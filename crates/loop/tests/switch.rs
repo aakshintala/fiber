@@ -124,52 +124,655 @@ const REASONING_REPLY: &[&str] = &[
     "assistant_message_completed",
 ];
 const SWITCHED_OPENING: &[&str] = &["model_changed", "preamble_built", "turn_started"];
+/// Whether the case switches the model or the credential label: the two
+/// halves of every switch pair in the table below.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Switch {
+    Model,
+    Credential,
+}
+
+/// The shared flow a pair of tests runs. Both halves run the same turns;
+/// only the prepare function and the switch delivery swap.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Shape {
+    /// One turn, the switch, another turn.
+    BetweenTurns,
+    /// The switch arrives while the first turn runs and applies after it.
+    DuringTurn,
+    /// The switch's prepare rejects, so nothing changes.
+    Rejected,
+    /// No switcher is installed, so the switch is invalid arguments.
+    NoSwitcher,
+    /// The switch arrives after close, so it is closing.
+    AfterClose,
+    /// The switch arrives during an approval wait and applies after the turn.
+    ApprovalWait,
+    /// The switch names what is already set, so nothing changes.
+    Noop,
+}
+
+/// One row of the switch-pair table: `name` names the case in every
+/// failure message, `switch` picks its half, `shape` picks the shared
+/// flow. Each `#[test]` below is one row's one-line call.
+struct Case {
+    name: &'static str,
+    switch: Switch,
+    shape: Shape,
+}
+
+/// Asserts the complete, ordered event kinds of `lines` for the `name`
+/// case, like support's `assert_kinds` but naming the case on failure.
+fn assert_case_kinds(name: &str, lines: &[Envelope], parts: &[&[&str]]) {
+    assert_eq!(kinds(lines), parts.concat(), "case {name}");
+}
+
+/// The switch delivery a `Switch` half sends carrying `value`: a `model`
+/// command or a `credential` command.
+fn switch_delivery(switch: Switch, value: &str) -> Delivery {
+    match switch {
+        Switch::Model => model(value, None),
+        Switch::Credential => support::credential(value),
+    }
+}
+
+/// What a `Shape::BetweenTurns` case's prepare recorded: the model
+/// prepare's thinking levels, or the credential prepare's `(model, label)`
+/// pairs.
+enum Recorder {
+    Model(Arc<Mutex<Vec<Option<ThinkingLevel>>>>),
+    Credential(Seen),
+}
+
+/// Rejects the switch answer `answer`, naming the `name` case when the
+/// switch was wrongly accepted.
+fn rejected_answer(name: &str, answer: Answer) -> Rejection {
+    match answer {
+        Err(rejection) => rejection,
+        Ok(ok) => panic!("case {name}: the switch was accepted: {ok:?}"),
+    }
+}
+
+/// Runs one switch-pair case: the shared `shape` flow with the `switch`
+/// half's prepare and delivery, then the case-specific assertions. Every
+/// failure message names the case.
+fn run_switch_case(case: &Case) {
+    let name = case.name;
+    match case.shape {
+        Shape::BetweenTurns => {
+            let next = new_provider(vec![Scripted::text("New.")]);
+            let mut session = Session::new(vec![Scripted::text("Old.")], None);
+            let recorder = match case.switch {
+                Switch::Model => {
+                    let recorded = Arc::new(Mutex::new(Vec::new()));
+                    with_switch(
+                        &mut session,
+                        prepare_to(Arc::clone(&next), NEW_MODEL, Arc::clone(&recorded)),
+                        switchable(),
+                    );
+                    Recorder::Model(recorded)
+                }
+                Switch::Credential => {
+                    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+                    with_switch(
+                        &mut session,
+                        prepare_keeping_model(Arc::clone(&next), Arc::clone(&seen)),
+                        switchable(),
+                    );
+                    Recorder::Credential(seen)
+                }
+            };
+
+            let (outcome, first) = run(&mut session, "hi");
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            assert_case_kinds(name, &first, &[OPENING, STEP, REPLY, ENDED]);
+
+            let ack_rx = match case.switch {
+                Switch::Model => {
+                    session.inbox.send(model(NEW_MODEL, None)).unwrap();
+                    None
+                }
+                Switch::Credential => {
+                    let (tx, rx) = mpsc::channel();
+                    session
+                        .inbox
+                        .send(support::credential_reported("home", tx))
+                        .unwrap();
+                    Some(rx)
+                }
+            };
+            let (outcome, lines) = run(&mut session, "again");
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            if let Some(rx) = ack_rx {
+                let answer = rx
+                    .recv_timeout(DEADLINE)
+                    .unwrap_or_else(|_| panic!("case {name}: the credential is answered"));
+                assert!(answer.is_ok(), "case {name}: accepted");
+            }
+            assert_case_kinds(name, &lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
+
+            let changed = of_kind(&lines, "model_changed");
+            assert_eq!(changed.len(), 1, "case {name}");
+            match case.switch {
+                Switch::Model => {
+                    let changed = &changed[0];
+                    assert_eq!(changed.payload["before"]["model"], MODEL, "case {name}");
+                    assert_eq!(changed.payload["after"]["model"], NEW_MODEL, "case {name}");
+                    assert_eq!(changed.payload["source"], "driver", "case {name}");
+                    assert!(changed.turn_id.is_none(), "case {name}");
+                }
+                Switch::Credential => {
+                    assert_eq!(changed[0].payload["before"]["model"], MODEL, "case {name}");
+                    assert_eq!(changed[0].payload["after"]["model"], MODEL, "case {name}");
+                    assert_eq!(
+                        changed[0].payload["before"]["credential"], "work",
+                        "case {name}"
+                    );
+                    assert_eq!(
+                        changed[0].payload["after"]["credential"], "home",
+                        "case {name}"
+                    );
+                    assert_eq!(changed[0].payload["source"], "driver", "case {name}");
+                }
+            }
+
+            let built = of_kind(&lines, "preamble_built");
+            assert_eq!(built.len(), 1, "case {name}");
+            assert_eq!(built[0].payload["reason"], "switch", "case {name}");
+            match case.switch {
+                Switch::Model => {
+                    assert_eq!(built[0].payload["model"], NEW_MODEL, "case {name}");
+                    assert_eq!(
+                        built[0].payload["context_window"], NEW_WINDOW,
+                        "case {name}"
+                    );
+                }
+                Switch::Credential => {
+                    assert_eq!(built[0].payload["model"], MODEL, "case {name}");
+                    assert_eq!(built[0].payload["credential"], "home", "case {name}");
+                }
+            }
+
+            match recorder {
+                Recorder::Model(recorded) => {
+                    assert_eq!(*recorded.lock().unwrap(), vec![None], "case {name}");
+                }
+                Recorder::Credential(seen) => {
+                    assert_eq!(
+                        seen.lock().unwrap().as_slice(),
+                        [(MODEL.to_owned(), Some("home".to_owned()))],
+                        "case {name}"
+                    );
+                }
+            }
+            assert_eq!(
+                session.requests().len(),
+                1,
+                "case {name}: the old provider keeps one call"
+            );
+            let after = match case.switch {
+                Switch::Model => "new",
+                Switch::Credential => "prepared",
+            };
+            assert_eq!(
+                next.requests().len(),
+                1,
+                "case {name}: the next turn goes to the {after} provider"
+            );
+        }
+        Shape::DuringTurn => {
+            let script = match case.switch {
+                Switch::Model => vec![Scripted::text("Old."), Scripted::text("New.")],
+                Switch::Credential => vec![Scripted::text("Old."), Scripted::text("Spare.")],
+            };
+            let next = new_provider(vec![Scripted::text("New.")]);
+            let injected = match case.switch {
+                Switch::Model => vec![model(NEW_MODEL, None)],
+                Switch::Credential => vec![support::credential("home")],
+            };
+            let mut session = Session::with_tools_injecting(script, injected, Vec::new());
+            match case.switch {
+                Switch::Model => {
+                    let recorded = Arc::new(Mutex::new(Vec::new()));
+                    with_switch(
+                        &mut session,
+                        prepare_to(Arc::clone(&next), NEW_MODEL, Arc::clone(&recorded)),
+                        switchable(),
+                    );
+                    // The first turn runs on the old provider; the switch it took waits
+                    // in `pending`.
+                }
+                Switch::Credential => {
+                    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+                    with_switch(
+                        &mut session,
+                        prepare_keeping_model(Arc::clone(&next), Arc::clone(&seen)),
+                        switchable(),
+                    );
+                    // The first turn runs on the old label; the switch it took waits in
+                    // `pending`.
+                }
+            }
+            session.inbox.send(delivery("hi")).unwrap();
+            let outcome = session.turn();
+            let first = session.lines();
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            assert_case_kinds(name, &first, &[OPENING, STEP, REPLY, ENDED]);
+            assert_eq!(session.requests().len(), 1, "case {name}");
+            assert!(next.requests().is_empty(), "case {name}");
+
+            let (outcome, lines) = run(&mut session, "again");
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            assert_case_kinds(name, &lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
+            if case.switch == Switch::Credential {
+                let changed = of_kind(&lines, "model_changed");
+                assert_eq!(changed.len(), 1, "case {name}");
+                assert_eq!(
+                    changed[0].payload["before"]["credential"], "work",
+                    "case {name}"
+                );
+                assert_eq!(
+                    changed[0].payload["after"]["credential"], "home",
+                    "case {name}"
+                );
+            }
+            assert_eq!(next.requests().len(), 1, "case {name}");
+        }
+        Shape::Rejected => {
+            let next = new_provider(vec![Scripted::text("New.")]);
+            let mut session = Session::new(
+                vec![Scripted::text("Old."), Scripted::text("Old again.")],
+                None,
+            );
+            let (tx, rx) = mpsc::channel();
+            let send = match case.switch {
+                Switch::Model => support::model_reported(NEW_MODEL, None, tx),
+                Switch::Credential => support::credential_reported("nope", tx),
+            };
+            match case.switch {
+                Switch::Model => {
+                    let prepare: Prepare = Arc::new(|_, _, _| {
+                        Err(Rejection {
+                            code: ErrorCode::InvalidArguments,
+                            message: "no such model".into(),
+                        })
+                    });
+                    with_switch(&mut session, prepare, switchable());
+                }
+                Switch::Credential => {
+                    let prepare: Prepare = Arc::new(|_, _, _| {
+                        Err(Rejection {
+                            code: ErrorCode::CredentialMissing,
+                            message:
+                                "`fake` has no credential label `nope`. The labels for `fake` are: work"
+                                    .into(),
+                        })
+                    });
+                    with_switch(&mut session, prepare, switchable());
+                }
+            }
+            session.inbox.send(send).unwrap();
+            let (outcome, first) = run(&mut session, "hi");
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            assert_case_kinds(name, &first, &[OPENING, STEP, REPLY, ENDED]);
+            let what = match case.switch {
+                Switch::Model => "the model is answered",
+                Switch::Credential => "the credential is answered",
+            };
+            let answer = rx
+                .recv_timeout(DEADLINE)
+                .unwrap_or_else(|_| panic!("case {name}: {what}"));
+            let rejection = rejected_answer(name, answer);
+            match case.switch {
+                Switch::Model => {
+                    assert_eq!(rejection.code, ErrorCode::InvalidArguments, "case {name}");
+                }
+                Switch::Credential => {
+                    assert_eq!(rejection.code, ErrorCode::CredentialMissing, "case {name}");
+                }
+            }
+
+            let (outcome, lines) = run(&mut session, "again");
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            assert_case_kinds(
+                name,
+                &lines,
+                &[&["turn_started"] as &[&str], STEP, REPLY, ENDED],
+            );
+            assert!(of_kind(&lines, "model_changed").is_empty(), "case {name}");
+            assert_eq!(session.requests().len(), 2, "case {name}");
+            assert!(next.requests().is_empty(), "case {name}");
+        }
+        Shape::NoSwitcher => {
+            let mut session = Session::new(vec![Scripted::text("Old.")], None);
+            let (tx, rx) = mpsc::channel();
+            let send = match case.switch {
+                Switch::Model => support::model_reported(NEW_MODEL, None, tx),
+                Switch::Credential => support::credential_reported("home", tx),
+            };
+            session.inbox.send(send).unwrap();
+            let (outcome, lines) = run(&mut session, "hi");
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            assert_case_kinds(name, &lines, &[OPENING, STEP, REPLY, ENDED]);
+            let what = match case.switch {
+                Switch::Model => "the model is answered",
+                Switch::Credential => "the credential is answered",
+            };
+            let answer = rx
+                .recv_timeout(DEADLINE)
+                .unwrap_or_else(|_| panic!("case {name}: {what}"));
+            let rejection = rejected_answer(name, answer);
+            assert_eq!(rejection.code, ErrorCode::InvalidArguments, "case {name}");
+            assert_eq!(rejection.message, NO_SWITCH, "case {name}");
+            if case.switch == Switch::Model {
+                assert!(of_kind(&lines, "model_changed").is_empty(), "case {name}");
+            }
+        }
+        Shape::AfterClose => {
+            let next = new_provider(vec![Scripted::text("New.")]);
+            let called = Arc::new(Mutex::new(false));
+            let flag = Arc::clone(&called);
+            let prepare: Prepare = Arc::new(move |_, _, _| {
+                *flag.lock().unwrap() = true;
+                Ok(Prepared {
+                    provider: Arc::clone(&next) as Arc<dyn Provider>,
+                    model: model_of(NEW_MODEL),
+                    thinking: None,
+                    chosen: None,
+                    credential: Some("home".into()),
+                    cache_lifetime: CacheLifetime::OneHour,
+                    context_window: fakes::CONTEXT_WINDOW,
+                    addendum: None,
+                    handoff: HandoffSettings::default(),
+                    reviewer: no_reviewer(),
+                    web_search: Hosted::Keep,
+                    notice: None,
+                    applied: None,
+                    credential_files: Vec::new(),
+                })
+            });
+            let mut session = Session::new(vec![Scripted::text("Old.")], None);
+            with_switch(&mut session, prepare, switchable());
+            let (outcome, first) = run(&mut session, "hi");
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            assert_case_kinds(name, &first, &[OPENING, STEP, REPLY, ENDED]);
+
+            let (close_tx, close_rx) = mpsc::channel::<Answer>();
+            session
+                .inbox
+                .send(Delivery::Close(Ack(Box::new(move |answer| {
+                    let _sent = close_tx.send(answer);
+                }))))
+                .unwrap();
+            let switch_rx = match case.switch {
+                Switch::Model => {
+                    let (model_tx, model_rx) = mpsc::channel::<Answer>();
+                    session
+                        .inbox
+                        .send(Delivery::Model(
+                            contract::commands::ModelArgs {
+                                model: NEW_MODEL.into(),
+                                thinking: None,
+                            },
+                            Ack(Box::new(move |answer| {
+                                let _sent = model_tx.send(answer);
+                            })),
+                        ))
+                        .unwrap();
+                    model_rx
+                }
+                Switch::Credential => {
+                    let (cred_tx, cred_rx) = mpsc::channel::<Answer>();
+                    session
+                        .inbox
+                        .send(support::credential_reported("home", cred_tx))
+                        .unwrap();
+                    cred_rx
+                }
+            };
+            let outcome = session.turn();
+            assert_eq!(outcome, None, "case {name}");
+            assert!(
+                close_rx
+                    .recv_timeout(DEADLINE)
+                    .unwrap_or_else(|_| panic!("case {name}: close answered"))
+                    .is_ok(),
+                "case {name}"
+            );
+            let what = match case.switch {
+                Switch::Model => "model answered",
+                Switch::Credential => "credential answered",
+            };
+            let answer = switch_rx
+                .recv_timeout(DEADLINE)
+                .unwrap_or_else(|_| panic!("case {name}: {what}"));
+            let rejected = rejected_answer(name, answer);
+            assert_eq!(rejected.code, ErrorCode::Closing, "case {name}");
+            assert!(
+                !*called.lock().unwrap(),
+                "case {name}: prepare runs only before `closing`"
+            );
+            if case.switch == Switch::Model {
+                let all = log::read(&session.dir).unwrap();
+                // The log holds the turn's durable lines only: no deltas, and the
+                // refused `model` and `close` write nothing.
+                assert_case_kinds(
+                    name,
+                    &all,
+                    &[&[
+                        "session_started",
+                        "preamble_built",
+                        "opening_message",
+                        "turn_started",
+                        "step_started",
+                        "assistant_message_started",
+                        "text_completed",
+                        "usage_recorded",
+                        "assistant_message_completed",
+                        "turn_completed",
+                    ] as &[&str]],
+                );
+            }
+        }
+        Shape::ApprovalWait => {
+            let next = new_provider(vec![Scripted::text("New.")]);
+            let tool = executes_tool();
+            let mut session = Session::with_tools(
+                vec![
+                    calls_reply("", &[("shell", serde_json::json!({"city": "Paris"}))]),
+                    Scripted::text("Done."),
+                ],
+                None,
+                vec![tool as Arc<dyn contract::tool::Tool>],
+            );
+            session.rules.set(ask_rule());
+            let switch = case.switch;
+            match switch {
+                Switch::Model => {
+                    let recorded = Arc::new(Mutex::new(Vec::new()));
+                    with_switch(
+                        &mut session,
+                        prepare_to(Arc::clone(&next), NEW_MODEL, Arc::clone(&recorded)),
+                        switchable(),
+                    );
+                }
+                Switch::Credential => {
+                    let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+                    with_switch(
+                        &mut session,
+                        prepare_keeping_model(Arc::clone(&next), Arc::clone(&seen)),
+                        switchable(),
+                    );
+                }
+            }
+            let (ack_tx, ack_rx) = mpsc::channel::<Answer>();
+            let answered = on_request(&session, {
+                let inbox = session.inbox.clone();
+                move |id| {
+                    match switch {
+                        Switch::Model => {
+                            inbox
+                                .send(support::model_reported(NEW_MODEL, None, ack_tx.clone()))
+                                .unwrap();
+                        }
+                        Switch::Credential => {
+                            inbox
+                                .send(support::credential_reported("home", ack_tx.clone()))
+                                .unwrap();
+                        }
+                    }
+                    // The switch is accepted while the approval waits.
+                    inbox
+                        .send(Delivery::Reply(
+                            contract::commands::Reply {
+                                request_id: id,
+                                answer: allow(),
+                            },
+                            support::ignore(),
+                        ))
+                        .unwrap();
+                }
+            });
+            session.inbox.send(delivery("go")).unwrap();
+            let outcome = session.turn();
+            answered.join().unwrap();
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            let lines = session.lines();
+            // Accepted during the wait, applied after the turn: no `model_changed` yet.
+            assert_case_kinds(
+                name,
+                &lines,
+                &[
+                    OPENING,
+                    STEP,
+                    &[
+                        "assistant_message_started",
+                        "assistant_message_delta",
+                        "tool_call_arguments_delta",
+                        "tool_call_requested",
+                        "usage_recorded",
+                        "assistant_message_completed",
+                        "permission_requested",
+                        "permission_resolved",
+                        "tool_call_started",
+                        "tool_call_completed",
+                    ],
+                    STEP,
+                    REPLY,
+                    ENDED,
+                ],
+            );
+            assert!(of_kind(&lines, "model_changed").is_empty(), "case {name}");
+            let what = match switch {
+                Switch::Model => "the model is answered",
+                Switch::Credential => "the credential is answered",
+            };
+            let answer = ack_rx
+                .recv_timeout(DEADLINE)
+                .unwrap_or_else(|_| panic!("case {name}: {what}"));
+            assert!(
+                answer.is_ok(),
+                "case {name}: accepted before `turn_completed`"
+            );
+
+            let (outcome, lines) = run(&mut session, "again");
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            assert_case_kinds(name, &lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
+            if switch == Switch::Credential {
+                let changed = of_kind(&lines, "model_changed");
+                assert_eq!(changed.len(), 1, "case {name}");
+                assert_eq!(changed[0].payload["before"]["model"], MODEL, "case {name}");
+                assert_eq!(changed[0].payload["after"]["model"], MODEL, "case {name}");
+                assert_eq!(
+                    changed[0].payload["before"]["credential"], "work",
+                    "case {name}"
+                );
+                assert_eq!(
+                    changed[0].payload["after"]["credential"], "home",
+                    "case {name}"
+                );
+            }
+            assert_eq!(next.requests().len(), 1, "case {name}");
+        }
+        Shape::Noop => {
+            let next = new_provider(vec![Scripted::text("New.")]);
+            let mut session = Session::new(
+                vec![Scripted::text("Old."), Scripted::text("Old again.")],
+                None,
+            );
+            match case.switch {
+                Switch::Model => {
+                    let recorded = Arc::new(Mutex::new(Vec::new()));
+                    with_switch(
+                        &mut session,
+                        prepare_to(Arc::clone(&next), MODEL, Arc::clone(&recorded)),
+                        switchable(),
+                    );
+                }
+                Switch::Credential => {
+                    with_switch(
+                        &mut session,
+                        prepare_keeping_model(Arc::clone(&next), Arc::new(Mutex::new(Vec::new()))),
+                        switchable(),
+                    );
+                }
+            }
+            let (outcome, first) = run(&mut session, "hi");
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            assert_case_kinds(name, &first, &[OPENING, STEP, REPLY, ENDED]);
+            let ack_rx = match case.switch {
+                Switch::Model => {
+                    // Same model, same thinking, same credential and lifetime: a no-op.
+                    session.inbox.send(model(MODEL, None)).unwrap();
+                    None
+                }
+                Switch::Credential => {
+                    // The command is still accepted.
+                    let (tx, rx) = mpsc::channel();
+                    session
+                        .inbox
+                        .send(support::credential_reported("work", tx))
+                        .unwrap();
+                    Some(rx)
+                }
+            };
+            let (outcome, lines) = run(&mut session, "again");
+            assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
+            if let Some(rx) = ack_rx {
+                let answer = rx
+                    .recv_timeout(DEADLINE)
+                    .unwrap_or_else(|_| panic!("case {name}: the credential is answered"));
+                assert!(answer.is_ok(), "case {name}");
+            }
+            assert_case_kinds(
+                name,
+                &lines,
+                &[&["turn_started"] as &[&str], STEP, REPLY, ENDED],
+            );
+            assert!(of_kind(&lines, "model_changed").is_empty(), "case {name}");
+            match case.switch {
+                Switch::Model => assert!(
+                    of_kind(&lines, "preamble_built").is_empty(),
+                    "case {name}: a no-op rebuilds nothing"
+                ),
+                Switch::Credential => {
+                    assert!(of_kind(&lines, "preamble_built").is_empty(), "case {name}");
+                    assert!(next.requests().is_empty(), "case {name}");
+                }
+            }
+        }
+    }
+}
+
+const BETWEEN_TURNS_MODEL: Case = Case {
+    name: "between_turns_switches_before_the_next_turn_started",
+    switch: Switch::Model,
+    shape: Shape::BetweenTurns,
+};
 
 #[test]
 fn between_turns_switches_before_the_next_turn_started() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let recorded = Arc::new(Mutex::new(Vec::new()));
-    let mut session = Session::new(vec![Scripted::text("Old.")], None);
-    with_switch(
-        &mut session,
-        prepare_to(Arc::clone(&next), NEW_MODEL, Arc::clone(&recorded)),
-        switchable(),
-    );
-
-    let (outcome, first) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-
-    session.inbox.send(model(NEW_MODEL, None)).unwrap();
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
-
-    let changed = of_kind(&lines, "model_changed");
-    assert_eq!(changed.len(), 1);
-    let changed = &changed[0];
-    assert_eq!(changed.payload["before"]["model"], MODEL);
-    assert_eq!(changed.payload["after"]["model"], NEW_MODEL);
-    assert_eq!(changed.payload["source"], "driver");
-    assert!(changed.turn_id.is_none());
-
-    let built = of_kind(&lines, "preamble_built");
-    assert_eq!(built.len(), 1);
-    assert_eq!(built[0].payload["reason"], "switch");
-    assert_eq!(built[0].payload["model"], NEW_MODEL);
-    assert_eq!(built[0].payload["context_window"], NEW_WINDOW);
-
-    assert_eq!(
-        session.requests().len(),
-        1,
-        "the old provider keeps one call"
-    );
-    assert_eq!(
-        next.requests().len(),
-        1,
-        "the next turn goes to the new provider"
-    );
-    assert_eq!(*recorded.lock().unwrap(), vec![None]);
+    run_switch_case(&BETWEEN_TURNS_MODEL);
 }
 
 #[test]
@@ -208,174 +811,48 @@ fn model_then_prompt_in_one_batch_runs_the_prompt_on_the_new_model() {
     assert!(session.requests().is_empty());
 }
 
+const DURING_TURN_MODEL: Case = Case {
+    name: "during_a_turn_applies_after_turn_completed",
+    switch: Switch::Model,
+    shape: Shape::DuringTurn,
+};
+
 #[test]
 fn during_a_turn_applies_after_turn_completed() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let recorded = Arc::new(Mutex::new(Vec::new()));
-    let mut session = Session::with_tools_injecting(
-        vec![Scripted::text("Old."), Scripted::text("New.")],
-        vec![model(NEW_MODEL, None)],
-        Vec::new(),
-    );
-    with_switch(
-        &mut session,
-        prepare_to(Arc::clone(&next), NEW_MODEL, Arc::clone(&recorded)),
-        switchable(),
-    );
-    // The first turn runs on the old provider; the switch it took waits
-    // in `pending`.
-    session.inbox.send(delivery("hi")).unwrap();
-    let outcome = session.turn();
-    let first = session.lines();
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-    assert_eq!(session.requests().len(), 1);
-    assert!(next.requests().is_empty());
-
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
-    assert_eq!(next.requests().len(), 1);
+    run_switch_case(&DURING_TURN_MODEL);
 }
+
+const REJECTED_MODEL: Case = Case {
+    name: "rejected_by_prepare_changes_nothing",
+    switch: Switch::Model,
+    shape: Shape::Rejected,
+};
 
 #[test]
 fn rejected_by_prepare_changes_nothing() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let mut session = Session::new(
-        vec![Scripted::text("Old."), Scripted::text("Old again.")],
-        None,
-    );
-    let prepare: Prepare = Arc::new(|_, _, _| {
-        Err(Rejection {
-            code: ErrorCode::InvalidArguments,
-            message: "no such model".into(),
-        })
-    });
-    with_switch(&mut session, prepare, switchable());
-
-    let (tx, rx) = mpsc::channel();
-    session
-        .inbox
-        .send(support::model_reported(NEW_MODEL, None, tx))
-        .unwrap();
-    let (outcome, first) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-    let answer = rx.recv_timeout(DEADLINE).expect("the model is answered");
-    let rejection = answer.unwrap_err();
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[&["turn_started"] as &[&str], STEP, REPLY, ENDED]);
-    assert!(of_kind(&lines, "model_changed").is_empty());
-    assert_eq!(session.requests().len(), 2);
-    assert!(next.requests().is_empty());
+    run_switch_case(&REJECTED_MODEL);
 }
+
+const NO_SWITCHER_MODEL: Case = Case {
+    name: "no_switcher_is_invalid_arguments",
+    switch: Switch::Model,
+    shape: Shape::NoSwitcher,
+};
 
 #[test]
 fn no_switcher_is_invalid_arguments() {
-    let mut session = Session::new(vec![Scripted::text("Old.")], None);
-    let (tx, rx) = mpsc::channel();
-    session
-        .inbox
-        .send(support::model_reported(NEW_MODEL, None, tx))
-        .unwrap();
-    let (outcome, lines) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[OPENING, STEP, REPLY, ENDED]);
-    let answer = rx.recv_timeout(DEADLINE).expect("the model is answered");
-    let rejection = answer.unwrap_err();
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert_eq!(rejection.message, NO_SWITCH);
-    assert!(of_kind(&lines, "model_changed").is_empty());
+    run_switch_case(&NO_SWITCHER_MODEL);
 }
+
+const AFTER_CLOSE_MODEL: Case = Case {
+    name: "after_close_prepare_is_not_called",
+    switch: Switch::Model,
+    shape: Shape::AfterClose,
+};
 
 #[test]
 fn after_close_prepare_is_not_called() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let called = Arc::new(Mutex::new(false));
-    let flag = Arc::clone(&called);
-    let prepare: Prepare = Arc::new(move |_, _, _| {
-        *flag.lock().unwrap() = true;
-        Ok(Prepared {
-            provider: Arc::clone(&next) as Arc<dyn Provider>,
-            model: model_of(NEW_MODEL),
-            thinking: None,
-            chosen: None,
-            credential: Some("work".into()),
-            cache_lifetime: CacheLifetime::OneHour,
-            context_window: fakes::CONTEXT_WINDOW,
-            addendum: None,
-            handoff: HandoffSettings::default(),
-            reviewer: no_reviewer(),
-            web_search: Hosted::Keep,
-            notice: None,
-            applied: None,
-            credential_files: Vec::new(),
-        })
-    });
-    let mut session = Session::new(vec![Scripted::text("Old.")], None);
-    with_switch(&mut session, prepare, switchable());
-    let (outcome, first) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-
-    let (close_tx, close_rx) = mpsc::channel::<Answer>();
-    let (model_tx, model_rx) = mpsc::channel::<Answer>();
-    session
-        .inbox
-        .send(Delivery::Close(Ack(Box::new(move |answer| {
-            let _sent = close_tx.send(answer);
-        }))))
-        .unwrap();
-    session
-        .inbox
-        .send(Delivery::Model(
-            contract::commands::ModelArgs {
-                model: NEW_MODEL.into(),
-                thinking: None,
-            },
-            Ack(Box::new(move |answer| {
-                let _sent = model_tx.send(answer);
-            })),
-        ))
-        .unwrap();
-    let outcome = session.turn();
-    assert_eq!(outcome, None);
-    assert!(
-        close_rx
-            .recv_timeout(DEADLINE)
-            .expect("close answered")
-            .is_ok()
-    );
-    let rejected = model_rx
-        .recv_timeout(DEADLINE)
-        .expect("model answered")
-        .unwrap_err();
-    assert_eq!(rejected.code, ErrorCode::Closing);
-    assert!(
-        !*called.lock().unwrap(),
-        "prepare runs only before `closing`"
-    );
-    let all = log::read(&session.dir).unwrap();
-    // The log holds the turn's durable lines only: no deltas, and the
-    // refused `model` and `close` write nothing.
-    assert_kinds(
-        &all,
-        &[&[
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-        ] as &[&str]],
-    );
+    run_switch_case(&AFTER_CLOSE_MODEL);
 }
 
 use contract::RequestId;
@@ -402,87 +879,15 @@ fn ask_rule() -> StandingRules {
     }
 }
 
+const APPROVAL_WAIT_MODEL: Case = Case {
+    name: "during_an_approval_wait_is_accepted_and_applied_after_the_turn",
+    switch: Switch::Model,
+    shape: Shape::ApprovalWait,
+};
+
 #[test]
 fn during_an_approval_wait_is_accepted_and_applied_after_the_turn() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let recorded = Arc::new(Mutex::new(Vec::new()));
-    let tool = executes_tool();
-    let mut session = Session::with_tools(
-        vec![
-            calls_reply("", &[("shell", serde_json::json!({"city": "Paris"}))]),
-            Scripted::text("Done."),
-        ],
-        None,
-        vec![tool as Arc<dyn contract::tool::Tool>],
-    );
-    session.rules.set(ask_rule());
-    with_switch(
-        &mut session,
-        prepare_to(Arc::clone(&next), NEW_MODEL, Arc::clone(&recorded)),
-        switchable(),
-    );
-    let (ack_tx, ack_rx) = mpsc::channel::<Answer>();
-    let answered = on_request(&session, {
-        let inbox = session.inbox.clone();
-        move |id| {
-            inbox
-                .send(support::model_reported(NEW_MODEL, None, ack_tx.clone()))
-                .unwrap();
-            // The switch is accepted while the approval waits.
-            inbox
-                .send(Delivery::Reply(
-                    contract::commands::Reply {
-                        request_id: id,
-                        answer: allow(),
-                    },
-                    support::ignore(),
-                ))
-                .unwrap();
-        }
-    });
-    session.inbox.send(delivery("go")).unwrap();
-    let outcome = session.turn();
-    answered.join().unwrap();
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let lines = session.lines();
-    // Accepted during the wait, applied after the turn: no `model_changed` yet.
-    assert_kinds(
-        &lines,
-        &[
-            &[
-                "session_started",
-                "preamble_built",
-                "opening_message",
-                "turn_started",
-            ] as &[&str],
-            &["step_started"],
-            &[
-                "assistant_message_started",
-                "assistant_message_delta",
-                "tool_call_arguments_delta",
-                "tool_call_requested",
-                "usage_recorded",
-                "assistant_message_completed",
-                "permission_requested",
-                "permission_resolved",
-                "tool_call_started",
-                "tool_call_completed",
-            ],
-            &["step_started"],
-            REPLY,
-            ENDED,
-        ],
-    );
-    assert!(of_kind(&lines, "model_changed").is_empty());
-    let answer = ack_rx
-        .recv_timeout(DEADLINE)
-        .expect("the model is answered");
-    assert!(answer.is_ok(), "accepted before `turn_completed`");
-
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
-    assert_eq!(next.requests().len(), 1);
+    run_switch_case(&APPROVAL_WAIT_MODEL);
 }
 
 #[test]
@@ -1278,32 +1683,15 @@ fn two_switches_apply_in_order_with_one_rebuild() {
     assert_eq!(second.requests().len(), 1);
 }
 
+const NOOP_MODEL: Case = Case {
+    name: "a_noop_switch_writes_nothing_but_keeps_the_choice",
+    switch: Switch::Model,
+    shape: Shape::Noop,
+};
+
 #[test]
 fn a_noop_switch_writes_nothing_but_keeps_the_choice() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let recorded = Arc::new(Mutex::new(Vec::new()));
-    let mut session = Session::new(
-        vec![Scripted::text("Old."), Scripted::text("Old again.")],
-        None,
-    );
-    with_switch(
-        &mut session,
-        prepare_to(Arc::clone(&next), MODEL, Arc::clone(&recorded)),
-        switchable(),
-    );
-    let (outcome, first) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-    // Same model, same thinking, same credential and lifetime: a no-op.
-    session.inbox.send(model(MODEL, None)).unwrap();
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[&["turn_started"] as &[&str], STEP, REPLY, ENDED]);
-    assert!(of_kind(&lines, "model_changed").is_empty());
-    assert!(
-        of_kind(&lines, "preamble_built").is_empty(),
-        "a no-op rebuilds nothing"
-    );
+    run_switch_case(&NOOP_MODEL);
 }
 
 #[test]
@@ -1867,171 +2255,48 @@ fn prepare_keeping_model(provider: Arc<ScriptedProvider>, seen: Seen) -> Prepare
     )
 }
 
+const BETWEEN_TURNS_CREDENTIAL: Case = Case {
+    name: "credential_between_turns_switches_before_the_next_turn_started",
+    switch: Switch::Credential,
+    shape: Shape::BetweenTurns,
+};
+
 #[test]
 fn credential_between_turns_switches_before_the_next_turn_started() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let mut session = Session::new(vec![Scripted::text("Old.")], None);
-    with_switch(
-        &mut session,
-        prepare_keeping_model(Arc::clone(&next), Arc::clone(&seen)),
-        switchable(),
-    );
-
-    let (outcome, first) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-
-    let (tx, rx) = mpsc::channel();
-    session
-        .inbox
-        .send(support::credential_reported("home", tx))
-        .unwrap();
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert!(
-        rx.recv_timeout(DEADLINE)
-            .expect("the credential is answered")
-            .is_ok()
-    );
-    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
-
-    let changed = of_kind(&lines, "model_changed");
-    assert_eq!(changed.len(), 1);
-    assert_eq!(changed[0].payload["before"]["model"], MODEL);
-    assert_eq!(changed[0].payload["after"]["model"], MODEL);
-    assert_eq!(changed[0].payload["before"]["credential"], "work");
-    assert_eq!(changed[0].payload["after"]["credential"], "home");
-    assert_eq!(changed[0].payload["source"], "driver");
-
-    let built = of_kind(&lines, "preamble_built");
-    assert_eq!(built.len(), 1);
-    assert_eq!(built[0].payload["reason"], "switch");
-    assert_eq!(built[0].payload["model"], MODEL);
-    assert_eq!(built[0].payload["credential"], "home");
-
-    assert_eq!(
-        seen.lock().unwrap().as_slice(),
-        [(MODEL.to_owned(), Some("home".to_owned()))]
-    );
-    assert_eq!(
-        session.requests().len(),
-        1,
-        "the old provider keeps one call"
-    );
-    assert_eq!(
-        next.requests().len(),
-        1,
-        "the next turn goes to the prepared provider"
-    );
+    run_switch_case(&BETWEEN_TURNS_CREDENTIAL);
 }
+
+const DURING_TURN_CREDENTIAL: Case = Case {
+    name: "credential_during_a_turn_applies_after_turn_completed",
+    switch: Switch::Credential,
+    shape: Shape::DuringTurn,
+};
 
 #[test]
 fn credential_during_a_turn_applies_after_turn_completed() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let mut session = Session::with_tools_injecting(
-        vec![Scripted::text("Old."), Scripted::text("Spare.")],
-        vec![support::credential("home")],
-        Vec::new(),
-    );
-    with_switch(
-        &mut session,
-        prepare_keeping_model(Arc::clone(&next), Arc::clone(&seen)),
-        switchable(),
-    );
-    // The first turn runs on the old label; the switch it took waits in
-    // `pending`.
-    session.inbox.send(delivery("hi")).unwrap();
-    let outcome = session.turn();
-    let first = session.lines();
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-    assert_eq!(session.requests().len(), 1);
-    assert!(next.requests().is_empty());
-
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
-    let changed = of_kind(&lines, "model_changed");
-    assert_eq!(changed.len(), 1);
-    assert_eq!(changed[0].payload["before"]["credential"], "work");
-    assert_eq!(changed[0].payload["after"]["credential"], "home");
-    assert_eq!(next.requests().len(), 1);
+    run_switch_case(&DURING_TURN_CREDENTIAL);
 }
+
+const NOOP_CREDENTIAL: Case = Case {
+    name: "credential_with_the_current_label_changes_nothing",
+    switch: Switch::Credential,
+    shape: Shape::Noop,
+};
 
 #[test]
 fn credential_with_the_current_label_changes_nothing() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let mut session = Session::new(
-        vec![Scripted::text("Old."), Scripted::text("Old again.")],
-        None,
-    );
-    with_switch(
-        &mut session,
-        prepare_keeping_model(Arc::clone(&next), Arc::new(Mutex::new(Vec::new()))),
-        switchable(),
-    );
-
-    let (outcome, first) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-
-    // The command is still accepted.
-    let (tx, rx) = mpsc::channel();
-    session
-        .inbox
-        .send(support::credential_reported("work", tx))
-        .unwrap();
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert!(
-        rx.recv_timeout(DEADLINE)
-            .expect("the credential is answered")
-            .is_ok()
-    );
-    assert_kinds(&lines, &[&["turn_started"] as &[&str], STEP, REPLY, ENDED]);
-    assert!(of_kind(&lines, "model_changed").is_empty());
-    assert!(of_kind(&lines, "preamble_built").is_empty());
-    assert!(next.requests().is_empty());
+    run_switch_case(&NOOP_CREDENTIAL);
 }
+
+const REJECTED_CREDENTIAL: Case = Case {
+    name: "credential_rejected_by_prepare_changes_nothing",
+    switch: Switch::Credential,
+    shape: Shape::Rejected,
+};
 
 #[test]
 fn credential_rejected_by_prepare_changes_nothing() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let mut session = Session::new(
-        vec![Scripted::text("Old."), Scripted::text("Old again.")],
-        None,
-    );
-    let prepare: Prepare = Arc::new(|_, _, _| {
-        Err(Rejection {
-            code: ErrorCode::CredentialMissing,
-            message: "`fake` has no credential label `nope`. The labels for `fake` are: work"
-                .into(),
-        })
-    });
-    with_switch(&mut session, prepare, switchable());
-
-    let (tx, rx) = mpsc::channel();
-    session
-        .inbox
-        .send(support::credential_reported("nope", tx))
-        .unwrap();
-    let (outcome, first) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-    let answer = rx
-        .recv_timeout(DEADLINE)
-        .expect("the credential is answered");
-    let rejection = answer.unwrap_err();
-    assert_eq!(rejection.code, ErrorCode::CredentialMissing);
-
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[&["turn_started"] as &[&str], STEP, REPLY, ENDED]);
-    assert!(of_kind(&lines, "model_changed").is_empty());
-    assert_eq!(session.requests().len(), 2);
-    assert!(next.requests().is_empty());
+    run_switch_case(&REJECTED_CREDENTIAL);
 }
 
 #[test]
@@ -2099,180 +2364,64 @@ fn mixed_model_and_credential_switches_apply_in_arrival_order() {
     assert_eq!(next.requests().len(), 1);
 }
 
+const NO_SWITCHER_CREDENTIAL: Case = Case {
+    name: "credential_without_a_switcher_is_invalid_arguments",
+    switch: Switch::Credential,
+    shape: Shape::NoSwitcher,
+};
+
 #[test]
 fn credential_without_a_switcher_is_invalid_arguments() {
-    let mut session = Session::new(vec![Scripted::text("Old.")], None);
-    let (tx, rx) = mpsc::channel();
-    session
-        .inbox
-        .send(support::credential_reported("home", tx))
-        .unwrap();
-    let (outcome, lines) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[OPENING, STEP, REPLY, ENDED]);
-    let answer = rx
-        .recv_timeout(DEADLINE)
-        .expect("the credential is answered");
-    let rejection = answer.unwrap_err();
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert_eq!(rejection.message, NO_SWITCH);
+    run_switch_case(&NO_SWITCHER_CREDENTIAL);
 }
+
+const AFTER_CLOSE_CREDENTIAL: Case = Case {
+    name: "credential_after_close_is_closing_and_prepare_is_not_called",
+    switch: Switch::Credential,
+    shape: Shape::AfterClose,
+};
 
 #[test]
 fn credential_after_close_is_closing_and_prepare_is_not_called() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let called = Arc::new(Mutex::new(false));
-    let flag = Arc::clone(&called);
-    let prepare: Prepare = Arc::new(move |_, _, _| {
-        *flag.lock().unwrap() = true;
-        Ok(Prepared {
-            provider: Arc::clone(&next) as Arc<dyn Provider>,
-            model: model_of(NEW_MODEL),
-            thinking: None,
-            chosen: None,
-            credential: Some("home".into()),
-            cache_lifetime: CacheLifetime::OneHour,
-            context_window: fakes::CONTEXT_WINDOW,
-            addendum: None,
-            handoff: HandoffSettings::default(),
-            reviewer: no_reviewer(),
-            web_search: Hosted::Keep,
-            notice: None,
-            applied: None,
-            credential_files: Vec::new(),
-        })
-    });
-    let mut session = Session::new(vec![Scripted::text("Old.")], None);
-    with_switch(&mut session, prepare, switchable());
-    let (outcome, first) = run(&mut session, "hi");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-
-    let (close_tx, close_rx) = mpsc::channel::<Answer>();
-    let (cred_tx, cred_rx) = mpsc::channel::<Answer>();
-    session
-        .inbox
-        .send(Delivery::Close(Ack(Box::new(move |answer| {
-            let _sent = close_tx.send(answer);
-        }))))
-        .unwrap();
-    session
-        .inbox
-        .send(support::credential_reported("home", cred_tx))
-        .unwrap();
-    let outcome = session.turn();
-    assert_eq!(outcome, None);
-    assert!(
-        close_rx
-            .recv_timeout(DEADLINE)
-            .expect("close answered")
-            .is_ok()
-    );
-    let rejected = cred_rx
-        .recv_timeout(DEADLINE)
-        .expect("credential answered")
-        .unwrap_err();
-    assert_eq!(rejected.code, ErrorCode::Closing);
-    assert!(
-        !*called.lock().unwrap(),
-        "prepare runs only before `closing`"
-    );
+    run_switch_case(&AFTER_CLOSE_CREDENTIAL);
 }
+
+const APPROVAL_WAIT_CREDENTIAL: Case = Case {
+    name: "credential_during_an_approval_wait_is_accepted_and_applied_after_the_turn",
+    switch: Switch::Credential,
+    shape: Shape::ApprovalWait,
+};
 
 #[test]
 fn credential_during_an_approval_wait_is_accepted_and_applied_after_the_turn() {
-    let next = new_provider(vec![Scripted::text("New.")]);
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let tool = executes_tool();
-    let mut session = Session::with_tools(
-        vec![
-            calls_reply("", &[("shell", serde_json::json!({"city": "Paris"}))]),
-            Scripted::text("Done."),
-        ],
-        None,
-        vec![tool as Arc<dyn contract::tool::Tool>],
-    );
-    session.rules.set(ask_rule());
-    with_switch(
-        &mut session,
-        prepare_keeping_model(Arc::clone(&next), Arc::clone(&seen)),
-        switchable(),
-    );
-    let (ack_tx, ack_rx) = mpsc::channel::<Answer>();
-    let answered = on_request(&session, {
-        let inbox = session.inbox.clone();
-        move |id| {
-            inbox
-                .send(support::credential_reported("home", ack_tx.clone()))
-                .unwrap();
-            // The switch is accepted while the approval waits.
-            inbox
-                .send(Delivery::Reply(
-                    contract::commands::Reply {
-                        request_id: id,
-                        answer: allow(),
-                    },
-                    support::ignore(),
-                ))
-                .unwrap();
-        }
-    });
-    session.inbox.send(delivery("go")).unwrap();
-    let outcome = session.turn();
-    answered.join().unwrap();
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let lines = session.lines();
-    assert_kinds(
-        &lines,
-        &[
-            &[
-                "session_started",
-                "preamble_built",
-                "opening_message",
-                "turn_started",
-            ] as &[&str],
-            &["step_started"],
-            &[
-                "assistant_message_started",
-                "assistant_message_delta",
-                "tool_call_arguments_delta",
-                "tool_call_requested",
-                "usage_recorded",
-                "assistant_message_completed",
-                "permission_requested",
-                "permission_resolved",
-                "tool_call_started",
-                "tool_call_completed",
-            ],
-            &["step_started"],
-            REPLY,
-            ENDED,
-        ],
-    );
-    let answer = ack_rx
-        .recv_timeout(DEADLINE)
-        .expect("the credential is answered");
-    assert!(answer.is_ok(), "accepted before `turn_completed`");
-
-    let (outcome, lines) = run(&mut session, "again");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_kinds(&lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
-    let changed = of_kind(&lines, "model_changed");
-    assert_eq!(changed.len(), 1);
-    assert_eq!(changed[0].payload["before"]["model"], MODEL);
-    assert_eq!(changed[0].payload["after"]["model"], MODEL);
-    assert_eq!(changed[0].payload["before"]["credential"], "work");
-    assert_eq!(changed[0].payload["after"]["credential"], "home");
-    assert_eq!(next.requests().len(), 1);
+    run_switch_case(&APPROVAL_WAIT_CREDENTIAL);
 }
 
-/// Runs a resumed finishing turn holding `held`, with `live` arriving
-/// during its approval wait, then one more turn: the prepare calls in
-/// arrival order and the log's `model_changed` lines.
-fn run_deferred_switch_case(
-    held: Delivery,
-    live: Delivery,
-) -> (Vec<(String, Option<String>)>, Vec<contract::Envelope>) {
+/// One row of the deferred-switch table: a switch held before a resumed
+/// finishing turn (`held`) with another arriving live during its approval
+/// wait (`live`), each a driver command sending `value`. `seen` holds the
+/// prepare calls in arrival order, and `first_after`, `second_before` and
+/// `second_after` hold the expected `model_changed` payloads (`None` skips
+/// that side). `name` names the case in every failure message.
+struct DeferredCase {
+    name: &'static str,
+    held: (Switch, &'static str),
+    live: (Switch, &'static str),
+    seen: &'static [(&'static str, Option<&'static str>)],
+    first_after: (&'static str, &'static str),
+    second_before: (Option<&'static str>, Option<&'static str>),
+    second_after: (&'static str, &'static str),
+}
+
+/// Runs one deferred-switch case: a resumed finishing turn holds the
+/// `held` switch, the `live` switch arrives during its approval wait, then
+/// one more turn admits both in arrival order. Checks the prepare calls
+/// and the `model_changed` payloads against the case row; every failure
+/// message names the case.
+fn run_deferred_case(case: &DeferredCase) {
+    let name = case.name;
+    let held = switch_delivery(case.held.0, case.held.1);
+    let live = switch_delivery(case.live.0, case.live.1);
     use contract::events::RuleScope;
     use contract::events::{
         AskStep, Empty, PermissionRequested, SessionStarted, StandingRule, TurnStarted as TurnBegin,
@@ -2471,9 +2620,11 @@ fn run_deferred_switch_case(
     });
     // Wait for the re-raised request, then send the live switch and the reply:
     // one `DEADLINE` for the whole wait, never one per line.
-    support::read_until(watcher, "a re-raised permission_requested line", |line| {
-        line.kind == "permission_requested"
-    });
+    support::read_until(
+        watcher,
+        &format!("case {name}: a re-raised permission_requested line"),
+        |line| line.kind == "permission_requested",
+    );
     inbox_tx.send(live).unwrap();
     inbox_tx
         .send(Delivery::Reply(
@@ -2486,19 +2637,24 @@ fn run_deferred_switch_case(
         .unwrap();
     let (mut looped, outcome) = finished
         .recv_timeout(DEADLINE)
-        .expect("the finishing turn ended");
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
+        .unwrap_or_else(|_| panic!("case {name}: the finishing turn ended"));
+    assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
 
     // The next turn admits both in arrival order, bounded so a hang
     // reports the wait instead of hanging the test.
     inbox_tx.send(support::delivery("next")).unwrap();
-    let (_looped, outcome) = fakes::within("the next turn", DEADLINE, move || {
-        let outcome = looped.turn().unwrap();
-        (looped, outcome)
-    });
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let (_looped, outcome) = fakes::within(
+        &format!("case {name}: the next turn"),
+        DEADLINE,
+        move || {
+            let outcome = looped.turn().unwrap();
+            (looped, outcome)
+        },
+    );
+    assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
     let lines = log::read(&dir).unwrap();
-    assert_kinds(
+    assert_case_kinds(
+        name,
         &lines,
         &[&[
             "session_started",
@@ -2537,61 +2693,82 @@ fn run_deferred_switch_case(
         .filter(|line| line.kind == "model_changed")
         .cloned()
         .collect();
-    assert_eq!(changed.len(), 2);
     let seen = seen.lock().unwrap().clone();
-    (seen, changed)
+    let expected: Vec<(String, Option<String>)> = case
+        .seen
+        .iter()
+        .map(|(model, label)| ((*model).to_owned(), (*label).map(str::to_owned)))
+        .collect();
+    assert_eq!(seen, expected, "case {name}");
+    assert_eq!(changed.len(), 2, "case {name}");
+    assert_eq!(
+        changed[0].payload["after"]["model"], case.first_after.0,
+        "case {name}"
+    );
+    assert_eq!(
+        changed[0].payload["after"]["credential"], case.first_after.1,
+        "case {name}"
+    );
+    if let Some(before) = case.second_before.0 {
+        assert_eq!(changed[1].payload["before"]["model"], before, "case {name}");
+    }
+    if let Some(before) = case.second_before.1 {
+        assert_eq!(
+            changed[1].payload["before"]["credential"], before,
+            "case {name}"
+        );
+    }
+    assert_eq!(
+        changed[1].payload["after"]["model"], case.second_after.0,
+        "case {name}"
+    );
+    assert_eq!(
+        changed[1].payload["after"]["credential"], case.second_after.1,
+        "case {name}"
+    );
 }
+
+const DEFERRED_MODEL_CREDENTIAL: DeferredCase = DeferredCase {
+    name: "deferred_model_then_live_credential_keeps_arrival_order",
+    held: (Switch::Model, "fake/n"),
+    live: (Switch::Credential, "home"),
+    seen: &[("fake/n", None), ("fake/n", Some("home"))],
+    first_after: ("fake/n", "work"),
+    second_before: (Some("fake/n"), None),
+    second_after: ("fake/n", "home"),
+};
 
 #[test]
 fn deferred_model_then_live_credential_keeps_arrival_order() {
-    let (seen, changed) =
-        run_deferred_switch_case(model("fake/n", None), support::credential("home"));
-    assert_eq!(
-        seen.as_slice(),
-        [
-            ("fake/n".to_owned(), None),
-            ("fake/n".to_owned(), Some("home".to_owned())),
-        ]
-    );
-    assert_eq!(changed[0].payload["after"]["model"], "fake/n");
-    assert_eq!(changed[0].payload["after"]["credential"], "work");
-    assert_eq!(changed[1].payload["before"]["model"], "fake/n");
-    assert_eq!(changed[1].payload["after"]["model"], "fake/n");
-    assert_eq!(changed[1].payload["after"]["credential"], "home");
+    run_deferred_case(&DEFERRED_MODEL_CREDENTIAL);
 }
+
+const DEFERRED_CREDENTIAL_MODEL: DeferredCase = DeferredCase {
+    name: "deferred_credential_then_live_model_keeps_arrival_order",
+    held: (Switch::Credential, "home"),
+    live: (Switch::Model, "fake/p"),
+    seen: &[(MODEL, Some("home")), ("fake/p", None)],
+    first_after: (MODEL, "home"),
+    second_before: (None, Some("home")),
+    second_after: ("fake/p", "work"),
+};
 
 #[test]
 fn deferred_credential_then_live_model_keeps_arrival_order() {
-    let (seen, changed) =
-        run_deferred_switch_case(support::credential("home"), model("fake/p", None));
-    assert_eq!(
-        seen.as_slice(),
-        [
-            (MODEL.to_owned(), Some("home".to_owned())),
-            ("fake/p".to_owned(), None),
-        ]
-    );
-    assert_eq!(changed[0].payload["after"]["model"], MODEL);
-    assert_eq!(changed[0].payload["after"]["credential"], "home");
-    assert_eq!(changed[1].payload["before"]["credential"], "home");
-    assert_eq!(changed[1].payload["after"]["model"], "fake/p");
-    assert_eq!(changed[1].payload["after"]["credential"], "work");
+    run_deferred_case(&DEFERRED_CREDENTIAL_MODEL);
 }
+
+const DEFERRED_CREDENTIAL_CREDENTIAL: DeferredCase = DeferredCase {
+    name: "deferred_credential_then_live_credential_keeps_arrival_order",
+    held: (Switch::Credential, "home"),
+    live: (Switch::Credential, "office"),
+    seen: &[(MODEL, Some("home")), (MODEL, Some("office"))],
+    first_after: (MODEL, "home"),
+    second_before: (None, Some("home")),
+    second_after: (MODEL, "office"),
+};
 
 #[test]
 fn deferred_credential_then_live_credential_keeps_arrival_order() {
-    let (seen, changed) =
-        run_deferred_switch_case(support::credential("home"), support::credential("office"));
-    assert_eq!(
-        seen.as_slice(),
-        [
-            (MODEL.to_owned(), Some("home".to_owned())),
-            (MODEL.to_owned(), Some("office".to_owned())),
-        ]
-    );
-    assert_eq!(changed[0].payload["after"]["model"], MODEL);
-    assert_eq!(changed[0].payload["after"]["credential"], "home");
-    assert_eq!(changed[1].payload["before"]["credential"], "home");
-    assert_eq!(changed[1].payload["after"]["model"], MODEL);
-    assert_eq!(changed[1].payload["after"]["credential"], "office");
+    run_deferred_case(&DEFERRED_CREDENTIAL_CREDENTIAL);
 }
