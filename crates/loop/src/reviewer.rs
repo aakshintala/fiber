@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use contract::events::{
     AskStep, CacheLifetime, DecidedBy, Decision, Escalation, Event, Notice, PermissionResolved,
-    ReviewerPurpose, ReviewerRef, ReviewerUse, RuleOffer, ToolCallCompleted, ToolCallRequested,
+    ReviewerRef, ReviewerUse, RuleOffer, ToolCallCompleted, ToolCallRequested,
 };
 use contract::provider::{CallError, Cost, Input, ModelRequest, Provider, Reply};
 use contract::shapes::Failure;
@@ -247,7 +247,7 @@ impl Loop {
             &endpoint,
             &prompt.shared,
             &prompt.first,
-            ReviewerPurpose::Stage1,
+            |id| ReviewerUse::Stage1 { action_id: id },
             Some(request::FIRST_STAGE_OUTPUT_TOKENS),
             read_first,
         )? {
@@ -257,7 +257,7 @@ impl Loop {
                 &endpoint,
                 &prompt.shared,
                 &prompt.second,
-                ReviewerPurpose::Stage2,
+                |id| ReviewerUse::Stage2 { action_id: id },
                 None,
                 read_second,
             )? {
@@ -293,7 +293,7 @@ impl Loop {
     /// `parse` reads a verdict, or says what was wrong.
     #[allow(
         clippy::too_many_arguments,
-        reason = "the call under review, the endpoint, the prompts, the stage's purpose and cap, and the verdict reader are one ask"
+        reason = "the call under review, the endpoint, the prompts, how the stage marks its usage, the cap, and the verdict reader are one ask"
     )]
     fn ask_stage<T>(
         &mut self,
@@ -301,14 +301,11 @@ impl Loop {
         endpoint: &ReviewEndpoint,
         shared: &str,
         stage: &str,
-        purpose: ReviewerPurpose,
+        make_reviewer: fn(ActionId) -> ReviewerUse,
         max_output_tokens: Option<u64>,
         parse: fn(&str) -> Result<T, String>,
     ) -> Result<StageReply<T>, Error> {
-        let reviewer = ReviewerUse {
-            purpose,
-            action_id: Some(under.id.clone()),
-        };
+        let reviewer = make_reviewer(under.id.clone());
         let mut note = None;
         let mut why = String::new();
         let mut last = String::new();

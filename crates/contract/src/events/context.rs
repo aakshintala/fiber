@@ -50,26 +50,24 @@ pub struct UsageRecorded {
 }
 
 /// What a reviewer's call was for (`docs/events.md`, `usage_recorded`).
+/// One variant per request: a stage names the call it reviewed, and the
+/// handoff selection names none, so no combination can contradict itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ReviewerUse {
-    /// Which reviewer request made the call.
-    pub purpose: ReviewerPurpose,
-    /// The tool call under review; absent on a handoff selection, which
-    /// reviews no call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub action_id: Option<ActionId>,
-}
-
-/// Which reviewer request made a call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ReviewerPurpose {
+#[serde(tag = "purpose")]
+pub enum ReviewerUse {
     /// The first review stage.
     #[serde(rename = "stage_1")]
-    Stage1,
+    Stage1 {
+        /// The tool call under review.
+        action_id: ActionId,
+    },
     /// The second review stage.
     #[serde(rename = "stage_2")]
-    Stage2,
-    /// The handoff selection.
+    Stage2 {
+        /// The tool call under review.
+        action_id: ActionId,
+    },
+    /// The handoff selection, which reviews no call.
     #[serde(rename = "handoff")]
     Handoff,
 }

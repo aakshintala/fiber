@@ -1077,9 +1077,8 @@ fn a_reviewer_use_round_trips_and_is_absent_otherwise() {
     let line = recorded(staged.clone());
     assert_eq!(
         line.reviewer,
-        Some(ReviewerUse {
-            purpose: ReviewerPurpose::Stage1,
-            action_id: Some(crate::ActionId("a_1".into())),
+        Some(ReviewerUse::Stage1 {
+            action_id: crate::ActionId("a_1".into()),
         })
     );
     assert_eq!(
@@ -1090,13 +1089,7 @@ fn a_reviewer_use_round_trips_and_is_absent_otherwise() {
     let mut handoff = base();
     handoff["reviewer"] = json!({"purpose": "handoff"});
     let line = recorded(handoff.clone());
-    assert_eq!(
-        line.reviewer,
-        Some(ReviewerUse {
-            purpose: ReviewerPurpose::Handoff,
-            action_id: None,
-        })
-    );
+    assert_eq!(line.reviewer, Some(ReviewerUse::Handoff));
     assert_eq!(
         Value::Object(Event::UsageRecorded(line).payload().unwrap()),
         handoff
@@ -1106,6 +1099,34 @@ fn a_reviewer_use_round_trips_and_is_absent_otherwise() {
     assert_eq!(line.reviewer, None);
     let written = Value::Object(Event::UsageRecorded(line).payload().unwrap());
     assert!(written.get("reviewer").is_none(), "{written}");
+}
+
+#[test]
+fn a_reviewer_use_names_its_call_on_a_stage_and_none_on_a_handoff() {
+    let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
+    let base = || {
+        json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
+        "input_bytes": 1, "cost": null})
+    };
+    // A stage without the call it reviewed does not read: the action id
+    // is part of the variant, not an optional side field.
+    let mut staged = base();
+    staged["reviewer"] = json!({"purpose": "stage_1"});
+    assert!(read("usage_recorded", staged).is_err());
+    // A handoff selection reviews no call, so an action id on one is not
+    // a field of the variant: serde's default ignores it, and the line
+    // reads as a plain handoff and writes back without the key.
+    let mut handoff = base();
+    handoff["reviewer"] = json!({"purpose": "handoff", "action_id": "a_1"});
+    let event = read("usage_recorded", handoff).unwrap().unwrap();
+    let Event::UsageRecorded(line) = &event else {
+        panic!("{event:?}");
+    };
+    assert_eq!(line.reviewer, Some(ReviewerUse::Handoff));
+    assert_eq!(
+        Value::Object(event.payload().unwrap())["reviewer"],
+        json!({"purpose": "handoff"})
+    );
 }
 
 #[test]

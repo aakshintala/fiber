@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use contract::clock::Clock;
-use contract::events::{ReviewerPurpose, ReviewerUse, UsageRecorded};
+use contract::events::{ReviewerUse, UsageRecorded};
 use contract::provider::CostLookup;
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, TurnId};
@@ -365,9 +365,8 @@ fn a_settled_record_keeps_the_reviewer_use() {
     let due = clock.now() + LOOKUP_AFTER;
     let (lookup, seen) = lookup(Some(0.0000072));
     let mut first = first("gen-9");
-    first.reviewer = Some(ReviewerUse {
-        purpose: ReviewerPurpose::Stage2,
-        action_id: Some(ActionId("a_9".into())),
+    first.reviewer = Some(ReviewerUse::Stage2 {
+        action_id: ActionId("a_9".into()),
     });
     let mut late = LateCost::default();
     late.schedule(lookup, first.clone(), turn(), action(), &dyn_clock)
