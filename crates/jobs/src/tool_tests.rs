@@ -51,10 +51,7 @@ fn run(tool: &JobsTool, value: Value, cancel: &dyn Cancel) -> Output {
 }
 
 fn setup(clock: Arc<dyn Clock>) -> (TempDir, Arc<Registry>, JobsTool) {
-    let dir = TempDir::new("fiber-jobs-tool");
-    let artifacts = dir.path().join("artifacts");
-    std::fs::create_dir(&artifacts).unwrap();
-    let registry = Registry::new(artifacts, clock, Arc::new(Recorder::default()));
+    let (dir, registry) = crate::support::registry_with(clock);
     let tool = JobsTool::new(Arc::clone(&registry));
     (dir, registry, tool)
 }

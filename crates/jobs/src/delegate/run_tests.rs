@@ -8,7 +8,7 @@
     reason = "test code"
 )]
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::io;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
@@ -26,7 +26,7 @@ use contract::clock::Clock as _;
 use contract::events::{FiberExited, FinalMessage, Outcome};
 use contract::inbox::Delivery;
 use contract::jobs::Jobs as _;
-use contract::shapes::{Failure, Tokens, Usage};
+use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, JobId, Seq, SessionId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -36,6 +36,7 @@ use super::{
     Launch, Launched, Runner, Watch, Watched, kill_due, mint_session_id, note_seq, park_due,
 };
 use crate::registry::Registry;
+use crate::support::{exited, usage};
 
 /// How long a test waits on the wall clock before it fails.
 const DEADLINE: Duration = Duration::from_secs(3);
@@ -114,33 +115,6 @@ impl Script {
     }
 }
 
-fn usage() -> Usage {
-    Usage {
-        tokens: Tokens {
-            input: 10,
-            cache_read: 0,
-            cache_write: BTreeMap::new(),
-            output: 5,
-        },
-        cost: Some(0.25),
-        subscription_cost: 0.0,
-    }
-}
-
-fn exited(text: &str) -> FiberExited {
-    FiberExited {
-        exit_code: 0,
-        usage: usage(),
-        final_message: Some(FinalMessage {
-            final_action_id: ActionId("a_1".into()),
-            text: text.to_owned(),
-        }),
-        error: None,
-        suspended_on: None,
-        questions: None,
-    }
-}
-
 fn envelope(seq: u64, kind: &str, payload: serde_json::Value) -> Envelope {
     Envelope {
         kind: kind.into(),
@@ -154,7 +128,7 @@ fn envelope(seq: u64, kind: &str, payload: serde_json::Value) -> Envelope {
     }
 }
 
-fn exited_line(seq: u64, text: &str) -> Envelope {
+fn fiber_exited_line(seq: u64, text: &str) -> Envelope {
     envelope(
         seq,
         "fiber_exited",
@@ -163,7 +137,7 @@ fn exited_line(seq: u64, text: &str) -> Envelope {
 }
 
 fn json_line(seq: u64, text: &str) -> String {
-    serde_json::to_string(&exited_line(seq, text)).unwrap()
+    serde_json::to_string(&fiber_exited_line(seq, text)).unwrap()
 }
 
 struct Rig {
@@ -550,7 +524,7 @@ fn the_watch_flow_completes_with_the_delegate_text() {
     let line = json_line(2, "Done.");
     let rig = rig(vec![WatchReply::Exited(vec![
         envelope(1, "turn_completed", serde_json::json!({})),
-        exited_line(2, "Done."),
+        fiber_exited_line(2, "Done."),
     ])]);
     // Backstop armed before the shell starts: the child exits on
     // its own in milliseconds; this only fires if a mutant strands it.
@@ -814,7 +788,7 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
         .unzip();
     replies.push(WatchReply::Exited(vec![
         envelope(9, "turn_completed", serde_json::json!({})),
-        exited_line(10, "Bound."),
+        fiber_exited_line(10, "Bound."),
     ]));
     let rig = rig(replies);
     let done = rig.start(&shell, BOUND, 1024);
@@ -879,7 +853,7 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
             envelope(1, "turn_completed", serde_json::json!({})),
             envelope(2, "turn_completed", serde_json::json!({})),
         ]),
-        WatchReply::Exited(vec![exited_line(3, "Replayed.")]),
+        WatchReply::Exited(vec![fiber_exited_line(3, "Replayed.")]),
     ]);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
@@ -914,7 +888,7 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
     let dir = TempDir::new("fiber-delegate-rests");
     let fifo = fifo(dir.path(), "release");
     let shell = format!("read _ < '{}'; exit 0", fifo.display());
-    let rig = rig(vec![WatchReply::Exited(vec![exited_line(1, "Once.")])]);
+    let rig = rig(vec![WatchReply::Exited(vec![fiber_exited_line(1, "Once.")])]);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
     let done = rig.start(&shell, BOUND, 1024);

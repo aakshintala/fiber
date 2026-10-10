@@ -1,45 +1,18 @@
 //! Tests first for the outcome fold: each termination reason over the
 //! other rows, and the socket line winning over the drain's.
 
-use std::collections::BTreeMap;
 use std::os::unix::process::ExitStatusExt;
 use std::process::ExitStatus;
 
 use contract::events::{FiberExited, FinalMessage, Outcome};
-use contract::shapes::{Failure, Question, Tokens, Usage};
+use contract::shapes::{Failure, Question};
 use contract::{ActionId, ErrorCode, JobId};
 
 use super::{Termination, outcome};
+use crate::support::{exited, usage};
 
 fn job_id() -> JobId {
     JobId("j_0123456789abcdef".into())
-}
-
-fn usage() -> Usage {
-    Usage {
-        tokens: Tokens {
-            input: 10,
-            cache_read: 0,
-            cache_write: BTreeMap::new(),
-            output: 5,
-        },
-        cost: Some(0.25),
-        subscription_cost: 0.0,
-    }
-}
-
-fn exited(text: &str) -> FiberExited {
-    FiberExited {
-        exit_code: 0,
-        usage: usage(),
-        final_message: Some(FinalMessage {
-            final_action_id: ActionId("a_1".into()),
-            text: text.to_owned(),
-        }),
-        error: None,
-        suspended_on: None,
-        questions: None,
-    }
 }
 
 fn errored() -> FiberExited {

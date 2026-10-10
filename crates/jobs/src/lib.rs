@@ -4,6 +4,8 @@
 
 mod delegate;
 mod registry;
+#[cfg(test)]
+mod support;
 mod tool;
 
 pub use delegate::{DelegateSpawn, Launch, Launched, Resolve, Watch, Watched};
