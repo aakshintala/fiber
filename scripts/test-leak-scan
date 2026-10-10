@@ -58,7 +58,7 @@ secret="leak-secret-$$-$(date +%s)-$RANDOM"
 FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10000)' &
 leaker1=$!
 
-if LEAK_SCAN_GRACE=0 scripts/leak-scan "$n" 2>"$err"; then
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with leaker $leaker1 alive" >&2
   exit 1
 fi
@@ -82,7 +82,7 @@ fi
 FIBER_CHECK_RUN=$n python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); os.setsid(); time.sleep(10000)' &
 leaker2=$!
 
-if LEAK_SCAN_GRACE=0 scripts/leak-scan "$n" 2>"$err"; then
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with leakers $leaker1 and $leaker2 alive" >&2
   exit 1
 fi
@@ -102,7 +102,7 @@ fi
 UNRELATED_TOKEN=$n python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(10000)' &
 leaker5=$!
 
-if LEAK_SCAN_GRACE=0 scripts/leak-scan "$n" 2>"$err"; then
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with leakers alive" >&2
   exit 1
 fi
@@ -116,7 +116,7 @@ kill_one "$leaker5"
 leaker5=
 
 # A sibling run's nonce never matches this run's leakers.
-if LEAK_SCAN_GRACE=0 scripts/leak-scan "$other" 2>"$err"; then
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$other" 2>"$err"; then
   :
 else
   echo "scripts/test-leak-scan: leak-scan named this run's leakers for a sibling nonce:" >&2
@@ -131,7 +131,7 @@ fi
 
 # An empty nonce would match everything, so the scan refuses it.
 empty_rc=0
-if scripts/leak-scan "" 2>"$err"; then
+if env -u FIBER_CHECK_START scripts/leak-scan "" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan accepted an empty NONCE" >&2
   exit 1
 else
@@ -146,7 +146,7 @@ kill_one "$leaker1"
 kill_one "$leaker2"
 leaker1=
 leaker2=
-if LEAK_SCAN_GRACE=0 scripts/leak-scan "$n" 2>"$err"; then
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   :
 else
   echo "scripts/test-leak-scan: leak-scan still names the reaped leakers:" >&2

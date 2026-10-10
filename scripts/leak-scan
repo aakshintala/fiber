@@ -63,39 +63,13 @@ while [ "$grew" -eq 1 ]; do
 done
 excluded=$ancestors$members
 
-# Whether $1 holds the exact token $2, whitespace-delimited: the token
-# starts the text or follows whitespace, and ends the text or precedes
-# whitespace. Callers pass FIBER_CHECK_RUN=$nonce as the token, so the
-# word before = is exactly FIBER_CHECK_RUN and a value like
+# Whether $1 holds the exact token $2, whitespace-delimited: pad both
+# sides with a space so the token must start/end at a boundary. The
+# token stays quoted, so it matches literally (no glob expansion).
+# Callers pass FIBER_CHECK_RUN=$nonce as the token, so a value like
 # UNRELATED_TOKEN=$nonce never matches.
 holds_token() {
-  local text=$1
-  local token=$2
-  local rest=$text
-  local before=
-  local after=
-  while true; do
-    case $rest in
-    *"$token"*) ;;
-    *) return 1 ;;
-    esac
-    before=${rest%%"$token"*}
-    after=${rest#*"$token"}
-    case $before in
-    '' | *[[:space:]]) ;;
-    *)
-      if [ -z "$after" ]; then
-        return 1
-      fi
-      rest=$after
-      continue
-      ;;
-    esac
-    case $after in
-    '' | [[:space:]]*) return 0 ;;
-    esac
-    rest=$after
-  done
+  [[ " $1 " == *" $2 "* ]]
 }
 
 leaks=0
