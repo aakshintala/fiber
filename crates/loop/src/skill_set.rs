@@ -260,23 +260,22 @@ impl SkillSet {
             let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
                 continue;
             };
-            match event {
-                Event::OpeningMessage(message) => {
-                    listed = message
-                        .skills
-                        .iter()
-                        .map(|entry| (entry.name.clone(), entry.clone()))
-                        .collect();
+            // Every other line changes nothing: only these two move the
+            // baseline.
+            if let Event::OpeningMessage(message) = &event {
+                listed = message
+                    .skills
+                    .iter()
+                    .map(|entry| (entry.name.clone(), entry.clone()))
+                    .collect();
+            }
+            if let Event::SkillsChanged(changed) = event {
+                for entry in changed.added {
+                    listed.insert(entry.name.clone(), entry);
                 }
-                Event::SkillsChanged(changed) => {
-                    for entry in changed.added {
-                        listed.insert(entry.name.clone(), entry);
-                    }
-                    for name in changed.removed {
-                        listed.remove(&name);
-                    }
+                for name in changed.removed {
+                    listed.remove(&name);
                 }
-                _ => {}
             }
         }
         lock(&self.0).listed = listed;

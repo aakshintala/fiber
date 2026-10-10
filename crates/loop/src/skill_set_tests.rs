@@ -598,7 +598,7 @@ fn a_reader_that_calls_back_into_the_set_does_not_deadlock() {
             })
         };
         let set = reading_set(&tree, reader);
-        let _ = slot.set(set.clone());
+        assert!(slot.set(set.clone()).is_ok());
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
             match which {

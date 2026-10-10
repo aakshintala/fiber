@@ -301,12 +301,14 @@ impl Loop {
         // and rebuilds the state from it.
         // Only the current context's lines: a completed handoff starts the
         // tracked state afresh, as it does live.
+        let skills = crate::skill_set::SkillSet::new(prompt.clone(), &workspace);
         let changes = if opened {
             let context = lines
                 .iter()
                 .rposition(|line| line.kind == "opening_message")
                 .unwrap_or(0);
             let context = lines.get(context..).unwrap_or_default();
+            skills.resumed(context)?;
             crate::changes::State::resumed(context, &workspace, &prompt)?
         } else {
             crate::changes::State::empty(&prompt.home)
@@ -318,7 +320,6 @@ impl Loop {
             contract::SessionId(session.clone()),
             Arc::clone(log.clock()),
         );
-        let skills = crate::skill_set::SkillSet::new(prompt.clone(), &workspace);
         let mut resumed = Self {
             log,
             diag,

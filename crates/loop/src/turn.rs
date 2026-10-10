@@ -140,10 +140,11 @@ impl Loop {
         Ok(true)
     }
 
-    /// The turn-start instruction-file and date check
-    /// (`docs/system-prompt.md`, "When something changes" and "The date"),
-    /// before `turn_started`: one `instruction_file` per change in path
-    /// order, then `date_changed`.
+    /// The turn-start instruction-file, skill and date check
+    /// (`docs/system-prompt.md`, "When something changes", "Added and
+    /// removed skills" and "The date"), before `turn_started`: one
+    /// `instruction_file` per change in path order, then the skill
+    /// notices, then `skills_changed`, then `date_changed`.
     fn check_changes(&mut self) -> Result<(), Error> {
         let out = self.changes.check(self.prompt.clock.as_ref());
         for event in out
@@ -153,6 +154,13 @@ impl Loop {
             .chain(out.notices.into_iter().map(Event::Notice))
         {
             self.append_early(&event)?;
+        }
+        let skills = self.skills.check();
+        for notice in skills.notices {
+            self.append_early(&Event::Notice(notice))?;
+        }
+        if let Some(changed) = skills.changed {
+            self.append_early(&Event::SkillsChanged(changed))?;
         }
         if let Some(date) = out.date {
             self.append_early(&Event::DateChanged(date))?;

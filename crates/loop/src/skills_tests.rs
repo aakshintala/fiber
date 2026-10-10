@@ -1191,7 +1191,10 @@ fn an_unreadable_skill_md_is_unread() {
     let found = tree.discover();
     allow(&victim);
     assert_eq!(names(&found), ["fine"]);
-    assert_eq!(found.unread, [victim.clone()]);
+    let [unread] = found.unread.as_slice() else {
+        panic!("one unread path, got {:?}", found.unread);
+    };
+    assert_eq!(unread, &victim);
     let [notice] = found.notices.as_slice() else {
         panic!("{:?}", messages(&found));
     };
