@@ -1433,10 +1433,17 @@ fn an_accepted_subscribe_is_replayed(prior: Option<&str>) {
     assert!(starter.stop(&sid(), DEADLINE), "the fake session ended");
     // The reconnect queues behind the parked acknowledgement: once it is
     // routed, the parked thread is released to keep the level it read.
+    // The hook only reports routing; the release sender stays test-owned
+    // so unwinding drops it and disconnects the parked acknowledgement.
+    let (routed_tx, routed_rx) = mpsc::channel();
     *crate::connection::lock(&hub.after_relay) = Some(Box::new(move || {
-        release_tx.send(()).unwrap_or(());
+        routed_tx.send(()).unwrap_or(());
     }));
     client.send(reply, "reply");
+    routed_rx
+        .recv_timeout(DEADLINE)
+        .expect("the reconnect routes behind the parked acknowledgement");
+    release_tx.send(()).unwrap_or(());
     let first = client.acknowledged("the first acknowledgement");
     let second = client.acknowledged("the second acknowledgement");
     let mut ids = [first, second];
