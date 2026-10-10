@@ -28,6 +28,7 @@ use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 
 pub(crate) mod package;
+pub(crate) mod pty;
 
 /// nextest kills a test at 120 s (`.config/nextest.toml`): a test's
 /// deadlines sum to half of that.
