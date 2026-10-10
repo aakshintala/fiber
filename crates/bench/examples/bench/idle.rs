@@ -215,20 +215,14 @@ type IdleWindow = (Vec<Value>, u64, Option<(u64, u64)>, usize);
 /// waits the idle window touching nothing, reads them again, then reads the
 /// peak RSS and its anon/file split from one status read. Returns the
 /// per-thread deltas, the peak RSS, the split when the kernel reports it
-/// (noted and `None` when it does not: a diagnostic never fails a run)
-/// and the thread count at the end.
+/// (`None` when it does not: a diagnostic never fails a run, and a note
+/// would count as a failure) and the thread count at the end.
 fn idle_window(ctx: &Ctx<'_>, pid: u32, notes: &mut Vec<String>) -> Result<IdleWindow, String> {
     let before = settle(ctx.clock, READY, || linux::threads(pid))?;
     ctx.clock.sleep(ctx.idle);
     let after = linux::threads(pid)?;
     let (rss, split) = linux::rss_kib(pid)?;
-    let split = match split {
-        Ok(split) => Some(split),
-        Err(err) => {
-            notes.push(err);
-            None
-        }
-    };
+    let split = split.ok();
     Ok((
         linux::idle_switches(&before, &after, notes),
         rss,
