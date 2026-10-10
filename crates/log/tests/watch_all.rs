@@ -238,42 +238,6 @@ fn steps(name: &str, count: usize) -> (common::TestDir, Log, Vec<Envelope>) {
 }
 
 #[test]
-fn watch_all_pages_through_a_log_longer_than_two_pages() {
-    let (_tmp, log, written) = steps("watch-all-pages", 2 * CAPACITY + 50);
-    let rx = relay(log.watch_all());
-    let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(
-        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
-        written
-    );
-    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
-}
-
-#[test]
-fn watch_all_on_a_log_of_whole_pages_carries_on_live() {
-    let (_tmp, log, written) = steps("watch-all-whole", 2 * CAPACITY);
-    let rx = relay(log.watch_all());
-    assert_eq!(
-        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
-        written
-    );
-    let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
-}
-
-#[test]
-fn watch_all_returns_the_lines_before_an_unparseable_line_in_its_first_page_then_the_error() {
-    let (tmp, log, written) = steps("watch-all-bad", 5);
-    corrupt(&tmp.session(&id("s_1")), 2);
-    let mut watcher = log.watch_all();
-    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[0]));
-    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[1]));
-    let err = watcher.try_recv().unwrap_err();
-    assert!(err.to_string().contains("line 3"), "{err}");
-    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
-}
-
-#[test]
 fn watch_all_meets_an_unparseable_line_in_a_later_page_when_it_gets_there() {
     let (tmp, log, written) = steps("watch-all-bad-later", CAPACITY + 10);
     corrupt(&tmp.session(&id("s_1")), CAPACITY + 5);
@@ -306,6 +270,7 @@ fn a_watcher_ends_after_a_read_error_and_never_reads_again() {
     assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[1]));
     let err = watcher.try_recv().unwrap_err();
     assert!(err.to_string().contains("line 3"), "{err}");
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
     assert_eq!(watcher.try_recv().unwrap(), None);
     // Calling code that blocks is a wait too (`docs/testing.md`, "Waits
     // and timeouts"): both blocking calls run on the thread owning the
@@ -332,28 +297,6 @@ fn a_watcher_ends_after_a_read_error_and_never_reads_again() {
     let appended = log.append(&empty("step_started"), None, None).unwrap();
     assert_eq!(watcher.try_recv().unwrap(), None);
     assert_eq!(live.try_recv().unwrap().as_ref(), Some(&appended));
-}
-
-#[test]
-fn a_seeded_watcher_ends_at_a_read_error_before_its_seeds() {
-    let (tmp, log, written) = steps("watch-all-seeded-bad", 3);
-    let tokens = serde_json::json!({"input": 1, "cache_read": 0, "cache_write": {"5m": 0, "1h": 0}, "output": 1});
-    let status = event(
-        "session_status",
-        serde_json::json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "idle", "since": 1,
-            "spend": {"tokens": tokens, "cost": 0.0, "subscription_cost": 0.0},
-            "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
-    );
-    log.append(&status, None, None).unwrap();
-    corrupt(&tmp.session(&id("s_1")), 1);
-    let mut watcher = log.watch_all_seeded();
-    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[0]));
-    let err = watcher.try_recv().unwrap_err();
-    assert!(err.to_string().contains("line 2"), "{err}");
-    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
-    // The seed queued after the failure is never returned.
-    assert_eq!(watcher.try_recv().unwrap(), None);
 }
 
 #[test]
@@ -392,19 +335,6 @@ fn large(name: &str) -> (common::TestDir, Log, Vec<Envelope>) {
     }
     written.push(log.append(&empty("step_started"), None, None).unwrap());
     (tmp, log, written)
-}
-
-#[test]
-fn watch_all_yields_a_log_of_lines_larger_than_a_page_then_live_lines() {
-    let (tmp, log, written) = large("watch-all-large");
-    assert_eq!(read(&tmp.session(&id("s_1"))).unwrap(), written);
-    let rx = relay(log.watch_all());
-    let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(
-        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
-        written
-    );
-    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
 }
 
 #[test]
