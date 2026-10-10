@@ -280,8 +280,6 @@ struct Run {
     /// A resize the reader has not applied to its parser yet, as
     /// (columns, rows).
     pending_size: Arc<Mutex<Option<(u16, u16)>>>,
-    /// Where the last `read_until` match ended.
-    seen: usize,
     deadline: Deadline,
 }
 
@@ -398,7 +396,6 @@ impl Run {
             output,
             screen,
             pending_size,
-            seen: 0,
             deadline: setup.deadline,
         }
     }
@@ -411,9 +408,15 @@ struct Grid {
     contents: String,
     rows: Vec<String>,
     cursor: (u16, u16),
-    #[allow(dead_code, reason = "the restore assertions read it from a later task on")]
+    #[allow(
+        dead_code,
+        reason = "the restore assertions read it from a later task on"
+    )]
     alternate_screen: bool,
-    #[allow(dead_code, reason = "the restore assertions read it from a later task on")]
+    #[allow(
+        dead_code,
+        reason = "the restore assertions read it from a later task on"
+    )]
     hide_cursor: bool,
 }
 
@@ -565,42 +568,25 @@ impl Run {
         .unwrap();
     }
 
-    /// The output so far.
-    fn output(&self) -> Vec<u8> {
-        self.output.lock().unwrap().clone()
-    }
-
-    /// Reads until the output after the last match holds `needle`, under
-    /// one named deadline for the whole wait, however much other output
-    /// arrives. On expiry the panic names what it waited for and shows the
-    /// output, so a stall says how far the journey got. A needle with a
-    /// space matches its words in order with only a terminal frame's gap
-    /// between them: spaces, cursor moves (`\x1b[<r>;<c>H`) and SGR
-    /// (`\x1b[...m`); unchanged cells are never rewritten, so a space can
-    /// arrive as a cursor move rather than a byte, and a style change can
-    /// split words with SGR.
-    fn read_until(&mut self, needle: &str) {
-        let (output, wakes, seen) = (Arc::clone(&self.output), Arc::clone(&self.wakes), self.seen);
-        let wanted = needle.to_owned();
-        let (done, found) = mpsc::channel();
-        thread::spawn(move || {
-            let wakes = wakes.lock().unwrap();
-            loop {
-                if let Some(end) = phrase_end(&output.lock().unwrap(), seen, &wanted) {
-                    done.send(end).unwrap_or(());
-                    return;
-                }
-                if wakes.recv().is_err() {
+    /// Reads until the raw output holds `needle` as exact bytes, under
+    /// one named deadline for the whole wait: an OSC 9 notification never
+    /// reaches the cells, so the grid cannot see it.
+    fn read_bytes_until(&self, needle: &[u8], what: &str) {
+        assert!(!needle.is_empty(), "a byte wait names its bytes");
+        let wakes = self.wakes.lock().unwrap();
+        loop {
+            {
+                let output = self.output.lock().unwrap();
+                if output.len() >= needle.len()
+                    && output.windows(needle.len()).any(|window| window == needle)
+                {
                     return;
                 }
             }
-        });
-        let Ok(end) = found.recv_timeout(self.deadline.left()) else {
-            let output = self.output();
-            let output = String::from_utf8_lossy(&output);
-            panic!("waited until the deadline for {needle:?}; output: {output:?}");
-        };
-        self.seen = end;
+            if wakes.recv_timeout(self.deadline.left()).is_err() {
+                panic!("waited until the deadline for {what}");
+            }
+        }
     }
 
     /// Waits for the child to exit, reaps it, and returns its output, then
@@ -649,170 +635,6 @@ fn until_socket(deadline: Deadline, socket: &Path, present: bool, what: &str) {
         reached.recv_timeout(deadline.left()).is_ok(),
         "waited until the deadline for {what}"
     );
-}
-
-/// Whether `haystack` holds `needle` as bytes.
-fn contains(haystack: &[u8], needle: &str) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle.as_bytes())
-}
-
-/// Where `needle` ends in `haystack` at or after `from`: an exact byte
-/// match, unless `needle` holds a space and starts with a non-escape
-/// byte, when each single space may instead be spaces, cursor moves and
-/// SGR in any mix, and nothing else.
-fn phrase_end(haystack: &[u8], from: usize, needle: &str) -> Option<usize> {
-    let wanted = needle.as_bytes();
-    if wanted.is_empty() {
-        return Some(from.min(haystack.len()));
-    }
-    if !needle.contains(' ') || wanted[0] == 0x1b {
-        return exact_end(haystack, from, wanted);
-    }
-    let words: Vec<&[u8]> = needle.split_whitespace().map(str::as_bytes).collect();
-    if words.len() < 2 {
-        return exact_end(haystack, from, wanted);
-    }
-    let mut cursor = from;
-    while cursor + words[0].len() <= haystack.len() {
-        let at = haystack[cursor..]
-            .windows(words[0].len())
-            .position(|window| window == words[0])?;
-        let mut pos = cursor + at + words[0].len();
-        let mut matched = true;
-        for word in &words[1..] {
-            let Some(gap) = frame_gap_end(haystack, pos) else {
-                matched = false;
-                break;
-            };
-            pos = gap;
-            if haystack[pos..].starts_with(word) {
-                pos += word.len();
-            } else {
-                matched = false;
-                break;
-            }
-        }
-        if matched {
-            return Some(pos);
-        }
-        cursor += at + 1;
-    }
-    None
-}
-
-/// Where `needle` ends in `haystack` at or after `from`, as exact bytes.
-fn exact_end(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
-    if from > haystack.len() {
-        return None;
-    }
-    haystack[from..]
-        .windows(needle.len())
-        .position(|window| window == needle)
-        .map(|at| from + at + needle.len())
-}
-
-/// Where the terminal frame's gap starting at `pos` ends: one or more
-/// spaces, cursor moves and SGR sequences, and nothing else.
-fn frame_gap_end(haystack: &[u8], mut pos: usize) -> Option<usize> {
-    let start = pos;
-    loop {
-        if haystack.get(pos) == Some(&b' ') {
-            pos += 1;
-        } else if let Some(end) = cursor_move_end(haystack, pos).or_else(|| sgr_end(haystack, pos))
-        {
-            pos = end;
-        } else {
-            break;
-        }
-    }
-    (pos > start).then_some(pos)
-}
-
-/// Where the cursor move at `pos` ends: `\x1b[<row>;<col>H`.
-fn cursor_move_end(haystack: &[u8], pos: usize) -> Option<usize> {
-    if haystack.get(pos) != Some(&0x1b) || haystack.get(pos + 1) != Some(&b'[') {
-        return None;
-    }
-    let mut end = pos + 2;
-    let row = end;
-    while haystack.get(end).is_some_and(|byte| byte.is_ascii_digit()) {
-        end += 1;
-    }
-    if end == row || haystack.get(end) != Some(&b';') {
-        return None;
-    }
-    end += 1;
-    let col = end;
-    while haystack.get(end).is_some_and(|byte| byte.is_ascii_digit()) {
-        end += 1;
-    }
-    if end == col || haystack.get(end) != Some(&b'H') {
-        return None;
-    }
-    Some(end + 1)
-}
-
-/// Where the SGR sequence at `pos` ends: `\x1b[...m`.
-fn sgr_end(haystack: &[u8], pos: usize) -> Option<usize> {
-    if haystack.get(pos) != Some(&0x1b) || haystack.get(pos + 1) != Some(&b'[') {
-        return None;
-    }
-    let mut end = pos + 2;
-    while haystack
-        .get(end)
-        .is_some_and(|byte| byte.is_ascii_digit() || *byte == b';')
-    {
-        end += 1;
-    }
-    (haystack.get(end) == Some(&b'm')).then_some(end + 1)
-}
-
-#[test]
-fn phrase_end_matches_a_single_word_exactly() {
-    assert_eq!(phrase_end(b"completed ok", 0, "completed"), Some(9));
-}
-
-#[test]
-fn phrase_end_matches_one_space_gap() {
-    assert_eq!(phrase_end(b"fiber resume", 0, "fiber resume"), Some(12));
-}
-
-#[test]
-fn phrase_end_matches_a_cursor_move_gap() {
-    assert_eq!(
-        phrase_end(b"fiber\x1b[10;1Hresume", 0, "fiber resume"),
-        Some(18)
-    );
-}
-
-#[test]
-fn phrase_end_matches_an_sgr_gap() {
-    assert_eq!(
-        phrase_end(b"fiber\x1b[0mresume", 0, "fiber resume"),
-        Some(15)
-    );
-}
-
-#[test]
-fn phrase_end_rejects_a_letter_gap() {
-    assert_eq!(phrase_end(b"fiberXresume", 0, "fiber resume"), None);
-}
-
-#[test]
-fn phrase_end_rejects_an_erase_display_gap() {
-    assert_eq!(phrase_end(b"fiber\x1b[2Jresume", 0, "fiber resume"), None);
-}
-
-#[test]
-fn phrase_end_ignores_a_phrase_starting_before_from() {
-    assert_eq!(phrase_end(b"fiber resume", 1, "fiber resume"), None);
-}
-
-#[test]
-fn phrase_end_rejects_an_empty_gap() {
-    assert_eq!(phrase_end(b"fiberresume", 0, "fiber resume"), None);
 }
 
 /// "Hello." in two deltas.
@@ -869,37 +691,36 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     let server = ProviderServer::start([hello(), stalled()]).unwrap();
     setup.provider(&server);
     let mut run = Run::terminal(&setup);
-    // The first frame draws the input line before any byte is written to
-    // the master: no detection reply goes in.
-    run.read_until(">");
-    // Enter goes out once the hub connects. Unchanged cells are never
-    // rewritten, spaces included, so each wait matches one word.
+    // The first frame draws the input line.
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    // Enter goes out once the hub connects.
     run.write(b"say hi\r");
-    // The reply streams in two deltas, so only the first delta's text
-    // arrives whole; the turn's close says it finished.
-    run.read_until("Hel");
-    run.read_until("completed");
-    // The second prompt starts a stalled turn; Esc interrupts it.
+    // The reply streams in two deltas; the turn's close says it finished.
+    run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
+    run.wait_screen("the finished turn", |grid| {
+        grid.contents.contains("completed")
+    });
+    // The second prompt starts a stalled turn; Esc interrupts it. The
+    // working line itself proves the turn runs, so no elapsed count.
     run.write(b"again\r");
-    run.read_until("Working");
-    // The elapsed count proves the working line draws: a count whose
-    // width changes rewrites its cells whole, while unchanged cells are
-    // never rewritten, so no other word of the line arrives whole.
-    run.read_until("10s");
+    run.wait_screen("the working turn", |grid| grid.contents.contains("Working"));
     // With kitty's flags pushed Esc arrives as `CSI 27 u`, never as a
     // lone byte.
     run.write(b"\x1b[27u");
-    run.read_until("interrupted");
+    run.wait_screen("the interrupted turn", |grid| {
+        grid.alternate_screen && grid.contents.contains("interrupted")
+    });
     run.write(b"\x03\x03\r");
     // The turn just ended, so its idle status may still be on its way: the
     // quit either exits at once or asks first (`docs/tui.md`, "Quit"). The
     // Enter goes out with the Ctrl+C bytes, so it is processed after them:
     // it leaves working sessions running, and when the terminal already
     // exited it is never read.
-    // After the last frame the output holds the alternate-screen leave and
-    // the cursor shown, then one resume line per live session ("On exit").
-    run.read_until("\x1b[?25h");
-    run.read_until("fiber resume");
+    // The terminal is restored: the primary screen is back, the cursor
+    // shows, and one resume line per live session is on it ("On exit").
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
@@ -912,14 +733,17 @@ fn a_finished_turn_sends_an_osc_9_notification() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let mut run = Run::terminal_with(&setup, &[("TERM_PROGRAM", "ghostty")]);
-    run.read_until(">");
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
     run.write(b"say hi\r");
-    // The reply streams in two deltas, so only the first delta's text
-    // arrives whole; the turn's close says it finished.
-    run.read_until("Hel");
-    run.read_until("\x1b]9;Fiber: ");
+    // The reply streams in two deltas; the turn's close says it finished.
+    run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
+    // The notification never reaches the cells, so this one wait stays on
+    // the raw bytes.
+    run.read_bytes_until(b"\x1b]9;Fiber: ", "the OSC 9 notification");
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
@@ -959,22 +783,29 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     )
     .unwrap();
     let mut run = Run::terminal(&setup);
-    run.read_until(">");
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
     run.write(b"run it\r");
-    run.read_until("asked by a global rule: echo hi");
-    run.read_until("allow once");
+    run.wait_screen("the approval panel", |grid| {
+        grid.contents.contains("asked by a global rule: echo hi")
+    });
+    run.wait_screen("the approval choices", |grid| {
+        grid.contents.contains("allow once")
+    });
     // Enter on the first choice allows once; the call runs and the turn
     // finishes with the answer.
     run.write(b"\r");
-    // The reply streams in two deltas, so only the first delta's text
-    // arrives whole; the turn's close says it finished.
-    run.read_until("Hel");
-    run.read_until("completed");
+    // The reply streams in two deltas; the turn's close says it finished.
+    run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
+    run.wait_screen("the finished turn", |grid| {
+        grid.contents.contains("completed")
+    });
     // As above: the turn just ended, so quitting either exits at once or
     // asks first. The Enter leaves the session running, and exiting prints
     // its resume line ("Quit", "On exit").
     run.write(b"\x03\x03\r");
-    run.read_until("fiber resume");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
     // The model got the call's output, not a denial.
@@ -1036,59 +867,58 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
         ),
     )
     .unwrap();
-    let mut run = Run::terminal(&setup);
-    // A 160x48 pty, as the ticket's screen: the resize lands before the
-    // first prompt, so every frame draws at the ticket's width.
-    rustix::termios::tcsetwinsize(
-        &run.main,
-        rustix::termios::Winsize {
-            ws_col: 160,
-            ws_row: 48,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        },
-    )
-    .unwrap();
-    support::kill_pid(setup.deadline, run.child.id(), "WINCH").unwrap();
-    run.read_until(">");
+    let mut run = Run::terminal_full_sized(&setup, Terminal::open_sized(160, 48), &[], &[]);
+    // A 160x48 grid, as the ticket's screen: every frame draws at the
+    // ticket's width.
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
     run.write(b"run it\r");
     // The collapsed group line counts the call's parsed form, before the
     // shell's approval panel opens below it.
-    run.read_until("asked 4 questions");
-    run.read_until("asked by a project rule: echo hi");
-    run.read_until("allow once");
-    let output = run.output();
-    let text = String::from_utf8_lossy(&output);
-    // The one-row rule cannot be read from this raw byte stream without a
-    // terminal emulator, so this test does not assert it here: it is
-    // asserted by the 160-column screen tests
-    // `group_line_and_ledger_show_parsed_arguments_never_json` and
-    // `ledger_rows_show_parsed_arguments_never_json` in
-    // crates/tui/src/view_tests.rs and
-    // `group_summary_lines_are_cut_to_one_row_at_the_width` in
-    // crates/tui/src/turn_tests.rs.
+    run.wait_screen("the asked questions", |grid| {
+        grid.contents.contains("asked 4 questions")
+    });
+    run.wait_screen("the approval panel", |grid| {
+        grid.contents.contains("asked by a project rule: echo hi")
+    });
+    run.wait_screen("the approval choices", |grid| {
+        grid.contents.contains("allow once")
+    });
+    let grid = run.screen();
+    let rows = grid.rows;
     // The approval panel shows the shell's arguments for review, so the
     // shell's JSON is expected there; the `ask_user` call's JSON must
-    // never draw: neither on the group line nor in its ledger row.
-    assert!(!text.contains("{\"questions\""), "{text:?}");
-    assert!(!text.contains("\"header\""), "{text:?}");
-    assert!(text.contains("asked 4 questions"), "{text:?}");
-    assert!(!text.contains("ask_user {"), "{text:?}");
+    // never draw: neither on the group line nor in its ledger row. The
+    // grid reassembles wrapped rows, so every drawn row is checked.
+    assert!(
+        !rows.iter().any(|row| row.contains("{\"questions\"")),
+        "{rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("\"header\"")),
+        "{rows:?}"
+    );
+    assert!(grid.contents.contains("asked 4 questions"), "{rows:?}");
+    assert!(
+        !rows.iter().any(|row| row.contains("ask_user {")),
+        "{rows:?}"
+    );
     // No row of the conversation holds `{"` except the shell approval
     // panel's arguments (`{\"command\":\"echo hi\"}`): every occurrence
-    // in the captured output is immediately followed by `command"`.
-    let mut rest = text.as_ref();
+    // on the grid is immediately followed by `command"`.
+    let mut rest = grid.contents.as_str();
     let mut calls = 0;
     while let Some(at) = rest.find("{\"") {
         calls += 1;
         let after = &rest[at + 2..];
-        assert!(after.starts_with("command\""), "{text:?}");
+        assert!(after.starts_with("command\""), "{rows:?}");
         rest = &rest[at + 2..];
     }
-    assert!(calls > 0, "{text:?}");
+    assert!(calls > 0, "{rows:?}");
     // As above: quitting either exits at once or asks first.
     run.write(b"\x03\x03\r");
-    run.read_until("fiber resume");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
@@ -1115,33 +945,28 @@ fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
     let setup = Setup::new();
     let server = ProviderServer::start([streaming_ask_stalls()]).unwrap();
     setup.provider(&server);
-    let mut run = Run::terminal(&setup);
-    // A 160x48 pty, as the ticket's screen: the resize lands before the
-    // first prompt, so every frame draws at the ticket's width.
-    rustix::termios::tcsetwinsize(
-        &run.main,
-        rustix::termios::Winsize {
-            ws_col: 160,
-            ws_row: 48,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        },
-    )
-    .unwrap();
-    support::kill_pid(setup.deadline, run.child.id(), "WINCH").unwrap();
-    run.read_until(">");
+    let mut run = Run::terminal_full_sized(&setup, Terminal::open_sized(160, 48), &[], &[]);
+    // A 160x48 grid, as the ticket's screen: every frame draws at the
+    // ticket's width.
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
     run.write(b"run it\r");
     // The call is still streaming its arguments, so the group line shows
     // the raw text; the scripted test above shows it gone once requested.
-    run.read_until("{\"questions\"");
+    run.wait_screen("the raw arguments", |grid| {
+        grid.contents.contains("{\"questions\"")
+    });
     // The turn stalls mid-arguments: Esc interrupts it, as the stalled
     // turn test interrupts its stalled reply. With kitty's flags pushed
     // Esc arrives as `CSI 27 u`, never as a lone byte.
     run.write(b"\x1b[27u");
-    run.read_until("interrupted");
+    run.wait_screen("the interrupted turn", |grid| {
+        grid.alternate_screen && grid.contents.contains("interrupted")
+    });
     // As above: quitting either exits at once or asks first.
     run.write(b"\x03\x03\r");
-    run.read_until("fiber resume");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
@@ -1157,63 +982,60 @@ fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
         &json!({"mcp": {"servers": {"db": {"command": "/bin/echo"}}}}),
     );
     let mut run = Run::terminal(&setup);
-    run.read_until(">");
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
     run.write(b"say hi\r");
-    // One word: the 60-column terminal wraps the TUI-files line, and
-    // unchanged cells are never rewritten, so a phrase can arrive split.
-    run.read_until("installed");
+    // The offer names the TUI files it installs; the grid reassembles
+    // the line however the terminal wraps it.
+    run.wait_screen("the repository offer", |grid| {
+        grid.contents.contains("installed")
+    });
     // From skip, ← chooses approve; ↓ moves to Send, and Enter sends.
     run.write(b"\x1b[D");
     run.write(b"\x1b[B");
     run.write(b"\r");
     // The turn runs only once the offer resolves, so the answer shows the
     // reply was accepted and the session counted this terminal first.
-    // The reply streams in two deltas, so only the first delta's text
-    // arrives whole; the turn's close says it finished.
-    run.read_until("Hel");
-    run.read_until("completed");
+    // The reply streams in two deltas; the turn's close says it finished.
+    run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
+    run.wait_screen("the finished turn", |grid| {
+        grid.contents.contains("completed")
+    });
     // As above: quitting either exits at once or asks first.
     run.write(b"\x03\x03\r");
-    run.read_until("fiber resume");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(server.requests().len(), 1);
 }
 
 #[test]
-fn resize_redraws_the_input_line_on_the_new_last_row() {
+fn resize_redraws_the_grid_at_the_new_size() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let mut run = Run::terminal(&setup);
-    run.read_until(">");
-    // Default-background cells stay unpainted, so no row is addressed
-    // whole; the footer's last word proves the last row drew before
-    // the resize.
-    run.read_until("quit");
-    let marked = run.output().len();
-    rustix::termios::tcsetwinsize(
-        &run.main,
-        rustix::termios::Winsize {
-            ws_col: 40,
-            ws_row: 10,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        },
-    )
-    .unwrap();
-    support::kill_pid(setup.deadline, run.child.id(), "WINCH").unwrap();
-    // The next frame draws the input line on row 10; rows 11 and 12 are
-    // never addressed again.
-    run.read_until("\x1b[10;1H");
-    let output = run.output();
-    let fresh = &output[marked..];
-    assert!(!contains(fresh, "\x1b[11;1H"));
-    assert!(!contains(fresh, "\x1b[12;1H"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    // The footer's last word proves the last row drew before the resize.
+    run.wait_screen("the footer", |grid| grid.contents.contains("quit"));
+    run.resize(40, 10);
+    // The grid shrinks to the new size with the input line on its last
+    // row; the old rows are gone, not just unaddressed.
+    // The grid shrinks to the new size with the input line still drawn;
+    // the old rows are gone, not just unaddressed.
+    run.wait_screen("the redrawn grid at the new size", |grid| {
+        grid.rows.len() == 10 && grid.rows.iter().any(|row| row.contains("> /?"))
+    });
     // The hub `fiber` started is up before the quit, so `wait` sees it
     // idle out rather than start after the home is gone.
     until_socket(setup.deadline, &run.hub_socket, true, "the hub to start");
     run.write(b"\x03\x03");
+    // No session runs, so no resume line follows: the restored primary
+    // screen is the assertion.
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
@@ -1250,10 +1072,12 @@ fn resume_opens_the_session_a_prefix_names() {
     assert_eq!(asked.status.code(), Some(0));
     let id = setup.only_session();
     let mut run = Run::terminal_args(&setup, &["resume", &id[..4]]);
-    run.read_until(">");
-    run.read_until("Hello.");
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the earlier reply", |grid| grid.contents.contains("Hello."));
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
@@ -1266,10 +1090,12 @@ fn continue_opens_the_latest_session() {
     assert_eq!(setup.fiber(&["ask", "first"]).status.code(), Some(0));
     assert_eq!(setup.fiber(&["ask", "second"]).status.code(), Some(0));
     let mut run = Run::terminal_args(&setup, &["continue"]);
-    run.read_until(">");
-    run.read_until("Second.");
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
@@ -1282,14 +1108,16 @@ fn resume_without_an_id_opens_home_at_the_session_list() {
     let asked = setup.fiber(&["ask", "say hi"]);
     assert_eq!(asked.status.code(), Some(0));
     let mut run = Run::terminal_args(&setup, &["resume"]);
-    run.read_until(">");
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
     // The exited session is listed by its first prompt.
-    run.read_until("say hi");
+    run.wait_screen("the session list", |grid| grid.contents.contains("say hi"));
     // The list is focused, so Enter opens the row: the reply shows.
     run.write(b"\r");
-    run.read_until("Hello.");
+    run.wait_screen("the earlier reply", |grid| grid.contents.contains("Hello."));
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
@@ -1297,8 +1125,11 @@ fn resume_without_an_id_opens_home_at_the_session_list() {
 #[test]
 fn continue_with_no_session_is_a_usage_error() {
     let setup = Setup::new();
-    let mut run = Run::terminal_args(&setup, &["continue"]);
-    run.read_until("No session in this project to continue");
+    let run = Run::terminal_args(&setup, &["continue"]);
+    run.wait_screen("the usage error", |grid| {
+        grid.contents
+            .contains("No session in this project to continue")
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(2));
 }
@@ -1306,14 +1137,18 @@ fn continue_with_no_session_is_a_usage_error() {
 #[test]
 fn resume_with_an_unknown_prefix_fails_before_any_frame() {
     let setup = Setup::new();
-    let mut run = Run::terminal_args(&setup, &["resume", "s_zzz"]);
-    run.read_until("no session at");
+    let run = Run::terminal_args(&setup, &["resume", "s_zzz"]);
+    run.wait_screen("the usage error", |grid| {
+        grid.contents.contains("no session at")
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(1));
 }
 
 /// Runs `fiber` with `args`, `stdin` and standard output and error
 /// piped: with no tty on `missing`, it exits 2 naming `fiber ask`.
+/// Without a tty the binary never draws, so these keep their
+/// byte/stderr/exit assertions: there is no screen to assert on.
 fn assert_names_ask(deadline: Deadline, stdin: Stdio, missing: &str, args: &[&str]) {
     let setup = Setup::within(deadline);
     let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -1427,17 +1262,22 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
         env.push(("WAYLAND_DISPLAY", "fiber-test"));
     }
     let mut run = Run::terminal_with(&setup, &env);
-    run.read_until(">");
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
     run.write(&[0x16]);
-    run.read_until("[Image #1]");
+    run.wait_screen("the pasted image", |grid| {
+        grid.contents.contains("[Image #1]")
+    });
     run.write(b"\r");
-    // The reply streams in two deltas, so only the first delta's text
-    // arrives whole; quitting needs the turn finished, which the close says.
-    run.read_until("completed");
+    // The reply streams in two deltas; quitting needs the turn finished,
+    // which the close says.
+    run.wait_screen("the finished turn", |grid| {
+        grid.contents.contains("completed")
+    });
     stored_pixel(&setup);
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
-    run.read_until("fiber resume");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
