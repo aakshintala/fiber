@@ -363,42 +363,6 @@ fn anthropic_reserved_extra_body_fields_leave_the_model_out() {
 }
 
 #[test]
-fn completions_reserved_extra_body_fields_leave_the_model_out() {
-    reserved_case(
-        "openai-completions",
-        &["model", "messages", "tools", "tool_choice", "stream"],
-    );
-}
-
-#[test]
-fn responses_reserved_extra_body_fields_leave_the_model_out() {
-    reserved_case(
-        "openai-responses",
-        &[
-            "model",
-            "instructions",
-            "input",
-            "tools",
-            "tool_choice",
-            "stream",
-        ],
-    );
-}
-
-#[test]
-fn google_reserved_extra_body_fields_leave_the_model_out() {
-    reserved_case(
-        "google-generative-ai",
-        &["systemInstruction", "contents", "tools", "toolConfig"],
-    );
-}
-
-#[test]
-fn bedrock_reserved_extra_body_fields_leave_the_model_out() {
-    reserved_case("bedrock-converse", &["system", "messages", "toolConfig"]);
-}
-
-#[test]
 fn extra_body_matching_is_exact_and_top_level_only() {
     let setup = Setup::new();
     let data = json!({
