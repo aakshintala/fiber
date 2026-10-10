@@ -709,8 +709,8 @@ test usage.
 3. The model. n/a (fuzzy finder; no provider). Repeatability via hermetic local
    config/cable dirs passed as CLI flags (`--cable-dir ./cable/unix --config-file
    ./.config/config.toml`) and per-test temp dirs.
-4. Scope. 138 PTY tests (`cat tests/pty/*.rs | grep -c "#\[test\]"` → 137 in
-   tests/pty + 0 in headless = 138 total per combined count) across 13 files
+4. Scope. 138 PTY tests (`cat tests/pty/*.rs | grep -c "#\[test\]"` → 138;
+   the headless tier is separate and uses `#[tokio::test]`) across 14 files (`ls tests/pty/*.rs | wc -l`)
    (channels/config/layout/modes/preview/remote-control/search/selection/…) plus
    10 headless tests — broad cross-feature journeys, not just widgets. CI runs
    everything serially-ish: `TV_CI=1 cargo test --locked --all-features --workspace
