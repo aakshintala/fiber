@@ -14,9 +14,10 @@ use std::io;
 use rustix::process::{Pid, Signal};
 
 use super::{
-    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, alive, bounded, group_empties,
-    group_lives, kill_group, kill_matching, kill_pid, listed_exit, matching, matching_exits,
-    pattern, pids_exit, signal_group, signal_named, signal_pid, try_matching_exits,
+    GONE_ARGS, MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, PS_TIMEOUT, WATCHDOG_SCRIPT, alive,
+    bounded, group_empties, group_lives, kill_group, kill_matching, kill_pid, listed_exit,
+    matching, matching_exits, pattern, pids_exit, read_lookup, signal_group, signal_named,
+    signal_pid, spawn_lookup, try_matching_exits,
 };
 use crate::deadline::Deadline;
 
@@ -690,6 +691,41 @@ fn listed_exit_names_a_second_listing_failure() {
     let text = err.to_string();
     assert!(text.contains("second pgrep failed"), "{text}");
     assert!(text.contains("pgrep fell over"), "{text}");
+}
+
+#[test]
+fn a_stalled_lookup_times_out_and_reaps_the_lookup() {
+    // A lookup that never prints: `sleep` ignores stdin, so a null one
+    // still stalls it past the lookup's own deadline.
+    let child = spawn_lookup("sh", &["-c", "exec sleep 30"]).unwrap();
+    let pid = child.id();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || {
+        match answered.send(read_lookup(
+            child,
+            "the stalled lookup",
+            Duration::from_millis(200),
+        )) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let text = match Deadline::after(DEADLINE).recv(&answer) {
+        Ok(text) => text,
+        Err(_) => panic!("waited {DEADLINE:?} for the stalled lookup to time out"),
+    };
+    assert_eq!(text, PS_TIMEOUT, "a stalled lookup must read as timed out");
+    assert!(
+        pids_exit(&[pid], DEADLINE),
+        "waited {DEADLINE:?} for the timed-out lookup to be reaped"
+    );
+}
+
+#[test]
+fn a_lookup_that_fails_or_prints_nothing_reads_gone() {
+    let child = spawn_lookup("sh", &["-c", "exit 3"]).unwrap();
+    assert_eq!(read_lookup(child, "the failed lookup", DEADLINE), GONE_ARGS);
+    let child = spawn_lookup("sh", &["-c", "exit 0"]).unwrap();
+    assert_eq!(read_lookup(child, "the silent lookup", DEADLINE), GONE_ARGS);
 }
 
 #[test]

@@ -392,31 +392,53 @@ pub fn pids_exit(pids: &[u32], deadline: Duration) -> bool {
 /// the pid in the expiry message still names the holder.
 const GONE_ARGS: &str = "<gone>";
 
-/// `pid`'s command line through `ps -o args= -p <pid>`, `None` when `ps`
-/// fails or prints nothing: the process exited between the listing and
-/// the lookup.
-fn command_line(pid: u32) -> Option<String> {
-    let output = Command::new("ps")
-        .args(["-o", "args=", "-p", &pid.to_string()])
+/// What a command line lookup prints when the lookup itself hung and was
+/// killed: nothing is known about the pid, not even that it is gone.
+const PS_TIMEOUT: &str = "<ps timed out>";
+
+/// Spawns a command line lookup: `program` with `args`, stdio closed but
+/// stdout piped for [`bounded`].
+fn spawn_lookup(program: &str, args: &[&str]) -> io::Result<Child> {
+    Command::new(program)
+        .args(args)
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let args = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if args.is_empty() { None } else { Some(args) }
+        .spawn()
 }
 
-/// Each outstanding pid with its command line, for the expiry message: a
-/// lookup that fails prints `<gone>`, so a reused pid still reads named.
+/// Reads a spawned lookup to its end under `deadline`: its trimmed stdout,
+/// `<gone>` when it fails or prints nothing, `<ps timed out>` when the
+/// lookup itself hung and was killed. [`bounded`] reaps the killed child.
+fn read_lookup(child: Child, what: &str, deadline: Duration) -> String {
+    match bounded(child, what, deadline) {
+        Ok((status, out)) if status.success() => {
+            let args = String::from_utf8_lossy(&out).trim().to_owned();
+            if args.is_empty() {
+                GONE_ARGS.to_owned()
+            } else {
+                args
+            }
+        }
+        Ok(_) => GONE_ARGS.to_owned(),
+        Err(err) if err.kind() == io::ErrorKind::TimedOut => PS_TIMEOUT.to_owned(),
+        Err(_) => GONE_ARGS.to_owned(),
+    }
+}
+
+/// `pid`'s command line through `ps -o args= -p <pid>`, bounded like
+/// [`matching`]'s `pgrep`: a hung `ps` is killed, never waited out.
+fn command_line(pid: u32) -> String {
+    match spawn_lookup("ps", &["-o", "args=", "-p", &pid.to_string()]) {
+        Ok(child) => read_lookup(child, "ps", PGREP_DEADLINE),
+        Err(_) => GONE_ARGS.to_owned(),
+    }
+}
+
+/// Each outstanding pid with its command line, for the expiry message.
 fn describe_holders(pids: &[u32]) -> String {
     pids.iter()
-        .map(|pid| {
-            let args = command_line(*pid).unwrap_or_else(|| GONE_ARGS.to_owned());
-            format!("{pid} {args}")
-        })
+        .map(|pid| format!("{pid} {}", command_line(*pid)))
         .collect::<Vec<_>>()
         .join(", ")
 }
