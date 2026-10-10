@@ -121,13 +121,7 @@ impl Tool for Edit {
             );
         }
         let text = match inspect(&path) {
-            Ok(Inspected::Pdf { size, .. }) => {
-                return failed(
-                    ErrorCode::UnsupportedFile,
-                    unsupported_message(&path, "a PDF", size, "Edit changes text files only."),
-                );
-            }
-            Ok(Inspected::PdfOverCap { size }) => {
+            Ok(Inspected::Pdf { size, .. }) | Ok(Inspected::PdfOverCap { size }) => {
                 return failed(
                     ErrorCode::UnsupportedFile,
                     unsupported_message(&path, "a PDF", size, "Edit changes text files only."),
