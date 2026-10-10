@@ -2,6 +2,7 @@
 //! durable lines, fsyncs them in the order `docs/events.md`, "Writing", sets,
 //! and fans every event out to watchers.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
@@ -109,28 +110,33 @@ impl Log {
             .append(true)
             .open(&path)
             .map_err(io_at(&path))?;
-        // One pass over the complete lines, one line held at a time: where
-        // each starts, the latest-wins kinds, and where a torn tail begins.
-        let mut lines = crate::read::lines(&dir)?;
-        let mut starts = Vec::new();
+        // One scan over the complete lines: the offset table, the
+        // latest-wins kinds and the rate fold, and where a torn tail
+        // begins. Each line's `kind` and `seq` are read first; only the
+        // kinds a fold reads are fully parsed. A refusal names its line
+        // and leaves the file as it was: nothing is truncated until the
+        // scan ends.
         let mut latest = BTreeMap::new();
         let mut rate = RateFold::default();
         let mut next = 0;
-        loop {
-            let start = lines.offset();
-            let Some(line) = lines.next() else {
-                break;
-            };
-            let line = line?;
-            starts.push(start);
-            next = line.seq.map_or(0, |s| s.0 + 1);
-            keep_latest(&mut latest, &line);
-            rate.fold(&line);
-        }
-        let end = lines.offset();
+        let offsets = Offsets::scan(&dir, u64::MAX, |bytes| {
+            let text = std::str::from_utf8(bytes)
+                .map_err(|_| serde::de::Error::custom("line is not UTF-8"))?;
+            let head: Head = serde_json::from_str(text)?;
+            next = head
+                .seq
+                .checked_add(1)
+                .ok_or_else(|| serde::de::Error::custom("seq leaves no next seq"))?;
+            if folded(&head.kind) {
+                let line = envelope(bytes)?;
+                keep_latest(&mut latest, &line);
+                rate.fold(&line);
+            }
+            Ok(())
+        })?;
+        let end = offsets.end();
         // A no-op unless the tail is torn.
         events.set_len(end).map_err(io_at(&path))?;
-        let offsets = Offsets::new(path, starts, end);
         let mut inner = Inner::new(id, dir, events, lock, next, offsets);
         inner.latest = latest;
         inner.rate = rate;
@@ -475,16 +481,68 @@ impl Inner {
     }
 }
 
+/// The two fields `Log::open` reads from every line: what decides
+/// whether the line is fully parsed. Every other field is skipped, but
+/// its JSON syntax is still checked. `kind` borrows the line's bytes and
+/// allocates only for an escaped kind; `seq` is required.
+#[derive(serde::Deserialize)]
+struct Head<'a> {
+    #[serde(borrow)]
+    kind: Cow<'a, str>,
+    seq: u64,
+}
+
+/// Whether `keep_latest` keeps a line of this kind: the latest-wins kinds.
+/// `Log::open` fully parses only these and the kinds the rate fold reads.
+fn latest_wins(kind: &str) -> bool {
+    matches!(
+        kind,
+        "session_status"
+            | "extensions_loaded"
+            | "steering_queue"
+            | "clients"
+            | "extension_ui"
+    )
+}
+
+/// Whether `Log::open` fully parses a line of this kind: the kinds a fold
+/// reads.
+fn folded(kind: &str) -> bool {
+    latest_wins(kind) || RateFold::reads(kind)
+}
+
+/// Fully parses one line open folds. The one full-parse helper on the open
+/// path, so the counted-work test counts through it.
+fn envelope(bytes: &[u8]) -> Result<Envelope, serde_json::Error> {
+    #[cfg(test)]
+    FULL_PARSES.with(|count| count.set(count.get().saturating_add(1)));
+    serde_json::from_slice(bytes)
+}
+
+// Counts the full parses on the open path, on the calling thread: the full
+// parse happens inside `Log::open` and its result is folded and dropped
+// there, so nothing a caller sees tells a full parse from a kind-and-seq
+// read. Test-only; non-test builds never call it.
+#[cfg(test)]
+thread_local! {
+    static FULL_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many full parses the open path has made on the calling thread
+/// (`docs/testing.md`, "a test of how much work something does counts the
+/// work"). The counted-work test reads it before and after `Log::open`.
+#[cfg(test)]
+pub(crate) fn full_parses() -> usize {
+    FULL_PARSES.with(|count| count.get())
+}
+
 /// Keeps `line` in `latest` when its kind is one whose latest wins
 /// (`session_status`, `extensions_loaded`, `steering_queue`, `clients`, and
 /// `extension_ui`). `extension_ui` is kept per extension and per widget id:
 /// one key for the status line and one per widget; a clearing line (`status`
 /// `""`, or empty `lines`) removes its key.
 fn keep_latest(latest: &mut BTreeMap<String, Envelope>, line: &Envelope) {
-    if matches!(
-        line.kind.as_str(),
-        "session_status" | "extensions_loaded" | "steering_queue" | "clients"
-    ) {
+    if latest_wins(line.kind.as_str()) && line.kind.as_str() != "extension_ui" {
         latest.insert(line.kind.clone(), line.clone());
         return;
     }
