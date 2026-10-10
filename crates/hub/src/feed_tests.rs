@@ -559,7 +559,14 @@ fn a_scan_skips_followed_sessions_and_delegates() {
     let names = BTreeSet::from([id(1), id(2), id(3)]);
     let mut state = lock(&feed.state);
     let (followed, _far) = UnixStream::pair().unwrap();
-    state.tracked.insert(id(1), followed);
+    let (_reader, stop) = support::stoppable::reader(followed.try_clone().unwrap()).unwrap();
+    state.tracked.insert(
+        id(1),
+        Tracked {
+            stream: followed,
+            stop,
+        },
+    );
     state.delegates.insert(id(2));
     assert_eq!(state.fresh(&names), [id(3)]);
 }
@@ -806,10 +813,7 @@ fn stop_returns_when_a_silent_session_stays_open() {
         drop(stopping);
         tx.send(()).unwrap_or(());
     });
-    assert!(
-        Deadline::after(DEADLINE).recv(&rx).is_ok(),
-        "stop returns"
-    );
+    assert!(Deadline::after(DEADLINE).recv(&rx).is_ok(), "stop returns");
     // Joined, not just told to end: the summary thread held the feed.
     assert_eq!(Arc::strong_count(&feed), 1);
     assert!(lock(&feed.state).tracked.is_empty());

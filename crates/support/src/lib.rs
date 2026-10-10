@@ -1,6 +1,7 @@
 //! Small shared mechanisms with no domain knowledge: the clock traits, the
-//! process clock and the clock-parked wait, the process-group guard and the
-//! poison-ignoring `lock` (`docs/architecture.md`, "The modules").
+//! process clock and the clock-parked wait, the process-group guard, the
+//! poison-ignoring `lock` and the stoppable read (`docs/architecture.md`,
+//! "The modules").
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -11,6 +12,9 @@ pub mod clock;
 /// The process-group guard, the process-wide list and the signals
 /// (`docs/testing.md`, "Running tests").
 pub mod group;
+
+/// The stoppable read: a socket reader that a `Stop` ends on demand.
+pub mod stoppable;
 
 /// Locks `mutex`, returning the guard even when another thread panicked
 /// while holding it: a poisoned lock still guards live state.

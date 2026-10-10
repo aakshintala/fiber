@@ -70,22 +70,22 @@ pub(crate) struct Conn {
     pub(crate) drive: Option<(Ack, Origin)>,
 }
 
-/// Reads `stream` until the client hangs up. `id` is the slot [`Gate`] stored
-/// the reader in, with the shutdown that unblocks it. The writer is the
-/// socket's other clone.
-pub(crate) fn serve(stream: UnixStream, gate: Arc<Gate>, id: u64) {
-    let Some(writer) = stream.try_clone().ok() else {
+/// Reads `stream` until the client hangs up or its ender stops it. `id` is
+/// the slot [`Gate`] stored the reader in, with the ender that stops it and
+/// shuts the socket. The writer is the socket's other clone.
+pub(crate) fn serve(stream: support::stoppable::Reader, gate: Arc<Gate>, id: u64) {
+    let Some(writer) = stream.get_ref().try_clone().ok() else {
         return;
     };
     serve_connection(stream, Box::new(writer), gate, id);
 }
 
-/// Reads `stream` and writes through `writer`. The connection's shutdown was
+/// Reads `stream` and writes through `writer`. The connection's ender was
 /// stored with its reader, which is how [`crate::session::Session::close`]
-/// reaps a blocked writer. Production builds the reader and the writer from
-/// one socket.
+/// stops a blocked reader and reaps it. Production builds the reader and
+/// the writer from one socket.
 pub(crate) fn serve_connection(
-    stream: UnixStream,
+    stream: support::stoppable::Reader,
     writer: Box<dyn Write + Send>,
     gate: Arc<Gate>,
     id: u64,
@@ -94,7 +94,7 @@ pub(crate) fn serve_connection(
         gate: Arc::clone(&gate),
         id,
     };
-    let Some(direct) = stream.try_clone().ok() else {
+    let Some(direct) = stream.get_ref().try_clone().ok() else {
         return;
     };
     let mut conn = Conn {
@@ -146,8 +146,16 @@ fn is_line_ending(byte: u8) -> bool {
     byte == b'\n' || byte == b'\r'
 }
 
-pub(crate) fn shutdown_both(stream: UnixStream) -> Box<dyn Fn() + Send + Sync> {
+/// Ends a client connection's reader: stops its stoppable read, then shuts
+/// the socket down, so the reader runs its normal cleanup and the client
+/// sees EOF. Stored with the reader, which is how
+/// [`crate::session::Session::close`] reaps a blocked reader.
+pub(crate) fn ender(
+    stream: UnixStream,
+    stop: support::stoppable::Stop,
+) -> Box<dyn Fn() + Send + Sync> {
     Box::new(move || {
+        stop.stop();
         #[cfg(test)]
         if crate::session::shutdown_skipped_for_test() {
             return;

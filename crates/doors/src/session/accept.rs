@@ -20,20 +20,26 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                     }
                     continue;
                 };
+                let Ok((read, stop)) = support::stoppable::reader(stream) else {
+                    if gate.stopped() {
+                        return;
+                    }
+                    continue;
+                };
                 let (tx, rx) = mpsc::channel();
                 let child = Arc::clone(&gate);
                 if let Ok(handle) = spawn("client", move || {
                     let Ok(id) = rx.recv() else {
                         return;
                     };
-                    client::serve(stream, child, id);
+                    client::serve(read, child, id);
                 }) {
                     // Atomic: `push_reader` checks the stop under the same
                     // lock `mark_stopped`/`join_clients` share, so a reader
                     // admitted after the stop is rejected instead of leaked:
                     // its stream is already shut, dropping `tx` ends its
                     // thread, and joining reaps it.
-                    match gate.push_reader(handle, client::shutdown_both(shutdown_stream)) {
+                    match gate.push_reader(handle, client::ender(shutdown_stream, stop)) {
                         Ok(id) => {
                             if tx.send(id).is_err() {
                                 gate.finish(id);

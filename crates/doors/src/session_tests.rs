@@ -395,15 +395,17 @@ fn close_returns_while_a_silent_client_stays_open() {
         let (conns, _) = gate
             .writers
             .wait_timeout_while(conns, DEADLINE, |conns| {
-                !conns.live.iter().any(|(_, live)| {
-                    live.reader.is_some() && live.shutdown.is_some()
-                })
+                !conns
+                    .live
+                    .iter()
+                    .any(|(_, live)| live.reader.is_some() && live.shutdown.is_some())
             })
             .unwrap_or_else(PoisonError::into_inner);
         assert!(
-            conns.live.iter().any(|(_, live)| {
-                live.reader.is_some() && live.shutdown.is_some()
-            }),
+            conns
+                .live
+                .iter()
+                .any(|(_, live)| { live.reader.is_some() && live.shutdown.is_some() }),
             "the silent client's reader is published and blocked"
         );
     }
@@ -832,6 +834,7 @@ fn a_reader_that_reaps_itself_finishes() {
     let gate = Arc::clone(&opened.session.gate);
     let (peer, stream) = UnixStream::pair().unwrap();
     let shutdown = stream.try_clone().unwrap();
+    let (read, stop) = support::stoppable::reader(stream).unwrap();
     let (id_tx, id_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
     let child = Arc::clone(&gate);
@@ -839,11 +842,11 @@ fn a_reader_that_reaps_itself_finishes() {
         let Ok(id) = Deadline::after(DEADLINE).recv(&id_rx) else {
             return;
         };
-        crate::client::serve(stream, child, id);
+        crate::client::serve(read, child, id);
         if let Ok(()) = done_tx.send(()) {}
     });
     let id = gate
-        .push_reader(reader, crate::client::shutdown_both(shutdown))
+        .push_reader(reader, crate::client::ender(shutdown, stop))
         .expect("the gate is running");
     if let Ok(()) = id_tx.send(id) {}
     drop(peer);
@@ -2880,9 +2883,10 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
     // publication is rejected, its stream shut, its thread ended.
     let (_peer, stream) = UnixStream::pair().unwrap();
     let shutdown = stream.try_clone().unwrap();
+    let (_read, stop) = support::stoppable::reader(stream).unwrap();
     let shut = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&shut);
-    let both = crate::client::shutdown_both(shutdown);
+    let both = crate::client::ender(shutdown, stop);
     let (id_tx, id_rx) = mpsc::channel::<u64>();
     let (exited_tx, exited_rx) = mpsc::channel();
     let reader = thread::spawn(move || {
