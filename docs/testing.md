@@ -434,8 +434,17 @@ tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
 fails the run when a process still carries it after the tests, listing each
 leak's PID and command. The scan only reports: reaping stays the test's job,
 above.
-No fixture clears its environment, so a fixture's leak always carries the
-nonce. On macOS `ps` withholds the environment of some processes, such as
+A test that clears a child's environment puts `FIBER_CHECK_RUN`
+back (`fakes::check_run`), so `fiber` and the processes it starts carry
+the nonce. The exception is the case processes of `fiber extension test`,
+which Fiber starts with a cleared environment. A shell-tool command gets
+the nonce through the session's environment: `fiber ask` passes its
+caller's, and a hub a test starts gets no `SHELL`, so it uses its
+inherited environment (`docs/invocation.md`, "A session's environment").
+When the selection includes `main`, `scripts/test-leak-probe` leaks a
+process through the shell tool under `fiber ask`, with its own nonce, and
+requires the scan to name its PID.
+On macOS `ps` withholds the environment of some processes, such as
 `sh` and `sleep`, so the nonce scan cannot name them. After it the scan
 reads the user's processes reparented to init that started after
 `scripts/check` began: one whose executable is under this worktree's

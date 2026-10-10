@@ -38,6 +38,7 @@ fn a_live_codex_turn_replies() {
             "Reply with the word pong.",
         ])
         .env_clear()
+        .envs(fakes::check_run())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", std::env::var_os("HOME").unwrap_or_default())
         .env("FIBER_HOME", &home)
