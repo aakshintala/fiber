@@ -192,6 +192,25 @@ fn base() -> State {
     State { still: STILL.load(Relaxed), ..Default::default() }
 }
 
+/// The picker's choice as an id and a level: the focused model's id, and
+/// the focused chip's level, else the model's own level.
+pub fn chosen(s: &State) -> (&'static str, &'static str) {
+    let mut i = 0;
+    for p in fixture() {
+        for m in &p.models {
+            if i == s.focus {
+                let level = match s.chip {
+                    Some(j) => m.levels.get(j).copied().unwrap_or(""),
+                    None => m.level.unwrap_or(""),
+                };
+                return (m.id, level);
+            }
+            i += 1;
+        }
+    }
+    ("", "")
+}
+
 pub fn for_case(case: &str) -> State {
     crate::cases::lookup(CASES, case).unwrap_or_else(|| panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")))
 }
@@ -660,6 +679,17 @@ mod tests {
             t.contains("this session only · nothing saved"),
             "missing the note"
         );
+    }
+
+    #[test]
+    fn chosen_reads_focus_and_chip() {
+        assert_eq!(chosen(&for_case("list")), ("claude-opus-5-5", "high"));
+        let mut sonnet = for_case("list");
+        sonnet.focus = 1;
+        assert_eq!(chosen(&sonnet), ("claude-sonnet-5-5", "medium"));
+        let mut low = for_case("list");
+        low.chip = Some(0);
+        assert_eq!(chosen(&low), ("claude-opus-5-5", "low"));
     }
 
     #[test]

@@ -1554,7 +1554,7 @@ const RAIL_A: u16 = 22;
 /// percentage), so the card still reads: rows 1, 2, 4 and spend-plus-percentage only.
 const RAIL_COMPACT: usize = 30;
 #[derive(Clone, Copy, PartialEq)]
-enum SState {
+pub(crate) enum SState {
     Working,
     Retrying,
     NeedsInput,
@@ -1632,8 +1632,11 @@ fn wait_glyph(tick: u64, reduced: bool) -> Style {
     }
     if tick / 4 % 2 == 0 { fg(ORANGE).add_modifier(Modifier::BOLD) } else { fg(CYAN) }
 }
-fn rail_glyph(s: &Fake, tick: u64, reduced: bool) -> Span<'static> {
-    match s.st {
+/// A session's state glyph, as on the rail and home's list: working `●`
+/// under reduced motion in the accent, waiting `!` attention, died `✗`
+/// error, exited `○` dim (drawn by the caller, not here).
+pub(crate) fn state_glyph(st: SState, tick: u64, reduced: bool) -> Span<'static> {
+    match st {
         // the braille spinner animates on the existing tick, the same frames as the
         // working line; `●` under reduced motion
         SState::Working if reduced => sp("●", fg(BLUE)),
@@ -1644,6 +1647,9 @@ fn rail_glyph(s: &Fake, tick: u64, reduced: bool) -> Span<'static> {
         SState::Ready => sp("✓", dim()),
         SState::Crashed => sp("✗", fg(RED).add_modifier(Modifier::BOLD)),
     }
+}
+fn rail_glyph(s: &Fake, tick: u64, reduced: bool) -> Span<'static> {
+    state_glyph(s.st, tick, reduced)
 }
 /// The state word's style: bold in the state colour, dim for idle.
 fn rail_state_style(s: &Fake, tick: u64, reduced: bool) -> Style {
@@ -4627,7 +4633,7 @@ mod tests {
         assert_eq!(
             all,
             [
-                "--home empty, sessions, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
+                "--home empty, sessions, live-only, past-only, selected, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",

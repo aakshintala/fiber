@@ -9,10 +9,10 @@
 use super::input::{Ev, Key};
 use super::{Args, Term};
 use super::{
-    BI, BLUE, CYAN, ORANGE, SEL, bold, dim, fg, fit, lift, paint, row, slab, sp,
-    t,
+    BI, BLUE, CYAN, ORANGE, RED, SEL, SState, bold, dim, fg, fit, lift, paint,
+    row, slab, sp, state_glyph, t,
 };
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use crate::cases::{Case, Surface};
 use std::io::{self, Write};
@@ -21,12 +21,15 @@ use unicode_width::UnicodeWidthStr;
 
 /// Every `--home` case, named in README.md.
 const CASES: &[Case<Look>] = &[
-    Case { name: "empty", help: "no sessions yet: logo, input box, chips", check: "the logo should read as pixel letters four rows tall (⌇ in accent, the name in the accent gradient, `0.0.1` dim on the last row); under it the large input box with `/? for shortcuts`, the chip row and `enter starts a session`; under the box one dim `No sessions yet` line; the key hint at the foot.", build: || Look { sessions: false, ..base() } },
-    Case { name: "sessions", help: "six exited sessions listed", check: "six exited rows, each `○ name · spend`, the three outside the launch project with their workspace's last segment; the long pi-rig name should fit without pushing the spend off the row.", build: || base() },
-    Case { name: "hover-workspace", help: "the workspace chip hovered", check: "the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Workspace), ..base() } },
-    Case { name: "hover-worktree", help: "the worktree switch hovered", check: "the switch chip should sit lighter with its ● still blue.", build: || Look { hover: Some(Hover::Worktree), ..base() } },
-    Case { name: "hover-model", help: "the model chip hovered", check: "the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Model), ..base() } },
-    Case { name: "hover-thinking", help: "the thinking chip hovered", check: "the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Thinking), ..base() } },
+    Case { name: "empty", help: "no sessions yet: logo, input box, chips", check: "the pixel logo four rows tall with `0.0.1` dim on the last row; under it the large input box with `/? for shortcuts`, the chip row and `enter starts a session`; under the box one dim `No sessions yet` line and no headers; the key hint at the foot.", build: || Look { list: List::None, ..base() } },
+    Case { name: "sessions", help: "live and past sessions in two-line rows", check: "a bold `Live sessions` header with `2 waiting on you` in orange, then five two-line live rows; one blank row, then a bold `Past sessions` header with `/resume lists all`, then six two-line exited rows; line one is the glyph, the name or first prompt, its age and its verb, line two dim `id · turns · branch · spend` with the workspace segment and the wait.", build: || base() },
+    Case { name: "live-only", help: "live sessions only, a still frame", check: "the `Live sessions` header and its five two-line rows; no `Past sessions` header.", build: || Look { list: List::Live, ..base() } },
+    Case { name: "past-only", help: "past sessions only, a still frame", check: "the `Past sessions` header and its six two-line rows; no `Live sessions` header.", build: || Look { list: List::Past, ..base() } },
+    Case { name: "selected", help: "the first live row selected, a still frame", check: "the first live row with the blue `▸` marker, its prompt bold and its verb blue; the other rows unmarked.", build: || Look { sel: Some(0), ..base() } },
+    Case { name: "hover-workspace", help: "the workspace chip hovered, a still frame", check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Workspace), ..base() } },
+    Case { name: "hover-worktree", help: "the worktree switch hovered, a still frame", check: "a still frame of the hover tint: the switch chip should sit lighter with its ● still blue.", build: || Look { hover: Some(Hover::Worktree), ..base() } },
+    Case { name: "hover-model", help: "the model chip hovered, a still frame", check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Model), ..base() } },
+    Case { name: "hover-thinking", help: "the thinking chip hovered, a still frame", check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Thinking), ..base() } },
     Case { name: "worktree-on", help: "new worktree switched on", check: "the switch should read `[● new worktree]` in blue.", build: || base() },
     Case { name: "worktree-off", help: "new worktree switched off", check: "the switch should read `[○ new worktree]` dim.", build: || Look { worktree: false, ..base() } },
     Case { name: "picker-recent", help: "workspace picker over home, recents", check: "the picker should float centred over home with ▄ ▀ edges and the ▌ stripe; `Workspaces` bold accent; four recent workspaces, the first `›` on a full-width accent bar; a bold-key legend foot.", build: || Look { picker: Some(Picker::Recent), ..base() } },
@@ -64,63 +67,190 @@ enum Picker {
     Typed,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum List {
+    None,
+    Live,
+    Past,
+    Both,
+}
+
 struct Look {
-    sessions: bool,
+    list: List,
+    /// the selected session in live-then-past order, if any
+    sel: Option<usize>,
     hover: Option<Hover>,
     worktree: bool,
     picker: Option<Picker>,
 }
 
 fn base() -> Look {
-    Look { sessions: true, hover: None, worktree: true, picker: None }
+    Look { list: List::Both, sel: None, hover: None, worktree: true, picker: None }
 }
 
-/// An exited session: the name, or the first prompt when it has none; the
-/// spend; and the workspace's last path segment, for a session outside the
-/// launch project (`~/work/fiber`). `ws: None` is the launch project.
-struct Exited {
-    name: &'static str,
+/// A session on home's list: live ones carry their rail state, exited ones
+/// none. The prompt is the name, or the first prompt when it has none; the
+/// note is what it waits on, if anything. `ws` is the workspace's last
+/// path segment, for a session outside the launch project (`~/work/fiber`);
+/// `ws: None` is the launch project. `foreign` is a session whose
+/// `schema_version` this terminal cannot read: it says `cannot attach`.
+/// Fixture constants; home talks to no hub.
+#[derive(Clone, Copy, PartialEq)]
+enum State {
+    Live(SState),
+    Exited,
+}
+
+struct Session {
+    id: &'static str,
     prompt: &'static str,
+    age: &'static str,
+    turns: u32,
+    branch: &'static str,
     spend: &'static str,
     ws: Option<&'static str>,
+    note: &'static str,
+    state: State,
+    foreign: bool,
 }
 
-const SESSIONS: &[Exited] = &[
-    Exited {
-        name: "fix flaky lock test",
-        prompt: "",
-        spend: "$0.42",
-        ws: None,
-    },
-    Exited {
-        name: "docs: rail spec",
-        prompt: "",
+/// Live sessions, waiting first.
+const LIVE: &[Session] = &[
+    Session {
+        id: "s_7f20aa",
+        prompt: "cut the 0.0.1 release",
+        age: "2h ago",
+        turns: 5,
+        branch: "release/0.0.1",
         spend: "$1.10",
         ws: None,
+        note: "approval: shell cargo publish --dry-run",
+        state: State::Live(SState::NeedsInput),
+        foreign: false,
     },
-    Exited {
-        name: "migrate every provider adapter to the new streaming contract",
-        prompt: "",
+    Session {
+        id: "s_3ab702",
+        prompt: "audit the event log",
+        age: "45m ago",
+        turns: 3,
+        branch: "audit/events",
+        spend: "$0.35",
+        ws: None,
+        note: "question: 2 of 3 answered",
+        state: State::Live(SState::NeedsInput),
+        foreign: false,
+    },
+    Session {
+        id: "s_61c9d0",
+        prompt: "speed up the render loop",
+        age: "12m ago",
+        turns: 2,
+        branch: "perf/render",
+        spend: "$0.58",
+        ws: None,
+        note: "",
+        state: State::Live(SState::Working),
+        foreign: false,
+    },
+    Session {
+        id: "s_88f310",
+        prompt: "port the router to hyper",
+        age: "1h ago",
+        turns: 8,
+        branch: "port/hyper",
+        spend: "$2.02",
+        ws: None,
+        note: "",
+        state: State::Live(SState::Working),
+        foreign: true,
+    },
+    Session {
+        id: "s_5e91b4",
+        prompt: "probe the lsp",
+        age: "3h ago",
+        turns: 3,
+        branch: "spike/lsp",
+        spend: "$0.05",
+        ws: None,
+        note: "stopped without exiting; 1 job orphaned on resume",
+        state: State::Live(SState::Crashed),
+        foreign: false,
+    },
+];
+
+/// Recently exited sessions.
+const PAST: &[Session] = &[
+    Session {
+        id: "s_9f31ac",
+        prompt: "fix flaky lock test",
+        age: "3h ago",
+        turns: 4,
+        branch: "fix/flaky-lock",
+        spend: "$0.42",
+        ws: None,
+        note: "",
+        state: State::Exited,
+        foreign: false,
+    },
+    Session {
+        id: "s_44d2e1",
+        prompt: "docs: rail spec",
+        age: "5h ago",
+        turns: 6,
+        branch: "docs/rail-692",
+        spend: "$1.10",
+        ws: None,
+        note: "",
+        state: State::Exited,
+        foreign: false,
+    },
+    Session {
+        id: "s_77aa01",
+        prompt: "migrate every provider adapter to the new streaming contract",
+        age: "1d ago",
+        turns: 12,
+        branch: "migrate/streaming",
         spend: "$2.31",
         ws: Some("pi-rig"),
+        note: "",
+        state: State::Exited,
+        foreign: false,
     },
-    Exited {
-        name: "",
+    Session {
+        id: "s_50c9d2",
         prompt: "how do I backfill embeddings for old sessions?",
+        age: "2d ago",
+        turns: 9,
+        branch: "backfill/embed",
         spend: "$0.87",
         ws: Some("fiber-worktrees"),
+        note: "continues s_2b8e11 from seq 812",
+        state: State::Exited,
+        foreign: false,
     },
-    Exited {
-        name: "bump ratatui",
-        prompt: "",
+    Session {
+        id: "s_08f3b9",
+        prompt: "bump ratatui",
+        age: "3d ago",
+        turns: 1,
+        branch: "deps/ratatui-0.30",
         spend: "$0.08",
         ws: None,
+        note: "",
+        state: State::Exited,
+        foreign: false,
     },
-    Exited {
-        name: "rewrite onboarding tour",
-        prompt: "",
+    Session {
+        id: "s_6d1e44",
+        prompt: "rewrite onboarding tour",
+        age: "4d ago",
+        turns: 7,
+        branch: "tour/rewrite",
         spend: "$0.35",
         ws: Some("beacon"),
+        note: "",
+        state: State::Exited,
+        foreign: false,
     },
 ];
 
@@ -145,6 +275,9 @@ fn chip(text: &str, st: Style, hovered: bool) -> Span<'static> {
 
 fn chip_row(c: &Look) -> Vec<Span<'static>> {
     let h = |k: Hover| c.hover == Some(k);
+    // The chips start from the model picker's current model, so a pick
+    // agrees with them.
+    let (model, level) = crate::model_picker::chosen(&crate::model_picker::for_case("list"));
     let mut s = vec![sp("▌ ", fg(BLUE))];
     s.push(chip("▣ ~/work/fiber", Style::new(), h(Hover::Workspace)));
     s.push(sp(" ", Style::new()));
@@ -155,9 +288,9 @@ fn chip_row(c: &Look) -> Vec<Span<'static>> {
     };
     s.push(chip(glyph, st, h(Hover::Worktree)));
     s.push(sp(" ", Style::new()));
-    s.push(chip("gpt-6.1-sol", fg(CYAN), h(Hover::Model)));
+    s.push(chip(model, fg(CYAN), h(Hover::Model)));
     s.push(sp(" ", Style::new()));
-    s.push(chip("medium", fg(ORANGE), h(Hover::Thinking)));
+    s.push(chip(level, fg(ORANGE), h(Hover::Thinking)));
     s.push(t());
     s.push(sp("enter starts a session ", dim()));
     s
@@ -187,26 +320,126 @@ fn input_box(c: &Look, w: usize) -> Vec<super::Row> {
     )
 }
 
-fn session_rows(w: usize) -> Vec<Vec<Span<'static>>> {
-    SESSIONS
+/// What Enter or a click on a row does: a live session attaches, a crashed
+/// or exited one resumes, and a foreign one cannot attach at all.
+fn verb(s: &Session) -> &'static str {
+    if s.foreign {
+        "cannot attach"
+    } else if matches!(s.state, State::Live(SState::Crashed) | State::Exited) {
+        "resume"
+    } else {
+        "attach"
+    }
+}
+
+/// A session row's first line at width `rw`: the marker, the glyph and a
+/// space, the prompt fitted to `rw - 4 - 24`, then the age right-aligned
+/// in 9 cells dim, two spaces, and the verb left-aligned in 13 cells. A
+/// long prompt is cut before the age field.
+fn session_line_one(s: &Session, selected: bool, rw: usize) -> Vec<Span<'static>> {
+    let mut line = if selected {
+        vec![sp("▸ ", fg(BLUE))]
+    } else {
+        vec![sp("  ", Style::new())]
+    };
+    line.push(match s.state {
+        State::Live(st) => state_glyph(st, 0, true),
+        State::Exited => sp("○", dim()),
+    });
+    line.push(sp(" ", Style::new()));
+    let prompt = if selected {
+        Style::new().add_modifier(Modifier::BOLD)
+    } else {
+        Style::new()
+    };
+    line.extend(fit(&[sp(s.prompt, prompt)], rw.saturating_sub(28)));
+    line.push(sp(format!("{:>9}", s.age), dim()));
+    line.push(sp("  ", Style::new()));
+    let verb_style = if s.foreign {
+        fg(RED).add_modifier(Modifier::DIM)
+    } else if selected {
+        fg(BLUE)
+    } else {
+        dim()
+    };
+    line.push(sp(format!("{:<13}", verb(s)), verb_style));
+    line
+}
+
+/// A session row's second line: four spaces, then dim `id · N turns ·
+/// branch · spend`, the workspace's last segment outside the launch
+/// project, and what it waits on when there is one: orange for a waiting
+/// session, red dim for a crashed one, else dim.
+fn session_line_two(s: &Session, rw: usize) -> Vec<Span<'static>> {
+    let turns = format!("{} turn{}", s.turns, if s.turns == 1 { "" } else { "s" });
+    let mut body = vec![sp(format!("{} · {turns} · {} · {}", s.id, s.branch, s.spend), dim())];
+    if let Some(ws) = s.ws {
+        body.push(sp(format!(" · {ws}"), dim()));
+    }
+    if !s.note.is_empty() {
+        let st = match s.state {
+            State::Live(SState::NeedsInput) => fg(ORANGE),
+            State::Live(SState::Crashed) => fg(RED).add_modifier(Modifier::DIM),
+            _ => dim(),
+        };
+        body.push(sp(format!(" · {}", s.note), st));
+    }
+    let mut line = vec![sp("    ", Style::new())];
+    line.extend(fit(&body, rw.saturating_sub(4)));
+    line
+}
+
+/// The live section's header: bold `Live sessions`, then, when any live
+/// session waits, how many wait on the person, in orange.
+fn live_header() -> Vec<Span<'static>> {
+    let mut h = vec![sp("Live sessions", bold())];
+    let waiting = LIVE
         .iter()
-        .map(|s| {
-            let mut line = vec![
-                sp("○ ", dim()),
-                sp(
-                    if s.name.is_empty() { s.prompt } else { s.name },
-                    Style::new(),
-                ),
-                sp(" · ", dim()),
-                sp(s.spend, dim()),
-            ];
-            if let Some(ws) = s.ws {
-                line.push(sp(" · ", dim()));
-                line.push(sp(ws, dim()));
-            }
-            fit(&line, w)
-        })
-        .collect()
+        .filter(|s| matches!(s.state, State::Live(SState::NeedsInput)))
+        .count();
+    if waiting > 0 {
+        h.push(sp(format!("  {waiting} waiting on you"), fg(ORANGE)));
+    }
+    h
+}
+
+/// The past section's header: bold `Past sessions`, then where the whole
+/// list lives, dim.
+fn past_header() -> Vec<Span<'static>> {
+    vec![sp("Past sessions", bold()), sp("  /resume lists all", dim())]
+}
+
+/// Pushes one section's header and two-line rows onto the list's lines.
+/// `at` counts sessions in live-then-past order; `sel_end` becomes the
+/// line index just past the selected row's second line.
+fn push_section(
+    lines: &mut Vec<Option<(usize, Vec<Span<'static>>)>>,
+    geom: (usize, usize),
+    header: Vec<Span<'static>>,
+    sessions: &[Session],
+    sel: Option<usize>,
+    at: &mut usize,
+    sel_end: &mut usize,
+) {
+    let (x0, rw) = geom;
+    lines.push(Some((x0 + 2, header)));
+    for s in sessions {
+        let selected = sel == Some(*at);
+        if selected {
+            *sel_end = lines.len() + 2;
+        }
+        *at += 1;
+        lines.push(Some((x0 + 1, session_line_one(s, selected, rw))));
+        lines.push(Some((x0 + 1, session_line_two(s, rw))));
+    }
+}
+
+/// How far the list scrolls: the selected row's second line stays on
+/// screen, so the offset is the line index just past it less the area.
+/// Also scrolls the model picker over home, whose focused row stays
+/// visible the same way.
+fn list_offset(sel_end: usize, area: usize) -> usize {
+    sel_end.saturating_sub(area)
 }
 
 /// The workspace picker's rows at an inner width: the typed-path row with
@@ -337,13 +570,21 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Vec<Vec<Placed>> {
         put(&mut screen, y, x0, w, r.spans, bg);
         y += 1;
     }
-    y += 1;
-    if c.sessions {
-        for l in session_rows(w) {
-            put(&mut screen, y, x0, w, l, None);
-            y += 1;
-        }
-    } else {
+    // Two blank rows under the box, then the list: live sessions under one
+    // header, exited ones under another, each row two lines. The list's
+    // lines scroll as one block above the key hint; an empty section draws
+    // no header, and with no sessions at all the dim line stays.
+    y += 2;
+    let live: &[Session] = match c.list {
+        List::Live | List::Both => LIVE,
+        _ => &[],
+    };
+    let past: &[Session] = match c.list {
+        List::Past | List::Both => PAST,
+        _ => &[],
+    };
+    let rw = w.saturating_sub(2);
+    if live.is_empty() && past.is_empty() {
         put(
             &mut screen,
             y,
@@ -358,9 +599,33 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Vec<Vec<Placed>> {
             ),
             None,
         );
-        y += 1;
+    } else {
+        // Each entry is the line's left edge and its spans; the blank
+        // between sections counts for the scroll but draws nothing. The
+        // session index is the row's position in live-then-past order.
+        let mut lines: Vec<Option<(usize, Vec<Span<'static>>)>> = vec![];
+        let (mut at, mut sel_end) = (0, 0);
+        if !live.is_empty() {
+            push_section(&mut lines, (x0, rw), live_header(), live, c.sel, &mut at, &mut sel_end);
+        }
+        if !live.is_empty() && !past.is_empty() {
+            lines.push(None);
+        }
+        if !past.is_empty() {
+            push_section(&mut lines, (x0, rw), past_header(), past, c.sel, &mut at, &mut sel_end);
+        }
+        if c.sel.is_some_and(|s| s >= at) {
+            sel_end = lines.len();
+        }
+        let list_top = y;
+        let area = rows.saturating_sub(2).saturating_sub(list_top);
+        let off = list_offset(sel_end, area);
+        for (k, l) in lines.iter().enumerate().skip(off).take(area) {
+            if let Some((x, spans)) = l {
+                put(&mut screen, list_top + k - off, *x, rw, spans.clone(), None);
+            }
+        }
     }
-    let _ = y;
     let hint = "enter starts a session · ↑↓ select · q quits";
     if rows >= 2 {
         let pad = cols.saturating_sub(hint.width()) / 2;
@@ -539,7 +804,7 @@ mod tests {
     #[test]
     fn every_case_parses_and_unknown_does_not() {
         assert!(CASES.iter().all(|c| crate::cases::lookup(CASES, c.name).is_some()));
-        assert_eq!(CASES.len(), 10);
+        assert_eq!(CASES.len(), 13);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
 
@@ -688,6 +953,245 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The first screen row holding `needle`, reading cells left to right.
+    fn find_row(buf: &Buffer, cols: u16, rows: u16, needle: &str) -> u16 {
+        for y in 0..rows {
+            let mut line = String::new();
+            for x in 0..cols {
+                line.push_str(buf[(x, y)].symbol());
+            }
+            if line.contains(needle) {
+                return y;
+            }
+        }
+        panic!("{needle:?} not on screen");
+    }
+
+    /// The symbols of one buffer run as text.
+    fn run_text(buf: &Buffer, x: u16, y: u16, len: u16) -> String {
+        (x..x + len).map(|x| buf[(x, y)].symbol()).collect()
+    }
+
+    /// The home column of one text row as text.
+    fn home_col(line: &str, x0: usize, w: usize) -> String {
+        line.chars().skip(x0).take(w).collect()
+    }
+
+    fn sessions() -> Look {
+        crate::cases::lookup(CASES, "sessions").unwrap()
+    }
+
+    #[test]
+    fn both_headers_in_order() {
+        // At 160 columns `w = 84` and `x0 = 38`: headers at 40, rows at 39.
+        let buf = buffer(&sessions(), 160, 48);
+        let live_y = find_row(&buf, 160, 48, "Live sessions");
+        let past_y = find_row(&buf, 160, 48, "Past sessions");
+        assert!(live_y < past_y, "the live header is not first");
+        assert_eq!(run_text(&buf, 40, live_y, 13), "Live sessions");
+        assert!(buf[(40, live_y)].modifier.contains(Modifier::BOLD));
+        assert_eq!(run_text(&buf, 40, past_y, 13), "Past sessions");
+        assert!(buf[(40, past_y)].modifier.contains(Modifier::BOLD));
+        assert_eq!(run_text(&buf, 53, live_y, 18), "  2 waiting on you");
+        for x in 55..69 {
+            assert_eq!(buf[(x, live_y)].fg, ORANGE, "waiting count not orange at {x}");
+        }
+        assert!(run_text(&buf, 53, past_y, 19).contains("/resume lists all"));
+    }
+
+    #[test]
+    fn two_blank_rows_under_the_box_and_one_between_sections() {
+        let t = text(&sessions(), 160, 48);
+        let lines: Vec<&str> = t.split('\n').collect();
+        let edge = lines
+            .iter()
+            .rposition(|l| l.chars().filter(|&c| c == '▀').count() >= 40)
+            .unwrap();
+        assert!(home_col(lines[edge + 1], 38, 84).trim().is_empty(), "no first blank");
+        assert!(home_col(lines[edge + 2], 38, 84).trim().is_empty(), "no second blank");
+        let past = lines.iter().position(|l| l.contains("Past sessions")).unwrap();
+        assert!(lines[past - 1].trim().is_empty(), "no blank over the past header");
+        assert!(lines[past - 2].contains("s_5e91b4"), "the last live row is not above the blank");
+    }
+
+    #[test]
+    fn waiting_row_tints() {
+        let buf = buffer(&sessions(), 160, 48);
+        let y2 = find_row(&buf, 160, 48, "s_7f20aa");
+        let y1 = y2 - 1;
+        assert_eq!(buf[(41, y1)].symbol(), "!");
+        assert_eq!(buf[(41, y1)].fg, ORANGE);
+        assert!(buf[(41, y1)].modifier.contains(Modifier::BOLD));
+        assert_eq!(run_text(&buf, 43, y1, 21), "cut the 0.0.1 release");
+        for x in 43..64 {
+            assert!(!buf[(x, y1)].modifier.contains(Modifier::BOLD), "prompt went bold at {x}");
+        }
+        // The age sits right-aligned in its 9-cell field, the verb after two spaces.
+        assert_eq!(run_text(&buf, 97, y1, 9), "   2h ago");
+        for x in 97..106 {
+            assert!(buf[(x, y1)].modifier.contains(Modifier::DIM), "age not dim at {x}");
+        }
+        assert_eq!(run_text(&buf, 108, y1, 13), "attach       ");
+        assert!(buf[(108, y1)].modifier.contains(Modifier::DIM));
+        assert_eq!(run_text(&buf, 43, y2, 34), "s_7f20aa · 5 turns · release/0.0.1");
+        for x in 43..80 {
+            assert!(buf[(x, y2)].modifier.contains(Modifier::DIM), "line two not dim at {x}");
+        }
+        let note_y = find_row(&buf, 160, 48, "approval:");
+        assert_eq!(note_y, y2);
+        for x in 88..97 {
+            assert_eq!(buf[(x, y2)].fg, ORANGE, "the wait is not orange at {x}");
+        }
+    }
+
+    #[test]
+    fn crashed_row_tints() {
+        let buf = buffer(&sessions(), 160, 48);
+        let y2 = find_row(&buf, 160, 48, "s_5e91b4");
+        let y1 = y2 - 1;
+        assert_eq!(buf[(41, y1)].symbol(), "✗");
+        assert_eq!(buf[(41, y1)].fg, RED);
+        assert!(buf[(41, y1)].modifier.contains(Modifier::BOLD));
+        assert_eq!(run_text(&buf, 108, y1, 13), "resume       ");
+        let y = find_row(&buf, 160, 48, "stopped");
+        assert_eq!(y, y2);
+        assert_eq!(buf[(84, y2)].fg, RED);
+        assert!(buf[(84, y2)].modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn foreign_row_says_cannot_attach() {
+        let buf = buffer(&sessions(), 160, 48);
+        let y1 = find_row(&buf, 160, 48, "s_88f310") - 1;
+        assert_eq!(run_text(&buf, 108, y1, 13), "cannot attach");
+        assert_eq!(buf[(108, y1)].fg, RED);
+        assert!(buf[(108, y1)].modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn working_row_glyph() {
+        let buf = buffer(&sessions(), 160, 48);
+        let y1 = find_row(&buf, 160, 48, "s_61c9d0") - 1;
+        assert_eq!(buf[(41, y1)].symbol(), "●");
+        assert_eq!(buf[(41, y1)].fg, BLUE);
+    }
+
+    #[test]
+    fn exited_row() {
+        let buf = buffer(&sessions(), 160, 48);
+        let y1 = find_row(&buf, 160, 48, "fix flaky");
+        assert_eq!(buf[(41, y1)].symbol(), "○");
+        assert!(buf[(41, y1)].modifier.contains(Modifier::DIM));
+        assert_eq!(run_text(&buf, 108, y1, 13), "resume       ");
+        let y2 = find_row(&buf, 160, 48, "$2.31");
+        assert!(run_text(&buf, 43, y2, 60).contains("· pi-rig"));
+        // A launch-project session carries no workspace segment.
+        assert_eq!(
+            run_text(&buf, 43, y1 + 1, 43).trim_end(),
+            "s_9f31ac · 4 turns · fix/flaky-lock · $0.42"
+        );
+    }
+
+    #[test]
+    fn one_turn_is_singular() {
+        let buf = buffer(&sessions(), 160, 48);
+        let y2 = find_row(&buf, 160, 48, "bump ratatui") + 1;
+        assert!(run_text(&buf, 43, y2, 60).contains("1 turn ·"));
+        assert!(!run_text(&buf, 43, y2, 60).contains("1 turns"));
+    }
+
+    #[test]
+    fn long_prompt_keeps_the_age_column() {
+        let buf = buffer(&sessions(), 160, 48);
+        let y_long = find_row(&buf, 160, 48, "migrate every");
+        let y_short = find_row(&buf, 160, 48, "fix flaky");
+        // Both verbs sit at the same columns: the long prompt was cut first.
+        assert_eq!(run_text(&buf, 108, y_long, 13), "resume       ");
+        assert_eq!(run_text(&buf, 108, y_short, 13), "resume       ");
+        assert!(run_text(&buf, 43, y_long, 54).ends_with('…'));
+    }
+
+    #[test]
+    fn selected_row() {
+        let c = crate::cases::lookup(CASES, "selected").unwrap();
+        let buf = buffer(&c, 160, 48);
+        let y1 = find_row(&buf, 160, 48, "cut the 0.0.1 release");
+        assert_eq!(buf[(39, y1)].symbol(), "▸");
+        assert_eq!(buf[(39, y1)].fg, BLUE);
+        for x in 43..64 {
+            assert!(buf[(x, y1)].modifier.contains(Modifier::BOLD), "prompt not bold at {x}");
+        }
+        assert_eq!(run_text(&buf, 108, y1, 13), "attach       ");
+        assert_eq!(buf[(108, y1)].fg, BLUE);
+        let y2 = find_row(&buf, 160, 48, "audit the event");
+        assert_eq!(run_text(&buf, 39, y2, 2), "  ");
+    }
+
+    #[test]
+    fn live_only_has_no_past_header() {
+        let c = crate::cases::lookup(CASES, "live-only").unwrap();
+        let t = text(&c, 160, 48);
+        assert!(t.contains("Live sessions"));
+        assert!(!t.contains("Past sessions"));
+    }
+
+    #[test]
+    fn past_only_has_no_live_header() {
+        let c = crate::cases::lookup(CASES, "past-only").unwrap();
+        let t = text(&c, 160, 48);
+        assert!(t.contains("Past sessions"));
+        assert!(!t.contains("Live sessions"));
+    }
+
+    #[test]
+    fn empty_has_no_headers() {
+        let c = crate::cases::lookup(CASES, "empty").unwrap();
+        let t = text(&c, 160, 48);
+        assert!(!t.contains("Live sessions"));
+        assert!(!t.contains("Past sessions"));
+        assert!(t.contains("No sessions yet"));
+    }
+
+    #[test]
+    fn chips_start_at_the_current_model() {
+        let buf = buffer(&sessions(), 160, 48);
+        // The chip row starts at `x0`: scan for the model chip's start.
+        let y = find_row(&buf, 160, 48, "[claude-opus-5-5]");
+        let mut line = String::new();
+        for x in 0..160 {
+            line.push_str(buf[(x, y)].symbol());
+        }
+        let at = line.find("[claude-opus-5-5]").unwrap();
+        let col = line[..at].chars().count() as u16;
+        for x in col..col + 17 {
+            assert_eq!(buf[(x, y)].fg, CYAN, "model chip not cyan at {x}");
+        }
+        let yh = find_row(&buf, 160, 48, "[high]");
+        assert_eq!(yh, y);
+        let ath = line.find("[high]").unwrap();
+        let colh = line[..ath].chars().count() as u16;
+        for x in colh..colh + 6 {
+            assert_eq!(buf[(x, yh)].fg, ORANGE, "thinking chip not orange at {x}");
+        }
+    }
+
+    #[test]
+    fn list_offset_boundaries() {
+        assert_eq!(list_offset(0, 10), 0);
+        assert_eq!(list_offset(10, 10), 0);
+        assert_eq!(list_offset(11, 10), 1);
+        assert_eq!(list_offset(25, 10), 15);
+    }
+
+    #[test]
+    fn selected_last_row_stays_visible() {
+        let c = Look { sel: Some(10), ..base() };
+        let buf = buffer(&c, 160, 30);
+        let y1 = find_row(&buf, 160, 30, "rewrite onboarding tour");
+        // Both lines sit above the hint row.
+        assert!(y1 + 1 < 28, "the last row scrolled off");
     }
 
     #[test]
