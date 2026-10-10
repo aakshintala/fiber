@@ -753,8 +753,7 @@ fn a_lookup_that_succeeds_reads_its_trimmed_output() {
 fn a_lookup_that_cannot_be_bounded_reads_gone_not_timed_out() {
     // A child with no piped stdout: `bounded` fails with an error that is
     // not a timeout, before it waits on anything. The shell is in its own
-    // group, watched, and killed by the test; no reap is needed as it is
-    // never waited on.
+    // group, watched, and killed by the test, then reaped by the test.
     let child = Command::new("sh")
         .args(["-c", "exec sleep 30"])
         .stdin(Stdio::null())
@@ -764,6 +763,7 @@ fn a_lookup_that_cannot_be_bounded_reads_gone_not_timed_out() {
         .spawn()
         .unwrap();
     let group = child.id();
+    let pid = Pid::from_raw(i32::try_from(group).unwrap()).unwrap();
     let watchdog = crate::Watchdog::group(group);
     assert_eq!(
         read_lookup(child, "the unbounded lookup", DEADLINE),
@@ -771,6 +771,24 @@ fn a_lookup_that_cannot_be_bounded_reads_gone_not_timed_out() {
         "a lookup that failed for a reason other than a timeout reads gone"
     );
     kill_group(group, "KILL").unwrap();
+    // `read_lookup` dropped the child unreaped: reap it here, on a thread
+    // under the deadline, and check it was the signalled lookup.
+    let (waited, reap) = mpsc::channel();
+    thread::spawn(move || {
+        match waited.send(rustix::process::waitpid(
+            Some(pid),
+            rustix::process::WaitOptions::empty(),
+        )) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let reaped = match Deadline::after(DEADLINE).recv(&reap) {
+        Ok(result) => result.unwrap(),
+        Err(_) => panic!("waited {DEADLINE:?} for the unbounded lookup to be reaped"),
+    };
+    let (reaped_pid, status) = reaped.expect("the killed lookup is waited on");
+    assert_eq!(reaped_pid, pid);
+    assert_eq!(status.terminating_signal(), Some(9));
     watchdog.stand_down(DEADLINE);
 }
 
