@@ -1,7 +1,7 @@
 //! The terminal in a pseudo-terminal, as `crates/main/tests/terminal.rs`
 //! runs it: bare `fiber` with standard input, output and error on the
 //! terminal side at 60x12, `TERM=xterm-256color`, and one reader thread
-//! appending what it draws.
+//! feeding what it draws to the screen the waits read.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -17,80 +17,38 @@ use rustix::pty;
 
 use crate::home::Home;
 use crate::run::{Proc, left};
+use crate::screen::Screen;
 
 /// The terminal under test and what it has drawn.
 pub(crate) struct Terminal {
     pub(crate) proc: Proc,
     main: fs::File,
-    output: Arc<Mutex<Vec<u8>>>,
+    output: Arc<Mutex<Output>>,
     /// One wake per chunk appended.
     wakes: mpsc::Receiver<()>,
+}
+
+/// What the terminal has drawn: the raw bytes and the screen they leave.
+struct Output {
+    raw: Vec<u8>,
+    screen: Screen,
 }
 
 fn err(what: &str) -> impl Fn(rustix::io::Errno) -> String + '_ {
     move |errno| format!("{what}: {errno}")
 }
 
-/// The length of the cursor-position sequence `ESC [ <row> ; <col> H` at
-/// the start of `bytes`, if one is there.
-fn cursor_position(bytes: &[u8]) -> Option<usize> {
-    let rest = bytes.strip_prefix(b"\x1b[")?;
-    let digits = |from: &[u8]| from.iter().take_while(|b| b.is_ascii_digit()).count();
-    let row = digits(rest);
-    let rest = rest.get(row..)?.strip_prefix(b";").filter(|_| row > 0)?;
-    let col = digits(rest);
-    rest.get(col..)?.strip_prefix(b"H").filter(|_| col > 0)?;
-    Some(2 + row + 1 + col + 1)
-}
-
-/// Whether `needle` matches `output` from its start. Each space in
-/// `needle` matches a space or one cursor-position sequence: a frame
-/// skips the cells it leaves unchanged, a blank cell between two words
-/// included, and moves the cursor past them. Any other byte may follow
-/// one cursor-position sequence, which a frame can emit inside a word.
-fn matches_at(mut output: &[u8], needle: &[u8]) -> bool {
-    for &byte in needle {
-        let skip = if byte == b' ' && output.first() != Some(&b' ') {
-            cursor_position(output)
-        } else {
-            match output.first() {
-                Some(&first) if first == byte => Some(1),
-                _ => cursor_position(output)
-                    .filter(|&moved| output.get(moved) == Some(&byte))
-                    .map(|moved| moved + 1),
-            }
-        };
-        match skip.and_then(|skip| output.get(skip..)) {
-            Some(rest) => output = rest,
-            None => return false,
-        }
-    }
-    true
-}
-
-/// Whether `output` holds `needle` anywhere ([`matches_at`]). An empty
-/// needle matches nothing.
-fn holds(output: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty()
-        && (0..output.len()).any(|start| {
-            output
-                .get(start..)
-                .is_some_and(|rest| matches_at(rest, needle))
-        })
-}
-
-/// The timeout error with what the terminal had drawn: its byte count and
-/// the last 3000 bytes as lossy text, so a failed wait shows where the
-/// replay stood.
-pub(crate) fn timeout_note(expired: String, output: &[u8]) -> String {
+/// The timeout error with what the terminal had drawn: its byte count, the
+/// last 3000 bytes as lossy text, and the screen's rows as text, so a
+/// failed wait shows where the replay stood.
+pub(crate) fn timeout_note(expired: String, bytes: &[u8], screen: &Screen) -> String {
     const TAIL: usize = 3000;
-    let tail = output
-        .get(output.len().saturating_sub(TAIL)..)
-        .unwrap_or(&[]);
+    let tail = bytes.get(bytes.len().saturating_sub(TAIL)..).unwrap_or(&[]);
     format!(
-        "{expired}; drew {} bytes, ending {:?}",
-        output.len(),
-        String::from_utf8_lossy(tail)
+        "{expired}; drew {} bytes, ending {:?}, screen:\n{}",
+        bytes.len(),
+        String::from_utf8_lossy(tail),
+        screen.text()
     )
 }
 
@@ -147,12 +105,16 @@ impl Terminal {
         let reader = main
             .try_clone()
             .map_err(|e| format!("cloning the pty master: {e}"))?;
-        let output = Arc::new(Mutex::new(Vec::new()));
+        let output = Arc::new(Mutex::new(Output {
+            raw: Vec::new(),
+            screen: Screen::new(60, 12),
+        }));
         let appended = Arc::clone(&output);
         let (tx, wakes) = mpsc::channel();
         fakes::pty::read_to_eof(reader, move |chunk| {
             if let Ok(mut out) = appended.lock() {
-                out.extend_from_slice(chunk);
+                out.raw.extend_from_slice(chunk);
+                out.screen.feed(chunk);
             }
             tx.send(()).unwrap_or(());
         });
@@ -164,14 +126,14 @@ impl Terminal {
         })
     }
 
-    fn holds(&self, needle: &[u8]) -> bool {
+    fn holds(&self, needle: &str) -> bool {
         self.output
             .lock()
-            .map(|output| holds(&output, needle))
+            .map(|output| output.screen.holds(needle))
             .unwrap_or(false)
     }
 
-    /// Waits until `until` for the output to hold `needle`.
+    /// Waits until `until` for the screen to hold `needle`.
     pub(crate) fn wait_for(
         &self,
         clock: &dyn Clock,
@@ -179,12 +141,12 @@ impl Terminal {
         needle: &str,
     ) -> Result<(), String> {
         let what = format!("{needle:?} on the terminal");
-        while !self.holds(needle.as_bytes()) {
+        while !self.holds(needle) {
             let wait = match left(clock, until, &what) {
                 Ok(wait) => wait,
                 Err(expired) => {
                     return Err(match self.output.lock() {
-                        Ok(output) => timeout_note(expired, &output),
+                        Ok(output) => timeout_note(expired, &output.raw, &output.screen),
                         Err(_) => expired,
                     });
                 }

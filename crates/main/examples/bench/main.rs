@@ -26,6 +26,7 @@ mod paging;
 mod pty;
 mod resume;
 mod run;
+mod screen;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
