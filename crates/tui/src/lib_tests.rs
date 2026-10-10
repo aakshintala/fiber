@@ -2268,8 +2268,10 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             }],
             notices: vec!["the lists are in".to_owned()],
+            lists: Vec::new(),
         })
     });
     let mut started = launch();
@@ -2368,8 +2370,10 @@ fn one_model() -> crate::Catalogue {
             configured: None,
             roles: Vec::new(),
             name: None,
+            price: None,
         }],
         notices: Vec::new(),
+        lists: Vec::new(),
     }
 }
 

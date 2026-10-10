@@ -40,6 +40,7 @@ fn entry(reference: &str) -> ModelEntry {
         configured: None,
         roles: Vec::new(),
         name: None,
+        price: None,
     }
 }
 
@@ -47,6 +48,7 @@ fn catalogue() -> Catalogue {
     Catalogue {
         models: vec![entry("acme/m1")],
         notices: vec!["a cached provider is gone".to_owned()],
+        lists: Vec::new(),
     }
 }
 
@@ -75,6 +77,7 @@ fn catalogue_notices_are_pushed_once_per_read() {
     let catalogue = Catalogue {
         models: vec![entry("acme/m1")],
         notices: vec!["first".to_owned(), "second".to_owned()],
+        lists: Vec::new(),
     };
     app.on_models(Ok(catalogue.clone()));
     assert_eq!(app.notices().len(), 2);
@@ -150,6 +153,7 @@ fn three() -> Catalogue {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "acme/m2".to_owned(),
@@ -160,6 +164,7 @@ fn three() -> Catalogue {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "zeta/z1".to_owned(),
@@ -170,9 +175,11 @@ fn three() -> Catalogue {
                 configured: Some("low".to_owned()),
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
         ],
         notices: Vec::new(),
+        lists: Vec::new(),
     }
 }
 
@@ -410,18 +417,23 @@ fn opening_asks_stale_and_refresh_asks_every() {
 
 #[test]
 fn refreshing_shows_until_the_answer() {
+    use crate::catalogue::Refresh;
     let mut app = home();
-    assert!(!app.model_picker.refreshing);
+    assert_eq!(app.model_picker.refreshing, None);
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
-    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
-    assert!(app.model_picker.refreshing);
+    assert_eq!(app.take_reads(), Some(Refresh::Stale));
+    assert_eq!(app.model_picker.refreshing, Some(Refresh::Stale));
     app.on_models(Ok(three()));
-    assert!(!app.model_picker.refreshing);
+    assert_eq!(app.model_picker.refreshing, None);
     assert_eq!(app.on_key(Key::CtrlR, now()), Effect::None);
-    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Every));
-    assert!(app.model_picker.refreshing);
+    assert_eq!(app.take_reads(), Some(Refresh::Every));
+    assert_eq!(app.model_picker.refreshing, Some(Refresh::Every));
     app.on_models(Err("gone".to_owned()));
-    assert!(!app.model_picker.refreshing);
+    assert_eq!(app.model_picker.refreshing, None);
+    // The startup `Cached` take never shows refreshing.
+    app.model_picker.want = Some(Refresh::Cached);
+    assert_eq!(app.take_reads(), Some(Refresh::Cached));
+    assert_eq!(app.model_picker.refreshing, None);
 }
 
 #[test]
@@ -644,10 +656,12 @@ fn thirty() -> Catalogue {
                     configured: None,
                     roles: Vec::new(),
                     name: None,
+                    price: None,
                 }
             })
             .collect(),
         notices: Vec::new(),
+        lists: Vec::new(),
     }
 }
 
@@ -1737,6 +1751,7 @@ fn a_suffix_named_model_is_not_chosen_by_mistake() {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "p/m:high".to_owned(),
@@ -1747,9 +1762,11 @@ fn a_suffix_named_model_is_not_chosen_by_mistake() {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
         ],
         notices: Vec::new(),
+        lists: Vec::new(),
     };
     let mut app = home();
     app.on_line(hello());

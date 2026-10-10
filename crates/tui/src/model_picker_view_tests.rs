@@ -68,6 +68,7 @@ fn catalogue() -> Catalogue {
                 configured: None,
                 roles: vec!["deep".to_owned(), "review".to_owned()],
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "acme/m2".to_owned(),
@@ -78,6 +79,7 @@ fn catalogue() -> Catalogue {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "zeta/z1".to_owned(),
@@ -88,6 +90,7 @@ fn catalogue() -> Catalogue {
                 configured: Some("low".to_owned()),
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "zeta/z2".to_owned(),
@@ -98,9 +101,11 @@ fn catalogue() -> Catalogue {
                 configured: Some("high".to_owned()),
                 roles: vec!["chat".to_owned()],
                 name: None,
+                price: None,
             },
         ],
         notices: Vec::new(),
+        lists: Vec::new(),
     }
 }
 
@@ -214,10 +219,12 @@ fn model_picker_long_list_scrolls_to_the_selection() {
                     configured: None,
                     roles: Vec::new(),
                     name: None,
+                    price: None,
                 }
             })
             .collect(),
         notices: Vec::new(),
+        lists: Vec::new(),
     }));
     open(&mut app);
     for _ in 0..25 {

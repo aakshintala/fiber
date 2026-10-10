@@ -7,6 +7,19 @@
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 
+/// A model's rebuild price in integer micro-dollars per million
+/// tokens, so `ModelEntry` keeps `Eq`. Example: `cache_write: 3.75`
+/// gives `micros_per_mtok: 3_750_000`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Price {
+    /// The base price: the `cache_write` price, or `input` when the
+    /// model names none.
+    pub micros_per_mtok: u64,
+    /// Higher input sizes, each with its own price: (`input_tokens_above`,
+    /// micros per million tokens), ascending by size.
+    pub tiers: Vec<(u64, u64)>,
+}
+
 /// One model of one installed provider, as the picker lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelEntry {
@@ -26,6 +39,22 @@ pub struct ModelEntry {
     pub configured: Option<String>,
     /// The role names marking this model.
     pub roles: Vec<String>,
+    /// The model's rebuild price, when its provider data names one.
+    pub price: Option<Price>,
+}
+
+/// One provider's list time: when its cached copy was written and
+/// whether it is stale (`docs/model-routing.md`, "Model discovery").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListAge {
+    /// The provider's name.
+    pub provider: String,
+    /// When its cached copy was written, in milliseconds since the
+    /// epoch; `None` with no cached copy.
+    pub updated_ms: Option<u64>,
+    /// Whether the list is stale: older than `refresh_after`, or with
+    /// no cached copy at all.
+    pub stale: bool,
 }
 
 /// The installed models, and the notices their read gave.
@@ -36,6 +65,8 @@ pub struct Catalogue {
     pub models: Vec<ModelEntry>,
     /// One notice per read, in read order.
     pub notices: Vec<String>,
+    /// One list time per installed provider.
+    pub lists: Vec<ListAge>,
 }
 
 /// How thorough a model-list read is.

@@ -102,8 +102,9 @@ pub(crate) struct ModelPicker {
     pub(crate) catalogue: Catalogue,
     /// Why the lists could not be read, when no catalogue is held yet.
     pub(crate) error: Option<String>,
-    /// A `Stale` or `Every` read runs: the picker shows "refreshing…" .
-    pub(crate) refreshing: bool,
+    /// Which `Stale` or `Every` read runs, if one does: the picker shows
+    /// "refreshing…" beside its lists.
+    pub(crate) refreshing: Option<Refresh>,
     /// `scoped_models`: the references the picker shows; empty means
     /// every installed model (`docs/configuration.md`, "Keys").
     pub(crate) scoped: Vec<String>,
@@ -114,6 +115,12 @@ pub(crate) struct ModelPicker {
     /// the session's acceptance writes, in order. An answer touches only
     /// its own entry.
     pub(crate) awaiting: HashMap<String, Vec<(String, String)>>,
+    /// The session-only `model` commands waiting on their session's
+    /// answer, by command id: the session and the reference.
+    pub(crate) only_pending: HashMap<String, (contract::SessionId, String)>,
+    /// The session-only choice its session accepted: the session and
+    /// the reference, drawn while it is the one on screen.
+    pub(crate) session_only: Option<(contract::SessionId, String)>,
     /// The session-only choice on home: the next `start` carries it.
     pub(crate) start_model: Option<Choice>,
     /// The open picker, if one is open.
@@ -129,7 +136,7 @@ impl ModelPicker {
     /// chip stays on its level's name, every other row preselects, and
     /// a removed selection clamps into the answered catalogue.
     pub(crate) fn store(&mut self, result: Result<Catalogue, String>) {
-        self.refreshing = false;
+        self.refreshing = None;
         let incoming = match result {
             Ok(catalogue) => catalogue,
             Err(error) => {
@@ -261,7 +268,7 @@ impl ModelPicker {
         // Only a `Stale` or `Every` read shows "refreshing…": the startup
         // `Cached` read shows "Reading the model lists…" instead.
         if matches!(read, Some(Refresh::Stale | Refresh::Every)) {
-            self.refreshing = true;
+            self.refreshing = read;
         }
         read
     }
@@ -929,14 +936,14 @@ impl ModelPicker {
             if let Some(error) = &self.error {
                 return vec![error.clone()];
             }
-            if self.want.is_some() || self.refreshing {
+            if self.want.is_some() || self.refreshing.is_some() {
                 return vec!["Reading the model lists…".to_owned()];
             }
             return vec![
                 "No models. Install a provider: fiber extension install <name>.".to_owned(),
             ];
         }
-        if self.refreshing {
+        if self.refreshing.is_some() {
             return vec!["refreshing…".to_owned()];
         }
         Vec::new()
