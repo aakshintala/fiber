@@ -1474,15 +1474,24 @@ fn a_running_session_without_a_new_start_gets_no_rejoin() {
     // bound; the log grows with non-start lines only.
     fake.shutdown_write();
     fake.await_closed();
+    // A running session that closes the relay ends the subscription.
+    let closed = client.next("the running session's stream_closed");
+    assert_eq!(closed["kind"], "stream_closed", "{closed}");
+    assert_eq!(
+        closed["payload"]["session_id"].as_str(),
+        Some(sid.as_str()),
+        "{closed}"
+    );
     temp.append(
         &sid,
         &json!({"kind": "session_status", "session_id": sid, "ts": 9, "schema_version": 1,
             "payload": payload("idle", None)}),
     );
-    let done = arm_pass(&hub);
+    // The close dropped the kept level, so the quiet scan finds no
+    // candidate and runs no worker: the scanner parking past the scan
+    // proves the scan ran.
     clock.advance(RUN_SCAN);
     await_scanner(&clock);
-    await_pass(&done, "the quiet scan");
     assert!(
         !fake.has_rejoin(),
         "the running session is not connected again"
@@ -2030,12 +2039,20 @@ fn a_level_changed_while_the_worker_waits_is_the_one_rejoined() {
     }));
     client.next_ack("c_full", "the full acknowledgement");
     // The feed's own summary connection, opened at the scan, is not this
-    // relay and may outlive it: only the client's relay is waited out.
+    // relay and may outlive it: only the client's relay is waited out. The
+    // relay closes as part of an exit: the log ends and the socket is gone
+    // before its connections shut, so the level is kept, not dropped.
+    temp.append(&sid, &fiber_exited(&sid));
+    resumed.stop_listening();
+    resumed.unlink();
     resumed.shutdown_write();
     resumed.await_conn_where(
         |lines, eof| eof && lines.iter().any(|line| line.contains("\"c_full\"")),
         "the end of the client's own relay",
     );
+    // The next run binds before it starts, as a resumed process does.
+    let next = Fake::bind(&temp.dir, &sid);
+    temp.append(&sid, &fiber_started(&sid));
     drop(release_tx);
     await_pass(&done, "the worker's pass");
     assert_eq!(
@@ -2045,12 +2062,11 @@ fn a_level_changed_while_the_worker_waits_is_the_one_rejoined() {
         resumed.all_lines()
     );
     // The next run is rejoined at the level the connection now holds.
-    temp.append(&sid, &fiber_started(&sid));
     let done = arm_pass(&hub);
     clock.advance(RUN_SCAN);
     await_scanner(&clock);
     await_pass(&done, "the next pass");
-    let (_, lines) = resumed.await_conn_where(
+    let (_, lines) = next.await_conn_where(
         |lines, eof| !eof && lines.iter().any(|line| is_rejoin(line)),
         "the rejoin at the new level",
     );
@@ -2245,10 +2261,11 @@ fn a_session_with_no_log_at_attach_rejoins_from_its_discovered_start() {
         client.next("the subscribe acknowledgement")["kind"],
         "command_accepted"
     );
-    fake.shutdown_write();
-    fake.await_closed();
+    // The session exits: the socket is gone before its connections shut.
     fake.stop_listening();
     fake.unlink();
+    fake.shutdown_write();
+    fake.await_closed();
     // The later run writes the log the attach never saw, then binds and
     // streams. Discovery starts it at offset 0, so its start counts.
     temp.write_log(&sid, &workspace, None, &[fiber_started(&sid)]);
