@@ -751,3 +751,19 @@ fn the_key_map_shows_the_person_lines_and_pages_them() {
         screen(&app)
     );
 }
+
+#[test]
+fn the_key_map_over_the_model_picker_is_the_overlay_context() {
+    let mut app = home();
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert!(app.model_picker_open());
+    assert_eq!(app.key_context(), Context::Picker);
+    // The key map opens above the picker: Esc closes whatever is on top.
+    assert_eq!(app.on_key(Key::F1, now()), Effect::None);
+    assert!(app.keymap_top().is_some());
+    assert_eq!(app.key_context(), Context::Overlay);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.keymap_top().is_none());
+    assert!(app.model_picker_open());
+    assert_eq!(app.key_context(), Context::Picker);
+}

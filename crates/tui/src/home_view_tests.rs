@@ -707,6 +707,8 @@ fn the_toggle_keeps_a_row_for_the_list() {
 #[test]
 fn home_cursor_hides_while_navigating() {
     let mut app = home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "fix the parser", live()));
     // Pasted text past the token line count becomes one paste token, a
     // click target focus can move to.
     let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
@@ -714,10 +716,21 @@ fn home_cursor_hides_while_navigating() {
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
+    assert!(
+        targets
+            .iter()
+            .any(|target| matches!(target.id, crate::mouse::TargetId::Token(_))),
+        "a paste token draws"
+    );
     app.drawn(&targets);
     let now = fakes::clock::FakeClock::new().now();
+    // Shift+Tab focuses the last stop, past the chip row: navigating
+    // hides the cursor.
     app.on_key(Key::BackTab, now);
-    assert!(app.focused().is_some());
+    assert!(matches!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Stop(_)))
+    ));
     assert_eq!(cursor(&app, area), None);
 }
 
@@ -748,10 +761,10 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    // Nine rows fit under the four-row logo's box, each with its ✕:
-    // nineteen steps focus the tenth row below the fold.
+    // Nine rows fit under the four-row logo's box: one chip step and
+    // ten row steps focus the tenth row below the fold.
     let now = fakes::clock::FakeClock::new().now();
-    for _ in 0..19 {
+    for _ in 0..11 {
         app.on_key(Key::Down, now);
     }
     assert_eq!(
@@ -782,11 +795,11 @@ fn a_focused_row_below_the_fold_is_drawn_last() {
     assert_eq!(drawn.len(), 9);
     assert_eq!(drawn.last(), Some(&keys[9]));
     assert!(!drawn.contains(&keys[0]));
-    // One step reaches the row's ✕, and the list still ends there.
+    // j steps onto the row's ✕, and the list still ends there.
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
-    app.on_key(Key::Down, now);
+    app.on_key(Key::Char('j'), now);
     assert_eq!(
         app.focused(),
         Some(crate::mouse::TargetId::Home(crate::home::Spot::Stop(
@@ -818,6 +831,8 @@ fn home_with_a_focused_row() {
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
+    // ↓ focuses the chip row first, then the first row.
+    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
     app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
     insta::assert_snapshot!("home_with_a_focused_row", screen(&app, 80, 24));
 }
@@ -1123,7 +1138,7 @@ fn the_toggle_does_not_draw_on_the_foot_row() {
             .all(|target| target.id != crate::mouse::TargetId::Home(Spot::Toggle)),
         "no toggle target on the foot row"
     );
-    assert!(screen(&app, 80, 10).contains("↓ the session list"));
+    assert!(screen(&app, 80, 10).contains("↓ chips and sessions"));
 }
 
 #[test]
@@ -1235,6 +1250,8 @@ fn the_focused_row_is_reversed_and_others_are_not() {
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     app.drawn(&targets);
+    // ↓ focuses the chip row first, then the first row.
+    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
     app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
