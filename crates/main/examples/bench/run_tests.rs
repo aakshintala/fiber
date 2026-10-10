@@ -460,3 +460,33 @@ fn a_timed_run_past_its_deadline_errs_and_leaves_nothing_behind() {
     assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
     watchdog.stand_down(READY);
 }
+
+/// A child that holds for a real second before it exits: a fake clock that
+/// races ahead of it must not end the wait.
+fn holds_then_exits() -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "sleep 1"]);
+    command
+}
+
+#[test]
+fn waiting_for_a_process_to_exit_does_not_depend_on_how_fast_fake_time_moves() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut command = holds_then_exits();
+    command.stdin(Stdio::null()).stdout(Stdio::null());
+    let mut proc = Proc::spawn(&mut command, &System).unwrap();
+    let spare = std::sync::Arc::clone(&clock);
+    let exited = fakes::within("the exit wait", WALL, move || {
+        let exited = proc.exits(&*spare, WALL).unwrap();
+        (exited, proc)
+    });
+    let (exited, proc) = exited;
+    assert!(exited, "the child was still running when the wait ended");
+    proc.stop(&System).unwrap();
+
+    let finished = fakes::within("the same hold under run_to_end", WALL, move || {
+        run_to_end(&mut holds_then_exits(), &*clock, WALL, "the holder")
+    })
+    .unwrap();
+    assert_eq!(finished.status.code(), Some(0));
+}
