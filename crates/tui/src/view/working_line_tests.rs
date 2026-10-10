@@ -15,6 +15,7 @@ use crate::app::App;
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::motion::SPINNER;
+use crate::theme::Role;
 use crate::view::{render, text};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
@@ -248,31 +249,117 @@ fn working_line_glimmer_frame_2() {
     );
     let (shown, _) = rendered(&app, 80, 24);
     insta::assert_snapshot!("working_line_glimmer_frame_2", shown);
-    // Frame 2's band is the word's first three cells, in the spinner's
-    // colour; the word past it holds the muted line style.
+    // Frame 2's band is the word's first three cells, its centre bold in
+    // the spinner's colour and its sides in it; the word past it holds
+    // the muted line style. The word starts past the indent and spinner.
     let buf = buffer_sized(&app, 80, 24);
     let row = working_row(&buf, 80);
-    for x in 0..3 {
+    for x in [4, 6] {
         assert_eq!(
             buf.cell((x, row)).and_then(|cell| cell.style().fg),
-            Some(crate::theme::Role::Accent.color()),
+            Some(Role::Attention.color()),
+            "cell {x}"
+        );
+        assert!(
+            !buf.cell((x, row))
+                .map(|cell| cell.style().add_modifier)
+                .is_some_and(|modifier| modifier.contains(ratatui::style::Modifier::BOLD)),
             "cell {x}"
         );
     }
     assert_eq!(
-        buf.cell((3, row)).and_then(|cell| cell.style().fg),
-        Some(crate::theme::Role::Muted.color()),
+        buf.cell((5, row)).and_then(|cell| cell.style().fg),
+        Some(Role::Attention.color()),
+    );
+    assert!(
+        buf.cell((5, row))
+            .map(|cell| cell.style().add_modifier)
+            .is_some_and(|modifier| modifier.contains(ratatui::style::Modifier::BOLD)),
+    );
+    assert_eq!(
+        buf.cell((7, row)).and_then(|cell| cell.style().fg),
+        Some(Role::Muted.color()),
     );
 }
 
-/// The working line's screen row in a buffer `width` wide.
+#[test]
+fn the_spinner_steps_on_the_tick_in_attention() {
+    let (mut app, clock) = home_app(WALL - 674_000);
+    let origin = clock.origin();
+    // Frame 0's spinner is the first braille cell, frame 1's the second,
+    // both in the attention colour.
+    for (frame, want) in [(0, SPINNER[0]), (1, SPINNER[1])] {
+        app.set_now(
+            origin
+                .checked_add(Duration::from_millis(frame * 120))
+                .expect("after the origin"),
+            WALL,
+        );
+        let buf = buffer_sized(&app, 80, 24);
+        let row = working_row(&buf, 80);
+        assert_eq!(buf.cell((2, row)).map(|cell| cell.symbol()), Some(want));
+        assert_eq!(
+            buf.cell((2, row)).and_then(|cell| cell.style().fg),
+            Some(Role::Attention.color()),
+        );
+    }
+}
+
+#[test]
+fn the_bands_edge_cells_carry_the_bold_centre() {
+    let (mut app, clock) = home_app(WALL - 674_000);
+    let origin = clock.origin();
+    // Frame 0's band is the word's first cell alone, frame 8's its last
+    // cell alone: a one-cell band is its own bold centre.
+    for (frame, x) in [(0, 4), (8, 10)] {
+        app.set_now(
+            origin
+                .checked_add(Duration::from_millis(frame * 120))
+                .expect("after the origin"),
+            WALL,
+        );
+        let buf = buffer_sized(&app, 80, 24);
+        let row = working_row(&buf, 80);
+        assert_eq!(
+            buf.cell((x, row)).and_then(|cell| cell.style().fg),
+            Some(Role::Attention.color()),
+            "frame {frame}"
+        );
+        assert!(
+            buf.cell((x, row))
+                .map(|cell| cell.style().add_modifier)
+                .is_some_and(|modifier| modifier.contains(ratatui::style::Modifier::BOLD)),
+            "frame {frame}"
+        );
+    }
+}
+
+#[test]
+fn the_elapsed_time_and_tail_stay_dim() {
+    let (mut app, clock) = home_app(WALL - 674_000);
+    app.set_now(clock.origin(), WALL);
+    let buf = buffer_sized(&app, 80, 24);
+    let row = working_row(&buf, 80);
+    // Past the word the line is muted throughout: the elapsed time and
+    // the interrupt tail.
+    for x in 11..38 {
+        assert_eq!(
+            buf.cell((x, row)).and_then(|cell| cell.style().fg),
+            Some(Role::Muted.color()),
+            "cell {x}"
+        );
+    }
+}
+
+/// The working line's screen row in a buffer `width` wide: the row
+/// holding the word.
 fn working_row(buf: &Buffer, width: u16) -> u16 {
     (0..buf.area.height)
         .find(|y| {
             let row: String = (0..width)
                 .filter_map(|x| buf.cell((x, *y)).map(|cell| cell.symbol().to_owned()))
                 .collect();
-            row.starts_with("Working")
+            row.contains("Working")
         })
         .unwrap_or_else(|| panic!("no working line"))
 }
@@ -284,13 +371,28 @@ fn working_line_reduced_has_no_glimmer() {
     app.set_now(clock.origin(), WALL);
     let (shown, _) = rendered(&app, 80, 24);
     insta::assert_snapshot!("working_line_reduced_has_no_glimmer", shown);
-    // No cell of the line carries the spinner's colour.
+    // The spinner is still and the word is plain: the spinner keeps
+    // its colour as a still ●, no cell of the word carries it, and none
+    // is bold.
     let buf = buffer_sized(&app, 80, 24);
     let row = working_row(&buf, 80);
+    assert_eq!(buf.cell((2, row)).map(|cell| cell.symbol()), Some("●"));
+    assert_eq!(
+        buf.cell((2, row)).and_then(|cell| cell.style().fg),
+        Some(Role::Attention.color()),
+    );
     for x in 0..80 {
-        assert_ne!(
-            buf.cell((x, row)).and_then(|cell| cell.style().fg),
-            Some(crate::theme::Role::Accent.color()),
+        if x != 2 {
+            assert_ne!(
+                buf.cell((x, row)).and_then(|cell| cell.style().fg),
+                Some(Role::Attention.color()),
+                "cell {x}"
+            );
+        }
+        assert!(
+            !buf.cell((x, row))
+                .map(|cell| cell.style().add_modifier)
+                .is_some_and(|modifier| modifier.contains(ratatui::style::Modifier::BOLD)),
             "cell {x}"
         );
     }
@@ -402,7 +504,7 @@ fn the_interrupt_target_goes_with_its_text() {
             .any(|target| target.id == crate::mouse::TargetId::Interrupt),
         "{targets:?}"
     );
-    assert_eq!(text(&buf), "Working 11m 14s\n");
+    assert_eq!(text(&buf), "  ⠋ Working 11m 14s\n");
 }
 
 #[test]
@@ -855,7 +957,8 @@ fn rest_frames_keep_asking_for_the_next_frame() {
         app.take_wake(),
         origin.checked_add(Duration::from_millis(1_320))
     );
-    // Frame 17 sweeps again from the word's first cell.
+    // Frame 17 sweeps again from the word's first cell, past the indent
+    // and the spinner.
     app.set_now(
         origin
             .checked_add(Duration::from_millis(2_040))
@@ -866,8 +969,8 @@ fn rest_frames_keep_asking_for_the_next_frame() {
     render(&app, area, &mut buf, None);
     let row = working_row(&buf, 80);
     assert_eq!(
-        buf.cell((0, row)).and_then(|cell| cell.style().fg),
-        Some(crate::theme::Role::Accent.color())
+        buf.cell((4, row)).and_then(|cell| cell.style().fg),
+        Some(crate::theme::Role::Attention.color())
     );
     assert_eq!(
         app.take_wake(),

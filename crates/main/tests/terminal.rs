@@ -252,7 +252,7 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     let mut run = terminal(&setup, 120, 32, &[], &[]);
     // The first frame draws the input line; its title proves the input
     // reader runs before the prompt goes out.
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The loop pushes kitty's flags only after it processes the harness's
     // reply, so this also keeps the responder's pty write ahead of input.
@@ -306,7 +306,7 @@ fn a_finished_turn_sends_an_osc_9_notification() {
     // The first frame's title proves the input reader runs before the
     // prompt goes out; quitting is taken in any state, so the resume
     // wait below proves the quit.
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     run.write(b"say hi\r");
     // The reply streams in two deltas; the turn's close says it finished.
@@ -357,7 +357,7 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     )
     .unwrap();
     let mut run = terminal(&setup, 120, 32, &[], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     let asking = run.output().len();
     run.write(b"run it\r");
@@ -450,7 +450,7 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
     // ticket's width. The first frame's title proves the input reader
     // runs before the prompt goes out; the approval choices prove the
     // quit below lands on the drawn view.
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     run.write(b"run it\r");
     // The collapsed group line counts the call's parsed form, before the
@@ -529,7 +529,7 @@ fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
     let mut run = terminal(&setup, 160, 48, &[], &[]);
     // A 160x48 grid, as the ticket's screen: every frame draws at the
     // ticket's width.
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The loop pushes kitty's flags only after it processes the harness's
     // reply, so this also keeps the responder's pty write ahead of input.
@@ -567,7 +567,7 @@ fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
         &json!({"mcp": {"servers": {"db": {"command": "/bin/echo"}}}}),
     );
     let mut run = terminal(&setup, 120, 32, &[], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     run.write(b"say hi\r");
     // The offer names the TUI files it installs; the grid reassembles
@@ -603,7 +603,7 @@ fn resize_redraws_the_grid_at_the_new_size() {
     let server = ProviderServer::start([hello()]).unwrap();
     provider(&setup, &server);
     let mut run = terminal(&setup, 120, 32, &[], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The footer's last word proves the last row drew before the resize.
     run.wait_screen("the footer", |grid| grid.contents.contains("quit"));
@@ -616,7 +616,7 @@ fn resize_redraws_the_grid_at_the_new_size() {
             && grid
                 .rows
                 .get(4)
-                .is_some_and(|row| row == "> /? for shortcuts")
+                .is_some_and(|row| row.trim_end() == "› █? for shortcuts")
             && grid.rows.get(9).is_some_and(|row| row.contains("key map"))
             && grid.cursor == (4, 2)
     });
@@ -670,7 +670,7 @@ fn resume_opens_the_session_a_prefix_names() {
     assert_eq!(asked.status.code(), Some(0));
     let id = only_session(&setup);
     let mut run = terminal(&setup, 120, 32, &["resume", &id[..4]], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     run.wait_screen("the earlier reply", |grid| grid.contents.contains("Hello."));
     run.write(b"\x03\x03\r");
@@ -689,7 +689,7 @@ fn continue_opens_the_latest_session() {
     assert_eq!(ask(&setup, &["ask", "first"]).status.code(), Some(0));
     assert_eq!(ask(&setup, &["ask", "second"]).status.code(), Some(0));
     let mut run = terminal(&setup, 120, 32, &["continue"], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     run.wait_screen("the latest reply", |grid| grid.contents.contains("Second."));
     run.write(b"\x03\x03\r");
@@ -708,7 +708,7 @@ fn resume_without_an_id_opens_home_at_the_session_list() {
     let asked = ask(&setup, &["ask", "say hi"]);
     assert_eq!(asked.status.code(), Some(0));
     let mut run = terminal(&setup, 120, 32, &["resume"], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The exited session is listed by its first prompt.
     run.wait_screen("the session list", |grid| grid.contents.contains("say hi"));
@@ -843,7 +843,7 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
         env.push(("WAYLAND_DISPLAY", "fiber-test"));
     }
     let mut run = terminal(&setup, 120, 32, &[], &env);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     run.write(&[0x16]);
     run.wait_screen("the pasted image", |grid| {
@@ -873,7 +873,7 @@ fn resume_draws_the_reply_then_its_closed_turn() {
     assert_eq!(asked.status.code(), Some(0));
     let id = only_session(&setup);
     let mut run = terminal(&setup, 120, 32, &["resume", &id[..4]], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // The turn ended before the attach: the reply draws, then the turn's
     // close, which folds only once `turn_completed` arrives.
@@ -1094,7 +1094,7 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
     provider_with_panel(&setup, &server, share);
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
     let mut run = terminal(&setup, 160, 48, &[], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     run.write(b"say hi\r");
     // The reply streams in two deltas; the turn's close says it finished.
@@ -1149,7 +1149,7 @@ fn journey_prompt_answer_approval_resize_quit() {
     )
     .unwrap();
     let mut run = terminal(&setup, 120, 32, &[], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     // Prompt one: the test releases the answer once the server holds its
     // request, never on a timer.
@@ -1235,7 +1235,7 @@ fn journey_quit_resume_answer_again() {
     // One turn, then quit: the conversation grid holds the answer before
     // the terminal is restored.
     let mut run = terminal(&setup, 120, 32, &[], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     let first_from = run.output().len();
     run.write(b"first\r");
@@ -1271,7 +1271,7 @@ fn journey_quit_resume_answer_again() {
     // Resume lists the exited session by its first prompt; Enter opens
     // the row, with the earlier turn on screen.
     let mut run = terminal(&setup, 120, 32, &["resume"], &[]);
-    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     run.wait_screen("the session list", |grid| grid.contents.contains("first"));
     // The drawn list is the terminal's own view, so Enter follows the

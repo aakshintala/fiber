@@ -13,8 +13,9 @@ use crate::keys::Edit;
 /// A paste of more lines than this shows as one token.
 const PASTE_LINES: usize = 10;
 
-/// The first row's prefix; later rows indent by its width.
-const PROMPT: &str = "> ";
+/// The first row's prefix; later rows indent by its width
+/// (`docs/tui.md`, "The input box").
+const PROMPT: &str = "› ";
 
 /// The indent of every row after the first.
 const INDENT: &str = "  ";

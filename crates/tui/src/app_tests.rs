@@ -809,7 +809,8 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     assert_eq!(app.conversation_height(), 9);
     app.attach(contract::SessionId(S_A.to_owned()));
     app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
-    assert_eq!(app.conversation_height(), 7);
+    // Two queued rows with the heading above and the footer below them.
+    assert_eq!(app.conversation_height(), 5);
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }
@@ -1356,13 +1357,13 @@ fn enter_sends_the_draft_with_its_tokens_expanded() {
     attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
     app.on_key(Key::Char('a'), now);
     app.on_edit(Edit::Paste(numbered(11)));
-    assert_eq!(app.input().rows(80), vec!["> a[Pasted text #1 · 11 lines]"]);
+    assert_eq!(app.input().rows(80), vec!["› a[Pasted text #1 · 11 lines]"]);
     let line = one_line(app.on_key(Key::Enter, now));
     assert_eq!(content_text(&line), format!("a{}", numbered(11)));
     assert!(app.input().is_empty());
     // The next draft numbers its tokens from 1 again.
     app.on_edit(Edit::Paste(numbered(11)));
-    assert_eq!(app.input().rows(80), vec!["> [Pasted text #1 · 11 lines]"]);
+    assert_eq!(app.input().rows(80), vec!["› [Pasted text #1 · 11 lines]"]);
 }
 
 #[test]
@@ -1431,7 +1432,7 @@ fn ctrl_c_clears_a_draft_with_tokens() {
     assert!(app.input().is_empty());
     assert!(!app.hint());
     app.on_edit(Edit::Paste(numbered(11)));
-    assert_eq!(app.input().rows(80), vec!["> [Pasted text #1 · 11 lines]"]);
+    assert_eq!(app.input().rows(80), vec!["› [Pasted text #1 · 11 lines]"]);
 }
 
 #[test]

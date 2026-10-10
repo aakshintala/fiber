@@ -272,11 +272,11 @@ pub(crate) fn quit(
     Ok(())
 }
 
-/// From just before the spawn to the pty output first holding `>`.
+/// From just before the spawn to the pty output first holding `›`.
 fn terminal_first_frame(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
     let terminal = Terminal::spawn(ctx.home, &[], ctx.path.as_deref(), ctx.clock)?;
     let started = terminal.proc.spawned;
-    let framed = terminal.wait_for(ctx.clock, started + READY, ">");
+    let framed = terminal.wait_for(ctx.clock, started + READY, "›");
     let took = ms(ctx.clock, started);
     // The hub is up before the quit, so it idles out rather than starting
     // after the terminal has gone.

@@ -355,7 +355,7 @@ fn a_tokens_text_comes_back_to_that_token() {
     app.on_edit(Edit::Paste(lines(11)));
     app.editor_returned(Target::Token(1), Ok(lines(13)));
     assert_eq!(app.draft(), format!("a{}", lines(13)));
-    assert_eq!(app.input().rows(80), vec!["> a[Pasted text #1 · 13 lines]"]);
+    assert_eq!(app.input().rows(80), vec!["› a[Pasted text #1 · 13 lines]"]);
 }
 
 #[test]
