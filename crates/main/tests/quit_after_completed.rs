@@ -17,7 +17,9 @@ use support::pty::Run;
 /// Whether `haystack` holds `needle` as bytes.
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.len() >= needle.len()
-        && haystack.windows(needle.len()).any(|window| window == needle)
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 #[test]

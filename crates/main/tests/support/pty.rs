@@ -391,14 +391,18 @@ impl Run {
         }
     }
 
-    /// Stops the reader, waits for the child to exit and reaps it, then
-    /// for the hub to idle out and remove its socket: a hub whose home is
-    /// deleted under it never exits. Dropping `self` kills the hub's
-    /// sessions through the matching watchdog. Returns the exit and
-    /// every byte read from the master since spawn.
+    /// Restores the drain when stalled, waits for the child to exit
+    /// and reaps it, then waits for the reader to end at end of file
+    /// before stopping it, so every queued byte is read: stopping
+    /// through the stop pipe while the master may still hold bytes
+    /// drops them. Then stands the watchdog down and waits for the hub
+    /// to idle out and remove its socket. Returns the exit and every
+    /// byte read from the master since spawn.
     pub(crate) fn wait(mut self) -> Exited {
-        if let Some(reader) = self.reader.take() {
-            reader.stop();
+        if self.reader.is_none() {
+            let main = self.main.try_clone().unwrap();
+            let output = Arc::clone(&self.output);
+            self.reader = Some(Reader::start_on(main, output, self.deadline));
         }
         let child = self.child.take().unwrap();
         let group = child.id();
@@ -414,6 +418,16 @@ impl Run {
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
+        let reader = self.reader.take().unwrap();
+        assert!(
+            reader.ended(self.deadline.left()),
+            "waited until the deadline for the terminal's end of file"
+        );
+        assert!(
+            !self.deadline.left().is_zero(),
+            "waited until the deadline for the terminal's end of file"
+        );
+        reader.stop();
         self.watchdog
             .take()
             .unwrap()
