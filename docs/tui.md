@@ -69,7 +69,9 @@ line says so: "Connecting 2 MCP servers…".
 **The workspace chip** defaults to the directory the terminal was launched in.
 Clicking it opens a picker of recent workspaces, from `recent.jsonl`
 (`docs/state.md`). A remote client has no launch directory, so it always
-shows the picker.
+shows the picker. The picker is an overlay centred over home ("Look",
+"Overlays"): the title "Workspaces", one row per recent workspace with the
+first focused, and the footer "↑↓ move · enter open · esc closes".
 
 **The new worktree switch** sits beside the workspace chip. When it is on,
 the session starts in a new worktree of the workspace, by the same rules a
@@ -405,6 +407,25 @@ a click on it returns too. The views are:
   all" toggle. Ctrl+L opens it, as `/model` does. It draws from the cached
   model lists at once and refreshes stale ones in the background; its refresh
   button refreshes every list (`docs/model-routing.md`, "Model discovery").
+
+  Under the view's top row the picker is an overlay ("Look", "Overlays").
+  Its first row holds the count dim ("12 models", or "scoped · 5 of 12"
+  under `scoped_models`), then "[show all]" bold, which reads "[show scoped]"
+  while every model shows, and "⟳ refresh all" dim at the right end. Each
+  provider is a section, a blank row between them: the provider's name dim,
+  then "· updated 2m ago" dim, or "⟳ refreshing" and a spinner in
+  `attention` while its list refreshes. Each model takes two rows. The first
+  is the model's id in `accent`, each role dim in brackets ("[reviewer]"),
+  "● current" bold in `accent` on the session's model, "· scoped" dim on a
+  scoped model while every model shows, and the rebuild cost dim at the
+  right end ("~84k tokens · $0.31", "—" for the current model). The second,
+  indented four columns, is "thinking" dim and the model's levels, or "fixed
+  thinking" dim for a model with none. On the focused model the levels are in
+  `attention`, its saved level bold, and the chosen chip bold in brackets
+  ("[high]"); elsewhere they are dim. ← and → move between the focused
+  model's chips. A model chosen for this session only gets a third row,
+  "ⓢ this session only · nothing saved" dim. The footer is "↑↓ move · ←→
+  levels · enter choose · s session only · esc close".
 - **The usage view,** `/usage`: the session's `usage` (`docs/events.md`) broken
   down by turn, by model and by delegate, each with tokens by kind, cost billed
   and cost on subscription, and the budget left when `budget.usd` is set.
@@ -1020,11 +1041,21 @@ copies with `y`.
   filtered as the person types. Each row is a name, a one-line description, a
   skill's `argument-hint` when it has one, and a tag: command, skill,
   template, the extension's name, or the MCP server's name. Tab completes and
-  Enter runs. A
+  Enter runs. The panel is an overlay above the input box ("Look",
+  "Overlays") with no title and at most eight rows. A row is the name in
+  `accent` in one column as wide as the longest name shown, the letters
+  that match the query bold; the description dim, cut with … so the tag
+  always fits; the `argument-hint` in `attention`; and the tag dim at the
+  right end. The first match is focused. When the list does not fit, a last
+  dim row says where the rows shown sit: "1–8 of 40 · ↓ 32 more", with "↑ 3
+  above · " in front once it has scrolled. With nothing matching, the panel
+  holds one dim row, "no matches". A
   skill the model has loaded shows in the transcript as a skill, not as a file
   read.
 - **File search.** Typing `@` opens a file search panel, and choosing a file
-  inserts its path as text. The model reads the file itself if it needs it.
+  inserts its path as text. It is drawn as the `/` panel is, one path per
+  row in `accent`, cut from the left when long so the file name stays, and
+  "no files match" dim when nothing does. The model reads the file itself if it needs it.
   The search runs on demand, each keystroke cancels the last, and it covers
   the files git tracks, so a huge repository costs one listing, never a walk of
   the tree.
@@ -1125,6 +1156,24 @@ search box and the draft shows without a cursor.
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
 binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
+
+The key map docks at the bottom, full width, in the overlay frame ("Look",
+"Overlays"). Its title is "Key map" with a ✕, then two dim lines: "Every
+binding by area, with its other paths." and the counts ("34 actions, 24 with
+other paths"). After a blank row comes a row of tabs, "All" and then each
+area, two columns apart: the chosen tab bold, drawn dark on white, the rest
+dim; ← and → move between them. Under the tabs, the search line reads "Type
+to search shortcuts" dim, then "› " dim and the typed query bold with a dim
+█. Typing narrows the rows to bindings whose action, key or other paths
+contain the query, ignoring case, across every area when the tab is All.
+
+Each binding is one row over three columns that start at the same cell on
+every row: the area dim, the action with any condition dim in parentheses
+after it, and the keys dim, alternatives comma-separated and other paths
+after " · ". Each column wraps inside its own width. The first row is
+focused. When rows hide below, a dim ↓ takes the last shown row's gutter; a
+screen too short for them scrolls, and its last line reads "↑ 4 more · ↓ 12
+more" dim. The footer is "↑↓ move · ←→ tabs · esc closes".
 
 Hints that name a key, on home and on the approval badge, name the action's
 bound key from this table, leaving the key out when the action is unbound.
@@ -1274,8 +1323,10 @@ SSH.
   about a second quits. It never interrupts a turn on its own; Esc does that.
 - **Quit** is a second Ctrl+C, or `/quit`. With no session working, meaning
   no turn, job or delegate running, the terminal exits without asking. With
-  some working, it asks: "2 sessions working · enter leave them running · c
-  close all · esc stay".
+  some working, it asks in an overlay ("Look", "Overlays"): the title
+  "Quit", "2 sessions working" dim, then three choices, "enter" to leave them
+  running, "c" to close all and "esc" to stay, with Enter's focused. The
+  footer reads "click a choice · they keep running meanwhile".
   - Enter, the default, leaves them running. The terminal closes its
     connections, and each session follows the lifecycle rules
     (`docs/invocation.md`, "Lifecycle").
@@ -1344,14 +1395,15 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
 
 - **Surfaces, not lines.** The person's messages, each turn's card, code
   blocks, the handoff band, the input box, the approval panel, the question
-  form, the search box and each panel card sit on their own background tint,
+  form, the search box, each panel card and every overlay sit on their own
+  background tint,
   with half-block edges (▄ above, ▀ below) and no borders. An edge's cell
   takes the surface's colour over the colour around it: the terminal's
   background in the conversation, the turn's tint for a code block inside a
   card, the `panel` tint for a panel card.
 - **A stripe marks state** on the side its surface is anchored to: ▌ on the
-  left for the input box, a running or finished job, an approval and a
-  question form; ▐ on the right for the person's prompt bubble. The stripe is one
+  left for the input box, a running or finished job, an approval, a
+  question form and every overlay's rows; ▐ on the right for the person's prompt bubble. The stripe is one
   unbroken bar, because ▌ and ▐ fill half of each cell as Ghostty draws them.
   Where a terminal cannot draw it unbroken, there is no stripe. Fiber draws
   stripes in Ghostty, WezTerm and kitty, and not inside tmux or screen;
@@ -1397,6 +1449,57 @@ hub        41   3,120
 tui       212   9,804
 ```
 
+### Overlays
+
+Every surface drawn over the screen shares one frame, the input box's: the
+key map, the quit question, home's delete question and workspace picker, the
+Ctrl+R panel, a notice's whole text, the `/` and `@` completion panels, and
+the model picker inside its view.
+
+- **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,
+  and no border glyphs. Each row that holds text opens with a ▌ stripe in
+  `accent` and two blank columns, and ends with two blank columns. One blank
+  row sits inside each edge, so no text touches either.
+- **The width** is the content's plus those five columns, kept between 40
+  and 150 columns and never wider than the screen. Content that wraps is
+  wrapped at a preferred width first and the overlay shrinks to what the
+  wrapped content needs: 71 columns for a question or notice, 55 for the
+  workspace picker, and 96 for the model picker and the completion panels,
+  less four columns on a narrower screen.
+- **Placement.** An overlay is centred across the area it covers. A question,
+  a notice, the Ctrl+R panel and the workspace picker are also centred down
+  it. The key map docks at the bottom, full width. The completion panels
+  sit above the input box, and the model picker under its view's top row.
+  The overlay's side margins are blank, with no tint, so the screen behind
+  reads around it.
+- **Rows.** A title, when there is one, is bold in `accent`, with a ✕ or a
+  count dim at its right end. The title, body and footer keep one blank row
+  between them; the body's sections keep their own blank rows.
+- **Choices.** Each choice row starts with two columns of gutter. A row of
+  keys and descriptions keeps the keys in one column as wide as the widest
+  key, two spaces, then the description dim; a description that wraps hangs
+  under its own start. The focused choice has "› " in its gutter, reads bold
+  throughout, and sits on a full-width bar in `accent` with its text in
+  `#000000`. Exactly one row is barred.
+- **The footer** is dim and aligned left with the body, never centred. It is
+  a legend: each key bold and its label dim, joined by " · ". It never
+  repeats a key the body already lists as a choice; where the body lists every
+  key, the footer says what the mouse does instead.
+
+```
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌  Quit                                       ✕
+▌
+▌  2 sessions working
+▌
+▌  › enter  leave them running
+▌    c      close all
+▌    esc    stay
+▌
+▌  click a choice · they keep running meanwhile
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+```
+
 ### Themes
 
 Fiber ships a dark and a light theme. A person adds their own as files in
@@ -1415,7 +1518,7 @@ The roles, in order, with the dark theme's values:
 |---|---|---|
 | `text` | the full text colour: replies, the draft, anything with no role of its own | the terminal's foreground |
 | `muted` | what the doc calls dim: READY, labels and hints, summary lines and results, the ▣ line, block quote bars, grips, the logo's counters | `text`, dim |
-| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar | `#6eaafe` |
+| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's stripe, title and selection bar | `#6eaafe` |
 | `heading` | markdown headings | `#ff9f43` |
 | `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded | `#6eaafe` |
 | `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` |
@@ -1438,8 +1541,8 @@ The roles, in order, with the dark theme's values:
 | `scroll` | the scroll bar's thumb | `#808080` |
 | `background` | every cell of the conversation no surface covers | the terminal's background |
 | `panel` | the rail's and the panel's regions, the narrow layout's status line | `#0c0c11` |
-| `surface` | the input box, the panel's cards, the search box, a swapped view's top row | `#1a1a22` |
-| `surface_raised` | the card on screen, a hovered card, pickers | `#3a3a4a` |
+| `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays | `#1a1a22` |
+| `surface_raised` | the card on screen, a hovered card | `#3a3a4a` |
 | `turn` | a turn's card | `#101017` |
 | `prompt` | the person's prompt bubble | `#343541` |
 | `code` | code blocks | `#181821` |
