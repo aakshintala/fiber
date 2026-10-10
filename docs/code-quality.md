@@ -70,7 +70,9 @@ Denied everywhere:
   also fire on another crate's `#[non_exhaustive]` enum, such as
   `std::io::ErrorKind`, where a `match` must keep its `_` and takes an allow
   with a reason. `==`, `matches!` and `if let` trip none of them, so a test
-  for one variant needs no allow
+  for one variant needs no allow. A match that handles one variant and
+  ignores the rest uses `if let` or `matches!`; the lints are for matches
+  that must grow with the enum
 - visibility and documentation: rustc's `unreachable_pub` and `missing_docs`
   (see "Visibility" and "Comments")
 - `unsafe_code` and `undocumented_unsafe_blocks` (see "`unsafe`")
