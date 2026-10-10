@@ -17,7 +17,7 @@ pub struct Entry {
     pub tag: &'static str,
 }
 
-/// Forty entries covering every tag kind.
+/// Forty-one entries covering every tag kind.
 pub fn entries() -> Vec<Entry> {
     vec![
         Entry {
@@ -29,6 +29,12 @@ pub fn entries() -> Vec<Entry> {
         Entry {
             name: "model",
             desc: "pick the model for this session",
+            hint: None,
+            tag: "command",
+        },
+        Entry {
+            name: "scoped-models",
+            desc: "pick the models the picker shows",
             hint: None,
             tag: "command",
         },
@@ -310,8 +316,8 @@ pub struct State {
 pub(crate) const CASES: &[Case<State>] = &[
     Case {
         name: "slash",
-        help: "the `/` list, eight of forty rows",
-        check: "the panel sits above the input box in the shared frame with ▄ ▀ edges and the ▌ stripe; eight rows of name in one fixed column, dim description and right-aligned tag, the focused row `›` on a full-width accent bar, sized to its content and centred, with a `1–8 of 40 · ↓ 32 more` footer.",
+        help: "the `/` list, eight of forty-one rows",
+        check: "the panel sits above the input box in the shared frame with ▄ ▀ edges and the ▌ stripe; eight rows of name in one fixed column, dim description and right-aligned tag, the focused row `›` on a full-width accent bar, sized to its content and centred, with a `1–8 of 41 · ↓ 33 more` footer.",
         build: || State { focus: 0 },
     },
     Case {
@@ -515,7 +521,7 @@ fn window(focus: usize, len: usize) -> (usize, usize) {
     (start, start + SHOWN)
 }
 
-/// "3–8 of 40 · ↓ 32 more": the scroll hint when the list does not all fit.
+/// "3–8 of 41 · ↓ 33 more": the scroll hint when the list does not all fit.
 fn footer(start: usize, end: usize, total: usize) -> Row {
     let mut parts = vec![];
     if start > 0 {
@@ -751,9 +757,9 @@ mod tests {
     }
 
     #[test]
-    fn forty_entries_cover_every_tag_kind() {
+    fn entries_cover_every_tag_kind() {
         let all = entries();
-        assert_eq!(all.len(), 40);
+        assert_eq!(all.len(), 41);
         for tag in ["command", "skill", "template", "review", "linear"] {
             assert!(all.iter().any(|e| e.tag == tag), "no entry tagged {tag}");
         }
@@ -762,9 +768,9 @@ mod tests {
     #[test]
     fn filter_matches_names() {
         let all = entries();
-        assert_eq!(filter(&all, "").len(), 40, "empty query matches all");
+        assert_eq!(filter(&all, "").len(), 41, "empty query matches all");
         let m = filter(&all, "re");
-        assert!(!m.is_empty() && m.len() < 40, "only some entries match");
+        assert!(!m.is_empty() && m.len() < 41, "only some entries match");
         assert!(
             m.iter().all(|e| e.name.to_lowercase().contains("re")),
             "every match holds the query"
@@ -805,7 +811,7 @@ mod tests {
         // at the width edge, one below, one above, focused on the longest
         // description so something actually truncates.
         let mut s = for_case("slash");
-        s.focus = 9; // login
+        s.focus = 10; // login
         for w in [59, 60, 61] {
             let rows = view(&s, "/", w);
             assert!(
@@ -838,7 +844,7 @@ mod tests {
             (15, "skill"),
             (24, "template"),
             (30, "review"),
-            (39, "linear"),
+            (40, "linear"),
         ] {
             let mut s = for_case("slash");
             s.focus = focus;
@@ -847,7 +853,7 @@ mod tests {
         }
         let t = text(&view(&for_case("slash"), "/", 100));
         assert!(
-            t.contains("↓") && t.contains("more") && t.contains("40"),
+            t.contains("↓") && t.contains("more") && t.contains("41"),
             "missing the scroll hint"
         );
     }
@@ -985,18 +991,18 @@ mod tests {
 
     #[test]
     fn the_window_follows_the_focus() {
-        let (a, b) = (window(0, 40), window(7, 40));
+        let (a, b) = (window(0, 41), window(7, 41));
         assert_eq!((a, b), ((0, 8), (0, 8)), "the first window holds eight");
-        assert_eq!(window(8, 40), (1, 9), "the window moves one row down");
-        assert_eq!(window(99, 40), (32, 40), "the focus clamps to the last row");
+        assert_eq!(window(8, 41), (1, 9), "the window moves one row down");
+        assert_eq!(window(99, 41), (33, 41), "the focus clamps to the last row");
         assert_eq!(window(0, 3), (0, 3), "a short list shows all");
         assert_eq!(window(0, 0), (0, 0), "an empty list shows none");
         // the last row on screen carries the focus marker
         let mut s = for_case("slash");
-        s.focus = 39;
+        s.focus = 40;
         let t = text(&view(&s, "/", 100));
         assert!(
-            t.contains("↑ 32 above") && t.contains("33–40 of 40"),
+            t.contains("↑ 33 above") && t.contains("34–41 of 41"),
             "missing the position"
         );
     }
@@ -1050,12 +1056,12 @@ mod tests {
 
     #[test]
     fn a_stale_focus_clamps_onto_the_filtered_list() {
-        // `/`, Down, Tab on `model`: the second row of the full list, one match after
+        // `/`, Down x10, Tab on `login`: the eleventh row of the full list, one match after (`model` also matches `scoped-models`, so it cannot show the clamp)
         let mut ui = ui_with("/", "slash");
-        move_focus(&mut ui, 1);
-        assert_eq!(ui.completions.as_ref().unwrap().focus, 1);
+        move_focus(&mut ui, 10);
+        assert_eq!(ui.completions.as_ref().unwrap().focus, 10);
         complete(&mut ui, false);
-        assert_eq!(ui.input, "/model ");
+        assert_eq!(ui.input, "/login ");
         assert_eq!(
             ui.completions.as_ref().unwrap().focus,
             0,
@@ -1063,9 +1069,9 @@ mod tests {
         );
         // rendering and selection agree on the same row
         let t = text(&view(ui.completions.as_ref().unwrap(), &ui.input, 100));
-        assert!(t.contains("model"), "the clamped row still shows");
+        assert!(t.contains("login"), "the clamped row still shows");
         complete(&mut ui, false);
-        assert_eq!(ui.input, "/model ", "a second Tab keeps the same row");
+        assert_eq!(ui.input, "/login ", "a second Tab keeps the same row");
     }
 
     #[test]
