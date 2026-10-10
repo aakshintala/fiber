@@ -207,30 +207,22 @@ type Posted = (
     crate::redact::Secrets,
 );
 
-/// Runs one `post_signed` with a fresh [`Secrets`] on its own thread and
-/// returns its outcome with the secrets it reported. Calling code that
-/// blocks is a wait too (`docs/testing.md`, "Waits and timeouts"): on
-/// expiry the test fails naming the call. A signer the test inspects
-/// afterwards is held as an `Arc` and passed as a clone.
-fn posted(
+/// One `post_signed` over `route` on its own thread under [`CALL_WITHIN`],
+/// its body read to a `String` on success: without the wait a held call
+/// outlives the test, which fails naming the call. `cancel` stays alive in
+/// the caller while the test reads the server's side.
+fn called(
     url: String,
     headers: &[(String, String)],
     body: &'static [u8],
     signer: Option<std::sync::Arc<dyn contract::signing::Signer>>,
+    route: super::Route,
     cancel: &std::sync::Arc<super::Cancel>,
-    proxy: Option<ureq::Proxy>,
 ) -> Posted {
     let headers = headers.to_vec();
     let cancel = std::sync::Arc::clone(cancel);
     fakes::within(&format!("the call to {url}"), CALL_WITHIN, move || {
         let mut secrets = crate::redact::Secrets::default();
-        let route = super::Route {
-            via: match proxy {
-                None => super::Via::Direct,
-                Some(proxy) => super::Via::Through(proxy),
-            },
-            limits: net::LIMITS,
-        };
         let sent = super::post_signed(
             &url,
             &headers,
@@ -252,6 +244,29 @@ fn posted(
         };
         (outcome, secrets)
     })
+}
+
+/// Runs one `post_signed` with a fresh [`Secrets`] on its own thread and
+/// returns its outcome with the secrets it reported. Calling code that
+/// blocks is a wait too (`docs/testing.md`, "Waits and timeouts"): on
+/// expiry the test fails naming the call. A signer the test inspects
+/// afterwards is held as an `Arc` and passed as a clone.
+fn posted(
+    url: String,
+    headers: &[(String, String)],
+    body: &'static [u8],
+    signer: Option<std::sync::Arc<dyn contract::signing::Signer>>,
+    cancel: &std::sync::Arc<super::Cancel>,
+    proxy: Option<ureq::Proxy>,
+) -> Posted {
+    let route = super::Route {
+        via: match proxy {
+            None => super::Via::Direct,
+            Some(proxy) => super::Via::Through(proxy),
+        },
+        limits: net::LIMITS,
+    };
+    called(url, headers, body, signer, route, cancel)
 }
 
 #[test]
@@ -888,38 +903,18 @@ fn stall_limits() -> net::Limits {
     .unwrap()
 }
 
-/// One `post_signed` over a direct route with `limits` on its own thread
-/// under [`CALL_WITHIN`]: without the limits a held call outlives the
-/// wait, and the test fails naming the call. `cancel` stays alive in the
-/// caller while the test reads the server's side.
+/// One `post_signed` over a direct route with `limits`, sharing [`called`]:
+/// the short limits keep a held call inside [`CALL_WITHIN`].
 fn posted_limited(
     url: String,
     limits: net::Limits,
     cancel: &std::sync::Arc<super::Cancel>,
 ) -> Result<(String, Option<bool>), crate::Error> {
-    let cancel = std::sync::Arc::clone(cancel);
-    fakes::within(
-        &format!("the limited call to {url}"),
-        CALL_WITHIN,
-        move || {
-            let route = super::Route {
-                via: super::Via::Direct,
-                limits,
-            };
-            let mut secrets = crate::redact::Secrets::default();
-            let sent = super::post_signed(&url, &[], b"{}", None, &route, &cancel, &mut secrets);
-            match sent {
-                Ok((mut stream, flag)) => {
-                    let mut text = String::new();
-                    match std::io::Read::read_to_string(&mut stream, &mut text) {
-                        Ok(_) => Ok((text, flag)),
-                        Err(err) => Err(crate::Error::Connection(err.to_string())),
-                    }
-                }
-                Err(err) => Err(err),
-            }
-        },
-    )
+    let route = super::Route {
+        via: super::Via::Direct,
+        limits,
+    };
+    called(url, &[], b"{}", None, route, cancel).0
 }
 
 #[test]
@@ -966,9 +961,13 @@ fn a_stalled_error_body_is_a_dropped_connection_not_a_status() {
         &std::sync::Arc::default(),
     )
     .map(|_| ());
-    assert!(
-        matches!(result, Err(crate::Error::Connection(_))),
-        "a stalled 500 is a dropped connection, not a status: {result:?}"
+    let Err(crate::Error::Stalled { should_retry, .. }) = &result else {
+        panic!("a stalled 500 is a dropped connection, not a status: {result:?}");
+    };
+    assert_eq!(*should_retry, None);
+    assert_eq!(
+        result.unwrap_err().code(),
+        contract::ErrorCode::ConnectionFailed
     );
 }
 
@@ -978,23 +977,26 @@ fn a_stalled_error_body_keeps_a_no_retry_veto() {
         fakes::Response::stall(500, "{", 1000).header("x-should-retry", "false")
     ])
     .unwrap();
-    let Err(crate::Error::Status {
-        status,
-        body,
-        should_retry,
-        ..
-    }) = posted_limited(
+    let result = posted_limited(
         format!("{}/v1", server.url()),
         stall_limits(),
         &std::sync::Arc::default(),
     )
-    .map(|_| ())
-    else {
-        panic!("a stalled 500 with x-should-retry: false was not a status failure");
+    .map(|_| ());
+    let Err(err) = &result else {
+        panic!("a stalled 500 with x-should-retry: false was not a stalled failure");
     };
-    assert_eq!(status, 500);
-    assert_eq!(body, "");
-    assert_eq!(should_retry, Some(false));
+    let crate::Error::Stalled { should_retry, .. } = err else {
+        panic!("a stalled 500 with x-should-retry: false was not stalled: {err:?}");
+    };
+    assert_eq!(*should_retry, Some(false));
+    assert_eq!(err.code(), contract::ErrorCode::ConnectionFailed);
+    assert_eq!(err.should_retry(), Some(false));
+    assert!(
+        err.failure("test", &crate::redact::Secrets::default())
+            .provider
+            .is_none()
+    );
 }
 
 #[test]

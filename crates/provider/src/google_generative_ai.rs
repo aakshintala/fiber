@@ -207,6 +207,7 @@ fn retry_info(error: Error) -> Error {
         }
         other @ (Error::Status { .. }
         | Error::Connection(_)
+        | Error::Stalled { .. }
         | Error::StreamIncomplete(_)
         | Error::ReplyFailed { .. }
         | Error::UnknownStopReason(_)

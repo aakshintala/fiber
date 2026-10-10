@@ -15,6 +15,14 @@ pub enum Error {
     /// The connection could not be made, or dropped.
     #[error("could not be reached: {0}.")]
     Connection(String),
+    /// An error body went silent after its headers arrived.
+    #[error("could not be reached: {message}.")]
+    Stalled {
+        /// The read failure that ended the body.
+        message: String,
+        /// The `x-should-retry` header, when the response carried one.
+        should_retry: Option<bool>,
+    },
     /// The provider answered with a status other than 2xx.
     #[error("answered HTTP {status}.")]
     Status {
@@ -67,7 +75,7 @@ impl Error {
     /// The stable code a consumer switches on.
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Connection(_) => ErrorCode::ConnectionFailed,
+            Self::Connection(_) | Self::Stalled { .. } => ErrorCode::ConnectionFailed,
             Self::Status {
                 status,
                 body,
@@ -94,7 +102,7 @@ impl Error {
     /// carried one.
     pub fn should_retry(&self) -> Option<bool> {
         match self {
-            Self::Status { should_retry, .. } => *should_retry,
+            Self::Status { should_retry, .. } | Self::Stalled { should_retry, .. } => *should_retry,
             // A failed signature is not retried.
             Self::Sign(_) => Some(false),
             Self::Connection(_)
@@ -131,6 +139,7 @@ impl Error {
                 | contract::signing::Error::Unattended { message: text },
             ) => (None, Some((None, secrets.redact(text)))),
             Self::Connection(_)
+            | Self::Stalled { .. }
             | Self::StreamIncomplete(_)
             | Self::UnknownStopReason(_)
             | Self::ContextOverflow(_)

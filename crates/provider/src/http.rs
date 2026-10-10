@@ -214,25 +214,19 @@ pub(crate) fn post_signed(
             .get("date")
             .and_then(|v| v.to_str().ok())
             .map(|v| v.trim().to_owned());
-        // A stalled error body is a dropped connection, retried as one:
-        // only a timeout becomes `Connection`. Any other read failure
-        // keeps today's empty body and the status's code. A timeout keeps
-        // the veto: `x-should-retry: false` was already read, so it stays
-        // a status with an empty body and the header's wait only.
+        // A stalled error body is a dropped connection, retried as one,
+        // keeping the `x-should-retry` header's effect: a timeout becomes
+        // `Stalled`, carrying the veto when the headers sent one. Any
+        // other read failure keeps today's empty body and the status's
+        // code.
         let body = match response.into_body().read_to_string() {
             Ok(body) => body,
             Err(error) => {
                 if net::timed_out(&error) {
-                    if should_retry == Some(false) {
-                        return Err(Error::Status {
-                            status,
-                            body: String::new(),
-                            retry_after,
-                            should_retry,
-                            url: crate::error::target(url),
-                        });
-                    }
-                    return Err(Error::Connection(error.to_string()));
+                    return Err(Error::Stalled {
+                        message: error.to_string(),
+                        should_retry,
+                    });
                 }
                 String::new()
             }
