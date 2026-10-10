@@ -5,11 +5,13 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# Of Fiber's crates, `fakes` may depend only on `contract`
-# (docs/architecture.md, "The call rules"). ring computes credential
+# Of Fiber's crates, `fakes` may depend only on `contract` and `support`
+# (docs/architecture.md, "The call rules"): every crate may depend on
+# `support`, which holds no domain knowledge. ring computes credential
 # fingerprints; the scripted provider implements contract's provider seam.
 [dependencies]
 contract = { path = "../contract" }
+support = { path = "../support" }
 ring = "0.17"
 rustix.workspace = true
 # gzip for the release fixtures `ustar` builds.
