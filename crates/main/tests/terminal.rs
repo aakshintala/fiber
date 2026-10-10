@@ -190,8 +190,6 @@ impl Setup {
 struct Terminal {
     main: OwnedFd,
     terminal: fs::File,
-    cols: u16,
-    rows: u16,
 }
 
 impl Terminal {
@@ -224,12 +222,7 @@ impl Terminal {
             },
         )
         .unwrap();
-        Self {
-            main,
-            terminal,
-            cols,
-            rows,
-        }
+        Self { main, terminal }
     }
 
     fn stdin(&self) -> Stdio {
@@ -502,7 +495,6 @@ impl Run {
     }
 
     /// The grid's rows, top to bottom, without newlines.
-    #[allow(dead_code, reason = "the grid waits use it from the next task on")]
     fn screen_rows(&self) -> Vec<String> {
         self.screen().rows
     }
@@ -867,7 +859,7 @@ fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
         ),
     )
     .unwrap();
-    let mut run = Run::terminal_full_sized(&setup, Terminal::open_sized(160, 48), &[], &[]);
+    let mut run = Run::terminal_full_sized(&setup, &[], &[], 160, 48);
     // A 160x48 grid, as the ticket's screen: every frame draws at the
     // ticket's width.
     run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
@@ -945,7 +937,7 @@ fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
     let setup = Setup::new();
     let server = ProviderServer::start([streaming_ask_stalls()]).unwrap();
     setup.provider(&server);
-    let mut run = Run::terminal_full_sized(&setup, Terminal::open_sized(160, 48), &[], &[]);
+    let mut run = Run::terminal_full_sized(&setup, &[], &[], 160, 48);
     // A 160x48 grid, as the ticket's screen: every frame draws at the
     // ticket's width.
     run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
@@ -1282,95 +1274,25 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
     assert_eq!(output.status.code(), Some(0));
 }
 
-/// The final screen rebuilt from the pty's bytes: one cell per column
-/// and row.
+/// The conversation screen: one cell per column and row.
 struct Screen {
     cells: Vec<Vec<char>>,
 }
 
 impl Screen {
-    /// Rebuilds the `cols` by `rows` screen from every pty byte: only
-    /// what the fixture emits is tracked (CUP, mode sets, the alternate
-    /// screen's entry and leave, OSC, and printable text); every other
-    /// sequence is skipped.
-    fn rebuild(output: &[u8], cols: u16, rows: u16) -> Self {
-        let (cols, rows) = (cols as usize, rows as usize);
-        let mut screen = Self {
-            cells: vec![vec![' '; cols]; rows],
-        };
-        let (mut row, mut col) = (0usize, 0usize);
-        let text = String::from_utf8_lossy(output);
-        let mut chars = text.chars();
-        while let Some(ch) = chars.next() {
-            match ch {
-                '\x1b' => match chars.next() {
-                    Some('[') => {
-                        let mut params = String::new();
-                        let mut final_ = '\0';
-                        for ch in chars.by_ref() {
-                            if ('@'..='~').contains(&ch) {
-                                final_ = ch;
-                                break;
-                            }
-                            params.push(ch);
-                        }
-                        // A missing row or column addresses the first.
-                        let number = |at: usize| {
-                            params
-                                .split(';')
-                                .nth(at)
-                                .and_then(|n| {
-                                    n.trim_start_matches(['?', ' ']).parse::<usize>().ok()
-                                })
-                                .unwrap_or(0)
-                        };
-                        match final_ {
-                            'H' => {
-                                row = number(0).saturating_sub(1).min(rows.saturating_sub(1));
-                                col = number(1).saturating_sub(1).min(cols.saturating_sub(1));
-                            }
-                            'h' | 'l' if params.contains("1049") => {
-                                if final_ == 'h' {
-                                    for dead in screen.cells.iter_mut() {
-                                        dead.fill(' ');
-                                    }
-                                    (row, col) = (0, 0);
-                                } else {
-                                    // The quit's leave: what follows is the
-                                    // resume lines, not screen.
-                                    return screen;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    Some(']') => {
-                        let osc = chars.by_ref();
-                        while let Some(ch) = osc.next() {
-                            if ch == '\x07' {
-                                break;
-                            }
-                            if ch == '\x1b' && osc.next() == Some('\\') {
-                                break;
-                            }
-                        }
-                    }
-                    Some(_) | None => {}
-                },
-                ch if ch.is_control() => {}
-                _ => {
-                    if row < rows && col < cols {
-                        screen.cells[row][col] = ch;
-                        col += 1;
-                        if col >= cols {
-                            col = 0;
-                            row = row.saturating_add(1);
-                        }
-                    }
-                }
-            }
+    /// Pads the grid's rows to `cols` columns: the grid omits trailing
+    /// blanks, while the card assertions index by column.
+    fn from_rows(rows: Vec<String>, cols: usize) -> Self {
+        Self {
+            cells: rows
+                .iter()
+                .map(|row| {
+                    let mut cells: Vec<char> = row.chars().collect();
+                    cells.resize(cols, ' ');
+                    cells
+                })
+                .collect(),
         }
-        screen
     }
 
     /// The panel's text columns, one right-trimmed row per screen row:
@@ -1557,27 +1479,29 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
     setup.provider_with_panel(&server, share);
     let workspace = fs::canonicalize(setup.workspace()).unwrap();
     let mut run = Run::terminal_full_sized(&setup, &[], &[], 160, 48);
-    run.read_until(">");
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
     run.write(b"say hi\r");
-    // The reply streams in two deltas, so only the first delta's text
-    // arrives whole; the turn's close says it finished. The updated
-    // status (with the turn's usage) can arrive before or after the
-    // close line, so only wait when its bytes are not here.
-    run.read_until("Hel");
-    run.read_until("completed");
-    if !contains(&run.output(), "cache hits") {
-        run.read_until("cache hits");
-    }
+    // The reply streams in two deltas; the turn's close says it finished.
+    // The updated status (with the turn's usage) can arrive before or
+    // after the close line; the card is whole once its spend row draws.
+    run.wait_screen("the first delta", |grid| grid.contents.contains("Hel"));
+    run.wait_screen("the finished turn", |grid| {
+        grid.contents.contains("completed")
+    });
+    run.wait_screen("the spend row", |grid| grid.contents.contains("cache hits"));
+    // The card below is the conversation screen before quitting: the
+    // primary screen after it holds the resume lines, not the card.
+    let card = Screen::from_rows(run.screen_rows(), 160);
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
-    run.read_until("fiber resume");
-    // The quit's bytes come after every panel byte, so the screen
-    // rebuilt now holds each frame whole: no row is read mid-frame.
-    Screen::rebuild(&run.output(), 160, 48).assert_session_cut(
-        160,
-        panel,
-        workspace.to_str().unwrap(),
-    );#[test]
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
+    card.assert_session_cut(160, panel, workspace.to_str().unwrap());
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
 fn journey_prompt_answer_approval_resize_quit() {
     let setup = Setup::new();
     // Three responses, each held until the test sees its request and lets
