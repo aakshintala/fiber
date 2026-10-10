@@ -806,7 +806,7 @@ matcher unit tests, and an unrelated version-bump test).
    found in any repo examined; terminal-bench's cost is bounded by task count and
    documented externally, not in-repo.
 4. Scope. Long cross-feature journeys by construction (whole tasks), minutes per
-   task; CI-incompatible (nightly/manual only).
+   task; no per-merge CI use of them was found in aider or goose.
 5. What it finds. Per aider HISTORY/benchmark docs: prompt/model regressions and
    unvetted-code hazards — behaviour bugs, not rendering bugs. Nothing found
    suggests agent-QA catches TUI rendering issues; that remains an open gap.
@@ -840,7 +840,7 @@ checked — a genuine gap Fiber could pioneer, cheaply, on top of a vt100 grid.
 
 ## Can terminal QA be scripted so no model has to run it?
 
-Yes, and it is the norm. A scripted provider, a real binary in a PTY, a terminal emulator that rebuilds the grid, and deadline-bounded waiting on that grid cover raw mode, resize, layout and cross-feature journeys with no model. What no project does is replace judgement about how a screen looks: a snapshot says "this changed", a person says whether the change is right (`cargo insta review`). Model-driven exploration of a TUI has no precedent in the sources read: the nearest, gemini-cli `evals/` and terminal-bench, grade task outcomes, cost real API calls per run, and are kept off the merge path (gemini-cli tiers them `ALWAYS_PASSES` and `USUALLY_PASSES`). Property tests of input sequences against a grid model were searched for and not found anywhere.
+Yes, and it is the norm. A scripted provider, a real binary in a PTY, a terminal emulator that rebuilds the grid, and deadline-bounded waiting on that grid cover raw mode, resize, layout and cross-feature journeys with no model. What no project does is replace judgement about how a screen looks: a snapshot says "this changed", a person says whether the change is right (`cargo insta review`). Model-driven exploration of a TUI has no precedent in the sources read: the nearest, gemini-cli `evals/` and terminal-bench, grade task outcomes, cost real API calls per run, and test agent behaviour, not rendering. gemini-cli runs its `ALWAYS_PASSES` evals in every CI and gates the `USUALLY_PASSES` and `USUALLY_FAILS` trendline sets behind `RUN_EVALS=1`. Property tests of input sequences against a grid model were searched for and not found anywhere.
 
 ## Recommendation for Fiber
 
