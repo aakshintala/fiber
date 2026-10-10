@@ -162,11 +162,8 @@ pub(crate) fn matched(name: &str, query: &str) -> Option<std::ops::Range<usize>>
         }
         // The match ends where the last character it consumed ends.
         let end = folded
-            .iter()
-            .map(|&(oi, _)| oi)
-            .take(query.len())
-            .last()
-            .and_then(|oi| chars.get(oi + 1))
+            .get(query.len() - 1)
+            .and_then(|&(oi, _)| chars.get(oi + 1))
             .map_or(name.len(), |(at, _)| *at);
         return Some(start..end);
     }

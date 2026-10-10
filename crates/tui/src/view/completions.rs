@@ -233,7 +233,7 @@ fn file_row(path: &str, query: &str, room: usize, focused: bool) -> Row {
 /// bar.
 fn body(completions: &Completions, room: usize, fit: usize) -> Vec<Row> {
     let selected = completions.selected.unwrap_or(0);
-    let rows = match &completions.rows {
+    match &completions.rows {
         Rows::Slash(entries) => {
             let name_w = entries
                 .iter()
@@ -289,8 +289,7 @@ fn body(completions: &Completions, room: usize, fit: usize) -> Vec<Row> {
         }
         Rows::Message(text) => vec![dim_row(text.clone())],
         Rows::Search(_) => Vec::new(),
-    };
-    rows
+    }
 }
 
 /// Draws the `/` and `@` panels over `area`, above the input box's top
