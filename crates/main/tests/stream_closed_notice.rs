@@ -257,16 +257,19 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
         screen.contents
     );
 
-    // Read the observer past the first attach and the close, so the
-    // count read after the reopen is a fresh transition.
+    // The summary subscriber is promised the latest count, not every
+    // change (`docs/events.md`, "session_status": the latest wins): the
+    // session reads the settled count when it folds a line, so an attach
+    // and a close that finish before it folds send no `clients: 1` and no
+    // second `clients: 0` (`crates/loop/src/status.rs`, `Fold::observe`).
+    // The test waits for nothing between them; the reopen's count below
+    // is the first one that stays.
     let clients_is = |count: u64| {
         move |line: &Value| {
             line.get("kind").and_then(Value::as_str) == Some("session_status")
                 && line["payload"].get("clients").and_then(Value::as_u64) == Some(count)
         }
     };
-    until(&observer, "the first attach's clients count", clients_is(1));
-    until(&observer, "the close's clients count", clients_is(0));
 
     // A send from the composer is rejected `not_subscribed`: the hub's
     // rejection message is `Send `subscribe` first.`
@@ -307,10 +310,7 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     let resubscribed = until(
         &observer,
         "the reopened subscribe's clients count",
-        |line| {
-            line.get("kind").and_then(Value::as_str) == Some("session_status")
-                && line["payload"].get("clients").and_then(Value::as_u64) == Some(1)
-        },
+        clients_is(1),
     );
     assert_eq!(
         resubscribed.last().unwrap()["payload"]["clients"],
