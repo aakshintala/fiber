@@ -61,6 +61,7 @@ mod schema;
 mod shutdown;
 mod skill_header;
 mod skill_reader;
+mod skill_set;
 mod skills;
 mod slash;
 mod status;
@@ -87,6 +88,7 @@ pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
 pub use rewind::{Rewound, rewind_note};
 pub use skill_reader::SkillReader;
+pub use skill_set::SkillSet;
 pub use slash::{FetchPrompt, ServerPrompts};
 pub use switch::{Hosted, NO_SWITCH, Prepare, Prepared, Switchable};
 
@@ -112,6 +114,9 @@ pub struct Loop {
     /// What the one preamble build reads, once (`docs/prompt-cache.md`,
     /// "The preamble").
     prompt: prompt::PromptInputs,
+    /// The session's maintained skill set: what `/name` and the `skill`
+    /// tool answer from (`docs/system-prompt.md`, "Skills").
+    skills: skill_set::SkillSet,
     /// Why the one build writes `preamble_built`: `start` on a new
     /// session, `resume` on a resumed one.
     preamble_reason: PreambleReason,
@@ -383,12 +388,14 @@ impl Loop {
             started.session_id.clone(),
             Arc::clone(log.clock()),
         );
+        let skills = skill_set::SkillSet::new(prompt.clone(), &workspace);
         Ok(Self {
             log,
             diag,
             provider,
             model,
             prompt,
+            skills,
             preamble_reason: PreambleReason::Start,
             preamble: None,
             inbox,

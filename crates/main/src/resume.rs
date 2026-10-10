@@ -254,10 +254,8 @@ fn resumed_session(
         resolve,
     );
     crate::shutdown::arm(signals);
-    let skills: Arc<dyn contract::skills::Skills> = Arc::new(r#loop::SkillReader::new(
-        prompt_inputs.clone(),
-        Path::new(&folded.workspace),
-    ));
+    let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), Path::new(&folded.workspace));
+    let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
         fiber,
         &home,
@@ -374,6 +372,7 @@ fn resumed_session(
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)
                         .repository_code(offer)
+                        .skill_set(skill_set)
                         .server_prompts(r#loop::ServerPrompts {
                             rows: prompt_rows,
                             fetch,
