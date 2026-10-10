@@ -522,7 +522,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // first frame to end of file.
     let frames = watch(
         &pair.main,
-        vec![b"shortcuts", b"Press Ctrl+C again to", RESTORE],
+        vec![b"shortcuts", b"Press", b"Ctrl+C", b"again to", RESTORE],
     );
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
@@ -556,9 +556,13 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
         .flush()
         .unwrap_or_else(|err| panic!("flush: {err}"));
     // The armed frame foots the quit hint, which no earlier frame
-    // holds. Only its first run is matched: the incremental redraw
-    // splits the hint around the cells the unarmed foot already holds.
-    watched(&frames, "the armed quit hint");
+    // holds. Its fragments are watched in order: the incremental
+    // redraw splits the hint around the cells the unarmed foot already
+    // holds, so the whole hint never arrives in one run, but every
+    // fragment does.
+    watched(&frames, "the armed quit hint's Press");
+    watched(&frames, "the armed quit hint's Ctrl+C");
+    watched(&frames, "the armed quit hint's again to");
     pair.main
         .write_all(&[0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));

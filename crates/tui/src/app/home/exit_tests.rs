@@ -398,7 +398,7 @@ fn esc_stays_and_shows_no_hint() {
     assert!(!app.hint());
     assert_eq!(
         foot(&app),
-        "↓ the session list · F1 the key map · Ctrl+C twice to quit"
+        "↓ chips and sessions · F1 the key map · Ctrl+C twice to quit"
     );
 }
 

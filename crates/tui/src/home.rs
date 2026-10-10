@@ -10,7 +10,9 @@ use serde_json::Value;
 /// A click target on home: one row's line, by the key [`Sessions`]
 /// gave it when it first appeared, its ✕ in the last column, the scope
 /// toggle heading the list, the workspace chip opening the workspace
-/// picker, one picker row by its index in the list fixed at open, and one
+/// picker, the new worktree switch, the model chip opening the model
+/// picker, the thinking chip opening it at the model's thinking chips,
+/// one picker row by its index in the list fixed at open, and one
 /// quit choice while the quit question is open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Spot {
@@ -28,11 +30,28 @@ pub(crate) enum Spot {
     /// The new worktree switch: clicking it, or Enter on it while
     /// focused, toggles it.
     Worktree,
+    /// The model chip: clicking it, or Enter on it while focused,
+    /// opens the model picker in `Mode::Choose`.
+    Model,
+    /// The thinking chip: clicking it, or Enter on it while focused,
+    /// opens the model picker at the model's thinking chips.
+    Thinking,
     /// A picker row, by its index in the list fixed at open.
     Pick(usize),
     /// A quit choice while the quit question is open: clicking it does
     /// what its key does.
     Quit(QuitChoice),
+}
+
+impl Spot {
+    /// Whether the spot is a chip of the chip row: the workspace chip,
+    /// the new worktree switch, the model chip or the thinking chip.
+    pub(crate) fn is_chip(self) -> bool {
+        match self {
+            Spot::Workspace | Spot::Worktree | Spot::Model | Spot::Thinking => true,
+            Spot::Entry(_) | Spot::Stop(_) | Spot::Toggle | Spot::Pick(_) | Spot::Quit(_) => false,
+        }
+    }
 }
 
 /// A quit choice: leaving working sessions running, closing them all

@@ -4,6 +4,7 @@
 use std::time::Instant;
 
 use super::{App, Effect};
+use crate::keys::{Event, default_event};
 use crate::keyset::{Context, KeysSetup, Keyset, Resolved, load};
 use crate::rebind::{KeysScreen, Outcome};
 use crate::stroke::{Code, Mods, Stroke};
@@ -96,7 +97,25 @@ impl App {
     }
 
     /// One stroke through the effective bindings in the context on screen.
+    /// Home owns plain arrows on a chip or a list stop: they dispatch
+    /// as its own keys ahead of the bindings, so a rebound `recall_prompt`
+    /// or `focus_next_prev` leaves them to home.
     fn bindings_press(&mut self, stroke: Stroke, now: Instant) -> Effect {
+        if self.home_owns_arrows()
+            && stroke.mods == Mods::NONE
+            && matches!(
+                stroke.code,
+                Code::Up | Code::Down | Code::Left | Code::Right
+            )
+        {
+            match default_event(&stroke) {
+                Some(Event::Key(key)) => return self.on_key(key, now),
+                Some(Event::Edit(edit)) => return self.on_edit(edit),
+                Some(Event::Stroke(_) | Event::Mouse(_) | Event::Reply(_)) | None => {
+                    return Effect::None;
+                }
+            }
+        }
         match self.keys().resolve(&stroke, self.key_context()) {
             Resolved::Key(key) => self.on_key(key, now),
             Resolved::Edit(edit) => self.on_edit(edit),
@@ -186,16 +205,16 @@ impl App {
     }
 
     /// The context a stroke arrives in, front to back: the quit question,
-    /// the model picker, an overlay, the search bar, the focused
-    /// conversation, a completion panel, a steering selection, else the
-    /// input box. The notice overlay is no context: it takes only Esc,
-    /// which is `close_or_interrupt`'s key everywhere.
-    fn key_context(&self) -> Context {
-        if self.quit_open() {
-            Context::Overlay
-        } else if self.model_picker_open() {
-            Context::Picker
-        } else if self.config_view_open()
+    /// an overlay (a configuration or session view, a home modal, the key
+    /// map above the model picker, the approval panel, an offer, the
+    /// search bar), the model picker, a focused chip as the input box,
+    /// the focused conversation, a completion panel, a steering
+    /// selection, else the input box. The notice overlay is no context:
+    /// it takes only Esc, which is `close_or_interrupt`'s key everywhere.
+    /// Home's arrows read it through `home_owns_arrows`.
+    pub(super) fn key_context(&self) -> Context {
+        if self.quit_open()
+            || self.config_view_open()
             || self.session_view_open()
             || self.home_modal()
             || self.keymap_top().is_some()
@@ -204,8 +223,12 @@ impl App {
             || self.search_panel().is_some()
         {
             Context::Overlay
+        } else if self.model_picker_open() {
+            Context::Picker
         } else if self.find_open() {
             Context::Search
+        } else if self.focused_chip().is_some() {
+            Context::Input
         } else if self.focus.is_some() {
             Context::Conversation
         } else if self.completions().is_some() {

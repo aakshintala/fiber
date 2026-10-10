@@ -274,9 +274,11 @@ pub(super) fn render(
         }
     }
     // The cursor is a drawn dim `█` at the draft's cursor while nothing
-    // takes the keyboard (`docs/tui.md`, "The input box"). The
+    // takes the keyboard (`docs/tui.md`, "The input box"). A focused
+    // chip keeps it there: the chip is the input box's keyboard. The
     // terminal's own cursor stays where `cursor` puts it.
-    if app.focused().is_none() {
+    let chip_focused = matches!(app.focused(), Some(TargetId::Home(spot)) if spot.is_chip());
+    if app.focused().is_none() || chip_focused {
         let (row, col) = app.input().cursor(placed.width);
         let y = placed
             .draft_top
@@ -303,16 +305,25 @@ pub(super) fn render(
         BOX_TINT,
     );
     let mut chip_x = placed.x;
+    // A chip past the box's right edge draws nothing and takes no
+    // target; a chip cut part-way keeps its visible cells.
+    let box_end = placed
+        .x
+        .saturating_add(placed.width)
+        .min(area.x.saturating_add(area.width));
     for (at, (spot, text)) in screen.chips.iter().enumerate() {
         if at != 0 {
             chip_x = chip_x.saturating_add(2);
         }
         let wide = super::to_u16(width(text));
         if let Some(spot) = spot {
-            targets.push(Target {
-                id: TargetId::Home(*spot),
-                rect: Rect::new(chip_x, placed.chip, wide, 1),
-            });
+            let end = chip_x.saturating_add(wide).min(box_end);
+            if end > chip_x {
+                targets.push(Target {
+                    id: TargetId::Home(*spot),
+                    rect: Rect::new(chip_x, placed.chip, end - chip_x, 1),
+                });
+            }
         }
         chip_x = chip_x.saturating_add(wide);
     }
@@ -510,8 +521,12 @@ pub(super) fn render(
         }
     }
     if let Some(id) = app.focused() {
+        // A focused chip draws as a hovered one, never reversed; every
+        // other focused target keeps the focus style.
+        let chip = matches!(id, TargetId::Home(spot) if spot.is_chip());
+        let style = if chip { HOVER_TINT } else { FOCUS_STYLE };
         for target in targets.iter().filter(|target| target.id == id) {
-            buf.set_style(target.rect, FOCUS_STYLE);
+            buf.set_style(target.rect, style);
         }
     }
     targets
@@ -593,9 +608,15 @@ fn token_targets(app: &App, area: Rect, placed: &Placed, targets: &mut Vec<Targe
 }
 
 /// Where the terminal cursor shows on home: at the draft's cursor in the
-/// box, `None` while navigating.
+/// box, `None` while navigating. A focused chip keeps it there: the chip
+/// is the input box's keyboard.
 pub(super) fn cursor(app: &App, screen: &HomeScreen, area: Rect) -> Option<Position> {
-    if app.focused().is_some() || area.is_empty() {
+    if area.is_empty() {
+        return None;
+    }
+    if let Some(focus) = app.focused()
+        && !matches!(focus, TargetId::Home(spot) if spot.is_chip())
+    {
         return None;
     }
     let placed = layout(app, screen, area);
