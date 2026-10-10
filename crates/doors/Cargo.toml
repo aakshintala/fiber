@@ -11,6 +11,7 @@ contract = { path = "../contract" }
 log = { path = "../log" }
 serde_json.workspace = true
 signal-hook = "0.3"
+support = { path = "../support" }
 worktree = { path = "../worktree" }
 
 [dev-dependencies]

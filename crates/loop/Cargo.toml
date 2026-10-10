@@ -6,10 +6,12 @@ license.workspace = true
 publish.workspace = true
 
 # `loop` depends on `contract`, `log` and the three seams, which live in
-# `contract` (docs/architecture.md, "The call rules").
+# `contract` (docs/architecture.md, "The call rules"), and on `support`,
+# which holds no domain knowledge and sits outside the call rules.
 [dependencies]
 contract = { path = "../contract" }
 log = { path = "../log" }
+support = { path = "../support" }
 serde_json.workspace = true
 similar.workspace = true
 thiserror.workspace = true

@@ -6,11 +6,13 @@ license.workspace = true
 publish.workspace = true
 
 # `provider` depends on `contract` and `net`
-# (docs/architecture.md, "The call rules").
+# (docs/architecture.md, "The call rules"), and on `support`, which holds
+# no domain knowledge and sits outside the call rules.
 [dependencies]
 base64.workspace = true
 contract = { path = "../contract" }
 net = { path = "../net" }
+support = { path = "../support" }
 serde_json.workspace = true
 thiserror.workspace = true
 ureq.workspace = true
