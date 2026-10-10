@@ -20,7 +20,7 @@ use std::time::Duration;
 use fakes::clock::FakeClock;
 use support::Deadline;
 use support::Setup;
-use support::pty::{Colour, Reader, Run, Screen, contains, sgr_params};
+use support::pty::{Colour, Reader, Run, Screen, contains, exact_end, sgr_params};
 
 #[test]
 fn the_screen_moves_and_writes() {
@@ -119,8 +119,23 @@ fn a_wide_char_misplaces_only_its_own_cell() {
 /// A pty pair with no child: the master the reader drains, and the
 /// terminal side the test holds open and writes to.
 fn pair() -> (fs::File, fs::File) {
-    let terminal = support::pty::open(80, 24);
+    pair_sized(80, 24)
+}
+
+/// [`pair`], sized `cols` by `rows`.
+fn pair_sized(cols: u16, rows: u16) -> (fs::File, fs::File) {
+    let terminal = support::pty::open(cols, rows);
     (fs::File::from(terminal.main), terminal.terminal)
+}
+
+/// Whether any screen row holds `needle` in consecutive cells.
+fn shows(screen: &Screen, needle: &str) -> bool {
+    (0..48).any(|y| {
+        let row: String = (0..160)
+            .map(|x| screen.cell(x, y).symbol.as_str())
+            .collect();
+        row.contains(needle)
+    })
 }
 
 #[test]
@@ -164,6 +179,45 @@ fn a_reader_ends_at_end_of_file() {
     assert!(reader.stop());
 }
 
+#[test]
+fn exact_end_matches_only_at_or_after_from() {
+    assert_eq!(exact_end(b"xxabyy", 2, b"ab"), Some(4));
+    assert_eq!(exact_end(b"xxabyy", 3, b"ab"), None);
+    assert_eq!(exact_end(b"xxab", 0, b"ab"), Some(4));
+    assert_eq!(exact_end(b"ab", 2, b"ab"), None);
+    assert_eq!(exact_end(b"ab", 3, b"ab"), None);
+}
+
+/// The journey's waits finish when the finished title arrives before the
+/// completed paint: no wait depends on the order of the two markers
+/// (see #1775).
+#[test]
+fn the_finished_title_before_the_completed_paint_still_finishes_the_turn() {
+    let deadline = Deadline::start();
+    let (main, mut terminal) = pair_sized(160, 48);
+    let mut run = Run::attach(main, 160, 48, deadline);
+    terminal.write_all(support::pty::FINISHED_TITLE).unwrap();
+    terminal
+        .write_all("\x1b[1;1HHel\x1b[2;1H\u{25a3} completed".as_bytes())
+        .unwrap();
+    drop(terminal);
+    run.turn_finished(0);
+}
+
+/// The same waits finish when the pair arrives in the other order.
+#[test]
+fn the_completed_paint_before_the_finished_title_still_finishes_the_turn() {
+    let deadline = Deadline::start();
+    let (main, mut terminal) = pair_sized(160, 48);
+    let mut run = Run::attach(main, 160, 48, deadline);
+    terminal
+        .write_all("\x1b[1;1HHel\x1b[2;1H\u{25a3} completed".as_bytes())
+        .unwrap();
+    terminal.write_all(support::pty::FINISHED_TITLE).unwrap();
+    drop(terminal);
+    run.turn_finished(0);
+}
+
 /// One turn at 160x48 with `env`: the scripted provider answers "Hello.",
 /// the journey types a prompt, sees the answer and quits. Returns the
 /// SGR stream read into a screen, and the whole output.
@@ -180,8 +234,9 @@ fn one_turn(env: &[(&str, &str)]) -> (Screen, Vec<u8>) {
     let mut run = Run::spawn(&setup, 160, 48, env);
     run.read_until(">");
     run.write(b"say hi\r");
-    run.read_until("Hel");
-    run.read_until("completed");
+    run.screen_until(160, 48, "the reply and the completed turn", |screen| {
+        shows(screen, "Hel") && shows(screen, "completed")
+    });
     let output = run.output();
     let mut screen = Screen::new(160, 48);
     screen.feed(&output);
@@ -458,10 +513,10 @@ fn started_run() -> (Setup, Run) {
     );
     let mut run = Run::spawn(&setup, 160, 48, &TRUECOLOUR);
     run.read_until(">");
+    let from = run.output().len();
     run.write(b"say hi\r");
-    run.read_until("Hel");
-    run.read_until("completed");
-    run.read_until("finished");
+    run.screen_until(160, 48, "the reply", |screen| shows(screen, "Hel"));
+    run.turn_finished(from);
     (setup, run)
 }
 
@@ -515,9 +570,10 @@ fn two_sessions_show_the_rail_on_panel_and_hiding_it_leaves_the_grip() {
         settled(&screen, SettledScreen::Home),
         "incomplete home screen"
     );
+    let from = run.output().len();
     run.write(b"again\r");
-    run.read_until("Hel");
-    run.read_until("finished");
+    run.screen_until(160, 48, "the reply", |screen| shows(screen, "Hel"));
+    run.turn_finished(from);
     let screen = run.screen_until(160, 48, "the rail", |s| settled(s, SettledScreen::Rail));
     assert!(
         settled(&screen, SettledScreen::Rail),

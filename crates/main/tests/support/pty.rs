@@ -32,6 +32,11 @@ use rustix::pty;
 
 use super::{Deadline, Setup, bounded, expired, kill_group_detached};
 
+/// The title the terminal shows once a turn finishes
+/// (`crates/tui/src/app/attention.rs`, `crates/tui/src/osc.rs`):
+/// session-side state reaching the terminal outside the cells.
+pub(crate) const FINISHED_TITLE: &[u8] = "\x1b]2;\u{2713} fiber \u{b7} finished\x07".as_bytes();
+
 /// The reader draining a pty master: it appends every chunk to the shared
 /// output and wakes the test once per chunk, from the spawn until it is
 /// stopped or the master ends, so the terminal's output queue never fills
@@ -255,6 +260,8 @@ pub(crate) struct Run {
     output: Arc<Mutex<Vec<u8>>>,
     /// Where the last `read_until` match ended.
     seen: usize,
+    cols: u16,
+    rows: u16,
     deadline: Deadline,
 }
 
@@ -301,6 +308,29 @@ impl Run {
             wakes,
             output,
             seen: 0,
+            cols,
+            rows,
+            deadline,
+        }
+    }
+
+    /// A run with no child over an already-open `master`, for harness
+    /// tests feeding output by hand: the reader drains from the first
+    /// chunk to end of file, as in [`Run::spawn`].
+    pub(crate) fn attach(master: fs::File, cols: u16, rows: u16, deadline: Deadline) -> Self {
+        let (reader, output, wakes) = Reader::start(master.try_clone().unwrap(), deadline);
+        Self {
+            child: None,
+            hub_socket: PathBuf::new(),
+            watchdog: None,
+            sessions: Watchdog::matching("no-sessions"),
+            main: master,
+            reader: Some(reader),
+            wakes,
+            output,
+            seen: 0,
+            cols,
+            rows,
             deadline,
         }
     }
@@ -347,6 +377,40 @@ impl Run {
                 );
             }
         }
+    }
+
+    /// Waits under the run's one deadline until the output at or after
+    /// `from` holds `needle` as exact bytes, and returns where the
+    /// match ends. Unlike `read_until`, the search starts at the
+    /// caller's offset, never at an earlier match, so two markers
+    /// arriving in either order both finish.
+    pub(crate) fn wait_bytes(&mut self, from: usize, needle: &[u8], what: &str) -> usize {
+        assert!(!needle.is_empty(), "a byte wait names its bytes");
+        loop {
+            if let Some(end) = exact_end(&self.output(), from, needle) {
+                return end;
+            }
+            let left = self.deadline.left();
+            if left.is_zero() || self.wakes.recv_timeout(left).is_err() {
+                panic!(
+                    "waited until the deadline for {what}; output: {:?}",
+                    String::from_utf8_lossy(&self.output())
+                );
+            }
+        }
+    }
+
+    /// The turn that started after offset `from` finished, whichever
+    /// order its two markers arrive in: the `completed` paint on the
+    /// screen and the finished title on the raw output. Each wait
+    /// searches from its own start, never from the other's match, so
+    /// the pair is order-free.
+    pub(crate) fn turn_finished(&mut self, from: usize) {
+        let (cols, rows) = (self.cols, self.rows);
+        self.screen_until(cols, rows, "the completed turn", |screen| {
+            shows(screen, "completed")
+        });
+        self.wait_bytes(from, FINISHED_TITLE, "the finished title");
     }
 
     /// Feeds the whole output so far into a fresh `Screen` on each wake
@@ -462,6 +526,16 @@ fn until_gone(deadline: Deadline, socket: &Path, what: &str) {
     }
 }
 
+/// Whether any screen row holds `needle` in consecutive cells.
+fn shows(screen: &Screen, needle: &str) -> bool {
+    (0..screen.rows).any(|y| {
+        let row: String = (0..screen.cols)
+            .map(|x| screen.cell(x, y).symbol.as_str())
+            .collect();
+        row.contains(needle)
+    })
+}
+
 /// Whether `haystack` holds `needle` as bytes.
 pub(crate) fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.len() >= needle.len()
@@ -515,7 +589,7 @@ pub(crate) fn phrase_end(haystack: &[u8], from: usize, needle: &str) -> Option<u
 }
 
 /// Where `needle` ends in `haystack` at or after `from`, as exact bytes.
-fn exact_end(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+pub(crate) fn exact_end(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
     if from > haystack.len() {
         return None;
     }
