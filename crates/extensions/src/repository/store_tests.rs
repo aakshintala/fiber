@@ -212,14 +212,15 @@ fn a_decision_file_is_one_json_line_naming_the_decision_kind_name_and_declaratio
     let hash = hashed(&item);
     store(&repo).approve(&item, &hash).unwrap();
     let text = fs::read_to_string(approvals_dir(&repo, true).join(&hash)).unwrap();
-    assert_eq!(
-        text,
-        concat!(
-            r#"{"decision":"approve","kind":"hook","name":"fmt","declaration":{"entry":{"args":["fmt"],"command":"cargo","#,
-            r#""on_failure":"non-blocking","point":"after_tool","timeout":30000},"name":"fmt"},"files":[]}"#,
-            "\n"
-        )
-    );
+    assert!(text.ends_with('\n'), "{text}");
+    // The key order is the serializer's, so the fields are asserted parsed,
+    // not as text.
+    let body: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(body.get("decision").and_then(Value::as_str), Some("approve"));
+    assert_eq!(body.get("kind").and_then(Value::as_str), Some("hook"));
+    assert_eq!(body.get("name").and_then(Value::as_str), Some("fmt"));
+    assert_eq!(body.get("files").and_then(|f| f.as_array()).map(Vec::len), Some(0));
+    assert_eq!(body.get("declaration"), item.declaration.as_ref());
     // The repository's text reaches no path: the name is only in the body.
     assert!(fs::read_dir(approvals_dir(&repo, true)).unwrap().all(|e| {
         let name = e.unwrap().file_name().to_string_lossy().into_owned();
