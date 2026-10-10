@@ -43,6 +43,33 @@ pub struct UsageRecorded {
     /// On a copy, the session whose call it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_session_id: Option<SessionId>,
+    /// What the reviewer was doing on a call the reviewer made; absent on
+    /// every other call (`docs/permissions.md`, "At a handoff").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewer: Option<ReviewerUse>,
+}
+
+/// What a reviewer's call was for (`docs/events.md`, `usage_recorded`).
+/// One variant per request: a stage names the call it reviewed, and the
+/// handoff selection names none, so no combination can contradict itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "purpose")]
+pub enum ReviewerUse {
+    /// The first review stage.
+    #[serde(rename = "stage_1")]
+    Stage1 {
+        /// The tool call under review.
+        action_id: ActionId,
+    },
+    /// The second review stage.
+    #[serde(rename = "stage_2")]
+    Stage2 {
+        /// The tool call under review.
+        action_id: ActionId,
+    },
+    /// The handoff selection, which reviews no call.
+    #[serde(rename = "handoff")]
+    Handoff,
 }
 
 /// `quota_noticed`.
