@@ -2844,7 +2844,7 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
 }
 
 #[test]
-fn close_returns_when_the_socket_path_was_rebound_with_a_full_backlog() {
+fn close_connects_nowhere_through_the_socket_path() {
     reset();
     let opened = open();
     keep_dir(&opened.log);
@@ -2852,52 +2852,19 @@ fn close_returns_when_the_socket_path_was_rebound_with_a_full_backlog() {
         .session
         .run(Vec::new(), Arc::new(|| false), |_inbox| Ok(()))
         .unwrap();
-    fs::remove_file(&opened.socket).unwrap();
-    let _other = UnixListener::bind(&opened.socket).unwrap();
-    // Fill the replacement's backlog with connected-but-unaccepted clients:
-    // a close that made a blocking `connect` wake here would block forever
-    // on Linux once the queue is full, so close must never make one. Each
-    // connect runs on its own helper thread with a short wall-clock bound:
-    // the first connect that blocks or is refused proves the queue is full,
-    // not a fixed count (Linux queues backlog+1, so 128 successes prove
-    // nothing). Every connected stream and every still-blocked helper is
-    // retained until the test ends so the queue stays full through close.
-    const CONNECT_WAIT: Duration = Duration::from_millis(500);
-    let path = opened.socket.clone();
-    let mut held = Vec::new();
-    let mut blocked = Vec::new();
-    let mut saturated = false;
-    for _ in 0..4096 {
-        let (tx, rx) = mpsc::channel();
-        let connecting = path.clone();
-        let helper = thread::Builder::new()
-            .name("doors-test-backlog".to_owned())
-            .spawn(move || {
-                tx.send(UnixStream::connect(&connecting).ok()).unwrap_or(());
-            })
-            .unwrap();
-        match Deadline::after(CONNECT_WAIT).recv(&rx) {
-            Ok(Some(stream)) => {
-                helper.join().unwrap();
-                held.push(stream);
-            }
-            Ok(None) => {
-                helper.join().unwrap();
-                saturated = true;
-                break;
-            }
-            Err(_) => {
-                blocked.push(helper);
-                saturated = true;
-                break;
-            }
-        }
-    }
-    assert!(
-        saturated,
-        "the replacement backlog filled until a connect blocked or refused"
-    );
+    let socket = opened.socket.clone();
+    fs::remove_file(&socket).unwrap();
+    let rebound = UnixListener::bind(&socket).unwrap();
+    rebound.set_nonblocking(true).unwrap();
     let dir = opened.session.dir.clone();
     close_within(opened.session, opened.log);
     assert_lock_released(&dir);
+    match rebound.accept() {
+        Ok(_) => panic!("close connected through the rebound socket path"),
+        Err(error) => assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the rebound listener stays quiet"
+        ),
+    }
 }

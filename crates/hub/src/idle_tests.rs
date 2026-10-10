@@ -768,56 +768,14 @@ fn an_idle_exit_lands_when_run_is_gone_entirely() {
 }
 
 #[test]
-fn an_idle_exit_lands_when_the_socket_was_rebound_with_a_full_backlog() {
+fn an_idle_exit_connects_nowhere_through_the_socket_path() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
     let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
     await_idle_park(&clock, clock.origin(), "at start");
     fs::remove_file(temp.socket()).unwrap();
-    let _other = UnixListener::bind(temp.socket()).unwrap();
-    // Fill the replacement's backlog with connected-but-unaccepted clients:
-    // an exit that made a blocking `connect` wake here would block forever
-    // on Linux once the queue is full, so the exit must never make one.
-    // Each connect runs on its own helper thread with a short wall-clock
-    // bound: the first connect that blocks or is refused proves the queue
-    // is full, not a fixed count (Linux queues backlog+1, so 128 successes
-    // prove nothing). Every connected stream and every still-blocked helper
-    // is retained until the test ends so the queue stays full through exit.
-    const CONNECT_WAIT: Duration = Duration::from_millis(500);
-    let path = temp.socket();
-    let mut held = Vec::new();
-    let mut blocked = Vec::new();
-    let mut saturated = false;
-    for _ in 0..4096 {
-        let (tx, rx) = mpsc::channel();
-        let connecting = path.clone();
-        let helper = thread::Builder::new()
-            .name("hub-test-backlog".to_owned())
-            .spawn(move || {
-                tx.send(UnixStream::connect(&connecting).ok()).unwrap_or(());
-            })
-            .unwrap();
-        match Deadline::after(CONNECT_WAIT).recv(&rx) {
-            Ok(Some(stream)) => {
-                helper.join().unwrap();
-                held.push(stream);
-            }
-            Ok(None) => {
-                helper.join().unwrap();
-                saturated = true;
-                break;
-            }
-            Err(_) => {
-                blocked.push(helper);
-                saturated = true;
-                break;
-            }
-        }
-    }
-    assert!(
-        saturated,
-        "the replacement backlog filled until a connect blocked or refused"
-    );
+    let rebound = UnixListener::bind(temp.socket()).unwrap();
+    rebound.set_nonblocking(true).unwrap();
     clock.advance(IDLE);
     assert_eq!(
         Deadline::after(DEADLINE)
@@ -825,4 +783,16 @@ fn an_idle_exit_lands_when_the_socket_was_rebound_with_a_full_backlog() {
             .expect("the hub exits idle"),
         0
     );
+    assert!(
+        fs::symlink_metadata(temp.socket()).is_ok(),
+        "the exit leaves the rebound socket in place"
+    );
+    match rebound.accept() {
+        Ok(_) => panic!("the idle exit connected through the rebound socket path"),
+        Err(error) => assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the rebound listener stays quiet"
+        ),
+    }
 }
