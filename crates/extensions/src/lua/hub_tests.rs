@@ -299,7 +299,7 @@ struct BlockingEmit {
 impl Emit for BlockingEmit {
     fn emit(&self, event: &Event) {
         let _entered = self.entered.send(());
-        let _released = self.release.lock().unwrap().recv_timeout(WAIT).ok();
+        let _released = self.release.lock().unwrap().recv().ok();
         self.recorded.lock().unwrap().push(event.clone());
     }
 }

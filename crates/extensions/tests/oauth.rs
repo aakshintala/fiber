@@ -1538,7 +1538,7 @@ end } })
             }
         }
         accepted_tx.send(()).unwrap();
-        match release_rx.recv_timeout(WAIT) {
+        match release_rx.recv() {
             Ok(()) | Err(_) => {}
         }
         drop(

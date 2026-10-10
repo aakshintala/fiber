@@ -165,7 +165,7 @@ fn the_worker_skips_a_search_superseded_before_it_ran() {
     // The listing waits at a pause point until both searches are asked.
     let search = Search::spawn(
         move || {
-            gate.recv_timeout(DEADLINE).map_err(|err| err.to_string())?;
+            gate.recv().map_err(|err| err.to_string())?;
             Ok(owned(&["a.rs", "b.rs"]))
         },
         out,
@@ -217,7 +217,7 @@ fn dropping_the_worker_abandons_the_search_it_was_asked_for() {
     let (release, gate) = mpsc::channel::<()>();
     let search = Search::spawn(
         move || {
-            gate.recv_timeout(DEADLINE).map_err(|err| err.to_string())?;
+            gate.recv().map_err(|err| err.to_string())?;
             Ok(owned(&["a.rs"]))
         },
         out,

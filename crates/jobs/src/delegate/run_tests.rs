@@ -93,7 +93,7 @@ impl Script {
                 Ok(Watched::Exited)
             }
             Some(WatchReply::Block(gate)) => {
-                let _released = gate.recv_timeout(Duration::from_secs(5));
+                let _released = gate.recv();
                 Err(io::Error::other("released"))
             }
         }

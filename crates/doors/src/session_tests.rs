@@ -1458,7 +1458,7 @@ impl Tool for HeldShell {
             sender.send(()).expect("the test is waiting");
         }
         if let Some(release) = lock(&self.release).take() {
-            let _released = release.recv_timeout(SHELL_LIMIT);
+            let _released = release.recv();
         }
         Output {
             content: vec![ContentPart::Text {
