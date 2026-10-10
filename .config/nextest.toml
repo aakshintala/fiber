@@ -8,6 +8,20 @@ slow-timeout = { period = "30s", terminate-after = 4 }
 [profile.mutants]
 fail-fast = { max-fail = 1, terminate = "immediate" }
 
+# docs/ci.md, "On every pull request that changes code": the test job runs
+# nextest under this profile, so a failed binary-level test retries once.
+# kind(test) is the integration-test binaries (crates/main/tests/*); the
+# unit tests in crates/main/src/ are kind(bin) and never retry.
+[profile.ci]
+inherits = "default"
+
+[[profile.ci.overrides]]
+filter = 'package(main) & kind(test)'
+retries = 1
+
+[profile.ci.junit]
+path = "junit.xml"
+
 # docs/tools.md, "Size budget in CI": the built-in definition sizes are printed on every run, a pass included.
 [[profile.default.overrides]]
 filter = 'package(main) & test(=builtin::tool_budget_tests::the_built_in_definitions_fit_their_budget)'
