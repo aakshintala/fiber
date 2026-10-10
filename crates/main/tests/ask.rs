@@ -3601,6 +3601,32 @@ fn a_configured_level_the_model_does_not_declare_logs_one_notice_and_runs() {
     assert_eq!(built["payload"]["thinking"], "low");
 }
 
+#[test]
+fn an_unknown_config_key_logs_one_notice_and_runs() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "frobnicate": 1}),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notices: Vec<_> = run.lines.iter().filter(|l| l["kind"] == "notice").collect();
+    assert_eq!(notices.len(), 1, "{:?}", run.kinds());
+    assert_eq!(notices[0]["payload"]["code"], "config_key_ignored");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("frobnicate"), "{message}");
+    assert!(
+        message.contains(&setup.home().join("config.json").display().to_string()),
+        "{message}"
+    );
+}
+
 /// Installs an inline extension `name` with `init_lua`, and makes `name/m1`
 /// the configured model.
 fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {
