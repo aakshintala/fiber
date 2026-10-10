@@ -63,7 +63,9 @@ impl Ink {
             Ink::Plain => Style::default(),
             Ink::Heading => Style::new().add_modifier(Modifier::BOLD),
             Ink::Muted => Style::new().fg(Role::Muted.color()),
-            Ink::Match => Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            Ink::Match => Style::new()
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::UNDERLINED),
         }
     }
 }
