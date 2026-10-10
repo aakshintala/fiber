@@ -234,12 +234,11 @@ impl Context<'_> {
         };
         let id = SessionId(name.to_string_lossy().into_owned());
         let path = dir.join(EVENTS);
-        match std::fs::symlink_metadata(&path) {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
-            Err(error) => return out.problem(unreadable(&path, &error)),
-            Ok(meta) if meta.is_symlink() => return out.problem(link(&path)),
-            Ok(meta) if !meta.is_file() => return,
-            Ok(_) => {}
+        let Some(kind) = kind_of(&path, &mut |problem| out.problem(problem)) else {
+            return;
+        };
+        if !kind.is_file() {
+            return;
         }
         let log = match File::open(&path) {
             Ok(log) => log,
@@ -288,17 +287,24 @@ impl Context<'_> {
 /// Whether `path` is a directory to walk. A link is a problem; a path that
 /// is missing or not a directory is passed over.
 fn directory(path: &Path, problem: &mut dyn FnMut(String)) -> bool {
+    kind_of(path, problem).is_some_and(|kind| kind.is_dir())
+}
+
+/// The file type of `path`: `None` for a missing path, an unreadable one
+/// or a link. An unreadable path or a link is a problem; a missing one is
+/// passed over silently, like every other missing path in a search.
+pub(super) fn kind_of(path: &Path, problem: &mut dyn FnMut(String)) -> Option<std::fs::FileType> {
     match std::fs::symlink_metadata(path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
         Err(error) => {
             problem(unreadable(path, &error));
-            false
+            None
         }
-        Ok(meta) if meta.is_symlink() => {
+        Ok(meta) if meta.file_type().is_symlink() => {
             problem(link(path));
-            false
+            None
         }
-        Ok(meta) => meta.is_dir(),
+        Ok(meta) => Some(meta.file_type()),
     }
 }
 
@@ -323,12 +329,12 @@ fn list(path: &Path, problem: &mut dyn FnMut(String)) -> Option<Vec<PathBuf>> {
 }
 
 /// The problem of `path` being unreadable.
-fn unreadable(path: &Path, error: &io::Error) -> String {
+pub(super) fn unreadable(path: &Path, error: &dyn std::fmt::Display) -> String {
     format!("Could not read: {}: {error}", path.display())
 }
 
 /// The problem of `path` being a link, which the search does not follow.
-fn link(path: &Path) -> String {
+pub(super) fn link(path: &Path) -> String {
     format!("{} is a link", path.display())
 }
 

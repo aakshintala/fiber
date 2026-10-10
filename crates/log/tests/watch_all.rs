@@ -20,7 +20,7 @@ use common::*;
 use contract::Envelope;
 use contract::emit::Emit;
 use fakes::Deadline;
-use log::{Log, Watcher, read};
+use log::{Log, Watcher};
 use serde_json::{Map, Value};
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -212,20 +212,6 @@ fn emit_sends_an_ephemeral_line_to_every_watcher_and_refuses_a_durable_one() {
     assert!(file.contains("step_started"));
     assert!(!file.contains("assistant_message_delta"));
     assert!(!file.contains("session_started"));
-}
-
-/// Receives from `rx` until `count` durable lines have arrived, and returns
-/// them.
-#[track_caller]
-fn durable(rx: &Receiver<Option<Envelope>>, count: usize, wait: &Deadline) -> Vec<Envelope> {
-    let mut got = Vec::new();
-    while got.len() < count {
-        let line = next(rx, wait).unwrap();
-        if line.is_durable() {
-            got.push(line);
-        }
-    }
-    got
 }
 
 /// A log of `count` durable lines and what each append returned.
