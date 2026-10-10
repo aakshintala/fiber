@@ -24,6 +24,7 @@ use super::*;
 use crate::fake::FakeStarter;
 use crate::{Started, Starter};
 use contract::events::SessionStatus;
+use fakes::Deadline;
 
 /// `wall()` on a fake clock nobody advances, in milliseconds.
 const WALL: u64 = 1_700_000_000_000;
@@ -704,9 +705,8 @@ fn a_closing_client_shuts_down_every_relay_stream() {
     }));
     client.next("the relayed line");
     drop(client);
-    session
-        .left
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&session.left)
         .expect("the session sees its client leave");
 }
 
@@ -716,6 +716,7 @@ fn guard<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
 }
 
 /// Waits, at most one deadline, for the hub to count `n` connections.
+#[track_caller]
 fn until_clients(hub: &Arc<Hub>, n: usize, what: &str) {
     let (done_tx, done_rx) = mpsc::channel();
     thread::Builder::new()
@@ -730,8 +731,8 @@ fn until_clients(hub: &Arc<Hub>, n: usize, what: &str) {
             }
         })
         .unwrap();
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .unwrap_or_else(|_| panic!("the hub counts {n} connections {what}"));
 }
 
@@ -914,6 +915,7 @@ fn crashed_feed(temp: &Temp, hub: &Arc<Hub>, id: &str) {
 }
 
 /// Waits under [`DEADLINE`] until the feed holds `n` subscribers.
+#[track_caller]
 fn until_subscribers(hub: &Arc<Hub>, n: usize, what: &str) {
     let (done_tx, done_rx) = mpsc::channel();
     let hub = Arc::clone(hub);
@@ -923,8 +925,8 @@ fn until_subscribers(hub: &Arc<Hub>, n: usize, what: &str) {
         }
         done_tx.send(()).unwrap_or(());
     });
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .unwrap_or_else(|_| panic!("the feed holds {n} subscribers {what}"));
 }
 
@@ -1043,6 +1045,7 @@ fn sessions_over_the_wire_answers_live_and_exited_once() {
 
 /// Stops the feed on a thread and receives its return under [`DEADLINE`]:
 /// joining its threads blocks.
+#[track_caller]
 fn stop_within(hub: &Arc<Hub>) {
     let (done_tx, done_rx) = mpsc::channel();
     let hub = Arc::clone(hub);
@@ -1050,10 +1053,13 @@ fn stop_within(hub: &Arc<Hub>) {
         hub.feed.stop();
         done_tx.send(()).unwrap_or(());
     });
-    done_rx.recv_timeout(DEADLINE).expect("the feed stops");
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the feed stops");
 }
 
 /// Waits under [`DEADLINE`] until attention holds `n` listeners.
+#[track_caller]
 fn until_listeners(hub: &Arc<Hub>, n: usize, what: &str) {
     let (done_tx, done_rx) = mpsc::channel();
     let hub = Arc::clone(hub);
@@ -1063,8 +1069,8 @@ fn until_listeners(hub: &Arc<Hub>, n: usize, what: &str) {
         }
         done_tx.send(()).unwrap_or(());
     });
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .unwrap_or_else(|_| panic!("attention holds {n} listeners {what}"));
 }
 
@@ -1118,8 +1124,8 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
         release_rx.recv().unwrap_or(());
     }));
     let mut c = Client::connect(&hub);
-    reached_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&reached_rx)
         .expect("C reaches its hello");
     hub.feed
         .attention
@@ -1371,7 +1377,9 @@ fn a_failed_answer_write_still_arms_the_bound() {
         on_start(&id, &args, &started, &dead, &relays);
         done_tx.send(()).unwrap_or(());
     });
-    done.recv_timeout(DEADLINE).expect("start returned");
+    Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("start returned");
     let due = clock.now() + FIRST_PROMPT_WAIT;
     assert!(clock.await_parked(due, DEADLINE), "the bound is armed");
     clock.advance(FIRST_PROMPT_WAIT);

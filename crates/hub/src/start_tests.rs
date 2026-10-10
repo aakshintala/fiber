@@ -25,6 +25,7 @@ use super::*;
 use crate::connection::Hub;
 use crate::diag::Diag;
 use crate::fake::{FakeStarter, Handshake, failure};
+use fakes::Deadline;
 
 /// One named deadline per wait: `start` answers before it.
 const DEADLINE: Duration = Duration::from_secs(30);
@@ -84,6 +85,7 @@ fn is_hex_id(id: &str) -> bool {
 
 /// Runs `start` on a thread: calling code that blocks is a wait, so the
 /// test receives its result with a wall-clock deadline.
+#[track_caller]
 fn started(
     hub: Hub,
     workspace: String,
@@ -118,8 +120,8 @@ fn started_before(
             done_tx.send(outcome).unwrap_or(());
         })
         .unwrap();
-    done_rx
-        .recv_timeout(deadline)
+    Deadline::after(deadline)
+        .recv(&done_rx)
         .expect("start answers before its deadline")
 }
 
@@ -391,6 +393,7 @@ fn accepting() -> Handshake {
 
 /// Runs `start` with `content` on a thread and returns the hub and the
 /// held first prompt.
+#[track_caller]
 fn held(temp: &Temp, starter: FakeStarter, content: &Value) -> (Arc<Hub>, Box<Held>) {
     let hub = Arc::new(temp.hub(starter));
     let workspace = temp.workspace();
@@ -412,8 +415,8 @@ fn held(temp: &Temp, starter: FakeStarter, content: &Value) -> (Arc<Hub>, Box<He
             done_tx.send(outcome).unwrap_or(());
         })
         .unwrap();
-    let outcome = done_rx
-        .recv_timeout(HANDSHAKE_DEADLINE)
+    let outcome = Deadline::after(HANDSHAKE_DEADLINE)
+        .recv(&done_rx)
         .expect("start answers before its deadline");
     let Outcome::Accepted {
         first: Some(held), ..
@@ -425,14 +428,15 @@ fn held(temp: &Temp, starter: FakeStarter, content: &Value) -> (Arc<Hub>, Box<He
 }
 
 /// Sends the held prompt on a thread, within the handshake deadline.
+#[track_caller]
 fn prompted(hub: Arc<Hub>, held: Held) -> Result<(), Outcome> {
     let (done_tx, done_rx) = mpsc::channel();
     thread::Builder::new()
         .name("hub-test-prompt".to_owned())
         .spawn(move || done_tx.send(prompt(held, &hub)).unwrap_or(()))
         .unwrap();
-    done_rx
-        .recv_timeout(HANDSHAKE_DEADLINE)
+    Deadline::after(HANDSHAKE_DEADLINE)
+        .recv(&done_rx)
         .expect("the prompt is answered before its deadline")
 }
 

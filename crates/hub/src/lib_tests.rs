@@ -23,6 +23,7 @@ use serde_json::Value;
 
 use super::*;
 use crate::fake::{FakeStarter, failure};
+use fakes::Deadline;
 
 const WITHIN: Duration = Duration::from_secs(10);
 
@@ -43,8 +44,8 @@ fn arm_records_a_signal_raised_at_the_process_and_wakes() {
     arm(&got, Arc::new(Sent(Mutex::new(woke_tx))));
     signal_hook::low_level::raise(signal_hook::consts::SIGTERM).unwrap();
     // The handler thread records the signal, then wakes the idle wait.
-    woke_rx
-        .recv_timeout(WITHIN)
+    Deadline::after(WITHIN)
+        .recv(&woke_rx)
         .expect("the arm wakes the idle wait before its deadline");
     assert_eq!(got.load(Ordering::SeqCst), signal_hook::consts::SIGTERM);
 }
@@ -75,6 +76,7 @@ fn log_lines(home: &Path) -> Vec<Value> {
 
 /// Runs [`serve`] in `home` on a thread, so a start that never returns
 /// fails the test under [`WITHIN`] rather than hanging it.
+#[track_caller]
 fn serve_in(
     home: &Path,
     mode: Mode,
@@ -99,8 +101,8 @@ fn serve_in(
         );
         done_tx.send(result).unwrap_or(());
     });
-    done_rx
-        .recv_timeout(WITHIN)
+    Deadline::after(WITHIN)
+        .recv(&done_rx)
         .expect("a hub that cannot start returns before its deadline")
 }
 
