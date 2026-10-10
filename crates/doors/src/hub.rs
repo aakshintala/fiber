@@ -38,7 +38,13 @@ pub fn connect(
     start: &mut dyn FnMut() -> io::Result<()>,
     clock: &dyn Clock,
 ) -> io::Result<Hub> {
-    connect_with(home, start, clock, Due::Within(CONNECT_DEADLINE), &mut || {})
+    connect_with(
+        home,
+        start,
+        clock,
+        Due::Within(CONNECT_DEADLINE),
+        &mut || {},
+    )
 }
 
 /// [`connect`], with `hub_hello` due by `deadline` on `clock`: the same
