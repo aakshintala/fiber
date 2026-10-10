@@ -639,7 +639,6 @@ fn a_stalled_install_step_approves_nothing_and_leaves_no_copy() {
     let kind = item.kind;
     let worker_hash = hash.clone();
     let clock = FakeClock::new();
-    let deadline = clock.now() + INSTALL_STEP_DEADLINE;
     let home = repo.home();
     let project = ProjectKey::new(KEY).unwrap();
     let worker_clock = Arc::clone(&clock);

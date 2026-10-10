@@ -4,13 +4,19 @@ use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, mpsc};
+use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::clock::Clock as _;
 use contract::events::OfferedKind;
+use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{RepoItem, declared_items};
 use crate::Error;
+use crate::git::GIT_DEADLINE;
+use crate::host::exec::{GRACE, GROUP_POLL};
 
 const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 
@@ -91,7 +97,7 @@ impl Repo {
     }
 
     pub(super) fn items(&self) -> Vec<RepoItem> {
-        declared_items(&self.root()).unwrap()
+        declared_items(&self.root(), &*fakes::clock::FakeClock::new()).unwrap()
     }
 
     pub(super) fn item(&self, kind: OfferedKind, name: &str) -> RepoItem {
@@ -205,7 +211,7 @@ fn an_extension_path_must_be_a_package_directory_inside_the_repository() {
     ];
     for (path, why) in cases {
         repo.config(&json!({"repository_extensions": [{"path": path}]}));
-        let e = declared_items(&repo.root()).unwrap_err();
+        let e = declared_items(&repo.root(), &*fakes::clock::FakeClock::new()).unwrap_err();
         assert!(
             matches!(&e, Error::BadRepositoryPath { path: p, why: w } if p == path && w.starts_with(why)),
             "{path}: {e}"
@@ -220,7 +226,7 @@ fn a_link_that_leaves_the_repository_is_not_a_package() {
     let outside = repo.elsewhere("elsewhere/extension.json", "{}");
     repo.link("pkg", outside.parent().unwrap());
     repo.config(&json!({"repository_extensions": [{"path": "pkg"}]}));
-    let e = declared_items(&repo.root()).unwrap_err();
+    let e = declared_items(&repo.root(), &*fakes::clock::FakeClock::new()).unwrap_err();
     assert!(matches!(e, Error::BadRepositoryPath { .. }), "{e}");
 }
 
@@ -229,7 +235,7 @@ fn a_package_in_a_directory_git_does_not_know_names_the_package() {
     let repo = Repo::bare();
     repo.package("pkg", "fiber.test/p", &json!({}));
     repo.config(&json!({"repository_extensions": [{"path": "pkg"}]}));
-    let e = declared_items(&repo.root()).unwrap_err();
+    let e = declared_items(&repo.root(), &*fakes::clock::FakeClock::new()).unwrap_err();
     assert!(
         matches!(&e, Error::Pin { item, .. } if item == "fiber.test/p"),
         "{e}"
@@ -241,7 +247,7 @@ fn a_package_without_a_manifest_is_an_error() {
     let repo = Repo::new();
     repo.write("pkg/init.lua", "x");
     repo.config(&json!({"repository_extensions": [{"path": "pkg"}]}));
-    assert!(declared_items(&repo.root()).is_err());
+    assert!(declared_items(&repo.root(), &*fakes::clock::FakeClock::new()).is_err());
 }
 
 #[test]
@@ -359,7 +365,7 @@ fn a_link_loop_fails_the_item_naming_it() {
     let repo = Repo::new();
     repo.link("scripts/loop", Path::new("loop"));
     repo.config(&server("scripts/loop", &json!([])));
-    let e = declared_items(&repo.root()).unwrap_err();
+    let e = declared_items(&repo.root(), &*fakes::clock::FakeClock::new()).unwrap_err();
     assert!(matches!(&e, Error::Pin { item, .. } if item == "db"), "{e}");
     assert_eq!(e.code(), ErrorCode::IoFailed);
 }
@@ -380,7 +386,7 @@ fn an_extension_path_that_cannot_be_resolved_for_another_reason_is_not_reported_
     let repo = Repo::new();
     repo.link("loop", Path::new("loop"));
     repo.config(&json!({"repository_extensions": [{"path": "loop"}]}));
-    let e = declared_items(&repo.root()).unwrap_err();
+    let e = declared_items(&repo.root(), &*fakes::clock::FakeClock::new()).unwrap_err();
     assert!(matches!(e, Error::Io { .. }), "{e}");
 }
 
@@ -406,7 +412,7 @@ fn a_path_that_cannot_be_examined_fails_the_item_and_a_missing_one_is_skipped() 
     let locked = repo.root().join("locked");
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
     repo.config(&server("locked/run.sh", &json!([])));
-    let denied = declared_items(&repo.root());
+    let denied = declared_items(&repo.root(), &*fakes::clock::FakeClock::new());
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
     let e = denied.unwrap_err();
     assert!(matches!(&e, Error::Pin { item, .. } if item == "db"), "{e}");
@@ -445,4 +451,97 @@ fn marking_a_hook_required_changes_its_hash() {
     )
     .unwrap();
     assert_ne!(before, after);
+}
+
+/// Present in a re-executed child, absent in the parent: the child lists
+/// files with the fixture directory first on its `PATH`.
+const LS_FILES_CHILD: &str = "FIBER_TEST_LS_FILES_CHILD";
+
+/// `git ls-files` through the fixture stalls: the file list is bounded at
+/// the git deadline, and the stall is gone afterwards. The stall runs in a
+/// re-executed child with the fixture directory first on `PATH` (tests
+/// cannot set process env: `unsafe_code` is denied). A `PATH` lookup is
+/// direct execution, so this test also passes a `--stress-count` run.
+#[test]
+fn a_stalled_ls_files_fails_at_the_git_deadline() {
+    if std::env::var_os(LS_FILES_CHILD).is_some() {
+        stalled_ls_files_child();
+        return;
+    }
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-git");
+    let path = format!("{}:{}", fixture.display(), std::env::var("PATH").unwrap());
+    let output = fakes::rerun(
+        "repository::declared_tests::a_stalled_ls_files_fails_at_the_git_deadline",
+        &[(LS_FILES_CHILD, "1"), ("PATH", path.as_str())],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "the ls-files child fails at the deadline:\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran exactly the ls-files stall test: {stdout}"
+    );
+}
+
+/// The re-executed child: `git` resolves to the fixture through `PATH`, so
+/// `ls-files` stalls, and the file list fails at the git deadline.
+fn stalled_ls_files_child() {
+    const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
+
+    // No `git init`: the fixture stalls `ls-files` whatever the directory
+    // holds, and a real `git` here would resolve to the fixture first on
+    // `PATH`.
+    let repo = Repo::bare();
+    repo.package("pkg", "fiber.test/p", &json!({}));
+    repo.config(&json!({"repository_extensions": [{"path": "pkg"}]}));
+    let clock = FakeClock::new();
+    let worker_clock = Arc::clone(&clock);
+    let root = repo.root();
+    // The fixture keeps `-C <dir>` in the stall's argv, so the stalled
+    // process matches this repository alone.
+    let unique = root.display().to_string();
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("stalled ls-files".into())
+        .spawn(move || {
+            let _sent = done_tx.send(declared_items(&root, &*worker_clock));
+        })
+        .unwrap();
+    assert!(
+        clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
+        "waited {WITHIN:?} for ls-files to park while running"
+    );
+    // Past the git deadline the run stops.
+    clock.advance(GIT_DEADLINE + Duration::from_secs(1));
+    let kill_at = clock.now() + GRACE;
+    assert!(
+        clock.await_parked(kill_at, WITHIN),
+        "waited {WITHIN:?} for ls-files to park for the grace"
+    );
+    clock.advance(GRACE);
+    let err = done_rx.recv_timeout(WITHIN).unwrap().unwrap_err();
+    assert!(
+        matches!(&err, Error::Pin { item, .. } if item == "fiber.test/p"),
+        "a stalled ls-files fails pinning its package: {err}"
+    );
+    assert!(
+        err.to_string().contains(&format!(
+            "`git ls-files` did not finish within {} s",
+            GIT_DEADLINE.as_secs()
+        )),
+        "the failure names the call and the deadline's seconds: {err}"
+    );
+    // The run kills what it stopped, so leftovers fail the test without
+    // leaking. By pid, never by group: the stall shares this child's group.
+    let leftovers = fakes::matching(&unique).unwrap();
+    for pid in &leftovers {
+        drop(fakes::kill_pid(*pid, "KILL"));
+    }
+    assert!(
+        leftovers.is_empty(),
+        "the stalled ls-files is gone: {leftovers:?}"
+    );
 }

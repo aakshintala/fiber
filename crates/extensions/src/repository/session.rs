@@ -71,7 +71,8 @@ fn failed(e: &Error, message: String) -> Failure {
 
 impl RepositoryCode for SessionOffer {
     fn unapproved(&self) -> Result<Vec<Unapproved>, Failure> {
-        let items = declared_items(&self.workspace).map_err(|e| failure(&e))?;
+        let items =
+            declared_items(&self.workspace, self.clock.as_ref()).map_err(|e| failure(&e))?;
         // A repository that ships nothing touches nothing in Fiber home.
         if items.is_empty() {
             return Ok(Vec::new());
@@ -95,7 +96,8 @@ impl RepositoryCode for SessionOffer {
             OfferDecision::Never => (Store::never, "record never for"),
             OfferDecision::Skip => return Ok(Decided::Obsolete),
         };
-        let items = declared_items(&self.workspace).map_err(|e| failure(&e))?;
+        let items =
+            declared_items(&self.workspace, self.clock.as_ref()).map_err(|e| failure(&e))?;
         let Some(current) = items
             .into_iter()
             .find(|i| i.kind == item.kind && i.name == item.name)

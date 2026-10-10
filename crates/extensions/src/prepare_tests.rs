@@ -139,7 +139,6 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
     }))
     .unwrap();
     let clock = FakeClock::new();
-    let deadline = clock.now() + INSTALL_STEP_DEADLINE;
     let worker_clock = Arc::clone(&clock);
     let worker_dir = dir.path().to_path_buf();
     let (done_tx, done_rx) = mpsc::channel();

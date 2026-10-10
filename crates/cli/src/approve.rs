@@ -19,6 +19,13 @@ const PROMPT: &str = "approve all? [y/N]";
 /// The usage failure when nobody can answer.
 const NOBODY: &str = "`fiber approve` has no terminal to ask on and no input. Pass `--yes` to approve without asking.";
 
+/// Where `run` asks and reports: stdin, and stdout and stderr.
+struct Streams<'a> {
+    input: &'a mut dyn BufRead,
+    out: &'a mut dyn Write,
+    err: &'a mut dyn Write,
+}
+
 /// `fiber approve [--yes]` in the current directory. Without `--yes` it asks
 /// once, and refuses when nobody can answer. The clock bounds an extension's
 /// install step when its copy is built.
@@ -38,9 +45,11 @@ pub fn approve(yes: bool, clock: Arc<dyn Clock>) -> i32 {
             &workspace,
             yes,
             terminal,
-            &mut stdin.lock(),
-            &mut io::stdout(),
-            &mut io::stderr(),
+            Streams {
+                input: &mut stdin.lock(),
+                out: &mut io::stdout(),
+                err: &mut io::stderr(),
+            },
             clock,
         )
     });
@@ -58,15 +67,15 @@ fn run(
     workspace: &Path,
     yes: bool,
     terminal: bool,
-    input: &mut dyn BufRead,
-    out: &mut dyn Write,
-    err: &mut dyn Write,
+    streams: Streams<'_>,
     clock: Arc<dyn Clock>,
 ) -> Result<(), Failure> {
+    let Streams { input, out, err } = streams;
     let (_, project) = project_of(home, workspace)?;
-    let store = Store::new(home, &project, clock);
+    let store = Store::new(home, &project, Arc::clone(&clock));
     let mut index = Index::load(home);
-    let items = extensions::declared_items(workspace).map_err(|e| failed(e.code(), e))?;
+    let items =
+        extensions::declared_items(workspace, clock.as_ref()).map_err(|e| failed(e.code(), e))?;
     let pending =
         extensions::pending(&store, &mut index, items).map_err(|e| failed(e.code(), e))?;
     // The index only saves a re-hash; failing to write it costs nothing else.

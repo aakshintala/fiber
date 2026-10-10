@@ -70,9 +70,11 @@ fn go(setup: &Setup, yes: bool, terminal: bool, input: &str) -> Run {
         &setup.repo(),
         yes,
         terminal,
-        &mut Cursor::new(input.as_bytes().to_vec()),
-        &mut out,
-        &mut err,
+        super::Streams {
+            input: &mut Cursor::new(input.as_bytes().to_vec()),
+            out: &mut out,
+            err: &mut err,
+        },
         fakes::clock::FakeClock::new(),
     );
     Run {

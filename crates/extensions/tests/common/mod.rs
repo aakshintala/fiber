@@ -6,9 +6,46 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use extensions::{Error, Origin, Request, plan};
 use serde_json::{Value, json};
+
+/// How far each round drives the fake clock: a day past any install or git
+/// bound, so the deadline, the grace and the drain all elapse.
+const FAR: Duration = Duration::from_secs(24 * 3600);
+
+/// Rounds of driving a stalled calibration: each jumps a day, and waits
+/// for the run to answer.
+const ROUNDS: u32 = 30;
+
+/// One round's wait for the run's answer.
+const ROUND: Duration = Duration::from_millis(200);
+
+/// Drives `clock` until the stalled run on `done` answers: whatever instant
+/// the run computes its bounds at, the next round's jump lands past them,
+/// so the deadline, the grace and the drain each take one round. An early
+/// answer ends the rounds; a run that never answers fails the assertion,
+/// naming the stall.
+pub(crate) fn drive<T: Send>(
+    clock: &fakes::clock::FakeClock,
+    done: std::sync::mpsc::Receiver<T>,
+) -> T {
+    let mut outcome = None;
+    for _ in 0..ROUNDS {
+        clock.advance(FAR);
+        match done.recv_timeout(ROUND) {
+            Ok(done) => {
+                outcome = Some(done);
+                break;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    assert!(outcome.is_some(), "the stalled run returns");
+    outcome.unwrap()
+}
 
 pub(crate) struct Setup {
     root: fakes::TempDir,

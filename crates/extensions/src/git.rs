@@ -2,14 +2,21 @@
 //! "Names"). Fiber runs `git` as a person would, so their SSH keys and
 //! credential helpers apply.
 
-use std::io::ErrorKind;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
+
+use contract::clock::Clock;
 
 use crate::Error;
+use crate::host::exec;
 
 pub(crate) use config::short_name;
 pub use config::{SHORT_NAMES, full_name};
+
+/// How long each `git` call may run before it is stopped
+/// (`docs/extensions.md`, "Installing").
+pub(crate) const GIT_DEADLINE: Duration = Duration::from_secs(120);
 
 /// Whether `typed` names a directory rather than an extension.
 pub fn is_path(typed: &str) -> bool {
@@ -50,6 +57,17 @@ fn git_marker_end(name: &str) -> Option<usize> {
     None
 }
 
+/// A `git` call stopped at its deadline, as a fetch failure naming the call.
+fn timeout(command: &str) -> Error {
+    Error::Git {
+        command: command.into(),
+        why: format!(
+            "did not finish within {} s, so it was stopped",
+            GIT_DEADLINE.as_secs()
+        ),
+    }
+}
+
 /// Whether `ls-remote`'s stderr means the repository is not there.
 /// "Could not read from remote repository" is not enough: an SSH
 /// authentication failure prints it too, and a host that asks for
@@ -79,35 +97,59 @@ impl Origin {
         }
     }
 
-    fn run(&self, args: &[&str], dir: Option<&Path>) -> Result<String, Error> {
-        let mut command = Command::new(&self.git);
-        command.args(args).stdin(Stdio::null());
-        if let Some(dir) = dir {
-            command.current_dir(dir);
-        }
-        let out = command.output().map_err(|e| {
-            if e.kind() == ErrorKind::NotFound {
-                Error::GitMissing
-            } else {
-                Error::Git {
-                    command: args.join(" "),
-                    why: e.to_string(),
-                }
+    /// Runs `git` with `args` in `dir`, stopped at [`GIT_DEADLINE`] on
+    /// `clock`. The call stays in Fiber's process group, so SSH and
+    /// credential-helper prompts on the terminal still work. Without `dir`
+    /// the working directory is inherited.
+    fn run(&self, args: &[&str], dir: Option<&Path>, clock: &dyn Clock) -> Result<String, Error> {
+        let req = exec::ExecRequest {
+            program: self.git.clone(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: dir.map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf),
+            // `git`'s output is not capped today.
+            cap: usize::MAX,
+            // In Fiber's process group, so SSH and credential-helper
+            // prompts on the terminal still work as they do today.
+            own_group: false,
+        };
+        let deadline = clock.now().checked_add(GIT_DEADLINE).unwrap_or(clock.now());
+        // Never cancelled except by the call's own end: the sender drops
+        // when this returns.
+        let (_cancel, cancel) = mpsc::channel::<()>();
+        let command = args.join(" ");
+        match exec::run(&req, clock, Some(deadline), cancel) {
+            Err(stalled) if stalled.ran.as_ref().is_some_and(|ran| ran.timed_out) => {
+                Err(timeout(&command))
             }
-        })?;
-        if !out.status.success() {
-            return Err(Error::Git {
-                command: args.join(" "),
-                why: String::from_utf8_lossy(&out.stderr).trim().to_owned(),
-            });
+            Err(failed) => Err(match failed.source {
+                Some(source) if source.kind() == std::io::ErrorKind::NotFound => Error::GitMissing,
+                Some(source) => Error::Git {
+                    command,
+                    why: source.to_string(),
+                },
+                // After the spawn: a reader thread that could not start.
+                None => Error::Git {
+                    command,
+                    why: failed.message,
+                },
+            }),
+            Ok(ran) if ran.timed_out => Err(timeout(&command)),
+            Ok(ran) => {
+                if ran.exit_code != Some(0) {
+                    return Err(Error::Git {
+                        command,
+                        why: String::from_utf8_lossy(&ran.stderr).trim().to_owned(),
+                    });
+                }
+                Ok(String::from_utf8_lossy(&ran.stdout).into_owned())
+            }
         }
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
     /// The repository's tags.
-    pub(crate) fn tags(&self, repo: &str) -> Result<Vec<String>, Error> {
+    pub(crate) fn tags(&self, repo: &str, clock: &dyn Clock) -> Result<Vec<String>, Error> {
         let url = (self.url)(repo);
-        let out = match self.run(&["ls-remote", "--tags", "--refs", &url], None) {
+        let out = match self.run(&["ls-remote", "--tags", "--refs", &url], None, clock) {
             Ok(out) => out,
             Err(Error::Git { why, .. }) if repository_missing(&why) => {
                 return Err(Error::NoRepository {
@@ -132,6 +174,7 @@ impl Origin {
         tag: &str,
         history: bool,
         dest: &Path,
+        clock: &dyn Clock,
     ) -> Result<String, Error> {
         let url = (self.url)(repo);
         let to = dest.to_string_lossy();
@@ -141,18 +184,22 @@ impl Origin {
         }
         args.extend(["--branch", tag]);
         args.extend([url.as_str(), &to]);
-        self.run(&args, None)?;
+        self.run(&args, None, clock)?;
         Ok(self
-            .run(&["rev-parse", "HEAD"], Some(dest))?
+            .run(&["rev-parse", "HEAD"], Some(dest), clock)?
             .trim()
             .to_owned())
     }
 
     /// What changed in `dir` of the clone since commit `old`.
-    pub(crate) fn changes(&self, clone: &Path, old: &str, dir: &str) -> String {
+    pub(crate) fn changes(&self, clone: &Path, old: &str, dir: &str, clock: &dyn Clock) -> String {
         let dir = if dir.is_empty() { "." } else { dir };
-        self.run(&["diff", "--stat", old, "HEAD", "--", dir], Some(clone))
-            .unwrap_or_else(|_| "The installed commit is not in the repository.\n".into())
+        self.run(
+            &["diff", "--stat", old, "HEAD", "--", dir],
+            Some(clone),
+            clock,
+        )
+        .unwrap_or_else(|_| "The installed commit is not in the repository.\n".into())
     }
 }
 

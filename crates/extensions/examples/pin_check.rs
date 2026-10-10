@@ -19,8 +19,10 @@
 
 use std::fs;
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
+use contract::clock::{Clock, Wake};
 use serde_json::json;
 
 /// How many warm passes are timed; the line reports the fastest and the
@@ -63,9 +65,10 @@ fn measure(files: usize, bytes: usize) -> Result<String, String> {
     let config = json!({"mcp": {"servers": {"db": {"command": "node", "args": names}}}});
     fs::write(repo.join(".fiber/config.json"), config.to_string()).map_err(|e| e.to_string())?;
 
+    let clock = ProcessClock;
     let pass = || -> Result<(Duration, String), String> {
         let start = Instant::now();
-        let items = extensions::declared_items(&repo).map_err(|e| e.to_string())?;
+        let items = extensions::declared_items(&repo, &clock).map_err(|e| e.to_string())?;
         let mut index = extensions::Index::load(&home);
         let item = items.first().ok_or("no item declared")?;
         let hash = extensions::hash(&mut index, item).map_err(|e| e.to_string())?;
@@ -92,4 +95,40 @@ fn measure(files: usize, bytes: usize) -> Result<String, String> {
         ms(fastest),
         ms(slowest),
     ))
+}
+
+/// The process clock. The jig measures real time; it never ships.
+struct ProcessClock;
+
+impl Clock for ProcessClock {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the pin_check jig reads the process clock; it measures real time"
+    )]
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the pin_check jig reads the process clock; it measures real time"
+    )]
+    fn wall(&self) -> std::time::SystemTime {
+        SystemTime::now()
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the pin_check jig waits on the process clock; it measures real time"
+    )]
+    fn sleep(&self, duration: Duration) {
+        thread::sleep(duration);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        let bound = until.map(|until| until.saturating_duration_since(self.now()));
+        wait(bound);
+    }
+
+    fn subscribe(&self, _wake: std::sync::Weak<dyn Wake>) {}
 }

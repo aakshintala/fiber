@@ -8,16 +8,11 @@ mod common;
 
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
 
 use common::{Setup, install, manifest, provider, write};
 use contract::ErrorCode;
 use extensions::{Error, Origin, Request, plan};
 use serde_json::json;
-
-/// How far each round drives the fake clock: a day past any install-step
-/// bound, so the step's deadline, grace and drain all elapse.
-const FAR: Duration = Duration::from_secs(24 * 3600);
 
 fn installed_dirs(home: &Path) -> Vec<String> {
     let Ok(entries) = fs::read_dir(home.join("extensions")) else {
@@ -199,12 +194,6 @@ fn unsettled_wrong_name_and_a_taken_directory_have_their_codes() {
 /// runs it rolls every swapped copy back.
 #[test]
 fn a_stalled_install_step_installs_nothing() {
-    /// Rounds of driving: each jumps a day past the step's next bound, and
-    /// waits for the run to get there.
-    const ROUNDS: u32 = 30;
-    /// One round's wait for the run's answer.
-    const ROUND: Duration = Duration::from_millis(200);
-
     let setup = Setup::new();
     let mut m = manifest("acme");
     // The step ignores SIGTERM, so the stop runs the full grace to SIGKILL
@@ -230,23 +219,7 @@ fn a_stalled_install_step_installs_nothing() {
             let _sent = done_tx.send(planned.commit());
         })
         .unwrap();
-    // Whatever instant the run computes its bounds at, the next round's jump
-    // lands past them: the deadline, the grace and the drain each take one
-    // round, so the run always returns, and an early return ends the rounds.
-    let mut outcome = None;
-    for _ in 0..ROUNDS {
-        clock.advance(FAR);
-        match done_rx.recv_timeout(ROUND) {
-            Ok(done) => {
-                outcome = Some(done);
-                break;
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-        }
-    }
-    assert!(outcome.is_some(), "the stalled commit returns");
-    let err = outcome.unwrap().unwrap_err();
+    let err = common::drive(&clock, done_rx).unwrap_err();
     assert!(
         matches!(err, Error::InstallExited { .. }),
         "a stalled step fails as its install step failed: {err}"

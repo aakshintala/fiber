@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 
-use common::{Setup, manifest, provider, write};
+use common::{Setup, drive, manifest, provider, write};
 use contract::ErrorCode;
 use extensions::{Error, Installed, Origin, Provenance, Request, SHORT_NAMES, list, plan, removal};
 use serde_json::{Value, json};
@@ -2226,4 +2226,116 @@ fn a_data_directory_that_cannot_be_removed_fails_naming_it() {
         inner.exists(),
         "the directory that could not be removed stays"
     );
+}
+
+/// The checked-in stand-in for `git`: it answers `ls-remote` with one tag
+/// and stalls on its markers (`docs/testing.md`, "Testing an extension").
+fn fake_git() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-git/git")
+}
+
+/// Kills the stalled processes matching `unique` by pid alone, then
+/// requires that none are left: the run kills what it stopped, so leftovers
+/// fail the test without leaking. By pid, never by group: a stalled `git`
+/// shares this test's process group.
+fn no_stall_left(unique: &str) {
+    let leftovers = fakes::matching(unique).unwrap();
+    for pid in &leftovers {
+        drop(fakes::kill_pid(*pid, "KILL"));
+    }
+    assert!(
+        leftovers.is_empty(),
+        "the stalled git is gone: {leftovers:?}"
+    );
+}
+
+/// A `ls-remote` that never answers fails the plan at the git deadline.
+#[test]
+fn a_stalled_ls_remote_fails_the_plan_at_the_git_deadline() {
+    let setup = Setup::new();
+    let unique = format!("stall-ls-remote-{}", setup.root().display());
+    let watching = unique.clone();
+    let git = fake_git().to_string_lossy().into_owned();
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock = std::sync::Arc::clone(&clock);
+    let home = setup.home();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("stalled ls-remote".into())
+        .spawn(move || {
+            // Built here: `Origin` holds a closure, so it never crosses a
+            // thread.
+            let origin = Origin::new(git, move |repo| format!("{unique}/{repo}"));
+            let _sent = done_tx.send(
+                plan(
+                    &home,
+                    &Request::Install("github.com/acme/stalled".into()),
+                    FIBER,
+                    &origin,
+                    &*worker_clock,
+                )
+                .map(|_| ()),
+            );
+        })
+        .unwrap();
+    let err = drive(&clock, done_rx).unwrap_err();
+    assert!(
+        matches!(err, Error::Git { .. }),
+        "a stalled ls-remote fails as git failed: {err}"
+    );
+    assert!(
+        err.to_string().contains("did not finish within"),
+        "the failure names the deadline: {err}"
+    );
+    assert!(
+        err.to_string().contains("so it was stopped"),
+        "the failure names the stop: {err}"
+    );
+    no_stall_left(&watching);
+}
+
+/// A `clone` that never finishes fails the plan at the git deadline: the
+/// canned `ls-remote` answer resolves the tag, and only the clone stalls.
+#[test]
+fn a_stalled_clone_fails_the_plan_at_the_git_deadline() {
+    let setup = Setup::new();
+    let unique = format!("stall-clone-{}", setup.root().display());
+    let watching = unique.clone();
+    let git = fake_git().to_string_lossy().into_owned();
+    let clock = fakes::clock::FakeClock::new();
+    let worker_clock = std::sync::Arc::clone(&clock);
+    let home = setup.home();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("stalled clone".into())
+        .spawn(move || {
+            // Built here: `Origin` holds a closure, so it never crosses a
+            // thread.
+            let origin = Origin::new(git, move |repo| format!("{unique}/{repo}"));
+            let _sent = done_tx.send(
+                plan(
+                    &home,
+                    &Request::Install("github.com/acme/stalled".into()),
+                    FIBER,
+                    &origin,
+                    &*worker_clock,
+                )
+                .map(|_| ()),
+            );
+        })
+        .unwrap();
+    let err = drive(&clock, done_rx).unwrap_err();
+    assert!(
+        matches!(err, Error::Git { .. }),
+        "a stalled clone fails as git failed: {err}"
+    );
+    assert!(
+        err.to_string().contains("did not finish within"),
+        "the failure names the deadline: {err}"
+    );
+    assert!(
+        err.to_string().contains("so it was stopped"),
+        "the failure names the stop: {err}"
+    );
+    no_stall_left(&watching);
 }

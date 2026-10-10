@@ -201,6 +201,7 @@ pub fn plan<'c>(
         fiber_version,
         origin,
         installed: &listing.installed,
+        clock,
     };
     plan.root = match request {
         Request::Path(path) => ctx.add_path(&mut plan, path, None)?,
@@ -230,15 +231,16 @@ pub fn plan<'c>(
     Ok(plan)
 }
 
-struct Ctx<'a> {
+struct Ctx<'a, 'c> {
     id: usize,
     home: &'a Path,
     fiber_version: &'a str,
     origin: &'a Origin,
     installed: &'a [Installed],
+    clock: &'c dyn Clock,
 }
 
-impl Ctx<'_> {
+impl Ctx<'_, '_> {
     fn requested(&self, name: &str, asked: bool) -> bool {
         asked || self.installed.iter().any(|i| i.name == name && i.requested)
     }
@@ -322,7 +324,7 @@ impl Ctx<'_> {
         self.slug_free(plan, name)?;
         let tag = match tag {
             Some(tag) => tag,
-            None => newest(&self.origin.tags(repo)?)
+            None => newest(&self.origin.tags(repo, self.clock)?)
                 .ok_or_else(|| Error::NoTag { name: name.into() })?,
         };
         let clone = plan.scratch.join(slug(name)?);
@@ -336,10 +338,10 @@ impl Ctx<'_> {
                 Provenance::Path(_) => None,
             });
         let history = asked && old.is_some();
-        let commit = self.origin.clone(repo, &tag, history, &clone)?;
+        let commit = self.origin.clone(repo, &tag, history, &clone, self.clock)?;
         let changes = old
             .filter(|_| history)
-            .map(|old| self.origin.changes(&clone, old, dir));
+            .map(|old| self.origin.changes(&clone, old, dir, self.clock));
         remove(&clone.join(".git"))?;
         let record = Record {
             name: name.into(),
@@ -488,7 +490,7 @@ impl Ctx<'_> {
             return Err(Error::Damaged(hit.clone()));
         }
         let (repo, _) = split(dep)?;
-        let tag = pick(dep, wants, &self.origin.tags(repo)?)?;
+        let tag = pick(dep, wants, &self.origin.tags(repo, self.clock)?)?;
         self.add_git(plan, dep, Some(tag), false)
     }
 
