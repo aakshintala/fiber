@@ -742,14 +742,7 @@ pub fn run_logout(provider: Option<&str>, target: LogoutTarget<'_>) -> i32 {
         let mut err = io::stderr();
         let notices: Vec<Notice> = config.notices().iter().cloned().chain(loading).collect();
         crate::config::print_notices(&mut err, &notices);
-        logout(
-            provider,
-            target,
-            &home,
-            &providers,
-            &config,
-            &mut err,
-        )
+        logout(provider, target, &home, &providers, &config, &mut err)
     });
     finish(ran)
 }
