@@ -16,6 +16,9 @@ set -euo pipefail
 # output (`| tail`) cannot mistake a failure for a pass.
 log=
 rc=0
+# Set inside the EXIT trap below; initialised here so shellcheck sees the
+# assignment (the trap string is the only other place it is set).
+leak_rc=0
 # Set to 1 once the test run's nonce is exported: the EXIT trap then scans
 # for leaked processes, failing a passing run that leaked any.
 scan_leaks=0
@@ -104,7 +107,7 @@ if [ "$scope" != platform ]; then
         crates/main/tests/install_fixture/fiber \
         crates/main/tests/install_fixture/bin/uname \
         crates/main/tests/install_fixture/bin/sysctl
-      shellcheck --shell=bash scripts/leak-scan scripts/test-leak-scan scripts/test-leak-probe
+      shellcheck --shell=bash scripts/flaky-tests scripts/test-flaky-tests scripts/leak-scan scripts/test-leak-scan scripts/test-leak-probe
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
     fi
@@ -114,6 +117,8 @@ fi
 if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   echo "== leak-scan self-test"
   scripts/test-leak-scan
+  echo "== flaky-tests self-test"
+  scripts/test-flaky-tests
   echo "== cargo clippy --all-targets -- -D warnings"
   cargo clippy --all-targets "${package_spec_args[@]}" -- -D warnings
   # A per-run nonce in the environment: every descendant inherits it, so

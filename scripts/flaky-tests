@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Prints the tests that passed after a retry, one per line, from nextest's
+# JUnit XML (docs/testing.md, "Flaky tests"). Each line is the test exactly
+# as nextest prints it (the binary id, a space, the test name), a TAB, then
+# the first failed attempt's failure text: the first flakyFailure child's
+# `message` attribute plus its element text (the stack or output), with
+# newlines as the two characters `\n`, no tab inside, cut at 1500
+# characters with `...` appended when cut. Nothing else reaches stdout.
+# A missing or empty file prints nothing and exits 0, so the
+# test job records no flakes when nextest wrote nothing. Malformed XML
+# exits 1 with a message.
+#
+# Usage: scripts/flaky-tests JUNIT_XML
+set -euo pipefail
+if [ $# -ne 1 ]; then
+  echo "usage: scripts/flaky-tests JUNIT_XML" >&2
+  exit 2
+fi
+python3 -I - "$1" <<'PYEOF'
+import sys
+import xml.etree.ElementTree as ET
+
+# The failure text is cut at this many characters, with `...` appended.
+LIMIT = 1500
+
+path = sys.argv[1]
+try:
+    with open(path, "rb") as handle:
+        data = handle.read()
+except FileNotFoundError:
+    sys.exit(0)
+if not data.strip():
+    sys.exit(0)
+try:
+    root = ET.fromstring(data)
+except ET.ParseError as err:
+    print(f"scripts/flaky-tests: {path}: malformed XML: {err}", file=sys.stderr)
+    sys.exit(1)
+
+# A testcase that passed after a retry carries a flakyFailure child for
+# each failed attempt and no failure or error child; a real failure
+# carries failure or error, so it never prints here even when an earlier
+# attempt left a flakyFailure behind. Only the first flakyFailure child
+# prints: it is the first failure the flake issue names.
+for case in root.iter("testcase"):
+    children = [child.tag for child in case]
+    if "flakyFailure" not in children:
+        continue
+    if "failure" in children or "error" in children:
+        continue
+    classname = case.get("classname")
+    name = case.get("name")
+    if classname is None or name is None:
+        continue
+    first = next(child for child in case if child.tag == "flakyFailure")
+    parts = []
+    message = (first.get("message") or "").strip()
+    if message:
+        parts.append(message)
+    text = "".join(first.itertext()).strip()
+    if text:
+        parts.append(text)
+    detail = "\n".join(parts)
+    detail = detail.replace("\t", " ")
+    detail = detail.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+    if len(detail) > LIMIT:
+        detail = detail[:LIMIT] + "..."
+    sys.stdout.write(f"{classname} {name}\t{detail}\n")
+PYEOF

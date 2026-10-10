@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# The self-test for scripts/flaky-tests: a fixture in nextest's real JUnit
+# shape proves only the tests that passed after a retry print, one line
+# each, each the test, a TAB, then the first failed attempt's failure text,
+# with nothing else on stdout; further fixtures prove newlines print as the
+# two characters `\n`, no line carries a second tab, only the first
+# flakyFailure child's text prints, and text past 1500 characters is cut
+# with `...` appended (exact at 1499, 1500 and 1501 characters); empty and
+# missing input print nothing and exit 0; malformed XML exits 1.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "scripts/test-flaky-tests: $1" >&2
+  exit 1
+}
+
+# The fixture mirrors target/nextest/ci/junit.xml from a run where one
+# integration test passed after a retry: the flakyFailure child carries
+# the failed attempt, with nextest's escaped entities in its message.
+cat >"$tmp/junit.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="5" failures="1" errors="0" uuid="2ca09716-36ca-4a8a-84e8-ec39804fa3d1" timestamp="2026-10-10T11:29:01.823-07:00" time="0.013">
+    <testsuite name="main::flaky_probe" tests="4" disabled="0" errors="0" failures="1">
+        <testcase name="fails_once_then_passes" classname="main::flaky_probe" timestamp="2026-10-10T11:29:01.831-07:00" time="0.005">
+            <flakyFailure timestamp="2026-10-10T11:29:01.823-07:00" time="0.006" message="thread &apos;fails_once_then_passes&apos; panicked at crates/main/tests/flaky_probe.rs:10:9" type="test failure with exit code 101">first attempt fails on purpose
+            </flakyFailure>
+        </testcase>
+        <testcase name="always_passes" classname="main::flaky_probe" timestamp="2026-10-10T11:29:01.831-07:00" time="0.004">
+        </testcase>
+        <testcase name="always_fails" classname="main::flaky_probe" timestamp="2026-10-10T11:29:01.831-07:00" time="0.004">
+            <failure message="assertion failed">output
+            </failure>
+        </testcase>
+        <testcase name="fails_twice" classname="main::flaky_probe" timestamp="2026-10-10T11:29:01.831-07:00" time="0.004">
+            <flakyFailure timestamp="2026-10-10T11:29:01.823-07:00" time="0.006" message="first attempt" type="test failure with exit code 101">output
+            </flakyFailure>
+            <failure message="second attempt">output
+            </failure>
+        </testcase>
+    </testsuite>
+    <testsuite name="main::bin/fiber" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="flaky_probe_tests::unit_fails_once_then_passes" classname="main::bin/fiber" timestamp="2026-10-10T11:29:01.831-07:00" time="0.005">
+            <flakyFailure timestamp="2026-10-10T11:29:01.823-07:00" time="0.006" message="first attempt" type="test failure with exit code 101">output
+            </flakyFailure>
+        </testcase>
+    </testsuite>
+</testsuites>
+EOF
+{
+  printf '%s\t%s\n' 'main::flaky_probe fails_once_then_passes' "thread 'fails_once_then_passes' panicked at crates/main/tests/flaky_probe.rs:10:9\nfirst attempt fails on purpose"
+  printf '%s\t%s\n' 'main::bin/fiber flaky_probe_tests::unit_fails_once_then_passes' 'first attempt\noutput'
+} >"$tmp/want.txt"
+
+scripts/flaky-tests "$tmp/junit.xml" >"$tmp/got.txt" 2>"$tmp/err.txt" || fail "exit $? on the fixture"
+cmp -s "$tmp/want.txt" "$tmp/got.txt" || {
+  echo "--- want:" >&2
+  cat "$tmp/want.txt" >&2
+  echo "--- got:" >&2
+  cat "$tmp/got.txt" >&2
+  fail "fixture output differs"
+}
+[ -s "$tmp/err.txt" ] && { cat "$tmp/err.txt" >&2; fail "fixture run printed to stderr"; }
+
+# Newlines in the failure print as the two characters `\n`, and only the
+# first flakyFailure child's text prints.
+cat >"$tmp/detail.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+    <testsuite name="s">
+        <testcase name="multiline" classname="c">
+            <flakyFailure message="boom">line1
+line2
+line3</flakyFailure>
+        </testcase>
+        <testcase name="two_attempts" classname="c">
+            <flakyFailure message="first">first-output</flakyFailure>
+            <flakyFailure message="second">second-output</flakyFailure>
+        </testcase>
+    </testsuite>
+</testsuites>
+EOF
+{
+  printf '%s\t%s\n' 'c multiline' 'boom\nline1\nline2\nline3'
+  printf '%s\t%s\n' 'c two_attempts' 'first\nfirst-output'
+} >"$tmp/detail-want.txt"
+scripts/flaky-tests "$tmp/detail.xml" >"$tmp/detail-got.txt" 2>"$tmp/err.txt" || fail "exit $? on the detail fixture"
+cmp -s "$tmp/detail-want.txt" "$tmp/detail-got.txt" || {
+  echo "--- want:" >&2
+  cat "$tmp/detail-want.txt" >&2
+  echo "--- got:" >&2
+  cat "$tmp/detail-got.txt" >&2
+  fail "detail output differs"
+}
+[ -s "$tmp/err.txt" ] && { cat "$tmp/err.txt" >&2; fail "detail run printed to stderr"; }
+
+# A tab in the failure prints as a space, so no line carries a second tab.
+# The tab below is written by printf's format string, so the source holds
+# no literal tab.
+printf '<?xml version="1.0" encoding="UTF-8"?><testsuites><testsuite name="s"><testcase name="tabbed" classname="c"><flakyFailure message="t">a\tb</flakyFailure></testcase></testsuite></testsuites>\n' >"$tmp/tab.xml"
+printf '%s\t%s\n' 'c tabbed' 't\na b' >"$tmp/tab-want.txt"
+scripts/flaky-tests "$tmp/tab.xml" >"$tmp/tab-got.txt" 2>"$tmp/err.txt" || fail "exit $? on the tab fixture"
+cmp -s "$tmp/tab-want.txt" "$tmp/tab-got.txt" || {
+  echo "--- want:" >&2
+  cat "$tmp/tab-want.txt" >&2
+  echo "--- got:" >&2
+  cat "$tmp/tab-got.txt" >&2
+  fail "tab output differs"
+}
+awk -F'\t' 'NF != 2 { exit 1 }' "$tmp/tab-got.txt" || fail "a line carries a second tab"
+[ -s "$tmp/err.txt" ] && { cat "$tmp/err.txt" >&2; fail "tab run printed to stderr"; }
+
+# A detail of exactly 1500 characters prints whole; 1501 is cut to 1500
+# with `...` appended; 1499 is the longest length that needs no cut. The
+# detail here is the message alone, so its length is the message's.
+m1499=$(printf 'x%.0s' {1..1499})
+m1500=$(printf 'x%.0s' {1..1500})
+m1501=$(printf 'x%.0s' {1..1501})
+{
+  echo '<?xml version="1.0" encoding="UTF-8"?>'
+  echo '<testsuites><testsuite name="s">'
+  echo "<testcase name=\"t1499\" classname=\"c\"><flakyFailure message=\"$m1499\"/></testcase>"
+  echo "<testcase name=\"t1500\" classname=\"c\"><flakyFailure message=\"$m1500\"/></testcase>"
+  echo "<testcase name=\"t1501\" classname=\"c\"><flakyFailure message=\"$m1501\"/></testcase>"
+  echo '</testsuite></testsuites>'
+} >"$tmp/lengths.xml"
+scripts/flaky-tests "$tmp/lengths.xml" >"$tmp/lengths.txt" 2>"$tmp/err.txt" || fail "exit $? on the lengths fixture"
+[ -s "$tmp/err.txt" ] && { cat "$tmp/err.txt" >&2; fail "lengths run printed to stderr"; }
+d1499=$(sed -n '1p' "$tmp/lengths.txt" | cut -f2)
+d1500=$(sed -n '2p' "$tmp/lengths.txt" | cut -f2)
+d1501=$(sed -n '3p' "$tmp/lengths.txt" | cut -f2)
+[ "$d1499" = "$m1499" ] || fail "1499-char detail differs"
+[ "${#d1499}" -eq 1499 ] || fail "1499-char detail is ${#d1499} chars"
+[ "$d1500" = "$m1500" ] || fail "1500-char detail was cut"
+[ "${#d1501}" -eq 1503 ] || fail "1501-char detail is ${#d1501} chars, want 1503"
+[ "${d1501: -3}" = "..." ] || fail "1501-char detail has no ... suffix"
+[ "${d1501:0:1500}" = "$m1500" ] || fail "1501-char detail keeps no 1500-char prefix"
+
+# A missing file prints nothing and exits 0.
+scripts/flaky-tests "$tmp/does-not-exist" >"$tmp/got.txt" 2>"$tmp/err.txt" || fail "exit $? on a missing file"
+[ -s "$tmp/got.txt" ] && fail "missing file printed output"
+
+# An empty file prints nothing and exits 0.
+: >"$tmp/empty.xml"
+scripts/flaky-tests "$tmp/empty.xml" >"$tmp/got.txt" 2>"$tmp/err.txt" || fail "exit $? on an empty file"
+[ -s "$tmp/got.txt" ] && fail "empty file printed output"
+
+# Malformed XML exits 1 with a message.
+echo "<not xml" >"$tmp/bad.xml"
+rc=0
+scripts/flaky-tests "$tmp/bad.xml" >"$tmp/got.txt" 2>"$tmp/err.txt" || rc=$?
+[ "$rc" -eq 1 ] || fail "malformed XML exited $rc, want 1"
+[ -s "$tmp/err.txt" ] || fail "malformed XML printed no message"
+
+# No argument is a usage error, not a silent empty run.
+if scripts/flaky-tests >"$tmp/got.txt" 2>/dev/null; then
+  fail "exited 0 with no argument"
+fi

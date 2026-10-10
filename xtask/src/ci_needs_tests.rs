@@ -109,7 +109,7 @@ fn scalar(extra: &[&str], needs: &str) -> String {
 }
 
 #[test]
-fn a_fourth_local_report_job_needs_no_builder_edit() {
+fn a_fifth_local_report_job_needs_no_builder_edit() {
     let mut reports = REPORT_JOBS.to_vec();
     reports.push("fixture_report");
     let workflow = workflow_with_reports(
@@ -117,7 +117,7 @@ fn a_fourth_local_report_job_needs_no_builder_edit() {
         "    needs: select\n    runs-on: ubuntu-24.04\n",
         &reports,
     );
-    // The check reads REPORT_JOBS, so only the three real names are exempt:
+    // The check reads REPORT_JOBS, so only the four real names are exempt:
     // the made-up job is a gating job the fixture's ci leaves out of needs.
     let failures = check(&workflow, &small_doc_with_reports(&REPORT_JOBS)).unwrap();
     assert_eq!(failures.len(), 1, "{failures:?}");
@@ -207,9 +207,9 @@ fn missing_jobs_are_sorted() {
 #[test]
 fn an_extra_report_job_in_the_doc_fails() {
     let doc = real_doc();
-    let from = "`cache_prune`.";
+    let from = "`flake_report`.";
     assert!(doc.contains(from), "the fixture drifted");
-    let changed = doc.replace(from, "`cache_prune`, `extra`.");
+    let changed = doc.replace(from, "`flake_report`, `extra`.");
     let failures = check(&real_workflow(), &changed).unwrap();
     assert_eq!(failures.len(), 1);
     assert!(
@@ -570,7 +570,7 @@ fn a_workflow_whose_only_job_is_ci_is_read() {
         "name: CI\non: push\njobs:\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
     );
     let failures = check(&workflow, &small_doc()).unwrap();
-    assert_eq!(failures.len(), 3, "{failures:?}");
+    assert_eq!(failures.len(), 4, "{failures:?}");
 }
 
 #[test]
