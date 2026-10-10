@@ -1435,6 +1435,8 @@ fn acknowledgement_wait_ignores_other_sessions_epochs_and_itself() {
     const EPOCH: u64 = 7;
     const NEWER: u64 = 8;
 
+    /// Receives with the deadline, failing at the caller's line.
+    #[track_caller]
     fn returns_without_waiting(
         held_session: &str,
         held_epoch: u64,
@@ -1551,6 +1553,8 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
     const SID: &str = "s_0123456789abcdef";
     const EPOCH: u64 = 7;
 
+    /// Receives with the deadline, failing at the caller's line.
+    #[track_caller]
     fn run_case(entry_session: &str, entry_epoch: u64, expect_pop: bool) {
         let held = fakes::TempDir::new("ri");
         let hub = Arc::new(hub(&held));

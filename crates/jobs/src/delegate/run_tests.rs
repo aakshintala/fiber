@@ -293,33 +293,17 @@ fn reported(rig: &Rig) -> contract::inbox::JobNotice {
 
 /// Takes the runner's report with one wall-clock deadline for the whole
 /// wait, failing at the caller's line: `#[track_caller]` reports the
-/// test's line, which the `thread::scope` closure below cannot.
+/// test's line, which the `thread::scope` closure below cannot. `expiry`
+/// names the wait that never reported.
 #[track_caller]
-fn take_report(rig: &Rig, stop: &AtomicBool) -> contract::inbox::JobNotice {
+fn take_report(rig: &Rig, stop: &AtomicBool, expiry: &str) -> contract::inbox::JobNotice {
     let result = Deadline::after(DEADLINE).recv(&rig.inbox);
     stop.store(true, Ordering::Relaxed);
     match result {
         Ok(Delivery::Job(notice)) => notice,
         Ok(other) => panic!("expected the runner's report, got {other:?}"),
         Err(_) => panic!(
-            "the runner did not report; now={:?} parked={:?}",
-            rig.clock.now(),
-            rig.clock.parked()
-        ),
-    }
-}
-
-/// The drain-wait twin of [`take_report`]: the inline scope below has its
-/// own expiry message, kept exact.
-#[track_caller]
-fn take_drain_report(rig: &Rig, stop: &AtomicBool) -> contract::inbox::JobNotice {
-    let result = Deadline::after(DEADLINE).recv(&rig.inbox);
-    stop.store(true, Ordering::Relaxed);
-    match result {
-        Ok(Delivery::Job(notice)) => notice,
-        Ok(other) => panic!("expected the runner's report, got {other:?}"),
-        Err(_) => panic!(
-            "the drain's end did not report; now={:?} parked={:?}",
+            "{expiry}; now={:?} parked={:?}",
             rig.clock.now(),
             rig.clock.parked()
         ),
@@ -361,7 +345,7 @@ fn reported_before(rig: &Rig, horizon: Option<std::time::Instant>) -> contract::
                 }
             }
         });
-        take_report(rig, &stop)
+        take_report(rig, &stop, "the runner did not report")
     })
 }
 
@@ -744,7 +728,7 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
                 }
             }
         });
-        take_drain_report(&rig, &stop)
+        take_report(&rig, &stop, "the drain's end did not report")
     });
     assert_eq!(notice.completed.status, Outcome::Failed);
     assert_eq!(

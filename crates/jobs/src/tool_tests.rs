@@ -975,7 +975,9 @@ fn a_failed_write_to_the_terminal_is_a_tool_error() {
 }
 
 /// The instant a `write` call with these arguments parks at, and the answer
-/// it returns once the clock reaches it.
+/// it returns once the clock reaches it. Receives with the deadline,
+/// failing at the caller's line.
+#[track_caller]
 fn write_parks_at(arguments: Value, wait: Duration) {
     let clock = FakeClock::new();
     let as_clock: Arc<dyn Clock> = clock.clone();

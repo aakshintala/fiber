@@ -1415,6 +1415,9 @@ fn a_command_for_an_exiting_delegate_is_refused_at_once() {
 /// session. With `prior`, the client first sets that level as `c_1`, and
 /// the accepted subscribe is `c_2`; without it, the accepted subscribe is
 /// `c_1`.
+///
+/// Receives with the deadline, failing at the caller's line.
+#[track_caller]
 fn an_accepted_subscribe_is_replayed(prior: Option<&str>) {
     let temp = Temp::new();
     temp.recorded();

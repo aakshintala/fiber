@@ -96,6 +96,9 @@ fn started(
     started_before(hub, workspace, model, worktree, content, DEADLINE)
 }
 
+/// Receives `start`'s answer with the deadline, failing at the caller's
+/// line.
+#[track_caller]
 fn started_before(
     hub: Hub,
     workspace: String,
