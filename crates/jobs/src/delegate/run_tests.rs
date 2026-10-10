@@ -664,6 +664,48 @@ fn a_delayed_drain_still_feeds_the_fold() {
 }
 
 #[test]
+fn a_clock_advance_after_the_drain_deadline_is_computed_still_reaches_the_drain_wait() {
+    let _serial = serial_shared();
+    let dir = TempDir::new("fiber-delegate-delayed");
+    let release = fifo(dir.path(), "release");
+    let ready_fifo = fifo(dir.path(), "ready");
+    // Same child as `a_delayed_drain_still_feeds_the_fold`: the member
+    // leaves the leader's group before it blocks, so the reap's SIGKILL
+    // cannot reach it, and the pipe stays open until it prints.
+    let line = json_line(7, "Late.");
+    let shell = format!(
+        "perl -MPOSIX -e 'POSIX::setsid(); open(my $W, \">\", $ARGV[2]) or die $!; print $W \"ok\\n\"; close $W; open(my $F, \"<\", $ARGV[0]) or die $!; my $x = <$F>; print STDOUT \"$ARGV[1]\\n\";' '{}' '{line}' '{}' & read _ < '{}'; exit 0",
+        release.display(),
+        ready_fifo.display(),
+        ready_fifo.display()
+    );
+    let watchdog = Watchdog::matching(&release.to_string_lossy());
+    // The watch never connects: only the drain can carry the line.
+    let rig = rig(vec![]);
+    // The 1 s advance the old wake loop had already decided on, run
+    // between the deadline computation and the first park.
+    let hook_clock = Arc::clone(&rig.clock);
+    super::lock(&super::AFTER_DRAIN_DEADLINE)
+        .replace(Box::new(move || hook_clock.advance(Duration::from_secs(1))));
+    rig.start(&shell, Duration::from_secs(30), 1024);
+    wake_until_draining(&rig.clock, Duration::from_secs(30));
+    assert!(
+        rig.inbox.try_recv().is_err(),
+        "the fold waits for the drain"
+    );
+    release_fifo(&release, b"go\n");
+    let Ok(Delivery::Job(notice)) = Deadline::after(DEADLINE).recv(&rig.inbox) else {
+        panic!("the drain's end did not wake the runner");
+    };
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
+        Some("Late.".into())
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
 fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
     let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-held-stdout");

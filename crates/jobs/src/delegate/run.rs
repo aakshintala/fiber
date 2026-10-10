@@ -75,6 +75,12 @@ const MAX_BACKOFF: Duration = Duration::from_secs(1);
 /// run on a wake at least this often.
 const POLL: Duration = Duration::from_secs(1);
 
+/// Test-only pause between computing the drain deadline and parking on it:
+/// the test installs a one-shot hook, which the drain wait takes and runs
+/// once. Empty means no effect and production never sets it.
+#[cfg(test)]
+static AFTER_DRAIN_DEADLINE: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
+
 /// Why the runner itself ended the delegate, and when a stop's SIGKILL is
 /// due. The stop closure and the runner thread share it; the first reason
 /// set wins.
@@ -436,6 +442,10 @@ impl Runner {
     /// left to finish on its own.
     fn await_drain(&self, drain: &mpsc::Receiver<Option<FiberExited>>) -> Option<FiberExited> {
         let deadline = later(self.clock.as_ref(), self.bound);
+        #[cfg(test)]
+        if let Some(hook) = lock(&AFTER_DRAIN_DEADLINE).take() {
+            hook();
+        }
         loop {
             let seen = self.park.generation();
             match drain.try_recv() {
