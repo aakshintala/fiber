@@ -137,6 +137,10 @@ grid, and the test asserts on that grid: its text, its rows, each cell's
 colours and attributes, the cursor position, and the alternate-screen and
 hidden-cursor flags. Each wait is a predicate over the grid with one named
 deadline; a wait the terminal ends before failing shows the last grid.
+The driver takes a grid snapshot for a wait only when no synchronized
+output block (mode 2026) is open, so a wait sees whole frames and never a
+mix of the old frame and the new one; a stream without mode 2026 snapshots
+after each read.
 The terminal is 120 by 32 unless a test picks the size its layout needs
 (the look tests use 160 by 48). The driver pins `TERM` to
 `xterm-256color` and answers the binary's capability queries for a fixed
