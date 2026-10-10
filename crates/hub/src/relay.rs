@@ -442,13 +442,24 @@ pub(crate) fn route(
     // entry and serves there instead.
     let gate = lock(relays).gate(session);
     let _held_gate = lock(&gate);
+    // Mark opening before the re-check, under one lock hold with the
+    // kept read: a rejoin worker either published before this mark (the
+    // check below sees its entry) or sees the mark and refuses its
+    // exclusive attach, so none publishes between the check and this
+    // opener's attach.
+    let (kept, _opening) = {
+        let mut held = lock(relays);
+        (
+            held.subscription(session),
+            crate::rejoin::Opening::mark(&mut held, relays, session),
+        )
+    };
     if serve_existing() {
+        // An opener ahead published first: serve there. The Opening
+        // guard drops here with no lock held; its Drop takes the relays
+        // lock itself.
         return;
     }
-    let mut held = lock(relays);
-    let kept = held.subscription(session);
-    let _opening = crate::rejoin::Opening::mark(&mut held, relays, session);
-    drop(held);
     #[cfg(test)]
     {
         // Taken out first: the pause below blocks, and must not hold

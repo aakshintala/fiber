@@ -803,8 +803,9 @@ fn follow_transfers_the_kept_level_onto_an_unsubscribed_relay() {
 struct OpenSession {
     socket: PathBuf,
     accepts: Arc<Mutex<usize>>,
+    accepted: Mutex<Option<mpsc::Receiver<()>>>,
     received: Arc<Mutex<Vec<Vec<String>>>>,
-    heard: mpsc::Receiver<()>,
+    heard: Mutex<Option<mpsc::Receiver<()>>>,
     closed: Arc<Mutex<bool>>,
     accept: Mutex<Option<thread::JoinHandle<()>>>,
 }
@@ -814,6 +815,7 @@ impl OpenSession {
         fs::create_dir_all(home.join("run")).unwrap();
         let socket = home.join("run").join(id);
         let accepts = Arc::new(Mutex::new(0));
+        let (accepted_tx, accepted) = mpsc::channel();
         let received = Arc::new(Mutex::new(Vec::new()));
         let (heard_tx, heard) = mpsc::channel();
         let closed = Arc::new(Mutex::new(false));
@@ -831,6 +833,7 @@ impl OpenSession {
                             return;
                         }
                         *lock(&accepts) += 1;
+                        accepted_tx.send(()).unwrap_or(());
                         lock(&received).push(Vec::new());
                         let received = Arc::clone(&received);
                         let heard = heard_tx.clone();
@@ -846,8 +849,9 @@ impl OpenSession {
         Self {
             socket,
             accepts,
+            accepted: Mutex::new(Some(accepted)),
             received,
-            heard,
+            heard: Mutex::new(Some(heard)),
             closed,
             accept: Mutex::new(Some(accept)),
         }
@@ -857,17 +861,58 @@ impl OpenSession {
         *lock(&self.accepts)
     }
 
+    /// Waits until the session has accepted `count` connections in total,
+    /// so the accept loop lagging behind the openers cannot hide one.
+    /// One deadline bounds the whole wait: a worker collects the accepts
+    /// while the test takes its result once.
+    fn await_accepts(&self, count: usize, what: &str) {
+        let accepted = lock(&self.accepted).take().expect("one wait per session");
+        let (done_tx, done) = mpsc::channel();
+        thread::Builder::new()
+            .name("open-session-accept-wait".to_owned())
+            .spawn(move || {
+                let mut missing = count;
+                while missing > 0 {
+                    if accepted.recv().is_err() {
+                        break;
+                    }
+                    missing -= 1;
+                }
+                done_tx.send(missing).unwrap_or(());
+            })
+            .expect("the waiter spawns");
+        assert_eq!(
+            done.recv_timeout(OPEN_DEADLINE).unwrap_or(count),
+            0,
+            "{what} reached the session"
+        );
+    }
+
     /// Waits until the session has received `count` lines in total, so a
-    /// serve thread lagging behind the openers cannot hide one.
+    /// serve thread lagging behind the openers cannot hide one. One
+    /// deadline bounds the whole wait: a worker collects the lines while
+    /// the test takes its result once.
     fn await_lines(&self, count: usize, what: &str) {
-        let mut heard = count;
-        while heard > 0 {
-            assert!(
-                self.heard.recv_timeout(OPEN_DEADLINE).is_ok(),
-                "{what} reached the session"
-            );
-            heard -= 1;
-        }
+        let heard = lock(&self.heard).take().expect("one wait per session");
+        let (done_tx, done) = mpsc::channel();
+        thread::Builder::new()
+            .name("open-session-wait".to_owned())
+            .spawn(move || {
+                let mut missing = count;
+                while missing > 0 {
+                    if heard.recv().is_err() {
+                        break;
+                    }
+                    missing -= 1;
+                }
+                done_tx.send(missing).unwrap_or(());
+            })
+            .expect("the waiter spawns");
+        assert_eq!(
+            done.recv_timeout(OPEN_DEADLINE).unwrap_or(count),
+            0,
+            "{what} reached the session"
+        );
     }
 
     /// Stops accepting: the probe connection wakes the accept loop, which
@@ -956,101 +1001,155 @@ fn arm_before_open(hub: &Arc<Hub>) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
     (paused, release_tx)
 }
 
-#[test]
-fn route_paused_in_before_open_shares_one_relay_with_follow() {
-    let temp = Temp::new();
-    let workspace = temp.workspace();
-    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
-    let old = id(1);
-    let next = id(2);
-    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
-    let session = OpenSession::bind(&temp.dir, &next);
-    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
-        .as_object()
-        .unwrap()
-        .clone();
-    let (_read, writer, relays) = open_race(&level, &old);
-    // The client command pauses after its opening, before its connect;
-    // the redirect pauses in the re-armed hook once it too is about to
-    // open, still having published nothing.
-    let (paused_first, release_first) = arm_before_open(&hub);
-    let (route_done_tx, route_done) = mpsc::channel();
+/// Spawns `job` on a worker: signals `started` immediately before running
+/// it and `done` after it returns, so the test knows the opener reached
+/// its call before releasing the parked one.
+fn spawn_opener(
+    job: impl FnOnce() + Send + 'static,
+    name: &str,
+) -> (mpsc::Receiver<()>, mpsc::Receiver<()>) {
+    let (started_tx, started) = mpsc::channel();
+    let (done_tx, done) = mpsc::channel();
     thread::Builder::new()
-        .name("race-route".to_owned())
-        .spawn({
-            let hub = Arc::clone(&hub);
-            let writer = Arc::clone(&writer);
-            let relays = Arc::clone(&relays);
-            let next = next.clone();
-            move || {
-                let stripped = json!({"id": "c_cmd", "command": "tools", "args": {}})
-                    .as_object()
-                    .unwrap()
-                    .clone();
-                crate::relay::route(
-                    &CommandId("c_cmd".to_owned()),
-                    &next,
-                    stripped,
-                    &hub,
-                    &writer,
-                    &relays,
-                    None,
-                    false,
-                );
-                route_done_tx.send(()).unwrap_or(());
-            }
+        .name(name.to_owned())
+        .spawn(move || {
+            started_tx.send(()).unwrap_or(());
+            job();
+            done_tx.send(()).unwrap_or(());
         })
         .unwrap();
+    (started, done)
+}
+
+/// Parks the first opener in the open hook, then the second in the
+/// re-armed hook, releases them, and joins both: the two opener orders
+/// share this choreography. Without the gate both wait past their checks,
+/// each about to publish; with it the second queues behind the first on
+/// the gate instead of pausing, and the wait below times out. When the
+/// waiter is the redirect it pauses in the hook once the gate frees it;
+/// when it is the command it takes the existing relay outright.
+fn race_openers(
+    hub: &Arc<Hub>,
+    first: impl FnOnce() + Send + 'static,
+    second: impl FnOnce() + Send + 'static,
+    second_is_follow: bool,
+) {
+    let (paused_first, release_first) = arm_before_open(hub);
+    let (_started_first, done_first) = spawn_opener(first, "race-first");
     assert!(
         paused_first.recv_timeout(OPEN_DEADLINE).is_ok(),
-        "route paused after its opening"
+        "the first opener parked after its opening"
     );
-    let (paused_second, release_second) = arm_before_open(&hub);
-    let (follow_done_tx, follow_done) = mpsc::channel();
-    thread::Builder::new()
-        .name("race-follow".to_owned())
-        .spawn({
-            let hub = Arc::clone(&hub);
-            let writer = Arc::clone(&writer);
-            let relays = Arc::clone(&relays);
-            let old = old.clone();
-            move || {
-                follow(&hub, &writer, &relays, &old);
-                follow_done_tx.send(()).unwrap_or(());
-            }
-        })
-        .unwrap();
-    // Without the gate both openers wait past their checks, each about
-    // to publish; with it follow queues behind route on the gate instead
-    // of pausing, and the wait below times out.
+    let (paused_second, release_second) = arm_before_open(hub);
+    let (started_second, done_second) = spawn_opener(second, "race-second");
+    // The first opener stays parked until the second reached its call: a
+    // thread that never started must not read as one queued on the gate.
+    assert!(
+        started_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+        "the second opener started"
+    );
     if paused_second.recv_timeout(OPEN_DEADLINE).is_err() {
         drop(release_first);
         assert!(
-            route_done.recv_timeout(OPEN_DEADLINE).is_ok(),
-            "route finished"
+            done_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "the first opener finished"
         );
+        if second_is_follow {
+            assert!(
+                paused_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "the waiter parked after the first published"
+            );
+            drop(release_second);
+        }
         assert!(
-            paused_second.recv_timeout(OPEN_DEADLINE).is_ok(),
-            "follow paused after route published"
-        );
-        drop(release_second);
-        assert!(
-            follow_done.recv_timeout(OPEN_DEADLINE).is_ok(),
-            "follow took the existing relay"
+            done_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "the second opener finished"
         );
     } else {
-        drop(release_second);
-        assert!(
-            follow_done.recv_timeout(OPEN_DEADLINE).is_ok(),
-            "follow finished"
-        );
-        drop(release_first);
-        assert!(
-            route_done.recv_timeout(OPEN_DEADLINE).is_ok(),
-            "route finished"
+        // No gate: both openers are parked before publishing. Release
+        // the redirect first: it is still before its check in one order
+        // and publishes while the command is still parked; the command
+        // is already past its check, so it publishes too.
+        if second_is_follow {
+            drop(release_second);
+            assert!(
+                done_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "the second opener finished"
+            );
+            drop(release_first);
+            assert!(
+                done_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "the first opener finished"
+            );
+        } else {
+            drop(release_first);
+            assert!(
+                done_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "the first opener finished"
+            );
+            drop(release_second);
+            assert!(
+                done_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "the second opener finished"
+            );
+        }
+    }
+}
+
+/// The client command for `next` as a worker job: a `tools` command, so
+/// the kept level can only come from the redirect's transfer.
+fn route_job(
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<crate::relay::Relays>>,
+    next: &str,
+) -> impl FnOnce() + Send + 'static {
+    let hub = Arc::clone(hub);
+    let writer = Arc::clone(writer);
+    let relays = Arc::clone(relays);
+    let next = next.to_owned();
+    move || {
+        let stripped = json!({"id": "c_cmd", "command": "tools", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone();
+        crate::relay::route(
+            &CommandId("c_cmd".to_owned()),
+            &next,
+            stripped,
+            &hub,
+            &writer,
+            &relays,
+            None,
+            false,
         );
     }
-    let held = lock(&relays);
+}
+
+/// The redirect from `old` as a worker job.
+fn follow_job(
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<crate::relay::Relays>>,
+    old: &str,
+) -> impl FnOnce() + Send + 'static {
+    let hub = Arc::clone(hub);
+    let writer = Arc::clone(writer);
+    let relays = Arc::clone(relays);
+    let old = old.to_owned();
+    move || follow(&hub, &writer, &relays, &old)
+}
+
+/// Asserts the race published exactly one live relay for `next`: one
+/// entry, one accept, the kept level, and both lines on the one
+/// connection — the client's command once, and the transfer's subscribe.
+fn assert_single_relay(
+    relays: &Arc<Mutex<crate::relay::Relays>>,
+    session: &OpenSession,
+    next: &str,
+    level: &Map<String, Value>,
+) {
+    let held = lock(relays);
     let live = held
         .entries
         .iter()
@@ -1058,15 +1157,18 @@ fn route_paused_in_before_open_shares_one_relay_with_follow() {
         .count();
     assert_eq!(live, 1, "one relay for the session, not one per opener");
     assert_eq!(held.entries.len(), 1, "nothing else published");
+    // The accept loop can lag behind the openers: the wait holds until
+    // the connection it counted arrived.
+    session.await_accepts(1, "the session's connection");
     assert_eq!(session.accepts(), 1, "the session saw one connection");
     assert_eq!(
-        held.subscription(&next),
-        Some(level),
+        held.subscription(next),
+        Some(level.clone()),
         "the kept level reached the relay"
     );
-    // Both lines land on the one connection: the client's command and
-    // the transfer's subscribe. A serve thread lagging behind the
-    // openers cannot hide one: the wait holds until both arrived.
+    drop(held);
+    // A serve thread lagging behind the openers cannot hide a line: the
+    // wait holds until both arrived.
     session.await_lines(2, "the command and the transfer");
     let received = lock(&session.received);
     assert_eq!(received.len(), 1, "one connection carried every line");
@@ -1082,6 +1184,37 @@ fn route_paused_in_before_open_shares_one_relay_with_follow() {
         "the transfer's subscribe reached it: {:?}",
         received[0]
     );
+    let commands = received
+        .iter()
+        .flatten()
+        .filter(|line| line.contains("\"c_cmd\""))
+        .count();
+    assert_eq!(commands, 1, "the client command reached the session once");
+}
+
+#[test]
+fn route_paused_in_before_open_shares_one_relay_with_follow() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let old = id(1);
+    let next = id(2);
+    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    let session = OpenSession::bind(&temp.dir, &next);
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let (_read, writer, relays) = open_race(&level, &old);
+    // The client command parks first; the redirect parks in the re-armed
+    // hook once it too is about to open, still having published nothing.
+    race_openers(
+        &hub,
+        route_job(&hub, &writer, &relays, &next),
+        follow_job(&hub, &writer, &relays, &old),
+        true,
+    );
+    assert_single_relay(&relays, &session, &next, &level);
     session.close();
 }
 
@@ -1099,105 +1232,14 @@ fn follow_paused_in_before_open_shares_one_relay_with_route() {
         .unwrap()
         .clone();
     let (_read, writer, relays) = open_race(&level, &old);
-    // The redirect pauses after its opening; the client command runs on
-    // another thread meanwhile, and pauses in the re-armed hook once it
-    // too has passed its check without publishing.
-    let (paused_first, release_first) = arm_before_open(&hub);
-    let (follow_done_tx, follow_done) = mpsc::channel();
-    thread::Builder::new()
-        .name("race-follow".to_owned())
-        .spawn({
-            let hub = Arc::clone(&hub);
-            let writer = Arc::clone(&writer);
-            let relays = Arc::clone(&relays);
-            let old = old.clone();
-            move || {
-                follow(&hub, &writer, &relays, &old);
-                follow_done_tx.send(()).unwrap_or(());
-            }
-        })
-        .unwrap();
-    assert!(
-        paused_first.recv_timeout(OPEN_DEADLINE).is_ok(),
-        "follow paused after its opening"
+    // The redirect parks first; the client command parks in the re-armed
+    // hook once it too is about to open, still having published nothing.
+    race_openers(
+        &hub,
+        follow_job(&hub, &writer, &relays, &old),
+        route_job(&hub, &writer, &relays, &next),
+        false,
     );
-    let (paused_second, release_second) = arm_before_open(&hub);
-    let (route_done_tx, route_done) = mpsc::channel();
-    thread::Builder::new()
-        .name("race-route".to_owned())
-        .spawn({
-            let hub = Arc::clone(&hub);
-            let writer = Arc::clone(&writer);
-            let relays = Arc::clone(&relays);
-            let next = next.clone();
-            move || {
-                let stripped = json!({"id": "c_cmd", "command": "tools", "args": {}})
-                    .as_object()
-                    .unwrap()
-                    .clone();
-                crate::relay::route(
-                    &CommandId("c_cmd".to_owned()),
-                    &next,
-                    stripped,
-                    &hub,
-                    &writer,
-                    &relays,
-                    None,
-                    false,
-                );
-                route_done_tx.send(()).unwrap_or(());
-            }
-        })
-        .unwrap();
-    // Without the gate both openers wait past their checks, each about
-    // to publish; with it route queues behind follow on the gate instead
-    // of pausing, and the wait below times out.
-    if paused_second.recv_timeout(OPEN_DEADLINE).is_err() {
-        drop(release_first);
-        assert!(
-            follow_done.recv_timeout(OPEN_DEADLINE).is_ok(),
-            "follow finished"
-        );
-        assert!(
-            route_done.recv_timeout(OPEN_DEADLINE).is_ok(),
-            "route took the existing relay"
-        );
-    } else {
-        drop(release_first);
-        assert!(
-            follow_done.recv_timeout(OPEN_DEADLINE).is_ok(),
-            "follow finished"
-        );
-        drop(release_second);
-        assert!(
-            route_done.recv_timeout(OPEN_DEADLINE).is_ok(),
-            "route finished"
-        );
-    }
-    let held = lock(&relays);
-    let live = held
-        .entries
-        .iter()
-        .filter(|entry| entry.session == next && entry.retiring.is_none())
-        .count();
-    assert_eq!(live, 1, "one relay for the session, not one per opener");
-    assert_eq!(held.entries.len(), 1, "nothing else published");
-    assert_eq!(session.accepts(), 1, "the session saw one connection");
-    assert_eq!(
-        held.subscription(&next),
-        Some(level),
-        "the kept level reached the relay"
-    );
-    // Both lines land on the one connection: the transfer's subscribe
-    // and the client's command. A serve thread lagging behind the
-    // openers cannot hide one: the wait holds until both arrived.
-    session.await_lines(2, "the transfer and the command");
-    let received = lock(&session.received);
-    let commands = received
-        .iter()
-        .flatten()
-        .filter(|line| line.contains("\"c_cmd\""))
-        .count();
-    assert_eq!(commands, 1, "the client command reached the session once");
+    assert_single_relay(&relays, &session, &next, &level);
     session.close();
 }
