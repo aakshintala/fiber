@@ -13,7 +13,7 @@
 
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
@@ -1314,7 +1314,7 @@ fn a_resume_detects_an_outside_change_with_a_diff() {
 }
 
 /// Writes the `late` skill into `workspace`'s `.agents/skills/`.
-fn late_skill(workspace: &PathBuf) {
+fn late_skill(workspace: &Path) {
     let dir = workspace.join(".agents/skills/late");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
