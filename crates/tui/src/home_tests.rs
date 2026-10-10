@@ -112,6 +112,25 @@ fn a_status_that_began_before_the_held_one_changes_nothing() {
 }
 
 #[test]
+fn a_status_in_the_same_millisecond_loses_to_a_held_waiting_one() {
+    let mut sessions = Sessions::default();
+    let id = "s_aaaaaaaaaaaaaaaa";
+    let waiting = json!({"state": "waiting", "since": 9,
+        "waiting": {"request_id": "r_1", "kind": "approval", "summary": "x"}});
+    let tool = json!({"state": "tool", "since": 9, "tool": "bash"});
+    sessions.status(from_status(&envelope(id, tool.clone())));
+    // Waiting replaces a tool that began in the same millisecond.
+    sessions.status(from_status(&envelope(id, waiting.clone())));
+    assert_eq!(shown(&sessions), ["!  fix the parser  approval: x"]);
+    // The late copy of the tool does not replace the waiting.
+    sessions.status(from_status(&envelope(id, tool)));
+    assert_eq!(shown(&sessions), ["!  fix the parser  approval: x"]);
+    // Another waiting status in that millisecond folds.
+    sessions.status(from_status(&envelope(id, waiting)));
+    assert_eq!(shown(&sessions), ["!  fix the parser  approval: x"]);
+}
+
+#[test]
 fn a_new_status_goes_after_the_rows_already_there() {
     let mut sessions = Sessions::default();
     for session in ["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"] {

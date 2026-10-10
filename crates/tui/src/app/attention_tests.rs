@@ -231,7 +231,10 @@ fn it_clears_when_the_row_stops_waiting() {
     app.on_line(waiting_row(SESSION, "approval"));
     app.on_line(attention(SESSION, "waiting"));
     assert_eq!(app.title(), "! fiber · approval");
-    app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
+    app.on_line(live(
+        SESSION,
+        serde_json::json!({"state": "streaming", "since": 1}),
+    ));
     assert_eq!(app.title(), "fiber");
 }
 
@@ -333,10 +336,13 @@ fn a_seen_row_that_stops_waiting_stays_cleared() {
     app.on_line(waiting_row(SESSION, "approval"));
     app.on_line(attention(SESSION, "waiting"));
     assert_eq!(app.title(), "! fiber · approval");
-    app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
+    app.on_line(live(
+        SESSION,
+        serde_json::json!({"state": "streaming", "since": 1}),
+    ));
     assert_eq!(app.title(), "fiber");
     // Waiting again without a new attention line never re-shows.
-    app.on_line(waiting_row(SESSION, "question"));
+    app.on_line(waiting_row_since(SESSION, "question", 2));
     assert_eq!(app.title(), "fiber");
     // A new attention line titles again.
     app.on_line(attention(SESSION, "waiting"));
