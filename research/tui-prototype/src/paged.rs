@@ -502,13 +502,8 @@ pub fn thumb_jumps(
             start.saturating_sub(m * vh),
             (start + vh + m * vh).min(s[n]),
         );
-        for p in known
-            .iter_mut()
-            .take(at(&s, hi.saturating_sub(1).max(lo)) + 1)
-            .skip(at(&s, lo))
-        {
-            *p = true;
-        }
+        let end = (at(&s, hi.saturating_sub(1).max(lo)) + 1).min(known.len());
+        known[at(&s, lo).min(end)..end].fill(true);
         let s = prefix(&est(&known));
         let t = thumb(s[ap] + off, s[n], vh);
         dev = dev.max(t.abs_diff(thumb(rs[ap] + off, real_total, vh)));

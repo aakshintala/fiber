@@ -69,19 +69,20 @@ if [ "$scope" != platform ]; then
     cargo xtask unsafe-table
     cargo xtask dependency-list
   fi
+  # research/tui-prototype is not a workspace member, so nothing else here lints
+  # it, and a diff that touches only research/ is mode docs. It has its own
+  # manifest and target directory; lint it when the diff touches it
+  # (docs/ci.md, "On every pull request that changes code").
+  prototype=research/tui-prototype
+  if { git diff --name-only "$(git merge-base "$base" HEAD)"; git ls-files --others --exclude-standard; } | grep -q "^$prototype/"; then
+    echo "== tui-prototype: cargo fmt --check, cargo clippy"
+    cargo fmt --check --manifest-path "$prototype/Cargo.toml"
+    cargo clippy --all-targets --manifest-path "$prototype/Cargo.toml" -- -D warnings
+  fi
   if [ "$mode" != docs ]; then
     if [ ${#package_args[@]} -gt 0 ]; then
       echo "== cargo fmt --check"
       cargo fmt --check "${package_args[@]}"
-    fi
-    # research/tui-prototype is not a workspace member, so nothing above lints
-    # it. It has its own manifest and target directory; lint it when the diff
-    # touches it (docs/ci.md, "On every pull request that changes code").
-    prototype=research/tui-prototype
-    if { git diff --name-only "$(git merge-base "$base" HEAD)"; git ls-files --others --exclude-standard; } | grep -q "^$prototype/"; then
-      echo "== tui-prototype: cargo fmt --check, cargo clippy"
-      cargo fmt --check --manifest-path "$prototype/Cargo.toml"
-      cargo clippy --all-targets --manifest-path "$prototype/Cargo.toml" -- -D warnings
     fi
     echo "== file size, signal sites, compiled-in list, image and tui isolation"
     cargo xtask line-cap
