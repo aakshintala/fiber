@@ -285,36 +285,32 @@ const STOP_WITHIN: Duration = Duration::from_secs(5);
 /// the tag still open converts nothing.
 #[test]
 fn a_stop_after_the_first_piece_takes_no_further_piece_of_a_quadratic_tag() {
-    within(
-        "the stopped copy",
-        STOP_WITHIN,
-        move || {
-            let mut page = String::from("<a");
-            for n in 0..1_000_000u32 {
-                page.push_str(&format!(" a{n}"));
-            }
-            page.push_str(">t</a>");
-            assert!(page.len() < 10 << 20, "the page is under the cap");
-            let dir = TempDir::new("fiber-download");
-            let mut body = io::Cursor::new(page.into_bytes());
-            let checks = Cell::new(0);
-            let stopped = || {
-                checks.set(checks.get() + 1);
-                checks.get() > 1
-            };
-            let mut sink = html_sink(dir.path(), None, &stopped);
-            let error = copy(&mut body, 10 << 20, &mut sink).unwrap_err();
-            assert_eq!(error.to_string(), "the fetch was stopped");
-            // One check per piece: the first piece taken, the second
-            // refused, so the converter's work on the page stops there.
-            assert_eq!(checks.get(), 2, "the checks the sink saw");
-            assert_eq!(
-                sink.html.unwrap().finish(),
-                "",
-                "a tag still open converts nothing"
-            );
-        },
-    );
+    within("the stopped copy", STOP_WITHIN, move || {
+        let mut page = String::from("<a");
+        for n in 0..1_000_000u32 {
+            page.push_str(&format!(" a{n}"));
+        }
+        page.push_str(">t</a>");
+        assert!(page.len() < 10 << 20, "the page is under the cap");
+        let dir = TempDir::new("fiber-download");
+        let mut body = io::Cursor::new(page.into_bytes());
+        let checks = Cell::new(0);
+        let stopped = || {
+            checks.set(checks.get() + 1);
+            checks.get() > 1
+        };
+        let mut sink = html_sink(dir.path(), None, &stopped);
+        let error = copy(&mut body, 10 << 20, &mut sink).unwrap_err();
+        assert_eq!(error.to_string(), "the fetch was stopped");
+        // One check per piece: the first piece taken, the second
+        // refused, so the converter's work on the page stops there.
+        assert_eq!(checks.get(), 2, "the checks the sink saw");
+        assert_eq!(
+            sink.html.unwrap().finish(),
+            "",
+            "a tag still open converts nothing"
+        );
+    });
 }
 
 #[test]
