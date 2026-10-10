@@ -78,6 +78,19 @@ the session starts in a new worktree of the workspace, by the same rules a
 delegate's worktree follows (`docs/invocation.md`, "Isolation"). Outside a git
 repository the switch is not shown.
 
+**The keyboard reaches every part of home.** Focus runs top to bottom: the
+entry bar, the chip row, the session list. ↓ from the entry bar focuses the
+chip row, on the chip focused there last, the workspace chip at first. ← and →
+move between the chips and stop at the ends. Enter on a focused chip does what
+a click does: the workspace chip opens the workspace picker, the new worktree
+switch toggles, the model chip opens the model picker, and the thinking chip
+opens it at the model's thinking chips. The chip stays focused behind the
+picker. A second ↓ focuses the first session row, and ↓ moves down the rows.
+↑ goes back the same way: from the first row to the chip focused last, and
+from the chip row to the entry bar. With no session, ↓ on the chip row does
+nothing. Typing or Backspace while a chip is focused goes to the entry bar.
+A focused chip is drawn as a hovered one ("Mouse and hover").
+
 The first frame draws at once. The session list fills in when the hub's feed
 arrives (`docs/performance.md`).
 
@@ -1192,6 +1205,8 @@ of them when a key arrives:
 - Conversation: focus is in the conversation.
 - Steering: a queued steering message is selected.
 - Input: the input box has the keyboard, home with nothing open included.
+  On home, ↑, ↓, ← and → move between the entry bar, the chip row and the
+  session list ("Home"); like an overlay's own keys, they are not bindings.
 
 A global action acts in all six. The rest act only where they are listed:
 
@@ -1312,9 +1327,26 @@ screens").
 ### Logging in
 
 `/login` logs in from the terminal with the same flow as `fiber login`. It
-lists providers and extension credentials. An API key goes in a hidden field
-in a bottom panel. OAuth opens the browser and also shows the URL to copy, for
-SSH.
+opens an overlay ("Look", "Overlays") titled "Log in" with a ✕: the providers under
+"Providers", each tagged `browser` for OAuth or `key` for an API key, then
+the extension credentials under "Secrets", the first row focused.
+
+Once a provider is picked, each step replaces the whole overlay; nothing is
+added under the list. The title is the provider's name and the list is not
+drawn. The steps keep the provider list's height and share one width, so the
+overlay does not jump between them; the URL is cut to fit rather than
+widening it. Esc goes back to the provider list.
+
+- **The browser wait.** OAuth opens the browser and also shows the URL to
+  copy, for SSH: "Open this URL to log in to anthropic:", the URL cut from
+  the left to keep its tail, and "Waiting for the browser…" dim. Footer:
+  "y copy URL · Esc back".
+- **Key entry.** "Label (--as): default." and "Key for google:", the key
+  masked as dots with a block cursor. Tab moves between the key and the
+  label. Footer: "Tab key or label · Enter submit · Esc back".
+- **Done.** "✓ Logged in to anthropic." in `success`. Footer: "Esc back".
+- **Failed.** "Login to anthropic failed: token expired.", the reason in
+  `error`. Footer: "Esc back".
 
 ### Quit
 
@@ -1453,7 +1485,7 @@ tui       212   9,804
 
 Every surface drawn over the screen shares one frame, the input box's: the
 key map, the quit question, home's delete question and workspace picker, the
-Ctrl+R panel, a notice's whole text, the `/` and `@` completion panels, and
+`/login` overlay, the Ctrl+R panel, a notice's whole text, the `/` and `@` completion panels, and
 the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,
@@ -1520,9 +1552,9 @@ The roles, in order, with the dark theme's values:
 | `muted` | what the doc calls dim: READY, labels and hints, summary lines and results, the ▣ line, block quote bars, grips, the logo's counters | `text`, dim |
 | `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's stripe, title and selection bar | `#6eaafe` |
 | `heading` | markdown headings | `#ff9f43` |
-| `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded | `#6eaafe` |
+| `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded, a login's ✓ | `#6eaafe` |
 | `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` |
-| `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown | `#ff5d73` |
+| `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown, a failed login's reason | `#ff5d73` |
 | `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` |
 | `added` | lines added: an edited file's `+N`, added lines in a diff | `#6eaafe` |
 | `removed` | lines removed: an edited file's `−N`, removed lines in a diff | `#ff5d73` |
