@@ -11,14 +11,14 @@ expression: "screen(&app, 80, 24)"
                      ▀▄ █     ▄▄█▄▄ █▀▀█  █▄▄▄▄ █   █ 0.0.1
 
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-› █? for shortcuts
+› fix█
 
 
-[w]  [no model]  [thinking: default]  enter starts a session
+[w]  [ ] new worktree  [no model]  [thinking: default]  enter starts a session
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-Delete fix the parser (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete ·
-esc keep
-○  fix the parser                                                              ✕
+●  first                                                                       ✕
+✓  second                                                                      ✕
+
 
 
 

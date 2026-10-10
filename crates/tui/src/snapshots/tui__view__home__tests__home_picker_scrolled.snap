@@ -26,4 +26,4 @@ expression: "screen(&app, 80, 24)"
 ●  fix the parser                                                              ✕
 ●  fix the parser                                                              ✕
 ●  fix the parser                                                              ✕
-           ↓ the session list · F1 the key map · Ctrl+C twice to quit
+          ↓ chips and sessions · F1 the key map · Ctrl+C twice to quit

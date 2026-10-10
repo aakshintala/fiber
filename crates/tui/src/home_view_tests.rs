@@ -1630,3 +1630,238 @@ fn short_home_slash_keeps_its_selection_barred() {
     assert!(shown.contains("above"), "{shown}");
     assert!(shown.contains("of 23"), "{shown}");
 }
+
+/// A git home at 80x24 with two live rows in the launch project and no
+/// toggle: the chip row, then the rows.
+fn focus_home() -> App {
+    let mut app = git_home(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "first", live()));
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "second", idle()));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    app
+}
+
+/// Renders home and checks every chip target's cells: the `tinted`
+/// chip carries the hover tint and no reversal, the others neither.
+fn check_chips(app: &App, tinted: Option<Spot>) {
+    use ratatui::style::Modifier;
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(app, area, &mut buf, None);
+    let hover = crate::theme::Role::Hover.color();
+    for target in &targets {
+        let crate::mouse::TargetId::Home(spot) = target.id else {
+            continue;
+        };
+        if !spot.is_chip() {
+            continue;
+        }
+        for x in target.rect.x..target.rect.x.saturating_add(target.rect.width) {
+            let cell = &buf[(x, target.rect.y)];
+            if tinted == Some(spot) {
+                assert_eq!(cell.bg, hover, "the focused chip is tinted");
+                assert!(
+                    !cell.modifier.contains(Modifier::REVERSED),
+                    "the focused chip is never reversed"
+                );
+            } else {
+                assert_ne!(cell.bg, hover, "no other chip is tinted");
+                assert!(
+                    !cell.modifier.contains(Modifier::REVERSED),
+                    "no chip is reversed"
+                );
+            }
+        }
+    }
+    assert!(
+        targets
+            .iter()
+            .any(|target| matches!(target.id, crate::mouse::TargetId::Home(_))),
+        "chips draw targets"
+    );
+}
+
+#[test]
+fn home_focus_entry() {
+    let app = focus_home();
+    check_chips(&app, None);
+    insta::assert_snapshot!("home_focus_entry", screen(&app, 80, 24));
+}
+
+#[test]
+fn home_focus_chip() {
+    let mut app = focus_home();
+    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
+    check_chips(&app, Some(Spot::Workspace));
+    let drawn = screen(&app, 80, 24);
+    assert!(drawn.contains('█'), "the entry bar keeps its cursor");
+    insta::assert_snapshot!("home_focus_chip", drawn);
+}
+
+#[test]
+fn home_focus_chip_typing() {
+    let mut app = focus_home();
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Down, now);
+    type_draft(&mut app, "fix");
+    check_chips(&app, None);
+    insta::assert_snapshot!("home_focus_chip_typing", screen(&app, 80, 24));
+}
+
+#[test]
+fn home_focus_first_row() {
+    use ratatui::style::Modifier;
+
+    let mut app = focus_home();
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Down, now);
+    app.on_key(Key::Down, now);
+    check_chips(&app, None);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let drawn = screen(&app, 80, 24);
+    let at = |name: &str| {
+        drawn
+            .lines()
+            .position(|row| row.contains(name))
+            .and_then(|row| u16::try_from(row).ok())
+            .unwrap_or_else(|| panic!("{name} draws"))
+    };
+    assert!(buf[(0, at("first"))].modifier.contains(Modifier::REVERSED));
+    assert!(!buf[(0, at("second"))].modifier.contains(Modifier::REVERSED));
+    insta::assert_snapshot!("home_focus_first_row", drawn);
+}
+
+/// A git home at 80x24 with hover off and two live rows.
+fn focus_home_no_hover() -> App {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: true,
+        hover: false,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        ..Default::default()
+    });
+    app.set_size(80, 24);
+    app.on_line(hello());
+    app.on_line(status("s_aaaaaaaaaaaaaaaa", "first", live()));
+    app.on_line(status("s_bbbbbbbbbbbbbbbb", "second", idle()));
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    app.drawn(&targets);
+    app
+}
+
+#[test]
+fn a_focused_chip_is_tinted_with_hover_off() {
+    let mut app = focus_home_no_hover();
+    app.on_key(Key::Down, fakes::clock::FakeClock::new().now());
+    check_chips(&app, Some(Spot::Workspace));
+}
+
+#[test]
+fn a_focused_model_chip_matches_a_hovered_one() {
+    let mut app = focus_home();
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Down, now);
+    app.on_edit(crate::keys::Edit::Right);
+    app.on_edit(crate::keys::Edit::Right);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Model))
+    );
+    let area = Rect::new(0, 0, 80, 24);
+    let mut focused = Buffer::empty(area);
+    let targets = render(&app, area, &mut focused, None);
+    let rect = targets
+        .iter()
+        .find_map(|target| match target.id {
+            crate::mouse::TargetId::Home(Spot::Model) => Some(target.rect),
+            _ => None,
+        })
+        .expect("the model chip draws a target");
+    // The same frame with the pointer over the model chip: its cells
+    // read the same.
+    let plain = focus_home();
+    let mut hovered = Buffer::empty(area);
+    render(&plain, area, &mut hovered, Some((rect.x, rect.y)));
+    for x in rect.x..rect.x.saturating_add(rect.width) {
+        assert_eq!(
+            focused[(x, rect.y)],
+            hovered[(x, rect.y)],
+            "cell {x} matches a hovered chip"
+        );
+    }
+}
+
+#[test]
+fn a_chip_past_the_box_has_no_target() {
+    let model = "m".repeat(36);
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        git: false,
+        hover: true,
+        version: "0.0.1".to_owned(),
+        model: Some(model.clone()),
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        ..Default::default()
+    });
+    app.set_size(40, 24);
+    let area = Rect::new(0, 0, 40, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    let chips: Vec<(Spot, ratatui::layout::Rect)> = targets
+        .into_iter()
+        .filter_map(|target| match target.id {
+            crate::mouse::TargetId::Home(spot) if spot.is_chip() => Some((spot, target.rect)),
+            _ => None,
+        })
+        .collect();
+    // The thinking chip starts past the box's right edge: no target.
+    assert!(
+        chips.iter().all(|(spot, _)| *spot != Spot::Thinking),
+        "a chip past the box has no target"
+    );
+    // The cut chip keeps its visible cells, ending at the box edge.
+    let (_, rect) = chips
+        .iter()
+        .find(|(spot, _)| *spot == Spot::Model)
+        .expect("the model chip draws");
+    assert_eq!(rect.x.saturating_add(rect.width), 40);
+    // → from the last drawn chip stays there.
+    app.drawn(&home_only(&app, area, &mut Buffer::empty(area)));
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Down, now);
+    app.on_edit(crate::keys::Edit::Right);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Model))
+    );
+    app.on_edit(crate::keys::Edit::Right);
+    assert_eq!(
+        app.focused(),
+        Some(crate::mouse::TargetId::Home(Spot::Model))
+    );
+}
