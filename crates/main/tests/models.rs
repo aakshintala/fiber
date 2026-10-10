@@ -27,6 +27,24 @@ use fakes::Watchdog;
 use serde_json::{Value, json};
 use support::{Deadline, group_alive};
 
+/// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
+/// directory is healthy: a directory with no record is damaged and its
+/// providers are left out (`docs/extensions.md`, "Installing").
+fn write_record(dir: &std::path::Path) {
+    let text = std::fs::read_to_string(dir.join("extension.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
+    let version = manifest
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("v0.0.0");
+    std::fs::write(
+        dir.join(".fiber.json"),
+        serde_json::json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}}).to_string(),
+    )
+    .unwrap();
+}
+
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
@@ -94,6 +112,7 @@ impl Setup {
             json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
         )
         .unwrap();
+        write_record(&dir);
         fs::write(
             dir.join("providers").join("acme.json"),
             json!({
@@ -448,12 +467,9 @@ fn models_lists_a_thousand_openrouter_models_within_the_memory_cap() {
 fn models_lists_every_first_party_model_and_drops_none() {
     let setup = Setup::new();
     for package in ["anthropic", "gemini", "muse", "openai", "opencode"] {
-        support::package::copy_package(
-            package,
-            &setup.home().join("extensions").join(package),
-            "",
-            "",
-        );
+        let dest = setup.home().join("extensions").join(package);
+        support::package::copy_package(package, &dest, "", "");
+        write_record(&dest);
     }
     let run = setup.fiber(&["models", "--json"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
