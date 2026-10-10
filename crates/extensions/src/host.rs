@@ -398,6 +398,9 @@ fn exec_request(spec: &Table, workspace: &Path, cap: usize) -> mlua::Result<exec
         args,
         cwd,
         cap,
+        // In Fiber's process group, so terminal prompts still work and
+        // Ctrl-C at the terminal still reaches the program as it does today.
+        own_group: true,
     })
 }
 

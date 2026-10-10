@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 use contract::clock::Clock as _;
 use fakes::clock::FakeClock;
 
-use super::{ExecRequest, GROUP_POLL, group_alive, kill_every_group, refused_group, signal_name};
+use super::{
+    DRAIN, ExecRequest, GROUP_POLL, group_alive, kill_every_group, refused_group, signal_name,
+};
 /// How long a test waits on the run before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -60,6 +62,18 @@ fn request(program: &str, args: &[&str], cwd: PathBuf, cap: usize) -> ExecReques
         args: args.iter().map(|s| (*s).into()).collect(),
         cwd,
         cap,
+        own_group: true,
+    }
+}
+
+/// `sh -c script` staying in the test's process group: no group of its own.
+fn sh_pid(script: &str, cwd: PathBuf, cap: usize) -> ExecRequest {
+    ExecRequest {
+        program: "sh".into(),
+        args: vec!["-c".into(), script.into()],
+        cwd,
+        cap,
+        own_group: false,
     }
 }
 
@@ -720,4 +734,270 @@ fn a_missing_working_directory_is_not_found() {
         err.message
     );
     assert!(err.ran.is_none(), "a spawn failure never ran");
+}
+
+/// Without its own group the program stays in the test's process group:
+/// `ps` prints the test process's group, and the test surviving proves no
+/// group-wide signal ever went out.
+#[test]
+fn a_pid_mode_run_stays_in_the_test_process_group() {
+    let (_dir, cwd) = dir("fiber-exec-pid-group");
+    let clock = FakeClock::new();
+    let (_cancel, done) = spawn(
+        sh_pid("ps -o pgid= -p $$", cwd, CAP),
+        Arc::clone(&clock),
+        None,
+    );
+    let ran = done
+        .recv_timeout(DEADLINE)
+        .expect("waited {DEADLINE:?} for the pid-mode group run")
+        .expect("the pid-mode group run spawns");
+    let printed = String::from_utf8_lossy(&ran.stdout).trim().to_owned();
+    let pgid: u32 = printed.parse().expect("the pid-mode run prints its pgid");
+    let expected = u32::try_from(rustix::process::getpgrp().as_raw_pid())
+        .expect("the test's process group fits in a u32");
+    assert_eq!(
+        pgid, expected,
+        "a run without its own group stays in the test's group"
+    );
+}
+
+/// At its deadline a run without its own group is stopped by a signal to
+/// its pid alone: the test process shares the group and survives, and the
+/// program is gone afterwards.
+#[test]
+fn a_pid_mode_deadline_stop_signals_only_the_pid() {
+    let (_dir, cwd) = dir("fiber-exec-pid-deadline");
+    let clock = FakeClock::new();
+    let ready = ready_in(&cwd);
+    let script = format!(
+        "trap '' TERM\necho $$ > '{}'\nwhile :; do :; done\n",
+        ready.path().display()
+    );
+    let deadline = clock.now() + Duration::from_millis(500);
+    let (_cancel, done) = spawn(
+        sh_pid(&script, cwd, CAP),
+        Arc::clone(&clock),
+        Some(deadline),
+    );
+    let pid = ready.wait(DEADLINE)[0];
+    assert!(
+        clock.await_parked(clock.now() + GROUP_POLL, DEADLINE),
+        "waited {DEADLINE:?} for the pid-mode run to park while running"
+    );
+    // Past the deadline the run stops, although nothing dropped its cancel.
+    clock.advance(Duration::from_millis(1000));
+    let kill_at = clock.now() + Duration::from_millis(800);
+    assert!(
+        clock.await_parked(kill_at, DEADLINE),
+        "waited {DEADLINE:?} for the pid-mode run to park for the 800 ms grace"
+    );
+    clock.advance(Duration::from_millis(800));
+    let outcome = done.recv_timeout(DEADLINE);
+    if outcome.is_err() {
+        kill_pid_now(pid);
+    }
+    let ran = outcome
+        .expect("waited {DEADLINE:?} for the timed-out pid-mode run")
+        .expect("the timed-out pid-mode run stops");
+    assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
+    assert!(ran.timed_out, "the deadline stopped the pid-mode run");
+    assert!(
+        !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
+        "the stopped program is gone"
+    );
+}
+
+/// A run without its own group is never listed: neither while it runs nor
+/// after it ends.
+#[test]
+fn a_pid_mode_run_is_never_listed() {
+    let (_dir, cwd) = dir("fiber-exec-pid-listed");
+    let clock = FakeClock::new();
+    let ready = ready_in(&cwd);
+    let script = format!(
+        "echo $$ > '{}'\nwhile :; do :; done\n",
+        ready.path().display()
+    );
+    let (cancel, done) = spawn(sh_pid(&script, cwd, CAP), Arc::clone(&clock), None);
+    let pid = ready.wait(DEADLINE)[0];
+    assert!(
+        !super::groups::listed().contains(&pid),
+        "a pid-mode run is never listed while it runs"
+    );
+    drop(cancel);
+    let outcome = done.recv_timeout(DEADLINE);
+    if outcome.is_err() {
+        kill_pid_now(pid);
+    }
+    outcome
+        .expect("waited {DEADLINE:?} for the cancelled pid-mode run")
+        .expect("the cancelled pid-mode run stops");
+    assert!(
+        !super::groups::listed().contains(&pid),
+        "a pid-mode run is never listed after it ends"
+    );
+}
+
+/// A program that cannot start reports its spawn failure, whatever group it
+/// would have run in: `NotFound` for a missing program.
+#[test]
+fn a_pid_mode_missing_program_reports_its_spawn_error() {
+    let (_dir, cwd) = dir("fiber-exec-pid-missing");
+    let clock = FakeClock::new();
+    let req = ExecRequest {
+        program: "fiber-definitely-missing-xyz".into(),
+        args: Vec::new(),
+        cwd,
+        cap: CAP,
+        own_group: false,
+    };
+    let (_cancel, done) = spawn(req, Arc::clone(&clock), None);
+    let err = done
+        .recv_timeout(DEADLINE)
+        .expect("waited {DEADLINE:?} for the missing pid-mode run")
+        .expect_err("a missing program never runs");
+    assert_eq!(err.code, contract::ErrorCode::NotFound);
+    assert!(err.ran.is_none(), "a spawn failure never ran");
+    assert!(
+        err.source
+            .as_ref()
+            .is_some_and(|source| source.kind() == std::io::ErrorKind::NotFound),
+        "the spawn failure carries its `NotFound` error"
+    );
+}
+
+/// `stop_pid` on a child that has exited but is not yet reaped reaps it and
+/// sends no signal. `waitid` with `EXITED | NOWAIT` blocks on a worker until
+/// the child has exited and leaves it waitable, so the child is
+/// deterministically unreaped when `stop_pid` runs.
+#[test]
+fn stop_pid_reaps_an_exited_child_without_signalling() {
+    use rustix::process::{Signal, WaitId, WaitIdOptions};
+    let (_dir, cwd) = dir("fiber-exec-stop-exited");
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "exit 0"])
+        .current_dir(&cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the exited child spawns");
+    let pid = rustix::process::Pid::from_raw(
+        i32::try_from(child.id()).expect("the exited child's pid fits in an i32"),
+    )
+    .expect("the exited child's pid is not zero");
+    fakes::within("the exited child", fakes::MUST_SUCCEED_WITHIN, move || {
+        rustix::process::waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOWAIT,
+        )
+        .expect("waitid sees the exit");
+    });
+    let shared = super::Shared::default();
+    assert!(
+        !super::stop_pid(&mut child, &shared, Signal::TERM),
+        "an exited child is reaped, never signalled"
+    );
+    // `Child::try_wait` caches the status, so a second one cannot tell a
+    // reap from an unreaped exit: the shared state shows the reap instead.
+    let inner = super::lock(&shared.inner);
+    assert!(inner.reaped, "the exited child is reaped afterwards");
+    assert!(
+        inner.status.as_ref().and_then(|status| status.code()) == Some(0),
+        "the reap keeps the child's own exit"
+    );
+}
+
+/// `stop_pid` on a running child signals it.
+#[test]
+fn stop_pid_signals_a_running_child() {
+    use rustix::process::Signal;
+    let (_dir, cwd) = dir("fiber-exec-stop-running");
+    let mut child = std::process::Command::new("sh")
+        .args(["-c", "while :; do :; done"])
+        .current_dir(&cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("the running child spawns");
+    let pid = child.id();
+    let shared = super::Shared::default();
+    assert!(
+        super::stop_pid(&mut child, &shared, Signal::TERM),
+        "a running child is signalled"
+    );
+    // SIGTERM ends the loop: the wait below, not the signal, is what the
+    // test fails on when the signal never went out.
+    let (done, waited) = mpsc::channel();
+    std::thread::spawn(move || done.send(child.wait()));
+    match waited.recv_timeout(DEADLINE) {
+        Ok(status) => {
+            use std::os::unix::process::ExitStatusExt as _;
+            assert_eq!(
+                status.expect("the running child reaps").signal(),
+                Some(15),
+                "the running child dies of SIGTERM"
+            );
+        }
+        Err(_) => {
+            kill_pid_now(pid);
+            panic!("waited {DEADLINE:?} for the signalled child to die");
+        }
+    }
+}
+
+/// A program that exits behind a helper holding the pipe ends at the drain,
+/// not the deadline: the reap starts the 2 s bound, and the run returns the
+/// child's own status with no timeout, well before any deadline.
+#[test]
+fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
+    let (_dir, cwd) = dir("fiber-exec-pid-drain");
+    let clock = FakeClock::new();
+    let holder_file = cwd.join("holder-pid");
+    // The background `sleep` inherits stdout and holds the pipe open after
+    // the shell exits, so EOF never comes on its own.
+    let script = format!(
+        "(exec sleep 1000) & echo $! > '{}'; echo out; exit 0",
+        holder_file.display()
+    );
+    let deadline = clock.now() + Duration::from_secs(60);
+    let (_cancel, done) = spawn(
+        sh_pid(&script, cwd, CAP),
+        Arc::clone(&clock),
+        Some(deadline),
+    );
+    // The reap starts the 2 s drain on the fake clock.
+    let drain_until = clock.now() + DRAIN;
+    assert!(
+        clock.mark_parked(drain_until, DEADLINE).is_some(),
+        "waited {DEADLINE:?} for the pid-mode run to park for the 2 s drain"
+    );
+    clock.advance(DRAIN);
+    let outcome = done.recv_timeout(DEADLINE);
+    // The holder keeps the pipe whether the wait ended or not: kill it by
+    // its pid file before asserting, so no `sleep` outlives the test.
+    let holder: Option<u32> = std::fs::read_to_string(&holder_file)
+        .ok()
+        .and_then(|text| text.trim().parse().ok());
+    if let Some(holder) = holder {
+        kill_pid_now(holder);
+    }
+    let ran = outcome
+        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the drained pid-mode run"))
+        .unwrap_or_else(|err| panic!("the drained pid-mode run returns: {}", err.message));
+    assert_eq!(
+        ran.exit_code,
+        Some(0),
+        "the run keeps the child's own status"
+    );
+    assert_eq!(ran.stdout, b"out\n");
+    assert!(!ran.timed_out, "no stop started, so no timeout");
+    assert!(
+        clock.now() < deadline,
+        "the run returned well before its deadline"
+    );
+    let holder = holder.expect("the script wrote its holder's pid");
+    assert!(fakes::pids_exit(&[holder], DEADLINE), "the holder is gone");
 }
