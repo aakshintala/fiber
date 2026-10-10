@@ -209,17 +209,16 @@ fn fold_line(line: &Envelope, fold: &mut Fold<'_>) -> Result<(), Error> {
         *fold.workspace = Some(started.workspace.clone());
         *fold.worktree = started.worktree.clone();
     } else if let Event::UsageRecorded(recorded) = &event {
-        // A correction keeps the model the call was first recorded at,
-        // which may be an earlier model than the latest one.
+        // The call's model is not the session's: the line may be a
+        // delegate's copy, a reviewer's call or an extension's.
         let ledger = if fold.own_segment {
             &mut *fold.ledger
         } else {
             &mut *fold.parent_ledger
         };
-        if !ledger.record(recorded) {
-            *fold.model = Some(recorded.model.clone());
-        }
+        ledger.record(recorded);
     } else if let Event::PreambleBuilt(built) = &event {
+        *fold.model = Some(built.model.clone());
         fold.credential.clone_from(&built.credential);
         *fold.preamble = Some(built.clone());
         // The settings the log last recorded, for a resume that switches

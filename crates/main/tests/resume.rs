@@ -23,8 +23,8 @@ use std::sync::mpsc;
 use std::thread;
 
 use contract::events::{
-    Event, SessionStarted, ToolCallRequested, ToolCallStarted, TurnStarted, UsageRecorded,
-    Variables, VariablesSource,
+    Event, SessionStarted, ToolCallRequested, ToolCallStarted, TurnStarted, Variables,
+    VariablesSource,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Origin, Sender};
 use contract::{ActionId, CommandId, SessionId, TurnId};
@@ -565,23 +565,20 @@ fn the_logs_last_model_beats_the_flag_and_the_default() {
         )
         .unwrap();
         log.append(
-            &Event::UsageRecorded(UsageRecorded {
-                generation_id: contract::GenerationId("g1".into()),
-                model: "fake/m2".into(),
-                tokens: contract::shapes::Tokens {
-                    input: 10,
-                    cache_read: 0,
-                    cache_write: Default::default(),
-                    output: 3,
+            &Event::ModelChanged(contract::events::ModelChanged {
+                before: contract::events::ModelSettings {
+                    model: "fake/m1".into(),
+                    thinking: None,
+                    cache_lifetime: contract::events::CacheLifetime::OneHour,
+                    credential: None,
                 },
-                web_searches: None,
-                cost: None,
-                subscription: None,
-                extension: None,
-                origin_session_id: None,
-                reviewer: None,
-                input_bytes: 1,
-                input_media: None,
+                after: contract::events::ModelSettings {
+                    model: "fake/m2".into(),
+                    thinking: None,
+                    cache_lifetime: contract::events::CacheLifetime::OneHour,
+                    credential: None,
+                },
+                source: contract::events::SwitchSource::Driver,
             }),
             Some(t()),
             Some(a("a_1")),

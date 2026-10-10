@@ -1474,18 +1474,43 @@ fn no_request_before_the_resume_leaves_previous_end_absent() {
 #[test]
 fn resumed_returns_the_first_workspace_and_the_last_model() {
     let history = History::new(vec![]);
+    history.write(preamble(None), None);
     history.write(History::usage("g1", "fake/first", Some(1.0)), Some("a_1"));
+    history.write(switched("fake/second", None, None), None);
     history.write(History::usage("g2", "fake/second", Some(2.0)), Some("a_2"));
 
-    let lines = history.lines();
-    assert_eq!(
-        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        ["session_started", "usage_recorded", "usage_recorded"]
-    );
     let resumed = r#loop::resumed(&history.dir).unwrap();
     assert_eq!(resumed.session, "s_1");
     assert_eq!(resumed.workspace, history.workspace);
     assert_eq!(resumed.model.as_deref(), Some("fake/second"));
+}
+
+#[test]
+fn a_delegates_copied_usage_is_not_the_sessions_model() {
+    let history = History::new(vec![]);
+    history.write(preamble(None), None);
+    history.write(History::usage("g1", MODEL, Some(1.0)), Some("a_1"));
+    let mut copy = History::usage("g2", "other/x", Some(2.0));
+    if let Event::UsageRecorded(recorded) = &mut copy {
+        recorded.origin_session_id = Some(SessionId("s_delegate".into()));
+    }
+    history.write(copy, Some("a_2"));
+    let resumed = r#loop::resumed(&history.dir).unwrap();
+    assert_eq!(resumed.model.as_deref(), Some(MODEL));
+}
+
+#[test]
+fn a_reviewers_usage_is_not_the_sessions_model() {
+    let history = History::new(vec![]);
+    history.write(preamble(None), None);
+    history.write(History::usage("g1", MODEL, Some(1.0)), Some("a_1"));
+    let mut review = History::usage("g2", "other/reviewer", Some(2.0));
+    if let Event::UsageRecorded(recorded) = &mut review {
+        recorded.reviewer = Some(contract::events::ReviewerUse::Handoff);
+    }
+    history.write(review, Some("a_2"));
+    let resumed = r#loop::resumed(&history.dir).unwrap();
+    assert_eq!(resumed.model.as_deref(), Some(MODEL));
 }
 
 #[test]

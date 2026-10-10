@@ -326,7 +326,7 @@ fn forked_gives_the_parents_model_credential_and_thinking_at_the_point() {
 }
 
 #[test]
-fn forked_without_a_build_reads_the_model_from_the_calls_and_switches() {
+fn forked_without_a_build_takes_the_model_from_switches_not_calls() {
     let (_home, sessions) = sessions("forked-bare");
     write_log(
         &sessions,
@@ -344,7 +344,7 @@ fn forked_without_a_build_reads_the_model_from_the_calls_and_switches() {
         ],
     );
     let at_usage = forked(&sessions.join(A), Seq(1)).unwrap();
-    assert_eq!(at_usage.model.as_deref(), Some("fake/model-1"));
+    assert_eq!(at_usage.model, None);
     assert!(at_usage.thinking.is_none());
     let at_switch = forked(&sessions.join(A), Seq(2)).unwrap();
     assert_eq!(at_switch.model.as_deref(), Some("fake/model-2"));
@@ -361,7 +361,7 @@ fn forked_leaves_a_garbage_line_past_the_point_unread() {
     let mut text = String::new();
     for line in [
         envelope(A, 0, None, None, &started("/w", None)),
-        envelope(A, 1, None, None, &usage("fake/model-1", "fiber-1", 7)),
+        envelope(A, 1, None, None, &built(None)),
     ] {
         text.push_str(&serde_json::to_string(&line).unwrap());
         text.push('\n');
