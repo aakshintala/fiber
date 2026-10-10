@@ -276,6 +276,35 @@ fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
 }
 
 #[test]
+fn timed_output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
+    let dir = TempDir::new("fiber-bench-timed-held");
+    let marker = dir.path().to_string_lossy().into_owned();
+    let watchdog = Watchdog::matching(&marker);
+    let escaped = dir.path().join("escaped");
+    // As above, the leader waits for the descendant's marker before
+    // exiting, so `Proc::stop` cannot catch the holder while it is still
+    // in the group. The wall-clock limit fails the test naming "timed
+    // output held open" if the call joins a reader blocked on the open
+    // pipe instead of returning at its deadline.
+    let script = format!(
+        "perl -MPOSIX -e 'POSIX::setsid(); open my $f, \">>\", $ARGV[1] or die $!; print $f \"x\\n\"; close $f; sleep 3600' '{}' '{}' & while [ ! -e '{}' ]; do sleep 0.05; done",
+        dir.path().display(),
+        escaped.display(),
+        escaped.display(),
+    );
+    let err = fakes::within("timed output held open", WALL, move || {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &script]);
+        super::timed_to_end(&mut command, &System, Duration::from_secs(5), "the holder")
+    })
+    .unwrap_err();
+    assert!(err.starts_with("timed out waiting for the holder"), "{err}");
+    fakes::kill_matching(&marker).unwrap();
+    assert!(fakes::matching_exits(&marker, READY));
+    watchdog.stand_down(READY);
+}
+
+#[test]
 fn a_stop_that_needs_a_second_sigkill_errs_after_the_group_empties() {
     let dir = TempDir::new("fiber-bench-stop");
     let ready = Ready::new(dir.path());
@@ -299,4 +328,135 @@ fn a_stop_that_needs_a_second_sigkill_errs_after_the_group_empties() {
         !fakes::kill_group(group, "0").unwrap(),
         "group {group} still has a process"
     );
+}
+
+/// A clock whose first sleep removes `marker`, waits for the child's exit
+/// line, then advances: the exit poll only runs after the test's child
+/// closed its stdout, so the run's timing ends before the clock first
+/// moves, and the wait that follows is a signal, never a sleep.
+struct AfterEof {
+    marker: std::sync::Mutex<Option<std::path::PathBuf>>,
+    ready: std::sync::Mutex<Ready>,
+    inner: std::sync::Arc<fakes::clock::FakeClock>,
+}
+
+impl Clock for AfterEof {
+    fn now(&self) -> std::time::Instant {
+        self.inner.now()
+    }
+    fn wall(&self) -> std::time::SystemTime {
+        self.inner.wall()
+    }
+    fn sleep(&self, d: Duration) {
+        if let Some(marker) = self.marker.lock().unwrap().take() {
+            std::fs::remove_file(&marker).unwrap();
+            // The child writes its exit line once its loop ends; the poll
+            // that follows reaps it from there.
+            self.ready.lock().unwrap().wait(READY);
+        }
+        self.inner.sleep(d);
+    }
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        self.inner.wait_until(until, wait);
+    }
+    fn subscribe(&self, waker: std::sync::Weak<dyn contract::clock::Wake>) {
+        self.inner.subscribe(waker);
+    }
+}
+
+/// The child closes its stdout at once, spins until `marker` is gone, then
+/// writes its exit line: the timing ends at the close, the run at the exit.
+/// The spin pauses for nothing, so the line follows the marker at once.
+fn eof_then_exit(marker: &Path, ready: &Path) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command.args([
+        "-c",
+        &format!(
+            "printf x; exec 1>&-; while [ -e '{}' ]; do :; done; echo $$ > '{}'",
+            marker.display(),
+            ready.display()
+        ),
+    ]);
+    command
+}
+
+#[test]
+fn a_timed_run_ends_when_stdout_closes_not_when_the_process_exits() {
+    let dir = TempDir::new("fiber-bench-timed");
+    let one = dir.path().join("one");
+    std::fs::create_dir(&one).unwrap();
+    let marker = one.join("marker");
+    std::fs::write(&marker, "").unwrap();
+    let ready = Ready::new(&one);
+    let ready_path = ready.path().to_path_buf();
+    let clock = std::sync::Arc::new(AfterEof {
+        marker: std::sync::Mutex::new(Some(marker.clone())),
+        ready: std::sync::Mutex::new(ready),
+        inner: fakes::clock::FakeClock::new(),
+    });
+    let start = clock.now();
+    let ran = std::sync::Arc::clone(&clock);
+    let (finished, took) = fakes::within("a timed run", WALL, move || {
+        super::timed_to_end(
+            &mut eof_then_exit(&marker, &ready_path),
+            ran.as_ref(),
+            WALL,
+            "the child",
+        )
+    })
+    .unwrap();
+    assert_eq!(took, Duration::ZERO);
+    assert!(clock.now() - start >= super::PROBE);
+    assert_eq!(finished.status.code(), Some(0));
+    assert_eq!(finished.stdout, "x");
+
+    let two = dir.path().join("two");
+    std::fs::create_dir(&two).unwrap();
+    let marker = two.join("marker");
+    std::fs::write(&marker, "").unwrap();
+    let ready = Ready::new(&two);
+    let ready_path = ready.path().to_path_buf();
+    let clock = AfterEof {
+        marker: std::sync::Mutex::new(Some(marker.clone())),
+        ready: std::sync::Mutex::new(ready),
+        inner: fakes::clock::FakeClock::new(),
+    };
+    let finished = fakes::within("the same child under run_to_end", WALL, move || {
+        run_to_end(
+            &mut eof_then_exit(&marker, &ready_path),
+            &clock,
+            WALL,
+            "the child",
+        )
+    })
+    .unwrap();
+    assert_eq!(finished.status.code(), Some(0));
+    assert_eq!(finished.stdout, "x");
+}
+
+#[test]
+fn a_timed_run_past_its_deadline_errs_and_leaves_nothing_behind() {
+    let dir = TempDir::new("fiber-bench-timed-deadline");
+    let marker = dir.path().to_string_lossy().into_owned();
+    let watchdog = Watchdog::matching(&marker);
+    let clock = fakes::clock::FakeClock::new();
+    let script = format!("while [ -e '{}' ]; do sleep 30; done", dir.path().display());
+    let err = fakes::within("a timed run past its deadline", WALL, move || {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", &script]);
+        super::timed_to_end(
+            &mut command,
+            &*clock,
+            Duration::from_millis(50),
+            "the sleeper",
+        )
+    })
+    .unwrap_err();
+    assert_eq!(err, "timed out waiting for the sleeper");
+    assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
+    watchdog.stand_down(READY);
 }

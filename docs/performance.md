@@ -100,7 +100,10 @@ Basis says where a number came from:
 - **Measured** is a Fiber measurement times two. The first build that runs a
   benchmark replaces a "from components" or "picked" number with its measured
   one only where the measurement exceeds that number. Every other ceiling stays
-  as it is, and a ceiling the measurement does not exceed keeps its basis.
+  as it is, and a ceiling the measurement does not exceed keeps its basis. A
+  ceiling given as a formula, such as attaching's, stays picked: its benchmark
+  reports each measurement against the formula until the row's timing gate
+  turns on.
 
 The busy-or-resumed ceiling holds on three workloads:
 
@@ -142,7 +145,12 @@ the same benchmarks. Linux arm64 and macOS arm64 are
 measured at each release and reported, never gated: timings differ by about
 20 times between macOS and Linux on I/O, and macOS memory counts system
 frameworks Fiber does not control. Listing with a cold cache is reported,
-never gated.
+never gated. Listing is timed from spawning `fiber sessions --json` in a git
+repository whose project holds 1,000 exited sessions to its output closing,
+with the hub running and one listing before the timed ones. Attaching is timed
+from spawning `fiber resume <id>` in a pseudo-terminal to the session's last
+reply on screen, for a live, idle session whose log is 1 MiB and one whose log
+is 10 MiB, with the hub running.
 
 No test asserts a timing (`docs/testing.md`). The budgets are a benchmark job,
 separate from the tests. The harness, `cargo run -p main --example bench`,

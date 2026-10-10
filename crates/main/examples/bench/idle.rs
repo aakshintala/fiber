@@ -33,6 +33,8 @@ pub(crate) struct Ctx<'a> {
     pub(crate) clock: &'a dyn Clock,
     pub(crate) idle: Duration,
     pub(crate) path: Option<OsString>,
+    /// Timed samples each sampled workload takes per fixture.
+    pub(crate) runs: u32,
     /// The `paging` jig, when the harness was given one.
     pub(crate) paging: Option<&'a Path>,
 }
@@ -72,10 +74,9 @@ pub(crate) const WORKLOADS: [Workload; 4] = [
     },
 ];
 
-fn ms(clock: &dyn Clock, since: Instant) -> Value {
+pub(crate) fn ms(clock: &dyn Clock, since: Instant) -> Value {
     json!(clock.now().saturating_duration_since(since).as_secs_f64() * 1000.0)
 }
-
 fn start_session(ctx: &Ctx<'_>) -> Result<(Session, String), String> {
     let id = doors::mint("s_");
     let workspace = ctx.home.workspace();
@@ -231,15 +232,34 @@ fn hub_connected(ctx: &Ctx<'_>) -> Result<(), String> {
     )
 }
 
+/// Whether quitting the terminal waits for the hub to idle out: sampled
+/// workloads keep their own hub across samples.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HubExit {
+    /// Waits for the hub to idle out and remove its socket.
+    Wait,
+    /// Leaves the hub running.
+    Keep,
+}
+
 /// Quits the terminal with two Ctrl-C, then waits for the hub to idle out
 /// and remove its socket; a hub that does not is killed and noted.
-fn quit(ctx: &Ctx<'_>, mut terminal: Terminal, notes: &mut Vec<String>) -> Result<(), String> {
+/// [`HubExit::Keep`] skips the wait: the workload stops its own hub.
+pub(crate) fn quit(
+    ctx: &Ctx<'_>,
+    mut terminal: Terminal,
+    notes: &mut Vec<String>,
+    exit: HubExit,
+) -> Result<(), String> {
     let typed = terminal.write(b"\x03\x03");
     let mut proc = terminal.proc;
     if typed.is_err() || !proc.exits(ctx.clock, READY)? {
         notes.push("the terminal did not quit on two Ctrl-C".to_owned());
     }
     proc.stop(ctx.clock)?;
+    if exit == HubExit::Keep {
+        return Ok(());
+    }
     let socket = ctx.home.hub_socket();
     let gone = run::poll(ctx.clock, HUB_EXIT, "the hub to exit", || {
         Ok(!socket.exists())
@@ -254,14 +274,14 @@ fn quit(ctx: &Ctx<'_>, mut terminal: Terminal, notes: &mut Vec<String>) -> Resul
 
 /// From just before the spawn to the pty output first holding `>`.
 fn terminal_first_frame(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
-    let terminal = Terminal::spawn(ctx.home, ctx.path.as_deref(), ctx.clock)?;
+    let terminal = Terminal::spawn(ctx.home, &[], ctx.path.as_deref(), ctx.clock)?;
     let started = terminal.proc.spawned;
     let framed = terminal.wait_for(ctx.clock, started + READY, ">");
     let took = ms(ctx.clock, started);
     // The hub is up before the quit, so it idles out rather than starting
     // after the terminal has gone.
     let connected = framed.and_then(|()| hub_connected(ctx));
-    let quit = quit(ctx, terminal, notes);
+    let quit = quit(ctx, terminal, notes, HubExit::Wait);
     connected?;
     quit?;
     Ok(vec![("terminal_first_frame_ms", took)])
@@ -345,15 +365,16 @@ fn terminal_idle(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, Stri
             clock: ctx.clock,
             idle: ctx.idle,
             path: ctx.path.clone(),
+            runs: ctx.runs,
             paging: ctx.paging,
         };
         let needle = seed(&ctx, home, notes)?;
-        let terminal = Terminal::spawn(home, ctx.path.as_deref(), ctx.clock)?;
+        let terminal = Terminal::spawn(home, &[], ctx.path.as_deref(), ctx.clock)?;
         let pid = terminal.proc.pid();
         let measured = terminal
             .wait_for(ctx.clock, ctx.clock.now() + READY, &needle)
             .and_then(|()| idle_window(&ctx, pid, notes));
-        let quit = quit(&ctx, terminal, notes);
+        let quit = quit(&ctx, terminal, notes, HubExit::Wait);
         let (switches, rss, _) = measured?;
         quit?;
         Ok(vec![
