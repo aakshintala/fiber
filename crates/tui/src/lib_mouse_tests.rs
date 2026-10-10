@@ -509,6 +509,12 @@ struct Cells {
     drawn: Vec<(u16, u16)>,
 }
 
+impl crate::screen::SyncEmit for Cells {
+    fn emit(&mut self, _begin: bool) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
 impl Backend for Cells {
     type Error = std::convert::Infallible;
 
@@ -621,7 +627,7 @@ fn thought_and_read() -> Vec<Input> {
 }
 
 /// A loop showing [`thought_and_read`] on `backend`.
-fn grouped<B: ratatui::backend::Backend>(backend: B) -> super::Loop<B> {
+fn grouped<B: ratatui::backend::Backend + crate::screen::SyncEmit>(backend: B) -> super::Loop<B> {
     let (mut lp, _) = new_loop(backend, None);
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));

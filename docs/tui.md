@@ -1976,6 +1976,7 @@ CPU and time to first frame. The design keeps to them this way:
   large session takes longer to open than a new one.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**
+- **Each frame is written inside synchronized output, mode 2026.** The first frame and frames drawn on resize are included; a terminal without support ignores the sequences.
 
 ## Configuration
 
