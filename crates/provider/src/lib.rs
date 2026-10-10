@@ -67,6 +67,11 @@ pub struct Endpoint {
     /// reach a local server directly whatever the shell names
     /// (`docs/dependencies.md`, "Proxies").
     pub direct: bool,
+    /// The socket limits the call runs under: 15 seconds per address to
+    /// connect, 300 seconds without a byte in either direction
+    /// (`docs/model-routing.md`, "When a model call fails"). The default
+    /// is the production value; tests set a short one to stall a call.
+    pub limits: net::Limits,
     /// True when the model's declared `input` lacks `image`
     /// (`docs/model-routing.md`, "What a provider extension declares").
     /// A request for such a model carries no image part on any protocol;
@@ -122,6 +127,7 @@ impl std::fmt::Debug for Endpoint {
             .field("max_output_tokens", &self.max_output_tokens)
             .field("extra_body", &self.extra_body)
             .field("direct", &self.direct)
+            .field("limits", &self.limits)
             .field("text_only", &self.text_only)
             .finish()
     }

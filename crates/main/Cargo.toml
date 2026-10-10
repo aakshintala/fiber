@@ -28,6 +28,7 @@ jobs = { path = "../jobs" }
 log = { path = "../log" }
 loop = { path = "../loop" }
 mcp = { path = "../mcp" }
+net = { path = "../net" }
 picture = { path = "../picture" }
 provider = { path = "../provider" }
 rustix.workspace = true

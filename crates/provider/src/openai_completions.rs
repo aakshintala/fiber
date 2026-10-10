@@ -86,7 +86,7 @@ impl Completions {
             provider: endpoint.provider.clone(),
             signer: endpoint.signer.clone(),
             lifetime: request.cache_lifetime,
-            direct: endpoint.direct,
+            route: http::Route::of(endpoint),
             cancel: Arc::default(),
             secrets: endpoint.secrets(),
         }
@@ -114,7 +114,7 @@ pub struct Call {
     /// The request's cache lifetime, which a reported cache write is counted
     /// under.
     lifetime: CacheLifetime,
-    direct: bool,
+    route: http::Route,
     cancel: Arc<Cancel>,
     secrets: Secrets,
 }
@@ -127,7 +127,7 @@ impl ModelCall for Call {
             &self.headers,
             &self.body,
             self.signer.as_deref(),
-            self.direct,
+            &self.route,
             &self.cancel,
             &mut secrets,
         ) {

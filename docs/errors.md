@@ -126,7 +126,7 @@ policy is `docs/model-routing.md`, "When a model call fails".
 |---|---|---|
 | `rate_limited` | HTTP 429 other than a quota or billing error; an OpenRouter in-flight budget 402 that carries a `Retry-After` in seconds | yes |
 | `provider_unavailable` | HTTP 5xx, including 503 and 529 overload, HTTP 408 and HTTP 409 | yes |
-| `connection_failed` | DNS, TLS, a refused or dropped connection | yes |
+| `connection_failed` | DNS, TLS, a refused or dropped connection, no address connecting within 15 seconds each, or a connection silent for 300 seconds (`docs/model-routing.md`, "When a model call fails") | yes |
 | `stream_incomplete` | a stream that ended before its protocol's terminal event, an `openai-responses` terminal event whose status is `in_progress` or `queued`, or an error inside an HTTP 200 response that no other code matches | yes |
 | `quota_exceeded` | quota, billing or a subscription limit, as an HTTP status or inside the stream ("Recognising a quota or billing error") | never |
 | `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh the token endpoint rejected, or a login with nobody attached | never |
