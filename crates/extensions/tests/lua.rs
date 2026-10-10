@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use common::{Setup, write};
+use common::{Setup, go_module, write};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use extensions::{Error, LuaExtension};
@@ -107,27 +107,6 @@ fn hold_open(dir: &std::path::Path) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
         drop(held);
     });
     (rx, release_tx)
-}
-
-/// `require("go_<name>")` is a signal, not a barrier. Opening the fifo for
-/// write returns only once the loader has opened it for read; the writer
-/// reports that and closes the fifo at once, so `require` reads an empty
-/// module and the code runs on. Nothing stays blocked in it. Each name is
-/// used once per VM, because `require` caches.
-#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
-fn go_module(dir: &std::path::Path, name: &str) -> mpsc::Receiver<()> {
-    let path = dir.join(format!("go_{name}.lua"));
-    let made = std::process::Command::new("mkfifo").arg(&path).status();
-    assert!(made.unwrap().success(), "mkfifo {path:?}");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        match tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        drop(held);
-    });
-    rx
 }
 
 /// True once `count` threads are parked in `wait_until` at `until`.

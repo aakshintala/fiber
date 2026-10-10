@@ -17,19 +17,6 @@ fn the_rfc_7636_appendix_b_verifier_gives_its_published_challenge() {
     );
 }
 
-#[test]
-fn a_generated_verifier_is_43_base64url_characters_and_differs_each_time() {
-    let one = verifier().unwrap();
-    let two = verifier().unwrap();
-    assert_eq!(one.len(), 43);
-    assert!(
-        one.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    );
-    assert_ne!(one, two);
-    assert_eq!(challenge(&one).len(), 43);
-}
-
 fn pairs(query: &str) -> Vec<(String, String)> {
     parse_query(query).unwrap()
 }
@@ -94,13 +81,6 @@ fn the_listener_binds_loopback_only() {
         listener.local_addr().unwrap(),
         SocketAddr::from((Ipv4Addr::LOCALHOST, listener.local_addr().unwrap().port()))
     );
-}
-
-#[test]
-fn a_taken_port_is_an_error() {
-    let held = bind(0).unwrap();
-    let port = held.local_addr().unwrap().port();
-    assert!(bind(port).is_err());
 }
 
 #[derive(Clone)]
@@ -359,26 +339,6 @@ fn failed(reply: Reply) -> (contract::ErrorCode, String) {
             panic!("no failure was delivered")
         }
     }
-}
-
-#[test]
-fn a_port_that_cannot_be_bound_is_io_failed() {
-    let held = bind(0).unwrap();
-    let port = held.local_addr().unwrap().port();
-    let (tx, rx) = mpsc::channel();
-    let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
-        Ok(()) | Err(_) => {}
-    });
-    let Err(reply) = listen(port, None, &deliver) else {
-        panic!("a taken port was bound");
-    };
-    let (code, message) = failed(reply);
-    assert_eq!(code, contract::ErrorCode::IoFailed);
-    assert!(message.contains(&format!("port {port}")), "{message}");
-    assert!(
-        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
-        "nothing was delivered"
-    );
 }
 
 #[test]

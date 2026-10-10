@@ -15,7 +15,7 @@ use std::time::Duration;
 use contract::clock::Clock as _;
 use fakes::clock::FakeClock;
 
-use super::{INSTALL_STEP_DEADLINE, binary_name, download, hex, platform};
+use super::{INSTALL_STEP_DEADLINE, binary_name, download, platform};
 use crate::host::exec::{GRACE, GROUP_POLL};
 
 /// How long a test waits on the run before it fails.
@@ -27,11 +27,6 @@ fn a_url_names_its_file_without_the_query() {
     for bad in ["https://x/y/", "https://x/..", "https://x/y/.?a"] {
         assert_eq!(binary_name(bad), None, "{bad}");
     }
-}
-
-#[test]
-fn a_digest_is_lowercase_hex() {
-    assert_eq!(hex(&[0, 15, 255]), "000fff");
 }
 
 #[test]

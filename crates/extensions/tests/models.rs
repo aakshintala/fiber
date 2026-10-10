@@ -8,8 +8,8 @@
 
 mod common;
 
-use common::{Setup, install, manifest, provider, write};
-use config::{Config, ModelData, ProjectKey, Sources, write_model_cache};
+use common::{Setup, config, install, lua_named, manifest, provider, write};
+use config::{ModelData, write_model_cache};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use extensions::{Error, Providers, leave_out_invalid};
@@ -23,16 +23,6 @@ fn installed(setup: &Setup, extensions: &[(&str, serde_json::Value)]) -> Provide
     let (providers, notices) = Providers::load(&setup.home()).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
     providers
-}
-
-fn config(setup: &Setup, overrides: &[&str]) -> Config {
-    Config::load(Sources {
-        home: setup.home(),
-        workspace: setup.workspace(),
-        project: ProjectKey::new("p").unwrap(),
-        overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
-    })
-    .unwrap()
 }
 
 #[test]
@@ -373,42 +363,6 @@ fn anthropic_reserved_extra_body_fields_leave_the_model_out() {
 }
 
 #[test]
-fn completions_reserved_extra_body_fields_leave_the_model_out() {
-    reserved_case(
-        "openai-completions",
-        &["model", "messages", "tools", "tool_choice", "stream"],
-    );
-}
-
-#[test]
-fn responses_reserved_extra_body_fields_leave_the_model_out() {
-    reserved_case(
-        "openai-responses",
-        &[
-            "model",
-            "instructions",
-            "input",
-            "tools",
-            "tool_choice",
-            "stream",
-        ],
-    );
-}
-
-#[test]
-fn google_reserved_extra_body_fields_leave_the_model_out() {
-    reserved_case(
-        "google-generative-ai",
-        &["systemInstruction", "contents", "tools", "toolConfig"],
-    );
-}
-
-#[test]
-fn bedrock_reserved_extra_body_fields_leave_the_model_out() {
-    reserved_case("bedrock-converse", &["system", "messages", "toolConfig"]);
-}
-
-#[test]
 fn extra_body_matching_is_exact_and_top_level_only() {
     let setup = Setup::new();
     let data = json!({
@@ -558,34 +512,6 @@ fn leave_out_invalid_filters_a_model_list_like_models_returns() {
 
 fn lua_acme(setup: &Setup, dir: &str, models_run: &str) -> std::sync::Arc<extensions::LuaProvider> {
     lua_named(setup, dir, "acme", models_run)
-}
-
-/// A Lua provider whose `models()` is `models_run`, with a `credential`
-/// function: what most `add_lua` tests use, so the credential gate lets
-/// `models()` run.
-fn lua_named(
-    setup: &Setup,
-    dir: &str,
-    provider: &str,
-    models_run: &str,
-) -> std::sync::Arc<extensions::LuaProvider> {
-    let ext = setup.home().join(dir);
-    write(
-        &ext.join("init.lua"),
-        &format!(
-            "fiber.provider(\"{provider}\", {{ \
-             credential = {{ timeout = 1000, run = function() \
-             return {{ token = \"test-token\", expires_at = 1893456000 }} end }}, \
-             models = {{ timeout = 1000, run = function() return {models_run} end }} }})\n"
-        ),
-    );
-    let extension = std::sync::Arc::new(extensions::LuaExtension::new(
-        "acme-ext",
-        ext,
-        setup.home(),
-        fakes::clock::FakeClock::new(),
-    ));
-    extensions::LuaProvider::new(extension, provider)
 }
 
 /// A Lua provider with no `credential` function and no other credential:

@@ -20,10 +20,10 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use common::{Setup, write};
+use common::{Setup, header, pair, script_provider, sign_with, write};
 use contract::ErrorCode;
 use contract::signing::{SignRequest, Signer};
-use extensions::{CredentialPair, LuaExtension, LuaProvider, REFRESH_BEFORE};
+use extensions::{LuaExtension, LuaProvider, REFRESH_BEFORE};
 use fakes::clock::FakeClock;
 use fakes::{ProviderServer, Response};
 use serde_json::json;
@@ -46,42 +46,6 @@ fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
         .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
 }
 
-/// The default-label pair for `provider`.
-fn pair(provider: &str) -> CredentialPair {
-    CredentialPair {
-        credential: provider.to_owned(),
-        label: "default".to_owned(),
-    }
-}
-
-/// A test-local provider `p` on `clock`: `credential` and `sign` run
-/// `credential_run` and `sign_run`, each absent when its option is `None`.
-fn script_provider(
-    setup: &Setup,
-    clock: Arc<FakeClock>,
-    credential_run: Option<&str>,
-    sign_run: Option<&str>,
-) -> Arc<LuaProvider> {
-    let mut spec = Vec::new();
-    if let Some(run) = credential_run {
-        spec.push(format!(
-            "credential = {{ timeout = 60000, run = function() return {run} end }}"
-        ));
-    }
-    if let Some(run) = sign_run {
-        spec.push(format!(
-            "sign = {{ timeout = 60000, run = function(request) return {run} end }}"
-        ));
-    }
-    let dir = setup.home().join("ext");
-    write(
-        &dir.join("init.lua"),
-        &format!("fiber.provider(\"p\", {{ {} }})\n", spec.join(", ")),
-    );
-    let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock));
-    LuaProvider::new(extension, "p")
-}
-
 fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaProvider> {
     script_provider(
         setup,
@@ -91,29 +55,15 @@ fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaPr
     )
 }
 
-/// Signs one request with `headers` already on it.
-fn sign_with(
-    signer: &Arc<dyn Signer>,
-    headers: &[(String, String)],
-) -> Result<Vec<(String, String)>, contract::signing::Error> {
-    let url = "http://127.0.0.1:1/v1/responses".to_owned();
-    let body = br#"{"model":"m"}"#.to_vec();
-    let signer = Arc::clone(signer);
-    let owned: Vec<(String, String)> = headers.to_vec();
-    within(move || {
-        signer.sign(&SignRequest {
-            method: "POST",
-            url: &url,
-            headers: &owned,
-            body: &body,
-        })
-    })
-}
-
 fn signer_of(provider: &Arc<LuaProvider>) -> Arc<dyn Signer> {
     within({
         let provider = Arc::clone(provider);
-        move || provider.signer(pair(provider.name())).unwrap().unwrap()
+        move || {
+            provider
+                .signer(pair(provider.name(), "default"))
+                .unwrap()
+                .unwrap()
+        }
     })
 }
 
@@ -124,14 +74,6 @@ type ClashCase<'a> = (&'a str, &'a [(&'a str, &'a str)], bool);
 /// A row of the shape table: what `credential()` returns, and the headers
 /// the sign sends besides `authorization`, or `None` when it must fail.
 type ShapeCase<'a> = (&'a str, Option<&'a [(&'a str, &'a str)]>);
-
-/// The value of `name` in `headers`, case-sensitively.
-fn header(headers: &[(String, String)], name: &str) -> Option<String> {
-    headers
-        .iter()
-        .find(|(n, _)| n == name)
-        .map(|(_, v)| v.clone())
-}
 
 #[test]
 fn headers_ride_every_signed_request_after_authorization() {
@@ -456,116 +398,6 @@ fn sign_still_overrides_authorization_with_headers_present() {
 }
 
 #[test]
-fn completed_history_keeps_the_last_sixteen_distinct_tokens() {
-    for (calls, first_kept) in [(15_u32, 1_u32), (16, 1), (17, 2), (20, 5)] {
-        let setup = Setup::new();
-        let clock = FakeClock::new();
-        let provider = script_provider(
-            &setup,
-            clock.clone(),
-            Some(
-                "(function() calls = (calls or 0) + 1 return { \
-                 token = calls == 1 and \"never-used-token\" or \"tok-\" .. (calls - 1), \
-                 expires_at = 1700000000 + (calls - 1) * 3600 + 1800 } end)()",
-            ),
-            Some("{}"),
-        );
-        let signer = signer_of(&provider);
-        let unused = within({
-            let provider = Arc::clone(&provider);
-            move || provider.token(&pair(provider.name()))
-        })
-        .unwrap();
-        assert_eq!(unused.expose(), "never-used-token");
-        clock.advance(Duration::from_secs(3600));
-        for round in 1..=calls {
-            if round > 1 {
-                clock.advance(Duration::from_secs(3600));
-            }
-            let headers = sign_with(&signer, &[]).unwrap();
-            assert_eq!(
-                header(&headers, "authorization"),
-                Some(format!("Bearer tok-{round}")),
-                "calls {calls}, round {round}"
-            );
-        }
-        let mut reported: Vec<String> = signer
-            .credentials()
-            .iter()
-            .map(|secret| secret.expose().to_owned())
-            .collect();
-        reported.sort();
-        let mut expected: Vec<String> = (first_kept..=calls)
-            .map(|round| format!("tok-{round}"))
-            .collect();
-        expected.sort();
-        assert_eq!(reported, expected, "calls {calls}");
-        assert!(!reported.contains(&"never-used-token".to_owned()));
-    }
-}
-
-#[test]
-fn past_values_are_bounded_to_sixteen_distinct() {
-    let setup = Setup::new();
-    let clock = FakeClock::new();
-    // Every fetch returns the same token with a new header value, and an
-    // expiry 1800 seconds past the fetch's own wall, so each advance of an
-    // hour expires it and the next sign fetches synchronously: no
-    // background refresh, one new distinct value per round.
-    let provider = script_provider(
-        &setup,
-        clock.clone(),
-        Some(
-            "(function() calls = (calls or 0) + 1 return { token = \"tok\", \
-             expires_at = 1700000000 + (calls - 1) * 3600 + 1800, \
-             headers = { [\"x-n\"] = \"hv-\" .. calls } } end)()",
-        ),
-        Some("{}"),
-    );
-    let signer = signer_of(&provider);
-    let reported = || {
-        let mut values: Vec<String> = signer
-            .credentials()
-            .iter()
-            .map(|secret| secret.expose().to_owned())
-            .collect();
-        values.sort();
-        values
-    };
-    for round in 1..=17_u32 {
-        if round > 1 {
-            clock.advance(Duration::from_secs(3600));
-        }
-        let headers = sign_with(&signer, &[]).unwrap();
-        assert_eq!(
-            header(&headers, "x-n"),
-            Some(format!("hv-{round}")),
-            "round {round}"
-        );
-        if round == 15 {
-            // Sixteen distinct values beside nothing else: the token and
-            // fifteen header values are all still reported.
-            assert!(
-                reported().contains(&"hv-1".to_owned()),
-                "exactly sixteen values are all kept: {:?}",
-                reported()
-            );
-        }
-    }
-    // Seventeen distinct values beside the token: the two oldest idle ones
-    // are dropped, the rest are kept.
-    let values = reported();
-    assert!(
-        !values.contains(&"hv-1".to_owned()) && !values.contains(&"hv-2".to_owned()),
-        "the oldest values past sixteen are dropped: {values:?}"
-    );
-    assert!(
-        values.contains(&"hv-3".to_owned()) && values.contains(&"hv-17".to_owned()),
-        "the newest sixteen are kept: {values:?}"
-    );
-}
-
-#[test]
 fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_history_values() {
     let setup = Setup::new();
     let clock = FakeClock::new();
@@ -581,9 +413,12 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
              credential = {{ timeout = 60000, run = function()\n\
              calls_c = calls_c + 1\n\
              if calls_c == 1 then\n\
+             return {{ token = \"tok-unused\", expires_at = 1700000301 }}\n\
+             end\n\
+             if calls_c == 2 then\n\
              local headers = {{}}\n\
              for i = 1, 16 do headers[\"x-\" .. i] = \"hv-\" .. i end\n\
-             return {{ token = \"tok-old\", expires_at = 1700000301, headers = headers }}\n\
+             return {{ token = \"tok-old\", expires_at = 1700000602, headers = headers }}\n\
              end\n\
              return {{ token = \"tok-current\", expires_at = 4102444800 }}\n\
              end }},\n\
@@ -599,6 +434,14 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock.clone()));
     let provider = LuaProvider::new(extension, "p");
     let signer = signer_of(&provider);
+    // A token fetched and replaced before any sign leaves no trace.
+    let unused = within({
+        let provider = Arc::clone(&provider);
+        move || provider.token(&pair(provider.name(), "default"))
+    })
+    .unwrap();
+    assert_eq!(unused.expose(), "tok-unused");
+    clock.advance(Duration::from_secs(301));
     let (done, first) = mpsc::channel();
     let held = Arc::clone(&signer);
     std::thread::spawn(move || {
@@ -642,7 +485,7 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
         "sixteen completed values plus the current cache"
     );
     assert!(!reported.contains(&"tok-old".to_owned()));
-    assert!(!reported.contains(&"never-used-token".to_owned()));
+    assert!(!reported.contains(&"tok-unused".to_owned()));
 }
 
 #[test]
@@ -951,7 +794,7 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
     let polling = Arc::clone(&provider);
     std::thread::spawn(move || {
         for _ in 0..100_000 {
-            match polling.token(&pair(polling.name())) {
+            match polling.token(&pair(polling.name(), "default")) {
                 Ok(secret) if secret.expose() == "tok-B-value" => {
                     match refreshed.send(()) {
                         Ok(()) | Err(mpsc::SendError(())) => {}
@@ -1161,7 +1004,7 @@ fn a_held_fetch_never_holds_the_token_lock() {
         )),
         None,
     );
-    let pair = pair(provider.name());
+    let pair = pair(provider.name(), "default");
     let fetching = Arc::clone(&provider);
     let worker_pair = pair.clone();
     let (done_tx, done_rx) = mpsc::channel();

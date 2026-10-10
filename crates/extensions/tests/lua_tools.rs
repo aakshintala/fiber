@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use common::{Setup, install, manifest, write};
+use common::{Setup, go_module, install_lua};
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -177,24 +177,6 @@ fn text(output: &Output) -> String {
 fn failed(output: &Output) -> (ErrorCode, String) {
     let failure = output.error.clone().expect("the call failed");
     (failure.code, failure.message)
-}
-
-/// `require("go_<name>")` in `dir` signals that the callback has started:
-/// the loader opens the fifo for read, the writer here reports it and
-/// closes the fifo, and the module reads empty.
-fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
-    let path = dir.join(format!("go_{name}.lua"));
-    let made = std::process::Command::new("mkfifo").arg(&path).status();
-    assert!(made.unwrap().success(), "mkfifo {path:?}");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        match tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        drop(held);
-    });
-    rx
 }
 
 /// An HTTP server holding one request: `accepted` fires once it has read
@@ -659,18 +641,6 @@ impl contract::files::PathLock for NoLock {
     }
 }
 
-/// Installs `fiber.test/<short>` with the entry script `init`, listing
-/// `replaces` in its manifest.
-fn installed(setup: &Setup, short: &str, replaces: &[&str], init: &str) {
-    let mut listed = manifest(&format!("fiber.test/{short}"));
-    if let Value::Object(fields) = &mut listed {
-        fields.insert("replaces".to_owned(), json!(replaces));
-    }
-    let source = setup.source(short, &listed, &[]);
-    write(&source.join("init.lua"), init);
-    install(&setup.home(), &source, "0.1.0").unwrap();
-}
-
 /// The session's extensions, loaded on a thread under `WAIT`.
 fn session(setup: &Setup) -> Arc<SessionExtensions> {
     let config = Config::load(Sources {
@@ -717,7 +687,12 @@ fiber.command("mine", { timeout = 1000, run = function() return "" end })
 #[test]
 fn a_declared_replacement_of_read_is_declared_with_its_extension() {
     let setup = Setup::new();
-    installed(&setup, "myread", &["read"], &tool_line("read", "mine"));
+    install_lua(
+        &setup,
+        "myread",
+        &json!({"replaces": ["read"]}),
+        &tool_line("read", "mine"),
+    );
     let session = session(&setup);
     assert_eq!(
         declared(&session),
@@ -729,10 +704,10 @@ fn a_declared_replacement_of_read_is_declared_with_its_extension() {
 #[test]
 fn an_undeclared_replacement_of_read_unloads_the_extension_and_all_it_registered() {
     let setup = Setup::new();
-    installed(
+    install_lua(
         &setup,
         "myread",
-        &[],
+        &json!({"replaces": []}),
         &format!("{}{HOOK_AND_COMMAND}", tool_line("read", "mine")),
     );
     let session = session(&setup);
@@ -753,16 +728,16 @@ fn an_undeclared_replacement_of_read_unloads_the_extension_and_all_it_registered
 #[test]
 fn two_extensions_registering_one_tool_lose_it_and_keep_their_others() {
     let setup = Setup::new();
-    installed(
+    install_lua(
         &setup,
         "a",
-        &[],
+        &json!({"replaces": []}),
         &format!("{}{}", tool_line("dup", "a"), tool_line("only_a", "a")),
     );
-    installed(
+    install_lua(
         &setup,
         "b",
-        &[],
+        &json!({"replaces": []}),
         &format!("{}{}", tool_line("dup", "b"), tool_line("only_b", "b")),
     );
     let session = session(&setup);
@@ -786,10 +761,10 @@ fn two_extensions_registering_one_tool_lose_it_and_keep_their_others() {
 #[test]
 fn an_extension_with_only_tools_stays_loaded_and_delivers() {
     let setup = Setup::new();
-    installed(
+    install_lua(
         &setup,
         "only",
-        &[],
+        &json!({"replaces": []}),
         r#"
 fiber.tool("probe", {
   description = "d", input_schema = { type = "object" }, timeout = 5000,
