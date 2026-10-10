@@ -2344,7 +2344,7 @@ fn a_scan_during_a_pass_queues_none_and_the_notice_follows_busy_clearing() {
     let (release_tx, release) = mpsc::channel::<()>();
     *lock(&hub.rejoins.before_connect) = Some(Box::new(move || {
         paused_tx.send(()).unwrap_or(());
-        release.recv_timeout(DEADLINE).unwrap_or(());
+        release.recv().unwrap_or(());
     }));
     let done = arm_pass(&hub);
     clock.advance(RUN_SCAN);
