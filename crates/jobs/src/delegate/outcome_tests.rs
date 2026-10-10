@@ -1,6 +1,5 @@
-//! Tests first for the outcome fold: every row of ruling 10, each
-//! termination reason over the other rows, and ruling 9's choice of one
-//! `fiber_exited`.
+//! Tests first for the outcome fold: each termination reason over the
+//! other rows, and the socket line winning over the drain's.
 
 use std::collections::BTreeMap;
 use std::os::unix::process::ExitStatusExt;
@@ -283,23 +282,14 @@ fn no_line_means_empty_text_and_zero_usage() {
 }
 
 #[test]
-fn every_signal_reports_its_own_name() {
-    // One row per arm of `signal_name`, plus a number with no arm: each
-    // must name itself, or the fallback names it. Deleting any arm reads
-    // `SIG{number}` instead.
+fn a_delegate_killed_by_sigbus_reports_sigbus() {
+    // SIGBUS's number moves by platform, so it is built from the signal
+    // itself; the second row pins the fallback for a number the shared
+    // table names nothing. Each must name itself, or the fallback names
+    // it.
     for (number, name) in [
-        (1, "SIGHUP"),
-        (2, "SIGINT"),
-        (3, "SIGQUIT"),
-        (4, "SIGILL"),
-        (6, "SIGABRT"),
-        (8, "SIGFPE"),
-        (9, "SIGKILL"),
-        (11, "SIGSEGV"),
-        (13, "SIGPIPE"),
-        (14, "SIGALRM"),
-        (15, "SIGTERM"),
-        (5, "SIG5"),
+        (rustix::process::Signal::BUS.as_raw(), "SIGBUS"),
+        (29, "SIG29"),
     ] {
         let (completed, _) = outcome(None, None, None, killed(number), &job_id());
         assert_eq!(completed.status, Outcome::Failed);

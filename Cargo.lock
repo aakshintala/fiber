@@ -1441,6 +1441,7 @@ dependencies = [
  "fakes",
  "rustix",
  "serde_json",
+ "support",
 ]
 
 [[package]]

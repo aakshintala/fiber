@@ -18,7 +18,6 @@ pub(crate) mod group;
 pub(crate) mod outcome;
 pub(crate) mod run;
 
-pub use group::kill_every_group;
 pub use run::{Launch, Launched, Resolve, Watch, Watched};
 
 use run::Runner;
@@ -214,7 +213,7 @@ impl Tool for DelegateSpawn {
             self.cap,
             Arc::clone(&self.watch),
         );
-        let child = match runner.spawn(&self.launch, &launched) {
+        let (child, listing) = match runner.spawn(&self.launch, &launched) {
             Ok(child) => child,
             Err(source) => {
                 return failed(
@@ -230,7 +229,7 @@ impl Tool for DelegateSpawn {
             output_path.clone(),
             stop,
         );
-        std::thread::spawn(move || runner.drive(child, finish));
+        std::thread::spawn(move || runner.drive(child, Some(listing), finish));
         let delegate = DelegateStarted {
             job_id: job_id.clone(),
             delegate_session_id: session_id.clone(),

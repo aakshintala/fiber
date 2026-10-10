@@ -35,7 +35,6 @@ use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, wit
 use super::{
     Launch, Launched, Runner, Watch, Watched, kill_due, mint_session_id, note_seq, park_due,
 };
-use crate::delegate::group::serial_shared;
 use crate::registry::Registry;
 
 /// How long a test waits on the wall clock before it fails.
@@ -236,7 +235,7 @@ impl Rig {
             prompt: "hi".into(),
             workspace: self.events.parent().unwrap().to_path_buf(),
         };
-        let child = runner.spawn(&launch, &launched).unwrap();
+        let (child, listing) = runner.spawn(&launch, &launched).unwrap();
         let (_started, finish) = self.registry.open_started(
             self.job.clone(),
             "delegate_spawn".into(),
@@ -246,7 +245,7 @@ impl Rig {
         );
         let (done, waited) = mpsc::channel();
         thread::spawn(move || {
-            runner.drive(child, finish);
+            runner.drive(child, Some(listing), finish);
             let _sent = done.send(());
         });
         waited
@@ -546,7 +545,6 @@ fn kills(pgid: u32) -> usize {
 
 #[test]
 fn the_watch_flow_completes_with_the_delegate_text() {
-    let _serial = serial_shared();
     // The child prints the same line the watch delivers: whether the reap
     // or the watch wins the race, the fold sees one `fiber_exited`.
     let line = json_line(2, "Done.");
@@ -573,7 +571,6 @@ fn the_watch_flow_completes_with_the_delegate_text() {
 
 #[test]
 fn a_pre_session_error_fails_with_that_error() {
-    let _serial = serial_shared();
     let errored = FiberExited {
         exit_code: 1,
         usage: usage(),
@@ -625,7 +622,6 @@ fn a_pre_session_error_fails_with_that_error() {
 
 #[test]
 fn a_child_that_exits_before_any_connect_uses_stdout() {
-    let _serial = serial_shared();
     let line = json_line(1, "Quick.");
     let rig = rig(vec![]);
     // Backstop armed before the shell starts: the child exits on
@@ -647,7 +643,6 @@ fn a_child_that_exits_before_any_connect_uses_stdout() {
 
 #[test]
 fn a_delayed_drain_still_feeds_the_fold() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-delayed");
     let release = fifo(dir.path(), "release");
     let ready_fifo = fifo(dir.path(), "ready");
@@ -695,7 +690,6 @@ fn a_delayed_drain_still_feeds_the_fold() {
 
 #[test]
 fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-held-stdout");
     let member_pid = dir.path().join("member");
     let ready = fifo(dir.path(), "ready");
@@ -779,7 +773,6 @@ fn a_member_holding_stdout_past_the_reap_ends_indeterminate() {
 
 #[test]
 fn exit_zero_with_no_line_anywhere_is_indeterminate() {
-    let _serial = serial_shared();
     let rig = rig(vec![]);
     // Backstop armed before the shell starts: the child exits on its own
     // in milliseconds; this only fires if a mutant strands it.
@@ -800,7 +793,6 @@ fn exit_zero_with_no_line_anywhere_is_indeterminate() {
 
 #[test]
 fn a_stalled_startup_backs_off_to_one_second_then_flows() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-backoff");
     let fifo = fifo(dir.path(), "release");
     let pidfile = dir.path().join("pid");
@@ -878,7 +870,6 @@ fn a_stalled_startup_backs_off_to_one_second_then_flows() {
 
 #[test]
 fn a_closed_watch_is_retried_and_each_seq_counts_once() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-closed");
     let fifo = fifo(dir.path(), "release");
     let shell = format!("read _ < '{}'; exit 0", fifo.display());
@@ -920,7 +911,6 @@ fn a_closed_watch_is_retried_and_each_seq_counts_once() {
 
 #[test]
 fn the_watch_is_not_called_again_after_fiber_exited() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-rests");
     let fifo = fifo(dir.path(), "release");
     let shell = format!("read _ < '{}'; exit 0", fifo.display());
@@ -942,7 +932,6 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
 
 #[test]
 fn a_stop_on_a_term_trap_cancels_without_sigkill() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-trap");
     let pidfile = dir.path().join("pid");
     let ready = dir.path().join("ready");
@@ -991,7 +980,6 @@ fn a_stop_on_a_term_trap_cancels_without_sigkill() {
 
 #[test]
 fn a_stop_on_a_term_ignorer_kills_past_the_bound() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-ignore");
     let pidfile = dir.path().join("pid");
     let ready = dir.path().join("ready");
@@ -1035,7 +1023,6 @@ fn a_stop_on_a_term_ignorer_kills_past_the_bound() {
 
 #[test]
 fn the_cap_at_an_exact_boundary_trips_only_past_it() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-cap");
     let fifo = fifo(dir.path(), "release");
     let shell = format!("read _ < '{}'; exit 0", fifo.display());
@@ -1099,7 +1086,6 @@ fn the_cap_at_an_exact_boundary_trips_only_past_it() {
 
 #[test]
 fn a_disconnected_cap_trips_on_a_backoff_wake() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-blind");
     let fifo = fifo(dir.path(), "release");
     let shell = format!(
@@ -1127,7 +1113,6 @@ fn a_disconnected_cap_trips_on_a_backoff_wake() {
 
 #[test]
 fn a_stop_before_the_cap_keeps_cancelled() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-first-wins");
     let fifo = fifo(dir.path(), "release");
     let ready = dir.path().join("ready");
@@ -1163,7 +1148,6 @@ fn a_stop_before_the_cap_keeps_cancelled() {
 
 #[test]
 fn a_child_that_exits_in_the_stop_timer_sends_no_kill() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-quick-stop");
     let pidfile = dir.path().join("pid");
     let ready = dir.path().join("ready");
@@ -1202,7 +1186,6 @@ fn a_child_that_exits_in_the_stop_timer_sends_no_kill() {
 
 #[test]
 fn a_member_outliving_a_stop_is_killed_and_the_job_still_cancels() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-stop-member");
     let leader = dir.path().join("leader");
     let member = dir.path().join("member");
@@ -1251,7 +1234,6 @@ fn a_member_outliving_a_stop_is_killed_and_the_job_still_cancels() {
 
 #[test]
 fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-retire-timer");
     let clock = FakeClock::new();
     // A live group with no delegate attached: only `retire` supervises
@@ -1263,8 +1245,9 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0);
-    let mut member = crate::delegate::group::spawn(&mut member).unwrap();
+    let (mut member, listing) = support::group::spawn(&mut member).unwrap();
     let pgid = member.id();
+    let mut listing = Some(listing);
     let watchdog = Watchdog::group(pgid);
     let watch: Watch = Arc::new(|_: &SessionId, _: &mut dyn FnMut(&Envelope)| {
         Err(std::io::Error::other("refused"))
@@ -1283,7 +1266,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
     stop.0();
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
-        runner.retire(pgid);
+        runner.retire(&mut listing);
         let _sent = done_tx.send(());
     });
     let first_poll = clock.origin() + Duration::from_secs(1);
@@ -1331,7 +1314,6 @@ fn a_new_seq_counts_and_a_replay_does_not() {
 
 #[test]
 fn a_blocked_watch_still_lets_a_stop_through() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-blocked-stop");
     let pidfile = dir.path().join("pid");
     let ready = dir.path().join("ready");
@@ -1407,7 +1389,6 @@ fn a_blocked_watch_still_lets_a_stop_through() {
 
 #[test]
 fn a_blocked_watch_does_not_block_the_cap() {
-    let _serial = serial_shared();
     let dir = TempDir::new("fiber-delegate-blocked-cap");
     let block = fifo(dir.path(), "block");
     let shell = format!(
