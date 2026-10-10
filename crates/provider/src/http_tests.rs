@@ -1,54 +1,7 @@
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
-
-use ureq::Timeout;
-use ureq::unversioned::transport::time::Duration;
-use ureq::unversioned::transport::{LazyBuffers, NextTimeout, Transport};
-
-use super::Socket;
-
-fn wait() -> NextTimeout {
-    NextTimeout {
-        after: Duration::NotHappening,
-        reason: Timeout::Global,
-    }
-}
-
-#[test]
-fn a_socket_is_open_until_a_read_finds_the_peer_closed() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (mut peer, _) = listener.accept().unwrap();
-    let mut socket = Socket {
-        stream,
-        buffers: LazyBuffers::new(1024, 1024),
-        open: true,
-    };
-    assert!(socket.is_open());
-
-    peer.write_all(b"x").unwrap();
-    let (mut socket, arrived) = fakes::within(
-        "the socket to see the peer's byte",
-        CALL_WITHIN,
-        move || {
-            let arrived = socket.await_input(wait());
-            (socket, arrived)
-        },
-    );
-    assert!(arrived.unwrap());
-    assert!(socket.is_open(), "a read that got bytes leaves it open");
-
-    drop(peer);
-    let (mut socket, arrived) =
-        fakes::within("the socket to see the peer close", CALL_WITHIN, move || {
-            let arrived = socket.await_input(wait());
-            (socket, arrived)
-        });
-    assert!(!arrived.unwrap());
-    assert!(!socket.is_open(), "a read that found the peer closed");
-}
 
 /// Records what it was asked to sign and adds one header.
 struct Recorder(std::sync::Mutex<Vec<(String, String, Vec<u8>)>>);
@@ -292,6 +245,15 @@ fn posted(
         };
         (outcome, secrets)
     })
+}
+
+#[test]
+fn a_cancel_is_not_stopped_until_it_is_cancelled() {
+    use net::Keep as _;
+    let cancel: std::sync::Arc<super::Cancel> = std::sync::Arc::default();
+    assert!(!cancel.is_stopped(), "a fresh call is not stopped");
+    cancel.cancel();
+    assert!(cancel.is_stopped(), "a cancelled call is stopped");
 }
 
 #[test]

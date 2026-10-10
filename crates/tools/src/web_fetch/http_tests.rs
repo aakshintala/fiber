@@ -2,7 +2,7 @@
 //! resolver that holds a connection to the addresses already checked.
 
 use std::io::{Read, Write};
-use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -15,9 +15,10 @@ use fakes::clock::FakeClock;
 use ureq::config::Config;
 use ureq::http::Uri;
 use ureq::unversioned::resolver::Resolver;
-use ureq::unversioned::transport::{LazyBuffers, NextTimeout, Transport};
+use ureq::unversioned::transport::NextTimeout;
 
-use super::{Ended, Hop, Limit, Pinned, Socket, Stop, guarded};
+use super::{Ended, Hop, Limit, Pinned, Stop, guarded};
+use net::Keep as _;
 
 /// How long a test waits on a socket or a waiter.
 const SIGNAL: Duration = Duration::from_secs(10);
@@ -156,10 +157,26 @@ fn a_call_cancelled_before_it_starts_runs_no_work_and_wins_over_a_passed_deadlin
 /// A connected pair: the client end for the hop to keep, and the server end.
 fn pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (server, _) = listener.accept().unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (client, server) = fakes::within(
+        "the client to connect and the listener to accept it",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            let client = TcpStream::connect(addr).unwrap();
+            let (server, _) = listener.accept().unwrap();
+            (client, server)
+        },
+    );
     server.set_read_timeout(Some(SIGNAL)).unwrap();
     (client, server)
+}
+
+#[test]
+fn a_hop_is_not_stopped_until_it_halts() {
+    let hop = Hop::default();
+    assert!(!hop.is_stopped(), "a fresh hop is not stopped");
+    hop.halt(Stop::Cancelled);
+    assert!(hop.is_stopped(), "a halted hop is stopped");
 }
 
 #[test]
@@ -352,37 +369,6 @@ fn park_returns_at_once_for_a_finished_hop() {
     rx.recv_timeout(SIGNAL)
         .expect("a finished hop ends park at once");
     assert!(fake.parked().is_empty(), "park never waited on the clock");
-}
-
-fn socket_timeout() -> NextTimeout {
-    NextTimeout {
-        after: ureq::unversioned::transport::time::Duration::NotHappening,
-        reason: ureq::Timeout::Global,
-    }
-}
-
-#[test]
-fn the_socket_is_open_while_bytes_arrive_and_shut_at_end_of_stream() {
-    let (client, mut server) = pair();
-    client.set_read_timeout(Some(SIGNAL)).unwrap();
-    server.write_all(b"hello").unwrap();
-    server.shutdown(Shutdown::Write).unwrap();
-    let config = Config::default();
-    let mut socket = Socket {
-        stream: client,
-        buffers: LazyBuffers::new(config.input_buffer_size(), config.output_buffer_size()),
-        open: true,
-    };
-    assert!(
-        socket.await_input(socket_timeout()).unwrap(),
-        "bytes arrived"
-    );
-    assert!(socket.is_open());
-    assert!(
-        !socket.await_input(socket_timeout()).unwrap(),
-        "the peer closed"
-    );
-    assert!(!socket.is_open());
 }
 
 /// The head of one GET of `uri`, pinned to `address`. The GET blocks on
