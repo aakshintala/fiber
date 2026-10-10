@@ -294,7 +294,6 @@ fn picker(p: Picker, cols: usize) -> Vec<super::Row> {
         .max(TITLE.width())
         .max("↑↓ move · enter open · esc closes".width());
     let w = super::panel::fit_width(natural, 55, cols);
-    let inner = super::panel::inner_w(w);
     super::panel::frame(
         Some(super::panel::title_row(TITLE, None)),
         picker_body(p),

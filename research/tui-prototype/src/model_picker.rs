@@ -388,7 +388,7 @@ fn footer_pairs() -> Vec<(&'static str, &'static str)> {
 }
 
 /// The foot legend: keys bold, labels muted.
-fn footer(inner: usize) -> Row {
+fn footer() -> Row {
     panel::footer_legend(&footer_pairs())
 }
 
@@ -457,7 +457,7 @@ pub fn view(s: &State, w: usize) -> Vec<Row> {
     let natural = natural.max(width(&foot).saturating_sub(3));
     let panel_w = panel::fit_width(natural, w.saturating_sub(4).min(96), w);
     let inner = panel::inner_w(panel_w);
-    let rows = panel::frame(None, body(s, inner), Some(footer(inner)), panel_w);
+    let rows = panel::frame(None, body(s, inner), Some(footer()), panel_w);
     panel::centre(rows, panel_w, w)
 }
 
