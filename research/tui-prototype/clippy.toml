@@ -1,0 +1,9 @@
+# The prototype is a throwaway research program, not a Fiber crate: it reads
+# the wall clock directly (animation, hover timing, benchmarks) and has no
+# injected clock. The workspace clippy.toml bans those reads for Fiber's
+# crates, and clippy reads only the nearest clippy.toml, so this file keeps
+# the test allowances and drops the bans.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
