@@ -248,6 +248,12 @@ pub fn slash_row(e: &Entry, focused: bool, query: &str, name_w: usize, w: usize)
         spans.push(sp(hint, fg(ORANGE)));
     }
     spans.extend([sp("\t", Style::new()), sp(e.tag, dim())]);
+    // The focused row reads bold throughout, like every focused choice.
+    if focused {
+        for s in spans.iter_mut().skip(1) {
+            s.style = s.style.patch(bold());
+        }
+    }
     row(spans)
 }
 
@@ -701,6 +707,33 @@ mod tests {
             let lines: Vec<&str> = t.split('\n').collect();
             assert!(lines[1].trim().is_empty(), "{}: no top pad", c.name);
             assert!(lines[lines.len() - 2].trim().is_empty(), "{}: no bottom pad", c.name);
+        }
+    }
+
+    #[test]
+    fn the_focused_row_reads_bold_in_the_buffer() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::Modifier;
+        let rows = view(&for_case("slash"), "/", 100);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, rows.len() as u16));
+        for (y, r) in rows.iter().enumerate() {
+            crate::paint(&mut buf, 0, y as u16, 100, r);
+        }
+        let t = text(&rows);
+        let (y, line) = t
+            .split('\n')
+            .enumerate()
+            .find(|(_, l)| l.contains("show the context breakdown"))
+            .unwrap();
+        // Description and tag both bold on the focused row.
+        for word in ["show the", "command"] {
+            let at = line.find(word).unwrap();
+            let col = line[..at].chars().count();
+            assert!(
+                buf[(col as u16, y as u16)].modifier.contains(Modifier::BOLD),
+                "{word} not bold"
+            );
         }
     }
 

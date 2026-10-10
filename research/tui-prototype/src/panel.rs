@@ -6,7 +6,7 @@
 //! No new frame style lives here; surfaces that need one say so in the PR.
 
 use super::{BI, BLUE, Row, bold, dim, fg, fit, row, slab, sp, t, width, wrap_rows};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
@@ -96,7 +96,13 @@ pub(crate) fn choice_row(
     let hang = 2 + key_w + 2;
     let first = vec![marker, key, sp("  ", Style::new())];
     let rest = vec![sp(" ".repeat(hang), Style::new())];
-    wrap_rows(vec![sp(desc, dim())], inner, first, rest)
+    // The focused choice reads bold throughout, like the approval card.
+    let desc = if focused {
+        sp(desc, dim().add_modifier(Modifier::BOLD))
+    } else {
+        sp(desc, dim())
+    };
+    wrap_rows(vec![desc], inner, first, rest)
 }
 
 /// A full-width selection bar over rows: the accent behind, dark ink over
@@ -332,6 +338,22 @@ mod tests {
         let rest = choice_row(false, "c", "close all", 5, 40);
         assert!(text(&rest).starts_with("  "));
         assert!(!rest[0].spans[1].style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn the_focused_description_reads_bold_in_the_buffer() {
+        for (focused, want) in [(true, true), (false, false)] {
+            let rows = choice_row(focused, "enter", "leave them running", 5, 40);
+            let buf = buffer(&rows, 40);
+            let mut bold = false;
+            for x in 0..40 {
+                if buf[(x, 0)].symbol() == "l" {
+                    bold = buf[(x, 0)].modifier.contains(Modifier::BOLD);
+                    break;
+                }
+            }
+            assert_eq!(bold, want, "focused={focused}: description bold wrong");
+        }
     }
 
     #[test]

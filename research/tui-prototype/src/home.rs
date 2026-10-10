@@ -254,6 +254,8 @@ fn picker_body(p: Picker) -> Vec<super::Row> {
                 out.push(row(vec![sp("  ", Style::new()), sp(*name, Style::new())]));
             }
         }
+        // The dim section header stands off from the completions above it.
+        out.push(row(vec![]));
         out.push(row(vec![sp("── recents ──", dim())]));
     }
     for (i, r) in RECENTS.iter().enumerate() {
@@ -512,5 +514,33 @@ mod tests {
         let typed = text(&crate::cases::lookup(CASES, "picker-typed").unwrap(), 160, 48);
         assert!(typed.contains("› ~/work/fi"));
         assert!(typed.contains("── recents ──"));
+        // The dim section header stands off on a blank row.
+        let lines: Vec<&str> = typed.split('\n').collect();
+        let div = lines.iter().position(|l| l.contains("── recents ──")).unwrap();
+        assert!(lines[div - 1].trim().is_empty(), "no blank over the recents");
+    }
+
+    #[test]
+    fn the_selected_workspace_reads_bold_in_the_buffer() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::Modifier;
+        let rows = picker(Picker::Recent, 160);
+        let w = crate::width(&rows[0].spans);
+        let mut buf = Buffer::empty(Rect::new(0, 0, w as u16, rows.len() as u16));
+        for (y, r) in rows.iter().enumerate() {
+            crate::paint(&mut buf, 0, y as u16, w as u16, r);
+        }
+        let t = rows
+            .iter()
+            .map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The first workspace row is the selected one.
+        let y = t.split('\n').position(|l| l.contains("~/work/fiber")).unwrap() as u16;
+        let line = t.split('\n').nth(y as usize).unwrap();
+        let at = line.find("~/work/fiber").unwrap();
+        let col = line[..at].chars().count();
+        assert!(buf[(col as u16, y)].modifier.contains(Modifier::BOLD), "selection not bold");
     }
 }

@@ -309,6 +309,12 @@ fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool) -> Row {
         spans.push(sp("· scoped ", dim()));
     }
     spans.extend([sp("\t", Style::new()), sp(m.rebuild, dim())]);
+    // The focused model reads bold throughout, like every focused choice.
+    if focused {
+        for s in spans.iter_mut().skip(3) {
+            s.style = s.style.patch(bold());
+        }
+    }
     Row { spans, act: Some(Act::Pick(f)), ..Default::default() }
 }
 
@@ -373,10 +379,10 @@ fn controls(s: &State, w: usize) -> Row {
     hot_row(parts)
 }
 
-/// The foot legend's pairs: keys bold, labels muted, naming panel keys the
-/// body never lists as choices.
-fn footer_pairs() -> Vec<(&'static str, &'static str)> {
-    vec![
+/// The foot legend: keys bold, labels muted, naming panel keys the body
+/// never lists as choices.
+fn footer() -> Row {
+    panel::footer_legend(&[
         ("↑↓", "move"),
         ("←→", "levels"),
         ("enter", "choose"),
@@ -384,12 +390,7 @@ fn footer_pairs() -> Vec<(&'static str, &'static str)> {
         ("a", "show all"),
         ("r", "refresh"),
         ("esc", "close"),
-    ]
-}
-
-/// The foot legend: keys bold, labels muted.
-fn footer() -> Row {
-    panel::footer_legend(&footer_pairs())
+    ])
 }
 
 /// The panel's body at an inner width: controls, dim provider sections with
@@ -594,6 +595,29 @@ mod tests {
             assert!(lines[1].trim().is_empty(), "{}: no top pad", c.name);
             assert!(lines[lines.len() - 2].trim().is_empty(), "{}: no bottom pad", c.name);
         }
+    }
+
+    #[test]
+    fn the_focused_model_reads_bold_in_the_buffer() {
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::style::Modifier;
+        let rows = view(&for_case("list"), 100);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 100, rows.len() as u16));
+        for (y, r) in rows.iter().enumerate() {
+            crate::paint(&mut buf, 0, y as u16, 100, r);
+        }
+        let t = text(&rows);
+        let y = t.split('\n').position(|l| l.contains("claude-opus-5-5")).unwrap() as u16;
+        // The role reads bold on the focused row; the same role stays plain below.
+        let hit = t.split('\n').nth(y as usize).unwrap().find("[main]").unwrap();
+        let col = t.split('\n').nth(y as usize).unwrap()[..hit].chars().count();
+        assert!(buf[(col as u16, y)].modifier.contains(Modifier::BOLD), "role not bold");
+        let y2 = t.split('\n').position(|l| l.contains("gpt-6-sol [main]")).unwrap() as u16;
+        assert!(
+            !(0..100).any(|x| buf[(x, y2)].modifier.contains(Modifier::BOLD) && buf[(x, y2)].symbol() == "["),
+            "unfocused role went bold"
+        );
     }
 
     #[test]

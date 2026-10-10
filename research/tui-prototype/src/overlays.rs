@@ -205,7 +205,8 @@ fn visible(tab: Option<&str>, query: &str) -> Vec<&'static Binding> {
 /// One keymap row over three fixed-width columns: the group dim, the action,
 /// and the keys dim. Each column wraps inside its own width; every column
 /// starts at the same cell on every row. Groups are ASCII, so padding by
-/// chars is padding by cells.
+/// chars is padding by cells. The selected row reads bold throughout, like
+/// every focused choice.
 fn binding_row(b: &Binding, selected: bool, gw: usize, aw: usize, kw: usize) -> Vec<super::Row> {
     let gutter = if selected { vec![sp("› ", bold())] } else { vec![sp("  ", Style::new())] };
     let a = wrap(desc_spans(b), aw.max(1), vec![], vec![]);
@@ -220,7 +221,17 @@ fn binding_row(b: &Binding, selected: bool, gw: usize, aw: usize, kw: usize) -> 
         s.extend(fit(k.get(i).map(|v| v.as_slice()).unwrap_or(&[]), kw));
         out.push(row(s));
     }
-    if selected { panel::bar(out) } else { out }
+    // The selected row reads bold throughout, like every focused choice.
+    if selected {
+        for r in &mut out {
+            for s in &mut r.spans {
+                s.style = s.style.patch(bold());
+            }
+        }
+        panel::bar(out)
+    } else {
+        out
+    }
 }
 
 /// The visible bindings as rows, the first one selected. Column widths come
@@ -378,8 +389,13 @@ fn history_body(inner: usize) -> Vec<super::Row> {
         row(vec![sp(format!("{} matches · newest first", PROMPTS.len()), dim())]),
     ];
     for (i, (prompt, from)) in PROMPTS.iter().enumerate() {
-        let mut spans = hl(prompt, QUERY, Style::new(), bold());
-        spans.push(sp(format!(" · {from}"), dim()));
+        // The focused match reads bold throughout, like every focused choice.
+        let base = if i == 0 { bold() } else { Style::new() };
+        let mut spans = hl(prompt, QUERY, base, bold());
+        spans.push(sp(
+            format!(" · {from}"),
+            if i == 0 { dim().patch(bold()) } else { dim() },
+        ));
         let (first, rest) = if i == 0 {
             (vec![sp("› ", bold())], vec![sp("  ", Style::new())])
         } else {
@@ -930,6 +946,36 @@ mod tests {
         // Only the default rides the bar.
         let barred = (0..48).filter(|&y| (0..160).any(|x| buf[(x, y)].bg == crate::BLUE)).count();
         assert_eq!(barred, 1, "more than enter is barred");
+    }
+
+    #[test]
+    fn focused_rows_read_bold_in_the_buffer() {
+        use ratatui::style::Modifier;
+        // Quit: the default's description, bold on its bar.
+        let c = parse("quit").unwrap();
+        let (buf, t) = (buffer(&c, 160, 48), text(&c, 160, 48));
+        let y = t.split('\n').position(|l| l.contains("leave them running")).unwrap() as u16;
+        assert!((0..160).any(|x| buf[(x, y)].symbol() == "l" && buf[(x, y)].modifier.contains(Modifier::BOLD)));
+        // Key map: the selected binding's action, bold on its bar.
+        let c = parse("keymap").unwrap();
+        let (buf, t) = (buffer(&c, 160, 48), text(&c, 160, 48));
+        let y = t.split('\n').position(|l| l.contains("Start a new session")).unwrap() as u16;
+        assert!((0..160).any(|x| buf[(x, y)].symbol() == "S" && buf[(x, y)].modifier.contains(Modifier::BOLD)));
+        // History: the first match's source, bold; the rest stay plain dim.
+        let c = parse("history").unwrap();
+        let (buf, t) = (buffer(&c, 160, 48), text(&c, 160, 48));
+        let (y, first) = t
+            .split('\n')
+            .enumerate()
+            .find(|(_, l)| l.contains("this session") || l.contains("· project"))
+            .unwrap();
+        assert!(first.contains("this session"));
+        let dot = first.find('·').unwrap();
+        let col = first[..dot].chars().count() + 2;
+        assert!(
+            buf[(col as u16, y as u16)].modifier.contains(Modifier::BOLD),
+            "first source not bold"
+        );
     }
 
     #[test]
