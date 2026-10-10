@@ -51,10 +51,10 @@ An extension may change everything the terminal draws, through the slots in
 `fiber` opens on home, the command center, drawn full screen with no panel and
 no rail. It is centred. From the top:
 
-1. the logo
-3. a large input box, whose bottom row carries the workspace chip, the new worktree
+1. the logo, centred over the box
+2. a large input box, whose bottom row carries the workspace chip, the new worktree
    switch, and the model and thinking chips and "enter starts a session"
-4. under the box, at its width, the session list ("The session list")
+3. under the box, at its width, the session list ("The session list")
 
 A key hint sits at the foot. It names the key map action's bound key,
 leaving the key out when the action is unbound; Ctrl+C cannot be
