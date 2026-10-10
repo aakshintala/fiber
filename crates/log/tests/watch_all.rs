@@ -12,6 +12,7 @@
 mod common;
 
 use std::fs;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
@@ -20,7 +21,7 @@ use common::*;
 use contract::Envelope;
 use contract::emit::Emit;
 use fakes::Deadline;
-use log::{Log, Watcher};
+use log::{Log, Watcher, WeakEmit};
 use serde_json::{Map, Value};
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -360,4 +361,24 @@ fn watch_all_seeded_over_lines_larger_than_a_page_yields_the_log_then_seeds_then
     let seeds: Vec<String> = (0..3).map(|_| next(&rx, &wait).unwrap().kind).collect();
     assert_eq!(seeds, ["session_status", "steering_queue", "extension_ui"]);
     assert_eq!(next(&rx, &wait), Some(live));
+}
+
+#[test]
+fn a_weak_emit_emits_while_the_log_lives_and_never_keeps_it() {
+    // Both promises through the public API: a line emitted while the log
+    // lives arrives, and the emitter keeps no strong handle.
+    let tmp = TestDir::new("weak-emit");
+    let log = Arc::new(Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap());
+    let emit = WeakEmit::new(&log);
+    let weak = Arc::downgrade(&log);
+    let rx = relay(log.watch());
+    emit.emit(&delta("e"));
+    let line = next(&rx, &Deadline::after(DEADLINE)).unwrap();
+    assert_eq!(line.kind, "assistant_message_delta");
+    drop(log);
+    assert!(
+        weak.upgrade().is_none(),
+        "the emitter holds no strong handle"
+    );
+    emit.emit(&delta("e"));
 }

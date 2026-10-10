@@ -9,6 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::cmp::Ordering;
 use std::fs::{self};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::sync::Weak;
@@ -261,24 +262,13 @@ fn hits_rank_by_class_then_newer_then_session_then_seq() {
 }
 
 #[test]
-fn ranked_equality_matches_its_ordering_key() {
-    let equal = Ranked(hit(Label::Message, 5, "s_a", 4));
-    let same_key = Ranked(hit(Label::Message, 5, "s_a", 4));
-    let different_key = Ranked(hit(Label::Message, 5, "s_a", 3));
-    assert!(equal.eq(&same_key));
-    assert!(!equal.eq(&different_key));
-    assert_eq!(equal.cmp(&same_key), Ordering::Equal);
-    assert_ne!(equal.cmp(&different_key), Ordering::Equal);
-}
-
-#[test]
 fn hits_tied_on_rank_order_by_log_then_snippet_then_artifact() {
     let with = |log: &str, snippet: &str, artifact: Option<&str>| {
         let mut hit = hit(Label::ToolOutput, 5, "s_a", 4);
         hit.log = PathBuf::from(log);
         snippet.clone_into(&mut hit.snippet);
         hit.artifact = artifact.map(PathBuf::from);
-        Ranked(hit)
+        hit
     };
     let base = with("/b", "b", Some("/b"));
     for (smaller, larger) in [
@@ -287,8 +277,8 @@ fn hits_tied_on_rank_order_by_log_then_snippet_then_artifact() {
         (with("/b", "b", None), with("/b", "b", Some("/a"))),
         (with("/b", "b", Some("/a")), with("/b", "b", Some("/b"))),
     ] {
-        assert_eq!(smaller.cmp(&larger), Ordering::Less);
-        assert!(!smaller.eq(&larger));
+        assert_eq!(key(&smaller).cmp(&key(&larger)), Ordering::Less);
+        assert_ne!(key(&smaller), key(&larger));
     }
 }
 
@@ -311,7 +301,7 @@ fn a_limit_of_zero_keeps_no_hit_while_scanning() {
     let mut out = Collect::new(0);
     for seq in 0..1000 {
         out.hit(hit(Label::Message, seq, "s", seq));
-        assert!(out.heap.is_empty());
+        assert!(out.hits.is_empty());
     }
     assert_eq!(out.found().total, 1000);
 }
@@ -345,9 +335,9 @@ proptest! {
         for hit in all.clone() {
             out.hit(hit);
         }
-        let mut sorted: Vec<Ranked> = all.into_iter().map(Ranked).collect();
-        sorted.sort();
-        let want: Vec<Hit> = sorted.into_iter().take(limit).map(|r| r.0).collect();
+        let mut sorted = all;
+        sorted.sort_by(|a, b| key(a).cmp(&key(b)));
+        let want: Vec<Hit> = sorted.into_iter().take(limit).collect();
         let found = out.found();
         prop_assert_eq!(keys(&found.hits), keys(&want));
         prop_assert_eq!(found.total, rows.len() as u64);

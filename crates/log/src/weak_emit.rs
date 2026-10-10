@@ -32,7 +32,3 @@ impl Emit for WeakEmit {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "weak_emit_tests.rs"]
-mod tests;

@@ -102,10 +102,8 @@ fn cache_writes_sum_by_lifetime() {
         usage(calls.iter()),
         expected(tokens(0, 0, &[("5m", 5), ("1h", 18)], 0), None, 0.0)
     );
-}
-
-#[test]
-fn token_sums_saturate() {
+    // Sums saturate: two calls whose `input`, `cache_read`, `output` and
+    // one `cache_write` lifetime sum past `u64::MAX` give `u64::MAX`.
     let calls = [
         call(
             "g1",

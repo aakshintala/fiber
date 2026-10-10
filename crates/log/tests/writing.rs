@@ -12,7 +12,6 @@
 mod common;
 
 use std::fs;
-use std::path::Path;
 use std::time::Duration;
 
 use common::*;
@@ -43,24 +42,6 @@ fn a_session_directory_is_created_once() {
     let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
     drop(log);
     assert!(Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).is_err());
-}
-
-#[test]
-fn sessions_live_under_the_project_key_in_fiber_home() {
-    let dir = log::sessions_dir(Path::new("/h"), Path::new("/Users/alice/work/fiber/.git"));
-    assert_eq!(
-        dir,
-        Path::new("/h/projects/-Users-alice-work-fiber-.git/sessions")
-    );
-}
-
-#[test]
-fn the_project_key_makes_every_slash_a_dash() {
-    assert_eq!(
-        log::project_key(Path::new("/Users/alice/work/fiber/.git")),
-        "-Users-alice-work-fiber-.git"
-    );
-    assert_eq!(log::project_key(Path::new("a/b//c/")), "a-b--c-");
 }
 
 #[test]
