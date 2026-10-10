@@ -1082,47 +1082,6 @@ fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
     );
 }
 
-#[test]
-fn lua_seal_directly_drops_late_status_log_and_emit_from_a_parked_command() {
-    // Through `LuaExtension::seal` directly: same parked command, same
-    // silence afterwards.
-    let (url, accepted_rx, release_tx) = reply_server();
-    let dir = fakes::TempDir::new("fiber-seal-direct");
-    std::fs::write(dir.path().join("init.lua"), hold_init(&url)).unwrap();
-    let lua = Arc::new(crate::lua::LuaExtension::new(
-        "fiber.test/a",
-        dir.path(),
-        dir.path(),
-        FakeClock::new(),
-    ));
-    let recorder = Arc::new(SealRecorder::default());
-    lua.set_emit(Arc::clone(&recorder) as Arc<dyn contract::emit::Emit>);
-    let (inbox_tx, inbox_rx) = mpsc::channel();
-    lua.deliver_to(inbox_tx);
-    let running = Arc::clone(&lua);
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _sent = done_tx.send(running.command("hold", ""));
-    });
-    accepted_rx
-        .recv_timeout(WAIT)
-        .expect("waited for the command to park on host.http");
-    lua.seal();
-    let _sent = release_tx.send(());
-    let result = done_rx
-        .recv_timeout(WAIT)
-        .expect("waited for the parked command to return");
-    assert_eq!(result.unwrap(), "ok");
-    assert!(
-        recorder.events.lock().unwrap().is_empty(),
-        "nothing reaches the Emit after LuaExtension::seal"
-    );
-    assert!(
-        inbox_rx.try_recv().is_err(),
-        "nothing reaches the inbox after LuaExtension::seal"
-    );
-}
-
 /// A fake door for `SessionExtensions::drive_to`: records each drive and
 /// answers `Ok(None)`, so `host.drive` returns true.
 struct FakeDrive {
