@@ -910,8 +910,9 @@ fn the_commands_answer_fills_the_list_with_hints_and_tags() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     let id = attached_asking(&mut app, now);
-    // Until the answer arrives, the built-ins only.
-    assert!(slash_rows(&mut app, "rev", now).is_empty());
+    // Until the answer arrives, the built-ins only: `/rev` finds no
+    // row, so the panel holds only its dim row.
+    assert_eq!(slash_rows(&mut app, "rev", now), ["no matches"]);
     let answer = commands_answer(
         &id,
         serde_json::json!([
@@ -960,7 +961,9 @@ fn reloaded_asks_again_and_only_the_latest_answer_fills_the_list() {
         app.on_line(commands_answer(&first, row("older")))
             .is_empty()
     );
-    assert!(slash_rows(&mut app, "older", now).is_empty());
+    // The older answer arrives after the reload: ignored, so `/older`
+    // finds no row and the panel holds only its dim row.
+    assert_eq!(slash_rows(&mut app, "older", now), ["no matches"]);
     assert!(
         app.on_line(commands_answer(&second, row("latest")))
             .is_empty()
@@ -992,7 +995,9 @@ fn the_opening_messages_skills_no_longer_feed_the_list() {
         None,
     );
     assert!(app.on_line(opening).is_empty());
-    assert!(slash_rows(&mut app, "td", now).is_empty());
+    // The opening message's skills never feed the list: `/td` finds
+    // no row, so the panel holds only its dim row.
+    assert_eq!(slash_rows(&mut app, "td", now), ["no matches"]);
 }
 
 #[test]
@@ -1008,7 +1013,9 @@ fn a_commands_answer_from_another_session_is_ignored() {
         envelope.session_id = contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
     }
     assert!(app.on_line(answer).is_empty());
-    assert!(slash_rows(&mut app, "td", now).is_empty());
+    // The foreign answer fills nothing: `/td` finds no row, so the
+    // panel holds only its dim row.
+    assert_eq!(slash_rows(&mut app, "td", now), ["no matches"]);
 }
 
 /// Every line an effect sends, parsed.
