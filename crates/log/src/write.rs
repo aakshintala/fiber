@@ -3,7 +3,7 @@
 //! and fans every event out to watchers.
 
 use std::collections::BTreeMap;
-use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
+use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
@@ -31,6 +31,7 @@ use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 /// truncates whatever part of a line the failure left.
 pub struct Log {
     inner: Mutex<Inner>,
+    offsets: Arc<Offsets>,
     clock: Arc<dyn Clock>,
     /// The session directory, copied out of `inner` so [`Log::dir`] can lend it.
     dir: PathBuf,
@@ -205,7 +206,7 @@ impl Log {
 
     /// How many durable lines the log holds: the `seq` the next one gets.
     pub fn count(&self) -> u64 {
-        self.lock().offsets.count()
+        self.offsets.count()
     }
 
     /// The durable lines whose `seq` is `from..from + max`, in order, fewer
@@ -213,14 +214,13 @@ impl Log {
     /// Reads and parses only those lines (`docs/events.md`, "Resume"): a
     /// line outside the window that does not parse is never seen.
     pub fn range(&self, from: u64, max: usize) -> Result<Vec<Envelope>, Error> {
-        let offsets = Arc::clone(&self.lock().offsets);
-        offsets.range(from, max)
+        self.offsets.range(from, max)
     }
 
     /// A watcher that receives every event appended from now on. On a log
     /// stopped by a failed write, one that returns the failure at once.
     pub fn watch(&self) -> Watcher {
-        let armed = self.arm(false);
+        let armed = self.arm(false, |_, _| {});
         Watcher::new(armed.queue, armed.offsets, armed.next)
     }
 
@@ -232,7 +232,7 @@ impl Log {
     /// them, then the failure once, then nothing; later pages are read as
     /// the watcher reaches them.
     pub fn watch_all(&self) -> Watcher {
-        let armed = self.arm(true);
+        let armed = self.arm(true, |_, _| {});
         self.finish(armed)
     }
 
@@ -243,47 +243,20 @@ impl Log {
     /// that `append` takes, so no later line can be queued before an older
     /// snapshot.
     pub fn watch_all_seeded(&self) -> Watcher {
-        let armed = {
-            let mut inner = self.lock();
-            let queue = Arc::new(Queue::default());
-            if let Some(cause) = &inner.failed {
-                queue.fail(&inner.session_id.0, cause);
-            }
-            inner.watchers.retain(|w| w.strong_count() > 0);
-            inner.watchers.push(Arc::downgrade(&queue));
-            let mut seeds: Vec<Envelope> = Vec::new();
-            if let Some(line) = inner.latest.get("session_status") {
-                seeds.push(line.clone());
-            }
-            if let Some(line) = inner.latest.get("steering_queue") {
-                seeds.push(line.clone());
-            }
-            let mut ui_keys: Vec<&String> = inner
-                .latest
-                .keys()
-                .filter(|k| k.starts_with("extension_ui:"))
-                .collect();
-            ui_keys.sort();
-            for key in ui_keys {
-                if let Some(line) = inner.latest.get(key) {
-                    seeds.push(line.clone());
-                }
-            }
-            for line in &seeds {
+        let armed = self.arm(true, |inner, queue| {
+            for line in inner.kept_seed() {
                 queue.push_kept(line);
             }
-            Armed {
-                queue,
-                offsets: Arc::clone(&inner.offsets),
-                next: 0,
-            }
-        };
+        });
         self.finish(armed)
     }
 
-    /// Registers a queue. `from_start` is [`Log::watch_all`]: the watcher
-    /// begins at `seq` 0. [`Log::watch`] begins at the next line.
-    fn arm(&self, from_start: bool) -> Armed {
+    /// Registers a queue and runs `seed` under the one log lock that
+    /// `append` takes, after the queue is registered (and after `fail` on
+    /// a stopped log), so no later line can be queued before an older
+    /// snapshot. `from_start` is [`Log::watch_all`]: the watcher begins at
+    /// `seq` 0. [`Log::watch`] begins at the next line.
+    fn arm(&self, from_start: bool, seed: impl FnOnce(&Inner, &Queue)) -> Armed {
         let mut inner = self.lock();
         let queue = Arc::new(Queue::default());
         if let Some(cause) = &inner.failed {
@@ -293,6 +266,7 @@ impl Log {
         // idle keeps nothing.
         inner.watchers.retain(|w| w.strong_count() > 0);
         inner.watchers.push(Arc::downgrade(&queue));
+        seed(&inner, &queue);
         Armed {
             queue,
             offsets: Arc::clone(&inner.offsets),
@@ -388,6 +362,7 @@ impl Log {
     fn from_parts(inner: Inner, clock: Arc<dyn Clock>) -> Self {
         Self {
             dir: inner.dir.clone(),
+            offsets: Arc::clone(&inner.offsets),
             inner: Mutex::new(inner),
             clock,
         }
@@ -463,6 +438,12 @@ impl Inner {
         self.offsets
             .push(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
         if sync {
+            #[cfg(test)]
+            BEFORE_SYNC.with(|cell| {
+                if let Some(hook) = cell.borrow().as_ref() {
+                    hook();
+                }
+            });
             self.fsyncs += 1;
             self.events.sync_data().map_err(io_at(&path))?;
         }
@@ -476,6 +457,21 @@ impl Inner {
             queue.fail(&self.session_id.0, &cause);
         }
         self.failed = Some(cause);
+    }
+
+    /// The kept ephemeral lines, seeded first on a full subscriber: the
+    /// kept `session_status`, then `steering_queue`, then every
+    /// `extension_ui:` key in `BTreeMap` order (already sorted, so no
+    /// explicit sort).
+    fn kept_seed(&self) -> impl Iterator<Item = &Envelope> {
+        let status = self.latest.get("session_status");
+        let steering = self.latest.get("steering_queue");
+        let ui = self
+            .latest
+            .iter()
+            .filter(|(key, _)| key.starts_with("extension_ui:"))
+            .map(|(_, line)| line);
+        status.into_iter().chain(steering).chain(ui)
     }
 }
 
@@ -629,6 +625,26 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
 /// holder's pid, so a later refusal never names a process that let go.
 struct Lock(File);
 
+// Pause point between publishing a line's offset and fsyncing it
+// (`docs/testing.md`, "Waits and timeouts"): the reader-during-fsync test
+// installs a hook to hold the appender there, so the race between the
+// offset being visible and the fsync happens on every run instead of being
+// waited for. Test-only; non-test builds never call it.
+#[cfg(test)]
+thread_local! {
+    static BEFORE_SYNC: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Installs the pause-point hook run after a line's offset is published and
+/// before its fsync (`docs/testing.md`, "Waits and timeouts"), on the
+/// current thread. The reader-during-fsync test uses it to hold the appender
+/// with the line visible, so the race happens on every run.
+#[cfg(test)]
+pub(crate) fn before_sync(hook: impl Fn() + 'static) {
+    BEFORE_SYNC.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
+}
+
 impl Drop for Lock {
     fn drop(&mut self) {
         // Best effort: the lock itself is released when the file closes.
@@ -640,25 +656,17 @@ impl Drop for Lock {
 /// who holds it.
 fn lock(dir: &Path, id: &SessionId, clock: &dyn Clock) -> Result<Lock, Error> {
     let path = dir.join(LOCK);
-    let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
-        .map_err(io_at(&path))?;
-    match file.try_lock() {
-        Ok(()) => {
+    match crate::scan::try_lock_file(dir)? {
+        Some(mut file) => {
             file.set_len(0).map_err(io_at(&path))?;
             file.write_all(format!("{}\n", std::process::id()).as_bytes())
                 .map_err(io_at(&path))?;
             Ok(Lock(file))
         }
-        Err(TryLockError::WouldBlock) => Err(Error::Held {
+        None => Err(Error::Held {
             session: id.0.clone(),
             holder: holder(&path, clock),
         }),
-        Err(TryLockError::Error(e)) => Err(io_at(&path)(e)),
     }
 }
 

@@ -198,21 +198,13 @@ pub fn remaining(dir: &Path) -> io::Result<Option<u64>> {
 }
 
 /// A session's lock, held until it is dropped.
-pub struct SessionLock(
-    #[allow(dead_code, reason = "held for its Drop: closing releases the lock")] File,
-);
-
-/// Whether `try_hold` took the session's lock.
-pub enum Hold {
-    /// The lock, held until the guard is dropped.
-    Held(SessionLock),
-    /// Another process holds the lock.
-    Busy,
+pub struct SessionLock {
+    _file: File,
 }
 
-/// Takes `dir`'s lock without waiting, creating `session.lock` when it is
-/// missing. This is the one write prune makes in a session directory.
-pub fn try_hold(dir: &Path) -> Result<Hold, Error> {
+/// Opens `dir`'s lock file for locking: `Some` file when the lock takes,
+/// `None` when another process holds it.
+pub(crate) fn try_lock_file(dir: &Path) -> Result<Option<File>, Error> {
     let path = dir.join(LOCK);
     let file = OpenOptions::new()
         .read(true)
@@ -225,9 +217,26 @@ pub fn try_hold(dir: &Path) -> Result<Hold, Error> {
             source,
         })?;
     match file.try_lock() {
-        Ok(()) => Ok(Hold::Held(SessionLock(file))),
-        Err(TryLockError::WouldBlock) => Ok(Hold::Busy),
+        Ok(()) => Ok(Some(file)),
+        Err(TryLockError::WouldBlock) => Ok(None),
         Err(TryLockError::Error(source)) => Err(Error::Io { path, source }),
+    }
+}
+
+/// Whether `try_hold` took the session's lock.
+pub enum Hold {
+    /// The lock, held until the guard is dropped.
+    Held(SessionLock),
+    /// Another process holds the lock.
+    Busy,
+}
+
+/// Takes `dir`'s lock without waiting, creating `session.lock` when it is
+/// missing. This is the one write prune makes in a session directory.
+pub fn try_hold(dir: &Path) -> Result<Hold, Error> {
+    match try_lock_file(dir)? {
+        Some(file) => Ok(Hold::Held(SessionLock { _file: file })),
+        None => Ok(Hold::Busy),
     }
 }
 

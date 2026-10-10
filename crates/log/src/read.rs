@@ -63,12 +63,11 @@ impl Lines {
     pub(crate) fn offset(&self) -> u64 {
         self.offset
     }
-}
 
-impl Iterator for Lines {
-    type Item = Result<Envelope, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
+    /// The next complete line's bytes, newline included: `None` at the end
+    /// or at a torn tail. An I/O error ends the lines. Each complete line
+    /// advances the line number and the offset.
+    pub(crate) fn next_raw(&mut self) -> Option<Result<&[u8], Error>> {
         if self.done {
             return None;
         }
@@ -87,12 +86,32 @@ impl Iterator for Lines {
         }
         self.number += 1;
         self.offset += u64::try_from(read).unwrap_or(u64::MAX);
-        let parsed = serde_json::from_slice(&self.buf).map_err(|source| Error::Unreadable {
+        Some(Ok(&self.buf))
+    }
+
+    /// A complete line that did not parse is an error naming it: the number
+    /// of the last complete line returned.
+    pub(crate) fn unreadable(&self, source: serde_json::Error) -> Error {
+        Error::Unreadable {
             path: self.path.clone(),
             line: self.number,
             source,
-        });
-        self.done = parsed.is_err();
+        }
+    }
+}
+
+impl Iterator for Lines {
+    type Item = Result<Envelope, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let bytes = match self.next_raw()? {
+            Ok(bytes) => bytes,
+            Err(error) => return Some(Err(error)),
+        };
+        let parsed = serde_json::from_slice(bytes);
+        let done = parsed.is_err();
+        let parsed = parsed.map_err(|source| self.unreadable(source));
+        self.done = done;
         Some(parsed)
     }
 }
