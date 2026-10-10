@@ -794,6 +794,7 @@ dependencies = [
  "log 0.0.0",
  "serde_json",
  "signal-hook",
+ "support",
  "worktree",
 ]
 
@@ -1209,6 +1210,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
+ "support",
  "thiserror 2.0.21",
 ]
 
@@ -1551,6 +1553,7 @@ dependencies = [
  "proptest",
  "serde_json",
  "similar",
+ "support",
  "thiserror 2.0.21",
 ]
 
@@ -2234,6 +2237,7 @@ dependencies = [
  "fakes",
  "net",
  "serde_json",
+ "support",
  "thiserror 2.0.21",
  "ureq",
 ]
