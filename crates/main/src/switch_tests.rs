@@ -34,6 +34,22 @@ const DEADLINE: Duration = Duration::from_secs(20);
 /// `command` that appends to `bad_marker` and fails; `filed` with `m`
 /// behind the `file` source `key_file`, absent at first; `bed` with a
 /// bedrock model behind the `command` source `other` uses.
+
+/// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
+/// directory is healthy: a directory with no record is damaged and its
+/// providers are left out (`docs/extensions.md`, "Installing").
+fn write_record(dir: &std::path::Path) {
+    let text = std::fs::read_to_string(dir.join("extension.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
+    let version = manifest.get("version").and_then(|v| v.as_str()).unwrap_or("v0.0.0");
+    std::fs::write(
+        dir.join(".fiber.json"),
+        serde_json::json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}}).to_string(),
+    )
+    .unwrap();
+}
+
 struct Fixture {
     root: fakes::TempDir,
     home: PathBuf,
@@ -62,6 +78,7 @@ fn data_extension(home: &Path, name: &str, data: &serde_json::Value) {
         json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&dir);
     std::fs::write(dir.join(format!("providers/{name}.json")), data.to_string()).unwrap();
 }
 
@@ -81,6 +98,7 @@ fn fixture(name: &str) -> Fixture {
         json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&fake);
     std::fs::write(
         fake.join("providers/fake.json"),
         json!({
@@ -107,6 +125,7 @@ fn fixture(name: &str) -> Fixture {
         json!({"name": "claude", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&claude);
     std::fs::write(
         claude.join("providers/claude.json"),
         json!({
@@ -127,6 +146,7 @@ fn fixture(name: &str) -> Fixture {
         json!({"name": "other", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&other);
     std::fs::write(
         other.join("providers/other.json"),
         json!({
@@ -152,6 +172,7 @@ fn fixture(name: &str) -> Fixture {
         json!({"name": "bed", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&bed);
     std::fs::write(
         bed.join("providers/bed.json"),
         json!({
@@ -772,6 +793,7 @@ fn with_literal_provider(fixture: &Fixture) {
         json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&lit);
     std::fs::write(
         lit.join("providers/lit.json"),
         json!({
@@ -869,6 +891,7 @@ fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
         json!({"name": "lit", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&lit);
     std::fs::write(
         lit.join("providers/lit.json"),
         json!({
@@ -930,6 +953,7 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
     )
     .unwrap();
+    write_record(&acme);
     std::fs::write(
         acme.join("providers/acme.json"),
         json!({
@@ -1299,6 +1323,7 @@ fn with_two_literal_providers(fixture: &Fixture) {
             json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
         )
         .unwrap();
+    write_record(&dir);
         std::fs::write(
             dir.join(format!("providers/{name}.json")),
             json!({
@@ -1517,6 +1542,7 @@ fn lua_extension(fixture: &Fixture, counter: &Path, flag: &Path) {
             .to_string(),
     )
     .unwrap();
+    write_record(&src);
     std::fs::write(
         src.join("init.lua"),
         format!(

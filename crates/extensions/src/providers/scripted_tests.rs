@@ -24,6 +24,21 @@ fn scripted_ids(providers: &Providers) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
+/// directory is healthy: a directory with no record is damaged and its
+/// providers are left out (`docs/extensions.md`, "Installing").
+fn write_record(dir: &std::path::Path) {
+    let text = std::fs::read_to_string(dir.join("extension.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
+    let version = manifest.get("version").and_then(|v| v.as_str()).unwrap_or("1.0.0");
+    std::fs::write(
+        dir.join(".fiber.json"),
+        serde_json::json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}}).to_string(),
+    )
+    .unwrap();
+}
+
 /// Writes an installed extension `name` serving one provider of the same
 /// name with these model ids straight into `home`'s `extensions/`.
 /// Writes an installed extension `ext` serving a data provider named
@@ -47,6 +62,7 @@ fn install_scripted_provider(home: &Path, ext: &str, ids: &[&str]) {
         json!({ "name": "scripted", "models": models }).to_string(),
     )
     .unwrap();
+    write_record(&dir);
 }
 
 fn install_provider(home: &Path, name: &str, ids: &[&str]) {
@@ -57,6 +73,7 @@ fn install_provider(home: &Path, name: &str, ids: &[&str]) {
         json!({ "name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1 }).to_string(),
     )
     .unwrap();
+    write_record(&dir);
     let models: Vec<_> = ids
         .iter()
         .map(|id| json!({ "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000 }))
@@ -66,6 +83,32 @@ fn install_provider(home: &Path, name: &str, ids: &[&str]) {
         json!({ "name": name, "models": models }).to_string(),
     )
     .unwrap();
+}
+
+#[test]
+fn a_damaged_directory_s_providers_are_left_out() {
+    let root = fakes::TempDir::new("fiber-damaged-providers");
+    let home = root.path().join("home");
+    install_provider(&home, "healthy", &["m"]);
+    // Damaged: a manifest and provider data but no install record, so it
+    // holds no installed extension (`docs/extensions.md`, "Installing").
+    let dir = home.join("extensions").join("broken");
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({ "name": "broken", "version": "v1.0.0", "fiber": "0.1.0", "api": 1 }).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("providers").join("broken.json"),
+        json!({ "name": "broken", "models": [{ "id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000 }] }).to_string(),
+    )
+    .unwrap();
+    let (providers, notices) = Providers::load(&home).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["healthy"]);
+    assert!(providers.get("broken").is_none());
+    assert!(providers.resolve("healthy/m").is_ok());
 }
 
 #[test]

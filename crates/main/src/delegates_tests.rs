@@ -19,6 +19,22 @@ use super::{launcher, resolver, watcher};
 
 /// Installs a provider `fake` with a leveled model `m` and a plain model
 /// `plain`, and returns the loaded registry with an empty configuration.
+
+/// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
+/// directory is healthy: a directory with no record is damaged and its
+/// providers are left out (`docs/extensions.md`, "Installing").
+fn write_record(dir: &std::path::Path) {
+    let text = std::fs::read_to_string(dir.join("extension.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
+    let version = manifest.get("version").and_then(|v| v.as_str()).unwrap_or("v0.0.0");
+    std::fs::write(
+        dir.join(".fiber.json"),
+        serde_json::json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}}).to_string(),
+    )
+    .unwrap();
+}
+
 fn rig() -> (extensions::Providers, config::Config) {
     let root = fakes::TempDir::new("fd");
     let home = root.path().join("home");
@@ -29,6 +45,7 @@ fn rig() -> (extensions::Providers, config::Config) {
         r#"{"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#,
     )
     .unwrap();
+    write_record(&extension);
     std::fs::write(
         extension.join("providers/fake.json"),
         r#"{"name": "fake", "models": [

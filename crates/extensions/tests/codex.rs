@@ -26,6 +26,21 @@ use extensions::{
     Browser, CredentialPair, Error, LoggedIn, LoginMethod, LuaExtension, LuaProvider,
     login_provider,
 };
+
+/// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
+/// directory is healthy: a directory with no record is damaged and its
+/// providers are left out (`docs/extensions.md`, "Installing").
+fn write_record(dir: &std::path::Path) {
+    let text = std::fs::read_to_string(dir.join("extension.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
+    let version = manifest.get("version").and_then(|v| v.as_str()).unwrap_or("v0.0.0");
+    std::fs::write(
+        dir.join(".fiber.json"),
+        serde_json::json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}}).to_string(),
+    )
+    .unwrap();
+}
 use fakes::OauthReply;
 use fakes::OauthServer;
 use fakes::clock::FakeClock;
@@ -72,14 +87,16 @@ impl Env {
     /// Installs the package copy pointing at `server`, with its callback
     /// port rewritten to `port`.
     fn install(&self, server: &OauthServer, port: u16) {
+        let dest = self.home().join("extensions").join("codex");
         copy_package(
-            &self.home().join("extensions").join("codex"),
+            &dest,
             "codex",
             &[
                 ("https://auth.openai.com", &server.url()),
                 ("local PORT = 1455", &format!("local PORT = {port}")),
             ],
         );
+        write_record(&dest);
     }
 
     fn providers(&self) -> extensions::Providers {

@@ -39,6 +39,22 @@ const BROWSER_WAIT: Duration = Duration::from_secs(4);
 const ACCOUNT: &str = "acct_1";
 const EMAIL: &str = "alice@example.com";
 
+
+/// Writes the install record `extensions/<dir>/.fiber.json` holds, so the
+/// directory is healthy: a directory with no record is damaged and its
+/// providers are left out (`docs/extensions.md`, "Installing").
+fn write_record(dir: &std::path::Path) {
+    let text = std::fs::read_to_string(dir.join("extension.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
+    let version = manifest.get("version").and_then(|v| v.as_str()).unwrap_or("v0.0.0");
+    std::fs::write(
+        dir.join(".fiber.json"),
+        serde_json::json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}}).to_string(),
+    )
+    .unwrap();
+}
+
 struct Setup {
     root: fakes::TempDir,
     clock: Arc<FakeClock>,
@@ -59,13 +75,15 @@ impl Setup {
     /// Installs the codex package copy pointing at `server`, with its
     /// callback port rewritten to `port`.
     fn install(&self, server: &OauthServer, port: u16) {
+        let dest = self.home().join("extensions").join("codex");
         copy_package(
-            &self.home().join("extensions").join("codex"),
+            &dest,
             &[
                 ("https://auth.openai.com", &server.url()),
                 ("local PORT = 1455", &format!("local PORT = {port}")),
             ],
         );
+        write_record(&dest);
     }
 
     /// Installs a key provider `name`.
@@ -77,6 +95,7 @@ impl Setup {
             json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
         )
         .unwrap();
+    write_record(&dir);
         fs::write(
             dir.join("providers").join(format!("{name}.json")),
             json!({
@@ -596,6 +615,7 @@ fn device_on_a_declared_secret_is_a_usage_error() {
             .to_string(),
     )
     .unwrap();
+    write_record(&dir);
     let providers = setup.providers();
     let mut err = Vec::new();
     let mut keys = Plain;
@@ -677,6 +697,7 @@ fn login_with_runs_the_provider_and_prints_its_stored_result() {
         json!({ "name": "acme-ext", "version": "v1.0.0", "fiber": "0.1.0", "api": 1 }).to_string(),
     )
     .unwrap();
+    write_record(&dir);
     fs::write(
         dir.join("providers/acme.json"),
         json!({
