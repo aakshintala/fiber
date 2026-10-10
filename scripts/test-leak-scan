@@ -7,7 +7,6 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 err=$(mktemp)
-watch_pids=$(mktemp)
 leaker1=
 leaker2=
 # macOS orphans below, Darwin only; empty unless that block started them.
@@ -16,8 +15,6 @@ leaker4=
 leaker5=
 leaker6=
 tmp=
-watchdog=
-self_pid=$$
 # SIGKILL by explicit pid only: never a group id, never pkill, so a wrong
 # pid can only miss, never signal what this test did not start.
 kill_one() {
@@ -36,47 +33,6 @@ kill_one() {
     fi
   fi
 }
-# Append a fixture PID to the watchdog's pid file (one PID per line).
-note_pid() {
-  if [ -n "${1-}" ]; then
-    echo "$1" >>"$watch_pids"
-  fi
-}
-# One background watchdog subshell (stdin/out/err to /dev/null) that polls
-# kill -0 on the given parent pid once per second. When the parent is gone
-# it SIGKILLs every PID listed in the pid file, removes the file, and
-# exits. Started with env -u FIBER_CHECK_RUN so the scan never names it,
-# and bounded to 180 s so it cannot linger.
-start_watchdog() {
-  local parent="$1"
-  local list="$2"
-  # The single-quoted body runs in the inner bash, so its $
-  # expansions must not expand here.
-  # shellcheck disable=SC2016
-  env -u FIBER_CHECK_RUN bash -c '
-    parent=$1
-    list=$2
-    i=0
-    while [ "$i" -lt 180 ]; do
-      if kill -0 "$parent" 2>/dev/null; then
-        sleep 1
-      else
-        if [ -f "$list" ]; then
-          while IFS= read -r pid || [ -n "$pid" ]; do
-            case $pid in "" | *[!0-9]*) continue ;; esac
-            if [ "$pid" -gt 1 ] 2>/dev/null; then
-              kill -KILL "$pid" 2>/dev/null || true
-            fi
-          done <"$list"
-          rm -f "$list"
-        fi
-        exit 0
-      fi
-      i=$((i + 1))
-    done
-    exit 0
-  ' _ "$parent" "$list" </dev/null >/dev/null 2>/dev/null &
-}
 cleanup() {
   kill_one "$leaker1"
   kill_one "$leaker2"
@@ -84,10 +40,6 @@ cleanup() {
   kill_one "$leaker4"
   kill_one "$leaker5"
   kill_one "$leaker6"
-  # Stand the watchdog down only after the fixtures are reaped: kill it
-  # by explicit PID, then remove the pid file.
-  kill_one "$watchdog"
-  rm -f "$watch_pids"
   if [ -n "$tmp" ]; then
     rm -rf "$tmp"
   fi
@@ -98,15 +50,9 @@ trap cleanup EXIT
 # Every deliberately leaked fixture below self-terminates after ~120 s
 # without any signal (a python deadline checked in its loop, SECONDS-bound
 # sh spinners, sleep 120): the EXIT trap cannot run if this self-test is
-# SIGKILLed, so an independent watchdog covers that path. The test appends
-# each fixture PID, including group escapees and orphans, to a pid file as
-# it starts them; the watchdog SIGKILLs every listed PID once the
-# self-test pid is gone, then removes the file and exits (180 s at most).
-# The trap still reaps by explicit PID first. A listed PID is only killed
-# while the self-test is gone, and every fixture is bounded to 120 s, so
-# no PID-reuse guard beyond that is needed.
-start_watchdog "$self_pid" "$watch_pids"
-watchdog=$!
+# SIGKILLed, so an unbounded leaker would survive forever. 120 s is well
+# above this test's few-second runtime; the trap still reaps by explicit
+# PID first, so no extra watchdog process is needed.
 
 n="self-test-$$-$(date +%s)-$RANDOM"
 other="sibling-$$-$(date +%s)-$RANDOM"
@@ -118,7 +64,6 @@ secret="leak-secret-$$-$(date +%s)-$RANDOM"
 # SIGKILL reaps it, and time.sleep starts no child to outlive it.
 FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); end=time.time()+120; exec("while time.time()<end:\n time.sleep(1)")' &
 leaker1=$!
-note_pid "$leaker1"
 
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with leaker $leaker1 alive" >&2
@@ -143,7 +88,6 @@ fi
 # already required by scripts/check, and macOS ships no setsid.
 FIBER_CHECK_RUN=$n python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); os.setsid(); end=time.time()+120; exec("while time.time()<end:\n time.sleep(1)")' &
 leaker2=$!
-note_pid "$leaker2"
 
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with leakers $leaker1 and $leaker2 alive" >&2
@@ -164,7 +108,6 @@ fi
 # only the exact token FIBER_CHECK_RUN=NONCE matches.
 UNRELATED_TOKEN=$n python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); end=time.time()+120; exec("while time.time()<end:\n time.sleep(1)")' &
 leaker5=$!
-note_pid "$leaker5"
 
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with leakers alive" >&2
@@ -259,7 +202,6 @@ if [ "$(uname -s)" = Darwin ]; then
     echo "scripts/test-leak-scan: sh orphan never reached ppid 1" >&2
     exit 1
   fi
-  note_pid "$leaker3"
   lstart=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker3" | sed 's/^ *//;s/ *$//')
   started=$(date -j -f "%a %b %e %T %Y" "$lstart" "+%s")
   # Started after the check: the warning names the PID, exit stays 0.
@@ -327,7 +269,6 @@ if [ "$(uname -s)" = Darwin ]; then
     echo "scripts/test-leak-scan: target orphan never reached ppid 1" >&2
     exit 1
   fi
-  note_pid "$leaker4"
   # The check began a second before the orphan started, so the orphan is
   # this run's leak: exit 1 naming the PID.
   lstart4=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker4" | sed 's/^ *//;s/ *$//')
@@ -361,7 +302,6 @@ if [ "$(uname -s)" = Darwin ]; then
     echo "scripts/test-leak-scan: shell arg orphan never reached ppid 1" >&2
     exit 1
   fi
-  note_pid "$leaker6"
   lstart6=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker6" | sed 's/^ *//;s/ *$//')
   started6=$(date -j -f "%a %b %e %T %Y" "$lstart6" "+%s")
   if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started6 - 1))" 2>"$err"; then
@@ -391,75 +331,3 @@ if [ "$(uname -s)" = Darwin ]; then
   rm -rf "$tmp"
   tmp=
 fi
-
-# The watchdog reaps fixtures when the self-test dies: run the same
-# start_watchdog logic against a dummy parent, SIGKILL the parent, and
-# require the fixture gone within ~5 s. Without the watchdog the fixture
-# survives, proving the check bites. Probe fixtures carry no nonce, so the
-# scan above never names them; every SIGKILL below names an explicit PID.
-probe_pids=$(mktemp)
-probe_leaker=
-probe_dummy=
-probe_watchdog=
-env -u FIBER_CHECK_RUN bash -c 'trap "" TERM; exec sleep 120' &
-probe_leaker=$!
-disown "$probe_leaker" 2>/dev/null || true
-echo "$probe_leaker" >>"$probe_pids"
-note_pid "$probe_leaker"
-env -u FIBER_CHECK_RUN sleep 30 &
-probe_dummy=$!
-note_pid "$probe_dummy"
-start_watchdog "$probe_dummy" "$probe_pids"
-probe_watchdog=$!
-kill -KILL "$probe_dummy" 2>/dev/null || true
-wait "$probe_dummy" 2>/dev/null || true
-probe_tries=0
-while [ "$probe_tries" -lt 6 ]; do
-  if kill -0 "$probe_leaker" 2>/dev/null; then
-    sleep 1
-  else
-    break
-  fi
-  probe_tries=$((probe_tries + 1))
-done
-if kill -0 "$probe_leaker" 2>/dev/null; then
-  echo "scripts/test-leak-scan: watchdog did not reap $probe_leaker after dummy parent died" >&2
-  kill_one "$probe_leaker"
-  kill_one "$probe_watchdog"
-  rm -f "$probe_pids"
-  exit 1
-fi
-probe_tries=0
-while [ "$probe_tries" -lt 6 ]; do
-  if kill -0 "$probe_watchdog" 2>/dev/null; then
-    sleep 1
-  else
-    break
-  fi
-  probe_tries=$((probe_tries + 1))
-done
-kill_one "$probe_watchdog"
-rm -f "$probe_pids"
-probe_leaker=
-probe_dummy=
-probe_watchdog=
-# Negate: without the watchdog a dead parent leaves the fixture behind.
-env -u FIBER_CHECK_RUN bash -c 'trap "" TERM; exec sleep 120' &
-neg_leaker=$!
-note_pid "$neg_leaker"
-env -u FIBER_CHECK_RUN sleep 30 &
-neg_dummy=$!
-note_pid "$neg_dummy"
-kill -KILL "$neg_dummy" 2>/dev/null || true
-wait "$neg_dummy" 2>/dev/null || true
-if kill -0 "$neg_leaker" 2>/dev/null; then
-  :
-else
-  echo "scripts/test-leak-scan: negate-check fixture $neg_leaker exited without a watchdog" >&2
-  kill_one "$neg_leaker"
-  exit 1
-fi
-kill_one "$neg_leaker"
-wait "$neg_leaker" 2>/dev/null || true
-neg_leaker=
-neg_dummy=
