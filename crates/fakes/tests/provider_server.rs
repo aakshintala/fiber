@@ -35,6 +35,7 @@ struct Reply {
     body: Vec<u8>,
 }
 
+#[track_caller]
 fn post(server: &ProviderServer, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Reply {
     let mut request = format!("POST {path} HTTP/1.1\r\nHost: fake\r\n");
     for (name, value) in headers {
@@ -65,6 +66,7 @@ fn wait(
 /// Sends `request` as written, ends the write side, and reads the reply to
 /// the end of the connection. A client thread does the I/O and reports each
 /// step, so each wait has one overall deadline and a stall names its step.
+#[track_caller]
 fn exchange(server: &ProviderServer, request: &[u8]) -> Reply {
     let (addr, request) = (addr(server), request.to_vec());
     let (tx, rx) = mpsc::channel();
@@ -309,6 +311,7 @@ fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
 
 /// `await_requests` on a helper, so a mutant that waits out its 30 s `within`
 /// fails this wait instead of hanging the test.
+#[track_caller]
 fn await_requests_within(server: &Arc<ProviderServer>, count: usize) -> bool {
     let (tx, rx) = mpsc::channel();
     let server = Arc::clone(server);

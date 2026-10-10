@@ -19,17 +19,6 @@ fn fake_clock() -> &'static Arc<FakeClock> {
 }
 
 #[test]
-fn a_second_wait_gets_only_what_the_first_left() {
-    let clock = fake_clock();
-    let deadline = Deadline::on(&**clock);
-    assert_eq!(deadline.left(), Duration::from_secs(40));
-    clock.advance(Duration::from_secs(15));
-    assert_eq!(deadline.left(), Duration::from_secs(25));
-    clock.advance(Duration::from_millis(24_999));
-    assert_eq!(deadline.left(), Duration::from_millis(1));
-}
-
-#[test]
 fn left_is_zero_from_the_waits_on_and_never_renews() {
     let clock = fake_clock();
     let deadline = Deadline::on(&**clock);

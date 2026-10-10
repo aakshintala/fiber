@@ -68,6 +68,7 @@ pub fn rerun_within(test: &str, env: &[(&str, &str)], within: Duration) -> Outpu
     clippy::panic,
     reason = "a child that cannot run means the test cannot proceed"
 )]
+#[track_caller]
 fn rerun_prepared(
     test: &str,
     env: &[(&str, &str)],

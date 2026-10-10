@@ -18,10 +18,10 @@ const DEADLINE: Duration = Duration::from_secs(10);
 fn waited(child: Child) -> Output {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    Deadline::after(DEADLINE)
-        .recv(&finished)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the script: {err}"))
-        .unwrap()
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(err) => panic!("waited {DEADLINE:?} for the script: {err}"),
+    }
 }
 
 fn spawn(path: &Path, args: &[&str]) -> Child {

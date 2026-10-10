@@ -1,7 +1,6 @@
 //! One deadline for a test's waits (`docs/testing.md`, "Waits and timeouts"):
 //! every wait takes what remains of it, so a second wait gets only what the
-//! first left. Moved from `crates/main/tests/support/mod.rs`, so every
-//! crate's tests share it.
+//! first left, and every crate's tests share it.
 
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};

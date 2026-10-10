@@ -221,6 +221,7 @@ pub(crate) fn kill_matching_detached(text: &str) {
 /// The timeout branch of a wait for a started process's exit: kills
 /// `group`, reaps through `reap` and checks the group empties, each within
 /// `deadline.cleanup()`, then panics naming `what`.
+#[track_caller]
 pub(crate) fn expired<T>(
     deadline: Deadline,
     group: u32,
@@ -371,6 +372,7 @@ impl HubProc {
 
     /// Waits under the test's [`Deadline`] for a hub that exits on its own,
     /// then asserts nothing remains in its group.
+    #[track_caller]
     pub(crate) fn wait(self) -> ExitStatus {
         let Self {
             mut child,
@@ -400,6 +402,7 @@ impl HubProc {
     /// Kills the hub's group, then waits under the test's [`Deadline`] for
     /// the hub to exit. For a test-sent SIGKILL: the hub's exit is proved by
     /// reaping it, and other members are not waited on.
+    #[track_caller]
     pub(crate) fn kill_and_wait(self) -> ExitStatus {
         let Self {
             mut child,
@@ -579,6 +582,7 @@ impl Clock for StretchedClock {
 /// `hub_hello` read included, bounded by `wait` on the wall clock. `connect`
 /// blocks, so it runs on a thread whose result the test receives with the
 /// deadline. A zero `wait` keeps the clock's scale at 1.
+#[track_caller]
 pub(crate) fn connect_hub_within(
     setup: &Setup,
     hub: &Arc<Mutex<Option<HubProc>>>,
@@ -754,6 +758,7 @@ pub(crate) fn close_session(socket: &Socket) {
 /// Runs `command`, which runs in its own process group, to its exit under
 /// the test's [`Deadline`], naming `what` on expiry, and checks it left no
 /// process in its group.
+#[track_caller]
 pub(crate) fn run_to_exit(deadline: Deadline, what: &str, mut command: Command) -> Output {
     let child = command.spawn().unwrap();
     let group = child.id();
