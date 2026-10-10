@@ -71,7 +71,6 @@ impl Setup {
         watchdog.stand_down(self.deadline.cleanup());
         Run {
             code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
             stderr: String::from_utf8(output.stderr).unwrap(),
         }
     }
@@ -91,7 +90,6 @@ fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
 
 struct Run {
     code: Option<i32>,
-    stdout: String,
     stderr: String,
 }
 
