@@ -4,13 +4,13 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use std::path::PathBuf;
 
-use super::{body, page_step, window};
+use super::{body, id_spans, model_fit, page_step, window};
 use crate::app::{App, Effect};
 use crate::catalogue::{Catalogue, ModelEntry, Price};
-use crate::keys::Key;
+use crate::keys::{Edit, Key};
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
 use crate::theme::Role;
@@ -553,5 +553,199 @@ fn choice_rows_open_with_a_gutter() {
     assert_eq!(
         crate::mouse::hit(&targets, x, y),
         Some(TargetId::View(Spot::Cell(4, 0)))
+    );
+}
+
+/// Each span's text, in order.
+fn texts(spans: &[ratatui::text::Span<'_>]) -> Vec<String> {
+    spans.iter().map(|span| span.content.to_string()).collect()
+}
+
+#[test]
+fn a_hit_after_plain_text_keeps_the_text_order() {
+    let spans = id_spans("m1", &[false, true]);
+    assert_eq!(texts(&spans), ["m", "1"]);
+    assert_eq!(
+        spans[1].style,
+        Style::new()
+            .fg(Role::Accent.color())
+            .add_modifier(Modifier::BOLD)
+            .add_modifier(Modifier::UNDERLINED)
+    );
+}
+
+#[test]
+fn a_plain_run_between_two_hits_splits_them() {
+    let spans = id_spans("a1b", &[true, false, true]);
+    assert_eq!(texts(&spans), ["a", "1", "b"]);
+    let accent = Style::new().fg(Role::Accent.color());
+    let bold = accent
+        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::UNDERLINED);
+    assert_eq!(spans[0].style, bold);
+    assert_eq!(spans[1].style, accent);
+    assert_eq!(spans[2].style, bold);
+}
+
+#[test]
+fn a_long_id_puts_the_roles_cell_after_its_name() {
+    let mut cat = catalogue();
+    cat.models[0].id = "longname1".to_owned();
+    let mut app = attached(80, 24);
+    app.on_models(Ok(cat));
+    open(&mut app);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    let (y, line) = find_row(&text, "longname1");
+    let roles_at = cell_x(&line, " [deep]");
+    assert_eq!(
+        crate::mouse::hit(&targets, roles_at - 1, y),
+        Some(TargetId::View(Spot::Cell(3, 0)))
+    );
+    assert_eq!(
+        crate::mouse::hit(&targets, roles_at, y),
+        Some(TargetId::View(Spot::Cell(3, 1)))
+    );
+}
+
+#[test]
+fn the_level_chips_take_clicks_past_the_thinking_label() {
+    let app = choosing(80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    let (y, line) = find_row(&text, "thinking");
+    let low = cell_x(&line, "low");
+    let high = cell_x(&line, "[high]");
+    assert_eq!(
+        crate::mouse::hit(&targets, low, y),
+        Some(TargetId::View(Spot::Cell(3, 2)))
+    );
+    assert_eq!(
+        crate::mouse::hit(&targets, high, y),
+        Some(TargetId::View(Spot::Cell(3, 3)))
+    );
+}
+
+#[test]
+fn an_unfocused_row_draws_its_saved_level_dim() {
+    let app = choosing(80, 24);
+    let buf = buffer(&app, 80, 24);
+    let text = crate::view::text(&buf);
+    let (y, _) = find_row(&text, "z2 [chat]");
+    let below = text
+        .lines()
+        .nth(usize::from(y) + 1)
+        .expect("z2's second row");
+    let x = cell_x(below, "[high]");
+    let cell = &buf[(x, y + 1)];
+    assert_ne!(cell.fg, Role::Attention.color());
+    assert!(!cell.modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn the_focused_saved_level_is_bold_when_another_chip_is_chosen() {
+    let mut app = choosing(80, 24);
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..3 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    app.on_edit(Edit::Left);
+    let buf = buffer(&app, 80, 24);
+    let text = crate::view::text(&buf);
+    let (y, line) = find_row(&text, "[low] high");
+    let x = cell_x(&line, "high");
+    assert!(buf[(x, y)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(x, y)].fg, Role::Attention.color());
+}
+
+#[test]
+fn a_checklist_row_cuts_its_id_from_the_roles_cell() {
+    let mut app = attached(160, 48);
+    app.on_models(Ok(catalogue()));
+    assert_eq!(app.scoped_models_command(), Effect::None);
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    let (y, line) = find_row(&text, "m1 [deep]");
+    let id_at = cell_x(&line, "m1");
+    let roles_at = cell_x(&line, " [deep]");
+    assert_eq!(
+        crate::mouse::hit(&targets, id_at, y),
+        Some(TargetId::View(Spot::Cell(2, 1)))
+    );
+    assert_eq!(
+        crate::mouse::hit(&targets, roles_at, y),
+        Some(TargetId::View(Spot::Cell(2, 2)))
+    );
+}
+
+#[test]
+fn a_window_starting_on_a_heading_takes_one_row_for_it() {
+    let mut app = choosing(160, 48);
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..2 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    let view = app.model_picker_view().expect("open");
+    let z1 = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .find(|model| model.id == "z1")
+        .expect("z1 is shown")
+        .at;
+    assert_eq!(view.focused, Some(z1));
+    assert_eq!(window(&view, 5), (2, 4));
+}
+
+#[test]
+fn a_session_only_model_takes_three_rows_in_the_window() {
+    let mut app = choosing(160, 48);
+    choose_session_only(&mut app);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.focused, Some(3));
+    assert_eq!(window(&view, 5), (0, 1));
+    assert_eq!(window(&view, 6), (0, 2));
+}
+
+#[test]
+fn a_refreshing_empty_filter_reserves_its_status_and_message_rows() {
+    let mut app = choosing(160, 48);
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in ['q', 'q', 'q'] {
+        assert_eq!(app.on_key(Key::Char(ch), now), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::CtrlR, now), Effect::None);
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Every));
+    let view = app.model_picker_view().expect("open");
+    assert!(view.no_match);
+    assert_eq!(view.status.len(), 1);
+    // The filter row, the buttons row, the status line and the no-match line.
+    assert_eq!(model_fit(&view, 24), usize::from(24 - super::CHROME) - 4);
+}
+
+#[test]
+fn the_refresh_click_sits_under_its_text_on_a_long_checklist() {
+    let mut cat = catalogue();
+    cat.models.truncate(1);
+    cat.models[0].id = "x".repeat(60);
+    cat.models[0].roles = Vec::new();
+    let mut app = attached(160, 48);
+    app.on_models(Ok(cat));
+    assert_eq!(app.scoped_models_command(), Effect::None);
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    let (y, line) = find_row(&text, "⟳ refresh all");
+    let x = cell_x(&line, "⟳");
+    assert_eq!(
+        crate::mouse::hit(&targets, x, y),
+        Some(TargetId::View(Spot::Cell(0, 0)))
     );
 }

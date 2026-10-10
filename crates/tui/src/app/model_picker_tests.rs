@@ -2874,3 +2874,55 @@ fn the_home_session_only_choice_marks_its_row() {
         .collect();
     assert_eq!(only, ["m1"]);
 }
+
+#[test]
+fn leaving_a_session_drops_its_session_only_wait_and_mark() {
+    let (mut app, _) = choosing_app();
+    let first = session_only_id(&mut app);
+    app.on_line(accepted(SESSION, &first));
+    assert!(app.model_picker.session_only.is_some());
+    let second = session_only_id(&mut app);
+    app.go_home();
+    assert!(app.model_picker.only_pending.is_empty());
+    assert_eq!(app.model_picker.session_only, None);
+    app.on_line(accepted(SESSION, &second));
+    assert_eq!(app.model_picker.session_only, None);
+}
+
+#[test]
+fn attaching_another_session_drops_its_session_only_wait_and_mark() {
+    let (mut app, _) = choosing_app();
+    let first = session_only_id(&mut app);
+    app.on_line(accepted(SESSION, &first));
+    let second = session_only_id(&mut app);
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    assert!(app.model_picker.only_pending.is_empty());
+    assert_eq!(app.model_picker.session_only, None);
+    app.on_line(accepted(SESSION, &second));
+    assert_eq!(app.model_picker.session_only, None);
+}
+
+#[test]
+fn reattaching_the_same_session_keeps_its_session_only_wait() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert!(app.model_picker.only_pending.contains_key(&id));
+    app.on_line(accepted(SESSION, &id));
+    assert!(app.model_picker.session_only.is_some());
+}
+
+#[test]
+fn reattaching_the_same_session_keeps_its_session_only_mark() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.on_line(accepted(SESSION, &id));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert_eq!(
+        app.model_picker.session_only,
+        Some((
+            contract::SessionId(SESSION.to_owned()),
+            "acme/m1".to_owned()
+        ))
+    );
+}
