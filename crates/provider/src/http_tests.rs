@@ -973,6 +973,31 @@ fn a_stalled_error_body_is_a_dropped_connection_not_a_status() {
 }
 
 #[test]
+fn a_stalled_error_body_keeps_a_no_retry_veto() {
+    let server = fakes::ProviderServer::start([
+        fakes::Response::stall(500, "{", 1000).header("x-should-retry", "false")
+    ])
+    .unwrap();
+    let Err(crate::Error::Status {
+        status,
+        body,
+        should_retry,
+        ..
+    }) = posted_limited(
+        format!("{}/v1", server.url()),
+        stall_limits(),
+        &std::sync::Arc::default(),
+    )
+    .map(|_| ())
+    else {
+        panic!("a stalled 500 with x-should-retry: false was not a status failure");
+    };
+    assert_eq!(status, 500);
+    assert_eq!(body, "");
+    assert_eq!(should_retry, Some(false));
+}
+
+#[test]
 fn an_overlong_error_body_is_still_a_status_with_no_body() {
     // Over ureq's 10 MB `read_to_string` limit: the read fails with a
     // non-timeout error, so the status keeps its code with an empty body.
