@@ -1354,3 +1354,131 @@ fn start_provider_reports_an_entry_script_that_fails() {
     assert_eq!(err.code(), ErrorCode::ExtensionFailed);
     assert!(err.to_string().contains("broken"), "{err}");
 }
+
+/// A search backend fixture: `fiber.test/<short>` registers `backend`,
+/// whose one result carries `tag` as its title.
+fn backend_init(short: &str, backend: &str, tag: &str) -> (String, Option<String>) {
+    (
+        short.to_owned(),
+        Some(format!(
+            "fiber.search_backend(\"{backend}\", {{ timeout = 1000, run = function() \
+               return {{ {{ title = \"{tag}\", url = \"https://example.com/\", snippet = \"s\" }} }} end }})\n"
+        )),
+    )
+}
+
+fn install_backend(home: &Home, short: &str, backend: &str, tag: &str) {
+    let (name, init) = backend_init(short, backend, tag);
+    let _ = name;
+    home.install(short, init.as_deref());
+}
+
+/// Runs the session's chosen backend once and returns its result's title.
+fn backend_title(session: &Arc<SessionExtensions>) -> String {
+    use contract::search::Domains;
+    let backend = session.search_backend().expect("a backend is chosen");
+    let found = backend
+        .search("rust", &Domains::Any, &fakes::CancelToken::new())
+        .expect("the search ran")
+        .expect("the search was not cancelled");
+    assert_eq!(found.len(), 1);
+    found[0].title.clone()
+}
+
+#[test]
+fn one_installed_backend_is_used_with_no_notice() {
+    let home = Home::new();
+    install_backend(&home, "one", "brave", "brave-hit");
+    let session = home.load(&[]);
+    assert!(session.search_backend().is_some());
+    assert!(
+        session
+            .notices()
+            .iter()
+            .all(|notice| notice.code != ErrorCode::WebSearchUnavailable),
+        "{:?}",
+        session.notices()
+    );
+    assert_eq!(backend_title(&session), "brave-hit");
+}
+
+#[test]
+fn two_backends_with_no_setting_are_not_declared_and_name_the_setting() {
+    let home = Home::new();
+    install_backend(&home, "one", "brave", "brave-hit");
+    install_backend(&home, "two", "kagi", "kagi-hit");
+    let session = home.load(&[]);
+    assert!(session.search_backend().is_none());
+    let notices: Vec<_> = session
+        .notices()
+        .into_iter()
+        .filter(|notice| notice.code == ErrorCode::WebSearchUnavailable)
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0].message.contains("web_search.backend"),
+        "{}",
+        notices[0].message
+    );
+}
+
+#[test]
+fn two_backends_with_the_setting_name_the_second() {
+    let home = Home::new();
+    install_backend(&home, "one", "brave", "brave-hit");
+    install_backend(&home, "two", "kagi", "kagi-hit");
+    let session = home.load(&["web_search.backend=kagi"]);
+    assert_eq!(backend_title(&session), "kagi-hit");
+    assert!(
+        session
+            .notices()
+            .iter()
+            .all(|notice| notice.code != ErrorCode::WebSearchUnavailable),
+        "{:?}",
+        session.notices()
+    );
+}
+
+#[test]
+fn a_setting_naming_a_missing_backend_is_not_declared_and_names_it() {
+    let home = Home::new();
+    install_backend(&home, "one", "brave", "brave-hit");
+    let session = home.load(&["web_search.backend=missing"]);
+    assert!(session.search_backend().is_none());
+    let notices: Vec<_> = session
+        .notices()
+        .into_iter()
+        .filter(|notice| notice.code == ErrorCode::WebSearchUnavailable)
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0].message.contains("missing"),
+        "{}",
+        notices[0].message
+    );
+}
+
+#[test]
+fn an_extension_with_only_a_backend_stays_for_it() {
+    let home = Home::new();
+    install_backend(&home, "one", "brave", "brave-hit");
+    let session = home.load(&[]);
+    assert_eq!(session.lua.len(), 1);
+}
+
+#[test]
+fn a_disabled_extensions_backend_is_not_counted() {
+    let home = Home::new();
+    install_backend(&home, "one", "brave", "brave-hit");
+    install_backend(&home, "two", "kagi", "kagi-hit");
+    let session = home.load(&["extensions.\"fiber.test/two\".enabled=false"]);
+    assert_eq!(backend_title(&session), "brave-hit");
+    assert!(
+        session
+            .notices()
+            .iter()
+            .all(|notice| notice.code != ErrorCode::WebSearchUnavailable),
+        "{:?}",
+        session.notices()
+    );
+}

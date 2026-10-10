@@ -83,7 +83,7 @@ pub(crate) fn session_tools(
     jobs: &Arc<jobs::Registry>,
     locks: &Arc<tools::PathLocks>,
     specs: Vec<mcp::ServerSpec>,
-    web_search: Option<&str>,
+    web_search: Option<(Arc<dyn Tool>, ToolInfo)>,
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
     extension_tools: Vec<(String, Arc<dyn Tool>)>,

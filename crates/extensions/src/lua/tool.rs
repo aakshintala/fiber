@@ -286,7 +286,18 @@ impl LuaExtension {
         args: Value,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, Error> {
-        let target = Target::Tool(name.to_owned());
+        self.run_cancellable(Target::Tool(name.to_owned()), args, cancel)
+    }
+
+    /// Runs `target`'s `run` function on `args`: a tool's or a search
+    /// backend's, each under its own timeout and `cancel`. `tool_run` and
+    /// `search_run` are the callers.
+    pub(super) fn run_cancellable(
+        &self,
+        target: Target,
+        args: Value,
+        cancel: &dyn Cancel,
+    ) -> Result<Option<Value>, Error> {
         // When Fiber asks, before it waits for the hub (`docs/extensions.md`).
         let asked = self.hub.clock().now();
         // Subscribed before anything is queued, and the signal is read

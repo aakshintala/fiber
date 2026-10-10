@@ -454,6 +454,7 @@ fn an_abandon_before_admission_starts_no_host_work() {
                 | Target::Hook { .. }
                 | Target::Timer { .. }
                 | Target::Tool(_)
+                | Target::Search(_)
                 | Target::Effects(_) => None,
             };
             if let Some(hub) = hub {
@@ -561,7 +562,7 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
                 return;
             }
             let name = match target {
-                Target::Tool(name) => Some(name.as_str()),
+                Target::Tool(name) | Target::Search(name) => Some(name.as_str()),
                 Target::Provider { name, .. } => Some(name.as_str()),
                 Target::Command(_)
                 | Target::Hook { .. }
