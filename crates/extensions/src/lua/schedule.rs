@@ -23,7 +23,7 @@ use crate::Error;
 use crate::host::{self, Reply, Request, exec};
 use crate::oauth::{self, Browser, Deliver, Holder};
 
-use super::hub::{Hub, Job, Phase, Progress, Shared, not_registered, timed_out};
+use super::hub::{Hub, Job, Phase, Progress, Shared, StopReason, not_registered, timed_out};
 use super::{CredentialFor, GRACE, LOAD_TIMEOUT, LuaExtension, Step, Target, Vm, asks, expired};
 
 /// A callback suspended on a host call. Its deadline keeps running.
@@ -113,7 +113,7 @@ pub(super) fn serve(hub: Arc<Hub>, start: Start) {
                 Some(vm)
             }
             Err(e) => {
-                let unsent = shared.stop(e);
+                let unsent = shared.stop(StopReason::of(e));
                 drop(shared);
                 drop(unsent);
                 hub.notify();

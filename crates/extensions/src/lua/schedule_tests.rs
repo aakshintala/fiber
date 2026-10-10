@@ -95,9 +95,7 @@ fn a_stopped_extension_starts_no_exec_for_a_suspended_callback() {
             serde_json::Value::Null,
             hub.clock().now(),
         );
-        shared.phase = Phase::Stopped(Error::Stopped {
-            extension: "fiber.test/stopped".to_owned(),
-        });
+        shared.phase = Phase::Stopped(StopReason::Stopped);
         id
     };
     let lua = mlua::Lua::new();
@@ -194,9 +192,7 @@ fn admit_holds_only_while_ready() {
     let hub = Hub::new(fakes::clock::FakeClock::new());
     let id = started(&hub);
     assert!(hub.admit(id).is_none(), "idle admits no work");
-    hub.lock().phase = Phase::Stopped(Error::Stopped {
-        extension: "fiber.test/stopped".to_owned(),
-    });
+    hub.lock().phase = Phase::Stopped(StopReason::Stopped);
     assert!(hub.admit(id).is_none(), "stopped admits no work");
     hub.lock().phase = Phase::Ready(Default::default());
     assert!(hub.admit(id).is_some(), "ready admits work");
@@ -243,9 +239,7 @@ fn stopping_an_extension_stops_its_admitted_exec() {
         matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
         "no stop is signalled yet"
     );
-    shared.stop(Error::Stopped {
-        extension: "fiber.test/stopped".to_owned(),
-    });
+    shared.stop(StopReason::Stopped);
     drop(shared);
     // The sender dropped with the stop: the receiver disconnects.
     assert!(
@@ -338,9 +332,7 @@ fn a_cancelled_abandoned_call_waits_for_its_exec() {
     );
     shared.register_exec(id);
     shared.cancel_call(id);
-    shared.phase = Phase::Stopped(Error::Stopped {
-        extension: "fiber.test/stopped".to_owned(),
-    });
+    shared.phase = Phase::Stopped(StopReason::Stopped);
     assert!(waits(&mut shared, id, now), "the call waits for its run");
     shared.finish_exec(id);
     let (judged, _) =
@@ -364,9 +356,7 @@ fn a_cancelled_abandoned_call_without_exec_ends_at_once() {
         },
     );
     shared.cancel_call(id);
-    shared.phase = Phase::Stopped(Error::Stopped {
-        extension: "fiber.test/stopped".to_owned(),
-    });
+    shared.phase = Phase::Stopped(StopReason::Stopped);
     let (judged, _) =
         shared.judge_tool("fiber.test/t", id, &Target::Tool("t".to_owned()), now, now);
     assert!(judged.is_none(), "the call ends cancelled at once");
@@ -388,9 +378,7 @@ fn an_uncancelled_abandoned_call_with_exec_still_fails() {
         },
     );
     shared.register_exec(id);
-    shared.phase = Phase::Stopped(Error::Stopped {
-        extension: "fiber.test/stopped".to_owned(),
-    });
+    shared.phase = Phase::Stopped(StopReason::Stopped);
     match shared.judge_tool("fiber.test/t", id, &Target::Tool("t".to_owned()), now, now) {
         (Some(super::super::Next::Return(Err(_))), _) => {}
         _ => panic!("the call fails"),
@@ -446,9 +434,6 @@ fn an_abandon_before_admission_starts_no_host_work() {
             if pause != Pause::Admission {
                 return;
             }
-            let stopped = || Error::Stopped {
-                extension: "fiber.test/stopped".to_owned(),
-            };
             let hub = match target {
                 Target::Tool(name) if name == "race" => Some(Arc::clone(&exec_hub)),
                 Target::Tool(name) if name == "race-drive" => Some(Arc::clone(&drive_hub)),
@@ -463,7 +448,7 @@ fn an_abandon_before_admission_starts_no_host_work() {
             if let Some(hub) = hub {
                 let unsent = {
                     let mut shared = hub.lock();
-                    shared.stop(stopped())
+                    shared.stop(StopReason::Stopped)
                 };
                 drop(unsent);
             }
@@ -725,9 +710,7 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
                         if ending == "cancel" {
                             guard.cancel_call(id);
                         } else {
-                            let unsent = guard.stop(Error::Stopped {
-                                extension: "fiber.test/stopped".to_owned(),
-                            });
+                            let unsent = guard.stop(StopReason::Stopped);
                             drop(guard);
                             drop(unsent);
                         }

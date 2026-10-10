@@ -73,7 +73,7 @@ pub(crate) fn lock(home: &Path, clock: &dyn Clock) -> Result<Lock, Error> {
 /// error, invalid JSON, or a missing or mistyped key. The record is read
 /// before the manifest, so a damaged directory never surfaces a manifest
 /// error.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Damaged {
     /// The manifest's name, or the directory's name when the manifest
     /// does not read.
