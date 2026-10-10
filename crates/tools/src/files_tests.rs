@@ -488,6 +488,14 @@ fn pdf_magic_treats_a_vanished_file_as_not_a_pdf_and_reports_other_errors() {
     let error = pdf_magic(dir.path()).unwrap_err();
     assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
     assert_ne!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+    // A path with a NUL byte makes `open` itself fail, with a kind that is
+    // not NotFound.
+    use std::os::unix::ffi::OsStrExt as _;
+    let nul = std::path::Path::new(std::ffi::OsStr::from_bytes(b"a\0b.pdf"));
+    assert_eq!(
+        pdf_magic(nul).unwrap_err().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
 }
 
 #[test]
