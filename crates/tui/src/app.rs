@@ -352,6 +352,7 @@ impl App {
     /// Attaches straight to `session`. The `draw` jig uses it: an events
     /// file is one session's stream.
     pub(crate) fn attach(&mut self, session: SessionId) {
+        self.switch_session(&session);
         self.phase = Phase::Attached {
             session,
             busy: false,
@@ -933,17 +934,14 @@ impl App {
             self.request_arrived(envelope);
         }
         let mut send = self.reply_ack(envelope);
-        // A `model` command's acceptance writes what it waited on,
-        // whatever session answered: choosing may span a switch.
+        // A `model` command's acceptance settles what it waited on,
+        // from its own session: choosing may span a switch, but a late
+        // accept after one, or another session's, names no row.
         if envelope.kind == "command_accepted"
             && let Some(accepted) = read!(envelope, CommandAccepted)
-            && self
-                .model_picker
-                .awaiting
-                .contains_key(&accepted.command_id.0)
         {
             let id = accepted.command_id.0.clone();
-            self.model_picker_accepted(&id);
+            self.model_picker_accepted(&id, &envelope.session_id);
         }
         // The open delegate's lines fold into the swapped screen, never
         // touching the attached busy flag; their command answers still

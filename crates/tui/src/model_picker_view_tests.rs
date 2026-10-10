@@ -8,7 +8,7 @@ use crate::home::Launch;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
-use crate::swapped::{Ink, Spot};
+use crate::swapped::Spot;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -68,6 +68,7 @@ fn catalogue() -> Catalogue {
                 configured: None,
                 roles: vec!["deep".to_owned(), "review".to_owned()],
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "acme/m2".to_owned(),
@@ -78,6 +79,7 @@ fn catalogue() -> Catalogue {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "zeta/z1".to_owned(),
@@ -88,6 +90,7 @@ fn catalogue() -> Catalogue {
                 configured: Some("low".to_owned()),
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "zeta/z2".to_owned(),
@@ -98,9 +101,11 @@ fn catalogue() -> Catalogue {
                 configured: Some("high".to_owned()),
                 roles: vec!["chat".to_owned()],
                 name: None,
+                price: None,
             },
         ],
         notices: Vec::new(),
+        lists: Vec::new(),
     }
 }
 
@@ -214,10 +219,12 @@ fn model_picker_long_list_scrolls_to_the_selection() {
                     configured: None,
                     roles: Vec::new(),
                     name: None,
+                    price: None,
                 }
             })
             .collect(),
         notices: Vec::new(),
+        lists: Vec::new(),
     }));
     open(&mut app);
     for _ in 0..25 {
@@ -321,53 +328,43 @@ fn the_filter_row_draws_the_query_bold_with_its_count() {
     let mut app = attached(80, 24);
     app.on_models(Ok(catalogue()));
     open(&mut app);
-    // An empty query draws the dim prompt with a dim block cursor and
-    // no count.
-    let frame = app.model_picker_frame(24).expect("open");
-    assert_eq!(
-        frame.rows[0],
-        vec![
-            ("Type to search ".to_owned(), None, Ink::Muted),
-            ("█".to_owned(), None, Ink::Muted),
-        ]
-    );
-    assert!(
-        !frame.rows[1]
-            .iter()
-            .any(|(text, _, _)| text.contains("models"))
-    );
-    // Typing narrows the list to `acme/m1`: the filter names the query
-    // bold, and the buttons count the shown rows of every model.
+    // An empty query draws the dim prompt, and the count names every
+    // model.
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.filter, "");
+    assert_eq!(view.count, "4 models");
+    // Typing narrows the list to `acme/m1`: the view names the query,
+    // and the buttons count the shown rows of every model.
     type_filter(&mut app, "m1");
-    let frame = app.model_picker_frame(24).expect("open");
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.filter, "m1");
+    assert_eq!(view.count, "1 of 4 models");
     assert_eq!(
-        frame.rows[0],
-        vec![
-            ("› ".to_owned(), None, Ink::Muted),
-            ("m1".to_owned(), None, Ink::Heading),
-            ("█".to_owned(), None, Ink::Muted),
+        view.footer,
+        [
+            ("↑↓", "move"),
+            ("←→", "levels"),
+            ("enter", "choose"),
+            ("tab", "all"),
+            ("ctrl+s", "session"),
+            ("ctrl+r", "refresh"),
+            ("esc", "close"),
         ]
     );
-    assert_eq!(
-        frame.rows[1],
-        vec![
-            ("↻ refresh".to_owned(), Some(Spot::Cell(1, 0)), Ink::Plain),
-            ("  1 of 4 models".to_owned(), None, Ink::Muted),
-        ]
-    );
-    assert_eq!(
-        frame.footer,
-        "↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"
-    );
-    // The drawn query reads bold.
+    // The drawn query reads bold after "› ".
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
     let text = crate::view::text(&buf);
-    assert!(text.contains("› m1█"), "{text}");
-    // The filter row draws at y 1: "›", " ", then the bold query.
-    assert!(buf[(2, 1)].modifier.contains(Modifier::BOLD));
-    assert!(buf[(3, 1)].modifier.contains(Modifier::BOLD));
+    let row = text
+        .lines()
+        .position(|line| line.contains("› m1█"))
+        .expect("filter row");
+    let line = text.lines().nth(row).unwrap();
+    let byte = line.find("m1").unwrap();
+    let x = u16::try_from(crate::format::width(&line[..byte])).unwrap_or(u16::MAX);
+    let y = u16::try_from(row).unwrap_or(u16::MAX);
+    assert!(buf[(x, y)].modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -380,47 +377,44 @@ fn matched_id_runs_draw_bold_and_underlined_on_and_off_the_selection() {
     // "m" matches `acme/m1` and `acme/m2` through their ids: the
     // selection stays on `acme/m1`, leaving `acme/m2` off it.
     type_filter(&mut app, "m");
-    let frame = app.model_picker_frame(24).expect("open");
-    // Frame rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
-    // 3 `acme/m1`, 4 `acme/m2`.
-    assert_eq!(
-        frame.rows[3][0],
-        ("m".to_owned(), Some(Spot::Cell(3, 0)), Ink::Match)
-    );
-    assert_eq!(
-        frame.rows[3][1],
-        ("1".to_owned(), Some(Spot::Cell(3, 0)), Ink::Plain)
-    );
-    // A role-less row's pad joins its last plain run.
-    assert_eq!(
-        frame.rows[4],
-        vec![
-            ("m".to_owned(), Some(Spot::Cell(4, 0)), Ink::Match),
-            ("2   ".to_owned(), Some(Spot::Cell(4, 0)), Ink::Plain),
-        ]
-    );
-    // The drawn runs underline the matches on both rows; the unmatched
-    // run is neither bold nor underlined, selected or not.
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.focused, Some(3));
+    assert_eq!(view.sections[0].models[0].hits, [true, false]);
+    assert_eq!(view.sections[0].models[1].hits, [true, false]);
+    // The drawn runs underline the matches on both rows. The bar bolds
+    // the focused row throughout, so only off it is the rest plain.
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     crate::view::render(&app, area, &mut buf, None);
-    for row in [4, 5] {
-        let row = u16::try_from(row).unwrap_or(u16::MAX);
-        assert!(buf[(0, row)].modifier.contains(Modifier::BOLD));
-        assert!(buf[(0, row)].modifier.contains(Modifier::UNDERLINED));
-        assert!(!buf[(1, row)].modifier.contains(Modifier::BOLD));
-        assert!(!buf[(1, row)].modifier.contains(Modifier::UNDERLINED));
+    let text = crate::view::text(&buf);
+    for id in ["m1", "m2"] {
+        let row = text
+            .lines()
+            .position(|line| line.contains(id))
+            .expect("model row");
+        let line = text.lines().nth(row).unwrap();
+        let byte = line.find(id).unwrap();
+        let x = u16::try_from(crate::format::width(&line[..byte])).unwrap_or(u16::MAX);
+        let y = u16::try_from(row).unwrap_or(u16::MAX);
+        assert!(buf[(x, y)].modifier.contains(Modifier::BOLD));
+        assert!(buf[(x, y)].modifier.contains(Modifier::UNDERLINED));
+        assert!(
+            !buf[(x.saturating_add(1), y)]
+                .modifier
+                .contains(Modifier::UNDERLINED)
+        );
+        if id == "m2" {
+            assert!(
+                !buf[(x.saturating_add(1), y)]
+                    .modifier
+                    .contains(Modifier::BOLD)
+            );
+        }
     }
-    // A role-less id matched whole keeps the pad as its own plain run.
+    // A role-less id matched whole underlines every letter.
     type_filter(&mut app, "2");
-    let frame = app.model_picker_frame(24).expect("open");
-    assert_eq!(
-        frame.rows[3],
-        vec![
-            ("m2".to_owned(), Some(Spot::Cell(3, 0)), Ink::Match),
-            ("   ".to_owned(), Some(Spot::Cell(3, 0)), Ink::Plain),
-        ]
-    );
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.sections[0].models[0].hits, [true, true]);
 }
 
 #[test]
@@ -428,17 +422,18 @@ fn a_query_matching_through_the_provider_marks_no_hits() {
     let mut app = attached(80, 24);
     app.on_models(Ok(catalogue()));
     open(&mut app);
-    // "acme" matches two rows through the provider alone: both ids draw
-    // as today's single cells.
+    // "acme" matches two rows through the provider alone: neither id
+    // marks a hit.
     type_filter(&mut app, "acme");
-    let frame = app.model_picker_frame(24).expect("open");
+    let view = app.model_picker_view().expect("open");
+    let hits: Vec<&[bool]> = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter().map(|model| model.hits.as_slice()))
+        .collect();
     assert_eq!(
-        frame.rows[3][0],
-        ("m1".to_owned(), Some(Spot::Cell(3, 0)), Ink::Plain)
-    );
-    assert_eq!(
-        frame.rows[4][0],
-        ("m2   ".to_owned(), Some(Spot::Cell(4, 0)), Ink::Plain)
+        hits,
+        [vec![false, false].as_slice(), vec![false, false].as_slice()]
     );
 }
 
@@ -460,14 +455,12 @@ fn model_picker_filtered_empty() {
     app.on_models(Ok(catalogue()));
     open(&mut app);
     type_filter(&mut app, "qqq");
-    let frame = app.model_picker_frame(24).expect("open");
-    // The filter, the buttons with the empty count, and the one dim
-    // line: no provider sections.
-    assert_eq!(frame.rows.len(), 3);
-    assert_eq!(
-        frame.rows[2],
-        vec![("No models match".to_owned(), None, Ink::Muted)]
-    );
+    let view = app.model_picker_view().expect("open");
+    // The query hides every row: one dim line, no sections, no focus.
+    assert!(view.no_match);
+    assert!(view.sections.is_empty());
+    assert_eq!(view.focused, None);
+    assert_eq!(view.count, "0 of 4 models");
     let text = screen(&app, 80, 24);
     assert!(text.contains("No models match"), "{text}");
     assert!(text.contains("0 of 4 models"), "{text}");
@@ -481,9 +474,9 @@ fn a_query_over_an_empty_catalogue_shows_no_no_match_row() {
     assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
     app.on_models(Ok(Catalogue::default()));
     type_filter(&mut app, "q");
-    let frame = app.model_picker_frame(24).expect("open");
+    let view = app.model_picker_view().expect("open");
     // No installed model, so no "No models match": the status names the
     // empty catalogue instead.
-    assert_eq!(frame.rows.len(), 2);
-    assert!(frame.below.iter().any(|line| line.contains("No models")));
+    assert!(!view.no_match);
+    assert!(view.status.iter().any(|line| line.contains("No models")));
 }

@@ -71,6 +71,7 @@ fn entry(reference: &str, levels: &[&str]) -> ModelEntry {
         configured: None,
         roles: Vec::new(),
         name: None,
+        price: None,
     }
 }
 
@@ -79,6 +80,7 @@ fn catalogue() -> Catalogue {
     Catalogue {
         models: vec![entry("acme/m1", &["low", "high"]), entry("acme/m2", &[])],
         notices: Vec::new(),
+        lists: Vec::new(),
     }
 }
 

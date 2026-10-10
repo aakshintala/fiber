@@ -8,9 +8,9 @@ use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
-use crate::catalogue::{Catalogue, ModelEntry, Refresh};
+use crate::catalogue::{Catalogue, ModelEntry, Price, Refresh};
 use crate::keys::Key;
-use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
+use crate::swapped::List;
 
 mod filter;
 
@@ -77,15 +77,91 @@ pub(crate) struct Open {
     pub(crate) query: String,
 }
 
-/// One frame row: the filter, the buttons, a provider heading, a model
-/// by catalogue index, or the empty-filter line. Clicks map back through
-/// it, so the filter, headings and the empty line are never stops.
+/// What the picker's overlay draws from.
+pub(crate) struct PickerCtx<'a> {
+    /// The last call's prompt size, what a switch rebuilds. `None` on
+    /// home or with no call yet: then the cost column stays out.
+    pub(crate) usage: Option<u64>,
+    /// The loop's wall time, in milliseconds since the epoch.
+    pub(crate) wall_ms: u64,
+    /// This frame's spinner, for lists still refreshing.
+    pub(crate) spinner: &'a str,
+    /// The on-screen model's reference: its row shows "● current".
+    pub(crate) current: Option<&'a str>,
+    /// The home session-only choice's reference: its row draws the third row.
+    pub(crate) home_only: Option<&'a str>,
+}
+
+/// The picker as its overlay draws it.
+pub(crate) struct PickerView {
+    pub(crate) filter: String,
+    /// The buttons row's count.
+    pub(crate) count: String,
+    /// The scope toggle, or `None` with no scope or on the checklist.
+    pub(crate) toggle: Option<String>,
+    /// The buttons row's layout index (refresh is cell 0 there).
+    pub(crate) buttons_at: usize,
+    /// One section per shown provider, in list order.
+    pub(crate) sections: Vec<Section>,
+    /// The query hides every row: one dim line, no sections.
+    pub(crate) no_match: bool,
+    /// The lines under the list.
+    pub(crate) status: Vec<String>,
+    /// The legend's keys and labels.
+    pub(crate) footer: Vec<(&'static str, &'static str)>,
+    /// This frame's spinner, for lists still refreshing.
+    pub(crate) spinner: String,
+    /// The focused model row's layout index, else the first shown row.
+    pub(crate) focused: Option<usize>,
+}
+
+/// One shown provider: its freshness and its models in list order.
+pub(crate) struct Section {
+    pub(crate) provider: String,
+    pub(crate) state: Fresh,
+    pub(crate) models: Vec<ModelRow>,
+}
+
+/// One shown provider's freshness.
+pub(crate) enum Fresh {
+    /// Its cached copy's age as the picker says it.
+    Updated(String),
+    /// Its list is refreshing now.
+    Refreshing,
+    /// It holds no cached copy.
+    Unknown,
+}
+
+/// One shown model: what both its rows draw. `at` is the `RowAt` index
+/// that `Spot::Cell(at, n)` and `select_frame_row` use.
+pub(crate) struct ModelRow {
+    pub(crate) at: usize,
+    pub(crate) id: String,
+    /// One flag per id character: whether the query matched it.
+    pub(crate) hits: Vec<bool>,
+    pub(crate) roles: Vec<String>,
+    pub(crate) current: bool,
+    /// Whether the scope keeps it, while the toggle shows every model.
+    pub(crate) scoped: bool,
+    /// Its rebuild cost, or "—" on the current model.
+    pub(crate) cost: Option<String>,
+    pub(crate) levels: Vec<String>,
+    /// The saved level's place in `levels`, when one is declared.
+    pub(crate) saved: Option<usize>,
+    /// The chosen chip's place in `levels`, when the row names one.
+    pub(crate) chip: Option<usize>,
+    /// Whether the checklist keeps the row. `Some` only there.
+    pub(crate) mark: Option<bool>,
+    pub(crate) session_only: bool,
+}
+
+/// One layout row: the filter, the buttons, a provider heading, a model
+/// by catalogue index, or the empty-filter line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RowAt {
     /// The filter query, first in every choosing frame.
     Filter,
-    /// The refresh button, the count while a query is typed, and the
-    /// scope line.
+    /// The buttons row: refresh, the count, and the scope toggle.
     Buttons,
     /// A provider's heading, naming it.
     Heading(String),
@@ -102,8 +178,9 @@ pub(crate) struct ModelPicker {
     pub(crate) catalogue: Catalogue,
     /// Why the lists could not be read, when no catalogue is held yet.
     pub(crate) error: Option<String>,
-    /// A `Stale` or `Every` read runs: the picker shows "refreshing…" .
-    pub(crate) refreshing: bool,
+    /// Which `Stale` or `Every` read runs, if one does: the picker shows
+    /// "refreshing…" beside its lists.
+    pub(crate) refreshing: Option<Refresh>,
     /// `scoped_models`: the references the picker shows; empty means
     /// every installed model (`docs/configuration.md`, "Keys").
     pub(crate) scoped: Vec<String>,
@@ -114,6 +191,12 @@ pub(crate) struct ModelPicker {
     /// the session's acceptance writes, in order. An answer touches only
     /// its own entry.
     pub(crate) awaiting: HashMap<String, Vec<(String, String)>>,
+    /// The session-only `model` commands waiting on their session's
+    /// answer, by command id: the session and the reference.
+    pub(crate) only_pending: HashMap<String, (contract::SessionId, String)>,
+    /// The session-only choice its session accepted: the session and
+    /// the reference, drawn while it is the one on screen.
+    pub(crate) session_only: Option<(contract::SessionId, String)>,
     /// The session-only choice on home: the next `start` carries it.
     pub(crate) start_model: Option<Choice>,
     /// The open picker, if one is open.
@@ -129,7 +212,7 @@ impl ModelPicker {
     /// chip stays on its level's name, every other row preselects, and
     /// a removed selection clamps into the answered catalogue.
     pub(crate) fn store(&mut self, result: Result<Catalogue, String>) {
-        self.refreshing = false;
+        self.refreshing = None;
         let incoming = match result {
             Ok(catalogue) => catalogue,
             Err(error) => {
@@ -191,7 +274,7 @@ impl ModelPicker {
                     // An open before the first catalogue answered has no
                     // model to keep: it lands on the on-screen model, else
                     // the first row.
-                    let (rows, _) = shown_in(
+                    let rows = shown_in(
                         &self.catalogue.models,
                         &self.scoped,
                         open.show_all,
@@ -218,7 +301,7 @@ impl ModelPicker {
         // on a hidden catalogue index while the frame highlights the
         // first shown row: move it onto the shown rows, so choosing
         // takes the highlighted row.
-        let (rows, _) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             open.show_all,
@@ -261,7 +344,7 @@ impl ModelPicker {
         // Only a `Stale` or `Every` read shows "refreshing…": the startup
         // `Cached` read shows "Reading the model lists…" instead.
         if matches!(read, Some(Refresh::Stale | Refresh::Every)) {
-            self.refreshing = true;
+            self.refreshing = read;
         }
         read
     }
@@ -273,7 +356,7 @@ impl ModelPicker {
     /// `Stale`, keeping a wider `Every`.
     pub(crate) fn open(&mut self, mode: Mode, on_screen: Option<(&str, Option<&str>)>) {
         let target = on_screen.map(|(model, level)| (model.to_owned(), level.map(str::to_owned)));
-        let (rows, _) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             false,
@@ -356,7 +439,7 @@ impl ModelPicker {
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        let (rows, _) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             open.show_all,
@@ -391,7 +474,7 @@ impl ModelPicker {
         if open.mode == Mode::Scope {
             return;
         }
-        let (rows, _) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             open.show_all,
@@ -430,7 +513,7 @@ impl ModelPicker {
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        let (rows, _) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             open.show_all,
@@ -489,7 +572,7 @@ impl ModelPicker {
             return;
         }
         open.show_all = !open.show_all;
-        let (rows, _) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             open.show_all,
@@ -508,7 +591,7 @@ impl ModelPicker {
             return;
         };
         open.query.push(c);
-        let (rows, _) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             open.show_all,
@@ -529,7 +612,7 @@ impl ModelPicker {
         if open.query.pop().is_none() {
             return;
         }
-        let (rows, _) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             open.show_all,
@@ -551,7 +634,7 @@ impl ModelPicker {
             return;
         }
         open.query.clear();
-        let (rows, _) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             open.show_all,
@@ -582,7 +665,7 @@ impl ModelPicker {
     /// Selects the model `frame_row` names. Headings and the buttons are
     /// not stops, so they select nothing.
     pub(crate) fn select_frame_row(&mut self, frame_row: usize) {
-        let Some((layout, _)) = self.layout() else {
+        let Some(layout) = self.layout() else {
             return;
         };
         if let Some(RowAt::Model(index)) = layout.get(frame_row)
@@ -603,7 +686,7 @@ impl ModelPicker {
             return None;
         }
         let open = self.open.as_ref()?;
-        let (rows, _) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             open.show_all,
@@ -630,13 +713,13 @@ impl ModelPicker {
     }
 
     /// Clicks `cell` of `row`: the refresh button refreshes every list,
-    /// the scope line toggles it, a roles cell selects its row, a name
+    /// the scope toggle flips it, a roles cell selects its row, a name
     /// cell chooses its row at its chip, and a chip chooses its row at
     /// that level. Choosing from a click always saves: Ctrl+S is the only
     /// path to a session-only choice. The filter and the empty line take
     /// no click.
     pub(crate) fn click_cell(&mut self, row: usize, cell: usize) -> Option<Choice> {
-        let (layout, _) = self.layout()?;
+        let layout = self.layout()?;
         match layout.get(row) {
             Some(RowAt::Buttons) => {
                 match cell {
@@ -701,67 +784,134 @@ impl ModelPicker {
         }
     }
 
-    /// The frame to draw at `height`: the buttons, the scoped providers
-    /// with their models and chips, the status below, and the keys.
-    /// `usage` is the last call's prompt size on the session on screen,
-    /// which names the header's rebuild size. `None` while closed.
-    pub(crate) fn frame(&self, height: usize, usage: Option<u64>) -> Option<Frame> {
+    /// The picker as its overlay draws it: the filter, the count with
+    /// its toggle, one section per shown provider, and the keys. `None`
+    /// while closed.
+    pub(crate) fn view(&self, ctx: &PickerCtx) -> Option<PickerView> {
         let open = self.open.as_ref()?;
-        let (layout, scope) = self.layout()?;
-        let title = match usage {
-            Some(tokens) => format!(
-                "Models · switching rebuilds the cache: about {} tokens",
-                about(tokens)
-            ),
-            None => "Models".to_owned(),
-        };
-        let rows = {
-            let shown = layout
-                .iter()
-                .filter(|row| matches!(row, RowAt::Model(_)))
-                .count();
-            layout
-                .iter()
-                .enumerate()
-                .map(|(at, row)| self.cells(at, row, scope.as_deref(), shown))
-                .collect::<Vec<_>>()
-        };
-        let mut frame = Frame {
-            title,
-            rows,
-            list: List::default(),
-            below: self.status(),
-            field: None,
-            footer: match open.mode {
-                // The checklist marks rows and saves the list: no model
-                // or level is chosen here.
-                Mode::Scope => "Space mark · Enter save · Esc back".to_owned(),
-                Mode::Choose | Mode::Thinking => {
-                    "↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"
-                        .to_owned()
-                }
-            },
-        };
-        // The selection may sit off the scoped rows after a read
+        let layout = self.layout()?;
+        let total = self.catalogue.models.len();
+        let buttons_at = layout.iter().position(|row| *row == RowAt::Buttons)?;
+        // The selection may sit off the shown rows after a read
         // answered, so it falls to the first model row shown.
-        let selected = layout
+        let focused = layout
             .iter()
             .position(|row| *row == RowAt::Model(open.selected))
-            .or_else(|| layout.iter().position(|row| matches!(row, RowAt::Model(_))))
-            .unwrap_or(0);
-        frame
-            .list
-            .select(selected, layout.len(), rows_height(&frame, height));
-        Some(frame)
+            .or_else(|| layout.iter().position(|row| matches!(row, RowAt::Model(_))));
+        // The shown models are the layout's model rows, in order.
+        let mut shown = 0;
+        let mut sections = Vec::new();
+        for (at, row) in layout.iter().enumerate() {
+            if let RowAt::Heading(provider) = row {
+                let listed = self
+                    .catalogue
+                    .lists
+                    .iter()
+                    .find(|list| &list.provider == provider);
+                let stale = listed.is_none_or(|list| list.stale);
+                let refreshing = self.refreshing == Some(Refresh::Every)
+                    || self.refreshing == Some(Refresh::Stale) && stale;
+                sections.push(Section {
+                    provider: provider.clone(),
+                    state: if refreshing {
+                        Fresh::Refreshing
+                    } else {
+                        match listed.and_then(|list| list.updated_ms) {
+                            Some(updated) => {
+                                Fresh::Updated(age(ctx.wall_ms.saturating_sub(updated)))
+                            }
+                            None => Fresh::Unknown,
+                        }
+                    },
+                    models: Vec::new(),
+                });
+            } else if let RowAt::Model(index) = row
+                && let Some(entry) = self.catalogue.models.get(*index)
+                && let Some(section) = sections.last_mut()
+            {
+                shown += 1;
+                let current = ctx.current.is_some_and(|model| model == entry.reference);
+                let only = self
+                    .session_only
+                    .as_ref()
+                    .is_some_and(|(_, r)| *r == entry.reference)
+                    || ctx.home_only.is_some_and(|r| r == entry.reference);
+                section.models.push(ModelRow {
+                    at,
+                    id: entry.id.clone(),
+                    hits: filter::id_hits(&entry.id, &open.query),
+                    roles: entry.roles.clone(),
+                    current,
+                    scoped: open.show_all && self.scoped.contains(&entry.reference),
+                    cost: ctx.usage.map(|tokens| {
+                        if current {
+                            "—".to_owned()
+                        } else {
+                            rebuild_cost(tokens, entry.price.as_ref())
+                        }
+                    }),
+                    levels: entry.levels.clone(),
+                    saved: entry
+                        .configured
+                        .as_ref()
+                        .and_then(|saved| entry.levels.iter().position(|level| level == saved)),
+                    chip: open.chips.get(*index).copied().flatten(),
+                    mark: (open.mode == Mode::Scope)
+                        .then(|| open.marks.get(*index).copied())
+                        .flatten(),
+                    session_only: only,
+                });
+            }
+        }
+        Some(PickerView {
+            filter: open.query.clone(),
+            count: if !open.query.is_empty() {
+                format!("{shown} of {total} models")
+            } else if open.mode != Mode::Scope && !self.scoped.is_empty() && !open.show_all {
+                format!("scoped · {shown} of {total}")
+            } else {
+                format!("{shown} models")
+            },
+            toggle: (open.mode != Mode::Scope && !self.scoped.is_empty()).then(|| {
+                if open.show_all {
+                    "[show scoped]"
+                } else {
+                    "[show all]"
+                }
+                .to_owned()
+            }),
+            buttons_at,
+            sections,
+            no_match: !open.query.is_empty() && shown == 0 && total > 0,
+            status: self.status(),
+            spinner: ctx.spinner.to_owned(),
+            // The checklist marks rows and saves the list: no model
+            // or level is chosen here.
+            footer: if open.mode == Mode::Scope {
+                vec![("Space", "mark"), ("Enter", "save"), ("Esc", "back")]
+            } else {
+                vec![
+                    ("↑↓", "move"),
+                    ("←→", "levels"),
+                    ("enter", "choose"),
+                    ("tab", "all"),
+                    ("ctrl+s", "session"),
+                    ("ctrl+r", "refresh"),
+                    ("esc", "close"),
+                ]
+            },
+            // The selection may sit off the shown rows after a read
+            // answered, so it falls to the first model row shown.
+            focused,
+        })
     }
 
-    /// The frame's rows with the scope line: the filter, the buttons,
-    /// then each scoped provider's heading with its models in catalogue
-    /// order, or the empty-filter line when the query hides every row.
-    /// The checklist draws no filter. `None` while the picker is closed.
-    fn layout(&self) -> Option<(Vec<RowAt>, Option<String>)> {
+    /// The layout rows in draw order: the filter (never on the
+    /// checklist), the buttons, headings with their models, or the
+    /// empty-filter line. `None` while closed.
+    fn layout(&self) -> Option<Vec<RowAt>> {
         let open = self.open.as_ref()?;
-        let (rows, scope) = shown_in(
+        let rows = shown_in(
             &self.catalogue.models,
             &self.scoped,
             open.show_all,
@@ -780,7 +930,7 @@ impl ModelPicker {
         // and no provider sections.
         if !open.query.is_empty() && rows.is_empty() && !self.catalogue.models.is_empty() {
             layout.push(RowAt::NoMatch);
-            return Some((layout, scope));
+            return Some(layout);
         }
         let mut provider: Option<&str> = None;
         for index in rows {
@@ -793,131 +943,7 @@ impl ModelPicker {
             }
             layout.push(RowAt::Model(index));
         }
-        Some((layout, scope))
-    }
-
-    /// One frame row's cells: the filter, the buttons with their targets
-    /// and the typed count, a heading, the empty-filter line, or a model's
-    /// name, roles and chips, each with its own target and the row's chip
-    /// in brackets. A matched id splits into hit runs; otherwise the id
-    /// draws as today's single cell.
-    fn cells(
-        &self,
-        at: usize,
-        row: &RowAt,
-        scope: Option<&str>,
-        shown: usize,
-    ) -> Vec<(String, Option<Spot>, Ink)> {
-        match row {
-            RowAt::Filter => {
-                if self.query().is_empty() {
-                    vec![
-                        ("Type to search ".to_owned(), None, Ink::Muted),
-                        ("█".to_owned(), None, Ink::Muted),
-                    ]
-                } else {
-                    vec![
-                        ("› ".to_owned(), None, Ink::Muted),
-                        (self.query().to_owned(), None, Ink::Heading),
-                        ("█".to_owned(), None, Ink::Muted),
-                    ]
-                }
-            }
-            RowAt::Buttons => {
-                let mut cells = vec![("↻ refresh".to_owned(), Some(Spot::Cell(at, 0)), Ink::Plain)];
-                // While a query is typed the count names the shown rows
-                // of every installed model.
-                if !self.query().is_empty() {
-                    cells.push((
-                        format!("  {shown} of {} models", self.catalogue.models.len()),
-                        None,
-                        Ink::Muted,
-                    ));
-                }
-                if let Some(line) = scope {
-                    cells.push((format!("  {line}"), Some(Spot::Cell(at, 1)), Ink::Plain));
-                }
-                cells
-            }
-            RowAt::Heading(provider) => vec![(provider.clone(), None, Ink::Heading)],
-            RowAt::NoMatch => vec![("No models match".to_owned(), None, Ink::Muted)],
-            RowAt::Model(index) => {
-                if self.is_scope() {
-                    let Some(entry) = self.catalogue.models.get(*index) else {
-                        return Vec::new();
-                    };
-                    return self.scope_cells(at, *index, entry);
-                }
-                let Some(entry) = self.catalogue.models.get(*index) else {
-                    return Vec::new();
-                };
-                let chip = self
-                    .open
-                    .as_ref()
-                    .and_then(|open| open.chips.get(*index).copied().flatten());
-                // A matched id splits into hit runs; otherwise the id
-                // draws as today's single cell, pad included.
-                let hits = filter::id_hits(&entry.id, self.query());
-                let mut cells = id_cells(&entry.id, &hits, at, entry.roles.is_empty());
-                let mut cell = 1;
-                if !entry.roles.is_empty() {
-                    cells.push((
-                        format!(" · {}   ", entry.roles.join(", ")),
-                        Some(Spot::Cell(at, cell)),
-                        Ink::Muted,
-                    ));
-                    cell += 1;
-                }
-                for (level_at, level) in entry.levels.iter().enumerate() {
-                    let text = if chip == Some(level_at) {
-                        format!("[{level}] ")
-                    } else {
-                        format!("{level} ")
-                    };
-                    cells.push((text, Some(Spot::Cell(at, cell)), Ink::Plain));
-                    cell += 1;
-                }
-                cells
-            }
-        }
-    }
-
-    /// One checklist row's cells: the mark, the name, and the roles
-    /// when the row shows any. A marked row draws bold, as a chosen
-    /// multi-select option does. The mark cell toggles its row; any
-    /// other cell selects it. There are no level chips here.
-    fn scope_cells(
-        &self,
-        at: usize,
-        index: usize,
-        entry: &ModelEntry,
-    ) -> Vec<(String, Option<Spot>, Ink)> {
-        let marked = self
-            .open
-            .as_ref()
-            .and_then(|open| open.marks.get(index).copied())
-            .unwrap_or(false);
-        let ink = if marked { Ink::Heading } else { Ink::Plain };
-        let mut cells = vec![
-            (
-                if marked {
-                    "[x] ".to_owned()
-                } else {
-                    "[ ] ".to_owned()
-                },
-                Some(Spot::Cell(at, 0)),
-                ink,
-            ),
-            (entry.id.clone(), Some(Spot::Cell(at, 1)), ink),
-        ];
-        if !entry.roles.is_empty() {
-            cells.push((
-                format!(" · {}   ", entry.roles.join(", ")),
-                Some(Spot::Cell(at, 2)),
-                Ink::Muted,
-            ));
-        }
-        cells
+        Some(layout)
     }
 
     /// The lines below the rows: a read error with no catalogue yet shows
@@ -929,62 +955,58 @@ impl ModelPicker {
             if let Some(error) = &self.error {
                 return vec![error.clone()];
             }
-            if self.want.is_some() || self.refreshing {
+            if self.want.is_some() || self.refreshing.is_some() {
                 return vec!["Reading the model lists…".to_owned()];
             }
             return vec![
                 "No models. Install a provider: fiber extension install <name>.".to_owned(),
             ];
         }
-        if self.refreshing {
+        if self.refreshing.is_some() {
             return vec!["refreshing…".to_owned()];
         }
         Vec::new()
     }
 }
 
-/// The id cell's runs: one cell per hit-flag run, matched runs drawn
-/// underlined and bold, the rest plain. Every run shares the name cell's
-/// target, so a click on any run chooses the row. The three-space pad of
-/// a role-less row joins the last run's text when that run is plain, and
-/// stands as its own plain run otherwise, so the texts always
-/// concatenate to the unfiltered id cell's text.
-fn id_cells(id: &str, hits: &[bool], at: usize, pad: bool) -> Vec<(String, Option<Spot>, Ink)> {
-    let spot = Some(Spot::Cell(at, 0));
-    if !hits.iter().any(|hit| *hit) {
-        let mut text = id.to_owned();
-        if pad {
-            text.push_str("   ");
-        }
-        return vec![(text, spot, Ink::Plain)];
+/// A switch's rebuild size at `tokens` with `price`, and the rebuild's
+/// price when the model names one. The tier is the highest whose
+/// `input_tokens_above` is below the token count, else the base price.
+pub(crate) fn rebuild_cost(tokens: u64, price: Option<&Price>) -> String {
+    let size = if tokens < 1000 {
+        format!("~{tokens} tokens")
+    } else {
+        format!("~{}k tokens", tokens.saturating_add(500) / 1000)
+    };
+    let Some(price) = price else {
+        return size;
+    };
+    let micros = price
+        .tiers
+        .iter()
+        .rev()
+        .find(|(above, _)| *above < tokens)
+        .map(|(_, micros)| *micros)
+        .unwrap_or(price.micros_per_mtok);
+    let dollars = tokens as f64 * micros as f64 / 1_000_000_000_000.0;
+    format!("{size} · {}", crate::format::money(dollars))
+}
+
+/// An age in milliseconds as the picker says it.
+pub(crate) fn age(ms: u64) -> String {
+    let secs = ms / 1000;
+    if secs < 60 {
+        return format!("{secs}s");
     }
-    let mut runs: Vec<(String, Ink)> = Vec::new();
-    for (got, hit) in id.chars().zip(hits.iter().copied()) {
-        let ink = if hit { Ink::Match } else { Ink::Plain };
-        let same = runs.last().is_some_and(|(_, last)| *last == ink);
-        if same {
-            if let Some((text, _)) = runs.last_mut() {
-                text.push(got);
-            }
-        } else {
-            runs.push((got.to_string(), ink));
-        }
+    let mins = secs / 60;
+    if mins < 60 {
+        return format!("{mins}m");
     }
-    let mut cells: Vec<(String, Option<Spot>, Ink)> = runs
-        .into_iter()
-        .map(|(text, ink)| (text, spot, ink))
-        .collect();
-    if pad {
-        let plain_last = cells.last().is_some_and(|(_, _, ink)| *ink == Ink::Plain);
-        if plain_last {
-            if let Some((text, _, _)) = cells.last_mut() {
-                text.push_str("   ");
-            }
-        } else {
-            cells.push(("   ".to_owned(), spot, Ink::Plain));
-        }
+    let hours = mins / 60;
+    if hours < 24 {
+        return format!("{hours}h");
     }
-    cells
+    format!("{}d", hours / 24)
 }
 
 /// What a choice writes through the configuration seam, in order: the
@@ -1091,12 +1113,10 @@ fn restick(open: &mut Open, rows: &[usize]) {
     }
 }
 
-/// The rows an open picker shows, by catalogue index, and the scope
-/// line: the scoped rows, with a `/thinking` open adding the current
-/// model's row in catalogue order whatever the scope, and the filter
-/// dropping whatever the query hides last, keeping catalogue order.
-/// With a scope matching none, only that row shows, under the scope
-/// line.
+/// The rows an open picker shows, by catalogue index: the scoped rows,
+/// with a `/thinking` open adding the current model's row in catalogue
+/// order whatever the scope, and the filter dropping whatever the query
+/// hides last, keeping catalogue order.
 pub(crate) fn shown_in(
     models: &[ModelEntry],
     scoped: &[String],
@@ -1104,13 +1124,13 @@ pub(crate) fn shown_in(
     mode: Mode,
     target: Option<&(String, Option<String>)>,
     query: &str,
-) -> (Vec<usize>, Option<String>) {
+) -> Vec<usize> {
     // The checklist opens over every installed model whatever the
-    // scope, with no scope line, no toggle and no filter.
+    // scope, with no toggle and no filter.
     if mode == Mode::Scope {
-        return ((0..models.len()).collect(), None);
+        return (0..models.len()).collect();
     }
-    let (mut rows, line) = visible(models, scoped, show_all);
+    let mut rows = visible(models, scoped, show_all);
     if mode == Mode::Thinking
         && let Some((model, _)) = target
         && let Some(at) = models.iter().position(|entry| &entry.reference == model)
@@ -1127,43 +1147,22 @@ pub(crate) fn shown_in(
             .get(*index)
             .is_some_and(|entry| filter::matches(entry, query))
     });
-    (rows, line)
+    rows
 }
 
-/// The rows in scope, by catalogue index, and the scope line: with no
-/// scope, every row and no line. A set scope lists only its installed
-/// entries in catalogue order until "show all" is toggled; with none of
-/// them installed, no rows and a line saying so.
-pub(crate) fn visible(
-    models: &[ModelEntry],
-    scoped: &[String],
-    show_all: bool,
-) -> (Vec<usize>, Option<String>) {
+/// The rows in scope, by catalogue index: with no scope, or past the
+/// "show all" toggle, every row. A set scope lists only its installed
+/// entries in catalogue order.
+pub(crate) fn visible(models: &[ModelEntry], scoped: &[String], show_all: bool) -> Vec<usize> {
     if scoped.is_empty() || show_all {
-        let rows = (0..models.len()).collect();
-        let line =
-            (!scoped.is_empty()).then(|| format!("all {} · Tab shows scoped_models", models.len()));
-        return (rows, line);
+        return (0..models.len()).collect();
     }
-    let rows: Vec<usize> = models
+    models
         .iter()
         .enumerate()
         .filter(|(_, entry)| scoped.contains(&entry.reference))
         .map(|(index, _)| index)
-        .collect();
-    let line = if rows.is_empty() {
-        format!(
-            "None of scoped_models is installed. Tab shows all {}.",
-            models.len()
-        )
-    } else {
-        format!(
-            "scoped_models: {} of {} · Tab shows all",
-            rows.len(),
-            models.len()
-        )
-    };
-    (rows, Some(line))
+        .collect()
 }
 
 /// The selected row's chip: its place in the entry's levels. The on-screen

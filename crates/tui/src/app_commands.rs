@@ -499,6 +499,7 @@ impl App {
     pub(super) fn go_home(&mut self) {
         self.draft.clear();
         self.close_find();
+        self.leave_session(self.session().cloned());
         // Leaving the parent closes the item view first, swapping the
         // screen back before anything clears it; outstanding `summary`
         // wishes are marked detached, so their lowering waits behind a

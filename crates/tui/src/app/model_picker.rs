@@ -8,7 +8,7 @@ use crate::catalogue::{Catalogue, Refresh};
 use crate::configure::Layer;
 use crate::keys::{Edit, Key};
 use crate::model_picker::{Choice, Mode, command_args, saves, scoped_save};
-use crate::swapped::{Frame, Spot, about, rows_height};
+use crate::swapped::{Spot, about};
 
 /// The thinking levels `/thinking` takes, in order.
 const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
@@ -116,6 +116,13 @@ impl App {
             (super::Kind::Command, crate::input::Draft::default()),
         );
         let writes = saves(&choice);
+        if choice.session_only {
+            // A session-only choice saves nothing: its session's accept
+            // names the row instead.
+            self.model_picker
+                .only_pending
+                .insert(id.clone(), (session.clone(), choice.reference.clone()));
+        }
         if !writes.is_empty() {
             // With no seam nothing can ever be written: the switch still
             // goes out, for this session only.
@@ -212,12 +219,37 @@ impl App {
         }
     }
 
-    /// The session accepted the `model` command `id`: its waiting writes
-    /// go out, each in order. Any other id changes nothing.
-    pub(in crate::app) fn model_picker_accepted(&mut self, id: &str) {
+    /// The session accepted the `model` command `id` from `session`: a
+    /// session-only wait names its row, but only from its own session:
+    /// a late accept after a switch, or another session's, is ignored.
+    /// A saved choice's writes go out, each in order, and clear the
+    /// session's session-only mark. Any other id changes nothing.
+    pub(in crate::app) fn model_picker_accepted(
+        &mut self,
+        id: &str,
+        session: &contract::SessionId,
+    ) {
+        if let Some((waiting, reference)) = self.model_picker.only_pending.remove(id) {
+            if waiting == *session {
+                self.model_picker.session_only = Some((waiting, reference));
+            } else {
+                self.model_picker
+                    .only_pending
+                    .insert(id.to_owned(), (waiting, reference));
+            }
+            return;
+        }
         let Some(writes) = self.model_picker.awaiting.remove(id) else {
             return;
         };
+        if self
+            .model_picker
+            .session_only
+            .as_ref()
+            .is_some_and(|(on, _)| on == session)
+        {
+            self.model_picker.session_only = None;
+        }
         let Some(seam) = self.configure_seam() else {
             return;
         };
@@ -268,9 +300,45 @@ impl App {
 
     /// The session or the hub refused the `model` command `id`: its
     /// waiting writes are dropped, so a later acceptance for it writes
-    /// nothing.
+    /// nothing, and its session-only wait is dropped with them.
     pub(in crate::app) fn model_picker_rejected(&mut self, id: &str) {
         self.model_picker.awaiting.remove(id);
+        self.model_picker.only_pending.remove(id);
+    }
+
+    /// Drops a left session's session-only wait and mark, so a late
+    /// accept after leaving sets nothing. Nothing while staying home.
+    pub(crate) fn leave_session(&mut self, session: Option<contract::SessionId>) {
+        if let Some(leaving) = session {
+            self.model_picker
+                .only_pending
+                .retain(|_, (waiting, _)| *waiting != leaving);
+            if self
+                .model_picker
+                .session_only
+                .as_ref()
+                .is_some_and(|(on, _)| *on == leaving)
+            {
+                self.model_picker.session_only = None;
+            }
+        }
+    }
+
+    /// Keeps an attached session's session-only wait and mark, dropping
+    /// any other session's: attaching to another session forgets the
+    /// last.
+    pub(crate) fn switch_session(&mut self, session: &contract::SessionId) {
+        self.model_picker
+            .only_pending
+            .retain(|_, (waiting, _)| waiting == session);
+        if self
+            .model_picker
+            .session_only
+            .as_ref()
+            .is_some_and(|(on, _)| on != session)
+        {
+            self.model_picker.session_only = None;
+        }
     }
 
     /// Runs `/thinking`: bare, the picker on the current model's chips;
@@ -445,10 +513,31 @@ impl App {
         ));
         super::Effect::None
     }
-    /// size of the session on screen, if its last call is known. `None`
-    /// while the picker is closed.
-    pub(crate) fn model_picker_frame(&self, height: usize) -> Option<Frame> {
-        self.model_picker.frame(height, self.usage_on_screen())
+    /// The open picker's overlay view: the filter, the buttons, one
+    /// section per shown provider, and the keys. `None` while closed.
+    pub(crate) fn model_picker_view(&self) -> Option<crate::model_picker::PickerView> {
+        let current;
+        let on_screen = if self.on_home() {
+            current = self.home_model().map(|(model, _)| model);
+            current.as_deref()
+        } else {
+            self.panel_state.model()
+        };
+        let home_only = if self.on_home() {
+            self.model_picker
+                .start_model
+                .as_ref()
+                .map(|choice| choice.reference.as_str())
+        } else {
+            None
+        };
+        self.model_picker.view(&crate::model_picker::PickerCtx {
+            usage: self.usage_on_screen(),
+            wall_ms: self.rail_state().wall(),
+            spinner: self.motion().spinner(),
+            current: on_screen,
+            home_only,
+        })
     }
     /// Whether the model picker is open.
     pub(crate) fn model_picker_open(&self) -> bool {
@@ -492,19 +581,18 @@ impl App {
                 Some(super::Effect::None)
             }
             Key::PageUp | Key::PageDown => {
-                // A page is the rows the list shows: the view's height
-                // less its header, status and footer.
-                let height = usize::from(if self.on_home() {
+                // A page is the windowed models less one: the overlay's
+                // body height in models.
+                let height = if self.on_home() {
                     self.screen.height()
                 } else {
                     u16::try_from(self.conversation_height()).unwrap_or(u16::MAX)
-                });
-                let shown = self
-                    .model_picker
-                    .frame(height, self.usage_on_screen())
-                    .map(|frame| rows_height(&frame, height))
-                    .unwrap_or(height);
-                self.model_picker.move_page(key, shown);
+                };
+                let step = self
+                    .model_picker_view()
+                    .map(|view| crate::view::model_picker::page_step(&view, height))
+                    .unwrap_or(usize::from(height));
+                self.model_picker.move_page(key, step);
                 Some(super::Effect::None)
             }
             Key::Esc => {

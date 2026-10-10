@@ -40,6 +40,7 @@ fn entry(reference: &str) -> ModelEntry {
         configured: None,
         roles: Vec::new(),
         name: None,
+        price: None,
     }
 }
 
@@ -47,6 +48,7 @@ fn catalogue() -> Catalogue {
     Catalogue {
         models: vec![entry("acme/m1")],
         notices: vec!["a cached provider is gone".to_owned()],
+        lists: Vec::new(),
     }
 }
 
@@ -75,6 +77,7 @@ fn catalogue_notices_are_pushed_once_per_read() {
     let catalogue = Catalogue {
         models: vec![entry("acme/m1")],
         notices: vec!["first".to_owned(), "second".to_owned()],
+        lists: Vec::new(),
     };
     app.on_models(Ok(catalogue.clone()));
     assert_eq!(app.notices().len(), 2);
@@ -150,6 +153,7 @@ fn three() -> Catalogue {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "acme/m2".to_owned(),
@@ -160,6 +164,7 @@ fn three() -> Catalogue {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "zeta/z1".to_owned(),
@@ -170,9 +175,11 @@ fn three() -> Catalogue {
                 configured: Some("low".to_owned()),
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
         ],
         notices: Vec::new(),
+        lists: Vec::new(),
     }
 }
 
@@ -410,18 +417,23 @@ fn opening_asks_stale_and_refresh_asks_every() {
 
 #[test]
 fn refreshing_shows_until_the_answer() {
+    use crate::catalogue::Refresh;
     let mut app = home();
-    assert!(!app.model_picker.refreshing);
+    assert_eq!(app.model_picker.refreshing, None);
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
-    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
-    assert!(app.model_picker.refreshing);
+    assert_eq!(app.take_reads(), Some(Refresh::Stale));
+    assert_eq!(app.model_picker.refreshing, Some(Refresh::Stale));
     app.on_models(Ok(three()));
-    assert!(!app.model_picker.refreshing);
+    assert_eq!(app.model_picker.refreshing, None);
     assert_eq!(app.on_key(Key::CtrlR, now()), Effect::None);
-    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Every));
-    assert!(app.model_picker.refreshing);
+    assert_eq!(app.take_reads(), Some(Refresh::Every));
+    assert_eq!(app.model_picker.refreshing, Some(Refresh::Every));
     app.on_models(Err("gone".to_owned()));
-    assert!(!app.model_picker.refreshing);
+    assert_eq!(app.model_picker.refreshing, None);
+    // The startup `Cached` take never shows refreshing.
+    app.model_picker.want = Some(Refresh::Cached);
+    assert_eq!(app.take_reads(), Some(Refresh::Cached));
+    assert_eq!(app.model_picker.refreshing, None);
 }
 
 #[test]
@@ -644,10 +656,12 @@ fn thirty() -> Catalogue {
                     configured: None,
                     roles: Vec::new(),
                     name: None,
+                    price: None,
                 }
             })
             .collect(),
         notices: Vec::new(),
+        lists: Vec::new(),
     }
 }
 
@@ -656,13 +670,15 @@ fn page_keys_move_by_a_page_clamped() {
     let mut app = home();
     app.on_models(Ok(thirty()));
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
-    // Home shows 24 rows less the header and footer: a page is 21.
+    // Home's 24 rows hold 16 body rows past the chrome, filter and
+    // buttons. The window slides to hold what fits, so a page moves
+    // six, then seven as the window grows.
     assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
-    assert_eq!(selected(&app).as_deref(), Some("acme/m21"));
+    assert_eq!(selected(&app).as_deref(), Some("acme/m06"));
     assert_eq!(app.on_key(Key::PageDown, now()), Effect::None);
-    assert_eq!(selected(&app).as_deref(), Some("acme/m29"));
+    assert_eq!(selected(&app).as_deref(), Some("acme/m12"));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
-    assert_eq!(selected(&app).as_deref(), Some("acme/m08"));
+    assert_eq!(selected(&app).as_deref(), Some("acme/m05"));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("acme/m00"));
     assert_eq!(app.on_key(Key::PageUp, now()), Effect::None);
@@ -699,7 +715,7 @@ fn the_cross_closes_it() {
 }
 
 #[test]
-fn the_header_shows_the_rebuild_size_of_the_session_on_screen() {
+fn the_rows_show_the_rebuild_size_of_the_session_on_screen() {
     let mut app = attached();
     app.on_models(Ok(three()));
     // Another session's call, a copy of this one's, and an extension's
@@ -726,9 +742,13 @@ fn the_header_shows_the_rebuild_size_of_the_session_on_screen() {
         json!({"extension": "x"}),
     ));
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
-    assert_eq!(
-        app.model_picker_frame(24).map(|frame| frame.title),
-        Some("Models".to_owned())
+    // With no prompt size on screen no cost column shows.
+    let view = app.model_picker_view().expect("open");
+    assert!(
+        view.sections
+            .iter()
+            .flat_map(|section| section.models.iter())
+            .all(|model| model.cost.is_none())
     );
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     app.on_line(usage_line(
@@ -739,17 +759,32 @@ fn the_header_shows_the_rebuild_size_of_the_session_on_screen() {
         json!({}),
     ));
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    // The session's own call sizes every row: no row is current here.
+    let view = app.model_picker_view().expect("open");
+    let costs: Vec<(&str, Option<&str>)> = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .map(|model| (model.id.as_str(), model.cost.as_deref()))
+        .collect();
     assert_eq!(
-        app.model_picker_frame(24).map(|frame| frame.title),
-        Some("Models · switching rebuilds the cache: about 201,034 tokens".to_owned())
+        costs,
+        [
+            ("m1", Some("~201k tokens")),
+            ("m2", Some("~201k tokens")),
+            ("z1", Some("~201k tokens")),
+        ]
     );
     // On home no session is on screen, so no size shows.
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     app.go_home();
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
-    assert_eq!(
-        app.model_picker_frame(24).map(|frame| frame.title),
-        Some("Models".to_owned())
+    let view = app.model_picker_view().expect("open");
+    assert!(
+        view.sections
+            .iter()
+            .flat_map(|section| section.models.iter())
+            .all(|model| model.cost.is_none())
     );
 }
 
@@ -1212,7 +1247,7 @@ fn with_no_seam_the_switch_says_it_is_not_saved() {
 fn a_chip_click_chooses_that_level() {
     let (mut app, seam) = choosing_app();
     open(&mut app);
-    // Frame rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // Layout rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
     // 3 `acme/m1` with two chips past its name cell.
     let line = sent(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
@@ -1454,11 +1489,11 @@ fn a_refresh_that_drops_the_selected_model_moves_the_selection_onto_the_shown_ro
     // Index 0 now hides the unscoped `other/u`: the selection moves to
     // the first shown row, `acme/m2`.
     assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
-    // The frame highlights that same row: the filter, the buttons, the
-    // heading, then `m2`.
-    let frame = app.model_picker_frame(24).expect("open");
-    assert_eq!(frame.rows[3][0].0, "m2   ".to_owned());
-    assert_eq!(frame.list.selected(), 3);
+    // The view highlights that same row: the filter, the buttons, the
+    // heading, then `m2` at layout row 3.
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.focused, Some(3));
+    assert_eq!(view.sections[0].models[0].id, "m2");
     // Enter takes the highlighted row, not the hidden model.
     let line = sent(app.on_key(Key::Enter, now()));
     assert_eq!(line["args"], json!({"model": "acme/m2"}));
@@ -1467,12 +1502,12 @@ fn a_refresh_that_drops_the_selected_model_moves_the_selection_onto_the_shown_ro
 #[test]
 fn choosing_with_a_hidden_selection_takes_the_highlighted_row() {
     let mut app = dropped_selection_app();
-    // Park the selection back on the hidden row: the frame still
+    // Park the selection back on the hidden row: the view still
     // highlights the first shown row.
     app.model_picker.open.as_mut().expect("open").selected = 0;
-    let frame = app.model_picker_frame(24).expect("open");
-    assert_eq!(frame.rows[3][0].0, "m2   ".to_owned());
-    assert_eq!(frame.list.selected(), 3);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.focused, Some(3));
+    assert_eq!(view.sections[0].models[0].id, "m2");
     // `s` takes the highlighted row for this session only, leaving
     // nothing to save.
     let line = sent(ctrl_s(&mut app));
@@ -1485,11 +1520,16 @@ fn the_footer_names_the_picker_keys() {
     let (mut app, _) = choosing_app();
     open(&mut app);
     assert_eq!(
-        app.model_picker_frame(24).map(|frame| frame.footer),
-        Some(
-            "↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"
-                .to_owned()
-        )
+        app.model_picker_view().map(|view| view.footer),
+        Some(vec![
+            ("↑↓", "move"),
+            ("←→", "levels"),
+            ("enter", "choose"),
+            ("tab", "all"),
+            ("ctrl+s", "session"),
+            ("ctrl+r", "refresh"),
+            ("esc", "close"),
+        ])
     );
 }
 
@@ -1737,6 +1777,7 @@ fn a_suffix_named_model_is_not_chosen_by_mistake() {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
             ModelEntry {
                 reference: "p/m:high".to_owned(),
@@ -1747,9 +1788,11 @@ fn a_suffix_named_model_is_not_chosen_by_mistake() {
                 configured: None,
                 roles: Vec::new(),
                 name: None,
+                price: None,
             },
         ],
         notices: Vec::new(),
+        lists: Vec::new(),
     };
     let mut app = home();
     app.on_line(hello());
@@ -2079,11 +2122,16 @@ fn bare_thinking_opens_the_picker_on_the_current_models_chips() {
     assert_eq!(chip(&app).as_deref(), Some("high"));
     assert!(open.touched.first().copied().unwrap_or(false));
     assert_eq!(
-        app.model_picker_frame(24).map(|frame| frame.footer),
-        Some(
-            "↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"
-                .to_owned()
-        )
+        app.model_picker_view().map(|view| view.footer),
+        Some(vec![
+            ("↑↓", "move"),
+            ("←→", "levels"),
+            ("enter", "choose"),
+            ("tab", "all"),
+            ("ctrl+s", "session"),
+            ("ctrl+r", "refresh"),
+            ("esc", "close"),
+        ])
     );
 }
 
@@ -2203,11 +2251,14 @@ fn thinking_low_updates_a_pending_home_choice_and_the_next_start() {
     // Reopening draws low as the selected chip; the same level rides the
     // pending model into the next start.
     open(&mut app);
-    let frame = app.model_picker_frame(24).expect("picker frame");
-    let chip_cells = frame.rows[3]
+    let view = app.model_picker_view().expect("picker view");
+    let drawn_levels: Vec<&str> = view.sections[0].models[0]
+        .levels
         .iter()
-        .map(|(text, _, _)| text.as_str())
-        .collect::<Vec<_>>();
+        .map(String::as_str)
+        .collect();
+    assert_eq!(drawn_levels, ["low", "high"]);
+    assert_eq!(view.sections[0].models[0].chip, Some(0));
     let chips = chip(&app);
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     type_draft(&mut app, "hi");
@@ -2215,13 +2266,13 @@ fn thinking_low_updates_a_pending_home_choice_and_the_next_start() {
     assert_eq!(
         (
             chips.as_deref(),
-            chip_cells,
+            drawn_levels,
             args["model"].clone(),
             args["overrides"].clone()
         ),
         (
             Some("low"),
-            vec!["m1   ", "[low] ", "high "],
+            vec!["low", "high"],
             json!("acme/m1"),
             json!(["models.\"acme/m1\".thinking=low"])
         )
@@ -2246,14 +2297,14 @@ fn an_accepted_level_updates_only_the_matching_pending_start_model() {
         "other".to_owned(),
         vec![("models.\"acme/m2\".thinking".to_owned(), "low".to_owned())],
     );
-    app.model_picker_accepted("other");
+    app.model_picker_accepted("other", &contract::SessionId("s_1".to_owned()));
     assert_eq!(app.model_picker.start_model, Some(held.clone()));
 
     app.model_picker.awaiting.insert(
         "same".to_owned(),
         vec![("models.\"acme/m1\".thinking".to_owned(), "low".to_owned())],
     );
-    app.model_picker_accepted("same");
+    app.model_picker_accepted("same", &contract::SessionId("s_1".to_owned()));
     assert_eq!(
         app.model_picker
             .start_model
@@ -2363,8 +2414,8 @@ fn scoped_models_opens_marking_over_every_model() {
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
     assert_eq!(
-        app.model_picker_frame(24).map(|frame| frame.footer),
-        Some("Space mark · Enter save · Esc back".to_owned())
+        app.model_picker_view().map(|view| view.footer),
+        Some(vec![("Space", "mark"), ("Enter", "save"), ("Esc", "back")])
     );
 }
 
@@ -2383,7 +2434,7 @@ fn rows_start_marked_from_the_list() {
 fn space_and_a_click_toggle_a_mark() {
     let (mut app, _) = scope_app(&[]);
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1`,
+    // Layout rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1`,
     // 4 the `zeta` heading, 5 `zeta/z1`.
     assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(marks(&app), Some(vec![true, false, false]));
@@ -2718,4 +2769,160 @@ fn typing_in_the_checklist_leaves_the_query_empty_and_space_marks() {
         Some(vec![false, false, false])
     );
     assert!(app.model_picker_open());
+}
+
+/// The session-only `model` command a Ctrl+S sends, with its id.
+fn session_only_id(app: &mut App) -> String {
+    open(app);
+    let line = sent(ctrl_s(app));
+    assert_eq!(line["command"], json!("model"));
+    line["id"].as_str().expect("a command id").to_owned()
+}
+
+#[test]
+fn a_session_only_accept_sets_the_row() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    assert!(app.model_picker.only_pending.contains_key(&id));
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(
+        app.model_picker.session_only,
+        Some((
+            contract::SessionId(SESSION.to_owned()),
+            "acme/m1".to_owned()
+        ))
+    );
+    assert!(!app.model_picker.only_pending.contains_key(&id));
+    // The row draws its third row.
+    open(&mut app);
+    let view = app.model_picker_view().expect("open");
+    let only: Vec<&str> = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .filter(|model| model.session_only)
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(only, ["m1"]);
+}
+
+#[test]
+fn a_session_only_rejection_drops_the_wait() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.on_line(refused(SESSION, &id, "invalid_arguments", "gone."));
+    assert!(!app.model_picker.only_pending.contains_key(&id));
+    // The late accept answers nothing now.
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(app.model_picker.session_only, None);
+}
+
+#[test]
+fn a_saved_choice_accepted_clears_the_session_only_mark() {
+    let (mut app, _) = choosing_app();
+    let first = session_only_id(&mut app);
+    app.on_line(accepted(SESSION, &first));
+    assert!(app.model_picker.session_only.is_some());
+    // Enter saves the model: its accept clears the mark.
+    open(&mut app);
+    let line = sent(app.on_key(Key::Enter, now()));
+    let second = line["id"].as_str().expect("a command id").to_owned();
+    assert_ne!(first, second);
+    app.on_line(accepted(SESSION, &second));
+    assert_eq!(app.model_picker.session_only, None);
+}
+
+#[test]
+fn a_switch_before_the_accept_sets_nothing() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.go_home();
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    app.on_line(accepted(SESSION, &id));
+    assert_eq!(app.model_picker.session_only, None);
+    assert!(!app.model_picker.only_pending.contains_key(&id));
+}
+
+#[test]
+fn another_sessions_accept_for_the_wait_is_ignored() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.on_line(accepted(OTHER, &id));
+    assert_eq!(app.model_picker.session_only, None);
+    assert!(app.model_picker.only_pending.contains_key(&id));
+    // Its own session's accept still names the row.
+    app.on_line(accepted(SESSION, &id));
+    assert!(app.model_picker.session_only.is_some());
+}
+
+#[test]
+fn the_home_session_only_choice_marks_its_row() {
+    let mut app = home();
+    app.on_models(Ok(three()));
+    open(&mut app);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
+    assert!(app.model_picker.start_model.is_some());
+    // Reopening marks only the choice the next start carries.
+    open(&mut app);
+    let view = app.model_picker_view().expect("open");
+    let only: Vec<&str> = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .filter(|model| model.session_only)
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(only, ["m1"]);
+}
+
+#[test]
+fn leaving_a_session_drops_its_session_only_wait_and_mark() {
+    let (mut app, _) = choosing_app();
+    let first = session_only_id(&mut app);
+    app.on_line(accepted(SESSION, &first));
+    assert!(app.model_picker.session_only.is_some());
+    let second = session_only_id(&mut app);
+    app.go_home();
+    assert!(app.model_picker.only_pending.is_empty());
+    assert_eq!(app.model_picker.session_only, None);
+    app.on_line(accepted(SESSION, &second));
+    assert_eq!(app.model_picker.session_only, None);
+}
+
+#[test]
+fn attaching_another_session_drops_its_session_only_wait_and_mark() {
+    let (mut app, _) = choosing_app();
+    let first = session_only_id(&mut app);
+    app.on_line(accepted(SESSION, &first));
+    let second = session_only_id(&mut app);
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    assert!(app.model_picker.only_pending.is_empty());
+    assert_eq!(app.model_picker.session_only, None);
+    app.on_line(accepted(SESSION, &second));
+    assert_eq!(app.model_picker.session_only, None);
+}
+
+#[test]
+fn reattaching_the_same_session_keeps_its_session_only_wait() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert!(app.model_picker.only_pending.contains_key(&id));
+    app.on_line(accepted(SESSION, &id));
+    assert!(app.model_picker.session_only.is_some());
+}
+
+#[test]
+fn reattaching_the_same_session_keeps_its_session_only_mark() {
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.on_line(accepted(SESSION, &id));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert_eq!(
+        app.model_picker.session_only,
+        Some((
+            contract::SessionId(SESSION.to_owned()),
+            "acme/m1".to_owned()
+        ))
+    );
 }

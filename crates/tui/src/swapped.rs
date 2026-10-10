@@ -41,9 +41,9 @@ pub(crate) enum Spot {
     Item(u64),
 }
 
-/// How a cell draws: plain text, a provider heading, dimmed text such
-/// as a row's roles, or a matched filter run. The selected row still
-/// reverses over it, so it shows on every theme and with no colour.
+/// How a cell draws: plain text, a provider heading, or dimmed text
+/// such as a row's roles. The selected row still reverses over it, so it
+/// shows on every theme and with no colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ink {
     /// Plain text.
@@ -52,8 +52,6 @@ pub(crate) enum Ink {
     Heading,
     /// Dimmed text: the muted role's colour.
     Muted,
-    /// A filter match in a model's id: bold and underlined.
-    Match,
 }
 
 impl Ink {
@@ -63,9 +61,6 @@ impl Ink {
             Ink::Plain => Style::default(),
             Ink::Heading => Style::new().add_modifier(Modifier::BOLD),
             Ink::Muted => Style::new().fg(Role::Muted.color()),
-            Ink::Match => Style::new()
-                .add_modifier(Modifier::BOLD)
-                .add_modifier(Modifier::UNDERLINED),
         }
     }
 }
@@ -152,13 +147,39 @@ pub(crate) fn rows_height(frame: &Frame, height: usize) -> usize {
 
 /// Draws the open swapped view into `area`, pushing its click targets:
 /// the model picker while it is open, else the open configuration view.
+/// The picker keeps the view's top row with its title and ✕, and draws
+/// in the overlay frame under it.
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+    if area.is_empty() {
+        return;
+    }
+    if let Some(view) = app.model_picker_view() {
+        buf.set_stringn(
+            area.x,
+            area.y,
+            "Models",
+            usize::from(area.width),
+            Style::default(),
+        );
+        let cross = Rect::new(area.right().saturating_sub(1), area.y, 1, 1);
+        buf.set_string(cross.x, cross.y, "✕", Style::default());
+        targets.push(Target {
+            id: TargetId::View(Spot::Close),
+            rect: cross,
+        });
+        let below = Rect::new(
+            area.x,
+            area.y.saturating_add(1),
+            area.width,
+            area.height.saturating_sub(1),
+        );
+        if !below.is_empty() {
+            super::view::model_picker::draw(&view, below, buf, targets);
+        }
+        return;
+    }
     let height = usize::from(area.height);
-    if let Some(frame) = app
-        .keys_frame(height)
-        .or_else(|| app.model_picker_frame(height))
-        .or_else(|| app.config_view_screen())
-    {
+    if let Some(frame) = app.keys_frame(height).or_else(|| app.config_view_screen()) {
         render(&frame, area, buf, targets);
     } else if let Some(frame) = app.session_view_screen(area.width) {
         render(&frame, area, buf, targets);

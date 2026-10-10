@@ -91,8 +91,10 @@ fn choose_session_model(app: &mut App) {
             configured: None,
             roles: Vec::new(),
             name: None,
+            price: None,
         }],
         notices: Vec::new(),
+        lists: Vec::new(),
     }));
     assert_eq!(
         app.on_press(crate::stroke::Stroke::parse("ctrl+s").unwrap(), now),

@@ -8,7 +8,8 @@
 
 use crate::test_support::{Rig, install_extension};
 use std::cell::Cell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use config::Config;
 use extensions::SessionExtensions;
@@ -72,6 +73,32 @@ impl Setup {
     }
 }
 
+/// A fixed `now` for the list-time tests: far past the epoch, so a
+/// cache file dated hours earlier is safely before it.
+fn now() -> SystemTime {
+    SystemTime::UNIX_EPOCH + Duration::from_secs(1_800_000_000)
+}
+
+/// Writes `provider`'s cached list and dates it `age` before [`now`].
+/// The content never matters to a `Cached` read of an installed
+/// provider; only the file's mtime does.
+fn date_cache(home: &Path, provider: &str, age: Duration) {
+    config::write_model_cache(
+        home,
+        provider,
+        &json!([{"id": "m1", "protocol": "openai-responses",
+                   "base_url": "http://127.0.0.1:1/v1"}]),
+    )
+    .unwrap();
+    let file = home.join("cache/models").join(format!("{provider}.json"));
+    let mtime = now().checked_sub(age).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
 /// Loads no extension and records that nothing was loaded.
 fn unloaded(called: &Cell<bool>) -> impl Fn(&Config) -> SessionExtensions + '_ {
     |_| {
@@ -107,6 +134,7 @@ fn levels_and_default_come_from_the_model() {
         &setup.home(),
         &setup.workspace(),
         tui::Refresh::Cached,
+        now(),
         &unloaded(&called),
     )
     .unwrap();
@@ -133,6 +161,7 @@ fn configured_is_the_per_model_level_then_the_top_level() {
         &setup.home(),
         &setup.workspace(),
         tui::Refresh::Cached,
+        now(),
         &unloaded(&called),
     )
     .unwrap();
@@ -148,6 +177,7 @@ fn configured_is_the_per_model_level_then_the_top_level() {
         &setup.home(),
         &setup.workspace(),
         tui::Refresh::Cached,
+        now(),
         &unloaded(&called),
     )
     .unwrap();
@@ -172,6 +202,7 @@ fn a_fiber_role_marks_its_model_with_or_without_a_level() {
         &setup.home(),
         &setup.workspace(),
         tui::Refresh::Cached,
+        now(),
         &unloaded(&called),
     )
     .unwrap();
@@ -210,6 +241,7 @@ fn load_notices_reach_the_catalogue() {
         &setup.home(),
         &setup.workspace(),
         tui::Refresh::Cached,
+        now(),
         &unloaded(&called),
     )
     .unwrap();
@@ -230,8 +262,238 @@ fn no_provider_is_an_empty_catalogue() {
         &setup.home(),
         &setup.workspace(),
         tui::Refresh::Cached,
+        now(),
         &unloaded(&called),
     )
     .unwrap();
     assert_eq!(catalogue, tui::Catalogue::default());
+}
+
+#[test]
+fn price_maps_cache_write_and_falls_back_to_input() {
+    let setup = Setup::new("fiber-model-list-price");
+    setup.install_data(
+        "acme-ext",
+        "acme",
+        &["m1"],
+        &json!({"cost": {"input": 3.0, "output": 15.0}}),
+    );
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+    )
+    .unwrap();
+    let [entry] = catalogue.models.as_slice() else {
+        panic!("{:?}", catalogue.models);
+    };
+    // No `cache_write`: the input price stands in.
+    assert_eq!(
+        entry.price,
+        Some(tui::Price {
+            micros_per_mtok: 3_000_000,
+            tiers: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn price_maps_cache_write_over_input() {
+    let setup = Setup::new("fiber-model-list-price-write");
+    setup.install_data(
+        "acme-ext",
+        "acme",
+        &["m1"],
+        &json!({"cost": {"input": 3.0, "output": 15.0, "cache_write": 0.75}}),
+    );
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+    )
+    .unwrap();
+    let [entry] = catalogue.models.as_slice() else {
+        panic!("{:?}", catalogue.models);
+    };
+    assert_eq!(
+        entry.price,
+        Some(tui::Price {
+            micros_per_mtok: 750_000,
+            tiers: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn price_is_none_without_a_cost_and_tiers_sort_ascending() {
+    let setup = Setup::new("fiber-model-list-price-tiers");
+    setup.install_data(
+        "acme-ext",
+        "acme",
+        &["m1"],
+        &json!({"cost": {"input": 2.0, "output": 10.0, "tiers": [
+            {"input_tokens_above": 200000, "input": 4.0, "output": 20.0,
+             "cache_read": 1.0, "cache_write": 1.5},
+            {"input_tokens_above": 100000, "input": 3.0, "output": 15.0,
+             "cache_read": 0.5, "cache_write": 0.0},
+        ]}}),
+    );
+    setup.install_data("zeta-ext", "zeta", &["z1"], &json!({}));
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+    )
+    .unwrap();
+    let prices: Vec<(&str, Option<tui::Price>)> = catalogue
+        .models
+        .iter()
+        .map(|entry| (entry.reference.as_str(), entry.price.clone()))
+        .collect();
+    // Out of install order the tiers sort ascending; a zero tier
+    // `cache_write` names no price, so the tier's input stands in.
+    assert_eq!(
+        prices,
+        [
+            (
+                "acme/m1",
+                Some(tui::Price {
+                    micros_per_mtok: 2_000_000,
+                    tiers: vec![(100_000, 3_000_000), (200_000, 1_500_000)],
+                })
+            ),
+            ("zeta/z1", None),
+        ]
+    );
+}
+
+#[test]
+fn fresh_cache_lists_its_age() {
+    let setup = Setup::new("fiber-model-list-fresh");
+    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    date_cache(&setup.home(), "acme", Duration::from_secs(90));
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+    )
+    .unwrap();
+    assert_eq!(
+        catalogue.lists,
+        [tui::ListAge {
+            provider: "acme".to_owned(),
+            updated_ms: Some(contract::clock::wall_ms(now()) - 90_000),
+            stale: false,
+        }]
+    );
+}
+
+#[test]
+fn cache_at_refresh_after_is_fresh_one_second_over_is_stale() {
+    // The default `refresh_after` is a day: exactly a day old reads
+    // fresh, one second over reads stale.
+    let setup = Setup::new("fiber-model-list-stale");
+    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    let called = Cell::new(false);
+    date_cache(&setup.home(), "acme", Duration::from_secs(86_400));
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+    )
+    .unwrap();
+    assert!(
+        !catalogue.lists[0].stale,
+        "exactly refresh_after is fresh: {:?}",
+        catalogue.lists
+    );
+    date_cache(&setup.home(), "acme", Duration::from_secs(86_401));
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+    )
+    .unwrap();
+    assert!(
+        catalogue.lists[0].stale,
+        "one second over is stale: {:?}",
+        catalogue.lists
+    );
+}
+
+#[test]
+fn missing_cache_has_no_time_and_is_stale() {
+    let setup = Setup::new("fiber-model-list-no-cache");
+    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+    )
+    .unwrap();
+    assert_eq!(
+        catalogue.lists,
+        [tui::ListAge {
+            provider: "acme".to_owned(),
+            updated_ms: None,
+            stale: true,
+        }]
+    );
+}
+
+#[test]
+fn future_cache_reads_as_updated_now() {
+    let setup = Setup::new("fiber-model-list-future");
+    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    config::write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "m1", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+    )
+    .unwrap();
+    let file = setup.home().join("cache/models/acme.json");
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(now() + Duration::from_secs(30))
+        .unwrap();
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+    )
+    .unwrap();
+    // A file dated after `now` reads as updated `now`: age zero.
+    assert_eq!(
+        catalogue.lists,
+        [tui::ListAge {
+            provider: "acme".to_owned(),
+            updated_ms: Some(contract::clock::wall_ms(now())),
+            stale: false,
+        }]
+    );
 }
