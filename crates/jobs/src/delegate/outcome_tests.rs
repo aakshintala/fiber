@@ -44,10 +44,7 @@ fn killed(signal: i32) -> ExitStatus {
 
 #[test]
 fn termination_beats_the_exit() {
-    // One row per former test: a_stop_beats_an_error_exit,
-    // a_stop_beats_a_clean_exit_zero, the_cap_beats_an_error_exit and
-    // the_cap_beats_a_clean_exit_zero. The termination reason wins over
-    // whatever the exit carried.
+    // The termination reason wins over whatever the exit carried.
     for (termination, clean, status, expected, code) in [
         (
             Termination::Stopped,
@@ -140,9 +137,7 @@ fn a_signal_with_no_line_is_signal() {
 
 #[test]
 fn an_exit_with_no_line_is_indeterminate() {
-    // One row per former test: exit_zero_with_no_line_is_indeterminate
-    // and exit_one_with_no_line_is_indeterminate. Not `signal`: no
-    // signal ended the process. Not `nonzero_exit`: with no
+    // Not `signal`: no signal ended the process. Not `nonzero_exit`: with no
     // `fiber_exited` there is no run to blame the code on.
     for code in [0, 1] {
         let (completed, finished) = outcome(None, None, None, exit(code), &job_id());
