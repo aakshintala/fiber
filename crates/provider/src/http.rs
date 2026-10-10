@@ -1,28 +1,18 @@
 //! Sending a request over HTTP, on a socket Fiber owns so another thread can
-//! close it (`docs/architecture.md`, "Cancellation"). ureq runs behind a
-//! connector that keeps a handle to each `TcpStream` it opens; shutting that
-//! handle down ends a read blocked inside ureq, under TLS too. The chain
-//! tunnels through the proxy the environment names (`docs/dependencies.md`,
-//! "Proxies"): the proxy step runs first and re-runs the chain to open the
-//! proxy socket, which this connector then keeps like any other, so a cancel
-//! still closes it. A provider
+//! close it (`docs/architecture.md`, "Cancellation"). Each call runs its own
+//! agent over the shared connector in `net`, which keeps a handle to the
+//! call's socket; shutting that handle down ends a read blocked inside
+//! ureq, under TLS too. A provider
 //! that signs its requests is asked for its headers on every send, a retry
 //! included (`docs/model-routing.md`, "Signing a request").
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use contract::signing::{SignRequest, Signer};
 use serde_json::Value;
-use ureq::Agent;
-use ureq::config::Config;
-use ureq::tls::{RootCerts, TlsConfig};
 use ureq::unversioned::resolver::DefaultResolver;
-use ureq::unversioned::transport::{
-    Buffers, ConnectProxyConnector, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout,
-    RustlsConnector, Transport,
-};
 
 use crate::Error;
 use crate::redact::Secrets;
@@ -72,6 +62,13 @@ impl Cancel {
         self.lock().cancelled
     }
 
+    fn lock(&self) -> MutexGuard<'_, CancelState> {
+        // Release builds abort on panic, so no holder can poison the lock.
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl net::Keep for Cancel {
     /// Keeps a handle to `socket`, or refuses it once the call is cancelled.
     fn keep(&self, socket: &TcpStream) -> io::Result<()> {
         let mut state = self.lock();
@@ -82,9 +79,8 @@ impl Cancel {
         Ok(())
     }
 
-    fn lock(&self) -> MutexGuard<'_, CancelState> {
-        // Release builds abort on panic, so no holder can poison the lock.
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    fn is_stopped(&self) -> bool {
+        self.is_cancelled()
     }
 }
 
@@ -157,24 +153,16 @@ fn post_with(
     for (name, value) in &signed {
         secrets.add_header(name, value);
     }
-    let tls = TlsConfig::builder()
-        .root_certs(RootCerts::PlatformVerifier)
-        .build();
-    let config = Config::builder()
-        .tls_config(tls)
-        .proxy(proxy)
-        .http_status_as_error(false)
-        .max_redirects(0)
-        .build();
     // One agent per call, so its connector keeps this call's socket.
-    // debt: builds the TLS config per call; share one agent with a
-    // per-call socket slot if the handshake setup shows in a profile.
-    // The proxy step runs before the socket step: it opens the proxy
-    // connection by re-running the chain, so the socket this connector
-    // keeps is the proxy's, and a cancel still closes the tunnel.
-    let connector = ConnectProxyConnector::default().chain(KeepSocket(Arc::clone(cancel)));
-    let connector = connector.chain(RustlsConnector::default());
-    let agent = Agent::with_parts(config, connector, DefaultResolver::default());
+    let agent = net::agent(
+        net::config()
+            .proxy(proxy)
+            .http_status_as_error(false)
+            .max_redirects(0)
+            .build(),
+        Arc::clone(cancel),
+        DefaultResolver::default(),
+    );
     let mut request = agent.post(url);
     for (name, value) in headers.iter().chain(&signed) {
         request = request.header(name, value);
@@ -241,83 +229,6 @@ fn usage_reset(body: &str, date: Option<&str>) -> Option<f64> {
         return None;
     }
     Some(wait as f64)
-}
-
-/// The connector that opens the socket and keeps a handle to it. A tunnel
-/// the proxy step opened passes through untouched: the socket kept while
-/// opening the proxy connection is already the one a cancel must close.
-#[derive(Debug)]
-struct KeepSocket(Arc<Cancel>);
-
-impl Connector<Either<(), Box<dyn Transport>>> for KeepSocket {
-    type Out = Either<Box<dyn Transport>, Socket>;
-
-    fn connect(
-        &self,
-        details: &ConnectionDetails,
-        chained: Option<Either<(), Box<dyn Transport>>>,
-    ) -> Result<Option<Self::Out>, ureq::Error> {
-        // debt: a connect blocked on an unreachable address is not
-        // cancellable; the cancel lands as soon as it returns. Connect with a
-        // timeout or from a cancellable thread if a cancel stuck on connect is
-        // reported.
-        if let Some(Either::B(tunnel)) = chained {
-            return Ok(Some(Either::A(tunnel)));
-        }
-        let addrs: Vec<_> = details.addrs.iter().copied().collect();
-        let stream = TcpStream::connect(addrs.as_slice())?;
-        if details.config.no_delay() {
-            stream.set_nodelay(true)?;
-        }
-        self.0.keep(&stream)?;
-        let buffers = LazyBuffers::new(
-            details.config.input_buffer_size(),
-            details.config.output_buffer_size(),
-        );
-        Ok(Some(Either::B(Socket {
-            stream,
-            buffers,
-            open: true,
-        })))
-    }
-}
-
-/// A plain TCP transport over the kept socket.
-#[derive(Debug)]
-struct Socket {
-    stream: TcpStream,
-    buffers: LazyBuffers,
-    /// False once a read found the peer had closed.
-    open: bool,
-}
-
-impl Transport for Socket {
-    fn buffers(&mut self) -> &mut dyn Buffers {
-        &mut self.buffers
-    }
-
-    fn transmit_output(&mut self, amount: usize, _timeout: NextTimeout) -> Result<(), ureq::Error> {
-        let output = self
-            .buffers
-            .output()
-            .get(..amount)
-            .ok_or_else(|| io::Error::other("ureq asked to send more than its buffer holds"))?;
-        self.stream.write_all(output)?;
-        Ok(())
-    }
-
-    fn await_input(&mut self, _timeout: NextTimeout) -> Result<bool, ureq::Error> {
-        let input = self.buffers.input_append_buf();
-        let read = self.stream.read(input)?;
-        self.buffers.input_appended(read);
-        // No bytes is the peer closing: ureq reads `false` as no progress.
-        self.open = read != 0;
-        Ok(self.open)
-    }
-
-    fn is_open(&mut self) -> bool {
-        self.open
-    }
 }
 
 #[cfg(test)]
