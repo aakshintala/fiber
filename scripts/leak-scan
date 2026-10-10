@@ -109,8 +109,10 @@ else
     # an unreadable file belongs to a process that already exited.
     # No -q: grep consumes the whole stream, so tr never dies of SIGPIPE
     # under pipefail when the match comes early; matches go to /dev/null.
-    if env -u FIBER_CHECK_RUN tr '\0' '\n' <"$envfile" 2>/dev/null | env -u FIBER_CHECK_RUN grep -Fx "FIBER_CHECK_RUN=$nonce" >/dev/null; then
-      if cmd=$(env -u FIBER_CHECK_RUN tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null); then
+    # The group's 2>/dev/null also covers the failed open of an environ file
+    # the user may not read: a redirect error prints before a later 2>/dev/null.
+    if { env -u FIBER_CHECK_RUN tr '\0' '\n' <"$envfile" | env -u FIBER_CHECK_RUN grep -Fx "FIBER_CHECK_RUN=$nonce" >/dev/null; } 2>/dev/null; then
+      if cmd=$(env -u FIBER_CHECK_RUN tr '\0' ' ' 2>/dev/null <"/proc/$pid/cmdline"); then
         if [ -z "$cmd" ]; then
           if cmd=$(env -u FIBER_CHECK_RUN ps -o command= -p "$pid" 2>/dev/null); then
             :
