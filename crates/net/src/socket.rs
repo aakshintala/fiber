@@ -16,15 +16,15 @@ use crate::{Error, Keep, Limits};
 /// the proxy step opened passes through untouched: the socket kept while
 /// opening the proxy connection is already the one a stop must close.
 #[derive(Debug)]
-pub(crate) struct KeepSocket<K>(pub(crate) Arc<K>, pub(crate) Limits);
+pub(crate) struct KeepSocket(pub(crate) Arc<dyn Keep>, pub(crate) Limits);
 
-impl<K: Keep> KeepSocket<K> {
-    pub(crate) fn new(keep: Arc<K>, limits: Limits) -> Self {
+impl KeepSocket {
+    pub(crate) fn new(keep: Arc<dyn Keep>, limits: Limits) -> Self {
         Self(keep, limits)
     }
 }
 
-impl<K: Keep> Connector<Either<(), Box<dyn Transport>>> for KeepSocket<K> {
+impl Connector<Either<(), Box<dyn Transport>>> for KeepSocket {
     type Out = Either<Box<dyn Transport>, Socket>;
 
     fn connect(
@@ -65,7 +65,7 @@ impl<K: Keep> Connector<Either<(), Box<dyn Transport>>> for KeepSocket<K> {
 /// connects, the last failure is returned.
 fn open(
     addrs: &[SocketAddr],
-    keep: &impl Keep,
+    keep: &dyn Keep,
     limits: Limits,
     timeout: NextTimeout,
 ) -> Result<TcpStream, ureq::Error> {

@@ -15,6 +15,8 @@ mod support;
 
 use std::fs;
 use std::io::Write;
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -24,7 +26,8 @@ use support::Deadline;
 use support::Setup;
 use support::pty::{
     Colour, FINISHED_TITLE, Grid, HOME_TITLE, MOTION, Reader, Run, Shared, Writer, contains,
-    exact_end, query_replies, sgr_params,
+    exact_end, hub_gone, hub_pids, list_processes, query_replies, sgr_params, until_hub_exits,
+    until_hub_exits_with,
 };
 
 /// Feeds `bytes` into an attached run's terminal side and returns the
@@ -363,6 +366,179 @@ fn grid_cell_reads_the_last_cell() {
 fn grid_cell_past_the_edges_panics() {
     let (run, _terminal) = grid_run(10, 6);
     let _ = run.screen().cell(10, 0);
+}
+
+/// `hub_pids` lists only this run's hub from a process table: a row
+/// matches when its command holds `hub serve` and its whitespace-split
+/// words hold the exact token `FIBER_HOME=<home>`, the same token rule
+/// `scripts/leak-scan`'s `holds_token` uses.
+#[test]
+fn hub_pids_lists_only_this_runs_hub() {
+    let home = "/tmp/fiber-hub-home";
+    let table = [
+        "12345 sh -c : hub serve; rm -f /s FIBER_HOME=/tmp/fiber-hub-home",
+        "12346 hub serve FIBER_HOME=/tmp/fiber-hub-home",
+        "12347 sh -c : rm -f /s FIBER_HOME=/tmp/fiber-hub-home",
+        "12348 sh -c : hub serve; rm -f /s FIBER_HOME=/tmp/fiber-hub-home-x",
+        "12349 hub serve FIBER_HOME=/tmp/other-home",
+        "pid sh -c : hub serve; rm -f /s FIBER_HOME=/tmp/fiber-hub-home",
+        // The lister's own row carries no `FIBER_HOME` token: it runs
+        // with a cleared environment holding only `PATH`, so it can
+        // never match itself.
+        "12350 ps -E -ww -o pid=,command= -U tester",
+    ]
+    .join("\n");
+    assert_eq!(hub_pids(&table, home), vec![12345, 12346]);
+}
+
+/// `hub_gone` is false while the socket is gone but the hub is alive:
+/// the pause-point repro without threads, pinning every condition (the
+/// socket probe, the empty-home shortcut, the listing).
+#[test]
+fn a_hub_alive_without_its_socket_is_not_gone() {
+    let dir = fakes::TempDir::new("hub-gone");
+    let socket = dir.path().join("hub");
+    fs::write(&socket, b"").unwrap();
+    let home = "/tmp/fiber-hub-home";
+    let hub_row = "4242 python3 -c 'import os, sys  # hub serve' FIBER_HOME=/tmp/fiber-hub-home";
+    // The socket gone while the hub is listed: not gone.
+    assert!(!hub_gone(&dir.path().join("missing"), home, &mut || {
+        hub_row.to_owned()
+    },));
+    // The socket gone and nothing listed: gone.
+    assert!(hub_gone(
+        &dir.path().join("missing"),
+        home,
+        &mut String::new,
+    ));
+    // The socket present and nothing listed: not gone.
+    assert!(!hub_gone(&socket, home, &mut String::new));
+    // An attached run lists nothing: the socket alone decides, and the
+    // lister never runs.
+    let mut listed = false;
+    let mut never = || {
+        listed = true;
+        String::new()
+    };
+    assert!(hub_gone(&dir.path().join("missing"), "", &mut never));
+    assert!(!listed, "an attached run lists no processes");
+}
+
+/// `until_hub_exits_with` returns only after the hub row vanishes: the
+/// counting lister shows the hub three polls running, so a socket-only
+/// loop would return on the first poll without listing at all.
+#[test]
+fn until_hub_exits_with_waits_until_the_hub_row_vanishes() {
+    let dir = fakes::TempDir::new("hub-exits");
+    let home = "/tmp/fiber-hub-home";
+    let hub_row = "4242 python3 -c 'import os, sys  # hub serve' FIBER_HOME=/tmp/fiber-hub-home";
+    let mut calls = 0;
+    let mut list = || {
+        calls += 1;
+        if calls <= 3 {
+            hub_row.to_owned()
+        } else {
+            String::new()
+        }
+    };
+    until_hub_exits_with(
+        Deadline::start(),
+        &dir.path().join("missing"),
+        home,
+        "the fake hub to exit",
+        &mut list,
+    );
+    assert_eq!(calls, 4, "the wait returns only after the hub row vanishes");
+}
+
+/// `until_hub_exits_with` panics naming `what` once the deadline is
+/// gone, even with the hub still listed: the wait ends at the deadline
+/// however the listing behaves.
+#[test]
+#[should_panic(expected = "waited until the deadline for the hub that never exits")]
+fn until_hub_exits_with_panics_naming_what_after_the_deadline() {
+    let clock = Box::leak(Box::new(FakeClock::new()));
+    let deadline = Deadline::on(&**clock);
+    clock.advance(support::WAITS + Duration::from_secs(1));
+    let dir = fakes::TempDir::new("hub-never-exits");
+    let hub_row = "4242 python3 -c 'import os, sys  # hub serve' FIBER_HOME=/tmp/fiber-hub-home";
+    until_hub_exits_with(
+        deadline,
+        &dir.path().join("missing"),
+        "/tmp/fiber-hub-home",
+        "the hub that never exits",
+        &mut || hub_row.to_owned(),
+    );
+}
+
+/// `Run::wait`'s hub wait must outlive the socket: the fake hub removes
+/// its socket, then blocks reading its stdin, so the socket's absence
+/// alone cannot prove the hub is gone (`docs/testing.md`, "Waits and
+/// timeouts": wait for the signal that proves the operation, here the
+/// hub process gone).
+#[test]
+fn the_hub_wait_outlives_the_sockets_absence() {
+    let deadline = Deadline::start();
+    let dir = fakes::TempDir::new("hub-exit");
+    let socket = dir.path().join("hub");
+    fs::write(&socket, b"").unwrap();
+    let mut child = Command::new("python3")
+        .arg("-c")
+        .arg("import os, sys; os.unlink(sys.argv[1]); sys.stdin.read()  # hub serve")
+        .arg(&socket)
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("FIBER_HOME", dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let watchdog = fakes::Watchdog::group(group);
+    let stdin = child.stdin.take().unwrap();
+    // The pause point: the fake removed its socket and now blocks in
+    // `sys.stdin.read()`. python3, not sh: macOS `ps -E` shows the
+    // environment of python but not of sh or sleep
+    // (`scripts/test-leak-scan`: "only a python leaker proves the scan
+    // names it"), and the wait lists hubs by their `FIBER_HOME`
+    // environment token.
+    while socket.exists() {
+        if deadline.left().is_zero() {
+            panic!("waited until the deadline for the fake hub to remove its socket");
+        }
+        thread::yield_now();
+    }
+    // The old condition is already true while the hub lives.
+    assert!(!socket.exists(), "the socket is gone while the hub lives");
+    let home = dir.path().to_string_lossy().into_owned();
+    // The hub is listed while paused, so it is not gone: a socket-only
+    // wait would return here.
+    assert!(
+        !hub_gone(&socket, &home, &mut || list_processes(deadline.left())),
+        "the hub is not gone while it lives without its socket"
+    );
+    // Releasing stdin ends the read at end of file, and reaping proves
+    // the exit, both bounded by the deadline.
+    drop(stdin);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    let status = finished
+        .recv_timeout(deadline.left())
+        .expect("the fake hub back after the release")
+        .expect("the fake hub reaped");
+    assert!(
+        status.success(),
+        "the fake hub exits cleanly after the release"
+    );
+    assert!(
+        hub_gone(&socket, &home, &mut || list_processes(deadline.left())),
+        "the hub is gone after its exit"
+    );
+    until_hub_exits(deadline, &socket, dir.path(), "the fake hub to exit");
+    watchdog.stand_down(deadline.cleanup());
 }
 
 /// The journey's waits finish when the finished title arrives before the

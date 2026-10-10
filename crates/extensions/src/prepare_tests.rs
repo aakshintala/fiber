@@ -15,7 +15,7 @@ use std::time::Duration;
 use contract::clock::Clock as _;
 use fakes::clock::FakeClock;
 
-use super::{INSTALL_STEP_DEADLINE, binary_name, download, platform};
+use super::{INSTALL_STEP_DEADLINE, binary_name, download, download_with, platform};
 use crate::host::exec::{GRACE, GROUP_POLL};
 
 /// How long a test waits on the run before it fails.
@@ -110,6 +110,59 @@ fn download_bypasses_the_proxy_for_no_proxy_hosts() {
         "nothing went through the proxy"
     );
     assert_eq!(server.requests().len(), 1);
+}
+
+/// How long a download-bound test waits on the blocking download before
+/// it fails. Far above the 200 ms idle limit under test, far below the
+/// 30 s hold, so without the limit the wait outlives the test and fails
+/// naming it.
+const DOWNLOAD_WITHIN: Duration = Duration::from_secs(10);
+
+/// A download whose server never answers fails as the install's own
+/// download error within the test's deadline, not after the hold lets go.
+#[test]
+fn a_held_download_fails_within_the_limit() {
+    let server = fakes::ProviderServer::start([]).unwrap();
+    server.hold_from(1, Duration::from_secs(30));
+    let url = format!("{}/tool", server.url());
+    let err = fakes::within("a held download", DOWNLOAD_WITHIN, move || {
+        download_with(
+            "probe",
+            &url,
+            None,
+            net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
+        )
+        .unwrap_err()
+    });
+    assert!(
+        matches!(err, crate::Error::Download { .. }),
+        "a held download fails as its download failed: {err}"
+    );
+}
+
+/// A download stalled mid-body fails as the install's own download error,
+/// and the server sees the client close the connection.
+#[test]
+fn a_stalled_download_body_fails_and_closes() {
+    let server = fakes::ProviderServer::start([fakes::Response::stall(200, "abc", 1000)]).unwrap();
+    let url = format!("{}/tool", server.url());
+    let err = fakes::within("a stalled download", DOWNLOAD_WITHIN, move || {
+        download_with(
+            "probe",
+            &url,
+            None,
+            net::Limits::new(Duration::from_secs(1), Duration::from_millis(200)).unwrap(),
+        )
+        .unwrap_err()
+    });
+    assert!(
+        matches!(err, crate::Error::Download { .. }),
+        "a stalled download fails as its download failed: {err}"
+    );
+    assert!(
+        server.await_closed(1, WITHIN),
+        "the server saw the stalled download close"
+    );
 }
 
 /// A step that never finishes is stopped at the install-step deadline, and

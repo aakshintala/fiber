@@ -871,6 +871,7 @@ dependencies = [
  "fakes",
  "flate2",
  "mlua",
+ "net",
  "ring",
  "rustix",
  "serde_json",

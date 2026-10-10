@@ -9,6 +9,7 @@ publish.workspace = true
 base64 = "0.23"
 config = { path = "../config" }
 contract = { path = "../contract" }
+net = { path = "../net" }
 serde_json.workspace = true
 # Decompressing the release's docs and extensions archives.
 flate2.workspace = true
