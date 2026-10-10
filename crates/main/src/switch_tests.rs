@@ -1485,13 +1485,6 @@ fn lua_extension(fixture: &Fixture, counter: &Path, flag: &Path) {
         ),
     )
     .unwrap();
-    std::fs::write(
-        src.join("providers/lp.json"),
-        json!({"name": "lp", "models": [{"id": "lm", "protocol": "openai-responses",
-            "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}]})
-        .to_string(),
-    )
-    .unwrap();
     extensions::plan(
         &fixture.home,
         &extensions::Request::Path(src),

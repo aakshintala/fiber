@@ -6,7 +6,7 @@
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
-use crate::test_support::install_extension;
+use crate::test_support::{Rig, install_extension};
 use std::cell::Cell;
 use std::path::PathBuf;
 
@@ -16,27 +16,24 @@ use serde_json::{Value, json};
 
 use super::{mode, read};
 
-/// Fiber home and a workspace in a temporary directory, removed on drop.
+/// Model-list fixtures with test-specific extension helpers.
 struct Setup {
-    root: fakes::TempDir,
+    rig: Rig,
 }
 
 impl Setup {
     fn new(prefix: &str) -> Self {
-        let setup = Self {
-            root: fakes::TempDir::new(prefix),
-        };
-        std::fs::create_dir_all(setup.home()).unwrap();
-        std::fs::create_dir_all(setup.workspace()).unwrap();
-        setup
+        Self {
+            rig: Rig::new(prefix),
+        }
     }
 
     fn home(&self) -> PathBuf {
-        self.root.path().join("home")
+        self.rig.home.clone()
     }
 
     fn workspace(&self) -> PathBuf {
-        self.root.path().join("workspace")
+        self.rig.workspace.clone()
     }
 
     /// Installs a data-only extension registering `name` with these model
