@@ -61,11 +61,7 @@ pub(crate) enum Place {
     /// Centred across and down the area.
     Centre,
     /// Above the input box: the slab's ▀ edge on the row above `bottom`.
-    /// The completion panels take it (a later lane).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the completion panels take it in a later lane")
-    )]
+    /// The completion panels take it.
     Across {
         /// The input box's top-edge row.
         bottom: u16,

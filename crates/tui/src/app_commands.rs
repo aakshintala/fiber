@@ -15,7 +15,7 @@ use crate::input::Draft;
 use crate::keymap::KeyMap;
 use crate::keys::{Edit, Key};
 use crate::shell;
-use crate::slash::{self, SHOWN};
+use crate::slash;
 
 /// What the notice says when a command needs a session and none is
 /// attached.
@@ -65,14 +65,7 @@ impl Default for Overlays {
     }
 }
 
-/// The open completion panel's rows as drawn, and which is selected.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Completions {
-    /// At most [`SHOWN`] rows.
-    pub(crate) lines: Vec<String>,
-    /// The selected row among `lines`, when one is selectable.
-    pub(crate) selected: Option<usize>,
-}
+pub(crate) use crate::completion_rows::{Completions, Rows};
 
 /// The draft's content as a prompt's `content` argument: text runs and
 /// image parts in order, each run one text part. `SentPart` serializes as
@@ -203,14 +196,18 @@ impl App {
         }
     }
 
-    /// The completion panel's height in rows; 0 while none is open.
+    /// The Ctrl+R panel's height in rows; 0 while none is open. The
+    /// `/` and `@` panels draw over the conversation, reserving nothing.
     pub(super) fn completion_rows(&self) -> usize {
         self.completions()
-            .map_or(0, |completions| completions.lines.len())
+            .filter(|completions| matches!(completions.rows, Rows::Search(_)))
+            .map_or(0, |completions| completions.lines().len())
     }
 
-    /// The completion panel above the input line, while one is open with
-    /// rows and the approval panel is closed.
+    /// The completion panel above the input line, while one is open and
+    /// the approval panel is closed. An empty `/` list shows "no
+    /// matches", an empty `@` result "no files match"; before an `@`
+    /// search answers, no panel shows.
     pub(crate) fn completions(&self) -> Option<Completions> {
         if self.panel().is_some() {
             return None;
@@ -218,28 +215,25 @@ impl App {
         if let Some(search) = self.search_panel() {
             return Some(search);
         }
-        let (all, selectable): (Vec<String>, bool) = if self.slash_open() {
-            let rows = slash::filter(&self.overlays.slash_rows, &self.slash_query());
-            (rows.into_iter().map(slash::Row::line).collect(), true)
-        } else {
-            match self
-                .overlays
-                .files
-                .as_ref()
-                .and_then(|panel| panel.result.as_ref())
-            {
-                Some(Ok(paths)) => (paths.clone(), true),
-                Some(Err(error)) => (vec![format!("No files: {error}")], false),
-                None => return None,
-            }
-        };
-        if all.is_empty() {
-            return None;
+        if self.slash_open() {
+            let query = self.slash_query();
+            let all: Vec<slash::Row> = slash::filter(&self.overlays.slash_rows, &query)
+                .into_iter()
+                .cloned()
+                .collect();
+            return Some(Completions::slash(all, self.overlays.selected, query));
         }
-        let start = slash::window_start(self.overlays.selected);
-        let lines: Vec<String> = all.into_iter().skip(start).take(SHOWN).collect();
-        let selected = selectable.then(|| self.overlays.selected.saturating_sub(start));
-        Some(Completions { lines, selected })
+        let query = self.file_query().unwrap_or_default();
+        match self
+            .overlays
+            .files
+            .as_ref()
+            .and_then(|panel| panel.result.as_ref())
+        {
+            Some(Ok(paths)) => Some(Completions::files(paths, self.overlays.selected, query)),
+            Some(Err(error)) => Some(Completions::message(format!("No files: {error}"), query)),
+            None => None,
+        }
     }
 
     /// Whether the `/` panel is open: the draft starts with `/`, holds no

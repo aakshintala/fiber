@@ -206,7 +206,7 @@ fn a_paste_on_the_form_goes_to_the_words_row() {
 /// The prompt search panel's first line, its query.
 fn search_query(app: &App) -> Option<String> {
     app.completions()
-        .and_then(|completions| completions.lines.first().cloned())
+        .and_then(|completions| completions.lines().first().cloned())
 }
 
 #[test]

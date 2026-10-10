@@ -7,6 +7,7 @@ use ratatui::style::{Modifier, Style};
 
 use super::{put, to_u16};
 use crate::app::App;
+use crate::completion_rows::Rows;
 use crate::format;
 use crate::markdown::{Role, style};
 use crate::mouse::{Target, TargetId};
@@ -17,16 +18,18 @@ use crate::surface;
 const EDITING_HINT: &str = "editing a queued message · enter amends · ⌥x drops · esc stops";
 
 /// Draws the input box on the rows above `bottom`: its rows on the surface
-/// tint with edges where they fit, token targets over them, and the
-/// completion panel above its top edge (`docs/tui.md`, "Look"). Moves
-/// `bottom` above it all.
+/// tint with edges where they fit, token targets over them, and the Ctrl+R
+/// panel above its top edge (`docs/tui.md`, "Look"). The `/` and `@`
+/// panels draw over the conversation instead, so they reserve nothing.
+/// Moves `bottom` above it all and returns the box's top-edge row, so the
+/// `/` and `@` overlay sits above it.
 pub(super) fn draw(
     app: &App,
     area: Rect,
     bottom: &mut u16,
     buf: &mut Buffer,
     targets: &mut Vec<Target>,
-) {
+) -> u16 {
     let (rows, top, cursor_row, cursor_col) = rows(app, area.width);
     let fits = surface::edged(rows.len(), usize::from(area.height)) > rows.len();
     let mut bottom_edge = false;
@@ -47,6 +50,8 @@ pub(super) fn draw(
         *bottom = y;
         top_edge = true;
     }
+    // Above the box's top edge: the box's own top row, whatever drew it.
+    let box_top = *bottom;
     // While a queued message is edited the stripe is in `attention`
     // (`docs/tui.md`, "Steering").
     let stripe = if app.steering_selected().is_some() {
@@ -78,8 +83,13 @@ pub(super) fn draw(
         buf.set_stringn(x, y, "█", 1, style(Role::Muted));
     }
     token_targets(app, area, below, (top, rows.len()), targets);
-    if let Some(completions) = app.completions() {
-        for (at, line) in completions.lines.iter().enumerate().rev() {
+    // Only the Ctrl+R panel draws here, in its reserved rows; the `/`
+    // and `@` panels draw over the conversation after it.
+    if let Some(completions) = app.completions()
+        && matches!(completions.rows, Rows::Search(_))
+    {
+        let lines = completions.lines();
+        for (at, line) in lines.iter().enumerate().rev() {
             let style = if completions.selected == Some(at) {
                 Style::new().add_modifier(Modifier::REVERSED)
             } else {
@@ -88,6 +98,7 @@ pub(super) fn draw(
             put(buf, area, bottom, line, style);
         }
     }
+    box_top
 }
 
 /// The columns the draft's rows take: past the stripe and gap where the

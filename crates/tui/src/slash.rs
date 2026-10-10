@@ -128,6 +128,53 @@ pub(crate) fn window_start(selected: usize) -> usize {
     selected.saturating_add(1).saturating_sub(SHOWN)
 }
 
+/// The first case-folded occurrence of `query` in `name`, as byte
+/// offsets on char boundaries; `None` when the query is empty or the
+/// name holds none of it (`docs/tui.md`, "Rules"). The match comes
+/// from the same fold the list filter uses, whole-string lowercase, so
+/// the two agree on every input the filter accepts (a final sigma
+/// folds contextually, which per-character folding misses). Folded
+/// offsets map back by walking the name's characters with the folded
+/// length of each prefix ending at a boundary: folding can expand (İ
+/// lowercases to two code points) or reshape, so folded offsets are
+/// never used on the original directly. Every step is bounded: the
+/// edges hold one entry per boundary, and both searches stop at one.
+pub(crate) fn matched(name: &str, query: &str) -> Option<std::ops::Range<usize>> {
+    let folded = name.to_lowercase();
+    let want = query.to_lowercase();
+    if want.is_empty() {
+        return None;
+    }
+    let at = folded.find(&want)?;
+    let end = at.saturating_add(want.len());
+    // Each original boundary with the folded length before it: the
+    // prefix grows character by character, so every offset here is a
+    // char boundary of the original string.
+    let mut edges: Vec<(usize, usize)> = vec![(0, 0)];
+    let mut prefix = String::new();
+    for (byte, ch) in name.char_indices() {
+        prefix.push(ch);
+        edges.push((
+            byte.saturating_add(ch.len_utf8()),
+            prefix.to_lowercase().len(),
+        ));
+    }
+    // The match covers the original characters whose folds it
+    // touches: the last boundary at or before its start, and the
+    // first at or past its end. Both always exist: the edges open at
+    // zero and close at the whole fold's length.
+    let start = edges
+        .iter()
+        .rev()
+        .find(|(_, before)| *before <= at)
+        .map_or(0, |(byte, _)| *byte);
+    let stop = edges
+        .iter()
+        .find(|(_, before)| *before >= end)
+        .map_or(name.len(), |(byte, _)| *byte);
+    Some(start..stop)
+}
+
 #[cfg(test)]
 #[path = "slash_tests.rs"]
 mod tests;
