@@ -70,65 +70,42 @@ fn killed(signal: i32) -> ExitStatus {
 }
 
 #[test]
-fn a_stop_beats_an_error_exit() {
-    let errored = errored();
-    let (completed, _) = outcome(
-        Some(Termination::Stopped),
-        Some(&errored),
-        None,
-        exit(1),
-        &job_id(),
-    );
-    assert_eq!(completed.status, Outcome::Cancelled);
-    assert_eq!(completed.error, None);
-}
-
-#[test]
-fn a_stop_beats_a_clean_exit_zero() {
-    let clean = exited("Done.");
-    let (completed, finished) = outcome(
-        Some(Termination::Stopped),
-        Some(&clean),
-        None,
-        exit(0),
-        &job_id(),
-    );
-    assert_eq!(completed.status, Outcome::Cancelled);
-    assert_eq!(finished.text, "Done.");
-}
-
-#[test]
-fn the_cap_beats_an_error_exit() {
-    let errored = errored();
-    let (completed, _) = outcome(
-        Some(Termination::OutputCap),
-        Some(&errored),
-        None,
-        exit(1),
-        &job_id(),
-    );
-    assert_eq!(completed.status, Outcome::Failed);
-    assert_eq!(
-        completed.error.as_ref().map(|error| error.code.clone()),
-        Some(ErrorCode::OutputCap)
-    );
-}
-
-#[test]
-fn the_cap_beats_a_clean_exit_zero() {
-    let clean = exited("Done.");
-    let (completed, _) = outcome(
-        Some(Termination::OutputCap),
-        Some(&clean),
-        None,
-        exit(0),
-        &job_id(),
-    );
-    assert_eq!(completed.status, Outcome::Failed);
-    assert_eq!(
-        completed.error.as_ref().map(|error| error.code.clone()),
-        Some(ErrorCode::OutputCap)
-    );
+fn termination_beats_the_exit() {
+    // One row per former test: a_stop_beats_an_error_exit,
+    // a_stop_beats_a_clean_exit_zero, the_cap_beats_an_error_exit and
+    // the_cap_beats_a_clean_exit_zero. The termination reason wins over
+    // whatever the exit carried.
+    for (termination, clean, status, expected, code) in [
+        (Termination::Stopped, false, exit(1), Outcome::Cancelled, None),
+        (Termination::Stopped, true, exit(0), Outcome::Cancelled, None),
+        (
+            Termination::OutputCap,
+            false,
+            exit(1),
+            Outcome::Failed,
+            Some(ErrorCode::OutputCap),
+        ),
+        (
+            Termination::OutputCap,
+            true,
+            exit(0),
+            Outcome::Failed,
+            Some(ErrorCode::OutputCap),
+        ),
+    ] {
+        let line = if clean { exited("Done.") } else { errored() };
+        let (completed, finished) =
+            outcome(Some(termination), Some(&line), None, status, &job_id());
+        assert_eq!(completed.status, expected, "{termination:?} clean={clean}");
+        assert_eq!(
+            completed.error.as_ref().map(|error| error.code.clone()),
+            code,
+            "{termination:?} clean={clean}"
+        );
+        if matches!(termination, Termination::Stopped) && clean {
+            assert_eq!(finished.text, "Done.");
+        }
+    }
 }
 
 #[test]
@@ -177,26 +154,21 @@ fn a_signal_with_no_line_is_signal() {
 }
 
 #[test]
-fn exit_zero_with_no_line_is_indeterminate() {
-    let (completed, finished) = outcome(None, None, None, exit(0), &job_id());
-    assert_eq!(completed.status, Outcome::Failed);
-    assert_eq!(
-        completed.error.as_ref().map(|error| error.code.clone()),
-        Some(ErrorCode::Indeterminate)
-    );
-    assert_eq!(finished.text, "");
-}
-
-#[test]
-fn exit_one_with_no_line_is_indeterminate() {
-    // Not `signal`: no signal ended the process. Not `nonzero_exit`: with
-    // no `fiber_exited` there is no run to blame the code on.
-    let (completed, _) = outcome(None, None, None, exit(1), &job_id());
-    assert_eq!(completed.status, Outcome::Failed);
-    assert_eq!(
-        completed.error.as_ref().map(|error| error.code.clone()),
-        Some(ErrorCode::Indeterminate)
-    );
+fn an_exit_with_no_line_is_indeterminate() {
+    // One row per former test: exit_zero_with_no_line_is_indeterminate
+    // and exit_one_with_no_line_is_indeterminate. Not `signal`: no
+    // signal ended the process. Not `nonzero_exit`: with no
+    // `fiber_exited` there is no run to blame the code on.
+    for code in [0, 1] {
+        let (completed, finished) = outcome(None, None, None, exit(code), &job_id());
+        assert_eq!(completed.status, Outcome::Failed, "exit {code}");
+        assert_eq!(
+            completed.error.as_ref().map(|error| error.code.clone()),
+            Some(ErrorCode::Indeterminate),
+            "exit {code}"
+        );
+        assert_eq!(finished.text, "");
+    }
 }
 
 #[test]

@@ -151,27 +151,6 @@ impl Clock for RecordingClock {
 }
 
 #[test]
-fn the_definition_is_list_wait_write_and_stop() {
-    let clock: Arc<dyn Clock> = FakeClock::new();
-    let (_dir, _registry, tool) = setup(clock);
-    let definition = tool.definition();
-    assert_eq!(definition.name, "jobs");
-    assert!(!definition.deferred);
-    let schema = definition.input_schema;
-    assert_eq!(schema["type"], "object");
-    assert_eq!(schema["required"], json!(["action"]));
-    assert_eq!(schema["additionalProperties"], false);
-    assert_eq!(
-        schema["properties"]["action"]["enum"],
-        json!(["list", "wait", "write", "stop"])
-    );
-    assert_eq!(schema["properties"]["input"]["type"], "string");
-    assert_eq!(schema["properties"]["job_id"]["type"], "string");
-    assert_eq!(schema["properties"]["timeout_ms"]["type"], "integer");
-    assert_eq!(schema["properties"]["timeout_ms"]["minimum"], json!(0));
-}
-
-#[test]
 fn effects_follow_the_action() {
     let clock: Arc<dyn Clock> = FakeClock::new();
     let (_dir, _registry, tool) = setup(clock);

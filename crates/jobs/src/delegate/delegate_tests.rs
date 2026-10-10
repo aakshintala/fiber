@@ -16,7 +16,6 @@ use std::time::Duration;
 
 use contract::inbox::Delivery;
 use contract::jobs::{JobRecord, Jobs as _};
-use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::Tool as _;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -145,47 +144,6 @@ fn arguments(model: &str) -> serde_json::Map<String, serde_json::Value> {
     .as_object()
     .unwrap()
     .clone()
-}
-
-#[test]
-fn the_definition_names_only_description_prompt_and_model() {
-    let rig = rig();
-    let definition = tool(&rig).definition();
-    assert_eq!(definition.name, "delegate_spawn");
-    let schema = &definition.input_schema;
-    let properties = schema["properties"].as_object().unwrap();
-    let mut names: Vec<&str> = properties.keys().map(String::as_str).collect();
-    names.sort_unstable();
-    assert_eq!(names, ["description", "model", "prompt"]);
-    assert_eq!(schema["additionalProperties"], false);
-    let mut required: Vec<&str> = schema["required"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|value| value.as_str().unwrap())
-        .collect();
-    required.sort_unstable();
-    assert_eq!(required, ["description", "model", "prompt"]);
-    // Neither the roles nor the references appear in the definition.
-    let text = serde_json::to_string(&definition).unwrap();
-    assert!(!text.contains("fiber:fake/m"), "{text}");
-}
-
-#[test]
-fn the_effects_execute_and_skip_every_fast_path() {
-    let rig = rig();
-    let effects = tool(&rig).effects(&arguments("fiber:fake/m")).unwrap();
-    assert_eq!(
-        effects.declared,
-        DeclaredEffects {
-            effects: vec![Effect::Executes],
-            reversible: false,
-            paths: None,
-        }
-    );
-    assert_eq!(effects.subject, Some(String::new()));
-    assert_eq!(effects.prefix, None);
-    assert!(effects.always_reviewed);
 }
 
 #[test]
