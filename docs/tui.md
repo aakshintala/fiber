@@ -1306,7 +1306,7 @@ later release still applies.
 | `/model` | Opens the model picker. |
 | `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
-| `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`, Space or a click on the mark toggles it, Enter saves the marked list as `scoped_models`, and Esc saves nothing. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
+| `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. The footer is "↑↓ move · enter toggle · ctrl+s save · esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |
 | `/tools` | Opens the tools view. |
