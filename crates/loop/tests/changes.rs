@@ -1524,10 +1524,15 @@ fn a_resumed_turn_replays_the_live_conversation_and_checks_silently() {
     let (tx1, rx1) = mpsc::channel();
     let looped = session.start(rx1);
     session.drive(looped, &tx1, "hi");
+    assert_eq!(kinds(&session.new_lines()), resumed_first_text_turn());
     late_skill(&session.workspace);
     let (tx2, rx2) = mpsc::channel();
     let looped = session.resume(rx2);
     session.drive(looped, &tx2, "again");
+    // Turn 2 announces the added skill, directly before its own input.
+    let mut announced = vec!["preamble_built", "skills_changed"];
+    announced.extend(resumed_later_text_turn());
+    assert_eq!(kinds(&session.new_lines()), announced);
     let live = session.provider.requests();
     assert_eq!(live.len(), 2);
     // Away, then back: the resumed turn's request starts with the live
