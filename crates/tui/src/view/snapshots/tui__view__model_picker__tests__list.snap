@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/view/model_picker_tests.rs
-assertion_line: 155
+assertion_line: 158
 expression: "screen(&app, 160, 48)"
 ---
 Models                                                                                                                                                         ✕
@@ -9,16 +9,16 @@ Models                                                                          
                                    Type to search █
                                    4 models                                                                     ⟳ refresh all
                                    acme
-                                   m1 [deep] [review]
-                                       thinking low [high]
-                                   m2
-                                       fixed thinking
+                                   › m1 [deep] [review]
+                                         thinking low [high]
+                                     m2
+                                         fixed thinking
 
                                    zeta
-                                   z1
-                                       thinking [low]
-                                   z2 [chat]
-                                       thinking low [high]
+                                     z1
+                                         thinking [low]
+                                     z2 [chat]
+                                         thinking low [high]
 
                                    ↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close
 

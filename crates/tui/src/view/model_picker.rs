@@ -116,6 +116,16 @@ fn heading_row(provider: &str, state: &Fresh, spinner: &str) -> Row {
     }
 }
 
+/// A choice row's gutter: "› " on the focused row, two blank columns
+/// elsewhere (`docs/tui.md`, "Look", "Overlays", "Choices").
+fn gutter(focused: bool) -> Span<'static> {
+    if focused {
+        Span::styled("› ".to_owned(), Style::new().add_modifier(Modifier::BOLD))
+    } else {
+        Span::raw("  ".to_owned())
+    }
+}
+
 /// The id's spans: in `accent`, with each query hit bold and underlined.
 fn id_spans(id: &str, hits: &[bool]) -> Vec<Span<'static>> {
     let accent = Style::new().fg(Role::Accent.color());
@@ -128,10 +138,7 @@ fn id_spans(id: &str, hits: &[bool]) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut plain = String::new();
     let mut hit = String::new();
-    for (got, matched) in id
-        .chars()
-        .zip(hits.iter().copied().chain(std::iter::repeat(false)))
-    {
+    for (got, matched) in id.chars().zip(hits.iter().copied()) {
         if matched {
             if !plain.is_empty() {
                 spans.push(Span::styled(std::mem::take(&mut plain), accent));
@@ -153,17 +160,19 @@ fn id_spans(id: &str, hits: &[bool]) -> Vec<Span<'static>> {
     spans
 }
 
-/// One choosing model's first row: the id in `accent`, each role dim in
-/// brackets, "● current" bold in `accent` on the session's model,
-/// "· scoped" dim while every model shows, and the rebuild cost dim at
-/// the right end. The name and roles cells take clicks; the row takes
-/// clicks anywhere, selecting it. The focused row sits on the bar.
+/// One choosing model's first row: the gutter, the id in `accent`,
+/// each role dim in brackets, "● current" bold in `accent` on the
+/// session's model, "· scoped" dim while every model shows, and the
+/// rebuild cost dim at the right end. The name and roles cells take
+/// clicks; the row takes clicks anywhere, selecting it. The focused row
+/// sits on the bar.
 fn model_first_row(model: &ModelRow, focused: bool) -> Row {
     let dim = Style::new().add_modifier(Modifier::DIM);
-    let mut spans = id_spans(&model.id, &model.hits);
-    let x = to_u16(cells(&model.id));
+    let mut spans = vec![gutter(focused)];
+    spans.extend(id_spans(&model.id, &model.hits));
+    let x = to_u16(2 + cells(&model.id));
     let mut targets = vec![(0, u16::MAX, TargetId::View(Spot::Row(model.at)))];
-    targets.push((0, x, TargetId::View(Spot::Cell(model.at, 0))));
+    targets.push((2, x, TargetId::View(Spot::Cell(model.at, 0))));
     if !model.roles.is_empty() {
         let roles = format!(" [{}]", model.roles.join("] ["));
         let wide = to_u16(cells(&roles));
@@ -197,15 +206,16 @@ fn model_first_row(model: &ModelRow, focused: bool) -> Row {
     }
 }
 
-/// One choosing model's second row, indented four columns: "thinking"
-/// dim and the levels, or "fixed thinking" dim for a model with none.
+/// One choosing model's second row, hung under the id: the gutter and
+/// four more columns, then "thinking" dim and the levels, or "fixed
+/// thinking" dim for a model with none.
 /// On the focused model the levels are in `attention`, its saved level
 /// bold, and the chosen chip bold in brackets; elsewhere they are dim.
 /// Each chip takes clicks at its level.
 fn model_second_row(model: &ModelRow, focused: bool) -> Row {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let attention = Style::new().fg(Role::Attention.color());
-    let mut spans = vec![Span::raw("    ".to_owned())];
+    let mut spans = vec![Span::raw("  ".to_owned()), Span::raw("    ".to_owned())];
     let mut targets = vec![(0, u16::MAX, TargetId::View(Spot::Row(model.at)))];
     if model.levels.is_empty() {
         spans.push(Span::styled("fixed thinking".to_owned(), dim));
@@ -217,7 +227,7 @@ fn model_second_row(model: &ModelRow, focused: bool) -> Row {
         };
     }
     spans.push(Span::styled("thinking ".to_owned(), dim));
-    let mut x = 4 + to_u16(cells("thinking "));
+    let mut x = 2 + 4 + to_u16(cells("thinking "));
     // The chips start past the name, and past the roles when the row
     // shows any: the click numbering names cells, not rows.
     let chips_at = if model.roles.is_empty() { 1 } else { 2 };
@@ -256,10 +266,12 @@ fn model_second_row(model: &ModelRow, focused: bool) -> Row {
     }
 }
 
-/// A model chosen for this session only takes a third row.
+/// A model chosen for this session only takes a third row, hung under
+/// the id like the second.
 fn session_row(model: &ModelRow) -> Row {
     Row {
         spans: vec![
+            Span::raw("  ".to_owned()),
             Span::raw("    ".to_owned()),
             Span::styled(
                 "ⓢ this session only · nothing saved".to_owned(),
@@ -272,8 +284,8 @@ fn session_row(model: &ModelRow) -> Row {
     }
 }
 
-/// One checklist row: the mark cell with its own target, then the id. A
-/// marked row draws bold. Any other cell selects the row.
+/// One checklist row: the gutter, the mark cell with its own target,
+/// then the id. A marked row draws bold. Any other cell selects the row.
 fn scope_row(model: &ModelRow, focused: bool) -> Row {
     let marked = model.mark.unwrap_or(false);
     let ink = if marked {
@@ -282,6 +294,7 @@ fn scope_row(model: &ModelRow, focused: bool) -> Row {
         Style::default()
     };
     let spans = vec![
+        gutter(focused),
         Span::styled(
             if marked {
                 "[x] ".to_owned()
@@ -292,10 +305,10 @@ fn scope_row(model: &ModelRow, focused: bool) -> Row {
         ),
         Span::styled(model.id.clone(), ink),
     ];
-    let x = 4 + to_u16(cells(&model.id));
+    let x = 2 + 4 + to_u16(cells(&model.id));
     let mut targets = vec![(0, u16::MAX, TargetId::View(Spot::Row(model.at)))];
-    targets.push((0, 4, TargetId::View(Spot::Cell(model.at, 0))));
-    targets.push((4, x, TargetId::View(Spot::Cell(model.at, 1))));
+    targets.push((2, 6, TargetId::View(Spot::Cell(model.at, 0))));
+    targets.push((6, x, TargetId::View(Spot::Cell(model.at, 1))));
     let mut spans = spans;
     if !model.roles.is_empty() {
         let roles = format!(" [{}]", model.roles.join("] ["));

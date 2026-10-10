@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/view/model_picker_tests.rs
-assertion_line: 372
+assertion_line: 378
 expression: "screen(&app, 160, 48)"
 ---
 Models                                                                                                                                                         ✕
@@ -8,12 +8,12 @@ Models                                                                          
 
                                                               4 models               ⟳ refresh all
                                                               acme
-                                                              [ ] m1 [deep] [review]
-                                                              [ ] m2
+                                                              › [ ] m1 [deep] [review]
+                                                                [ ] m2
 
                                                               zeta
-                                                              [ ] z1
-                                                              [ ] z2 [chat]
+                                                                [ ] z1
+                                                                [ ] z2 [chat]
 
                                                               Space mark · Enter save · Esc back
 

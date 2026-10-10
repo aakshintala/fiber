@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/view/model_picker_tests.rs
-assertion_line: 342
+assertion_line: 345
 expression: "screen(&app, 100, 40)"
 ---
 Models                                                                                             ✕
@@ -9,8 +9,8 @@ Models                                                                          
      › m1█
      1 of 4 models                                                                ⟳ refresh all
      acme
-     m1 [deep] [review]
-         thinking low [high]
+     › m1 [deep] [review]
+           thinking low [high]
 
      ↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close
 

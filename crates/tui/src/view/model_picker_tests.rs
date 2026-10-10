@@ -526,3 +526,32 @@ fn clicks_cover_the_buttons_chips_and_marks() {
     assert!(ids.iter().all(|id| *id != TargetId::View(Spot::Cell(2, 0))));
     assert!(ids.iter().all(|id| *id != TargetId::View(Spot::Cell(2, 1))));
 }
+
+#[test]
+fn choice_rows_open_with_a_gutter() {
+    let app = choosing(80, 24);
+    let buf = buffer(&app, 80, 24);
+    let text = crate::view::text(&buf);
+    // The barred row carries "› " in its gutter...
+    let (_, m1) = find_row(&text, "m1");
+    assert!(m1.contains("› m1"), "{m1}");
+    // ...every other choice row two blank columns, with the levels hung
+    // under the id.
+    let (_, m2) = find_row(&text, "m2");
+    let at = m2.find("m2").unwrap();
+    assert!(m2[..at].ends_with("  "), "{m2}");
+    assert!(
+        text.lines().any(|line| line.contains("      thinking")),
+        "{text}"
+    );
+    // A click on the id still selects its row.
+    let area = Rect::new(0, 0, 80, 24);
+    let mut scratch = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut scratch, None);
+    let (y, line) = find_row(&text, "m2");
+    let x = cell_x(&line, "m2");
+    assert_eq!(
+        crate::mouse::hit(&targets, x, y),
+        Some(TargetId::View(Spot::Cell(4, 0)))
+    );
+}

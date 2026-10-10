@@ -9,16 +9,16 @@ Models                                                                         �
   Type to search █
   4 models                                                       ⟳ refresh all
   acme
-  m1 [deep] [review] ● current                                               —
-      thinking low [high]
-  m2                                                              ~201k tokens
-      fixed thinking
+  › m1 [deep] [review] ● current                                             —
+        thinking low [high]
+    m2                                                            ~201k tokens
+        fixed thinking
 
   zeta
-  z1                                                              ~201k tokens
-      thinking [low]
-  z2 [chat]                                                       ~201k tokens
-      thinking low [high]
+    z1                                                            ~201k tokens
+        thinking [low]
+    z2 [chat]                                                     ~201k tokens
+        thinking low [high]
 
   ↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refre
 
