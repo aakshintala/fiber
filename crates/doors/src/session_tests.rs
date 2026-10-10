@@ -1493,21 +1493,29 @@ struct Running {
 }
 
 /// Stops the session, then expects the loop's inbox to wake with
-/// [`Delivery::Cancelled`]: what the stopper test checks mid-run.
-#[track_caller]
-fn stop_and_expect_cancel(inbox: &mpsc::Receiver<Delivery>, session: &Session) {
+/// [`Delivery::Cancelled`]: what the stopper test checks mid-run. A check
+/// returns what failed, and `running_shell` panics with it at the test's line.
+fn stop_and_expect_cancel(
+    inbox: &mpsc::Receiver<Delivery>,
+    session: &Session,
+) -> Result<(), &'static str> {
     (session.stopper())();
-    let delivery = Deadline::after(DEADLINE)
-        .recv(inbox)
-        .expect("the stopper wakes the inbox");
-    assert!(matches!(delivery, Delivery::Cancelled));
+    match Deadline::after(DEADLINE).recv(inbox) {
+        Ok(Delivery::Cancelled) => Ok(()),
+        Ok(_) => Err("the stopper wakes the inbox with Cancelled"),
+        Err(_) => Err("the stopper wakes the inbox"),
+    }
 }
 
 /// No mid-run check: the shell runs until the test releases it.
-fn no_check(_: &mpsc::Receiver<Delivery>, _: &Session) {}
+fn no_check(_: &mpsc::Receiver<Delivery>, _: &Session) -> Result<(), &'static str> {
+    Ok(())
+}
 
 #[track_caller]
-fn running_shell(check: fn(&mpsc::Receiver<Delivery>, &Session)) -> Running {
+fn running_shell(
+    check: fn(&mpsc::Receiver<Delivery>, &Session) -> Result<(), &'static str>,
+) -> Running {
     let opened = open();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (cancelled_tx, cancelled) = mpsc::channel();
@@ -1519,6 +1527,7 @@ fn running_shell(check: fn(&mpsc::Receiver<Delivery>, &Session)) -> Running {
     }));
     let socket = opened.socket.clone();
     let mut connected = None;
+    let mut failed = None;
     let session = &opened.session;
     session
         .run(Vec::new(), Arc::new(|| false), |inbox| {
@@ -1528,14 +1537,17 @@ fn running_shell(check: fn(&mpsc::Receiver<Delivery>, &Session)) -> Running {
             client
                 .send(r#"{"id":"c_shell","command":"shell","args":{"command":"sleep 60"}}"#)
                 .unwrap();
-            Deadline::after(DEADLINE)
-                .recv(&entered_rx)
-                .expect("the driver shell started");
-            check(&inbox, session);
+            failed = match Deadline::after(DEADLINE).recv(&entered_rx) {
+                Ok(()) => check(&inbox, session).err(),
+                Err(_) => Some("the driver shell started"),
+            };
             connected = Some(client);
             Ok(())
         })
         .unwrap();
+    if let Some(what) = failed {
+        panic!("{what}");
+    }
     Running {
         opened,
         client: connected.expect("the client connected"),
