@@ -88,6 +88,8 @@ pub(crate) struct PickerCtx<'a> {
     pub(crate) spinner: &'a str,
     /// The on-screen model's reference: its row shows "● current".
     pub(crate) current: Option<&'a str>,
+    /// The home session-only choice's reference: its row draws the third row.
+    pub(crate) home_only: Option<&'a str>,
 }
 
 /// The picker as its overlay draws it.
@@ -829,6 +831,11 @@ impl ModelPicker {
             {
                 shown += 1;
                 let current = ctx.current.is_some_and(|model| model == entry.reference);
+                let only = self
+                    .session_only
+                    .as_ref()
+                    .is_some_and(|(_, r)| *r == entry.reference)
+                    || ctx.home_only.is_some_and(|r| r == entry.reference);
                 section.models.push(ModelRow {
                     at,
                     id: entry.id.clone(),
@@ -852,10 +859,7 @@ impl ModelPicker {
                     mark: (open.mode == Mode::Scope)
                         .then(|| open.marks.get(*index).copied())
                         .flatten(),
-                    session_only: self
-                        .session_only
-                        .as_ref()
-                        .is_some_and(|(_, reference)| *reference == entry.reference),
+                    session_only: only,
                 });
             }
         }

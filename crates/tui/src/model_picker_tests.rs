@@ -52,6 +52,7 @@ fn ctx(usage: Option<u64>, wall_ms: u64, current: Option<&str>) -> PickerCtx<'_>
         wall_ms,
         spinner: "⠋",
         current,
+        home_only: None,
     }
 }
 
@@ -1467,4 +1468,34 @@ fn age_says_seconds_minutes_hours_then_days() {
     assert_eq!(age(23 * 60 * 60_000), "23h");
     assert_eq!(age(24 * 60 * 60_000), "1d");
     assert_eq!(age(9 * 24 * 60 * 60_000), "9d");
+}
+
+#[test]
+fn the_home_choice_marks_only_its_row() {
+    let picker = open_over(catalogue());
+    // With no home choice no row draws the third row.
+    let view = view_of(&picker);
+    assert!(
+        view.sections
+            .iter()
+            .flat_map(|section| section.models.iter())
+            .all(|model| !model.session_only)
+    );
+    // The home choice marks its model, wherever the attached mark is.
+    let home = PickerCtx {
+        usage: None,
+        wall_ms: 0,
+        spinner: "⠋",
+        current: None,
+        home_only: Some("acme/m2"),
+    };
+    let view = picker.view(&home).expect("open");
+    let only: Vec<&str> = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .filter(|model| model.session_only)
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(only, ["m2"]);
 }

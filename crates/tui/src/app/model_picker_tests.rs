@@ -2854,3 +2854,23 @@ fn another_sessions_accept_for_the_wait_is_ignored() {
     app.on_line(accepted(SESSION, &id));
     assert!(app.model_picker.session_only.is_some());
 }
+
+#[test]
+fn the_home_session_only_choice_marks_its_row() {
+    let mut app = home();
+    app.on_models(Ok(three()));
+    open(&mut app);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
+    assert!(app.model_picker.start_model.is_some());
+    // Reopening marks only the choice the next start carries.
+    open(&mut app);
+    let view = app.model_picker_view().expect("open");
+    let only: Vec<&str> = view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .filter(|model| model.session_only)
+        .map(|model| model.id.as_str())
+        .collect();
+    assert_eq!(only, ["m1"]);
+}

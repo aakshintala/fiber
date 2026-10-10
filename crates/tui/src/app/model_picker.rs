@@ -523,11 +523,20 @@ impl App {
         } else {
             self.panel_state.model()
         };
+        let home_only = if self.on_home() {
+            self.model_picker
+                .start_model
+                .as_ref()
+                .map(|choice| choice.reference.as_str())
+        } else {
+            None
+        };
         self.model_picker.view(&crate::model_picker::PickerCtx {
             usage: self.usage_on_screen(),
             wall_ms: self.rail_state().wall(),
             spinner: self.motion().spinner(),
             current: on_screen,
+            home_only,
         })
     }
     /// Whether the model picker is open.
