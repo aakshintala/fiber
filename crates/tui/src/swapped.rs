@@ -41,9 +41,9 @@ pub(crate) enum Spot {
     Item(u64),
 }
 
-/// How a cell draws: plain text, a provider heading, or dimmed text
-/// such as a row's roles. The selected row still reverses over it, so
-/// it shows on every theme and with no colour.
+/// How a cell draws: plain text, a provider heading, dimmed text such
+/// as a row's roles, or a matched filter run. The selected row still
+/// reverses over it, so it shows on every theme and with no colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Ink {
     /// Plain text.
@@ -52,6 +52,8 @@ pub(crate) enum Ink {
     Heading,
     /// Dimmed text: the muted role's colour.
     Muted,
+    /// A filter match in a model's id: bold and underlined.
+    Match,
 }
 
 impl Ink {
@@ -61,6 +63,9 @@ impl Ink {
             Ink::Plain => Style::default(),
             Ink::Heading => Style::new().add_modifier(Modifier::BOLD),
             Ink::Muted => Style::new().fg(Role::Muted.color()),
+            Ink::Match => Style::new()
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::UNDERLINED),
         }
     }
 }

@@ -1,8 +1,10 @@
 ---
 source: crates/tui/src/model_picker_view_tests.rs
+assertion_line: 163
 expression: "screen(&app, 80, 24)"
 ---
 Models · switching rebuilds the cache: about 201,034 tokens                    ✕
+Type to search █
 ↻ refresh
 acme
 m1 · deep, review   low [high]
@@ -21,8 +23,7 @@ z2 · chat   low [high]
 
 
 
-
-Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDow
+↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh ·
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ ›
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

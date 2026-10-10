@@ -65,9 +65,8 @@ An implementer is given:
 ## The gate
 
 `scripts/check` passing in CI on the exact head gates the merge. Before a
-push, the implementer runs the checks for the crates they changed:
-`cargo clippy -p <crate> --all-targets -- -D warnings` and
-`cargo nextest run -p <crate>`.
+push, the implementer runs the checks for the paths they changed ("Rules by
+path").
 
 `scripts/check` runs what CI runs, for the crates `docs/ci.md`, "Selection",
 chooses. The list of checks is `docs/ci.md`, "On every pull request that
@@ -78,6 +77,44 @@ Mutation testing runs in CI only.
 Driving the binary is not part of the gate. A behaviour the tests do not
 reach gets a test: a binary-level test for the JSON lines, a screen test for
 what the terminal shows (`docs/testing.md`).
+
+## Rules by path
+
+A ticket's brief carries the rules for the paths its diff touches, and only
+those.
+
+`crates/` and `xtask/`:
+
+- Before a push, for each crate changed: `cargo fmt --check -p <crate>`,
+  `cargo clippy -p <crate> --all-targets -- -D warnings` and
+  `cargo nextest run -p <crate>`, then `cargo xtask signal-sites`,
+  `cargo xtask compiled-in`, `cargo xtask image-isolation`,
+  `cargo xtask tui-isolation` and `cargo xtask dependency-list`. `main` has no
+  library target, so its clippy and nextest take `--bins --tests` in place of
+  `--all-targets`. `log` shares its name with a dependency, so its clippy and
+  nextest take `-p log@0.0.0`; `cargo fmt` takes plain `-p log`.
+- A crate whose tests read a doc table, such as `contract`, runs its tests
+  when that doc changes.
+- A change to session, door or hub behaviour that `crates/main/tests`
+  exercises also runs `cargo nextest run -p main --bins --tests`.
+- Mutation testing runs in CI only, never locally: a mutant that turns a
+  process-group id into 1 signals every process the user owns. It runs the
+  mutated crate's tests alone ("Proving a test bites" in `docs/testing.md`),
+  so new code needs tests in its own crate; binary-level tests in `main` do
+  not cover another crate.
+- A pull request for a `bug` ticket lays out its red commit as "The pull
+  request" says; `scripts/bug-red BASE` runs CI's check locally. Tests added
+  in a review round go in new commits on top; history before them is never
+  rewritten.
+
+`research/tui-prototype/`, which is not a workspace member:
+
+- Before a push: `cargo fmt --check`, `cargo clippy --all-targets -- -D
+  warnings` and `cargo test`, with `--manifest-path
+  research/tui-prototype/Cargo.toml`.
+- None of the `crates/` rules apply.
+
+Any other docs path: `scripts/check-docs`.
 
 ## Tools, not handwork
 

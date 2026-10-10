@@ -27,6 +27,7 @@
 //! A session that resumes is subscribed again at the level the connection
 //! last held, with no client command (`crate::rejoin`).
 
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
@@ -82,6 +83,10 @@ pub(crate) struct Relay {
 pub(crate) struct Relays {
     pub(crate) entries: Vec<Relay>,
     pub(crate) minted: u64,
+    /// One gate per session this connection opened: an opener holds its
+    /// session's gate from its check until its attach publishes, so two
+    /// openers never publish two relays for one session (see #1462).
+    pub(crate) gates: HashMap<String, Arc<Mutex<()>>>,
     /// Tests only: pauses after a transfer write, before its result returns.
     #[cfg(test)]
     pub(crate) after_transfer_write: Option<Box<dyn FnOnce() + Send>>,
@@ -89,6 +94,11 @@ pub(crate) struct Relays {
     /// as sent and writing it, with the relays lock held.
     #[cfg(test)]
     pub(crate) before_command_write: Option<Box<dyn FnOnce() + Send>>,
+    /// Tests only: a one-shot signal an opener calls after cloning its
+    /// session's gate and dropping the relays lock, immediately before
+    /// blocking on the gate.
+    #[cfg(test)]
+    pub(crate) at_gate: Option<Box<dyn FnOnce() + Send>>,
     /// Per session, the last `subscribe` it accepted, without its
     /// `session_id`: what a reconnect sends again.
     pub(crate) subscribed: Vec<(String, Map<String, Value>)>,
@@ -108,6 +118,17 @@ impl Relays {
     pub(crate) fn mint(&mut self) -> u64 {
         self.minted += 1;
         self.minted
+    }
+
+    /// `session`'s open gate, inserting it when absent: the opener clones
+    /// this Arc under the relays lock, drops that lock, then holds the
+    /// gate until its attach publishes.
+    pub(crate) fn gate(&mut self, session: &str) -> Arc<Mutex<()>> {
+        self.gates.get(session).cloned().unwrap_or_else(|| {
+            let gate = Arc::new(Mutex::new(()));
+            self.gates.insert(session.to_owned(), Arc::clone(&gate));
+            gate
+        })
     }
 
     /// Drops a finished relay thread's entry: its own session and epoch
@@ -323,91 +344,141 @@ pub(crate) fn route(
         return;
     };
     let order = lock(relays).order.clone();
+    // Serves the command on the session's published relay, when one
+    // outlives this call's check: every path below serves it and reports
+    // true. False when no relay for the session is published: the caller
+    // opens one. The re-check after taking the gate below reuses this
+    // branch unchanged.
+    let serve_existing = || -> bool {
+        let mut held = lock(relays);
+        let Some(at) = held.entries.iter().position(|entry| {
+            entry.session == session && from.is_none_or(|from| entry.epoch > from)
+        }) else {
+            return false;
+        };
+        // Liveness before enqueue: nobody passes the queue on when
+        // the thread is gone, so its unsent commands are routed
+        // first, then this command, each with this bound.
+        let alive = held.entries.get(at).is_some_and(|entry| {
+            entry
+                .thread
+                .as_ref()
+                .is_some_and(|thread| !thread.is_finished())
+        });
+        if !alive {
+            let entry = held.entries.remove(at);
+            drop(held);
+            crate::retire::recover(
+                entry,
+                id,
+                session,
+                stripped.clone(),
+                exited,
+                hub,
+                writer,
+                relays,
+                from,
+            );
+            return true;
+        }
+        // A new command joins the session's acknowledgement queue in
+        // read order, except one the session answers when it ends.
+        // After the liveness check, so a recovered queue keeps its
+        // read order ahead of this command.
+        if from.is_none() {
+            crate::retire::enqueue_new(&order, session, id, &stripped);
+        }
+        if held
+            .entries
+            .get(at)
+            .is_some_and(|entry| entry.retiring.is_some())
+        {
+            // Kept before anything else, so the relay thread passes
+            // it on in the order it was read. Never written: the
+            // session is exiting or gone.
+            if let Some(entry) = held.entries.get(at) {
+                lock(&entry.kept).push((id.0.clone(), stripped.clone(), false));
+            }
+            return true;
+        }
+        // Kept before the write, so the relay thread finds it when the
+        // session answers. The drain never sees the push without the
+        // write's outcome: it collects under the relays lock, which
+        // this hold keeps until the write's result flips the entry.
+        #[cfg(test)]
+        let before_write = held.before_command_write.take();
+        let sent = held.entries.get(at).is_some_and(|entry| {
+            lock(&entry.kept).push((id.0.clone(), stripped.clone(), true));
+            #[cfg(test)]
+            if let Some(before_write) = before_write {
+                before_write();
+            }
+            write_all(&entry.writer, &bytes).is_ok()
+        });
+        if sent {
+            return true;
+        }
+        // The write failed: the session is gone. The relay keeps the
+        // command unsent and reads on: only the write half shuts, so
+        // every answer already in the kernel buffer is still read. A
+        // command the session never answered is dropped, as when a
+        // live relay's socket closes.
+        if let Some(entry) = held.entries.get_mut(at) {
+            entry.retiring = Some(Retire::Dead);
+            if let Some(queued) = lock(&entry.kept)
+                .iter_mut()
+                .find(|(kept, _, _)| *kept == id.0)
+            {
+                queued.2 = false;
+            }
+            match entry.writer.shutdown(Shutdown::Write) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        true
+    };
+    if serve_existing() {
+        return;
+    }
+    // No relay for the session: at most one opener runs past here. The
+    // gate is cloned under the relays lock, which is dropped before
+    // blocking on it; the guard is held until the attach below
+    // publishes. An opener ahead publishes first: the re-check finds its
+    // entry and serves there instead.
+    let gate = lock(relays).gate(session);
+    #[cfg(test)]
+    let at_gate = lock(relays).at_gate.take();
+    #[cfg(test)]
+    if let Some(at_gate) = at_gate {
+        at_gate();
+    }
+    let _held_gate = lock(&gate);
+    // Mark opening before the re-check, under one lock hold with the
+    // kept read: a rejoin worker either published before this mark (the
+    // check below sees its entry) or sees the mark and refuses its
+    // exclusive attach, so none publishes between the check and this
+    // opener's attach.
     let (kept, _opening) = {
         let mut held = lock(relays);
-        if let Some(at) = held.entries.iter().position(|entry| {
-            entry.session == session && from.is_none_or(|from| entry.epoch > from)
-        }) {
-            // Liveness before enqueue: nobody passes the queue on when
-            // the thread is gone, so its unsent commands are routed
-            // first, then this command, each with this bound.
-            let alive = held.entries.get(at).is_some_and(|entry| {
-                entry
-                    .thread
-                    .as_ref()
-                    .is_some_and(|thread| !thread.is_finished())
-            });
-            if !alive {
-                let entry = held.entries.remove(at);
-                drop(held);
-                crate::retire::recover(
-                    entry, id, session, stripped, exited, hub, writer, relays, from,
-                );
-                return;
-            }
-            // A new command joins the session's acknowledgement queue in
-            // read order, except one the session answers when it ends.
-            // After the liveness check, so a recovered queue keeps its
-            // read order ahead of this command.
-            if from.is_none() {
-                crate::retire::enqueue_new(&order, session, id, &stripped);
-            }
-            if held
-                .entries
-                .get(at)
-                .is_some_and(|entry| entry.retiring.is_some())
-            {
-                // Kept before anything else, so the relay thread passes
-                // it on in the order it was read. Never written: the
-                // session is exiting or gone.
-                if let Some(entry) = held.entries.get(at) {
-                    lock(&entry.kept).push((id.0.clone(), stripped.clone(), false));
-                }
-                return;
-            }
-            // Kept before the write, so the relay thread finds it when the
-            // session answers. The drain never sees the push without the
-            // write's outcome: it collects under the relays lock, which
-            // this hold keeps until the write's result flips the entry.
-            #[cfg(test)]
-            let before_write = held.before_command_write.take();
-            let sent = held.entries.get(at).is_some_and(|entry| {
-                lock(&entry.kept).push((id.0.clone(), stripped.clone(), true));
-                #[cfg(test)]
-                if let Some(before_write) = before_write {
-                    before_write();
-                }
-                write_all(&entry.writer, &bytes).is_ok()
-            });
-            if sent {
-                return;
-            }
-            // The write failed: the session is gone. The relay keeps the
-            // command unsent and reads on: only the write half shuts, so
-            // every answer already in the kernel buffer is still read. A
-            // command the session never answered is dropped, as when a
-            // live relay's socket closes.
-            if let Some(entry) = held.entries.get_mut(at) {
-                entry.retiring = Some(Retire::Dead);
-                if let Some(queued) = lock(&entry.kept)
-                    .iter_mut()
-                    .find(|(kept, _, _)| *kept == id.0)
-                {
-                    queued.2 = false;
-                }
-                match entry.writer.shutdown(Shutdown::Write) {
-                    Ok(()) | Err(_) => {}
-                }
-            }
-            return;
-        }
-        let kept = held.subscription(session);
-        let opening = crate::rejoin::Opening::mark(&mut held, relays, session);
-        (kept, opening)
+        (
+            held.subscription(session),
+            crate::rejoin::Opening::mark(&mut held, relays, session),
+        )
     };
+    if serve_existing() {
+        // An opener ahead published first: serve there. The Opening
+        // guard drops here with no lock held; its Drop takes the relays
+        // lock itself.
+        return;
+    }
     #[cfg(test)]
-    if let Some(before_open) = lock(&hub.before_open).take() {
-        before_open();
+    {
+        // Taken out first: the pause below blocks, and must not hold
+        // the hub lock while parked, so a test can re-arm it meanwhile.
+        let before_open = lock(&hub.before_open).take();
+        if let Some(before_open) = before_open {
+            before_open();
+        }
     }
     if from.is_none() {
         crate::retire::enqueue_new(&order, session, id, &stripped);

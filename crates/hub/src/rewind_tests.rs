@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use contract::CommandId;
+use serde_json::{Map, Value, json};
 
 use super::*;
 use crate::Started;
@@ -30,6 +31,10 @@ use crate::fake::{FakeStarter, Handshake};
 /// One named deadline per wait: every start and acknowledgement lands
 /// before it.
 const DEADLINE: Duration = Duration::from_secs(10);
+
+/// How long each open-race step waits: every pause and join carries it,
+/// so a stalled opener fails the test instead of hanging the suite.
+const OPEN_DEADLINE: Duration = Duration::from_secs(5);
 
 struct Temp {
     dir: PathBuf,
@@ -788,4 +793,456 @@ fn follow_transfers_the_kept_level_onto_an_unsubscribed_relay() {
         vec![minted],
         "the relay thread drops its acknowledgement"
     );
+}
+
+/// A pre-bound session socket for the open race: counts the connections
+/// it accepted, answers every command `command_accepted`, records every
+/// line per connection, in accept order, and tells `heard` after every
+/// line. Stays bound until `close`: closing it earlier would read as EOF
+/// on the relay threads.
+struct OpenSession {
+    socket: PathBuf,
+    accepts: Arc<Mutex<usize>>,
+    accepted: Mutex<Option<mpsc::Receiver<()>>>,
+    received: Arc<Mutex<Vec<Vec<String>>>>,
+    heard: Mutex<Option<mpsc::Receiver<()>>>,
+    closed: Arc<Mutex<bool>>,
+    accept: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+impl OpenSession {
+    fn bind(home: &std::path::Path, id: &str) -> Self {
+        fs::create_dir_all(home.join("run")).unwrap();
+        let socket = home.join("run").join(id);
+        let accepts = Arc::new(Mutex::new(0));
+        let (accepted_tx, accepted) = mpsc::channel();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let (heard_tx, heard) = mpsc::channel();
+        let closed = Arc::new(Mutex::new(false));
+        let listener = UnixListener::bind(&socket).unwrap();
+        let accept = {
+            let accepts = Arc::clone(&accepts);
+            let received = Arc::clone(&received);
+            let closed = Arc::clone(&closed);
+            thread::Builder::new()
+                .name("open-session".to_owned())
+                .spawn(move || {
+                    let mut index = 0;
+                    while let Ok((stream, _)) = listener.accept() {
+                        if *lock(&closed) {
+                            return;
+                        }
+                        *lock(&accepts) += 1;
+                        accepted_tx.send(()).unwrap_or(());
+                        lock(&received).push(Vec::new());
+                        let received = Arc::clone(&received);
+                        let heard = heard_tx.clone();
+                        thread::Builder::new()
+                            .name("open-session-conn".to_owned())
+                            .spawn(move || serve_open(stream, index, &received, heard))
+                            .unwrap();
+                        index += 1;
+                    }
+                })
+                .unwrap()
+        };
+        Self {
+            socket,
+            accepts,
+            accepted: Mutex::new(Some(accepted)),
+            received,
+            heard: Mutex::new(Some(heard)),
+            closed,
+            accept: Mutex::new(Some(accept)),
+        }
+    }
+
+    fn accepts(&self) -> usize {
+        *lock(&self.accepts)
+    }
+
+    /// Waits until the session has accepted `count` connections in total,
+    /// so the accept loop lagging behind the openers cannot hide one.
+    /// One deadline bounds the whole wait: a worker collects the accepts
+    /// while the test takes its result once.
+    fn await_accepts(&self, count: usize, what: &str) {
+        let accepted = lock(&self.accepted).take().expect("one wait per session");
+        let (done_tx, done) = mpsc::channel();
+        thread::Builder::new()
+            .name("open-session-accept-wait".to_owned())
+            .spawn(move || {
+                let mut missing = count;
+                while missing > 0 {
+                    if accepted.recv().is_err() {
+                        break;
+                    }
+                    missing -= 1;
+                }
+                done_tx.send(missing).unwrap_or(());
+            })
+            .expect("the waiter spawns");
+        assert_eq!(
+            done.recv_timeout(OPEN_DEADLINE).unwrap_or(count),
+            0,
+            "{what} reached the session"
+        );
+    }
+
+    /// Waits until the session has received `count` lines in total, so a
+    /// serve thread lagging behind the openers cannot hide one. One
+    /// deadline bounds the whole wait: a worker collects the lines while
+    /// the test takes its result once.
+    fn await_lines(&self, count: usize, what: &str) {
+        let heard = lock(&self.heard).take().expect("one wait per session");
+        let (done_tx, done) = mpsc::channel();
+        thread::Builder::new()
+            .name("open-session-wait".to_owned())
+            .spawn(move || {
+                let mut missing = count;
+                while missing > 0 {
+                    if heard.recv().is_err() {
+                        break;
+                    }
+                    missing -= 1;
+                }
+                done_tx.send(missing).unwrap_or(());
+            })
+            .expect("the waiter spawns");
+        assert_eq!(
+            done.recv_timeout(OPEN_DEADLINE).unwrap_or(count),
+            0,
+            "{what} reached the session"
+        );
+    }
+
+    /// Stops accepting: the probe connection wakes the accept loop, which
+    /// sees the flag before counting it. Served connections stay open.
+    fn close(&self) {
+        *lock(&self.closed) = true;
+        drop(UnixStream::connect(&self.socket));
+        if let Some(accept) = lock(&self.accept).take() {
+            accept.join().unwrap_or(());
+        }
+    }
+}
+
+/// Serves one open-race connection: records every line, answers each
+/// `command_accepted` under its own id, tells `heard` after every line,
+/// and holds the socket open.
+fn serve_open(
+    stream: UnixStream,
+    index: usize,
+    received: &Arc<Mutex<Vec<Vec<String>>>>,
+    heard: mpsc::Sender<()>,
+) {
+    let mut write = stream.try_clone().unwrap();
+    let mut read = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match read.read_line(&mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {
+                lock(received)[index].push(line.clone());
+                heard.send(()).unwrap_or(());
+                let id = serde_json::from_str::<Value>(&line)
+                    .ok()
+                    .and_then(|line| line.get("id").cloned())
+                    .unwrap_or(Value::Null);
+                let ack = json!({
+                    "kind": "command_accepted", "ts": 1, "schema_version": 1,
+                    "payload": {"command_id": id},
+                });
+                let mut bytes = serde_json::to_vec(&ack).unwrap();
+                bytes.push(b'\n');
+                if write
+                    .write_all(&bytes)
+                    .and_then(|()| write.flush())
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// The race setup both open tests share: the connection holds the level
+/// on the old session, and returns the client's read end with its writer
+/// and relays. The read end stays open in the test scope: every relay
+/// thread forwards onto the writer, and a closed reader would fail those
+/// forwards and drain the entries under test.
+fn open_race(
+    level: &Map<String, Value>,
+    old: &str,
+) -> (
+    UnixStream,
+    Arc<Mutex<UnixStream>>,
+    Arc<Mutex<crate::relay::Relays>>,
+) {
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    lock(&relays)
+        .subscribed
+        .push((old.to_owned(), level.clone()));
+    let (write, read) = UnixStream::pair().unwrap();
+    (read, Arc::new(Mutex::new(write)), relays)
+}
+
+/// Arms the one-shot open pause on `hub`: the opener reaching it signals
+/// `paused` and waits for `release` before connecting.
+fn arm_before_open(hub: &Arc<Hub>) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (paused_tx, paused) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    *lock(&hub.before_open) = Some(Box::new(move || {
+        paused_tx.send(()).unwrap_or(());
+        release.recv().unwrap_or(());
+    }));
+    (paused, release_tx)
+}
+
+/// Spawns `job` on a worker and reports when it returns.
+fn spawn_opener(job: impl FnOnce() + Send + 'static, name: &str) -> mpsc::Receiver<()> {
+    let (done_tx, done) = mpsc::channel();
+    thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(move || {
+            job();
+            done_tx.send(()).unwrap_or(());
+        })
+        .unwrap();
+    done
+}
+
+/// Parks the first opener in the open hook, then the second in the
+/// re-armed hook, releases them, and joins both: the two opener orders
+/// share this choreography. Without the gate both wait past their checks,
+/// each about to publish; with it the second queues behind the first on
+/// the gate instead of pausing, and the wait below times out. When the
+/// waiter is the redirect it pauses in the hook once the gate frees it;
+/// when it is the command it takes the existing relay outright.
+fn race_openers(
+    hub: &Arc<Hub>,
+    relays: &Arc<Mutex<crate::relay::Relays>>,
+    first: impl FnOnce() + Send + 'static,
+    second: impl FnOnce() + Send + 'static,
+    second_is_follow: bool,
+) {
+    let (paused_first, release_first) = arm_before_open(hub);
+    let done_first = spawn_opener(first, "race-first");
+    assert!(
+        paused_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+        "the first opener parked after its opening"
+    );
+    // Arm the gate seam now: the first opener already passed it (it is
+    // parked past the gate), so only the contender signals.
+    let (reached_tx, reached) = mpsc::channel();
+    lock(relays).at_gate = Some(Box::new(move || {
+        reached_tx.send(()).unwrap_or(());
+    }));
+    let (paused_second, release_second) = arm_before_open(hub);
+    let done_second = spawn_opener(second, "race-second");
+    // The first opener stays parked until the contender reached the
+    // gate: releasing it on a thread start alone could release it
+    // before any contention.
+    assert!(
+        reached.recv_timeout(OPEN_DEADLINE).is_ok(),
+        "the second opener reached the gate"
+    );
+    if paused_second.recv_timeout(OPEN_DEADLINE).is_err() {
+        drop(release_first);
+        assert!(
+            done_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "the first opener finished"
+        );
+        if second_is_follow {
+            assert!(
+                paused_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "the waiter parked after the first published"
+            );
+            drop(release_second);
+        }
+        assert!(
+            done_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+            "the second opener finished"
+        );
+    } else {
+        // No gate: both openers are parked before publishing. Release
+        // the redirect first: it is still before its check in one order
+        // and publishes while the command is still parked; the command
+        // is already past its check, so it publishes too.
+        if second_is_follow {
+            drop(release_second);
+            assert!(
+                done_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "the second opener finished"
+            );
+            drop(release_first);
+            assert!(
+                done_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "the first opener finished"
+            );
+        } else {
+            drop(release_first);
+            assert!(
+                done_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "the first opener finished"
+            );
+            drop(release_second);
+            assert!(
+                done_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "the second opener finished"
+            );
+        }
+    }
+}
+
+/// The client command for `next` as a worker job: a `tools` command, so
+/// the kept level can only come from the redirect's transfer.
+fn route_job(
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<crate::relay::Relays>>,
+    next: &str,
+) -> impl FnOnce() + Send + 'static {
+    let hub = Arc::clone(hub);
+    let writer = Arc::clone(writer);
+    let relays = Arc::clone(relays);
+    let next = next.to_owned();
+    move || {
+        let stripped = json!({"id": "c_cmd", "command": "tools", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone();
+        crate::relay::route(
+            &CommandId("c_cmd".to_owned()),
+            &next,
+            stripped,
+            &hub,
+            &writer,
+            &relays,
+            None,
+            false,
+        );
+    }
+}
+
+/// The redirect from `old` as a worker job.
+fn follow_job(
+    hub: &Arc<Hub>,
+    writer: &Arc<Mutex<UnixStream>>,
+    relays: &Arc<Mutex<crate::relay::Relays>>,
+    old: &str,
+) -> impl FnOnce() + Send + 'static {
+    let hub = Arc::clone(hub);
+    let writer = Arc::clone(writer);
+    let relays = Arc::clone(relays);
+    let old = old.to_owned();
+    move || follow(&hub, &writer, &relays, &old)
+}
+
+/// Asserts the race published exactly one live relay for `next`: one
+/// entry, one accept, the kept level, and both lines on the one
+/// connection — the client's command once, and the transfer's subscribe.
+fn assert_single_relay(
+    relays: &Arc<Mutex<crate::relay::Relays>>,
+    session: &OpenSession,
+    next: &str,
+    level: &Map<String, Value>,
+) {
+    let held = lock(relays);
+    let live = held
+        .entries
+        .iter()
+        .filter(|entry| entry.session == next && entry.retiring.is_none())
+        .count();
+    assert_eq!(live, 1, "one relay for the session, not one per opener");
+    assert_eq!(held.entries.len(), 1, "nothing else published");
+    // The accept loop can lag behind the openers: the wait holds until
+    // the connection it counted arrived.
+    session.await_accepts(1, "the session's connection");
+    assert_eq!(session.accepts(), 1, "the session saw one connection");
+    assert_eq!(
+        held.subscription(next),
+        Some(level.clone()),
+        "the kept level reached the relay"
+    );
+    drop(held);
+    // A serve thread lagging behind the openers cannot hide a line: the
+    // wait holds until both arrived.
+    session.await_lines(2, "the command and the transfer");
+    let received = lock(&session.received);
+    assert_eq!(received.len(), 1, "one connection carried every line");
+    assert!(
+        received[0].iter().any(|line| line.contains("\"c_cmd\"")),
+        "the client command reached it: {:?}",
+        received[0]
+    );
+    assert!(
+        received[0]
+            .iter()
+            .any(|line| line.contains("\"subscribe\"")),
+        "the transfer's subscribe reached it: {:?}",
+        received[0]
+    );
+    let commands = received
+        .iter()
+        .flatten()
+        .filter(|line| line.contains("\"c_cmd\""))
+        .count();
+    assert_eq!(commands, 1, "the client command reached the session once");
+}
+
+#[test]
+fn route_paused_in_before_open_shares_one_relay_with_follow() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let old = id(1);
+    let next = id(2);
+    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    let session = OpenSession::bind(&temp.dir, &next);
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let (_read, writer, relays) = open_race(&level, &old);
+    // The client command parks first; the redirect parks in the re-armed
+    // hook once it too is about to open, still having published nothing.
+    race_openers(
+        &hub,
+        &relays,
+        route_job(&hub, &writer, &relays, &next),
+        follow_job(&hub, &writer, &relays, &old),
+        true,
+    );
+    assert_single_relay(&relays, &session, &next, &level);
+    session.close();
+}
+
+#[test]
+fn follow_paused_in_before_open_shares_one_relay_with_route() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
+    let old = id(1);
+    let next = id(2);
+    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    let session = OpenSession::bind(&temp.dir, &next);
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let (_read, writer, relays) = open_race(&level, &old);
+    // The redirect parks first; the client command parks in the re-armed
+    // hook once it too is about to open, still having published nothing.
+    race_openers(
+        &hub,
+        &relays,
+        follow_job(&hub, &writer, &relays, &old),
+        route_job(&hub, &writer, &relays, &next),
+        false,
+    );
+    assert_single_relay(&relays, &session, &next, &level);
+    session.close();
 }

@@ -2258,6 +2258,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
                 default_level: None,
                 configured: None,
                 roles: Vec::new(),
+                name: None,
             }],
             notices: vec!["the lists are in".to_owned()],
         })
@@ -2357,6 +2358,7 @@ fn one_model() -> crate::Catalogue {
             default_level: None,
             configured: None,
             roles: Vec::new(),
+            name: None,
         }],
         notices: Vec::new(),
     }

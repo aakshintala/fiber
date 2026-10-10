@@ -20,7 +20,7 @@ use std::time::Duration;
 use fakes::clock::FakeClock;
 use support::Deadline;
 use support::Setup;
-use support::pty::{Colour, Reader, Run, Screen, sgr_params};
+use support::pty::{Colour, Reader, Run, Screen, contains, sgr_params};
 
 #[test]
 fn the_screen_moves_and_writes() {
@@ -123,13 +123,6 @@ fn pair() -> (fs::File, fs::File) {
     (fs::File::from(terminal.main), terminal.terminal)
 }
 
-/// Whether `haystack` holds `needle` as bytes.
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
-}
-
 #[test]
 fn a_reader_stops_while_the_terminal_side_stays_open() {
     let deadline = Deadline::start();
@@ -189,15 +182,10 @@ fn one_turn(env: &[(&str, &str)]) -> (Screen, Vec<u8>) {
     run.write(b"say hi\r");
     run.read_until("Hel");
     run.read_until("completed");
-    // The turn's attention lands after its close: quitting with the
-    // teardown still in flight wedges the run, so the journey waits
-    // for it (`docs/tui.md`, "Getting the person's attention").
-    run.read_until("finished");
     let output = run.output();
     let mut screen = Screen::new(160, 48);
     screen.feed(&output);
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
     (screen, output)
@@ -479,7 +467,6 @@ fn started_run() -> (Setup, Run) {
 
 fn quit(mut run: Run) {
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
 }

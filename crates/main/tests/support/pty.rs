@@ -21,7 +21,7 @@ use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -70,6 +70,31 @@ impl Reader {
             output,
             wakes,
         )
+    }
+
+    /// Drains `master` on a thread, appending to the shared `output`
+    /// instead of a new buffer, and dropping its wakes: nothing reads
+    /// them after `wait` restores the drain. The thread ends as in
+    /// [`Reader::start`].
+    pub(crate) fn start_on(
+        master: fs::File,
+        output: Arc<Mutex<Vec<u8>>>,
+        deadline: Deadline,
+    ) -> Self {
+        let (stop_read, stop_write) = std::io::pipe().unwrap();
+        let (wake, wakes) = mpsc::channel();
+        drop(wakes);
+        let (done, finished) = mpsc::channel();
+        let appended = Arc::clone(&output);
+        let master = OwnedFd::from(master);
+        thread::Builder::new()
+            .spawn(move || Self::drain(master, stop_read, appended, wake, done, deadline))
+            .unwrap();
+        Self {
+            stop: stop_write,
+            done: finished,
+            deadline,
+        }
     }
 
     /// Polls the master and the stop pipe with the deadline's remaining
@@ -211,10 +236,12 @@ impl Drop for KillGroup {
     }
 }
 
-/// The terminal under test: its child, the pty master with its reader,
-/// and one wake per chunk appended. Sessions the hub starts run in their
-/// own process groups, guarded by a matching watchdog on the workspace;
-/// the hub idles out on its own.
+/// The terminal under test: its child, the pty master with its reader
+/// draining it from the first frame to end of file, and one wake per
+/// chunk appended. A reader drains the master except between `stall`
+/// and `wait`. Sessions the hub starts run in their own process groups,
+/// guarded by a matching watchdog on the workspace; the hub idles out
+/// on its own.
 pub(crate) struct Run {
     child: Option<Child>,
     /// The hub's socket, removed when the hub exits.
@@ -229,6 +256,13 @@ pub(crate) struct Run {
     /// Where the last `read_until` match ended.
     seen: usize,
     deadline: Deadline,
+}
+
+/// What a run drained: the child's exit and every byte read from the
+/// master since spawn, in order, through end of file.
+pub(crate) struct Exited {
+    pub(crate) status: ExitStatus,
+    pub(crate) terminal: Vec<u8>,
 }
 
 impl Run {
@@ -344,13 +378,31 @@ impl Run {
         }
     }
 
-    /// Stops the reader, waits for the child to exit and reaps it, then
-    /// for the hub to idle out and remove its socket: a hub whose home is
-    /// deleted under it never exits. Dropping `self` kills the hub's
-    /// sessions through the matching watchdog.
-    pub(crate) fn wait(mut self) -> std::process::Output {
+    /// Stops the reader so `fiber`'s later output stays queued in the
+    /// terminal until `wait`: every byte `fiber` writes from then on is
+    /// undrained. A reader still running after the stop would prove
+    /// nothing, so the stop is an assert naming the reader. A second
+    /// call finds no reader and does nothing. After it, `read_until`
+    /// and `screen_until` are not called: with no reader draining, their
+    /// wakes never arrive and they wait until the deadline.
+    pub(crate) fn stall(&mut self) {
         if let Some(reader) = self.reader.take() {
-            reader.stop();
+            assert!(reader.stop(), "expected the reader to stop");
+        }
+    }
+
+    /// Restores the drain when stalled, waits for the child to exit
+    /// and reaps it, then waits for the reader to end at end of file
+    /// before stopping it, so every queued byte is read: stopping
+    /// through the stop pipe while the master may still hold bytes
+    /// drops them. Then stands the watchdog down and waits for the hub
+    /// to idle out and remove its socket. Returns the exit and every
+    /// byte read from the master since spawn.
+    pub(crate) fn wait(mut self) -> Exited {
+        if self.reader.is_none() {
+            let main = self.main.try_clone().unwrap();
+            let output = Arc::clone(&self.output);
+            self.reader = Some(Reader::start_on(main, output, self.deadline));
         }
         let child = self.child.take().unwrap();
         let group = child.id();
@@ -366,12 +418,25 @@ impl Run {
             "`fiber` left a process in its group behind"
         );
         std::mem::forget(guard);
+        let reader = self.reader.take().unwrap();
+        assert!(
+            reader.ended(self.deadline.left()),
+            "waited until the deadline for the terminal's end of file"
+        );
+        assert!(
+            !self.deadline.left().is_zero(),
+            "waited until the deadline for the terminal's end of file"
+        );
+        reader.stop();
         self.watchdog
             .take()
             .unwrap()
             .stand_down(self.deadline.cleanup());
         until_gone(self.deadline, &self.hub_socket, "the hub to idle out");
-        output
+        Exited {
+            status: output.status,
+            terminal: self.output.lock().unwrap().clone(),
+        }
     }
 }
 
@@ -395,6 +460,14 @@ fn until_gone(deadline: Deadline, socket: &Path, what: &str) {
         }
         thread::yield_now();
     }
+}
+
+/// Whether `haystack` holds `needle` as bytes.
+pub(crate) fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.len() >= needle.len()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 /// Where `needle` ends in `haystack` at or after `from`: an exact byte

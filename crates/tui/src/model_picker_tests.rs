@@ -23,6 +23,7 @@ fn entry(
         default_level: default.map(str::to_owned),
         configured: configured.map(str::to_owned),
         roles: Vec::new(),
+        name: None,
     }
 }
 
@@ -101,6 +102,7 @@ fn thinking_inserts_the_current_model_in_catalogue_order_without_duplicates() {
         false,
         Mode::Thinking,
         Some(&("zeta/z1".to_owned(), None)),
+        "",
     );
     assert_eq!(rows, [0, 2, 3]);
 
@@ -111,6 +113,7 @@ fn thinking_inserts_the_current_model_in_catalogue_order_without_duplicates() {
         false,
         Mode::Thinking,
         Some(&("zeta/z3".to_owned(), None)),
+        "",
     );
     assert_eq!(rows, [0, 1, 4]);
 
@@ -125,6 +128,7 @@ fn thinking_inserts_the_current_model_in_catalogue_order_without_duplicates() {
         false,
         Mode::Thinking,
         Some(&("zeta/z1".to_owned(), None)),
+        "",
     );
     assert_eq!(rows, [0, 2, 3]);
 }
@@ -510,23 +514,25 @@ fn frame_row_clicks_select_without_choosing() {
         ..ModelPicker::default()
     };
     picker.open(Mode::Choose, None);
-    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1` with
-    // its roles cell, 3 the `zeta` heading, 4 `zeta/z3`.
+    // Frame rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // 3 `acme/m1` with its roles cell, 4 the `zeta` heading, 5 `zeta/z3`.
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A heading selects nothing.
-    picker.select_frame_row(1);
+    picker.select_frame_row(2);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
-    // The buttons row selects nothing either.
+    // The filter and the buttons rows select nothing either.
     picker.select_frame_row(0);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    picker.select_frame_row(1);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A model row is a selection stop.
-    picker.select_frame_row(4);
+    picker.select_frame_row(5);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(4));
     // The refresh button asks `Every`; the scope line toggles.
-    let _ = picker.click_cell(0, 0);
+    let _ = picker.click_cell(1, 0);
     assert_eq!(picker.want, Some(crate::catalogue::Refresh::Every));
     assert!(picker.open.as_ref().is_some_and(|open| !open.show_all));
-    let _ = picker.click_cell(0, 1);
+    let _ = picker.click_cell(1, 1);
     assert!(picker.open.as_ref().is_some_and(|open| open.show_all));
 }
 
@@ -544,7 +550,7 @@ fn the_first_chip_target_follows_the_roles_cell() {
     picker.open(Mode::Choose, None);
 
     let frame = picker.frame(24, None).unwrap();
-    assert_eq!(frame.rows[2][2].1, Some(crate::swapped::Spot::Cell(2, 2)));
+    assert_eq!(frame.rows[3][2].1, Some(crate::swapped::Spot::Cell(3, 2)));
 }
 
 #[test]
@@ -559,7 +565,7 @@ fn each_chip_target_advances_one_cell() {
     picker.open(Mode::Choose, None);
 
     let frame = picker.frame(24, None).unwrap();
-    assert_eq!(frame.rows[2][2].1, Some(crate::swapped::Spot::Cell(2, 2)));
+    assert_eq!(frame.rows[3][2].1, Some(crate::swapped::Spot::Cell(3, 2)));
 }
 
 /// A choice of `reference` at `level`, picked out or not.
@@ -704,24 +710,25 @@ fn clicks_choose_at_the_row_and_chip() {
         ..ModelPicker::default()
     };
     picker.open(Mode::Choose, None);
-    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1` with
-    // its roles cell, 3 the `zeta` heading, 4 `zeta/z3`.
+    // Frame rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // 3 `acme/m1` with its roles cell, 4 the `zeta` heading, 5 `zeta/z3`.
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A heading chooses nothing.
-    assert_eq!(picker.click_cell(1, 0), None);
+    assert_eq!(picker.click_cell(2, 0), None);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
-    // The buttons choose nothing either.
+    // The filter and the buttons choose nothing either.
     assert_eq!(picker.click_cell(0, 0), None);
+    assert_eq!(picker.click_cell(1, 0), None);
     // A name cell chooses its row at its chip: untouched, so only the
     // model is saved.
-    let choice = picker.click_cell(4, 0).expect("a choice");
+    let choice = picker.click_cell(5, 0).expect("a choice");
     assert_eq!(choice.reference, "zeta/z3");
     assert!(!choice.level_chosen);
     assert!(choice.save_model);
     assert!(!choice.session_only);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(4));
     // A roles cell selects its row without choosing.
-    assert_eq!(picker.click_cell(2, 1), None);
+    assert_eq!(picker.click_cell(3, 1), None);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     assert!(
         picker
@@ -731,7 +738,7 @@ fn clicks_choose_at_the_row_and_chip() {
     );
     // A chip chooses its row at that level: `acme/m1` declares `low`
     // then `high`, past its roles cell.
-    let choice = picker.click_cell(2, 3).expect("a choice");
+    let choice = picker.click_cell(3, 3).expect("a choice");
     assert_eq!(choice.reference, "acme/m1");
     assert_eq!(choice.level.as_deref(), Some("high"));
     assert!(choice.level_chosen);
@@ -740,7 +747,7 @@ fn clicks_choose_at_the_row_and_chip() {
     assert_eq!(open.chips.first().copied().flatten(), Some(1));
     assert!(open.touched.first().copied().unwrap_or(false));
     // The first cell past the last chip only selects the row.
-    assert_eq!(picker.click_cell(2, 4), None);
+    assert_eq!(picker.click_cell(3, 4), None);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // A row past the frame chooses nothing.
     assert_eq!(picker.click_cell(40, 0), None);
@@ -750,7 +757,7 @@ fn clicks_choose_at_the_row_and_chip() {
 fn scope_opens_over_every_model_with_no_scope_line() {
     let models = catalogue();
     for scoped in [Vec::new(), vec!["acme/m1".to_owned(), "gone/x".to_owned()]] {
-        let (rows, line) = shown_in(&models, &scoped, false, Mode::Scope, None);
+        let (rows, line) = shown_in(&models, &scoped, false, Mode::Scope, None, "");
         assert_eq!(rows, [0, 1, 2, 3, 4]);
         assert_eq!(line, None);
     }
@@ -1009,4 +1016,184 @@ fn a_read_through_an_empty_catalogue_marks_from_the_list_again() {
             "gone/x".to_owned()
         ]
     );
+}
+
+#[test]
+fn typing_narrows_the_shown_rows_in_catalogue_order() {
+    let models = catalogue();
+    let (rows, _) = shown_in(&models, &[], false, Mode::Choose, None, "z1 z2");
+    assert!(rows.is_empty());
+    let (rows, _) = shown_in(&models, &[], false, Mode::Choose, None, "zeta");
+    assert_eq!(rows, [2, 3, 4]);
+    let (rows, _) = shown_in(&models, &[], false, Mode::Choose, None, "m1");
+    assert_eq!(rows, [0]);
+}
+
+#[test]
+fn typing_keeps_the_selection_on_a_shown_model() {
+    let mut picker = open_over(catalogue());
+    picker.move_row(1);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+    // `acme/m2` matches "m2": the selection stays on its model.
+    picker.push_query('m');
+    picker.push_query('2');
+    assert_eq!(picker.query(), "m2");
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+}
+
+#[test]
+fn typing_moves_the_selection_to_the_first_shown_row() {
+    let mut picker = open_over(catalogue());
+    picker.move_row(1);
+    // `acme/m2` hides under "z": the selection moves to `zeta/z1`.
+    picker.push_query('z');
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(2));
+}
+
+#[test]
+fn typing_with_no_match_keeps_the_hidden_selection() {
+    let mut picker = open_over(catalogue());
+    picker.push_query('q');
+    picker.push_query('q');
+    picker.push_query('q');
+    let (rows, _) = shown_in(
+        &picker.catalogue.models,
+        &picker.scoped,
+        false,
+        Mode::Choose,
+        None,
+        picker.query(),
+    );
+    assert!(rows.is_empty());
+    // With no row shown the selection stays where it was, hidden.
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    // Clearing the query shows every row again, on the same selection.
+    picker.clear_query();
+    assert_eq!(picker.query(), "");
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+}
+
+#[test]
+fn typing_keeps_chips_and_touched() {
+    let mut picker = open_over(catalogue());
+    picker.move_chip(-1);
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(open.chips.first().copied().flatten(), Some(0));
+    assert!(open.touched.first().copied().unwrap_or(false));
+    // A level chosen with the arrows survives typing.
+    picker.push_query('m');
+    picker.push_query('1');
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(open.chips.first().copied().flatten(), Some(0));
+    assert!(open.touched.first().copied().unwrap_or(false));
+}
+
+#[test]
+fn backspace_on_an_empty_query_changes_nothing() {
+    let mut picker = open_over(catalogue());
+    picker.pop_query();
+    assert_eq!(picker.query(), "");
+    assert!(picker.is_open());
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
+    picker.clear_query();
+    assert_eq!(picker.query(), "");
+    assert!(picker.is_open());
+}
+
+#[test]
+fn backspace_drops_the_last_letter_and_widens_the_filter() {
+    let mut picker = open_over(catalogue());
+    picker.push_query('m');
+    picker.push_query('2');
+    let (narrow, _) = shown_in(
+        &picker.catalogue.models,
+        &picker.scoped,
+        false,
+        Mode::Choose,
+        None,
+        picker.query(),
+    );
+    assert_eq!(narrow, [1]);
+    picker.pop_query();
+    assert_eq!(picker.query(), "m");
+    // `acme/m1` shows again; the selection stays on `acme/m2`.
+    let (wide, _) = shown_in(
+        &picker.catalogue.models,
+        &picker.scoped,
+        false,
+        Mode::Choose,
+        None,
+        picker.query(),
+    );
+    assert_eq!(wide, [0, 1]);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+}
+
+#[test]
+fn with_no_row_shown_choice_is_none_and_chips_do_not_move() {
+    let mut picker = open_over(catalogue());
+    picker.push_query('q');
+    picker.push_query('q');
+    picker.push_query('q');
+    assert_eq!(picker.choice(false), None);
+    assert_eq!(picker.choice(true), None);
+    let before = picker.open.as_ref().expect("open").chips.clone();
+    picker.move_chip(-1);
+    picker.move_chip(1);
+    assert_eq!(picker.open.as_ref().expect("open").chips, before);
+}
+
+#[test]
+fn the_scope_toggle_keeps_the_query_and_refilters() {
+    let mut picker = open_over(catalogue());
+    picker.scoped = vec!["acme/m1".to_owned(), "acme/m2".to_owned()];
+    picker.push_query('z');
+    assert_eq!(picker.query(), "z");
+    // Under the scope nothing matches: showing all refilters the same
+    // query onto every installed model.
+    picker.toggle_show_all();
+    assert_eq!(picker.query(), "z");
+    let open = picker.open.as_ref().unwrap();
+    assert!(open.show_all);
+    assert_eq!(open.selected, 2);
+    picker.toggle_show_all();
+    assert_eq!(picker.query(), "z");
+}
+
+#[test]
+fn a_replacement_with_a_query_keeps_the_selection_on_the_shown_rows() {
+    let mut picker = open_over(catalogue());
+    picker.move_row(1);
+    picker.push_query('a');
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+    // The answer removes `acme/m2`: the old index clamps onto `zeta/z1`,
+    // which matches "a" and shows, so it stays selected.
+    let mut models = catalogue();
+    models.remove(1);
+    picker.store(Ok(Catalogue {
+        models,
+        notices: Vec::new(),
+    }));
+    let open = picker.open.as_ref().unwrap();
+    assert_eq!(picker.catalogue.models[open.selected].reference, "zeta/z1");
+    assert_eq!(picker.query(), "a");
+}
+
+#[test]
+fn thinking_drops_its_target_row_on_a_non_matching_query() {
+    let models = catalogue();
+    let target = Some(("acme/m1".to_owned(), None));
+    let (rows, _) = shown_in(&models, &[], false, Mode::Thinking, target.as_ref(), "");
+    assert!(rows.contains(&0));
+    let (rows, _) = shown_in(&models, &[], false, Mode::Thinking, target.as_ref(), "zeta");
+    assert!(!rows.contains(&0));
+    assert_eq!(rows, [2, 3, 4]);
+}
+
+#[test]
+fn the_checklist_ignores_the_query() {
+    let models = catalogue();
+    let (rows, line) = shown_in(&models, &[], false, Mode::Scope, None, "zzz");
+    assert_eq!(rows, [0, 1, 2, 3, 4]);
+    assert_eq!(line, None);
 }

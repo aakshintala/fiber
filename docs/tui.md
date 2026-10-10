@@ -78,6 +78,19 @@ the session starts in a new worktree of the workspace, by the same rules a
 delegate's worktree follows (`docs/invocation.md`, "Isolation"). Outside a git
 repository the switch is not shown.
 
+**The keyboard reaches every part of home.** Focus runs top to bottom: the
+entry bar, the chip row, the session list. ↓ from the entry bar focuses the
+chip row, on the chip focused there last, the workspace chip at first. ← and →
+move between the chips and stop at the ends. Enter on a focused chip does what
+a click does: the workspace chip opens the workspace picker, the new worktree
+switch toggles, the model chip opens the model picker, and the thinking chip
+opens it at the model's thinking chips. The chip stays focused behind the
+picker. A second ↓ focuses the first session row, and ↓ moves down the rows.
+↑ goes back the same way: from the first row to the chip focused last, and
+from the chip row to the entry bar. With no session, ↓ on the chip row does
+nothing. Typing or Backspace while a chip is focused goes to the entry bar.
+A focused chip is drawn as a hovered one ("Mouse and hover").
+
 The first frame draws at once. The session list fills in when the hub's feed
 arrives (`docs/performance.md`).
 
@@ -401,16 +414,24 @@ a click on it returns too. The views are:
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, and the size of the prompt-cache rebuild
   a switch costs. Choosing a model saves the global `model`, and choosing a
-  level saves `models."<provider/model>".thinking` to the global file. One key
+  level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
   marks the choice as this session only, and then nothing is saved. When
   `scoped_models` is set, the picker shows only those models, with a "show
-  all" toggle. Ctrl+L opens it, as `/model` does. It draws from the cached
+  all" toggle on Tab. Typing filters the list on every letter: each
+  space-separated word of the query must match, in order but not
+  necessarily next to each other and ignoring case, the model's provider,
+  id or display name. The filter keeps the list's order and only drops
+  rows. Backspace removes a letter; Esc clears the query first and closes
+  the picker on the next press. Enter with no match leaves the picker open.
+  Ctrl+L opens it, as `/model` does. It draws from the cached
   model lists at once and refreshes stale ones in the background; its refresh
   button refreshes every list (`docs/model-routing.md`, "Model discovery").
 
   Under the view's top row the picker is an overlay ("Look", "Overlays").
-  Its first row holds the count dim ("12 models", or "scoped · 5 of 12"
-  under `scoped_models`), then "[show all]" bold, which reads "[show scoped]"
+  Its first row is the filter: "Type to search" dim until something is
+  typed, then "›" dim and the query bold, with a dim block cursor either
+  way. Its second row holds the count dim ("12 models", "scoped · 5 of 12"
+  under `scoped_models`, or "4 of 12 models" while a query is typed), then "[show all]" bold, which reads "[show scoped]"
   while every model shows, and "⟳ refresh all" dim at the right end. Each
   provider is a section, a blank row between them: the provider's name dim,
   then "· updated 2m ago" dim, or "⟳ refreshing" and a spinner in
@@ -424,8 +445,11 @@ a click on it returns too. The views are:
   `attention`, its saved level bold, and the chosen chip bold in brackets
   ("[high]"); elsewhere they are dim. ← and → move between the focused
   model's chips. A model chosen for this session only gets a third row,
-  "ⓢ this session only · nothing saved" dim. The footer is "↑↓ move · ←→
-  levels · enter choose · s session only · esc close".
+  "ⓢ this session only · nothing saved" dim. While a query is typed, the
+  characters of each id it matched are underlined and bold; a query that
+  matches nothing shows one line, "No models match" dim, and no provider
+  sections. The footer is "↑↓ move · ←→ levels · enter choose · tab all ·
+  ctrl+s session · ctrl+r refresh · esc close", keys bold.
 - **The usage view,** `/usage`: the session's `usage` (`docs/events.md`) broken
   down by turn, by model and by delegate, each with tokens by kind, cost billed
   and cost on subscription, and the budget left when `budget.usd` is set.
@@ -1150,7 +1174,9 @@ search box and the draft shows without a cursor.
 | Drop it | `drop_steering` | ⌥X | its mouse target |
 | Reopen a request put aside, or move to the next, the oldest first, switching to its session | `next_request` | ⌥A | `/approvals`; click the badge or a waiting card |
 | Open the model picker | `model_picker` | Ctrl+L | `/model` |
-| Choose in the model picker for this session only | `session_only` | s | |
+| Choose in the model picker for this session only | `session_only` | Ctrl+S | |
+| Show every model in the model picker, or only the scoped ones | `show_all` | Tab | click "[show all]" |
+| Refresh every model list in the model picker | `refresh_lists` | Ctrl+R | click "⟳ refresh all" |
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
@@ -1192,13 +1218,15 @@ of them when a key arrives:
 - Conversation: focus is in the conversation.
 - Steering: a queued steering message is selected.
 - Input: the input box has the keyboard, home with nothing open included.
+  On home, ↑, ↓, ← and → move between the entry bar, the chip row and the
+  session list ("Home"); like an overlay's own keys, they are not bindings.
 
 A global action acts in all six. The rest act only where they are listed:
 
 - Global: `close_or_interrupt`, `clear_then_quit`, `rail_row_n`,
   `toggle_ledgers`, `toggle_panel`, `toggle_rail`, `jump_to_end`,
   `next_request`, `key_map`.
-- Picker: `session_only`.
+- Picker: `session_only`, `show_all`, `refresh_lists`.
 - Input, Steering and Conversation: `go_home`, `new_session`,
   `open_in_editor`, `navigate`, `search`, `select_steering`, `drop_steering`,
   `model_picker`.
@@ -1276,9 +1304,9 @@ later release still applies.
 | `/new` | Goes home with the cursor in the input box. |
 | `/resume` | Opens home at the session list. |
 | `/model` | Opens the model picker. |
-| `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, `s` applies it to this session only. |
+| `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
-| `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`, Space or a click on the mark toggles it, Enter saves the marked list as `scoped_models`, and Esc saves nothing. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
+| `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. The footer is "↑↓ move · enter toggle · ctrl+s save · esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |
 | `/tools` | Opens the tools view. |
@@ -1312,9 +1340,26 @@ screens").
 ### Logging in
 
 `/login` logs in from the terminal with the same flow as `fiber login`. It
-lists providers and extension credentials. An API key goes in a hidden field
-in a bottom panel. OAuth opens the browser and also shows the URL to copy, for
-SSH.
+opens an overlay ("Look", "Overlays") titled "Log in" with a ✕: the providers under
+"Providers", each tagged `browser` for OAuth or `key` for an API key, then
+the extension credentials under "Secrets", the first row focused.
+
+Once a provider is picked, each step replaces the whole overlay; nothing is
+added under the list. The title is the provider's name and the list is not
+drawn. The steps keep the provider list's height and share one width, so the
+overlay does not jump between them; the URL is cut to fit rather than
+widening it. Esc goes back to the provider list.
+
+- **The browser wait.** OAuth opens the browser and also shows the URL to
+  copy, for SSH: "Open this URL to log in to anthropic:", the URL cut from
+  the left to keep its tail, and "Waiting for the browser…" dim. Footer:
+  "y copy URL · Esc back".
+- **Key entry.** "Label (--as): default." and "Key for google:", the key
+  masked as dots with a block cursor. Tab moves between the key and the
+  label. Footer: "Tab key or label · Enter submit · Esc back".
+- **Done.** "✓ Logged in to anthropic." in `success`. Footer: "Esc back".
+- **Failed.** "Login to anthropic failed: token expired.", the reason in
+  `error`. Footer: "Esc back".
 
 ### Quit
 
@@ -1402,9 +1447,9 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
   background in the conversation, the turn's tint for a code block inside a
   card, the `panel` tint for a panel card.
 - **A stripe marks state** on the side its surface is anchored to: ▌ on the
-  left for the input box, a running or finished job, an approval, a
-  question form and every overlay's rows; ▐ on the right for the person's prompt bubble. The stripe is one
-  unbroken bar, because ▌ and ▐ fill half of each cell as Ghostty draws them.
+  left for the input box, a running or finished job, an approval and a
+  question form; ▐ on the right for the person's prompt bubble. An overlay
+  has no stripe. The stripe is one unbroken bar, because ▌ and ▐ fill half of each cell as Ghostty draws them.
   Where a terminal cannot draw it unbroken, there is no stripe. Fiber draws
   stripes in Ghostty, WezTerm and kitty, and not inside tmux or screen;
   elsewhere the stripe's cell keeps its tint.
@@ -1451,16 +1496,16 @@ tui       212   9,804
 
 ### Overlays
 
-Every surface drawn over the screen shares one frame, the input box's: the
+Every surface drawn over the screen shares one frame: the
 key map, the quit question, home's delete question and workspace picker, the
-Ctrl+R panel, a notice's whole text, the `/` and `@` completion panels, and
+`/login` overlay, the Ctrl+R panel, a notice's whole text, the `/` and `@` completion panels, and
 the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,
-  and no border glyphs. Each row that holds text opens with a ▌ stripe in
-  `accent` and two blank columns, and ends with two blank columns. One blank
+  and no border glyphs. Each row that holds text opens with two blank
+  columns and ends with two blank columns, with no stripe. One blank
   row sits inside each edge, so no text touches either.
-- **The width** is the content's plus those five columns, kept between 40
+- **The width** is the content's plus those four columns, kept between 40
   and 150 columns and never wider than the screen. Content that wraps is
   wrapped at a preferred width first and the overlay shrinks to what the
   wrapped content needs: 71 columns for a question or notice, 55 for the
@@ -1518,11 +1563,11 @@ The roles, in order, with the dark theme's values:
 |---|---|---|
 | `text` | the full text colour: replies, the draft, anything with no role of its own | the terminal's foreground |
 | `muted` | what the doc calls dim: READY, labels and hints, summary lines and results, the ▣ line, block quote bars, grips, the logo's counters | `text`, dim |
-| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's stripe, title and selection bar | `#6eaafe` |
+| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's title and selection bar | `#6eaafe` |
 | `heading` | markdown headings | `#ff9f43` |
-| `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded | `#6eaafe` |
+| `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded, a login's ✓ | `#6eaafe` |
 | `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` |
-| `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown | `#ff5d73` |
+| `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown, a failed login's reason | `#ff5d73` |
 | `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` |
 | `added` | lines added: an edited file's `+N`, added lines in a diff | `#6eaafe` |
 | `removed` | lines removed: an edited file's `−N`, removed lines in a diff | `#ff5d73` |

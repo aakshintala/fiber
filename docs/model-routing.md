@@ -304,6 +304,9 @@ Most of a provider is data. For the provider:
 For each model:
 
 - its id, as the vendor spells it
+- `name`, optional: its display name, such as `Claude Opus 5.5`, which the
+  model picker's filter matches beside the provider and id (`docs/tui.md`,
+  "Swapped views"); a model with no name is matched on provider and id only
 - its protocol and base URL, which can differ between models of one provider,
   and may name a per-account host ("A per-account host")
 - compatibility flags the native protocol reads, such as whether the vendor
@@ -328,7 +331,7 @@ For each model:
 - output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
 
-A first-party package's `models` list is generated, except `openrouter`'s, which its `models()` reads from OpenRouter ("Model discovery"). `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
+A first-party package's `models` list is generated, except `openrouter`'s, which its `models()` reads from OpenRouter ("Model discovery"), taking each model's `name` from OpenRouter's list. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.

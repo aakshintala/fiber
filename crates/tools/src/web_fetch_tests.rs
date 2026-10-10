@@ -26,6 +26,10 @@ const WITHIN: Duration = Duration::from_secs(30);
 /// How long a test waits for a fake-clock waiter or a request to arrive.
 const SIGNAL: Duration = Duration::from_secs(10);
 
+/// How long the quadratic-tag timeout test may take on the wall clock.
+const QUADRATIC_TAG_WITHIN: Duration = Duration::from_secs(5);
+
+const DOWNLOAD_PIECE: usize = 64 * 1024;
 const TEN_MIB: usize = 10 * 1024 * 1024;
 
 const METADATA: IpAddr = IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254));
@@ -1518,6 +1522,108 @@ fn a_deadline_while_the_download_is_saved_leaves_no_file() {
         format!("{}: the request took over 60 seconds.\n", held.url)
     );
     assert!(no_file_in(&held.rig), "the partial artifact is removed");
+}
+
+/// Counts artifact writes and advances the request clock from write two,
+/// after the previous piece has been converted.
+struct AdvanceOnSecondArtifactWrite {
+    file: fs::File,
+    writes: Arc<AtomicUsize>,
+    clock: Arc<FakeClock>,
+    second_write: mpsc::Sender<()>,
+    advance: Arc<std::sync::Mutex<Receiver<()>>>,
+}
+
+impl std::io::Write for AdvanceOnSecondArtifactWrite {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let number = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
+        self.file.write_all(bytes)?;
+        if number == 2 {
+            self.second_write.send(()).map_err(std::io::Error::other)?;
+            self.advance
+                .lock()
+                .unwrap()
+                .recv()
+                .map_err(std::io::Error::other)?;
+            self.clock.advance(Duration::from_secs(61));
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+#[test]
+fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
+    let mut page = String::with_capacity(8 << 20);
+    page.push_str("<a");
+    for n in 0..1_000_000u32 {
+        page.push_str(&format!(" a{n}"));
+    }
+    page.push_str(">t</a>");
+    assert!(page.len() < TEN_MIB, "the page is under the download cap");
+
+    let bytes = page.into_bytes();
+    let server = serve([
+        Response::stall(200, bytes[..3 * DOWNLOAD_PIECE].to_vec(), bytes.len())
+            .header("content-type", "text/html; charset=utf-8"),
+    ]);
+    let rig = Rig::new();
+    let clock = Arc::clone(&rig.clock);
+    let writes = Arc::new(AtomicUsize::new(0));
+    let observed_writes = Arc::clone(&writes);
+    let (second_write, second_write_rx) = mpsc::channel();
+    let (advance, advance_rx) = mpsc::channel();
+    let advance_rx = Arc::new(std::sync::Mutex::new(advance_rx));
+    let rig = rig.with(move |tool| {
+        tool.with_artifact_writer(Arc::new(move |file| {
+            Box::new(AdvanceOnSecondArtifactWrite {
+                file,
+                writes: Arc::clone(&observed_writes),
+                clock: Arc::clone(&clock),
+                second_write: second_write.clone(),
+                advance: Arc::clone(&advance_rx),
+            })
+        }))
+    });
+    let url = format!("{}/page", server.url());
+
+    fakes::within(
+        "the quadratic-tag request timeout",
+        QUADRATIC_TAG_WITHIN,
+        move || {
+            let _server = server;
+            let deadline = rig.clock.origin() + Duration::from_secs(60);
+            let call = rig.start(&url);
+            assert!(
+                rig.clock.await_parked(deadline, QUADRATIC_TAG_WITHIN),
+                "the request watcher waits for the request deadline"
+            );
+            second_write_rx
+                .recv_timeout(QUADRATIC_TAG_WITHIN)
+                .expect("the artifact writer reaches piece two");
+            assert!(
+                _server.await_partial(1, QUADRATIC_TAG_WITHIN),
+                "the server sends piece three before the timeout"
+            );
+            advance
+                .send(())
+                .expect("piece two releases the clock advance");
+            let output = call
+                .rx
+                .recv_timeout(QUADRATIC_TAG_WITHIN)
+                .expect("the fetch finishes within its deadline");
+            assert_eq!(code(&output), Some(ErrorCode::Timeout));
+            assert_eq!(
+                writes.load(Ordering::SeqCst),
+                2,
+                "the stopped fetch saves no piece after the request window"
+            );
+            assert!(no_file_in(&rig), "the timed-out artifact is removed");
+        },
+    );
 }
 
 /// A head for an HTML page read straight from memory.

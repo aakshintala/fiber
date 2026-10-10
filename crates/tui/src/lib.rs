@@ -106,7 +106,7 @@ pub use look::ThemeSetting;
 
 pub use keyset::KeysSetup;
 
-pub use jigs::{draw, hover_frames, measure_paging};
+pub use jigs::{OpenStages, draw, hover_frames, measure_open, measure_paging};
 
 pub use event_loop::run;
 

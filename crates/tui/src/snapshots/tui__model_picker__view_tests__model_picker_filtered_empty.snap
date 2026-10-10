@@ -1,29 +1,29 @@
 ---
 source: crates/tui/src/model_picker_view_tests.rs
-assertion_line: 228
+assertion_line: 464
 expression: text
 ---
 Models                                                                         ✕
-m16   low [high]
-apex
-m17   low [high]
-acme
-m18   low [high]
-zeta
-m19   low [high]
-apex
-m20   low [high]
-acme
-m21   low [high]
-zeta
-m22   low [high]
-apex
-m23   low [high]
-acme
-m24   low [high]
-zeta
-m25   low [high]
+› qqq█
+↻ refresh  0 of 4 models
+No models match
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh ·
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ ›
+▌ >
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

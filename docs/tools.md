@@ -904,9 +904,24 @@ algorithm:
 On any input, however malformed, the converter promises three things:
 
 - No text a reader would see is lost, except inside the dropped elements.
-- Its time grows in proportion to the page's size.
-- Its memory is bounded: deep nesting becomes neither recursion nor unbounded
-  indentation.
+- Its time grows in proportion to the page's size, except for a tag with a
+  very large number of attributes: checking each attribute against the
+  earlier ones takes time quadratic in their count, so a page that defeats
+  the converter this way fails the fetch with `timeout`.
+- Its memory is bounded: deep nesting becomes neither recursion nor
+  unbounded indentation. Apart from the markdown it writes, the converter
+  holds 256 KiB of its own state, plus one byte per open hidden element
+  (`svg`, `noscript` and `template`), whose stack holds at most
+  `max(64, 4 × open)` bytes, plus the one token html5ever is reading.
+  html5ever holds that token whole until it ends: a comment, an attribute
+  value, or a tag with all its attributes, up to 3 bytes of decoded text
+  per downloaded byte. A UTF-8 page-sized comment peaks at 17 MiB beside
+  the output, and so does a UTF-8 page-sized attribute value. Each
+  attribute of a tag held open holds about 45 bytes beside the output,
+  about 40 bytes plus the attribute's name. The markdown is at most 14
+  times the decoded page, and decoding a character set writes at most 3
+  bytes of text per downloaded byte. The stop reaches the converter
+  between 64 KiB pieces.
 
 Formatting may come out wrong, such as a complex table or a misnested list.
 That is accepted, because the raw page is in `artifacts/`.
