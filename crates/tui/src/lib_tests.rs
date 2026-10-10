@@ -618,13 +618,16 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
-    // A second restore writes nothing: the next bytes are the test's own.
+    // The screen's drop shows the cursor inside a closed synchronized
+    // block after the restore; a second restore then writes nothing, so
+    // the next bytes are the test's own.
     crate::restore();
     (&pair.slave)
         .write_all(b"mark")
         .unwrap_or_else(|err| panic!("write: {err}"));
     let tail = watched(&frames, "the mark");
-    let expected = [RESTORE, b"mark".as_slice()].concat();
+    let dropped: &[u8] = b"\x1b[?2026h\x1b[?25h\x1b[?2026l";
+    let expected = [RESTORE, dropped, b"mark".as_slice()].concat();
     assert_eq!(
         tail.get(tail.len().saturating_sub(expected.len())..),
         Some(expected.as_slice())
