@@ -3,6 +3,7 @@
 
 use crate::shapes::Failure;
 use crate::tool::Cancel;
+use serde::Deserialize;
 
 /// Which domains a search keeps (`docs/tools.md`, "web_search").
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,7 +17,8 @@ pub enum Domains {
 }
 
 /// One result a search backend returned.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SearchResult {
     /// The result's title.
     pub title: String,

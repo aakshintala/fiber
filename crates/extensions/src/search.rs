@@ -79,8 +79,9 @@ fn failure(code: ErrorCode, message: String) -> Failure {
     }
 }
 
-/// The validated list as results. The VM already checked the shape, so a
-/// row that does not read is the same malformed return, worded as one.
+/// The validated list as results. The VM already checked the shape on the
+/// Lua value, so this only reads the checked list into results; a row that
+/// does not read is the same malformed return, worded as one.
 fn read_results(
     backend: &str,
     extension: &str,
@@ -100,32 +101,8 @@ fn read_results(
         .enumerate()
         .map(|(at, item)| {
             let position = at + 1;
-            let Value::Object(mut map) = item else {
-                return Err(wrong(format!("result {position} is not a table")));
-            };
-            let title = map.remove("title");
-            let url = map.remove("url");
-            let snippet = map.remove("snippet");
-            if let Some(key) = map.keys().next() {
-                return Err(wrong(format!(
-                    "result {position} has `{key}`, which is not `title`, `url` or `snippet`"
-                )));
-            }
-            let (
-                Some(Value::String(title)),
-                Some(Value::String(url)),
-                Some(Value::String(snippet)),
-            ) = (title, url, snippet)
-            else {
-                return Err(wrong(format!(
-                    "result {position} with no string `title`, `url` and `snippet`"
-                )));
-            };
-            Ok(SearchResult {
-                title,
-                url,
-                snippet,
-            })
+            serde_json::from_value::<SearchResult>(item)
+                .map_err(|error| wrong(format!("result {position} is not a valid result: {error}")))
         })
         .collect()
 }
@@ -179,7 +156,6 @@ fn select(backends: &[(String, String)], setting: Option<&str>) -> Selection {
             duplicated.push((name, extensions));
         }
     }
-    duplicated.sort();
     for (name, extensions) in &duplicated {
         notices.push(Notice {
             code: ErrorCode::ExtensionFailed,

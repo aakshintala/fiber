@@ -244,6 +244,96 @@ fn write_config(setup: &Setup, config: &Value) {
     fs::write(setup.home().join("config.json"), config.to_string()).unwrap();
 }
 
+/// The complete event kinds of a run whose model calls `web_search` once
+/// (allowed by the standing rule, so `permission_resolved` names it) then
+/// answers `Hello.`: one `assistant_message_delta`, as this file's `hello`
+/// streams one text fragment.
+fn search_call_kinds() -> Vec<&'static str> {
+    vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "permission_resolved",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]
+}
+
+/// The complete event kinds of a run whose only reply is `hello`, with
+/// `extra` notices between `extensions_loaded` and `preamble_built`.
+fn hello_kinds(extra: &[&'static str]) -> Vec<&'static str> {
+    let mut kinds = vec!["session_started", "fiber_started", "extensions_loaded"];
+    kinds.extend(extra.iter().copied());
+    kinds.extend([
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    kinds
+}
+
+/// The complete event kinds of a resumed run whose only reply is `hello`:
+/// no `session_started` and no `opening_message`, as the log holds both.
+fn resumed_hello_kinds() -> Vec<&'static str> {
+    vec![
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]
+}
+
+/// Asserts two strings hold the same bytes, reporting only the lengths
+/// and the first differing offset: both sides can be tens of kilobytes,
+/// which `assert_eq!` would print whole into the CI log
+/// (`docs/testing.md`, "What a test asserts").
+fn assert_str_eq(expected: &str, actual: &str, what: &str) {
+    let offset = expected
+        .bytes()
+        .zip(actual.bytes())
+        .position(|(a, b)| a != b);
+    let same = expected.len() == actual.len() && offset.is_none();
+    assert!(
+        same,
+        "{what}: lengths {} vs {}, first difference at {}",
+        expected.len(),
+        actual.len(),
+        offset.unwrap_or(expected.len().min(actual.len()))
+    );
+}
+
 #[test]
 fn one_backend_runs_the_search_and_writes_its_results() {
     let setup = Setup::new();
@@ -255,6 +345,7 @@ fn one_backend_runs_the_search_and_writes_its_results() {
     setup.provider(&server);
     echo_setup("searcher", "brave", "T", &setup);
     let run = ask(&setup, "search the web for rust");
+    assert_eq!(run.kinds(), search_call_kinds());
 
     let tools = sent_tools(&server, 0);
     let declared = tools
@@ -294,6 +385,7 @@ fn a_hosted_search_stands_over_an_installed_backend() {
     install_hosted_model(&setup, &server);
     setup.lua("searcher", &echo_backend("brave", "T"));
     let run = ask(&setup, "search the web for rust");
+    assert_eq!(run.kinds(), hello_kinds(&[]));
 
     let tools = sent_tools(&server, 0);
     assert!(
@@ -357,6 +449,7 @@ fn two_backends_with_no_setting_declare_nothing_and_name_the_setting() {
     setup.lua("one", &echo_backend("one", "one"));
     setup.lua("two", &echo_backend("two", "two"));
     let run = ask(&setup, "search the web for rust");
+    assert_eq!(run.kinds(), hello_kinds(&["notice"]));
 
     let tools = sent_tools(&server, 0);
     assert!(
@@ -392,6 +485,7 @@ fn two_backends_with_the_setting_run_the_named_one() {
         &json!({"model": "fake/m", "web_search": {"backend": "two"}}),
     );
     let run = ask(&setup, "search the web for rust");
+    assert_eq!(run.kinds(), search_call_kinds());
 
     let completed = run.payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
@@ -413,6 +507,7 @@ fn a_setting_naming_a_missing_backend_declares_nothing_and_names_it() {
         &json!({"model": "fake/m", "web_search": {"backend": "missing"}}),
     );
     let run = ask(&setup, "search the web for rust");
+    assert_eq!(run.kinds(), hello_kinds(&["notice"]));
 
     let tools = sent_tools(&server, 0);
     assert!(
@@ -442,15 +537,11 @@ fn a_backend_past_its_timeout_fails_and_the_turn_ends() {
     );
     allow_web_search(&setup);
     let run = ask(&setup, "search the web for rust");
+    assert_eq!(run.kinds(), search_call_kinds());
 
     let completed = run.payload("tool_call_completed");
     assert_eq!(completed["status"], "failed");
     assert_eq!(completed["error"]["code"], "timeout");
-    assert!(
-        run.kinds().contains(&"turn_completed"),
-        "the session goes on: {:?}",
-        run.kinds()
-    );
 }
 
 #[test]
@@ -474,6 +565,7 @@ fn a_result_past_the_default_cap_is_cut_to_its_start() {
     );
     allow_web_search(&setup);
     let run = ask(&setup, "search the web for rust");
+    assert_eq!(run.kinds(), search_call_kinds());
 
     let mut full = String::new();
     for i in 1..=200 {
@@ -495,15 +587,20 @@ fn a_result_past_the_default_cap_is_cut_to_its_start() {
     assert_eq!(completed["artifact"], artifact.as_str());
     let dir = run.session_dir(&setup);
     let path = dir.join(&artifact);
-    assert_eq!(fs::read_to_string(&path).unwrap(), full);
-    assert_eq!(
-        completed["content"][0]["text"],
-        format!(
+    assert_str_eq(
+        &full,
+        &fs::read_to_string(&path).unwrap(),
+        "the artifact holds the whole result",
+    );
+    assert_str_eq(
+        &format!(
             "{}\n[{} bytes cut. The full output is in {}; read it with `read`.]",
             &full[..16_384],
             full.len() - 16_384,
             path.display()
-        )
+        ),
+        completed["content"][0]["text"].as_str().unwrap(),
+        "the completed content keeps the start",
     );
 }
 
@@ -523,10 +620,12 @@ fn a_resumed_session_lists_the_backend_search() {
     setup.provider(&server);
     echo_setup("searcher", "brave", "T", &setup);
     let first = ask(&setup, "search the web for rust");
+    assert_eq!(first.kinds(), search_call_kinds());
     let id = first.session_id().to_owned();
 
     let second = run_fiber(&setup, &["ask", "--resume", &id, "two"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.kinds(), resumed_hello_kinds());
     let row = second.sent_tool("web_search");
     assert_eq!(row["registered_by"], "builtin");
 }

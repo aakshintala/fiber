@@ -207,13 +207,9 @@ fn entry_at(entry: &Table, position: usize) -> Result<Value, String> {
 
 impl LuaExtension {
     /// Every search backend the entry script registered, sorted. Starts the
-    /// extension.
+    /// extension (`timeouts.search` is a `BTreeMap`, so its keys read sorted).
     pub(crate) fn search_backends(&self) -> Result<Vec<String>, Error> {
-        self.registered(|timeouts| {
-            let mut names: Vec<String> = timeouts.search.keys().cloned().collect();
-            names.sort();
-            names
-        })
+        self.registered(|timeouts| timeouts.search.keys().cloned().collect())
     }
 
     /// Runs the `run` function of the backend `name` on `args` and returns

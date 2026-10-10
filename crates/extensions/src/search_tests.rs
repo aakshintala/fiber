@@ -130,6 +130,30 @@ fn choose_table() {
         )],
     );
     row(
+        &[("b", "brave"), ("a", "brave")],
+        None,
+        None,
+        &[(
+            "extension_failed",
+            "`brave` search backend not registered: `a` and `b` both register it.",
+        )],
+    );
+    row(
+        &[("b", "kagi"), ("a", "kagi"), ("d", "brave"), ("c", "brave")],
+        None,
+        None,
+        &[
+            (
+                "extension_failed",
+                "`brave` search backend not registered: `c` and `d` both register it.",
+            ),
+            (
+                "extension_failed",
+                "`kagi` search backend not registered: `a` and `b` both register it.",
+            ),
+        ],
+    );
+    row(
         &[("a", "brave"), ("b", "brave"), ("c", "c")],
         None,
         Some(2),
