@@ -81,7 +81,6 @@ impl CaseClock {
     }
 
     /// Moves case time by `d` and wakes every subscribed clock waiter.
-    #[cfg(test)]
     pub(crate) fn advance(&self, d: Duration) {
         let wakers = move_by(&mut lock(&self.state), d);
         self.wake(wakers);

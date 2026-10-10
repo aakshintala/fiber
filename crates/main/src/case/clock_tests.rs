@@ -9,6 +9,20 @@ use contract::clock::{Clock, Wake};
 
 use super::CaseClock;
 
+#[test]
+fn per_call_advances_move_time_before_any_operation_parks() {
+    let clock = CaseClock::new();
+    let start = clock.now();
+    for (advance_ms, total_ms) in [(1, 1), (2, 3)] {
+        assert!(clock.parked().is_empty());
+        clock.advance(Duration::from_millis(advance_ms));
+        assert_eq!(
+            clock.now().duration_since(start),
+            Duration::from_millis(total_ms)
+        );
+    }
+}
+
 const WAIT: Duration = Duration::from_secs(5);
 const NO_MATCH: Duration = Duration::from_millis(30);
 

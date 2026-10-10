@@ -1214,6 +1214,7 @@ fn a_later_provider_start_keeps_the_case_host_script_from_load() {
             reply: Ok((200, b"started later".to_vec())),
         }],
         Vec::new(),
+        Vec::new(),
     );
     let mut session = home.load_with_host(&[], Some(Arc::clone(&host)));
     assert!(session.notices().is_empty(), "{:?}", session.notices());

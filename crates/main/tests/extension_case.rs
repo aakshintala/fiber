@@ -18,6 +18,114 @@ use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::Setup;
 
+const CREDENTIAL_PROVIDER: &str = r#"
+fiber.provider("casefixture", {
+  credential = {timeout = 60000, run = function(arg)
+    local stored = host.oauth.refresh(function(old)
+      if old ~= nil then
+        local reply = host.http({url = "https://example.test/refresh"})
+        return json.decode(reply.body)
+      end
+      if arg.login == "device" then
+        host.oauth.show("https://example.test/device", "1234")
+        return host.oauth.poll({url = "https://example.test/poll", interval = 1})
+      end
+      local pkce = host.oauth.pkce()
+      host.oauth.open("https://example.test/" .. pkce.challenge)
+      local query = host.oauth.callback({port = 1})
+      return {token = query.code, expires_at = 1700001000, account = pkce.verifier}
+    end)
+    return {token = stored.token, expires_at = stored.expires_at, headers = { ["x-account"] = stored.account }}
+  end}
+})
+"#;
+
+#[test]
+fn ordered_login_credential_and_sign_share_stored_credentials_and_oauth_script() {
+    let setup = setup(CREDENTIAL_PROVIDER);
+    let value = json!({
+        "calls": [
+            {"call": {"provider": "casefixture", "function": "login", "arg": {"method": "browser"}}, "returns": {"token": "new", "account": "fixed"}},
+            {"call": {"provider": "casefixture", "function": "credential", "arg": {}}, "returns": {"token": "new", "expires_at": 1700001000, "headers": {"x-account": "fixed"}}},
+            {"await": "credential_idle"},
+            {"call": {"provider": "casefixture", "function": "sign", "arg": {"method": "POST", "url": "https://example.test", "headers": {}}}, "returns": {"authorization": "Bearer new", "x-account": "fixed"}}
+        ],
+        "host": {"oauth": [
+            {"pkce": {"verifier": "fixed", "challenge": "challenge"}},
+            {"open": {"url": "https://example.test/challenge"}},
+            {"callback": {"reply": {"query": {"code": "new"}}}}
+        ]},
+        "expect_credentials": {"casefixture/default": {"token": "new", "account": "fixed", "expires_at": 1700001000}}
+    });
+    assert_success(&run_case(&setup, "ordered-login", &value));
+    let mut bad = value.clone();
+    bad["expect_credentials"]["casefixture/default"]["token"] = json!("wrong");
+    assert_failure(
+        &run_case(&setup, "wrong-stored", &bad),
+        "expect_credentials",
+    );
+    let mut both = value;
+    both["call"] = json!({"provider": "casefixture", "function": "models", "arg": {}});
+    assert_malformed(&run_case(&setup, "both-calls", &both), "call and calls");
+}
+
+#[test]
+fn a_call_clock_advances_a_device_poll_only_after_it_parks() {
+    let setup = setup(CREDENTIAL_PROVIDER);
+    let value = json!({
+        "call": {"provider": "casefixture", "function": "login", "arg": {"method": "device", "label": "work"}},
+        "returns": {"token": "device", "expires_at": 1700001000},
+        "clock": [{"advance_ms": 1000}],
+        "host": {
+            "oauth": [{"show": {"url": "https://example.test/device", "code": "1234"}}],
+            "http": [
+                {"request": {"url": "https://example.test/poll"}, "reply": {"status": 200, "body": "{\"error\":\"authorization_pending\"}"}},
+                {"request": {"url": "https://example.test/poll"}, "reply": {"status": 200, "body": "{\"token\":\"device\",\"expires_at\":1700001000,\"account\":\"work\"}"}}
+            ]
+        },
+        "expect_credentials": {"casefixture/work": {"token": "device"}}
+    });
+    assert_success(&run_case(&setup, "device-clock", &value));
+}
+
+#[test]
+fn per_call_clock_and_credential_idle_order_a_background_refresh() {
+    let setup = setup(CREDENTIAL_PROVIDER);
+    let sign = json!({"provider": "casefixture", "function": "sign", "arg": {"method": "POST", "url": "https://example.test", "headers": {}}});
+    let value = json!({
+        "credentials": {"casefixture/default": {"token": "old", "expires_at": 1700000301, "account": "old-account"}},
+        "calls": [
+            {"call": sign, "returns": {"authorization": "Bearer old", "x-account": "old-account"}},
+            {"call": sign, "clock": [{"advance_ms": 2000}], "returns": {"authorization": "Bearer old", "x-account": "old-account"}},
+            {"await": "credential_idle"},
+            {"call": sign, "returns": {"authorization": "Bearer fresh", "x-account": "fresh-account"}}
+        ],
+        "host": {"http": [{"request": {"url": "https://example.test/refresh"}, "reply": {"status": 200, "body": "{\"token\":\"fresh\",\"expires_at\":1700001000,\"account\":\"fresh-account\"}"}}]},
+        "expect_credentials": {"casefixture/default": {"token": "fresh", "account": "fresh-account"}}
+    });
+    assert_success(&run_case(&setup, "background-refresh", &value));
+}
+
+#[test]
+fn unattended_calls_and_scripted_callback_errors_keep_their_codes() {
+    let setup = setup(CREDENTIAL_PROVIDER);
+    let mut value = json!({
+        "call": {"provider": "casefixture", "function": "credential", "arg": {}},
+        "attended": false,
+        "host": {"oauth": [{"pkce": {"verifier": "v", "challenge": "c"}}]},
+        "error": {"code": "authentication_failed"}
+    });
+    assert_success(&run_case(&setup, "unattended", &value));
+    value["attended"] = json!(true);
+    value["host"]["oauth"] = json!([
+        {"pkce": {"verifier": "v", "challenge": "c"}},
+        {"open": {"url": "https://example.test/c"}},
+        {"callback": {"error": {"code": "io_failed", "message": "callback busy"}}}
+    ]);
+    value["error"] = json!({"code": "authentication_failed"});
+    assert_success(&run_case(&setup, "callback-error", &value));
+}
+
 const SESSION_KINDS: &[&str] = &[
     "session_started",
     "fiber_started",

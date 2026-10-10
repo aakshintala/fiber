@@ -583,7 +583,24 @@ fn settle(
             // delivered after releasing it.
             #[cfg(test)]
             settle_hook(&target, Pause::Start);
-            let started = oauth::listen(port, path.clone(), &deliver);
+            let started = if let Some(script) = hub.host_script() {
+                let result = script
+                    .oauth("callback", &serde_json::json!({}))
+                    .map(|reply| {
+                        reply
+                            .get("query")
+                            .and_then(serde_json::Value::as_object)
+                            .into_iter()
+                            .flat_map(|query| query.iter())
+                            .filter_map(|(key, value)| {
+                                value.as_str().map(|value| (key.clone(), value.to_owned()))
+                            })
+                            .collect()
+                    });
+                Err(Reply::Query(result))
+            } else {
+                oauth::listen(port, path.clone(), &deliver)
+            };
             drop(shared);
             let cancel = match started {
                 Ok(cancel) => Some(cancel),

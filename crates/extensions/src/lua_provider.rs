@@ -214,15 +214,25 @@ impl LuaProvider {
 
     /// Whether a credential fetch for this pair is running.
     pub fn fetching(&self, pair: &CredentialPair) -> bool {
-        lock(&self.token).get(pair).is_some_and(|state| state.refreshing)
+        lock(&self.token)
+            .get(pair)
+            .is_some_and(|state| state.refreshing)
     }
 
     /// Waits for this pair's credential fetch to finish, bounded on the wall
     /// clock. Returns false if the pair is still fetching at the bound.
     pub fn await_idle(&self, pair: &CredentialPair, within: Duration) -> bool {
-        let (state, _) = self.fetched.wait_timeout_while(lock(&self.token), within, |state| {
-            state.get(pair).is_some_and(|state| state.refreshing)
-        }).unwrap_or_else(PoisonError::into_inner);
+        let (state, _) = self
+            .fetched
+            .wait_timeout_while(lock(&self.token), within, |state| {
+                let fetching = state.get(pair).is_some_and(|state| state.refreshing);
+                #[cfg(test)]
+                if fetching && let Some(waiting) = lock(&self.waiting).as_ref() {
+                    let _sent = waiting.send(());
+                }
+                fetching
+            })
+            .unwrap_or_else(PoisonError::into_inner);
         !state.get(pair).is_some_and(|state| state.refreshing)
     }
 
@@ -498,6 +508,20 @@ impl LuaProvider {
         drop(tokens);
         self.fetched.notify_all();
         fresh
+    }
+
+    /// Fetches the cached credential as its callback's token, expiry and headers.
+    /// The returned JSON contains secrets and is intended for the case runner.
+    pub fn credential_value(self: &Arc<Self>, pair: &CredentialPair) -> Result<Value, Error> {
+        let token = self.current(pair)?;
+        let headers: Map<String, Value> = token
+            .headers
+            .iter()
+            .map(|(name, value)| (name.clone(), Value::String(value.expose().to_owned())))
+            .collect();
+        Ok(
+            json!({"token": token.secret.expose(), "expires_at": token.expires.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(), "headers": headers}),
+        )
     }
 
     /// The token `token()` returns; a failure as the signing seam carries it.

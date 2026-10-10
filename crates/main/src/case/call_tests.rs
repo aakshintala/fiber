@@ -53,6 +53,63 @@ fn models_takes_exactly_an_empty_object() {
     }
 }
 
+#[test]
+fn credential_functions_validate_their_arguments() {
+    for (function, arg) in [
+        ("credential", json!({})),
+        ("credential", json!({"label": "work"})),
+        ("login", json!({"method": "browser"})),
+        ("login", json!({"method": "device", "label": "work"})),
+        (
+            "sign",
+            json!({"method": "POST", "url": "https://example.test", "headers": {}}),
+        ),
+        (
+            "sign",
+            json!({"method": "GET", "url": "https://example.test", "headers": {"x-test": "value"}}),
+        ),
+    ] {
+        let call = super::Call {
+            provider: "p".to_owned(),
+            function: function.to_owned(),
+            arg,
+        };
+        assert!(super::ready(&call).is_ok(), "{function}: {}", call.arg);
+    }
+    for (function, arg) in [
+        ("credential", json!(null)),
+        ("credential", json!({"label": 1})),
+        ("credential", json!({"other": true})),
+        ("login", json!({})),
+        ("login", json!({"method": "other"})),
+        ("login", json!({"method": "browser", "other": true})),
+        (
+            "sign",
+            json!({"method": "POST", "url": "https://example.test"}),
+        ),
+        (
+            "sign",
+            json!({"method": "POST", "url": "https://example.test", "headers": {"x": 1}}),
+        ),
+        (
+            "sign",
+            json!({"method": 1, "url": "https://example.test", "headers": {}}),
+        ),
+        ("sign", json!({"method": "POST", "url": 1, "headers": {}})),
+        (
+            "sign",
+            json!({"method": "POST", "url": "https://example.test", "headers": {}, "label": "work"}),
+        ),
+    ] {
+        let call = super::Call {
+            provider: "p".to_owned(),
+            function: function.to_owned(),
+            arg,
+        };
+        assert!(super::ready(&call).is_err(), "{function}: {}", call.arg);
+    }
+}
+
 fn returns(value: Value) -> CallOutcome {
     CallOutcome::Returns(value)
 }
@@ -142,8 +199,8 @@ fn resolved(
     home: &std::path::Path,
 ) -> Option<String> {
     let clock: Arc<dyn contract::clock::Clock> = crate::case::clock::CaseClock::new();
-    let host = extensions::HostScript::new(Vec::new(), Vec::new());
-    provider_extension(installed, provider, home, &clock, &host)
+    let host = extensions::HostScript::new(Vec::new(), Vec::new(), Vec::new());
+    provider_extension(installed, provider, home, &clock, &host, true)
         .map(|extension| extension.name().to_owned())
 }
 

@@ -294,7 +294,7 @@ fn http_token_provider(root: &fakes::TempDir, url: &str) -> Arc<LuaProvider> {
              local reply = host.http({{ url = \"{url}\", method = \"POST\" }})\n\
              if reply.status ~= 200 then error(\"denied\") end\n\
              local got = json.decode(reply.body)\n\
-             return {{ token = got.token, expires_at = got.expires_at }}\n\
+             return {{ token = got.token, expires_at = got.expires_at, headers = got.headers }}\n\
              end }} }})"
         ),
     )
@@ -318,23 +318,55 @@ fn credential_idle_distinguishes_idle_fetching_and_completed() {
     let fetch = std::thread::spawn(move || {
         drop(sent.send(other.token(&other_pair)));
     });
-    assert!(tokens.await_requests(1, WAIT), "fetch reaches the held server");
+    assert!(
+        tokens.await_requests(1, WAIT),
+        "fetch reaches the held server"
+    );
     assert!(provider.fetching(&pair));
     assert!(!provider.await_idle(&pair, Duration::ZERO));
     assert!(!provider.await_idle(&pair, Duration::from_millis(10)));
+    let (parked_tx, parked_rx) = mpsc::channel();
+    *provider.waiting.lock().unwrap() = Some(parked_tx);
     let idle_provider = Arc::clone(&provider);
     let idle_pair = pair.clone();
     let (sent, idle) = mpsc::channel();
     let waiter = std::thread::spawn(move || {
         let _sent = sent.send(idle_provider.await_idle(&idle_pair, WAIT));
     });
+    parked_rx
+        .recv_timeout(WAIT)
+        .expect("idle waiter reaches its condition wait");
     tokens.release();
-    assert_eq!(received.recv_timeout(WAIT).unwrap().unwrap().expose(), "tok-idle");
-    assert!(idle.recv_timeout(WAIT).unwrap());
+    assert_eq!(
+        received.recv_timeout(WAIT).unwrap().unwrap().expose(),
+        "tok-idle"
+    );
+    assert!(
+        idle.recv_timeout(Duration::from_secs(1))
+            .expect("fetch completion wakes the idle waiter")
+    );
     fetch.join().unwrap();
     waiter.join().unwrap();
     assert!(!provider.fetching(&pair));
     assert!(provider.await_idle(&pair, Duration::ZERO));
+}
+
+#[test]
+fn credential_value_returns_the_cached_token_expiry_and_headers() {
+    let root = fakes::TempDir::new("fiber-credential-value");
+    let tokens = fakes::ProviderServer::start([fakes::Response::status(200, json!({"token": "json-token", "expires_at": 4102444800_u64, "headers": {"x-account": "json-account"}}).to_string())]).unwrap();
+    let provider = http_token_provider(&root, &format!("{}/token", tokens.url()));
+    let result = within(move || {
+        let first = provider.credential_value(&token_pair()).unwrap();
+        let second = provider.credential_value(&token_pair()).unwrap();
+        (first, second)
+    });
+    assert_eq!(
+        result.0,
+        json!({"token": "json-token", "expires_at": 4102444800_u64, "headers": {"x-account": "json-account"}})
+    );
+    assert_eq!(result.0, result.1);
+    assert_eq!(tokens.requests().len(), 1);
 }
 
 fn token_pair() -> CredentialPair {
