@@ -310,7 +310,6 @@ fn credential_idle_distinguishes_idle_fetching_and_completed() {
     tokens.hold();
     let provider = http_token_provider(&root, &format!("{}/token", tokens.url()));
     let pair = token_pair();
-    assert!(!provider.fetching(&pair));
     assert!(provider.await_idle(&pair, Duration::ZERO));
     let other = Arc::clone(&provider);
     let other_pair = pair.clone();
@@ -322,7 +321,6 @@ fn credential_idle_distinguishes_idle_fetching_and_completed() {
         tokens.await_requests(1, WAIT),
         "fetch reaches the held server"
     );
-    assert!(provider.fetching(&pair));
     assert!(!provider.await_idle(&pair, Duration::ZERO));
     assert!(!provider.await_idle(&pair, Duration::from_millis(10)));
     let (parked_tx, parked_rx) = mpsc::channel();
@@ -347,7 +345,6 @@ fn credential_idle_distinguishes_idle_fetching_and_completed() {
     );
     fetch.join().unwrap();
     waiter.join().unwrap();
-    assert!(!provider.fetching(&pair));
     assert!(provider.await_idle(&pair, Duration::ZERO));
 }
 

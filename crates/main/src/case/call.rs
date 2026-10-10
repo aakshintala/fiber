@@ -154,7 +154,7 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
             break;
         }
     }
-    if provider.fetching(&pair) && !provider.await_idle(&pair, CALL_WAIT) {
+    if !provider.await_idle(&pair, CALL_WAIT) {
         failures.push("credential fetch did not finish within the runner bound".to_owned());
     }
     provider.stop();
