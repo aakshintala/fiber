@@ -25,7 +25,7 @@ use fakes::clock::FakeClock;
 use fakes::{OauthReply, OauthServer, jwt};
 use serde_json::{Value, json};
 
-use super::{Attended, browser_login, login_with};
+use super::{Attended, LoginCancel, browser_login, login_with};
 use crate::login::{LoginIo, Plain, login};
 
 /// How long a test waits for one call or one child.
@@ -298,6 +298,7 @@ fn browser_flow(
             LoginMethod::Browser,
             browser,
             clock,
+            &LoginCancel::default(),
         );
         match tx.send(result) {
             Ok(()) | Err(_) => {}
@@ -399,6 +400,7 @@ fn an_as_label_already_stored_is_refused_before_anything_opens() {
         LoginMethod::Browser,
         browser.clone(),
         setup.clock(),
+        &LoginCancel::default(),
     ));
     assert_eq!(error.code, ErrorCode::Usage);
     assert!(
@@ -537,6 +539,7 @@ fn a_device_login_shows_its_code_and_stores_the_email_label() {
             LoginMethod::Device,
             browser_in,
             clock,
+            &LoginCancel::default(),
         ))
         .unwrap();
     });
@@ -828,4 +831,185 @@ fn run_login_of_a_key_provider_with_device_is_a_usage_failure() {
     watchdog.stand_down(REAP_DEADLINE);
     let output = received.unwrap();
     assert_eq!(output.status.code(), Some(2), "{output:?}");
+}
+
+fn cancelled_of(error: &Failure) {
+    assert_eq!(error.code, ErrorCode::AuthenticationFailed, "{error:?}");
+    assert_eq!(
+        error.message, "the login was cancelled; nothing was stored.",
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_commit_before_any_cancel_runs_the_store() {
+    let cancel = LoginCancel::default();
+    let mut ran = false;
+    let value = cancel
+        .commit(|| {
+            ran = true;
+            Ok::<_, Failure>(7)
+        })
+        .unwrap();
+    assert_eq!(value, 7);
+    assert!(ran);
+}
+
+#[test]
+fn a_commit_after_cancel_refuses_without_running_the_store() {
+    let cancel = LoginCancel::default();
+    cancel.cancel();
+    let mut ran = false;
+    let error = cancel
+        .commit(|| {
+            ran = true;
+            Ok::<_, Failure>(7)
+        })
+        .unwrap_err();
+    cancelled_of(&error);
+    assert!(!ran, "the store ran after cancel");
+}
+
+#[test]
+fn a_cancel_before_registration_runs_the_stop_at_registration() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let cancel = LoginCancel::default();
+    cancel.cancel();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stopped);
+    let error = cancel
+        .started(Box::new(move || {
+            flag.store(true, Ordering::SeqCst);
+        }))
+        .unwrap_err();
+    cancelled_of(&error);
+    assert!(stopped.load(Ordering::SeqCst), "the stop never ran");
+}
+
+#[test]
+fn a_cancel_after_registration_runs_the_stop_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let cancel = LoginCancel::default();
+    let stops = Arc::new(AtomicUsize::new(0));
+    let flag = Arc::clone(&stops);
+    cancel
+        .started(Box::new(move || {
+            flag.fetch_add(1, Ordering::SeqCst);
+        }))
+        .unwrap();
+    cancel.cancel();
+    cancel.cancel();
+    assert_eq!(stops.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_cancel_during_the_store_waits_for_it() {
+    use std::sync::Mutex as StdMutex;
+    const STEP: Duration = Duration::from_secs(10);
+    let cancel = Arc::new(LoginCancel::default());
+    let log = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (inner_tx, inner_rx) = mpsc::channel();
+    let (stopped_tx, stopped_rx) = mpsc::channel();
+    // The registered stop commits on the same cancel: it would deadlock if
+    // the stop ran while the gate's mutex is held.
+    let (cancel_for_stop, log_for_stop) = (Arc::clone(&cancel), Arc::clone(&log));
+    cancel
+        .started(Box::new(move || {
+            let inner = cancel_for_stop.commit(|| {
+                log_for_stop
+                    .lock()
+                    .unwrap()
+                    .push("store-inside-stop".to_owned());
+                Ok::<_, Failure>(())
+            });
+            log_for_stop.lock().unwrap().push("stopped".to_owned());
+            stopped_tx.send(()).unwrap();
+            inner_tx.send(inner).unwrap();
+        }))
+        .unwrap();
+    let (commit_tx, commit_rx) = mpsc::channel();
+    let (cancel_for_commit, log_for_commit) = (Arc::clone(&cancel), Arc::clone(&log));
+    thread::spawn(move || {
+        let result = cancel_for_commit.commit(|| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv_timeout(STEP).expect("the release arrives");
+            log_for_commit.lock().unwrap().push("stored".to_owned());
+            Ok::<_, Failure>(7)
+        });
+        commit_tx.send(result).unwrap();
+    });
+    entered_rx.recv_timeout(STEP).expect("the store is entered");
+    let cancelling = Arc::clone(&cancel);
+    let (cancel_done_tx, cancel_done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        cancelling.cancel();
+        cancel_done_tx.send(()).unwrap();
+    });
+    // The cancel waits for the store: releasing it lets both finish in
+    // order.
+    release_tx.send(()).unwrap();
+    let result = commit_rx.recv_timeout(STEP).expect("the commit returns");
+    assert_eq!(result.unwrap(), 7);
+    stopped_rx.recv_timeout(STEP).expect("the stop ran");
+    let inner = inner_rx
+        .recv_timeout(STEP)
+        .expect("the inner commit returns");
+    cancelled_of(&inner.unwrap_err());
+    assert_eq!(log.lock().unwrap().as_slice(), ["stored", "stopped"]);
+    cancel_done_rx.recv_timeout(STEP).expect("cancel returned");
+}
+
+#[test]
+fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
+    let setup = Setup::new();
+    let (access, id) = tokens(EMAIL);
+    let server = OauthServer::start(vec![exchange(&access, &id)]);
+    let port = free_port();
+    setup.install(&server, port);
+    let providers = setup.providers();
+    let (browser, opened) = RedirectBrowser::notified();
+    let cancel = Arc::new(LoginCancel::default());
+    let (tx, rx) = mpsc::channel();
+    let (home, owned) = (setup.home(), providers.clone());
+    let (browser_in, clock, cancelling) = (
+        Arc::clone(&browser) as Arc<dyn Browser>,
+        setup.clock(),
+        Arc::clone(&cancel),
+    );
+    thread::spawn(move || {
+        let result = browser_login(
+            &home,
+            &owned,
+            "codex",
+            None,
+            LoginMethod::Browser,
+            browser_in,
+            clock,
+            &cancelling,
+        );
+        match tx.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let url = await_opened(&opened);
+    let callback_port = free_port_of(&url);
+    cancel.cancel();
+    let result = rx
+        .recv_timeout(WAIT)
+        .unwrap_or_else(|_| panic!("the cancelled login did not return within {WAIT:?}"));
+    assert!(result.is_err(), "{result:?}");
+    assert!(setup.stored(EMAIL).is_none());
+    let global = std::fs::read_to_string(setup.home().join("config.json")).unwrap_or_default();
+    assert!(!global.contains("credential"), "{global}");
+    drop(server);
+    fakes::within("the callback port to bind again", BROWSER_WAIT, move || {
+        loop {
+            if TcpListener::bind((Ipv4Addr::LOCALHOST, callback_port)).is_ok() {
+                return;
+            }
+            thread::yield_now();
+        }
+    });
 }
