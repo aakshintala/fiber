@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use contract::ErrorCode;
 use contract::shapes::ContentPart;
 use contract::tool::{Output, Tool};
+use fakes::Deadline;
 use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Value, json};
 
@@ -302,6 +303,7 @@ fn a_cancel_after_both_pipes_closed_stops_and_reaps_the_child() {
 
 /// Starts a child that runs `prelude`, then sleeps, cancels once it is up,
 /// and checks the call ended and the child is gone.
+#[track_caller]
 fn cancel_stops_and_reaps(prelude: &str) {
     let dir = workspace();
     let ready = fakes::children::Ready::new(dir.path());
@@ -335,7 +337,9 @@ fn cancel_stops_and_reaps(prelude: &str) {
         "the call ended before the cancel"
     );
     cancel.cancel();
-    let output = done_rx.recv_timeout(LIMIT).expect("the call ends");
+    let output = Deadline::after(LIMIT)
+        .recv(&done_rx)
+        .expect("the call ends");
     call.join().unwrap();
     assert_eq!(code(&output), None);
     assert_eq!(message(&output), "Cancelled and stopped.\n");
@@ -365,7 +369,9 @@ exit 3"#,
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let root = dir.path().to_path_buf();
     let call = std::thread::spawn(move || drop(done_tx.send(run_with(&root, &fiber, "a.png"))));
-    let output = done_rx.recv_timeout(LIMIT).expect("the call ends");
+    let output = Deadline::after(LIMIT)
+        .recv(&done_rx)
+        .expect("the call ends");
     call.join().unwrap();
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
     assert!(
@@ -603,7 +609,9 @@ fn process_cancel_after_the_child_started_stops_and_reaps_it() {
         "the call ended before the cancel"
     );
     cancel.cancel();
-    let result = done_rx.recv_timeout(PROCESS_LIMIT).expect("the call ends");
+    let result = Deadline::after(PROCESS_LIMIT)
+        .recv(&done_rx)
+        .expect("the call ends");
     assert_eq!(result, Err(ImageError::Cancelled));
     let alive = std::process::Command::new("ps")
         .args(["-p", &pid.to_string()])
@@ -636,8 +644,8 @@ fn process_cancel_stops_a_stalled_child_while_the_write_is_blocked() {
     });
     let pid = ready.wait(PROCESS_LIMIT).first().copied().unwrap();
     cancel.cancel();
-    let result = done_rx
-        .recv_timeout(PROCESS_LIMIT)
+    let result = Deadline::after(PROCESS_LIMIT)
+        .recv(&done_rx)
         .expect("the call ends within the deadline");
     assert_eq!(result, Err(ImageError::Cancelled));
     let alive = std::process::Command::new("ps")
@@ -736,8 +744,8 @@ fn process_child_that_exits_early_without_reading_does_not_hang() {
         let child = ImageChild::new(fiber, root.join("artifacts"));
         drop(done_tx.send(child.process(&bytes, &CancelToken::new())));
     });
-    let result = done_rx
-        .recv_timeout(PROCESS_LIMIT)
+    let result = Deadline::after(PROCESS_LIMIT)
+        .recv(&done_rx)
         .expect("the call ends without hanging");
     assert!(matches!(result, Err(ImageError::Failed(_))), "{result:?}");
 }
@@ -759,7 +767,9 @@ exit 3"#,
         let child = ImageChild::new(fiber, root.join("artifacts"));
         drop(done_tx.send(child.process(&bytes, &CancelToken::new())));
     });
-    let result = done_rx.recv_timeout(PROCESS_LIMIT).expect("the call ends");
+    let result = Deadline::after(PROCESS_LIMIT)
+        .recv(&done_rx)
+        .expect("the call ends");
     let Err(ImageError::Failed(message)) = result else {
         panic!("failed: {result:?}");
     };

@@ -10,6 +10,7 @@ use std::io::{self, Cursor, Read, Write};
 use std::os::unix::ffi::OsStringExt;
 
 use super::{Outcome, run};
+use fakes::Deadline;
 
 /// A corpus with byte-exact contents, for binary and invalid UTF-8 too.
 fn bytes_tree(files: &BTreeMap<&str, &[u8]>) -> fakes::TempDir {
@@ -1002,8 +1003,8 @@ fn only_matching_on_a_closed_pipe_stops_before_the_input_ends() {
             .unwrap_or(());
     });
     let deadline = std::time::Duration::from_secs(10);
-    let (code, read, writes, stderr) = finished
-        .recv_timeout(deadline)
+    let (code, read, writes, stderr) = Deadline::after(deadline)
+        .recv(&finished)
         .expect("waited 10s for the bounded generator search to finish");
     assert_eq!(code, 0);
     assert!(stderr.is_empty());
@@ -1164,8 +1165,8 @@ fn a_closed_pipe_stops_before_the_input_ends() {
             .unwrap_or(());
     });
     let deadline = std::time::Duration::from_secs(10);
-    let (code, read, writes, stderr) = finished
-        .recv_timeout(deadline)
+    let (code, read, writes, stderr) = Deadline::after(deadline)
+        .recv(&finished)
         .expect("waited 10s for the bounded generator search to finish");
     // The first line matched, the pipe closed quietly, and most of the
     // megabyte was never read: nothing accumulated until end of input.

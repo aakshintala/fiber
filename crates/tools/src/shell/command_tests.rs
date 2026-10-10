@@ -6,6 +6,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
 use fakes::CancelToken;
+use fakes::Deadline;
 use fakes::Recorder;
 use fakes::clock::FakeClock;
 
@@ -227,6 +228,7 @@ impl Clock for BoundlessClock {
     fn subscribe(&self, _waker: Weak<dyn Wake>) {}
 }
 
+#[track_caller]
 fn assert_park_returns(clock: BoundlessClock, shared: Arc<Shared>, seen: u64) {
     const DEADLINE: Duration = Duration::from_secs(5);
     let cancel = CancelToken::new();
@@ -245,7 +247,7 @@ fn assert_park_returns(clock: BoundlessClock, shared: Arc<Shared>, seen: u64) {
         done.send(()).unwrap();
     });
     assert!(
-        finished.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&finished).is_ok(),
         "waited {DEADLINE:?} for park to return"
     );
 }
@@ -883,10 +885,10 @@ impl Job {
     }
 
     /// The job's end, waited for at most [`JOB_DEADLINE`].
+    #[track_caller]
     fn end(self) -> (super::Finished, fakes::TempDir, Arc<fakes::jobs::JobDeltas>) {
-        let finished = self
-            .done
-            .recv_timeout(JOB_DEADLINE)
+        let finished = Deadline::after(JOB_DEADLINE)
+            .recv(&self.done)
             .expect("the job's drive did not return within the deadline");
         assert!(!group_alive(self.pgid), "the group was left running");
         self.watchdog.stand_down(JOB_DEADLINE);

@@ -13,6 +13,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::shapes::{ContentPart, Effect};
 use contract::tool::{EffectsError, Output, Tool};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, ConnectProxy, ProviderServer, Recorder, Response, TempDir};
 use serde_json::{Map, Value, json};
@@ -123,9 +124,10 @@ struct Call {
 }
 
 impl Call {
+    #[track_caller]
     fn wait(&self) -> Output {
-        self.rx
-            .recv_timeout(WITHIN)
+        Deadline::after(WITHIN)
+            .recv(&self.rx)
             .expect("the fetch finished within its deadline")
     }
 }
@@ -1450,6 +1452,7 @@ struct HeldDownload {
     release: mpsc::Sender<()>,
 }
 
+#[track_caller]
 fn held_download() -> HeldDownload {
     let prefix = "<p>held</p>".repeat(64 * 1024 / 11).into_bytes();
     let server =
@@ -1470,8 +1473,8 @@ fn held_download() -> HeldDownload {
         }))
     });
     let call = rig.start(&url);
-    wrote
-        .recv_timeout(SIGNAL)
+    Deadline::after(SIGNAL)
+        .recv(&wrote)
         .expect("the first piece is written within its deadline");
     let saved: Vec<_> = fs::read_dir(rig.artifacts())
         .unwrap()
@@ -1601,8 +1604,8 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
                 rig.clock.await_parked(deadline, QUADRATIC_TAG_WITHIN),
                 "the request watcher waits for the request deadline"
             );
-            second_write_rx
-                .recv_timeout(QUADRATIC_TAG_WITHIN)
+            Deadline::after(QUADRATIC_TAG_WITHIN)
+                .recv(&second_write_rx)
                 .expect("the artifact writer reaches piece two");
             assert!(
                 _server.await_partial(1, QUADRATIC_TAG_WITHIN),
@@ -1611,9 +1614,8 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
             advance
                 .send(())
                 .expect("piece two releases the clock advance");
-            let output = call
-                .rx
-                .recv_timeout(QUADRATIC_TAG_WITHIN)
+            let output = Deadline::after(QUADRATIC_TAG_WITHIN)
+                .recv(&call.rx)
                 .expect("the fetch finishes within its deadline");
             assert_eq!(code(&output), Some(ErrorCode::Timeout));
             assert_eq!(

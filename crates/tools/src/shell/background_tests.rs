@@ -15,6 +15,7 @@ use contract::jobs::{Jobs as _, Stop};
 use contract::shapes::ContentPart;
 use contract::tool::Cancel;
 use contract::{ErrorCode, JobId};
+use fakes::Deadline;
 use fakes::children::Ready;
 use fakes::clock::FakeClock;
 use fakes::kill_pid;
@@ -162,20 +163,32 @@ fn list(ps: &Path, pgid: u32, clock: &Arc<FakeClock>) -> mpsc::Receiver<Option<S
     rx
 }
 
+/// Takes one `ps` listing with the deadline, failing at the caller's
+/// line: `#[track_caller]` cannot cross the closure this replaces, and one
+/// definition line serves three calls.
+#[track_caller]
+fn listed(ps: &Path, pgid: u32, clock: &Arc<FakeClock>) -> Option<String> {
+    Deadline::after(DEADLINE)
+        .recv(&list(ps, pgid, clock))
+        .unwrap()
+}
+
 #[test]
 fn the_group_is_listed_from_ps() {
     let dir = fakes::TempDir::new("fiber-shell-ps");
     let clock = FakeClock::new();
     let rows = "printf '  12  99 sleep\\n  50   7 other\\n  34  99 my cmd\\n'";
     let ps = fake_ps(dir.path(), rows);
-    let listed = |pgid| list(&ps, pgid, &clock).recv_timeout(DEADLINE).unwrap();
-    assert_eq!(listed(99).as_deref(), Some("sleep (12), my cmd (34)"));
-    assert_eq!(listed(8), None);
+    assert_eq!(
+        listed(&ps, 99, &clock).as_deref(),
+        Some("sleep (12), my cmd (34)")
+    );
+    assert_eq!(listed(&ps, 8, &clock), None);
     let missing = list(&dir.path().join("missing"), 99, &clock);
-    assert_eq!(missing.recv_timeout(DEADLINE).unwrap(), None);
+    assert_eq!(Deadline::after(DEADLINE).recv(&missing).unwrap(), None);
     let failing = fake_ps(dir.path(), &format!("{rows}; exit 1"));
     let failed = list(&failing, 99, &clock);
-    assert_eq!(failed.recv_timeout(DEADLINE).unwrap(), None);
+    assert_eq!(Deadline::after(DEADLINE).recv(&failed).unwrap(), None);
 }
 
 #[test]
@@ -203,7 +216,9 @@ fn a_ps_that_closes_its_output_and_hangs_is_killed_at_the_bound() {
     );
     clock.advance(PS_BOUND);
     assert_eq!(
-        rx.recv_timeout(DEADLINE).expect("the bound to end it"),
+        Deadline::after(DEADLINE)
+            .recv(&rx)
+            .expect("the bound to end it"),
         None
     );
     assert!(!kill_pid(pid, "0").unwrap(), "the hung ps was not killed");
@@ -226,7 +241,9 @@ fn a_ps_that_does_not_finish_is_killed_at_the_bound() {
     );
     clock.advance(PS_BOUND);
     assert_eq!(
-        rx.recv_timeout(DEADLINE).expect("the bound to end it"),
+        Deadline::after(DEADLINE)
+            .recv(&rx)
+            .expect("the bound to end it"),
         None
     );
 }

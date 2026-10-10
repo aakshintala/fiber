@@ -22,6 +22,7 @@ use contract::events::{JobStarted, Outcome};
 use contract::jobs::{JobRecord, Jobs as _};
 use contract::shapes::{ContentPart, Process};
 use contract::tool::{Cancel, Tool};
+use fakes::Deadline;
 use fakes::children::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
 use fakes::clock::FakeClock;
 use fakes::jobs::FakeJobs;
@@ -69,6 +70,7 @@ fn run(dir: &Path, command: &str) -> contract::tool::Output {
 /// Runs one shell call on its own thread and returns its output. Calling
 /// code that blocks is a wait too (`docs/testing.md`, "Waits and
 /// timeouts"): on expiry the test fails naming the command.
+#[track_caller]
 fn run_on(
     shell: &Arc<Shell>,
     arguments: Map<String, Value>,
@@ -129,6 +131,7 @@ impl Lifeline {
     /// the open, then reads to end-of-file and reports that. Call only
     /// when a holder exists, after its ready line and before anything
     /// kills it: a read-only open with no writer blocks.
+    #[track_caller]
     fn watch(&self) -> Holders {
         let path = self.path.clone();
         let (tx, rx) = mpsc::channel();
@@ -152,7 +155,7 @@ impl Lifeline {
                 Ok(()) | Err(_) => {}
             }
         });
-        match rx.recv_timeout(LIFELINE) {
+        match Deadline::after(LIFELINE).recv(&rx) {
             Ok(()) => {}
             Err(_) => panic!(
                 "waited {LIFELINE:?} for a holder of {}",
@@ -166,8 +169,9 @@ impl Lifeline {
 struct Holders(mpsc::Receiver<()>);
 
 impl Holders {
+    #[track_caller]
     fn gone(self, what: &str) {
-        match self.0.recv_timeout(LIFELINE) {
+        match Deadline::after(LIFELINE).recv(&self.0) {
             Ok(()) => {}
             Err(_) => panic!("waited {LIFELINE:?} for {what} to exit"),
         }
@@ -201,8 +205,9 @@ fn start(dir: PathBuf, command: String, timeout_ms: Option<u64>, cancel: CancelT
     }
 }
 
+#[track_caller]
 fn join(running: Running) -> contract::tool::Output {
-    match running.output.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&running.output) {
         Ok(output) => output,
         Err(_) => panic!("waited {DEADLINE:?} for the command to finish"),
     }
@@ -375,7 +380,7 @@ fn bash_env_is_not_read() {
         .unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(DEADLINE) {
+    let output = match Deadline::after(DEADLINE).recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => panic!("waited {DEADLINE:?} for the BASH_ENV probe"),
     };
@@ -413,7 +418,7 @@ fn exported_functions_are_not_carried() {
         .unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(DEADLINE) {
+    let output = match Deadline::after(DEADLINE).recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => panic!("waited {DEADLINE:?} for the BASH_FUNC probe"),
     };
@@ -720,9 +725,10 @@ fn two_calls_at_once_do_not_share_a_command() {
             ))
             .unwrap();
     });
+    let wait = Deadline::after(DEADLINE);
     let texts = [
-        text(&rx.recv_timeout(DEADLINE).unwrap()),
-        text(&rx.recv_timeout(DEADLINE).unwrap()),
+        text(&wait.recv(&rx).unwrap()),
+        text(&wait.recv(&rx).unwrap()),
     ];
     assert!(texts.iter().any(|line| line.contains("left\nExit code 0.")));
     assert!(
@@ -823,7 +829,9 @@ fn output_streams_before_the_call_returns() {
     // Opening the pipe blocks until the command opens its end, so the
     // write runs on its own thread and the wait below carries the deadline.
     thread::spawn(move || std::fs::write(&fifo, "go\n"));
-    let output = rx.recv_timeout(DEADLINE).expect("the call to finish");
+    let output = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the call to finish");
     assert_eq!(text(&output), "line\ngot:go\nExit code 0.\n");
     assert_eq!(recorder.text(), "line\ngot:go\n");
 }
@@ -871,9 +879,8 @@ fn a_timed_out_command_streams_what_it_printed_before_the_deadline() {
         "the run did not park at the timeout"
     );
     running.clock.advance(Duration::from_secs(1));
-    let output = running
-        .output
-        .recv_timeout(DEADLINE)
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
         .expect("the command to finish");
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(text(&output).starts_with("partial\n"), "{}", text(&output));
@@ -975,7 +982,9 @@ fn run_in_background_returns_a_receipt_while_the_command_runs() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let job = started(&output);
     assert!(output.error.is_none(), "{}", text(&output));
     assert!(output.process.is_none());
@@ -1025,7 +1034,9 @@ fn a_running_job_emits_what_it_prints_after_the_move_as_job_deltas() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let job = started(&output);
     let deltas = jobs.deltas();
     // The FIFO open waits for the shell's read, so it runs on its own thread.
@@ -1035,8 +1046,8 @@ fn a_running_job_emits_what_it_prints_after_the_move_as_job_deltas() {
         release_block(&block);
         let _sent = released.send(());
     });
-    release
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&release)
         .expect("waited for the command's read of the block fifo");
     let ended = jobs.ended(DEADLINE).expect("the job to finish");
     assert_eq!(ended.status, Outcome::Completed);
@@ -1082,9 +1093,8 @@ fn a_command_moves_after_thirty_seconds_without_being_restarted() {
     );
     assert!(group_alive(pgid));
     running.clock.advance(Duration::from_secs(30));
-    let output = running
-        .output
-        .recv_timeout(DEADLINE)
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
         .expect("the 30-second receipt");
     let job = started(&output);
     assert!(output.error.is_none(), "{}", text(&output));
@@ -1137,7 +1147,9 @@ fn the_background_command_moves_a_running_call_before_thirty_seconds() {
         "the run did not park at 30 seconds"
     );
     assert_eq!(jobs.background(), 1);
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let job = started(&output);
     assert!(
         text(&output).starts_with("Moved to the background by the `background` command.\n"),
@@ -1175,7 +1187,9 @@ fn a_finished_call_is_not_registered_as_foreground() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let output = running.output.recv_timeout(DEADLINE).expect("the result");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the result");
     assert!(output.jobs.is_empty());
     assert_eq!(jobs.background(), 0);
     assert!(jobs.started().is_empty());
@@ -1204,7 +1218,9 @@ fn a_call_that_moved_by_thirty_seconds_is_not_moved_again() {
         "the run did not park at 30 seconds"
     );
     running.clock.advance(Duration::from_secs(30));
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     assert!(
         text(&output).starts_with("Still running after 30 seconds"),
         "{}",
@@ -1233,7 +1249,9 @@ fn a_run_in_background_call_is_not_registered_as_foreground() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    running.output.recv_timeout(DEADLINE).expect("the receipt");
+    Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     assert_eq!(jobs.background(), 0);
     release_block(ready.path());
     jobs.ended(DEADLINE).expect("the job to finish");
@@ -1264,7 +1282,9 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
     );
     assert!(group_alive(pgid), "stopped before the deadline");
     running.clock.advance(Duration::from_secs(30));
-    let output = running.output.recv_timeout(DEADLINE).expect("the timeout");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the timeout");
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(output.process.as_ref().unwrap().timed_out);
     assert!(text(&output).contains("Timed out after 30000 ms and stopped."));
@@ -1293,9 +1313,8 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
     );
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
-    let output = running
-        .output
-        .recv_timeout(DEADLINE)
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
         .expect("waited for the shell-exited receipt after sleep exec'd");
     let body = text(&output);
     assert!(output.error.is_none(), "{body}");
@@ -1353,7 +1372,9 @@ fn a_moved_job_times_out_from_the_commands_start() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let _output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let _output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let due = running.start + Duration::from_secs(5);
     assert!(
         running.clock.await_parked(due, DEADLINE),
@@ -1423,7 +1444,9 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let job = started(&output);
     assert_eq!(
         watched.live(),
@@ -1499,7 +1522,9 @@ fn a_background_command_whose_open_fails_leaves_no_registration() {
     );
     assert_eq!(jobs.background(), 0, "a fallen-back call stayed registered");
     release_block(ready.path());
-    let output = running.output.recv_timeout(DEADLINE).expect("the result");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the result");
     assert!(
         text(&output).contains("It could not move to the background"),
         "{}",
@@ -1537,9 +1562,8 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
     assert!(group_alive(pgid));
     assert!(running.jobs.started().is_empty());
     release_block(ready.path());
-    let output = running
-        .output
-        .recv_timeout(DEADLINE)
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
         .expect("the foreground result");
     let body = text(&output);
     assert!(body.contains("BEFORE\n"), "{body}");
@@ -1674,8 +1698,8 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
         release_block(&block);
         let _sent = released.send(());
     });
-    release
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&release)
         .expect("waited for the command's read of the block fifo");
     assert!(
         jobs.deltas().wait_for_text("yes:/dev/", DEADLINE),
@@ -1683,7 +1707,9 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
         jobs.deltas().text()
     );
     running.clock.advance(Duration::from_millis(250));
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let job = started(&output);
     let body = text(&output);
     assert!(output.error.is_none(), "{body}");
@@ -1730,7 +1756,9 @@ fn a_command_that_ends_at_once_on_a_terminal_still_returns_its_output() {
     );
     // Moved or finished, the output is in the result: the call raced the
     // command's exit.
-    let output = running.output.recv_timeout(DEADLINE).expect("the result");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the result");
     assert!(text(&output).contains("quick"), "{}", text(&output));
     assert!(output.error.is_none(), "{}", text(&output));
 }
@@ -1758,7 +1786,9 @@ fn the_receipt_waits_250_ms_for_output_on_the_clock() {
         "the receipt returned before 250 ms"
     );
     running.clock.advance(Duration::from_millis(250));
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let job = started(&output);
     assert!(
         !text(&output).contains("Output so far"),
@@ -1787,7 +1817,9 @@ fn what_a_job_is_typed_reaches_the_program_and_its_answer_is_in_the_file() {
     let due = running.start + Duration::from_millis(250);
     assert!(running.clock.await_parked(due, DEADLINE));
     running.clock.advance(Duration::from_millis(250));
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let job = started(&output);
     assert!(
         running
@@ -1827,7 +1859,9 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
             .await_parked(running.start + Duration::from_millis(250), DEADLINE)
     );
     running.clock.advance(Duration::from_millis(250));
-    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let _receipt = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let timeout_at = running.start + Duration::from_secs(5);
     assert!(
         running.clock.await_parked(timeout_at, CHILD_START),
@@ -1874,7 +1908,9 @@ fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
             .await_parked(running.start + Duration::from_millis(250), DEADLINE)
     );
     running.clock.advance(Duration::from_millis(250));
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let job = started(&output);
 
     let clock = FakeClock::new();
@@ -1899,8 +1935,8 @@ fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
     );
     assert!(matches!(written.try_recv(), Err(mpsc::TryRecvError::Empty)));
     cancel.cancel();
-    let count = written
-        .recv_timeout(DEADLINE)
+    let count = Deadline::after(DEADLINE)
+        .recv(&written)
         .expect("the cancelled write to return")
         .unwrap();
     assert!(count < length, "the whole input fit: {count}");
@@ -1978,19 +2014,22 @@ fn fed_by_fifo(ready: &Path, before: &str) -> String {
 
 /// The feed's write end. The open waits for the command's read, so it runs
 /// on its own thread under the deadline.
+#[track_caller]
 fn open_feed(ready: &Path) -> std::fs::File {
     let feed = block_of(ready);
     let (opened, open) = mpsc::channel();
     thread::spawn(move || {
         let _sent = opened.send(std::fs::OpenOptions::new().write(true).open(feed).unwrap());
     });
-    open.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&open)
         .expect("waited for the command's read of the feed fifo")
 }
 
 /// Every step in order: the drive thread offers what a delta carried before
 /// it parks again, so the next step's park means the line was offered at the
 /// step's instant. One [`STEPS`] bound for the whole sequence.
+#[track_caller]
 fn print_steps(
     run: &JobRun,
     deadline: Instant,
@@ -2038,7 +2077,9 @@ fn a_monitor_moves_at_once_with_its_receipt() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     assert!(output.error.is_none(), "{}", text(&output));
     let job = started(&output);
     assert_eq!(
@@ -2081,7 +2122,9 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     assert!(output.error.is_none(), "{}", text(&output));
     let job = started(&output);
     assert_eq!(errors_file(dir.path(), &job), errors);
@@ -2104,7 +2147,9 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
         release_block(&path);
         let _sent = released.send(());
     });
-    release.recv_timeout(DEADLINE).expect("the release");
+    Deadline::after(DEADLINE)
+        .recv(&release)
+        .expect("the release");
     let ended = jobs.ended(DEADLINE).expect("the monitor to end");
     assert_eq!(ended.status, Outcome::Completed, "{ended:?}");
     let texts: Vec<String> = jobs
@@ -2156,7 +2201,9 @@ fn standard_output_lines_reach_the_model_and_standard_error_its_own_file() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let output = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let job = started(&output);
     let path = ready.path().to_path_buf();
     let (released, release) = mpsc::channel();
@@ -2164,7 +2211,9 @@ fn standard_output_lines_reach_the_model_and_standard_error_its_own_file() {
         release_block(&path);
         let _sent = released.send(());
     });
-    release.recv_timeout(DEADLINE).expect("the release");
+    Deadline::after(DEADLINE)
+        .recv(&release)
+        .expect("the release");
     let ended = jobs.ended(DEADLINE).expect("the monitor to end");
     assert_eq!(ended.status, Outcome::Completed, "{ended:?}");
     let delivered: Vec<String> = jobs
@@ -2203,14 +2252,18 @@ fn an_incomplete_last_line_is_flushed_before_the_end() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let _receipt = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let path = ready.path().to_path_buf();
     let (released, release) = mpsc::channel();
     thread::spawn(move || {
         release_block(&path);
         let _sent = released.send(());
     });
-    release.recv_timeout(DEADLINE).expect("the release");
+    Deadline::after(DEADLINE)
+        .recv(&release)
+        .expect("the release");
     let ended = jobs.ended(DEADLINE).expect("the monitor to end");
     assert_eq!(ended.status, Outcome::Completed);
     let texts: Vec<String> = jobs
@@ -2255,7 +2308,9 @@ fn a_suppressed_count_still_pending_is_sent_before_the_end() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let _receipt = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
     let feed = open_feed(ready.path());
     // Twelve deliveries 100 ms apart: ten spend the budget, two are dropped.
@@ -2296,7 +2351,9 @@ fn sustained_output_for_thirty_seconds_floods_and_stops_the_monitor() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let _receipt = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
     let feed = open_feed(ready.path());
     // One delivery every 500 ms, faster than the refill: the budget runs
@@ -2346,7 +2403,9 @@ fn output_that_pauses_for_two_seconds_ends_the_run_and_does_not_flood() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let _receipt = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
     let feed = open_feed(ready.path());
     // Suppressed from 7 s to 25 s, then 2.5 s with nothing, then suppressed
@@ -2378,7 +2437,9 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
     let pgid = ready.wait(CHILD_START)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let _receipt = Deadline::after(DEADLINE)
+        .recv(&running.output)
+        .expect("the receipt");
     let due = running.start + Duration::from_secs(5);
     assert!(running.clock.await_parked(due, DEADLINE));
     assert!(group_alive(pgid), "stopped before the deadline");
