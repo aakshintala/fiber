@@ -734,6 +734,47 @@ fn a_lookup_that_fails_or_prints_nothing_reads_gone() {
 }
 
 #[test]
+fn a_lookup_that_prints_then_fails_reads_gone_not_its_output() {
+    let child = spawn_lookup("sh", &["-c", "echo stale; exit 1"]).unwrap();
+    assert_eq!(
+        read_lookup(child, "the failed lookup", DEADLINE),
+        GONE_ARGS,
+        "a failed lookup's output must not be read as the process's command line"
+    );
+}
+
+#[test]
+fn a_lookup_that_succeeds_reads_its_trimmed_output() {
+    let child = spawn_lookup("sh", &["-c", "printf '  listed  \\n'; exit 0"]).unwrap();
+    assert_eq!(read_lookup(child, "the listed lookup", DEADLINE), "listed");
+}
+
+#[test]
+fn a_lookup_that_cannot_be_bounded_reads_gone_not_timed_out() {
+    // A child with no piped stdout: `bounded` fails with an error that is
+    // not a timeout, before it waits on anything. The shell is in its own
+    // group, watched, and killed by the test; no reap is needed as it is
+    // never waited on.
+    let child = Command::new("sh")
+        .args(["-c", "exec sleep 30"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let watchdog = crate::Watchdog::group(group);
+    assert_eq!(
+        read_lookup(child, "the unbounded lookup", DEADLINE),
+        GONE_ARGS,
+        "a lookup that failed for a reason other than a timeout reads gone"
+    );
+    kill_group(group, "KILL").unwrap();
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
 fn listed_exit_names_the_holders_when_the_deadline_expires() {
     let mut child = held();
     let pid = child.id();
