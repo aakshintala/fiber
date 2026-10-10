@@ -507,13 +507,26 @@ fn windowed() -> Vec<crate::slash::Row> {
         .collect()
 }
 
-/// A `/` panel of `total` matches with the first eight windowed, the
-/// selection on `selected`.
-fn panel(total: usize, selected: usize) -> crate::completion_rows::Completions {
+/// A `/` panel of `total` matches with eight entries windowed from
+/// `start`, the selection on `selected` among them.
+fn panel(start: usize, total: usize, selected: usize) -> crate::completion_rows::Completions {
     crate::completion_rows::Completions {
         selected: Some(selected),
         rows: crate::completion_rows::Rows::Slash(windowed()),
-        start: 0,
+        start,
+        total,
+        query: String::new(),
+    }
+}
+
+/// An `@` panel of `total` paths with eight windowed from `start`,
+/// the selection on `selected` among them.
+fn file_panel(start: usize, total: usize, selected: usize) -> crate::completion_rows::Completions {
+    let paths: Vec<String> = (0..8).map(|n| format!("f{n}.rs")).collect();
+    crate::completion_rows::Completions {
+        selected: Some(selected),
+        rows: crate::completion_rows::Rows::Files(paths),
+        start,
         total,
         query: String::new(),
     }
@@ -538,25 +551,25 @@ fn texts(rows: &[super::Row]) -> Vec<(String, bool)> {
 fn fit_windows_around_the_selection_with_exactly_one_bar() {
     let bars = |drawn: &[(String, bool)]| drawn.iter().filter(|(_, barred)| *barred).count();
     // Nine body rows hold eight entries and the range.
-    let drawn = texts(&super::body(&panel(40, 5), 60, 9));
+    let drawn = texts(&super::body(&panel(0, 40, 5), 60, 9));
     assert_eq!(drawn.len(), 9);
     assert_eq!(bars(&drawn), 1, "{drawn:?}");
     assert!(drawn[5].0.contains("n5") && drawn[5].1, "{drawn:?}");
     assert!(drawn[8].0.contains("1–8 of 40 · ↓ 32 more"), "{drawn:?}");
     // Eight hold seven entries: the range keeps its row.
-    let drawn = texts(&super::body(&panel(40, 5), 60, 8));
+    let drawn = texts(&super::body(&panel(0, 40, 5), 60, 8));
     assert_eq!(drawn.len(), 8);
     assert_eq!(bars(&drawn), 1, "{drawn:?}");
     assert!(drawn[5].0.contains("n5") && drawn[5].1, "{drawn:?}");
     assert!(drawn[7].0.contains("1–7 of 40 · ↓ 33 more"), "{drawn:?}");
     // Seven hold six, still around the selection.
-    let drawn = texts(&super::body(&panel(40, 5), 60, 7));
+    let drawn = texts(&super::body(&panel(0, 40, 5), 60, 7));
     assert_eq!(drawn.len(), 7);
     assert_eq!(bars(&drawn), 1, "{drawn:?}");
     assert!(drawn[5].0.contains("n5") && drawn[5].1, "{drawn:?}");
     assert!(drawn[6].0.contains("1–6 of 40 · ↓ 34 more"), "{drawn:?}");
     // Room for one: the selection alone, counted where it sits.
-    let drawn = texts(&super::body(&panel(40, 5), 60, 1));
+    let drawn = texts(&super::body(&panel(0, 40, 5), 60, 1));
     assert_eq!(drawn.len(), 2);
     assert!(drawn[0].0.contains("n5") && drawn[0].1, "{drawn:?}");
     assert!(
@@ -564,10 +577,10 @@ fn fit_windows_around_the_selection_with_exactly_one_bar() {
         "{drawn:?}"
     );
     // No room: still the selection alone; the frame clips the range.
-    let floored = texts(&super::body(&panel(40, 5), 60, 0));
+    let floored = texts(&super::body(&panel(0, 40, 5), 60, 0));
     assert_eq!(floored, drawn);
     // All matches fit: every entry, no range.
-    let drawn = texts(&super::body(&panel(8, 0), 60, 8));
+    let drawn = texts(&super::body(&panel(0, 8, 0), 60, 8));
     assert_eq!(drawn.len(), 8);
     assert!(drawn[0].1, "{drawn:?}");
     assert!(
@@ -575,7 +588,7 @@ fn fit_windows_around_the_selection_with_exactly_one_bar() {
         "{drawn:?}"
     );
     // One match hides: the range shows over seven entries.
-    let drawn = texts(&super::body(&panel(9, 0), 60, 8));
+    let drawn = texts(&super::body(&panel(0, 9, 0), 60, 8));
     assert_eq!(drawn.len(), 8);
     assert!(drawn[7].0.contains("1–7 of 9 · ↓ 2 more"), "{drawn:?}");
 }
@@ -645,4 +658,71 @@ fn window_fits_around_the_selection() {
     assert_eq!(super::window(5, 8, 0), (5, 1));
     // No entries: no window.
     assert_eq!(super::window(0, 0, 5), (0, 0));
+}
+
+/// The name column pads past its width only: exactly as wide means no
+/// padding span, one wider means a single blank.
+#[test]
+fn name_spans_pads_only_past_the_column() {
+    let texts = |spans: Vec<ratatui::text::Span<'static>>| {
+        spans
+            .iter()
+            .map(|span| span.content.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(texts(super::name_spans("home", "", 4)), ["home"]);
+    assert_eq!(texts(super::name_spans("home", "", 5)), ["home", " "]);
+    assert_eq!(texts(super::name_spans("home", "ho", 4)), ["", "ho", "me"]);
+}
+
+/// The `@` fit window keeps the selection visible with exactly one
+/// bar, and the range counts the entries actually drawn.
+#[test]
+fn files_fit_windows_around_the_selection_with_exactly_one_bar() {
+    let bars = |drawn: &[(String, bool)]| drawn.iter().filter(|(_, barred)| *barred).count();
+    // All eight fit: every path, no range.
+    let drawn = texts(&super::body(&file_panel(0, 8, 0), 60, 8));
+    assert_eq!(drawn.len(), 8);
+    assert_eq!(bars(&drawn), 1, "{drawn:?}");
+    assert!(drawn[0].1, "{drawn:?}");
+    assert!(
+        drawn.iter().all(|(text, _)| !text.contains(" of ")),
+        "{drawn:?}"
+    );
+    // One hides: seven paths and the range over them.
+    let drawn = texts(&super::body(&file_panel(0, 9, 0), 60, 8));
+    assert_eq!(drawn.len(), 8);
+    assert_eq!(bars(&drawn), 1, "{drawn:?}");
+    assert!(drawn[7].0.contains("1–7 of 9 · ↓ 2 more"), "{drawn:?}");
+    // Scrolled past the app window with a short fit: the range starts
+    // where the drawn entries sit in the whole list.
+    let drawn = texts(&super::body(&file_panel(3, 40, 5), 60, 5));
+    assert_eq!(bars(&drawn), 1, "{drawn:?}");
+    assert!(drawn[3].0.contains("f5.rs") && drawn[3].1, "{drawn:?}");
+    assert!(
+        drawn
+            .last()
+            .is_some_and(|(text, _)| text.contains("↑ 5 above · 6–9 of 40 · ↓ 31 more")),
+        "{drawn:?}"
+    );
+}
+
+/// A scrolled `/` window with a short fit: the range starts where the
+/// drawn entries sit in the whole list, with a non-zero app start and
+/// a non-zero fit offset whose sum, difference and product all differ.
+#[test]
+fn slash_range_counts_from_the_entries_actually_drawn() {
+    let drawn = texts(&super::body(&panel(3, 40, 5), 60, 5));
+    assert_eq!(
+        drawn.iter().filter(|(_, barred)| *barred).count(),
+        1,
+        "{drawn:?}"
+    );
+    assert!(drawn[3].0.contains("n5") && drawn[3].1, "{drawn:?}");
+    assert!(
+        drawn
+            .last()
+            .is_some_and(|(text, _)| text.contains("↑ 5 above · 6–9 of 40 · ↓ 31 more")),
+        "{drawn:?}"
+    );
 }
