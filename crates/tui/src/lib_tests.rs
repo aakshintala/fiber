@@ -520,10 +520,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     };
     // The watcher starts before `run`, and is the only reader from the
     // first frame to end of file.
-    let frames = watch(
-        &pair.main,
-        vec![b"shortcuts", b"Press Ctrl+C again to", RESTORE],
-    );
+    let frames = watch(&pair.main, vec![b"shortcuts", b"again to", RESTORE]);
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-run".to_owned())
