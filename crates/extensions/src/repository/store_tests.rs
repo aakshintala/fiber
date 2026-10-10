@@ -650,7 +650,10 @@ fn a_stalled_install_step_approves_nothing_and_leaves_no_copy() {
             let _sent = done_tx.send(store.approve(&item, &worker_hash));
         })
         .unwrap();
-    let _pid = ready.wait(WITHIN);
+    let pid = ready.wait(WITHIN)[0];
+    // The spinner shares this test's group: match its argv by pid alone,
+    // so a panic anywhere below still kills it.
+    let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     assert!(
         clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
         "waited {WITHIN:?} for the step to park while running"
@@ -679,4 +682,22 @@ fn a_stalled_install_step_approves_nothing_and_leaves_no_copy() {
         store(&repo).decision(kind, &hash).is_none(),
         "a failed step records no approval"
     );
+    assert!(
+        !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
+        "the stopped step is gone"
+    );
+    watchdog.stand_down(WITHIN);
+}
+
+/// The `Debug` names the store and every field it prints: a body replaced
+/// with an empty `Ok` (the surviving mutant) prints none of them.
+#[test]
+fn store_debug_names_the_type_and_its_fields() {
+    let repo = Repo::bare();
+    let text = format!("{:?}", store(&repo));
+    assert!(text.contains("Store"), "{text}");
+    assert!(text.contains("home"), "{text}");
+    assert!(text.contains("project"), "{text}");
+    // The clock is skipped: `Arc<dyn Clock>` has no `Debug`.
+    assert!(!text.contains("clock"), "{text}");
 }

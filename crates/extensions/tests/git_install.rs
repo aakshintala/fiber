@@ -2255,6 +2255,9 @@ fn a_stalled_ls_remote_fails_the_plan_at_the_git_deadline() {
     let setup = Setup::new();
     let unique = format!("stall-ls-remote-{}", setup.root().display());
     let watching = unique.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never the test's own group.
+    let watchdog = fakes::Watchdog::matching(&watching);
     let git = fake_git().to_string_lossy().into_owned();
     let clock = fakes::clock::FakeClock::new();
     let worker_clock = std::sync::Arc::clone(&clock);
@@ -2292,6 +2295,7 @@ fn a_stalled_ls_remote_fails_the_plan_at_the_git_deadline() {
         "the failure names the stop: {err}"
     );
     no_stall_left(&watching);
+    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
 }
 
 /// A `clone` that never finishes fails the plan at the git deadline: the
@@ -2301,6 +2305,9 @@ fn a_stalled_clone_fails_the_plan_at_the_git_deadline() {
     let setup = Setup::new();
     let unique = format!("stall-clone-{}", setup.root().display());
     let watching = unique.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never the test's own group.
+    let watchdog = fakes::Watchdog::matching(&watching);
     let git = fake_git().to_string_lossy().into_owned();
     let clock = fakes::clock::FakeClock::new();
     let worker_clock = std::sync::Arc::clone(&clock);
@@ -2338,4 +2345,5 @@ fn a_stalled_clone_fails_the_plan_at_the_git_deadline() {
         "the failure names the stop: {err}"
     );
     no_stall_left(&watching);
+    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
 }

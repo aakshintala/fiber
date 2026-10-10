@@ -477,6 +477,10 @@ fn a_stalled_ls_files_fails_at_the_git_deadline() {
     let path = format!("{}:{}", fixture.display(), std::env::var("PATH").unwrap());
     // Unique to the run: no two re-executed children match each other's stall.
     let marker = format!("stall-ls-files-{}", std::process::id());
+    // The guard matches this stall alone by its argv: if the child hangs
+    // and the run below kills it, the guard still kills the stall the dead
+    // child leaves behind, by pid and never this test's own group.
+    let stall_guard = fakes::Watchdog::matching(&marker);
     let output = fakes::rerun(
         "repository::declared_tests::a_stalled_ls_files_fails_at_the_git_deadline",
         &[
@@ -495,6 +499,7 @@ fn a_stalled_ls_files_fails_at_the_git_deadline() {
         stdout.contains("1 passed"),
         "the child ran exactly the ls-files stall test: {stdout}"
     );
+    stall_guard.stand_down(fakes::MUST_SUCCEED_WITHIN);
 }
 
 /// The re-executed child: `git` resolves to the fixture through `PATH`, so
@@ -554,6 +559,9 @@ fn stalled_ls_files_child() {
     // stalled process matches the marker the parent set alone.
     let marker = std::env::var(STALL_MARKER).expect("the parent sets the stall marker");
     let watching = marker.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never this child's own group.
+    let stall_guard = fakes::Watchdog::matching(&watching);
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("stalled ls-files".into())
@@ -561,23 +569,70 @@ fn stalled_ls_files_child() {
             let _sent = done_tx.send(declared_items(&root, &*worker_clock));
         })
         .unwrap();
+    // The run parks while running; an answer meanwhile (a `git` that never
+    // stalled) ends this at once instead of burning `WITHIN` in one blind
+    // wait, which the parent then wins by milliseconds and reports as its
+    // own timeout.
+    let running_until = clock.now() + GROUP_POLL;
+    let mut parked = false;
+    let mut early = None;
+    for _ in 0..STUCK_ROUNDS {
+        if clock.await_parked(running_until, SIGHT) {
+            parked = true;
+            break;
+        }
+        match done_rx.try_recv() {
+            Ok(done) => {
+                early = Some(done);
+                break;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("the stalled run returns")
+            }
+        }
+    }
     assert!(
-        clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
-        "waited {WITHIN:?} for ls-files to park while running"
+        early.is_none(),
+        "ls-files answers before the clock moves: {early:?}"
     );
+    assert!(parked, "ls-files parks while running");
     // The stall proves it is stuck before the clock first moves: stopping
     // a starter on the way up reports a timeout the stall never caused.
     let early = await_stuck(&done_rx, &watching);
     assert!(early.is_none(), "the stall answers only at its deadline");
     // Past the git deadline the run stops.
     clock.advance(GIT_DEADLINE + Duration::from_secs(1));
+    // The run parks for the grace; an answer meanwhile ends this at once,
+    // as above: no blind wait burns the child's budget.
     let kill_at = clock.now() + GRACE;
-    assert!(
-        clock.await_parked(kill_at, WITHIN),
-        "waited {WITHIN:?} for ls-files to park for the grace"
-    );
+    let mut graced = false;
+    let mut answered = None;
+    for _ in 0..STUCK_ROUNDS {
+        if clock.await_parked(kill_at, SIGHT) {
+            graced = true;
+            break;
+        }
+        match done_rx.try_recv() {
+            Ok(done) => {
+                answered = Some(done);
+                break;
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                panic!("the stalled run returns")
+            }
+        }
+    }
     clock.advance(GRACE);
-    let err = done_rx.recv_timeout(WITHIN).unwrap().unwrap_err();
+    let answer = match answered {
+        Some(answer) => answer,
+        None => {
+            assert!(graced, "ls-files parks for the grace");
+            done_rx.recv_timeout(WITHIN).unwrap()
+        }
+    };
+    let err = answer.unwrap_err();
     assert!(
         matches!(&err, Error::Pin { item, .. } if item == "fiber.test/p"),
         "a stalled ls-files fails pinning its package: {err}"
@@ -599,4 +654,5 @@ fn stalled_ls_files_child() {
         leftovers.is_empty(),
         "the stalled ls-files is gone: {leftovers:?}"
     );
+    stall_guard.stand_down(WITHIN);
 }

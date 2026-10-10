@@ -200,6 +200,10 @@ fn a_stalled_install_step_installs_nothing() {
     // Its argv carries text unique to the run, so the driver acknowledges
     // this stall — and no other process — before the clock first moves.
     let unique = format!("stall-install-step-{}", setup.root().display());
+    let watching = unique.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never the test's own group.
+    let watchdog = fakes::Watchdog::matching(&watching);
     let step = format!("trap '' TERM; while :; do :; done # {unique}");
     m["install"] = json!(["sh", "-c", step]);
     let source = setup.source("local", &m, &[provider("acme", &["m1"])]);
@@ -230,4 +234,15 @@ fn a_stalled_install_step_installs_nothing() {
         installed_dirs(&setup.home()).is_empty(),
         "a failed step installs nothing"
     );
+    // The run kills what it stopped: leftovers fail the test, by pid and
+    // never the test's own group.
+    let leftovers = fakes::matching(&watching).unwrap();
+    for pid in &leftovers {
+        drop(fakes::kill_pid(*pid, "KILL"));
+    }
+    assert!(
+        leftovers.is_empty(),
+        "the stalled install step is gone: {leftovers:?}"
+    );
+    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
 }

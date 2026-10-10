@@ -172,6 +172,9 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     // process matches this run alone.
     let unique = format!("stall-diff-{}", dir.path().display());
     let watching = unique.clone();
+    // The guard matches this stall alone by its argv: a panic anywhere
+    // below still kills it, by pid and never the test's own group.
+    let watchdog = fakes::Watchdog::matching(&watching);
     let git = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/fake-git/git")
         .to_string_lossy()
@@ -229,6 +232,7 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
         leftovers.is_empty(),
         "the stalled diff is gone: {leftovers:?}"
     );
+    watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
 }
 
 /// A `diff` that fails at once keeps the missing-commit fallback: only a

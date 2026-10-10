@@ -782,6 +782,9 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
         Some(deadline),
     );
     let pid = ready.wait(DEADLINE)[0];
+    // The spinner shares this test's group, so the guard matches its argv
+    // by pid alone, never the group: a panic anywhere below still kills it.
+    let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     assert!(
         clock.await_parked(clock.now() + GROUP_POLL, DEADLINE),
         "waited {DEADLINE:?} for the pid-mode run to park while running"
@@ -807,6 +810,7 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the stopped program is gone"
     );
+    watchdog.stand_down(DEADLINE);
 }
 
 /// A run without its own group is never listed: neither while it runs nor
@@ -822,6 +826,8 @@ fn a_pid_mode_run_is_never_listed() {
     );
     let (cancel, done) = spawn(sh_pid(&script, cwd, CAP), Arc::clone(&clock), None);
     let pid = ready.wait(DEADLINE)[0];
+    // The spinner shares this test's group: match its argv by pid alone.
+    let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     assert!(
         !super::groups::listed().contains(&pid),
         "a pid-mode run is never listed while it runs"
@@ -838,6 +844,11 @@ fn a_pid_mode_run_is_never_listed() {
         !super::groups::listed().contains(&pid),
         "a pid-mode run is never listed after it ends"
     );
+    assert!(
+        !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
+        "the cancelled program is gone"
+    );
+    watchdog.stand_down(DEADLINE);
 }
 
 /// A program that cannot start reports its spawn failure, whatever group it
@@ -915,8 +926,11 @@ fn stop_pid_reaps_an_exited_child_without_signalling() {
 fn stop_pid_signals_a_running_child() {
     use rustix::process::Signal;
     let (_dir, cwd) = dir("fiber-exec-stop-running");
+    // The loop's comment carries the directory: the guard below matches
+    // this spinner alone by its argv.
+    let script = format!("while :; do :; done # {}", cwd.display());
     let mut child = std::process::Command::new("sh")
-        .args(["-c", "while :; do :; done"])
+        .args(["-c", script.as_str()])
         .current_dir(&cwd)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -924,6 +938,7 @@ fn stop_pid_signals_a_running_child() {
         .spawn()
         .expect("the running child spawns");
     let pid = child.id();
+    let watchdog = fakes::Watchdog::matching(&cwd.display().to_string());
     let shared = super::Shared::default();
     assert!(
         super::stop_pid(&mut child, &shared, Signal::TERM),
@@ -941,6 +956,7 @@ fn stop_pid_signals_a_running_child() {
                 Some(15),
                 "the running child dies of SIGTERM"
             );
+            watchdog.stand_down(DEADLINE);
         }
         Err(_) => {
             kill_pid_now(pid);
@@ -969,6 +985,8 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
         Arc::clone(&clock),
         Some(deadline),
     );
+    // The holder's argv carries its pid file: the guard matches it alone.
+    let watchdog = fakes::Watchdog::matching(&holder_file.display().to_string());
     // The reap starts the 2 s drain on the fake clock.
     let drain_until = clock.now() + DRAIN;
     assert!(
@@ -1001,6 +1019,7 @@ fn a_reaped_child_with_a_held_pipe_returns_at_the_drain() {
     );
     let holder = holder.expect("the script wrote its holder's pid");
     assert!(fakes::pids_exit(&[holder], DEADLINE), "the holder is gone");
+    watchdog.stand_down(DEADLINE);
 }
 
 /// A pid-mode drain that crosses the deadline still returns the child's
@@ -1020,6 +1039,8 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
     // One step of the fake clock: the three deadlines straddle the drain
     // bound by it.
     let step = Duration::from_millis(1);
+    // The holder's argv carries its pid file: one guard covers all cases.
+    let watchdog = fakes::Watchdog::matching(&holder_file.display().to_string());
     for (case, shift) in [("before", -1), ("at", 0), ("after", 1)] {
         let clock = FakeClock::new();
         let drain_until = clock.now() + DRAIN;
@@ -1091,6 +1112,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
             "the holder is gone ({case})"
         );
     }
+    watchdog.stand_down(DEADLINE);
 }
 
 /// A run without its own group is stopped by a signal to its pid: the
@@ -1111,6 +1133,8 @@ fn a_pid_mode_term_stop_reports_sigterm() {
         Some(deadline),
     );
     let pid = ready.wait(DEADLINE)[0];
+    // The spinner shares this test's group: match its argv by pid alone.
+    let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     assert!(
         clock.await_parked(clock.now() + GROUP_POLL, DEADLINE),
         "waited {DEADLINE:?} for the pid-mode run to park while running"
@@ -1130,6 +1154,7 @@ fn a_pid_mode_term_stop_reports_sigterm() {
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the stopped program is gone"
     );
+    watchdog.stand_down(DEADLINE);
 }
 
 /// A startup abort without its own group signals only the pid: the child
@@ -1154,6 +1179,8 @@ fn a_pid_mode_startup_abort_signals_only_the_pid() {
         .stderr(std::process::Stdio::null());
     let child = cmd.spawn().expect("the pid-mode child spawns");
     let pid = ready.wait(DEADLINE)[0];
+    // The spinner shares this test's group: match its argv by pid alone.
+    let watchdog = fakes::Watchdog::matching(&ready.path().display().to_string());
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let req = sh_pid("startup", cwd, CAP);
@@ -1188,4 +1215,5 @@ fn a_pid_mode_startup_abort_signals_only_the_pid() {
         !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
         "the aborted program is gone"
     );
+    watchdog.stand_down(DEADLINE);
 }

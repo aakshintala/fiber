@@ -807,3 +807,137 @@ fn a_re_park_before_the_advance_does_not_match() {
     exit.recv_timeout(Duration::from_secs(5))
         .expect("the parked thread exits");
 }
+
+/// An await for any later park on a helper thread with a 5 s `within`,
+/// so a wait that never matches fails the test instead of blocking it.
+#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+fn await_any(clock: &Arc<FakeClock>, mark: &super::Mark) -> bool {
+    let (tx, rx) = mpsc::channel();
+    let clock = Arc::clone(clock);
+    let mark = mark.clone();
+    thread::spawn(move || {
+        match tx.send(clock.await_any_parked_since(&mark, Duration::from_secs(5))) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("waited for await_any_parked_since")
+}
+
+/// `await_any_parked_since` times out false when no thread parks again: a
+/// body replaced with `true` (a surviving mutant) answers true at once.
+#[test]
+fn await_any_parked_since_is_false_when_no_thread_parks_again() {
+    let clock = FakeClock::new();
+    let mark = clock.advance_marked(Duration::from_millis(1));
+    assert!(
+        !clock.await_any_parked_since(&mark, Duration::from_millis(30)),
+        "no thread parked again after the mark"
+    );
+}
+
+/// A thread that left its park before the advance matches its next park:
+/// without the `!` (a surviving mutant) the wait ends at once with false.
+/// The helper starts awaiting while nothing is parked, and the settle
+/// waits out its first check before the gate opens, so the mutant's early
+/// false is deterministic, not a race with the re-park.
+#[test]
+fn await_any_parked_since_matches_a_next_park_after_a_leave() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (first, left, second, exit, release, gate) = park_twice(&clock, until);
+    first
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park");
+    release.send(()).unwrap();
+    left.recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to leave its park");
+    let mark = clock.advance_marked(Duration::from_millis(1));
+    let (awaited_tx, awaited_rx) = mpsc::channel();
+    let clock_wait = Arc::clone(&clock);
+    let mark_wait = mark.clone();
+    thread::spawn(move || {
+        let result = clock_wait.await_any_parked_since(&mark_wait, Duration::from_secs(5));
+        if let Ok(()) = awaited_tx.send(result) {}
+    });
+    // The helper has checked by now: nothing is parked, so the wait holds
+    // on correct code and has already answered false without the `!`.
+    // A receive with a bound, never a sleep.
+    let (_settle_tx, settle_rx) = mpsc::channel::<()>();
+    match settle_rx.recv_timeout(Duration::from_millis(200)) {
+        Ok(()) | Err(_) => {}
+    }
+    gate.send(()).unwrap();
+    second
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park again");
+    assert!(
+        awaited_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("waited for a later park at any deadline"),
+        "the park after the advance is later than the mark"
+    );
+    release.send(()).unwrap();
+    exit.recv_timeout(Duration::from_secs(5))
+        .expect("the parked thread exits");
+}
+
+/// A park carrying the mark's own id is the same park, not a later one;
+/// the re-park past it is. `>=` or `||` (surviving mutants) match the first.
+#[test]
+fn await_any_parked_since_needs_an_id_past_the_mark() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (first, left, second, exit, release, gate) = park_twice(&clock, until);
+    first
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park");
+    let mark = clock.advance_marked(Duration::from_millis(1));
+    assert!(
+        !clock.await_any_parked_since(&mark, Duration::from_millis(30)),
+        "the park present at the advance is not a later park"
+    );
+    release.send(()).unwrap();
+    left.recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to leave its park");
+    gate.send(()).unwrap();
+    second
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park again");
+    assert!(
+        await_any(&clock, &mark),
+        "the re-park past the mark is a later park"
+    );
+    release.send(()).unwrap();
+    exit.recv_timeout(Duration::from_secs(5))
+        .expect("the parked thread exits");
+}
+
+/// A park by a thread absent from the mark is not a later park, however new
+/// its id is. `||` (a surviving mutant) matches it through its id alone.
+#[test]
+fn await_any_parked_since_ignores_a_thread_absent_from_the_mark() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked_a, release_a, exit_a) = park_once(&clock, Some(until));
+    parked_a
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the first thread to park");
+    let mark = clock.advance_marked(Duration::from_millis(1));
+    let (parked_b, release_b, exit_b) = park_once(&clock, Some(until));
+    parked_b
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the second thread to park");
+    assert!(
+        !clock.await_any_parked_since(&mark, Duration::from_millis(30)),
+        "a park by a thread absent from the mark is not a later park"
+    );
+    release_a.send(()).unwrap();
+    release_b.send(()).unwrap();
+    exit_a
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the first thread exits");
+    exit_b
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the second thread exits");
+}
