@@ -92,6 +92,7 @@ asked for the session.
 | `extension_missing` | the provider of a `provider/model` is not installed | 1 |
 | `protocol_unsupported` | the session model's protocol is one this Fiber does not speak yet | 1 |
 | `extension_required_failed` | an extension marked `required` failed to start | 1 |
+| `extension_not_installed` | `fiber extension remove <name>` found no directory for the name; the message names the extension and the directory it looked for | 1 |
 | `mcp_required_server_failed` | an MCP server marked `required` failed to start | 1 |
 | `extension_unapproved` | the repository declares a `required` extension nobody approved, and nobody could be asked (`docs/extensions.md`, "Code a repository ships") | 1 |
 | `hook_unapproved` | the repository declares a `required` hook nobody approved, and nobody could be asked | 1 |
@@ -270,6 +271,7 @@ the lines that carry it.
 | `extension_incompatible` | exit, notice | an extension needs a newer `fiber` or a different extension API version; `fiber extension install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
 | `extension_missing` | exit | the provider of a `provider/model` is not installed |
 | `extension_not_found` | exit | an install names a repository or tag that does not exist; fix the name. Not retried automatically (`docs/extensions.md`, "Names") |
+| `extension_not_installed` | exit | `fiber extension remove` names an extension with no directory under `extensions/`; nothing is deleted (`docs/extensions.md`, "Installing") |
 | `extension_required_failed` | exit | a required extension failed to start |
 | `extension_shadowed` | notice | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions (`docs/extensions.md`, "Code a repository ships") |
 | `extension_unapproved` | exit | a repository's required extension is not approved; run `fiber approve` in the repository |

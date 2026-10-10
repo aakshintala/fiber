@@ -655,7 +655,8 @@ fn a_remove_deletes_the_extension_and_the_dependencies_nothing_else_uses() {
             .is_empty()
     );
     let err = uninstall(&setup.home(), b).unwrap_err();
-    assert!(matches!(err, Error::NotInstalled { .. }));
+    assert!(matches!(err, Error::NothingToRemove { .. }));
+    assert_eq!(err.code(), ErrorCode::ExtensionNotInstalled);
 }
 
 #[test]
@@ -2350,4 +2351,19 @@ fn a_stalled_clone_fails_the_plan_at_the_git_deadline() {
     );
     no_stall_left(&watching);
     watchdog.stand_down(fakes::MUST_SUCCEED_WITHIN);
+}
+
+#[test]
+fn a_record_in_a_directory_with_another_name_is_not_removed() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/legacy";
+    repos.tag(name, "", "v1.0.0", &manifest(name), &[]);
+    install_named(&setup, &repos, name).unwrap();
+    let extensions = setup.home().join("extensions");
+    let legacy = extensions.join("older-layout");
+    std::fs::rename(extensions.join("example.com-acme-legacy"), &legacy).unwrap();
+    let err = uninstall(&setup.home(), name).unwrap_err();
+    assert!(matches!(err, Error::NothingToRemove { .. }));
+    assert!(legacy.is_dir());
 }

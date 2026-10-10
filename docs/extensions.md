@@ -1275,7 +1275,7 @@ for 300 seconds, fails with `fetch_failed`.
 |---|---|
 | `fiber extension install <name>` | Installs an extension and its dependencies. If any part fails, nothing is installed. |
 | `fiber extension update [<name>]` | Moves one extension, or every installed extension when no name is given, to its newest version and re-resolves dependencies. The new version stays a minimum (see [Versions](#versions)). It never touches a repository's extension. |
-| `fiber extension remove <name>` | Removes an extension, and any dependency nothing else uses. |
+| `fiber extension remove <name>` | Removes an extension, and any dependency nothing else uses. It fails with `extension_not_installed` when no directory exists under the name, and deletes nothing. |
 | `fiber extension reinstall <name>` | Removes an extension and installs it again. When its install record can be read, it installs the recorded source at the recorded commit. When the extension is damaged, it installs `<name>` as given, a short name or a git address. |
 | `fiber extension list` | Lists installed extensions with their versions and commits, and each repository extension with its project, its path in the repository and the content it loads. |
 | `fiber approve [--yes]` | Shows everything the current repository declares and approves it ("Code a repository ships"). |

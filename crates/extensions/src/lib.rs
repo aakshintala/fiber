@@ -166,6 +166,14 @@ pub enum Error {
         /// The name.
         name: String,
     },
+    /// `remove` names an extension with no directory to delete.
+    #[error("`{name}` is not installed: there is no directory `{dir}`.")]
+    NothingToRemove {
+        /// The name as asked for.
+        name: String,
+        /// The directory looked for.
+        dir: String,
+    },
     /// A fetched manifest names another extension than the one asked for.
     #[error("Fetched `{asked}`, but its manifest names `{found}`.")]
     WrongName {
@@ -457,6 +465,7 @@ impl Error {
                 ErrorCode::ExtensionNotFound
             }
             Self::NotInstalled { .. } => ErrorCode::ExtensionMissing,
+            Self::NothingToRemove { .. } => ErrorCode::ExtensionNotInstalled,
             Self::NeedsNewerFiber { .. } | Self::ApiVersion { .. } => {
                 ErrorCode::ExtensionIncompatible
             }
