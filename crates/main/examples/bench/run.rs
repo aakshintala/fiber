@@ -24,15 +24,6 @@ pub(crate) const STOP: Duration = Duration::from_secs(5);
 /// The pause between two probes of a condition the harness polls.
 pub(crate) const PROBE: Duration = Duration::from_millis(5);
 
-/// The real time a process gets to exit after a probe finds it running,
-/// whatever clock times the wait.
-pub(crate) const EXIT_GRACE: Duration = Duration::from_secs(1);
-
-/// Whether a wait that has paused `paused` of real time pauses again.
-pub(crate) fn grace_left(paused: Duration) -> bool {
-    paused < EXIT_GRACE
-}
-
 /// The operating system's clock: the one place the harness reads or waits
 /// on real time.
 pub(crate) struct System;
@@ -151,26 +142,27 @@ impl Proc {
             .map_err(|err| format!("checking the process: {err}"))
     }
 
-    /// Waits up to `within` on `clock` for the process to exit, and reaps
-    /// it. A real process exits in real time, so a fake clock that advances
-    /// without waiting must not use up the bound before the process can
-    /// exit: the first [`EXIT_GRACE`] of unsuccessful probes also wait
-    /// [`PROBE`] of real time each.
+    /// Waits up to `within` of real time for the process to exit, and
+    /// reaps it. A real process exits in real time, so the bound is the
+    /// system clock's however fast `clock` advances; each probe still waits
+    /// on `clock`, which is where a test's clock hears that the wait is
+    /// under way.
     pub(crate) fn exits(&mut self, clock: &dyn Clock, within: Duration) -> Result<bool, String> {
-        let mut paused = Duration::ZERO;
-        let exited = poll(clock, within, "the process to exit", || {
+        let until = System.now() + within;
+        loop {
             let exited = self
                 .child
                 .try_wait()
                 .map(|status| status.is_some())
                 .map_err(|err| format!("waiting for the process: {err}"))?;
-            if !exited && grace_left(paused) {
-                System.sleep(PROBE);
-                paused += PROBE;
+            if exited {
+                return Ok(true);
             }
-            Ok(exited)
-        });
-        Ok(exited.is_ok())
+            if left(&System, until, "the process to exit").is_err() {
+                return Ok(false);
+            }
+            clock.sleep(PROBE);
+        }
     }
 
     /// Ends the process: SIGTERM, then SIGKILL after [`STOP`], then waits
