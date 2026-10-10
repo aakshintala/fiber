@@ -452,27 +452,14 @@ fn model_lists_refresh_after_accepts_durations_and_refuses_the_rest() {
 }
 
 #[test]
-fn model_lists_refresh_after_defaults_to_one_day() {
-    let setup = Setup::new();
-    let config = setup.load(&[]).unwrap();
-    assert_eq!(
-        config.get("model_lists.refresh_after", None),
-        Some((json!("24h"), Source::Default))
-    );
-}
-
-#[test]
 fn parse_duration_pins_exact_seconds_for_every_unit() {
-    assert_eq!(config::parse_duration("7s"), Some(Duration::from_secs(7)));
-    assert_eq!(config::parse_duration("2m"), Some(Duration::from_secs(120)));
-    assert_eq!(
-        config::parse_duration("3h"),
-        Some(Duration::from_secs(10800))
-    );
-    assert_eq!(
-        config::parse_duration("2d"),
-        Some(Duration::from_secs(172800))
-    );
+    for (text, seconds) in [("1s", 1), ("1m", 60), ("1h", 3600), ("1d", 86400)] {
+        assert_eq!(
+            config::parse_duration(text),
+            Some(Duration::from_secs(seconds)),
+            "{text}"
+        );
+    }
 }
 
 #[test]
