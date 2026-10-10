@@ -1638,6 +1638,7 @@ dependencies = [
  "provider",
  "rustix",
  "serde_json",
+ "support",
  "tools",
  "tui",
  "vt100",
