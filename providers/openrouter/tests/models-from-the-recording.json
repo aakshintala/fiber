@@ -43,7 +43,15 @@
         "output": 10.0,
         "cache_read": 0.1,
         "cache_write": 2.5
-      }
+      },
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "thinking_default": "high"
     },
     {
       "id": "z-ai/glm-5.3-flash",
@@ -66,7 +74,13 @@
         "output": 0.5,
         "cache_read": 0.03,
         "cache_write": null
-      }
+      },
+      "thinking_levels": [
+        "low",
+        "high",
+        "max"
+      ],
+      "thinking_default": "max"
     },
     {
       "id": "openrouter/free",
@@ -88,7 +102,13 @@
         "cache_read": null,
         "cache_write": null
       },
-      "max_output_tokens": null
+      "max_output_tokens": null,
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "thinking_default": null
     },
     {
       "id": "qwen/qwen3-max",
@@ -109,7 +129,9 @@
         "output": 3.9,
         "cache_read": 0.156,
         "cache_write": 0.975
-      }
+      },
+      "thinking_levels": null,
+      "thinking_default": null
     },
     {
       "id": "openrouter/auto",
@@ -129,7 +151,13 @@
         "video"
       ],
       "max_output_tokens": null,
-      "cost": null
+      "cost": null,
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "thinking_default": null
     }
   ]
 }

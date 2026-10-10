@@ -1,0 +1,73 @@
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "models",
+    "arg": {}
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://openrouter.ai/api/v1/models",
+          "headers": {
+            "authorization": null
+          }
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"data\": [{\"id\": \"edge/efforts-with-default\", \"supported_parameters\": [\"tools\", \"reasoning\"], \"reasoning\": {\"supported_efforts\": [\"high\", \"low\"], \"default_effort\": \"low\"}}, {\"id\": \"edge/reasoning-without-efforts\", \"supported_parameters\": [\"tools\", \"reasoning\"], \"reasoning\": {\"mandatory\": true}}, {\"id\": \"edge/efforts-unknown-filtered\", \"supported_parameters\": [\"tools\", \"reasoning\"], \"reasoning\": {\"supported_efforts\": [\"low\", \"turbo\", \"high\"], \"default_effort\": \"turbo\"}}, {\"id\": \"edge/default-outside-list\", \"supported_parameters\": [\"tools\", \"reasoning\"], \"reasoning\": {\"supported_efforts\": [\"low\", \"high\"], \"default_effort\": \"max\"}}, {\"id\": \"edge/empty-efforts\", \"supported_parameters\": [\"tools\", \"reasoning\"], \"reasoning\": {\"supported_efforts\": []}}, {\"id\": \"edge/no-reasoning\", \"supported_parameters\": [\"tools\"]}]}"
+        }
+      }
+    ]
+  },
+  "returns": [
+    {
+      "id": "edge/efforts-with-default",
+      "thinking_levels": [
+        "low",
+        "high"
+      ],
+      "thinking_default": "low"
+    },
+    {
+      "id": "edge/reasoning-without-efforts",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "thinking_default": null
+    },
+    {
+      "id": "edge/efforts-unknown-filtered",
+      "thinking_levels": [
+        "low",
+        "high"
+      ],
+      "thinking_default": null
+    },
+    {
+      "id": "edge/default-outside-list",
+      "thinking_levels": [
+        "low",
+        "high"
+      ],
+      "thinking_default": null
+    },
+    {
+      "id": "edge/empty-efforts",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "thinking_default": null
+    },
+    {
+      "id": "edge/no-reasoning",
+      "thinking_levels": null,
+      "thinking_default": null
+    }
+  ]
+}

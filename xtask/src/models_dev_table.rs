@@ -38,7 +38,28 @@ pub(crate) struct Package {
     pub(crate) by_protocol: &'static [(&'static str, &'static str)],
     /// A JSON object merged into one model, as `(id, object)`.
     pub(crate) by_model: &'static [(&'static str, &'static str)],
+    /// A model's thinking levels and default, as `(id, levels, default)`:
+    /// merged after `by_model`, so it replaces a `by_model` layer naming
+    /// the same keys. Every level is a thinking-vocabulary name (`off`,
+    /// `minimal`, `low`, `medium`, `high`, `xhigh`, `max`); a `None`
+    /// default leaves the vendor default in force by sending no level.
+    pub(crate) thinking: &'static [(&'static str, &'static [&'static str], Option<&'static str>)],
 }
+
+/// The level sets the thinking tables share, each in vocabulary order.
+const OFF_LOW_MEDIUM_HIGH_MAX: &[&str] = &["off", "low", "medium", "high", "max"];
+const OFF_LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] = &["off", "low", "medium", "high", "xhigh", "max"];
+const OFF_LOW_MEDIUM_HIGH: &[&str] = &["off", "low", "medium", "high"];
+const OFF_LOW_MEDIUM_HIGH_XHIGH: &[&str] = &["off", "low", "medium", "high", "xhigh"];
+const MINIMAL_LOW_MEDIUM_HIGH: &[&str] = &["minimal", "low", "medium", "high"];
+const MINIMAL_LOW_MEDIUM_HIGH_XHIGH: &[&str] = &["minimal", "low", "medium", "high", "xhigh"];
+const MINIMAL_HIGH: &[&str] = &["minimal", "high"];
+const LOW_MEDIUM_HIGH: &[&str] = &["low", "medium", "high"];
+const LOW_MEDIUM_HIGH_XHIGH: &[&str] = &["low", "medium", "high", "xhigh"];
+const LOW_MEDIUM_HIGH_XHIGH_MAX: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+const MEDIUM_XHIGH: &[&str] = &["medium", "xhigh"];
+const MEDIUM_HIGH_XHIGH: &[&str] = &["medium", "high", "xhigh"];
+const HIGH_ONLY: &[&str] = &["high"];
 
 /// Anthropic's models, all on `anthropic-messages` with its search tool.
 const ANTHROPIC: Package = Package {
@@ -56,6 +77,18 @@ const ANTHROPIC: Package = Package {
         r#"{"web_search":"web_search_20250305"}"#,
     )],
     by_model: &[],
+    thinking: &[
+        ("claude-fable-5", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("claude-fable-5-1", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("claude-opus-4-6", OFF_LOW_MEDIUM_HIGH_MAX, None),
+        ("claude-opus-4-7", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("claude-opus-4-8", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("claude-opus-5", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("claude-opus-5-5", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("claude-sonnet-4-6", OFF_LOW_MEDIUM_HIGH_MAX, None),
+        ("claude-sonnet-5", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("claude-sonnet-5-5", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+    ],
 };
 
 /// The hosted search the probed Gemini models accept (October 9, 2026); a
@@ -86,6 +119,32 @@ const GEMINI: Package = Package {
         ("gemini-3.8-flash", GOOGLE_SEARCH),
         ("gemini-3-flash-preview", GOOGLE_SEARCH),
     ],
+    thinking: &[
+        ("gemini-3-flash-preview", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemini-3.1-flash-lite", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemini-3.1-flash-lite-image", MINIMAL_HIGH, None),
+        (
+            "gemini-3.1-flash-lite-preview",
+            MINIMAL_LOW_MEDIUM_HIGH,
+            None,
+        ),
+        (
+            "gemini-3.1-flash-live-preview",
+            MINIMAL_LOW_MEDIUM_HIGH,
+            None,
+        ),
+        ("gemini-3.1-pro-preview", LOW_MEDIUM_HIGH, None),
+        ("gemini-3.1-pro-preview-customtools", LOW_MEDIUM_HIGH, None),
+        ("gemini-3.5-flash", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemini-3.5-flash-lite", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemini-3.6-flash", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemini-3.7-flash", LOW_MEDIUM_HIGH, None),
+        ("gemini-3.8-flash", LOW_MEDIUM_HIGH, None),
+        ("gemini-flash-latest", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemini-flash-lite-latest", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gemma-4-26b-a4b-it", MINIMAL_HIGH, None),
+        ("gemma-4-31b-it", MINIMAL_HIGH, None),
+    ],
 };
 
 /// OpenAI's models, all on `openai-responses` with `store: false`.
@@ -101,6 +160,48 @@ const OPENAI: Package = Package {
     every_model: r#"{"compat":{"store":false}}"#,
     by_protocol: &[],
     by_model: &[],
+    thinking: &[
+        ("gpt-5", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gpt-5-mini", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gpt-5-nano", MINIMAL_LOW_MEDIUM_HIGH, None),
+        ("gpt-5-pro", HIGH_ONLY, None),
+        ("gpt-5.1", OFF_LOW_MEDIUM_HIGH, None),
+        ("gpt-5.2", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
+        ("gpt-5.2-chat-latest", MEDIUM_XHIGH, None),
+        ("gpt-5.2-pro", MEDIUM_HIGH_XHIGH, None),
+        ("gpt-5.3-codex", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
+        ("gpt-5.3-codex-spark", LOW_MEDIUM_HIGH_XHIGH, None),
+        ("gpt-5.4", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
+        ("gpt-5.4-mini", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
+        ("gpt-5.4-nano", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
+        ("gpt-5.4-pro", MEDIUM_HIGH_XHIGH, None),
+        ("gpt-5.5", OFF_LOW_MEDIUM_HIGH_XHIGH, None),
+        ("gpt-5.5-pro", MEDIUM_HIGH_XHIGH, None),
+        ("gpt-5.6-luna", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("gpt-5.6-sol", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("gpt-5.6-terra", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("gpt-6-astra", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("gpt-6-luna", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("gpt-6-sol", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("gpt-6.1-sol", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        (
+            "gpt-daybreak-blue-latest",
+            OFF_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            None,
+        ),
+        (
+            "gpt-daybreak-red-latest",
+            OFF_LOW_MEDIUM_HIGH_XHIGH_MAX,
+            None,
+        ),
+        ("gpt-realtime-2.1", MINIMAL_LOW_MEDIUM_HIGH_XHIGH, None),
+        ("o1", LOW_MEDIUM_HIGH, None),
+        ("o1-pro", LOW_MEDIUM_HIGH, None),
+        ("o3", LOW_MEDIUM_HIGH, None),
+        ("o3-mini", LOW_MEDIUM_HIGH, None),
+        ("o3-pro", LOW_MEDIUM_HIGH, None),
+        ("o4-mini", LOW_MEDIUM_HIGH, None),
+    ],
 };
 
 /// Meta's models, all on `openai-responses` with its search tool.
@@ -128,6 +229,7 @@ const MUSE: Package = Package {
             r#"{"thinking_levels":["minimal","low","medium","high","xhigh","max"]}"#,
         ),
     ],
+    thinking: &[],
 };
 
 /// The cache-key header every OpenCode model sends.
@@ -159,6 +261,7 @@ const OPENCODE_GO: Package = Package {
         "muse-spark-1.3-contributor",
         r#"{"thinking_levels":["minimal","low","medium","high","xhigh","max"]}"#,
     )],
+    thinking: &[],
 };
 
 /// OpenCode Zen: billed per token. Its Gemini models are kept: one request
@@ -191,6 +294,7 @@ const OPENCODE_ZEN: Package = Package {
             r#"{"extra_body":{"include":["reasoning.encrypted_content","web_search_call.action.sources"]},"web_search":"web_search"}"#,
         ),
     ],
+    thinking: &[],
 };
 
 /// The six first-party provider files generated from models.dev.

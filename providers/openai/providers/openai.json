@@ -206,7 +206,13 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -225,7 +231,13 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -244,7 +256,13 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -262,7 +280,10 @@
         "image"
       ],
       "max_output_tokens": 272000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "high"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -281,7 +302,13 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -300,7 +327,14 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -319,7 +353,11 @@
         "image"
       ],
       "max_output_tokens": 16384,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "medium",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -337,7 +375,12 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -375,7 +418,14 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -394,7 +444,13 @@
         "image"
       ],
       "max_output_tokens": 32000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -422,7 +478,14 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -441,7 +504,14 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -460,7 +530,14 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -487,7 +564,12 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -515,7 +597,14 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -542,7 +631,12 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -571,7 +665,15 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -600,7 +702,15 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -629,7 +739,15 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -658,7 +776,14 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -687,7 +812,15 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -716,7 +849,15 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -745,7 +886,14 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -774,7 +922,15 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -794,7 +950,15 @@
         "image"
       ],
       "max_output_tokens": 128000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -813,7 +977,14 @@
         "image"
       ],
       "max_output_tokens": 32000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -832,7 +1003,12 @@
         "image"
       ],
       "max_output_tokens": 100000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -850,7 +1026,12 @@
         "image"
       ],
       "max_output_tokens": 100000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -869,7 +1050,12 @@
         "image"
       ],
       "max_output_tokens": 100000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -887,7 +1073,12 @@
         "text"
       ],
       "max_output_tokens": 100000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -905,7 +1096,12 @@
         "image"
       ],
       "max_output_tokens": 100000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://api.openai.com/v1",
@@ -924,7 +1120,12 @@
         "image"
       ],
       "max_output_tokens": 100000,
-      "protocol": "openai-responses"
+      "protocol": "openai-responses",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ]
     }
   ],
   "name": "openai",

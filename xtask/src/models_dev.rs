@@ -363,6 +363,15 @@ fn generate_model(
             generated.insert(key, value);
         }
     }
+    if let Some((_, levels, default)) = package.thinking.iter().find(|entry| entry.0 == id) {
+        generated.insert(
+            "thinking_levels".to_owned(),
+            Value::Array(levels.iter().map(|level| Value::from(*level)).collect()),
+        );
+        if let Some(default) = default {
+            generated.insert("thinking_default".to_owned(), Value::from(*default));
+        }
+    }
     Ok(generated)
 }
 
@@ -395,12 +404,14 @@ pub(crate) fn generate(catalog: &Value, packages: &[Package]) -> Result<Generate
             }
             generated.push((id.clone(), generate_model(package, protocol, id, model)?));
         }
-        for (id, _) in package
+        for id in package
             .protocol_overrides
             .iter()
-            .chain(package.by_model.iter())
+            .map(|entry| entry.0)
+            .chain(package.by_model.iter().map(|entry| entry.0))
+            .chain(package.thinking.iter().map(|entry| entry.0))
         {
-            if !generated.iter().any(|model| model.0 == *id) {
+            if !generated.iter().any(|model| model.0 == id) {
                 return Err(format!(
                     "{}: table entry for `{id}` matches no generated model",
                     stem(package)
