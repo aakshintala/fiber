@@ -16,14 +16,15 @@ pub(super) struct DeclaredCommand {
     pub(super) description: String,
 }
 
-/// What the entry script registered: commands, provider functions, hooks
-/// and tools, in separate maps so a shared name cannot collide.
+/// What the entry script registered: commands, provider functions, hooks,
+/// tools and search backends, in separate maps so a shared name cannot collide.
 #[derive(Default)]
 pub(super) struct CallbackTimeouts {
     pub(super) commands: BTreeMap<String, DeclaredCommand>,
     pub(super) providers: BTreeMap<String, BTreeMap<String, Duration>>,
     pub(super) hooks: DeclaredHooks,
     pub(super) tools: BTreeMap<String, DeclaredTool>,
+    pub(super) search: BTreeMap<String, Duration>,
 }
 
 impl CallbackTimeouts {
@@ -50,6 +51,8 @@ impl CallbackTimeouts {
             Target::Tool(name) | Target::Effects(name) => {
                 self.tools.get(name).map(|tool| tool.timeout)
             }
+            // A search backend's `run` runs under the backend's timeout.
+            Target::Search(name) => self.search.get(name).copied(),
         }
     }
 

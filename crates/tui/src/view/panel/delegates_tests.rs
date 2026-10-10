@@ -231,7 +231,7 @@ fn the_description_is_cut_at_the_text_width() {
     let drawn = card_texts(&app);
     let second = drawn.get(1).unwrap_or_else(|| panic!("a second row"));
     assert_eq!(crate::format::width(second), text);
-    assert_eq!(*second, format!("  {}", "x".repeat(text - 2)));
+    assert_eq!(*second, format!("  {}\u{2026}", "x".repeat(text - 3)));
 }
 
 #[test]

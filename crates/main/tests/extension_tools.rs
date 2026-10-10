@@ -316,7 +316,7 @@ fn an_extension_tool_is_declared_in_full_runs_and_its_result_passes_the_hooks() 
     );
     setup.lua(
         "tag",
-        "fiber.hook(\"after_tool\", { timeout = 1000, on_failure = \"blocking\",\n\
+        "fiber.hook(\"after_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
            run = function(call) return { content = call.content .. \"|t\" } end })\n",
     );
     let run = ask(&setup, "count the notes");

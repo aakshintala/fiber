@@ -5,9 +5,9 @@ expression: "screen(&app, 160, 40)"
 work
                                                                                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                                                                                                 directory  …sers/you/work/fiber
-                                                                                                                                model  test/model · thinking hi
-                                                                                                                                context  50% of 1.0k tokens
-                                                                                                                                ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆░░░░░░░░░░░░░░░░
+                                                                                                                                model  test/model · thinking h…
+                                                                                                                                ▆▆▆▆▆▆▆▆░░░░░░░░░           500
+                                                                                                                                50% of window
                                                                                                                                 tokens in / out  1.1k / 200
                                                                                                                                 cache hits  9%
                                                                                                                                 cost billed  $0.41 of $5.00

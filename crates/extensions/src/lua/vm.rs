@@ -48,6 +48,8 @@ pub(super) struct Vm {
     problems: Table,
     /// What `fiber.tool` registered.
     tools: super::tool::Registry,
+    /// What `fiber.search_backend` registered.
+    search: super::search::Registry,
     /// The last raised failure, consumed only if its text escapes the callback.
     failures: crate::host::failure::FailureState,
     /// The timers `host.after` and `host.every` set, by id in set order:
@@ -119,6 +121,8 @@ impl Vm {
         let entry = Rc::new(Cell::new(true));
         let tools =
             super::tool::install(&lua, problems.clone(), Rc::clone(&entry)).map_err(lua_error)?;
+        let search =
+            super::search::install(&lua, problems.clone(), Rc::clone(&entry)).map_err(lua_error)?;
         let (http_tag, timer_funcs) = host::install(
             &lua,
             host::HostContext {
@@ -150,6 +154,7 @@ impl Vm {
             hooks,
             problems,
             tools,
+            search,
             failures: failure_state,
             timer_funcs,
         };
@@ -208,6 +213,7 @@ impl Vm {
                     })
                 }),
             Target::Tool(name) => self.tools.function(name, "run"),
+            Target::Search(name) => self.search.function(name),
             Target::Effects(name) => self.tools.function(name, "effects"),
         }
         .map_err(fail)?;
@@ -224,6 +230,7 @@ impl Vm {
             Target::Provider { .. }
             | Target::Hook { .. }
             | Target::Tool(_)
+            | Target::Search(_)
             | Target::Effects(_) => host::to_lua(&self.lua, arg).map_err(fail)?,
             // A firing takes no argument.
             Target::Timer { .. } => mlua::Value::Nil,
@@ -286,6 +293,7 @@ impl Vm {
         }
         timeouts.hooks = DeclaredHooks::read(&self.hooks, &self.problems);
         timeouts.tools = self.tools.declared();
+        timeouts.search = self.search.declared();
         timeouts
     }
 
@@ -322,6 +330,19 @@ impl Vm {
             | Target::Timer { .. }
             | Target::Tool(_)
             | Target::Effects(_) => host::to_json(&value).map_err(fail),
+            Target::Search(name) => {
+                // A field such as `title = function() end` would fail a
+                // bare JSON conversion with no backend, extension or
+                // position, so the shape is checked on the Lua value first.
+                match super::search::results(&value) {
+                    Ok(checked) => Ok(checked),
+                    Err(why) => Err(Error::BadReturn {
+                        extension: self.name.clone(),
+                        callback: name.clone(),
+                        why,
+                    }),
+                }
+            }
         }
     }
 

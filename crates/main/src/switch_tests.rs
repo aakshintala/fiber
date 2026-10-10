@@ -355,6 +355,7 @@ fn quiet() -> Door {
     Door {
         declare: Arc::new(|_, _| {}),
         hosted_stands: false,
+        backend: None,
     }
 }
 
@@ -371,6 +372,7 @@ fn recording(hosted_stands: bool) -> (Door, Declared) {
                 .push((name.to_owned(), info.map(|info| info.name)));
         }),
         hosted_stands,
+        backend: None,
     };
     (door, declared)
 }
@@ -2060,5 +2062,71 @@ fn fake_data() -> config::ProviderData {
         models: Vec::new(),
         reviewer_model: None,
         login: None,
+    }
+}
+
+/// A search backend answering nothing, for switching with one installed.
+struct StubBackend;
+
+impl contract::search::SearchBackend for StubBackend {
+    fn search(
+        &self,
+        _query: &str,
+        _domains: &contract::search::Domains,
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<Option<Vec<contract::search::SearchResult>>, contract::shapes::Failure> {
+        Ok(Some(Vec::new()))
+    }
+}
+
+fn stub_backend() -> Arc<dyn contract::search::SearchBackend> {
+    Arc::new(StubBackend)
+}
+
+#[test]
+fn a_model_without_hosted_search_declares_fibers_own_over_the_backend() {
+    let fixture = fixture("fiber-switch-hosted-withdraw");
+    let switching = switching(&fixture, &[]);
+    let (mut door, declared) = recording(false);
+    door.backend = Some(stub_backend());
+    let Ok(made) = prepare(&switching, &door, &args("fake/m"), None, None) else {
+        panic!("the switch rejected");
+    };
+    assert_eq!(declared_type(&made.web_search), Some(None));
+    (made.applied.expect("applying publishes"))();
+    assert_eq!(
+        *declared.lock().unwrap(),
+        vec![("web_search".to_owned(), Some("web_search".to_owned()))]
+    );
+}
+
+#[test]
+fn a_model_with_hosted_search_declares_it_despite_the_backend() {
+    let fixture = fixture("fiber-switch-hosted-declare");
+    let switching = switching(&fixture, &[]);
+    let (mut door, _) = recording(false);
+    door.backend = Some(stub_backend());
+    let Ok(made) = prepare(&switching, &door, &args("claude/w"), None, None) else {
+        panic!("the switch rejected");
+    };
+    assert_eq!(
+        declared_type(&made.web_search),
+        Some(Some("web_search_20250305".to_owned()))
+    );
+}
+
+#[test]
+fn a_standing_web_search_is_kept_whatever_the_backend() {
+    let fixture = fixture("fiber-switch-hosted-keep");
+    let switching = switching(&fixture, &[]);
+    for model in ["claude/w", "fake/m"] {
+        let (mut door, declared) = recording(true);
+        door.backend = Some(stub_backend());
+        let Ok(made) = prepare(&switching, &door, &args(model), None, None) else {
+            panic!("the switch rejected");
+        };
+        assert!(matches!(made.web_search, r#loop::Hosted::Keep), "{model}");
+        (made.applied.expect("applying keeps the loaded set"))();
+        assert!(declared.lock().unwrap().is_empty(), "{model}");
     }
 }

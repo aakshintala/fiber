@@ -9,6 +9,7 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{ToolInfo, ToolSource, ToolState};
+use contract::search::SearchBackend;
 use contract::shapes::Failure;
 use contract::tool::Tool;
 
@@ -27,8 +28,10 @@ type SessionTools = (
 
 /// `ask_user`, `delegate_spawn`, `edit`, `handoff`, `read`, `session_search`, `shell`,
 /// `skill`, `web_fetch`, `write` and `jobs`, each registered by `builtin`, and
-/// `web_search` when `web_search` names the hosted search type of the
-/// session's model. `session_search` searches the logs under `home`, Fiber
+/// `web_search` as `web_search` chose it: the hosted search of the session's
+/// model when it has one, else Fiber's own over the installed backend, else
+/// nothing (`docs/tools.md`, "Hosted by the provider" and "Fiber's own, over
+/// a backend"). `session_search` searches the logs under `home`, Fiber
 /// home, and counts a session as this project's when `doors::project` gives
 /// its workspace the same identity as `workspace`, as resume looks a
 /// session up. `read`, `write` and `edit`
@@ -51,7 +54,7 @@ pub(crate) fn builtin(
     clock: &Arc<dyn Clock>,
     jobs: &Arc<jobs::Registry>,
     locks: &Arc<tools::PathLocks>,
-    web_search: Option<&str>,
+    web_search: Option<(Arc<dyn Tool>, ToolInfo)>,
     delegates: &crate::delegates::Delegates,
     skills: Arc<dyn contract::skills::Skills>,
 ) -> Result<SessionTools, Failure> {
@@ -91,11 +94,12 @@ pub(crate) fn builtin(
         registered(files.write())?,
         registered(jobs::JobsTool::new(Arc::clone(jobs)))?,
     ];
-    // Declared only for a model whose provider hosts a search; it is fixed
-    // when the session's preamble is built (`docs/tools.md`, "Hosted by the
+    // What `web_search` chose for the session's preamble: the hosted
+    // search, Fiber's own over the backend, or nothing. It is fixed when
+    // the session's preamble is built (`docs/tools.md`, "Hosted by the
     // provider").
-    if let Some(kind) = web_search {
-        built.push(hosted(kind)?);
+    if let Some(given) = web_search {
+        built.push(given);
     }
     let mut pairs = Vec::new();
     let mut infos = Vec::new();
@@ -111,6 +115,27 @@ pub(crate) fn builtin(
 /// command answers for it (`docs/tools.md`, "Hosted by the provider").
 pub(crate) fn hosted(kind: &str) -> Result<(Arc<dyn Tool>, ToolInfo), Failure> {
     registered(tools::HostedSearch::new(kind.to_owned()))
+}
+
+/// What `web_search` chose for the session: the declared tool and what
+/// the `tools` command answers for it, if any.
+type Chosen = Option<(Arc<dyn Tool>, ToolInfo)>;
+
+/// The `web_search` the session declares: the model's hosted search when
+/// it has one, else Fiber's own tool over the chosen backend, else nothing
+/// (`docs/tools.md`, "web_search": the model sees one tool, whichever way
+/// it runs). At most one `web_search` is registered at any time.
+pub(crate) fn web_search(
+    kind: Option<&str>,
+    backend: Option<&Arc<dyn SearchBackend>>,
+) -> Result<Chosen, Failure> {
+    if let Some(kind) = kind {
+        return hosted(kind).map(Some);
+    }
+    let Some(backend) = backend else {
+        return Ok(None);
+    };
+    registered(tools::BackendSearch::new(Arc::clone(backend))).map(Some)
 }
 
 /// One tool and what the `tools` command answers for it.

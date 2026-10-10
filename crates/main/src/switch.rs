@@ -84,6 +84,9 @@ pub(crate) struct Door {
     /// A `web_search` an extension or MCP server registered at start
     /// replaced the hosted one, and it stands across switches.
     pub(crate) hosted_stands: bool,
+    /// The search backend Fiber's own `web_search` runs: the load's choice,
+    /// fixed for the session.
+    pub(crate) backend: Option<Arc<dyn contract::search::SearchBackend>>,
 }
 
 /// Whether a `web_search` registered by anything other than `builtin` is
@@ -489,10 +492,11 @@ pub(crate) fn prepare(
 /// What `Prepared.applied` runs when the switch applies.
 type Applied = Box<dyn FnOnce() + Send>;
 
-/// The hosted search after the switch, and what applying it publishes to
+/// The search after the switch, and what applying it publishes to
 /// the door's `tools` answer: the new model's hosted search when it has
-/// one, else none, unless another registrant's `web_search` stands
-/// (`docs/tools.md`, "Hosted by the provider").
+/// one, else Fiber's own over the backend, else none, unless another
+/// registrant's `web_search` stands (`docs/tools.md`, "web_search": the
+/// model sees one tool, whichever way it runs).
 fn hosted(
     switching: &Switching,
     door: &Door,
@@ -502,14 +506,15 @@ fn hosted(
         return Ok((r#loop::Hosted::Keep, None));
     }
     let declare = Arc::clone(&door.declare);
-    let Some(kind) = kind else {
+    let Some((tool, info)) =
+        crate::builtin::web_search(kind, door.backend.as_ref()).map_err(rejection)?
+    else {
         let applied = Box::new(move || declare("web_search", None));
         return Ok((
             r#loop::Hosted::Withdraw("web_search".to_owned()),
             Some(applied),
         ));
     };
-    let (tool, info) = crate::builtin::hosted(kind).map_err(rejection)?;
     let tool = r#loop::capped(
         vec![("builtin".to_owned(), Arc::clone(&tool))],
         &switching.caps,

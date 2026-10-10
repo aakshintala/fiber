@@ -1,22 +1,19 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
-expression: "super::super::text(&draw_panel(&app))"
+expression: "super::super::text(&buf)"
 ---
 
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
   directory  …/you/work/fiber
-  model  test/model · thinkin
-  context  50% of 1.0k tokens
-  ▆▆▆▆▆▆▆▆▆▆▆▆▆░░░░░░░░│░░░░░
-  │ handoff at 800 tokens:
-  Fiber writes a summary and
-  the work continues in a
-  fresh context
+  model  test/model · thinki…
+  ▆▆▆▆▆▆▆▆▆▆░░░░░░░│      500
+  handoff at 8… 50% of window
+  then a summary, fresh cont…
   tokens in / out  1.1k / 200
   cache hits  9%
   cost billed  $0.41
   cost on subscription  $1.10
-  output speed, last reply  2
+  output speed, last reply  …
   turns  1
   tools  relay down
  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

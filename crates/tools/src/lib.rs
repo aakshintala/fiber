@@ -28,5 +28,5 @@ pub use session_search::SessionSearch;
 pub use shell::{Shell, kill_every_group};
 pub use skill::Skill;
 pub use web_fetch::WebFetch;
-pub use web_search::HostedSearch;
+pub use web_search::{BackendSearch, HostedSearch};
 pub use write::Write;

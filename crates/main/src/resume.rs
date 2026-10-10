@@ -254,10 +254,15 @@ fn resumed_session(
         resolve,
     );
     crate::shutdown::arm(signals);
-    let skills: Arc<dyn contract::skills::Skills> = Arc::new(r#loop::SkillReader::new(
-        prompt_inputs.clone(),
-        Path::new(&folded.workspace),
-    ));
+    let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), Path::new(&folded.workspace));
+    let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
+    let web_search = match crate::builtin::web_search(
+        web_search.as_deref(),
+        extensions.search_backend().as_ref(),
+    ) {
+        Ok(web_search) => web_search,
+        Err(e) => return ask_failed(e),
+    };
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
         fiber,
         &home,
@@ -267,7 +272,7 @@ fn resumed_session(
         &jobs,
         &locks,
         mcp.specs,
-        web_search.as_deref(),
+        web_search,
         &delegates,
         skills,
         extensions.tools(),
@@ -322,6 +327,7 @@ fn resumed_session(
     let door = crate::switch::Door {
         declare: session.declarer(),
         hosted_stands,
+        backend: extensions.search_backend(),
     };
     let cancel = Arc::new(r#loop::TurnCancel::default());
     // A signal while armed: the log stays as it was.
@@ -374,6 +380,7 @@ fn resumed_session(
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)
                         .repository_code(offer)
+                        .skill_set(skill_set)
                         .server_prompts(r#loop::ServerPrompts {
                             rows: prompt_rows,
                             fetch,

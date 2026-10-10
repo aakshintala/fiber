@@ -80,12 +80,14 @@ A pull request runs only what its diff can affect.
   workspace: a manifest there is a docs file.
 - A file a crate compiles in runs that crate alone, not the crates that
   depend on it. This covers Markdown anywhere, and any file outside the
-  crate. A change to `docs/events.md`, `docs/errors.md`,
-  `docs/invocation.md` or `docs/tui.md` runs `contract`, whose tests check
-  the code against them. A change to a built-in skill under `docs/skills/` runs `loop`, whose
-  tests check it parses. The selector lists these files. The gate fails when
+  crate. A change to `docs/events.md`, `docs/errors.md` or
+  `docs/invocation.md` runs `contract`, whose tests check
+  the code against them. A change to `docs/tui.md` runs `contract` and
+  `tui`. A change to `docs/ci.md` runs `xtask`. A change to a built-in skill under `docs/skills/` runs `loop`, whose
+  tests check it parses, and `main`, whose tests install it. The selector lists these files. The gate fails when
   the list and the source disagree, or when an include's argument is not a
-  string literal.
+  string literal. Tests read a repository file only by compiling it in; the gate fails on a run-time read.
+  An `include_str!` path resolves from the source file that holds it.
 - A diff under `providers/` or `extensions/` runs the binary-level tests
   and every crate whose tests read a first-party package. The selector lists
   the crates that read packages. The gate fails when the list and the source
@@ -135,8 +137,8 @@ On Linux x86_64 alone:
   line-cap`); the list never fails the run (`docs/code-quality.md`, "Size")
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`)
 - the compiled-in list matches the files crates compile in, Markdown
-  anywhere or any file outside the crate, and every include argument is a
-  string literal
+  anywhere or any file outside the crate, every include argument is a
+  string literal, and no crate reads a repository file at run time
 - no crate but `picture` and `main` has `image` or `fast_image_resize` in its
   normal dependency tree (`cargo xtask image-isolation`), so the session
   process links no image code
@@ -349,7 +351,9 @@ changes a widely used function, so its bound is twice that slow group, not
 twice the median. A shard of up to 15 mutants gets 20 minutes. A larger
 shard, which only the cap makes, gets 20 minutes per 15 of its mutants,
 rounded up, at most 360 minutes, GitHub's limit for a job. The selection
-computes it (`cargo xtask plan`). The median behind each bound is a comment beside its
+computes it (`cargo xtask plan`). A job that builds the workspace is bounded at
+twice its cold-cache duration, since a pull request's first run after a cache
+eviction or a `Cargo.lock` change builds cold. The median behind each bound is a comment beside its
 `timeout-minutes` line. A job that gains work past its bound has the bound
 raised in its workflow.
 

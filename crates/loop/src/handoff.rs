@@ -372,13 +372,25 @@ impl Loop {
     }
 
     /// Writes the opening message and its notices, and rebuilds the tracked
-    /// instruction-file state from them.
+    /// instruction-file state from them. Refreshes the maintained skill
+    /// set with what the message sent, so `/name` and the `skill` tool
+    /// answer from the listing the model was given.
     pub(crate) fn write_opening(&mut self, turn: Option<&TurnId>) -> Result<(), Error> {
-        let collected = crate::opening::collect(&self.prompt, &self.workspace);
-        self.changes =
-            crate::changes::State::initial(&collected.message, &self.workspace, &self.prompt);
-        for event in std::iter::once(Event::OpeningMessage(collected.message))
-            .chain(collected.notices.into_iter().map(Event::Notice))
+        // The loop's current inputs, with the maintained disabled list
+        // applied: a model switch updates the window `collect` sizes its
+        // notices by, and the set's snapshot would keep the old one
+        // (`docs/system-prompt.md`, "Size").
+        let inputs = self.skills.with_disabled(&self.prompt);
+        let collected = crate::opening::collect(&inputs, &self.workspace);
+        let crate::opening::Collected {
+            message,
+            notices,
+            found,
+        } = collected;
+        self.skills.opened(found, inputs.skills_disabled.clone());
+        self.changes = crate::changes::State::initial(&message, &self.workspace, &self.prompt);
+        for event in std::iter::once(Event::OpeningMessage(message))
+            .chain(notices.into_iter().map(Event::Notice))
         {
             crate::util::write(
                 &self.log,

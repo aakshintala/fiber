@@ -3405,3 +3405,158 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
         ],
     );
 }
+
+#[test]
+fn a_skill_added_mid_session_is_refused_until_the_listing_has_it() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        hello(),
+        stream(&[function_call(
+            "call_late",
+            "skill",
+            &json!({"name": "late"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    // Turn 1 writes the opening message, before the skill exists.
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    let first = until(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let mut stream = vec![sub];
+    stream.extend(first.clone());
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert!(
+        first
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the first turn ran: {first:?}"
+    );
+    // Installed mid-session, after the listing the model was given, the
+    // skill stays unknown to the shared set: the `skill` tool refuses it.
+    // A reader of its own would read lazily at the call and find it, so
+    // this fails when the loop is built without its shared set.
+    let dir = setup.workspace().join(".agents/skills/late");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: late\ndescription: Runs late.\n---\nRuns late.\n",
+    )
+    .unwrap();
+    send(
+        &client,
+        r#"{"id":"c_load","command":"prompt","args":{"content":[{"type":"text","text":"load the skill"}]}}"#,
+    );
+    let second = until(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert_eq!(
+        kinds(&second),
+        [
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let completed = second
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the skill call completed");
+    assert_eq!(completed["payload"]["status"], "failed");
+    assert_eq!(completed["payload"]["error"]["code"], "invalid_arguments");
+    assert!(completed["payload"].get("control").is_none());
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_close(&client);
+    assert_eq!(kinds(&tail), ["command_accepted", "fiber_exited"]);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(
+        kinds_except_clients(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+}
