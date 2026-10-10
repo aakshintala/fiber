@@ -156,7 +156,7 @@ time above; `hub_replay` replays it with no terminal, timing a `subscribe` at
 `full` over a raw hub-socket client from the send to its acknowledgement.
 `parse`, `fold` and `frames_1`, `frames_4096` and `frames_64` run in the
 paging jig, built in the release profile, over the session's `events.jsonl`:
-parsing each line, folding it into the app, and drawing one frame, one frame
+parsing each line, folding it into the app in batches of up to 4,096 lines, and drawing one frame, one frame
 per 4,096 lines and one per 64 lines. The table also shows the residual, the
 terminal time minus the hub replay, the parse, the fold and the single frame:
 process start, home and the extra frames.

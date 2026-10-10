@@ -115,6 +115,36 @@ fn measure_open_draws_after_every_k_lines_and_once_at_the_end() {
 }
 
 #[test]
+fn measure_open_batch_boundaries_neither_add_nor_drop_frames() {
+    // The jig folds in batches of up to HUB_BATCH lines, as the loop
+    // does; crossing a batch boundary draws no frame of its own. 4095,
+    // 4096 and 4097 straddle the first boundary.
+    for (lines, frames) in [(4095, 1), (4096, 1), (4097, 1)] {
+        let clock = fakes::clock::FakeClock::new();
+        let stages = crate::measure_open(&events(lines), 60, 12, usize::MAX, clock)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(stages.frames, frames, "for {lines} lines ending at once");
+        assert_ne!(stages.frames, frames.saturating_add(1));
+    }
+    for (lines, frames) in [(4095, 1), (4096, 1), (4097, 2)] {
+        let clock = fakes::clock::FakeClock::new();
+        let stages = crate::measure_open(&events(lines), 60, 12, 4096, clock)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(stages.frames, frames, "for {lines} lines every 4096");
+        assert_ne!(stages.frames, frames.saturating_add(1));
+    }
+    // 4095 lines hold 63 full sixties and a partial frame, 4096 hold
+    // 64 full ones, 4097 add the final frame.
+    for (lines, frames) in [(4095, 64), (4096, 64), (4097, 65)] {
+        let clock = fakes::clock::FakeClock::new();
+        let stages = crate::measure_open(&events(lines), 60, 12, 64, clock)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(stages.frames, frames, "for {lines} lines every 64");
+        assert_ne!(stages.frames, frames.saturating_add(1));
+    }
+}
+
+#[test]
 fn measure_open_skips_blank_lines_without_counting_them() {
     let clock = fakes::clock::FakeClock::new();
     let stages = crate::measure_open(

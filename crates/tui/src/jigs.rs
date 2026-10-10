@@ -12,6 +12,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::app::App;
+use crate::event_loop::batch::HUB_BATCH;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::screen::Screen;
@@ -103,7 +104,8 @@ fn fold(events: &str, width: u16, height: u16) -> Result<App, String> {
 pub struct OpenStages {
     /// Time in `serde_json::from_str`, one line at a time.
     pub parse: Duration,
-    /// Time in `App::on_line`, one line at a time.
+    /// Time folding batches: `begin_batch`, one `App::on_line` per line,
+    /// `end_batch`.
     pub fold: Duration,
     /// The frames drawn: one after every `frame_every` lines, and one at
     /// the end, which the last periodic frame covers when the count lands
@@ -114,12 +116,17 @@ pub struct OpenStages {
 }
 
 /// Reopens `events`, one envelope per line as one session's stream, at
-/// `width` by `height` through the loop's screen: each line is parsed
-/// and folded as [`draw`] folds it, and a frame is drawn after every
-/// `frame_every` lines and once at the end. `usize::MAX` draws the single
-/// final frame. An unreadable line is an error naming its number, as
-/// [`draw`] names it. Only the bench calls this; the shipped event loop
-/// never does.
+/// `width` by `height` through the loop's screen: each line is parsed as
+/// [`draw`] parses it, and lines are folded in batches, as the loop folds
+/// a batch of hub lines before one frame: `begin_batch` at the batch's
+/// start, `end_batch` after its last line, then a frame after every
+/// `frame_every` lines and once at the end. A batch never crosses the
+/// frame boundary its frame draws on, and never holds more than the
+/// loop's batch, so it holds at most `frame_every` or `HUB_BATCH` lines,
+/// whichever holds fewer. `usize::MAX` draws the single final frame,
+/// though batches still end every `HUB_BATCH` lines. An unreadable line
+/// is an error naming its number, as [`draw`] names it. Only the bench
+/// calls this; the shipped event loop never does.
 pub fn measure_open(
     events: &str,
     width: u16,
@@ -138,6 +145,11 @@ pub fn measure_open(
         frame_time: Duration::ZERO,
     };
     let mut since_frame = 0usize;
+    // A batch never crosses a frame boundary, and the loop never folds
+    // more than HUB_BATCH lines before a frame; a `frame_every` of zero
+    // frames every line, so its batches hold one.
+    let batch_size = frame_every.clamp(1, HUB_BATCH);
+    let mut pending: Vec<Envelope> = Vec::with_capacity(batch_size);
     for (at, line) in events.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
@@ -151,20 +163,29 @@ pub fn measure_open(
         if app.session().is_none() {
             app.attach(envelope.session_id.clone());
         }
-        let started = clock.now();
-        app.on_line(Line::Session(envelope));
-        stages.fold = stages
-            .fold
-            .saturating_add(clock.now().saturating_duration_since(started));
-        since_frame = since_frame.saturating_add(1);
-        if since_frame >= frame_every {
-            stages.frame_time =
-                stages
-                    .frame_time
-                    .saturating_add(draw_frame(&mut screen, &mut app, &clock)?);
-            stages.frames = stages.frames.saturating_add(1);
-            since_frame = 0;
+        pending.push(envelope);
+        if pending.len() >= batch_size {
+            fold_batch(
+                &mut app,
+                &mut screen,
+                &mut stages,
+                &mut since_frame,
+                frame_every,
+                &mut pending,
+                &clock,
+            )?;
         }
+    }
+    if !pending.is_empty() {
+        fold_batch(
+            &mut app,
+            &mut screen,
+            &mut stages,
+            &mut since_frame,
+            frame_every,
+            &mut pending,
+            &clock,
+        )?;
     }
     // The final frame, unless the last periodic draw already drew it; an
     // empty log still draws once.
@@ -176,6 +197,41 @@ pub fn measure_open(
         stages.frames = stages.frames.saturating_add(1);
     }
     Ok(stages)
+}
+
+/// One batch folded as the loop folds it: `begin_batch` at the batch's
+/// start, one `App::on_line` per line, `end_batch` after its last line,
+/// all inside the fold time; then a frame when the batch reaches the
+/// frame boundary. The batch never crosses that boundary, so one frame
+/// per batch at most.
+fn fold_batch(
+    app: &mut App,
+    screen: &mut Screen<CrosstermBackend<Counter>>,
+    stages: &mut OpenStages,
+    since_frame: &mut usize,
+    frame_every: usize,
+    pending: &mut Vec<Envelope>,
+    clock: &Arc<dyn Clock>,
+) -> Result<(), String> {
+    let started = clock.now();
+    app.begin_batch();
+    let folded = pending.len();
+    for envelope in pending.drain(..) {
+        app.on_line(Line::Session(envelope));
+    }
+    app.end_batch();
+    stages.fold = stages
+        .fold
+        .saturating_add(clock.now().saturating_duration_since(started));
+    *since_frame = since_frame.saturating_add(folded);
+    if *since_frame >= frame_every {
+        stages.frame_time = stages
+            .frame_time
+            .saturating_add(draw_frame(screen, app, clock)?);
+        stages.frames = stages.frames.saturating_add(1);
+        *since_frame = 0;
+    }
+    Ok(())
 }
 
 /// One frame through the loop's screen, and how long it took.

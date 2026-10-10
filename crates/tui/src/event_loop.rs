@@ -3,7 +3,7 @@
 //! handles one batch of ready inputs at a time, fetches the history pages a frame needs
 //! before drawing it, and hands the terminal to the editor.
 
-mod batch;
+pub(crate) mod batch;
 
 use batch::{batch, batchable};
 

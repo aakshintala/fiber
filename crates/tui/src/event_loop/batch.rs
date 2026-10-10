@@ -11,7 +11,7 @@ use crate::Input;
 /// The most inputs one frame folds, so a stream that never empties still
 /// draws.
 // debt: 4,096 is picked, not measured; a measured fold rate per line on the benchmark runner would set it.
-pub(super) const HUB_BATCH: usize = 4096;
+pub(crate) const HUB_BATCH: usize = 4096;
 
 /// Whether the batch takes `input` with the ones waiting, and whether a
 /// batch starting with `input` holds: hub lines and ticks only. Hub
