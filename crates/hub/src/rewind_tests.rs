@@ -796,13 +796,15 @@ fn follow_transfers_the_kept_level_onto_an_unsubscribed_relay() {
 }
 
 /// A pre-bound session socket for the open race: counts the connections
-/// it accepted, answers every command `command_accepted`, and records
-/// every line per connection, in accept order. Stays bound until
-/// `close`: closing it earlier would read as EOF on the relay threads.
+/// it accepted, answers every command `command_accepted`, records every
+/// line per connection, in accept order, and tells `heard` after every
+/// line. Stays bound until `close`: closing it earlier would read as EOF
+/// on the relay threads.
 struct OpenSession {
     socket: PathBuf,
     accepts: Arc<Mutex<usize>>,
     received: Arc<Mutex<Vec<Vec<String>>>>,
+    heard: mpsc::Receiver<()>,
     closed: Arc<Mutex<bool>>,
     accept: Mutex<Option<thread::JoinHandle<()>>>,
 }
@@ -813,6 +815,7 @@ impl OpenSession {
         let socket = home.join("run").join(id);
         let accepts = Arc::new(Mutex::new(0));
         let received = Arc::new(Mutex::new(Vec::new()));
+        let (heard_tx, heard) = mpsc::channel();
         let closed = Arc::new(Mutex::new(false));
         let listener = UnixListener::bind(&socket).unwrap();
         let accept = {
@@ -830,9 +833,10 @@ impl OpenSession {
                         *lock(&accepts) += 1;
                         lock(&received).push(Vec::new());
                         let received = Arc::clone(&received);
+                        let heard = heard_tx.clone();
                         thread::Builder::new()
                             .name("open-session-conn".to_owned())
-                            .spawn(move || serve_open(stream, index, &received))
+                            .spawn(move || serve_open(stream, index, &received, heard))
                             .unwrap();
                         index += 1;
                     }
@@ -843,6 +847,7 @@ impl OpenSession {
             socket,
             accepts,
             received,
+            heard,
             closed,
             accept: Mutex::new(Some(accept)),
         }
@@ -850,6 +855,19 @@ impl OpenSession {
 
     fn accepts(&self) -> usize {
         *lock(&self.accepts)
+    }
+
+    /// Waits until the session has received `count` lines in total, so a
+    /// serve thread lagging behind the openers cannot hide one.
+    fn await_lines(&self, count: usize, what: &str) {
+        let mut heard = count;
+        while heard > 0 {
+            assert!(
+                self.heard.recv_timeout(OPEN_DEADLINE).is_ok(),
+                "{what} reached the session"
+            );
+            heard -= 1;
+        }
     }
 
     /// Stops accepting: the probe connection wakes the accept loop, which
@@ -864,8 +882,14 @@ impl OpenSession {
 }
 
 /// Serves one open-race connection: records every line, answers each
-/// `command_accepted` under its own id, and holds the socket open.
-fn serve_open(stream: UnixStream, index: usize, received: &Arc<Mutex<Vec<Vec<String>>>>) {
+/// `command_accepted` under its own id, tells `heard` after every line,
+/// and holds the socket open.
+fn serve_open(
+    stream: UnixStream,
+    index: usize,
+    received: &Arc<Mutex<Vec<Vec<String>>>>,
+    heard: mpsc::Sender<()>,
+) {
     let mut write = stream.try_clone().unwrap();
     let mut read = BufReader::new(stream);
     let mut line = String::new();
@@ -875,6 +899,7 @@ fn serve_open(stream: UnixStream, index: usize, received: &Arc<Mutex<Vec<Vec<Str
             Ok(0) | Err(_) => return,
             Ok(_) => {
                 lock(received)[index].push(line.clone());
+                heard.send(()).unwrap_or(());
                 let id = serde_json::from_str::<Value>(&line)
                     .ok()
                     .and_then(|line| line.get("id").cloned())
@@ -898,18 +923,25 @@ fn serve_open(stream: UnixStream, index: usize, received: &Arc<Mutex<Vec<Vec<Str
 }
 
 /// The race setup both open tests share: the connection holds the level
-/// on the old session, and returns its writer and relays.
+/// on the old session, and returns the client's read end with its writer
+/// and relays. The read end stays open in the test scope: every relay
+/// thread forwards onto the writer, and a closed reader would fail those
+/// forwards and drain the entries under test.
 fn open_race(
     level: &Map<String, Value>,
     old: &str,
-) -> (Arc<Mutex<UnixStream>>, Arc<Mutex<crate::relay::Relays>>) {
+) -> (
+    UnixStream,
+    Arc<Mutex<UnixStream>>,
+    Arc<Mutex<crate::relay::Relays>>,
+) {
     let relays: Arc<Mutex<crate::relay::Relays>> =
         Arc::new(Mutex::new(crate::relay::Relays::default()));
     lock(&relays)
         .subscribed
         .push((old.to_owned(), level.clone()));
-    let (write, _read) = UnixStream::pair().unwrap();
-    (Arc::new(Mutex::new(write)), relays)
+    let (write, read) = UnixStream::pair().unwrap();
+    (read, Arc::new(Mutex::new(write)), relays)
 }
 
 /// Arms the one-shot open pause on `hub`: the opener reaching it signals
@@ -937,7 +969,7 @@ fn route_paused_in_before_open_shares_one_relay_with_follow() {
         .as_object()
         .unwrap()
         .clone();
-    let (writer, relays) = open_race(&level, &old);
+    let (_read, writer, relays) = open_race(&level, &old);
     // The client command pauses after its opening, before its connect;
     // the redirect pauses in the re-armed hook once it too is about to
     // open, still having published nothing.
@@ -1032,8 +1064,17 @@ fn route_paused_in_before_open_shares_one_relay_with_follow() {
         Some(level),
         "the kept level reached the relay"
     );
+    // Both lines land on the one connection: the client's command and
+    // the transfer's subscribe. A serve thread lagging behind the
+    // openers cannot hide one: the wait holds until both arrived.
+    session.await_lines(2, "the command and the transfer");
     let received = lock(&session.received);
     assert_eq!(received.len(), 1, "one connection carried every line");
+    assert!(
+        received[0].iter().any(|line| line.contains("\"c_cmd\"")),
+        "the client command reached it: {:?}",
+        received[0]
+    );
     assert!(
         received[0]
             .iter()
@@ -1057,7 +1098,7 @@ fn follow_paused_in_before_open_shares_one_relay_with_route() {
         .as_object()
         .unwrap()
         .clone();
-    let (writer, relays) = open_race(&level, &old);
+    let (_read, writer, relays) = open_race(&level, &old);
     // The redirect pauses after its opening; the client command runs on
     // another thread meanwhile, and pauses in the re-armed hook once it
     // too has passed its check without publishing.
@@ -1147,6 +1188,10 @@ fn follow_paused_in_before_open_shares_one_relay_with_route() {
         Some(level),
         "the kept level reached the relay"
     );
+    // Both lines land on the one connection: the transfer's subscribe
+    // and the client's command. A serve thread lagging behind the
+    // openers cannot hide one: the wait holds until both arrived.
+    session.await_lines(2, "the transfer and the command");
     let received = lock(&session.received);
     let commands = received
         .iter()

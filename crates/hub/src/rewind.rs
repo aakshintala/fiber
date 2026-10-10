@@ -158,7 +158,12 @@ pub(crate) fn follow(
         return;
     };
     // The new session opens once: the sweep never opens it while this
-    // transfer, reach and attach hold it opening.
+    // transfer, reach and attach hold it opening, and a client command
+    // racing this redirect waits on its gate instead of publishing a
+    // second relay. The relays lock is never held while blocking on the
+    // gate; the guard is held through the attach below.
+    let gate = lock(relays).gate(&next.0);
+    let _held_gate = lock(&gate);
     let _opening = {
         let mut held = lock(relays);
         crate::rejoin::Opening::mark(&mut held, relays, &next.0)
