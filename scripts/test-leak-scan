@@ -8,23 +8,51 @@ cd "$(git rev-parse --show-toplevel)"
 
 err=$(mktemp)
 leaker1=
+leaker1_start=
 leaker2=
+leaker2_start=
 # macOS orphans below, Darwin only; empty unless that block started them.
 leaker3=
+leaker3_start=
 leaker4=
+leaker4_start=
 leaker5=
+leaker5_start=
 leaker6=
+leaker6_start=
+probe=
+probe_start=
 tmp=
-# SIGKILL by explicit pid only: never a group id, never pkill, so a wrong
-# pid can only miss, never signal what this test did not start.
+# Start time of a PID, trimmed of ps padding; empty when the PID is gone.
+# lstart exists on macOS and Linux; no -ww or extra format, so portable.
+pid_lstart() {
+  env -u FIBER_CHECK_RUN ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//;s/ *$//' || true
+}
+# SIGKILL by explicit pid only: never a group id, never pkill. The caller
+# records the PID's start time at spawn and passes it back here; a PID
+# whose start time differs (reused after the fixture exited) or is gone
+# is skipped silently, so a stall past the fixture lifetime can only miss,
+# never signal a process this test did not start.
 kill_one() {
-  local target=$1
+  local target=${1-}
+  local expected=${2-}
+  local current
   if [ -z "$target" ]; then
+    return 0
+  fi
+  if [ -z "$expected" ]; then
     return 0
   fi
   # An id of 1 or less is never signalled: kill -- 0 would reach the
   # caller's own group, and kill(-1) every process the user owns.
   if [ "$target" -gt 1 ] 2>/dev/null; then
+    current=$(pid_lstart "$target")
+    if [ -z "$current" ]; then
+      return 0
+    fi
+    if [ "$current" != "$expected" ]; then
+      return 0
+    fi
     if kill -KILL "$target" 2>/dev/null; then
       :
     fi
@@ -34,12 +62,13 @@ kill_one() {
   fi
 }
 cleanup() {
-  kill_one "$leaker1"
-  kill_one "$leaker2"
-  kill_one "$leaker3"
-  kill_one "$leaker4"
-  kill_one "$leaker5"
-  kill_one "$leaker6"
+  kill_one "$leaker1" "$leaker1_start"
+  kill_one "$leaker2" "$leaker2_start"
+  kill_one "$leaker3" "$leaker3_start"
+  kill_one "$leaker4" "$leaker4_start"
+  kill_one "$leaker5" "$leaker5_start"
+  kill_one "$leaker6" "$leaker6_start"
+  kill_one "$probe" "$probe_start"
   if [ -n "$tmp" ]; then
     rm -rf "$tmp"
   fi
@@ -64,6 +93,7 @@ secret="leak-secret-$$-$(date +%s)-$RANDOM"
 # SIGKILL reaps it, and time.sleep starts no child to outlive it.
 FIBER_CHECK_RUN=$n LEAK_SCAN_SECRET="$secret" python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); end=time.time()+120; exec("while time.time()<end:\n time.sleep(1)")' &
 leaker1=$!
+leaker1_start=$(pid_lstart "$leaker1")
 
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with leaker $leaker1 alive" >&2
@@ -88,6 +118,7 @@ fi
 # already required by scripts/check, and macOS ships no setsid.
 FIBER_CHECK_RUN=$n python3 -c 'import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); os.setsid(); end=time.time()+120; exec("while time.time()<end:\n time.sleep(1)")' &
 leaker2=$!
+leaker2_start=$(pid_lstart "$leaker2")
 
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with leakers $leaker1 and $leaker2 alive" >&2
@@ -108,6 +139,7 @@ fi
 # only the exact token FIBER_CHECK_RUN=NONCE matches.
 UNRELATED_TOKEN=$n python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); end=time.time()+120; exec("while time.time()<end:\n time.sleep(1)")' &
 leaker5=$!
+leaker5_start=$(pid_lstart "$leaker5")
 
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   echo "scripts/test-leak-scan: leak-scan exited 0 with leakers alive" >&2
@@ -119,8 +151,9 @@ if grep -Fq "leaked process $leaker5:" "$err"; then
   exit 1
 fi
 
-kill_one "$leaker5"
+kill_one "$leaker5" "$leaker5_start"
 leaker5=
+leaker5_start=
 
 # A sibling run's nonce never matches this run's leakers.
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$other" 2>"$err"; then
@@ -149,10 +182,12 @@ if [ "$empty_rc" -ne 2 ]; then
   exit 1
 fi
 
-kill_one "$leaker1"
-kill_one "$leaker2"
+kill_one "$leaker1" "$leaker1_start"
+kill_one "$leaker2" "$leaker2_start"
 leaker1=
+leaker1_start=
 leaker2=
+leaker2_start=
 if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$n" 2>"$err"; then
   :
 else
@@ -165,6 +200,25 @@ if [ -s "$err" ]; then
   cat "$err" >&2
   exit 1
 fi
+
+# kill_one signals only the recorded identity: a stale start time never
+# signals a live PID. Without the guard this probe would die on the first
+# kill_one and the test would fail.
+sleep 30 &
+probe=$!
+probe_start=$(pid_lstart "$probe")
+kill_one "$probe" "bogus-start-time-that-never-matches"
+if ! kill -0 "$probe" 2>/dev/null; then
+  echo "scripts/test-leak-scan: kill_one with a stale start time killed $probe" >&2
+  exit 1
+fi
+kill_one "$probe" "$probe_start"
+if kill -0 "$probe" 2>/dev/null; then
+  echo "scripts/test-leak-scan: kill_one with the recorded start time left $probe alive" >&2
+  exit 1
+fi
+probe=
+probe_start=
 
 # The Linux environ reader must consume the whole stream: grep -q quits
 # early and SIGPIPEs tr under pipefail, hiding a leak.
@@ -202,7 +256,8 @@ if [ "$(uname -s)" = Darwin ]; then
     echo "scripts/test-leak-scan: sh orphan never reached ppid 1" >&2
     exit 1
   fi
-  lstart=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker3" | sed 's/^ *//;s/ *$//')
+  leaker3_start=$(pid_lstart "$leaker3")
+  lstart=$leaker3_start
   started=$(date -j -f "%a %b %e %T %Y" "$lstart" "+%s")
   # Started after the check: the warning names the PID, exit stays 0.
   if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started - 1))" 2>"$err"; then
@@ -248,8 +303,9 @@ if [ "$(uname -s)" = Darwin ]; then
     cat "$err" >&2
     exit 1
   fi
-  kill_one "$leaker3"
+  kill_one "$leaker3" "$leaker3_start"
   leaker3=
+  leaker3_start=
   # A binary under target/ is this run's leak: exit 1 naming the PID. A
   # copied platform binary is SIGKILLed on exec, so the orphan is sleep
   # re-executed with argv0 set to the target/ path (bash exec -a, with
@@ -271,7 +327,8 @@ if [ "$(uname -s)" = Darwin ]; then
   fi
   # The check began a second before the orphan started, so the orphan is
   # this run's leak: exit 1 naming the PID.
-  lstart4=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker4" | sed 's/^ *//;s/ *$//')
+  leaker4_start=$(pid_lstart "$leaker4")
+  lstart4=$leaker4_start
   started4=$(date -j -f "%a %b %e %T %Y" "$lstart4" "+%s")
   if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started4 - 1))" 2>"$err"; then
     echo "scripts/test-leak-scan: target orphan $leaker4 did not fail the scan:" >&2
@@ -283,8 +340,9 @@ if [ "$(uname -s)" = Darwin ]; then
     cat "$err" >&2
     exit 1
   fi
-  kill_one "$leaker4"
+  kill_one "$leaker4" "$leaker4_start"
   leaker4=
+  leaker4_start=
   # A shell orphan carrying a target/ path in its arguments is not this
   # run's leak: only argv0 names it, so this warns like sh, not fails.
   printf "#!/bin/sh\ntrap \"\" TERM\nwhile [ \"\$SECONDS\" -lt 120 ]; do :; done\n" >"$tmp/target/argscript"
@@ -302,7 +360,8 @@ if [ "$(uname -s)" = Darwin ]; then
     echo "scripts/test-leak-scan: shell arg orphan never reached ppid 1" >&2
     exit 1
   fi
-  lstart6=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker6" | sed 's/^ *//;s/ *$//')
+  leaker6_start=$(pid_lstart "$leaker6")
+  lstart6=$leaker6_start
   started6=$(date -j -f "%a %b %e %T %Y" "$lstart6" "+%s")
   if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started6 - 1))" 2>"$err"; then
     :
@@ -326,8 +385,9 @@ if [ "$(uname -s)" = Darwin ]; then
     cat "$err" >&2
     exit 1
   fi
-  kill_one "$leaker6"
+  kill_one "$leaker6" "$leaker6_start"
   leaker6=
+  leaker6_start=
   rm -rf "$tmp"
   tmp=
 fi
