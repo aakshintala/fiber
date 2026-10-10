@@ -12,6 +12,8 @@ use crate::catalogue::{Catalogue, ModelEntry, Refresh};
 use crate::keys::Key;
 use crate::swapped::{Frame, Ink, List, Spot, about, rows_height};
 
+mod filter;
+
 /// What the picker was opened for: choosing a model and its level,
 /// choosing a level for the current model, or marking the models a
 /// `/scoped-models` save keeps.
@@ -36,8 +38,8 @@ pub(crate) struct Choice {
     pub(crate) reference: String,
     /// The chosen level, `None` for a model with no levels.
     pub(crate) level: Option<String>,
-    /// Whether the level was picked out: a chip click, or Enter or `s`
-    /// on a touched row. Only then is the level saved.
+    /// Whether the level was picked out: a chip click, or Enter or
+    /// Ctrl+S on a touched row. Only then is the level saved.
     pub(crate) level_chosen: bool,
     /// Whether the global `model` is saved: false only for a level
     /// picked for the current model.
@@ -70,19 +72,27 @@ pub(crate) struct Open {
     pub(crate) target: Option<(String, Option<String>)>,
     /// The scope toggle shows every installed model.
     pub(crate) show_all: bool,
+    /// The filter query: what typing narrowed the list to. Empty at
+    /// every open; the checklist never filters, so it stays empty there.
+    pub(crate) query: String,
 }
 
-/// One frame row: the buttons, a provider heading, or a model by
-/// catalogue index. Clicks map back through it, so headings are never
-/// stops.
+/// One frame row: the filter, the buttons, a provider heading, a model
+/// by catalogue index, or the empty-filter line. Clicks map back through
+/// it, so the filter, headings and the empty line are never stops.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RowAt {
-    /// The refresh button and the scope line.
+    /// The filter query, first in every choosing frame.
+    Filter,
+    /// The refresh button, the count while a query is typed, and the
+    /// scope line.
     Buttons,
     /// A provider's heading, naming it.
     Heading(String),
     /// A model, by catalogue index.
     Model(usize),
+    /// The typed query matches no model: one dim line, no sections.
+    NoMatch,
 }
 
 /// The model picker: what it lists, and what it waits on.
@@ -187,6 +197,7 @@ impl ModelPicker {
                         open.show_all,
                         open.mode,
                         open.target.as_ref(),
+                        &open.query,
                     );
                     on_screen
                         .and_then(|(model, _)| {
@@ -213,6 +224,7 @@ impl ModelPicker {
             open.show_all,
             open.mode,
             open.target.as_ref(),
+            &open.query,
         );
         if !rows.contains(&selected)
             && let Some(first) = rows.first()
@@ -257,7 +269,7 @@ impl ModelPicker {
     /// Opens the picker fresh: the selection on the on-screen model, else
     /// the first row; each row's chip at its preselected level, untouched;
     /// "show all" off. A `/thinking` open touches the current model's
-    /// row, so Enter or `s` on it carries the chip's level. Each open asks
+    /// row, so Enter or Ctrl+S on it carries the chip's level. Each open asks
     /// `Stale`, keeping a wider `Every`.
     pub(crate) fn open(&mut self, mode: Mode, on_screen: Option<(&str, Option<&str>)>) {
         let target = on_screen.map(|(model, level)| (model.to_owned(), level.map(str::to_owned)));
@@ -267,6 +279,7 @@ impl ModelPicker {
             false,
             mode,
             target.as_ref(),
+            "",
         );
         let selected = on_screen
             .and_then(|(model, _)| {
@@ -318,6 +331,8 @@ impl ModelPicker {
             marks,
             show_all: false,
             target,
+            // Every open starts with an empty query.
+            query: String::new(),
         });
         self.want = Some(match self.want {
             Some(Refresh::Every) => Refresh::Every,
@@ -347,6 +362,7 @@ impl ModelPicker {
             open.show_all,
             open.mode,
             open.target.as_ref(),
+            &open.query,
         );
         if rows.is_empty() {
             return;
@@ -364,13 +380,26 @@ impl ModelPicker {
     }
 
     /// Moves the selected row's chip by `delta`, clamped, and marks the
-    /// row touched. A model with no levels has no chip to move.
+    /// row touched. A model with no levels has no chip to move, and with
+    /// no row shown the selection sits hidden off the shown rows, so the
+    /// chip keys change nothing.
     pub(crate) fn move_chip(&mut self, delta: isize) {
         let Some(open) = self.open.as_mut() else {
             return;
         };
         // Checklist rows have no level chips to move.
         if open.mode == Mode::Scope {
+            return;
+        }
+        let (rows, _) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+            &open.query,
+        );
+        if !rows.contains(&open.selected) {
             return;
         }
         let Some(entry) = self.catalogue.models.get(open.selected) else {
@@ -407,6 +436,7 @@ impl ModelPicker {
             open.show_all,
             open.mode,
             open.target.as_ref(),
+            &open.query,
         );
         if rows.is_empty() {
             return;
@@ -465,13 +495,80 @@ impl ModelPicker {
             open.show_all,
             open.mode,
             open.target.as_ref(),
+            &open.query,
         );
-        if !rows.is_empty()
-            && !rows.contains(&open.selected)
-            && let Some(first) = rows.first()
-        {
-            open.selected = *first;
+        restick(open, &rows);
+    }
+
+    /// Appends `c` to the filter query: typing narrows the choosing list
+    /// on every letter. The selection stays on its model when it still
+    /// shows, else moves to the first shown row. Nothing while closed.
+    pub(crate) fn push_query(&mut self, c: char) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        open.query.push(c);
+        let (rows, _) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+            &open.query,
+        );
+        restick(open, &rows);
+    }
+
+    /// Drops the query's last letter: Backspace shortens the filter.
+    /// The selection stays on its model when it still shows, else moves
+    /// to the first shown row. Nothing while closed or already empty.
+    pub(crate) fn pop_query(&mut self) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        if open.query.pop().is_none() {
+            return;
         }
+        let (rows, _) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+            &open.query,
+        );
+        restick(open, &rows);
+    }
+
+    /// Clears the filter query: the first Esc while one is typed. The
+    /// selection stays on its model when it still shows, else moves to
+    /// the first shown row. Nothing while closed or already empty.
+    pub(crate) fn clear_query(&mut self) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        if open.query.is_empty() {
+            return;
+        }
+        open.query.clear();
+        let (rows, _) = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+            &open.query,
+        );
+        restick(open, &rows);
+    }
+
+    /// The filter query: what typing narrowed the list to. Empty while
+    /// closed and at every open.
+    pub(crate) fn query(&self) -> &str {
+        self.open
+            .as_ref()
+            .map(|open| open.query.as_str())
+            .unwrap_or("")
     }
 
     /// Asks `Every`: the refresh button refreshes every list, keeping
@@ -512,6 +609,7 @@ impl ModelPicker {
             open.show_all,
             open.mode,
             open.target.as_ref(),
+            &open.query,
         );
         // The selection can sit off the shown rows: choosing takes the
         // first shown row, the one the frame highlights.
@@ -534,8 +632,9 @@ impl ModelPicker {
     /// Clicks `cell` of `row`: the refresh button refreshes every list,
     /// the scope line toggles it, a roles cell selects its row, a name
     /// cell chooses its row at its chip, and a chip chooses its row at
-    /// that level. Choosing from a click always saves: `s` is the only
-    /// path to a session-only choice.
+    /// that level. Choosing from a click always saves: Ctrl+S is the only
+    /// path to a session-only choice. The filter and the empty line take
+    /// no click.
     pub(crate) fn click_cell(&mut self, row: usize, cell: usize) -> Option<Choice> {
         let (layout, _) = self.layout()?;
         match layout.get(row) {
@@ -547,7 +646,7 @@ impl ModelPicker {
                 }
                 None
             }
-            Some(RowAt::Heading(_)) | None => None,
+            Some(RowAt::Filter | RowAt::Heading(_) | RowAt::NoMatch) | None => None,
             Some(RowAt::Model(index)) => {
                 let index = *index;
                 // The checklist has no chips to choose: the mark cell
@@ -616,11 +715,17 @@ impl ModelPicker {
             ),
             None => "Models".to_owned(),
         };
-        let rows = layout
-            .iter()
-            .enumerate()
-            .map(|(at, row)| self.cells(at, row, scope.as_deref()))
-            .collect::<Vec<_>>();
+        let rows = {
+            let shown = layout
+                .iter()
+                .filter(|row| matches!(row, RowAt::Model(_)))
+                .count();
+            layout
+                .iter()
+                .enumerate()
+                .map(|(at, row)| self.cells(at, row, scope.as_deref(), shown))
+                .collect::<Vec<_>>()
+        };
         let mut frame = Frame {
             title,
             rows,
@@ -631,8 +736,10 @@ impl ModelPicker {
                 // The checklist marks rows and saves the list: no model
                 // or level is chosen here.
                 Mode::Scope => "Space mark · Enter save · Esc back".to_owned(),
-                Mode::Choose | Mode::Thinking => "Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDown page · Tab scope · Ctrl+R refresh · Esc close"
-                    .to_owned(),
+                Mode::Choose | Mode::Thinking => {
+                    "↑↓ move · ←→ levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"
+                        .to_owned()
+                }
             },
         };
         // The selection may sit off the scoped rows after a read
@@ -648,9 +755,10 @@ impl ModelPicker {
         Some(frame)
     }
 
-    /// The frame's rows with the scope line: the buttons, then each
-    /// scoped provider's heading with its models in catalogue order.
-    /// `None` while the picker is closed.
+    /// The frame's rows with the scope line: the filter, the buttons,
+    /// then each scoped provider's heading with its models in catalogue
+    /// order, or the empty-filter line when the query hides every row.
+    /// The checklist draws no filter. `None` while the picker is closed.
     fn layout(&self) -> Option<(Vec<RowAt>, Option<String>)> {
         let open = self.open.as_ref()?;
         let (rows, scope) = shown_in(
@@ -659,8 +767,21 @@ impl ModelPicker {
             open.show_all,
             open.mode,
             open.target.as_ref(),
+            &open.query,
         );
-        let mut layout = vec![RowAt::Buttons];
+        // The checklist takes no filter: its frame starts at the buttons
+        // with no filter row, so no row number shifts there.
+        let mut layout = if open.mode == Mode::Scope {
+            vec![RowAt::Buttons]
+        } else {
+            vec![RowAt::Filter, RowAt::Buttons]
+        };
+        // A typed query hiding every installed model shows one dim line
+        // and no provider sections.
+        if !open.query.is_empty() && rows.is_empty() && !self.catalogue.models.is_empty() {
+            layout.push(RowAt::NoMatch);
+            return Some((layout, scope));
+        }
         let mut provider: Option<&str> = None;
         for index in rows {
             let Some(entry) = self.catalogue.models.get(index) else {
@@ -675,24 +796,51 @@ impl ModelPicker {
         Some((layout, scope))
     }
 
-    /// One frame row's cells: the buttons with their targets, a heading,
-    /// or a model's name, roles and chips, each with its own target and
-    /// the row's chip in brackets.
+    /// One frame row's cells: the filter, the buttons with their targets
+    /// and the typed count, a heading, the empty-filter line, or a model's
+    /// name, roles and chips, each with its own target and the row's chip
+    /// in brackets. A matched id splits into hit runs; otherwise the id
+    /// draws as today's single cell.
     fn cells(
         &self,
         at: usize,
         row: &RowAt,
         scope: Option<&str>,
+        shown: usize,
     ) -> Vec<(String, Option<Spot>, Ink)> {
         match row {
+            RowAt::Filter => {
+                if self.query().is_empty() {
+                    vec![
+                        ("Type to search ".to_owned(), None, Ink::Muted),
+                        ("█".to_owned(), None, Ink::Muted),
+                    ]
+                } else {
+                    vec![
+                        ("› ".to_owned(), None, Ink::Muted),
+                        (self.query().to_owned(), None, Ink::Heading),
+                        ("█".to_owned(), None, Ink::Muted),
+                    ]
+                }
+            }
             RowAt::Buttons => {
                 let mut cells = vec![("↻ refresh".to_owned(), Some(Spot::Cell(at, 0)), Ink::Plain)];
+                // While a query is typed the count names the shown rows
+                // of every installed model.
+                if !self.query().is_empty() {
+                    cells.push((
+                        format!("  {shown} of {} models", self.catalogue.models.len()),
+                        None,
+                        Ink::Muted,
+                    ));
+                }
                 if let Some(line) = scope {
                     cells.push((format!("  {line}"), Some(Spot::Cell(at, 1)), Ink::Plain));
                 }
                 cells
             }
             RowAt::Heading(provider) => vec![(provider.clone(), None, Ink::Heading)],
+            RowAt::NoMatch => vec![("No models match".to_owned(), None, Ink::Muted)],
             RowAt::Model(index) => {
                 if self.is_scope() {
                     let Some(entry) = self.catalogue.models.get(*index) else {
@@ -707,15 +855,10 @@ impl ModelPicker {
                     .open
                     .as_ref()
                     .and_then(|open| open.chips.get(*index).copied().flatten());
-                let mut cells = vec![(
-                    if entry.roles.is_empty() {
-                        format!("{}   ", entry.id)
-                    } else {
-                        entry.id.clone()
-                    },
-                    Some(Spot::Cell(at, 0)),
-                    Ink::Plain,
-                )];
+                // A matched id splits into hit runs; otherwise the id
+                // draws as today's single cell, pad included.
+                let hits = filter::id_hits(&entry.id, self.query());
+                let mut cells = id_cells(&entry.id, &hits, at, entry.roles.is_empty());
                 let mut cell = 1;
                 if !entry.roles.is_empty() {
                     cells.push((
@@ -798,6 +941,50 @@ impl ModelPicker {
         }
         Vec::new()
     }
+}
+
+/// The id cell's runs: one cell per hit-flag run, matched runs drawn
+/// underlined and bold, the rest plain. Every run shares the name cell's
+/// target, so a click on any run chooses the row. The three-space pad of
+/// a role-less row joins the last run's text when that run is plain, and
+/// stands as its own plain run otherwise, so the texts always
+/// concatenate to the unfiltered id cell's text.
+fn id_cells(id: &str, hits: &[bool], at: usize, pad: bool) -> Vec<(String, Option<Spot>, Ink)> {
+    let spot = Some(Spot::Cell(at, 0));
+    if !hits.iter().any(|hit| *hit) {
+        let mut text = id.to_owned();
+        if pad {
+            text.push_str("   ");
+        }
+        return vec![(text, spot, Ink::Plain)];
+    }
+    let mut runs: Vec<(String, Ink)> = Vec::new();
+    for (got, hit) in id.chars().zip(hits.iter().copied()) {
+        let ink = if hit { Ink::Match } else { Ink::Plain };
+        let same = runs.last().is_some_and(|(_, last)| *last == ink);
+        if same {
+            if let Some((text, _)) = runs.last_mut() {
+                text.push(got);
+            }
+        } else {
+            runs.push((got.to_string(), ink));
+        }
+    }
+    let mut cells: Vec<(String, Option<Spot>, Ink)> = runs
+        .into_iter()
+        .map(|(text, ink)| (text, spot, ink))
+        .collect();
+    if pad {
+        let plain_last = cells.last().is_some_and(|(_, _, ink)| *ink == Ink::Plain);
+        if plain_last {
+            if let Some((text, _, _)) = cells.last_mut() {
+                text.push_str("   ");
+            }
+        } else {
+            cells.push(("   ".to_owned(), spot, Ink::Plain));
+        }
+    }
+    cells
 }
 
 /// What a choice writes through the configuration seam, in order: the
@@ -892,19 +1079,34 @@ fn choice_at(
     }
 }
 
+/// Moves the selection onto the shown rows: it stays where it was when
+/// that row still shows, else moves to the first shown row. With no row
+/// shown it stays where it was, hidden.
+fn restick(open: &mut Open, rows: &[usize]) {
+    if !rows.is_empty()
+        && !rows.contains(&open.selected)
+        && let Some(first) = rows.first()
+    {
+        open.selected = *first;
+    }
+}
+
 /// The rows an open picker shows, by catalogue index, and the scope
 /// line: the scoped rows, with a `/thinking` open adding the current
-/// model's row in catalogue order whatever the scope. With a scope
-/// matching none, only that row shows, under the scope line.
+/// model's row in catalogue order whatever the scope, and the filter
+/// dropping whatever the query hides last, keeping catalogue order.
+/// With a scope matching none, only that row shows, under the scope
+/// line.
 pub(crate) fn shown_in(
     models: &[ModelEntry],
     scoped: &[String],
     show_all: bool,
     mode: Mode,
     target: Option<&(String, Option<String>)>,
+    query: &str,
 ) -> (Vec<usize>, Option<String>) {
     // The checklist opens over every installed model whatever the
-    // scope, with no scope line and no toggle.
+    // scope, with no scope line, no toggle and no filter.
     if mode == Mode::Scope {
         return ((0..models.len()).collect(), None);
     }
@@ -918,6 +1120,13 @@ pub(crate) fn shown_in(
             rows.insert(insertion, at);
         }
     }
+    // The filter runs last and only drops rows: an empty query matches
+    // every row.
+    rows.retain(|index| {
+        models
+            .get(*index)
+            .is_some_and(|entry| filter::matches(entry, query))
+    });
     (rows, line)
 }
 

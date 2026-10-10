@@ -414,16 +414,24 @@ a click on it returns too. The views are:
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, and the size of the prompt-cache rebuild
   a switch costs. Choosing a model saves the global `model`, and choosing a
-  level saves `models."<provider/model>".thinking` to the global file. One key
+  level saves `models."<provider/model>".thinking` to the global file. Ctrl+S
   marks the choice as this session only, and then nothing is saved. When
   `scoped_models` is set, the picker shows only those models, with a "show
-  all" toggle. Ctrl+L opens it, as `/model` does. It draws from the cached
+  all" toggle on Tab. Typing filters the list on every letter: each
+  space-separated word of the query must match, in order but not
+  necessarily next to each other and ignoring case, the model's provider,
+  id or display name. The filter keeps the list's order and only drops
+  rows. Backspace removes a letter; Esc clears the query first and closes
+  the picker on the next press. Enter with no match leaves the picker open.
+  Ctrl+L opens it, as `/model` does. It draws from the cached
   model lists at once and refreshes stale ones in the background; its refresh
   button refreshes every list (`docs/model-routing.md`, "Model discovery").
 
   Under the view's top row the picker is an overlay ("Look", "Overlays").
-  Its first row holds the count dim ("12 models", or "scoped · 5 of 12"
-  under `scoped_models`), then "[show all]" bold, which reads "[show scoped]"
+  Its first row is the filter: "Type to search" dim until something is
+  typed, then "›" dim and the query bold, with a dim block cursor either
+  way. Its second row holds the count dim ("12 models", "scoped · 5 of 12"
+  under `scoped_models`, or "4 of 12 models" while a query is typed), then "[show all]" bold, which reads "[show scoped]"
   while every model shows, and "⟳ refresh all" dim at the right end. Each
   provider is a section, a blank row between them: the provider's name dim,
   then "· updated 2m ago" dim, or "⟳ refreshing" and a spinner in
@@ -437,8 +445,11 @@ a click on it returns too. The views are:
   `attention`, its saved level bold, and the chosen chip bold in brackets
   ("[high]"); elsewhere they are dim. ← and → move between the focused
   model's chips. A model chosen for this session only gets a third row,
-  "ⓢ this session only · nothing saved" dim. The footer is "↑↓ move · ←→
-  levels · enter choose · s session only · esc close".
+  "ⓢ this session only · nothing saved" dim. While a query is typed, the
+  characters of each id it matched are underlined and bold; a query that
+  matches nothing shows one line, "No models match" dim, and no provider
+  sections. The footer is "↑↓ move · ←→ levels · enter choose · tab all ·
+  ctrl+s session · ctrl+r refresh · esc close", keys bold.
 - **The usage view,** `/usage`: the session's `usage` (`docs/events.md`) broken
   down by turn, by model and by delegate, each with tokens by kind, cost billed
   and cost on subscription, and the budget left when `budget.usd` is set.
@@ -1163,7 +1174,9 @@ search box and the draft shows without a cursor.
 | Drop it | `drop_steering` | ⌥X | its mouse target |
 | Reopen a request put aside, or move to the next, the oldest first, switching to its session | `next_request` | ⌥A | `/approvals`; click the badge or a waiting card |
 | Open the model picker | `model_picker` | Ctrl+L | `/model` |
-| Choose in the model picker for this session only | `session_only` | s | |
+| Choose in the model picker for this session only | `session_only` | Ctrl+S | |
+| Show every model in the model picker, or only the scoped ones | `show_all` | Tab | click "[show all]" |
+| Refresh every model list in the model picker | `refresh_lists` | Ctrl+R | click "⟳ refresh all" |
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
@@ -1213,7 +1226,7 @@ A global action acts in all six. The rest act only where they are listed:
 - Global: `close_or_interrupt`, `clear_then_quit`, `rail_row_n`,
   `toggle_ledgers`, `toggle_panel`, `toggle_rail`, `jump_to_end`,
   `next_request`, `key_map`.
-- Picker: `session_only`.
+- Picker: `session_only`, `show_all`, `refresh_lists`.
 - Input, Steering and Conversation: `go_home`, `new_session`,
   `open_in_editor`, `navigate`, `search`, `select_steering`, `drop_steering`,
   `model_picker`.
@@ -1291,7 +1304,7 @@ later release still applies.
 | `/new` | Goes home with the cursor in the input box. |
 | `/resume` | Opens home at the session list. |
 | `/model` | Opens the model picker. |
-| `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, `s` applies it to this session only. |
+| `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
 | `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`, Space or a click on the mark toggles it, Enter saves the marked list as `scoped_models`, and Esc saves nothing. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/context` | Opens the context breakdown. |

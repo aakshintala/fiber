@@ -219,8 +219,12 @@ impl App {
 
     /// Runs an action: `new_session` and `go_home` leave for home the way
     /// `/new` does, dropping focus and any steering selection first, so
-    /// the cursor is in the input box. Anything else does nothing.
+    /// the cursor is in the input box. `session_only` chooses in the open
+    /// model picker for this session only. Anything else does nothing.
     fn on_action(&mut self, id: &'static str) -> Effect {
+        if id == "session_only" {
+            return self.model_picker_session_only();
+        }
         if !matches!(id, "new_session" | "go_home") {
             return Effect::None;
         }
