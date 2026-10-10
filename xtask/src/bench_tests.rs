@@ -946,6 +946,21 @@ fn an_attaching_run_missing_its_ten_mib_fixture_fails() {
 }
 
 #[test]
+fn an_unknown_metric_id_is_ignored() {
+    let entry = json!({"fixture": "1 MiB", "log_bytes": 1_050_231, "stage": "terminal", "ms": 31.0});
+    let headed = with_metric(
+        head(),
+        "attach_stage_ms",
+        Value::Array(vec![entry; 5]),
+    );
+    let plain = judge(&head(), Some(&base()), Event::PullRequest);
+    let out = judge(&headed, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, plain.failures);
+    assert_eq!(out.comment, plain.comment);
+    assert!(!has(&out.failures, "attach_stage"), "{:?}", out.failures);
+}
+
+#[test]
 fn an_unknown_attaching_fixture_fails() {
     let mut entries = attach_entries("1 MiB", 1_048_576, &[10.0; 5]);
     entries.extend(attach_entries("2 MiB", 2_097_152, &[15.0; 5]));

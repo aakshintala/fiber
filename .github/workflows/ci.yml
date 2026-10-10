@@ -448,6 +448,38 @@ jobs:
             "$harness" --fiber "$RUNNER_TEMP/release/base/fiber" --out "$out/base.json" --only all \
               "${base_paging[@]}" || echo "::warning::the base binary's benchmarks exited $?"
           fi
+      - name: Print the attach stages
+        run: |
+          table=$(jq -r '
+            (.metrics.attach_stage_ms // []) as $rows
+            | if ($rows | length) == 0 then
+              "No attach stages recorded."
+            else
+              (def median: if length == 0 then null else sort | .[(length / 2) | floor] end;
+               def show: if . == null then "n/a" else ((. * 10 | round / 10) | tostring) end;
+               def med(f; s): [$rows[] | select(.fixture == f and .stage == s) | .ms] | median;
+               ["## Attach stages", "",
+                "| Fixture | terminal | hub_replay | parse | fold | frames_1 | frames_4096 | frames_64 | residual |",
+                "|---|---|---|---|---|---|---|---|---|"]
+               + (["1 MiB", "10 MiB"] | map(
+                 . as $f
+                 | (med($f; "terminal")) as $t
+                 | (med($f; "hub_replay")) as $h
+                 | (med($f; "parse")) as $p
+                 | (med($f; "fold")) as $fo
+                 | (med($f; "frames_1")) as $f1
+                 | (med($f; "frames_4096")) as $f4096
+                 | (med($f; "frames_64")) as $f64
+                 | (if [$t, $h, $p, $fo, $f1] | any(. == null) then "n/a"
+                    else ([$t, $h, $p, $fo, $f1] | (.[0] - .[1] - .[2] - .[3] - .[4]) | show) end) as $r
+                 | "| \($f) | \($t | show) | \($h | show) | \($p | show) | \($fo | show)" +
+                   " | \($f1 | show) | \($f4096 | show) | \($f64 | show) | \($r) |"
+               ))
+               | join("\n"))
+            end
+          ' "$RUNNER_TEMP/bench/head.json")
+          echo "$table"
+          echo "$table" >> "$GITHUB_STEP_SUMMARY"
       - name: Judge the benchmarks against docs/performance.md
         id: report
         run: |
