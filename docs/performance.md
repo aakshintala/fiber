@@ -137,7 +137,9 @@ voluntary and involuntary context switch counts in
 `/proc/<pid>/task/*/status`, read before and after the idle window: 10
 seconds on a pull request, the "Release build and size" job included, and 60
 in the release workflow (`docs/releasing.md`). A truly idle process switches
-zero times in either. fsyncs are the session's `fdatasync` calls, counted
+zero times in either. The idle-session and idle-terminal benchmarks also report
+RssAnon and RssFile from `/proc/<pid>/status` at the end of the idle window, as
+diagnostics; the budget stays on peak RSS. fsyncs are the session's `fdatasync` calls, counted
 with strace in one more run of the busy turn, which is never a timing or
 memory sample, and log bytes are the size of `events.jsonl`, so both are
 exact.
