@@ -179,10 +179,6 @@ fn check_labels(labels: &[&str], kind: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(test)]
-#[path = "asks_tests.rs"]
-mod tests;
-
 /// An open `host.ask`: what was asked and whose parked call waits for the
 /// answer. Plain data: leaving the registry neither sends nor answers.
 pub(super) struct PendingAsk {
@@ -310,3 +306,7 @@ impl Hub {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "asks_tests.rs"]
+mod tests;
