@@ -562,6 +562,7 @@ provider extension declares") lists:
   | `anthropic` | boolean | `openai-completions` | the model is Anthropic's, behind a gateway such as OpenRouter: requests carry Anthropic's `cache_control` markers on content parts, and Anthropic's strict-tool limits apply |
   | `cache_key_field` | string | `openai-completions` | a body field that also carries the cache key, such as OpenRouter's `session_id` |
   | `cache_key_header` | string | `openai-responses`, `openai-completions`, `anthropic-messages`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |
+  | `thinking_budget` | boolean | `anthropic-messages` | the thinking level goes in `thinking: {type: "enabled", budget_tokens}` (`docs/model-routing.md`, "Thinking"); absent, it goes in `thinking: {type: "adaptive"}` and `output_config: {effort}` |
 
   `openai-completions` always sends `stream_options.include_usage: true`,
   because OpenAI sends no usage without it (`docs/model-routing.md`,

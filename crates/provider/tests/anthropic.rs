@@ -2492,3 +2492,246 @@ fn sent_tools_are_sent_verbatim_in_order() {
         .unwrap();
     assert_eq!(sent_body(&server, 0)["tools"], Value::Array(sent));
 }
+
+fn budget_endpoint(server: &ProviderServer) -> Endpoint {
+    Endpoint {
+        compat: provider::Compat {
+            thinking_budget: true,
+            ..provider::Compat::default()
+        },
+        max_output_tokens: Some(64_000),
+        ..endpoint(server)
+    }
+}
+
+#[test]
+fn a_budget_model_sends_each_level_as_pis_token_budget() {
+    use contract::ThinkingLevel::{High, Low, Max, Medium, Minimal, Off, Xhigh};
+    let server = ProviderServer::start([
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+        completed_reply(),
+    ])
+    .unwrap();
+    let levels = [
+        None,
+        Some(Off),
+        Some(Minimal),
+        Some(Low),
+        Some(Medium),
+        Some(High),
+        Some(Xhigh),
+        Some(Max),
+    ];
+    for level in levels {
+        let mut req = request();
+        req.thinking = level;
+        run(Box::new(
+            Messages::new(budget_endpoint(&server)).request(&req),
+        ))
+        .0
+        .unwrap();
+    }
+    for n in [0, 1] {
+        let body = sent_body(&server, n);
+        assert_eq!(body.get("thinking"), None, "{n}");
+        assert_eq!(body.get("output_config"), None, "{n}");
+    }
+    for (n, budget) in [
+        (2, 1024),
+        (3, 2048),
+        (4, 8192),
+        (5, 16384),
+        (6, 16384),
+        (7, 16384),
+    ] {
+        let body = sent_body(&server, n);
+        assert_eq!(
+            body["thinking"],
+            json!({"type": "enabled", "budget_tokens": budget}),
+            "{n}"
+        );
+        assert_eq!(body.get("output_config"), None, "{n}");
+        assert_eq!(body["max_tokens"], json!(64_000), "{n}");
+    }
+}
+
+#[test]
+fn a_budget_stays_at_least_1024_below_max_tokens() {
+    use contract::ThinkingLevel::{High, Minimal};
+    let cases: Vec<(u64, Option<u64>)> = vec![
+        (1023, None),
+        (1024, None),
+        (1025, Some(1024)),
+        (2047, Some(1024)),
+        (2048, Some(1024)),
+        (2049, Some(1025)),
+        (17407, Some(16383)),
+        (17408, Some(16384)),
+        (17409, Some(16384)),
+    ];
+    let server =
+        ProviderServer::start(cases.iter().map(|_| completed_reply()).collect::<Vec<_>>()).unwrap();
+    for (m, _) in &cases {
+        let mut req = request();
+        req.thinking = Some(High);
+        req.max_output_tokens = Some(*m);
+        run(Box::new(
+            Messages::new(budget_endpoint(&server)).request(&req),
+        ))
+        .0
+        .unwrap();
+    }
+    for (n, (m, want)) in cases.iter().enumerate() {
+        let body = sent_body(&server, n);
+        assert_eq!(body["max_tokens"], json!(*m), "{m}");
+        match want {
+            None => assert_eq!(body.get("thinking"), None, "{m}"),
+            Some(budget) => {
+                assert_eq!(
+                    body["thinking"],
+                    json!({"type": "enabled", "budget_tokens": budget}),
+                    "{m}"
+                );
+                assert!(budget < m, "budget_tokens {budget} < max_tokens {m}");
+            }
+        }
+    }
+    let minimal = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    for m in [2048, 2049] {
+        let mut req = request();
+        req.thinking = Some(Minimal);
+        req.max_output_tokens = Some(m);
+        run(Box::new(
+            Messages::new(budget_endpoint(&minimal)).request(&req),
+        ))
+        .0
+        .unwrap();
+    }
+    for (n, m) in [2048, 2049].iter().enumerate() {
+        let body = sent_body(&minimal, n);
+        assert_eq!(
+            body["thinking"],
+            json!({"type": "enabled", "budget_tokens": 1024}),
+            "{m}"
+        );
+    }
+}
+
+#[test]
+fn a_budget_is_measured_against_extra_body_max_tokens() {
+    use contract::ThinkingLevel::High;
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut end = budget_endpoint(&server);
+    end.extra_body = json!({"max_tokens": 4096}).as_object().unwrap().clone();
+    let mut req = request();
+    req.thinking = Some(High);
+    run(Box::new(Messages::new(end).request(&req))).0.unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(body["max_tokens"], json!(4096));
+    assert_eq!(
+        body["thinking"],
+        json!({"type": "enabled", "budget_tokens": 3072})
+    );
+}
+
+#[test]
+fn extra_body_thinking_replaces_the_budget() {
+    use contract::ThinkingLevel::High;
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut end = budget_endpoint(&server);
+    end.extra_body = json!({"thinking": {"type": "disabled"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let mut req = request();
+    req.thinking = Some(High);
+    run(Box::new(Messages::new(end).request(&req))).0.unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["thinking"],
+        json!({"type": "disabled"})
+    );
+}
+
+#[test]
+fn a_budget_model_with_no_max_tokens_sends_the_full_budget() {
+    use contract::ThinkingLevel::Medium;
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let end = Endpoint {
+        compat: provider::Compat {
+            thinking_budget: true,
+            ..provider::Compat::default()
+        },
+        ..endpoint(&server)
+    };
+    let mut req = request();
+    req.thinking = Some(Medium);
+    run(Box::new(Messages::new(end).request(&req))).0.unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(
+        body["thinking"],
+        json!({"type": "enabled", "budget_tokens": 8192})
+    );
+    assert_eq!(body.get("max_tokens"), None);
+    assert_eq!(body.get("output_config"), None);
+}
+
+#[test]
+fn a_malformed_extra_body_cap_is_kept_and_not_measured() {
+    use contract::ThinkingLevel::Medium;
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut end = Endpoint {
+        compat: provider::Compat {
+            thinking_budget: true,
+            ..provider::Compat::default()
+        },
+        ..endpoint(&server)
+    };
+    end.extra_body = json!({"max_tokens": 1.0}).as_object().unwrap().clone();
+    let mut req = request();
+    req.thinking = Some(Medium);
+    run(Box::new(Messages::new(end).request(&req))).0.unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(body["max_tokens"], json!(1.0));
+    assert_eq!(
+        body["thinking"],
+        json!({"type": "enabled", "budget_tokens": 8192})
+    );
+}
+
+#[test]
+fn a_malformed_extra_body_cap_on_an_adaptive_model_is_todays_bytes() {
+    use contract::ThinkingLevel::Medium;
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut end = endpoint(&server);
+    end.extra_body = json!({"max_tokens": 1.0}).as_object().unwrap().clone();
+    let mut req = request();
+    req.thinking = Some(Medium);
+    run(Box::new(Messages::new(end).request(&req))).0.unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(body["max_tokens"], json!(1.0));
+    assert_eq!(body["thinking"], json!({"type": "adaptive"}));
+    assert_eq!(body["output_config"], json!({"effort": "medium"}));
+}
+
+#[test]
+fn only_a_token_budget_level_does_not_warm() {
+    use contract::ThinkingLevel::{Low, Off};
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let budget = Messages::new(budget_endpoint(&server));
+    let adaptive = Messages::new(endpoint(&server));
+    let at = |level| {
+        let mut req = request();
+        req.thinking = level;
+        req
+    };
+    assert!(!budget.warms(&at(Some(Low))));
+    assert!(budget.warms(&at(Some(Off))));
+    assert!(budget.warms(&at(None)));
+    assert!(adaptive.warms(&at(Some(Low))));
+}

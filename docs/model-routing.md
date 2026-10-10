@@ -134,6 +134,11 @@ Measured on `claude-sonnet-5-5` against api.anthropic.com
   by a hosted tool", says.
 - More than 20 tools with `strict: true` returned 400, "The maximum number of
   strict tools supported is 20" (measured October 1, 2026).
+- `thinking: {type: "enabled", budget_tokens: 1024}` with `max_tokens: 2048`
+  returned 200 on `claude-haiku-4-5` through OpenRouter's native Messages
+  endpoint (`research/reasoning-resume`, September 27, 2026), while `enabled`
+  on `claude-sonnet-5-5` returned 400 ("Use thinking.type.adaptive and
+  output_config.effort").
 
 ### Google Generative AI wire facts
 
@@ -663,6 +668,17 @@ or the top-level `thinking`, is ignored: the session uses the model's own
 default and logs the notice `config_key_ignored`, naming the key, the level and
 the model. A model that declares no levels, such as a local Ollama model, runs
 with none.
+
+On `anthropic-messages` a model takes adaptive thinking unless its data
+declares `compat.thinking_budget`. Adaptive thinking sends the level as
+`thinking: {type: "adaptive"}` with `output_config: {effort}`. A
+budget-tier model sends the level as
+`thinking: {type: "enabled", budget_tokens}` with no `output_config`:
+`minimal` sends 1024, `low` 2048, `medium` 8192, and `high`, `xhigh` and
+`max` 16384. The budget is measured against the sent `max_tokens`: with
+none, the level's budget is sent; at or below 1024, no `thinking` key is
+sent; otherwise the budget is capped so at least 1024 tokens stay for the
+reply, and is never below 1024.
 
 ## Choosing the model
 

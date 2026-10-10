@@ -705,10 +705,12 @@ impl SessionGuard {
     /// path to exit, then stands the guard down.
     #[track_caller]
     pub(crate) fn wait_gone(mut self) {
-        assert!(
-            fakes::matching_exits(&self.workspace, self.deadline.left()),
-            "waited until the deadline for every process holding the workspace path to exit"
-        );
+        match fakes::try_matching_exits(&self.workspace, self.deadline.left()) {
+            Ok(()) => {}
+            Err(err) => panic!(
+                "waited until the deadline for every process holding the workspace path to exit: {err}"
+            ),
+        }
         self.stand_down_watchdog();
     }
 }

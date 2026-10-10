@@ -46,7 +46,10 @@ impl Loop {
     /// off, or no request was sent to resend.
     pub(crate) fn warm_stop(&self, start: Instant) -> Option<Instant> {
         let cap = self.warm?;
-        self.last_request.as_ref()?;
+        let (request, _) = self.last_request.as_ref()?;
+        if !self.provider.warms(request) {
+            return None;
+        }
         start.checked_add(self.lifetime()?.checked_mul(cap)?)
     }
 
