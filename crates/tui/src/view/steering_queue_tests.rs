@@ -68,6 +68,65 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
 }
 
 #[test]
+fn wide_and_combining_marks_draw_whole() {
+    // `界` takes two cells and `é` here is `e` with a combining acute:
+    // the rows keep both whole instead of dropping half a glyph or
+    // orphaning the mark (`docs/tui.md`, "Steering", "Look").
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(60, 12);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "turn_started",
+        serde_json::json!({"input": [{
+            "type": "message",
+            "source": "driver",
+            "content": [{"type": "text", "text": "hi"}],
+        }]}),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "steering_queue",
+        serde_json::json!({"messages": [
+            {"content": [{"type": "text", "text": "界界"}], "source": "driver", "command_id": "c_1"},
+            {"content": [{"type": "text", "text": "e\u{301}cole"}], "source": "driver", "command_id": "c_2"},
+        ]}),
+    ));
+    let shown = screen(&app, 60, 12);
+    // A wide glyph keeps its cells: the second cell of each is the
+    // model's blank continuation. The combining mark stays on its base.
+    let wide = shown
+        .lines()
+        .position(|row| row.contains('界'))
+        .and_then(|at| u16::try_from(at).ok())
+        .expect("the wide row");
+    assert!(shown.contains("e\u{301}cole"), "{shown}");
+    // Dim throughout, over the rows' own spans: the wide row ends
+    // after its `✕`, the combining row after its. Blank continuations
+    // of wide glyphs carry no style.
+    let buf = buffer(&app, 60, 12);
+    assert_eq!(buf[(4, wide)].symbol(), "界");
+    assert_eq!(buf[(6, wide)].symbol(), "界");
+    let combining = shown
+        .lines()
+        .position(|row| row.contains("e\u{301}cole"))
+        .and_then(|at| u16::try_from(at).ok())
+        .expect("the combining row");
+    for (y, end) in [(wide, 2 + 2 + 4 + 3), (combining, 2 + 2 + 5 + 3)] {
+        for x in 0..end {
+            if buf[(x, y)].symbol() == " " {
+                continue;
+            }
+            assert_eq!(
+                buf[(x, y)].style().fg,
+                Role::Muted.color().into(),
+                "cell ({x}, {y})"
+            );
+        }
+    }
+}
+
+#[test]
 fn steering_rows_indented_with_heading_and_footer() {
     insta::assert_snapshot!(
         "steering_rows_indented_with_heading_and_footer",

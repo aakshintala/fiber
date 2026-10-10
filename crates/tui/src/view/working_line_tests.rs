@@ -352,27 +352,14 @@ fn the_elapsed_time_and_tail_stay_dim() {
 }
 
 /// The working line's screen row in a buffer `width` wide: the row
-/// whose text, past its indent and its spinner, starts with the word.
+/// holding the word.
 fn working_row(buf: &Buffer, width: u16) -> u16 {
     (0..buf.area.height)
         .find(|y| {
             let row: String = (0..width)
                 .filter_map(|x| buf.cell((x, *y)).map(|cell| cell.symbol().to_owned()))
                 .collect();
-            // The line is indented past its spinner: skip both to the
-            // word.
-            let trimmed = row.trim_start();
-            let word = trimmed
-                .chars()
-                .next()
-                .filter(|ch| *ch != 'W')
-                .map_or(trimmed, |ch| {
-                    trimmed
-                        .get(ch.len_utf8()..)
-                        .unwrap_or_default()
-                        .trim_start()
-                });
-            word.starts_with("Working")
+            row.contains("Working")
         })
         .unwrap_or_else(|| panic!("no working line"))
 }

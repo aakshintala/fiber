@@ -5,6 +5,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 
 use crate::app::App;
 use crate::format;
@@ -51,28 +52,22 @@ pub(super) fn draw(
             continue;
         };
         *bottom = y;
-        // The row cut at the width: the `✕` draws only while it fits, so
-        // the drop target never covers text.
-        let mut shown = format!("{INDENT}{} {}", row.mark, row.text);
+        // The `✕` draws only while it and the row fit, so the drop
+        // target never covers text: the indent, the mark with its gap,
+        // the text, and the `✕` with its gap.
         let crossed = row.droppable
-            && format::width(&shown) + format::width(CROSS) <= usize::from(area.width);
-        if crossed {
-            shown.push_str(CROSS);
-        }
-        let shown = format::cut(&shown, usize::from(area.width));
-        paint_row(buf, area, y, &shown, &row.text, row.selected);
+            && format::width(INDENT) + 2 + format::width(&row.text) + format::width(CROSS)
+                <= usize::from(area.width);
+        let end = paint_row(buf, area, y, &row.text, row.selected, crossed);
         targets.push(Target {
             id: TargetId::Steering(at),
             rect: Rect::new(area.x, y, area.width, 1),
         });
-        if crossed && shown.ends_with('✕') && area.width > 0 {
+        if crossed {
             // The `✕` ends the drawn row: the target sits on its cell.
-            let x = area
-                .x
-                .saturating_add(u16::try_from(format::width(&shown)).unwrap_or(u16::MAX));
             targets.push(Target {
                 id: TargetId::DropSteering(at),
-                rect: Rect::new(x.saturating_sub(1), y, 1, 1),
+                rect: Rect::new(end.saturating_sub(1), y, 1, 1),
             });
         }
     }
@@ -85,37 +80,38 @@ pub(super) fn draw(
     );
 }
 
-/// Paints one queue row at `y`: the indent dim, the mark and its gap dim,
-/// or in `attention` while the row is selected, the text dim, or in the
-/// default foreground while selected, and the row's `✕` dim
-/// (`docs/tui.md`, "Steering").
-fn paint_row(buf: &mut Buffer, area: Rect, y: u16, shown: &str, text: &str, selected: bool) {
+/// Paints one queue row at `y` from its spans — the indent dim, the mark
+/// with its gap dim or in `attention` while selected, the text dim or in
+/// the default foreground while selected, and the row's `✕` dim — through
+/// the grapheme-aware line writer, so wide glyphs draw whole and combining
+/// marks stay on their base (`docs/tui.md`, "Steering"). Returns the
+/// column after the drawn row.
+fn paint_row(
+    buf: &mut Buffer,
+    area: Rect,
+    y: u16,
+    text: &str,
+    selected: bool,
+    crossed: bool,
+) -> u16 {
     let dim = style(Role::Muted);
-    // The mark's cell with its gap, and the text's cells.
-    let mark = area
-        .x
-        .saturating_add(u16::try_from(INDENT.len()).unwrap_or(u16::MAX));
-    let body = mark.saturating_add(2);
-    let end = body.saturating_add(u16::try_from(format::width(text)).unwrap_or(u16::MAX));
-    let mut x = area.x;
-    for ch in shown.chars() {
-        let paint = if x < mark {
-            dim
-        } else if x < body {
-            // The mark with its gap: attention while selected, else dim.
+    let mut spans = vec![
+        Span::styled(INDENT, dim),
+        Span::styled(
+            if selected { "▸ " } else { "↳ " },
             if selected {
                 style(Role::Attention)
             } else {
                 dim
-            }
-        } else if x < end {
-            if selected { Style::default() } else { dim }
-        } else {
-            dim
-        };
-        buf.set_stringn(x, y, ch.to_string(), 1, paint);
-        x = x.saturating_add(u16::try_from(format::width(&ch.to_string())).unwrap_or(1));
+            },
+        ),
+        Span::styled(text, if selected { Style::default() } else { dim }),
+    ];
+    if crossed {
+        spans.push(Span::styled(CROSS, dim));
     }
+    let (end, _) = buf.set_line(area.x, y, &Line::from(spans), area.width);
+    end
 }
 
 /// Puts one queue line on the row above `bottom`, cut at the width;
