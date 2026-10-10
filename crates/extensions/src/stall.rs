@@ -34,7 +34,13 @@ pub(crate) fn await_grace_or_answer<T>(
 ) -> Option<T> {
     for _ in 0..ROUNDS {
         if clock.await_parked(kill_at, SIGHT) {
-            return None;
+            return match done.try_recv() {
+                Ok(done) => Some(done),
+                Err(mpsc::TryRecvError::Empty) => None,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    panic!("the stalled run returns")
+                }
+            };
         }
         match done.try_recv() {
             Ok(done) => return Some(done),
@@ -45,4 +51,103 @@ pub(crate) fn await_grace_or_answer<T>(
         }
     }
     panic!("the stalled run neither parks for the grace nor answers");
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        reason = "test code"
+    )]
+
+    use std::sync::{Arc, mpsc};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use contract::clock::Clock as _;
+    use fakes::clock::FakeClock;
+
+    use super::await_grace_or_answer;
+
+    const TEST_GUARD: Duration = Duration::from_secs(4);
+
+    fn park(clock: &Arc<FakeClock>, until: Instant) -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
+        let (release_tx, release_rx) = mpsc::channel();
+        let (exited_tx, exited_rx) = mpsc::channel();
+        let parked_clock = Arc::clone(clock);
+        thread::spawn(move || {
+            parked_clock.wait_until(Some(until), &mut |_bound| {
+                release_rx
+                    .recv_timeout(TEST_GUARD)
+                    .expect("waited for the test to release the parked thread");
+            });
+            let _sent = exited_tx.send(());
+        });
+        assert!(
+            clock.await_parked(until, TEST_GUARD),
+            "waited {TEST_GUARD:?} for the thread to park at the grace"
+        );
+        (release_tx, exited_rx)
+    }
+
+    fn release(release_tx: mpsc::Sender<()>, exited_rx: mpsc::Receiver<()>) {
+        release_tx
+            .send(())
+            .expect("the parked thread is waiting for release");
+        exited_rx
+            .recv_timeout(TEST_GUARD)
+            .expect("waited for the parked thread to exit");
+    }
+
+    #[test]
+    fn answer_before_the_park_returns_the_answer() {
+        let clock = FakeClock::new();
+        let until = clock.origin() + Duration::from_secs(30);
+        let (answer_tx, answer_rx) = mpsc::channel();
+        answer_tx.send("answer").expect("the answer is queued");
+
+        assert_eq!(
+            await_grace_or_answer(&clock, &answer_rx, until),
+            Some("answer")
+        );
+    }
+
+    #[test]
+    fn park_before_the_answer_returns_the_park() {
+        let clock = FakeClock::new();
+        let until = clock.origin() + Duration::from_secs(30);
+        let (release_tx, exited_rx) = park(&clock, until);
+        let (_answer_tx, answer_rx) = mpsc::channel::<()>();
+
+        let outcome = await_grace_or_answer(&clock, &answer_rx, until);
+        release(release_tx, exited_rx);
+
+        assert_eq!(outcome, None);
+    }
+
+    #[test]
+    fn answer_wins_when_park_and_answer_are_both_present() {
+        let clock = FakeClock::new();
+        let until = clock.origin() + Duration::from_secs(30);
+        let (release_tx, exited_rx) = park(&clock, until);
+        let (answer_tx, answer_rx) = mpsc::channel();
+        answer_tx.send("answer").expect("the answer is queued");
+
+        let outcome = await_grace_or_answer(&clock, &answer_rx, until);
+        release(release_tx, exited_rx);
+
+        assert_eq!(outcome, Some("answer"));
+    }
+
+    #[test]
+    #[should_panic(expected = "the stalled run neither parks for the grace nor answers")]
+    fn neither_park_nor_answer_hits_the_hang_guard() {
+        let clock = FakeClock::new();
+        let until = clock.origin() + Duration::from_secs(30);
+        let (_answer_tx, answer_rx) = mpsc::channel::<()>();
+
+        await_grace_or_answer(&clock, &answer_rx, until);
+    }
 }

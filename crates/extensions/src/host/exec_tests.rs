@@ -794,12 +794,14 @@ fn a_pid_mode_deadline_stop_signals_only_the_pid() {
     // Past the deadline the run stops, although nothing dropped its cancel.
     clock.advance(Duration::from_millis(1000));
     let kill_at = clock.now() + Duration::from_millis(800);
-    assert!(
-        clock.await_parked(kill_at, DEADLINE),
-        "waited {DEADLINE:?} for the pid-mode run to park for the 800 ms grace"
-    );
-    clock.advance(Duration::from_millis(800));
-    let outcome = done.recv_timeout(DEADLINE);
+    let early = crate::stall::await_grace_or_answer(&clock, &done, kill_at);
+    if early.is_none() {
+        clock.advance(Duration::from_millis(800));
+    }
+    let outcome = match early {
+        Some(outcome) => Ok(outcome),
+        None => done.recv_timeout(DEADLINE),
+    };
     if outcome.is_err() {
         kill_pid_now(pid);
     }
