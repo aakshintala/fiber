@@ -631,3 +631,18 @@ fn short_at_keeps_its_selection_barred() {
     assert!(row_text(&buf, bars[0]).contains("sc.rs"), "{shown}");
     assert!(shown.contains("of 10"), "{shown}");
 }
+
+/// The fit window around the selection: its start and length.
+#[test]
+fn window_fits_around_the_selection() {
+    // Everything fits: the whole list from the top.
+    assert_eq!(super::window(5, 8, 9), (0, 8));
+    // Short: the window ends at the selection's row and keeps it.
+    assert_eq!(super::window(5, 8, 4), (2, 4));
+    // At the end: the window's last row is the selection's.
+    assert_eq!(super::window(9, 10, 2), (8, 2));
+    // No room: still the selection alone; the frame clips the range.
+    assert_eq!(super::window(5, 8, 0), (5, 1));
+    // No entries: no window.
+    assert_eq!(super::window(0, 0, 5), (0, 0));
+}
