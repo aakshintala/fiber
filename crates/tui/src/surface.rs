@@ -137,7 +137,6 @@ pub(crate) fn draw_slab(
     }
     buf.set_style(rect, Style::new().bg(tint.color()));
     if let Some(stripe) = stripe
-        && rect.height > 0
         && inset(rect.width) < rect.width
     {
         draw_stripe(buf, rect, stripe.colour, tint, stripe.right);
