@@ -694,8 +694,8 @@ impl App {
                 command_id: id.clone(),
             };
         }
-        self.pending
-            .insert(id, (kind, std::mem::take(&mut self.draft)));
+        let draft = std::mem::take(&mut self.draft);
+        self.pending.insert(id, (kind, draft));
         let line = line.to_string();
         if self.link == Link::Up {
             Effect::Send(vec![line])
@@ -712,7 +712,8 @@ impl App {
     /// the prompt. A rejection returns the draft to an empty box.
     pub(super) fn first_prompt(&mut self, session: &SessionId, draft: Draft) -> String {
         let id = mint();
-        let line = session_command(&id, "prompt", session, Some(content_arg(&draft))).to_string();
+        let args = content_arg(&draft);
+        let line = session_command(&id, "prompt", session, Some(args)).to_string();
         self.pending.insert(id, (Kind::Prompt, draft));
         line
     }
