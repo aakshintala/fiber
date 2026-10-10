@@ -220,6 +220,40 @@ fn an_unknown_config_key_prints_its_notice_as_one_line() {
 }
 
 #[test]
+fn a_failing_entry_script_prints_its_notice_as_one_line() {
+    let setup = two_provider_setup();
+    let src = setup.root.path().join("src").join("broken");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(
+        src.join("extension.json"),
+        json!({
+            "name": "broken",
+            "version": "v0.0.0",
+            "fiber": "0.0.0",
+            "api": extensions::API,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(src.join("init.lua"), "error(\"entry boom\")\n").unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(src),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
+    result.unwrap();
+    assert!(out.contains("acme/big"), "{out:?}");
+    assert_eq!(err.lines().count(), 1, "{err:?}");
+    assert!(err.contains("entry boom"), "{err:?}");
+}
+
+#[test]
 fn the_text_table_marks_exactly_the_default_row() {
     let setup = two_provider_setup();
     let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());

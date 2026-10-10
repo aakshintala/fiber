@@ -175,12 +175,14 @@ fn run(
     spawn: &dyn Fn(Vec<String>) -> io::Result<()>,
     clock: &dyn Clock,
 ) -> Result<(), Failure> {
-    // Each notice as one line on stderr: this load's, then discovery and
-    // placeholders', each once per command run.
+    // Each notice as one line on stderr: this load's, the session
+    // extensions', then discovery and placeholders', each once per
+    // command run.
     let (mut providers, config, loading) = providers_and_config(home, workspace)?;
     let mut notices: Vec<Notice> = config.notices().to_vec();
     notices.extend(loading);
     let extensions = load(&config);
+    notices.extend(extensions.notices());
     for (extension, provider) in extensions.lua_providers() {
         notices.extend(providers.add_lua(extension, provider, &config));
     }
