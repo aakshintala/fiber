@@ -73,9 +73,10 @@ fiber.provider("timed", {
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    Deadline::after(WAIT)
-        .recv(&rx)
-        .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+    match Deadline::after(WAIT).recv(&rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("the call did not return within {WAIT:?}"),
+    }
 }
 
 /// The fixture extension, registering `echo`, `oauth` and `timed`, in a

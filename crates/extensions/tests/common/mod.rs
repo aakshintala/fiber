@@ -384,9 +384,10 @@ pub(crate) fn sign_with(
             body: &body,
         }))
     });
-    Deadline::after(SIGN_WITHIN)
-        .recv(&rx)
-        .unwrap_or_else(|_| panic!("the sign did not return within {SIGN_WITHIN:?}"))
+    match Deadline::after(SIGN_WITHIN).recv(&rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("the sign did not return within {SIGN_WITHIN:?}"),
+    }
 }
 
 /// `require("go_<name>")` in `dir` signals that the callback has started:

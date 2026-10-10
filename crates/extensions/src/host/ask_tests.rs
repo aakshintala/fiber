@@ -32,9 +32,10 @@ const WAIT: Duration = Duration::from_secs(5);
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || done_tx.send(f()));
-    Deadline::after(WAIT)
-        .recv(&done_rx)
-        .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+    match Deadline::after(WAIT).recv(&done_rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("the call did not return within {WAIT:?}"),
+    }
 }
 
 /// `clock` as the extension's clock.

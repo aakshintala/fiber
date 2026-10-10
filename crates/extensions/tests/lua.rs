@@ -223,6 +223,7 @@ fn a_command_the_extension_never_registered_is_unknown() {
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 #[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+#[track_caller]
 fn spinning_callback_stops_at_its_timeout(command: &'static str, body: &str) {
     let setup = Setup::new();
     let dir = setup.home().join("ext");

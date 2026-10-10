@@ -32,9 +32,10 @@ fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'stat
     std::thread::spawn(move || {
         let _sent = tx.send(work());
     });
-    Deadline::after(DEADLINE)
-        .recv(&rx)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for {what}"))
+    match Deadline::after(DEADLINE).recv(&rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+    }
 }
 
 /// Whether the group still holds a process: `kill -0` on a worker.

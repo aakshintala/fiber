@@ -44,9 +44,10 @@ const WALL: u64 = 1_700_000_000;
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    Deadline::after(WAIT)
-        .recv(&rx)
-        .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+    match Deadline::after(WAIT).recv(&rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("the call did not return within {WAIT:?}"),
+    }
 }
 
 fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaProvider> {
