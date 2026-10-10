@@ -162,6 +162,7 @@ fn post_with(
             .build(),
         Arc::clone(cancel),
         DefaultResolver::default(),
+        net::LIMITS,
     );
     let mut request = agent.post(url);
     for (name, value) in headers.iter().chain(&signed) {
