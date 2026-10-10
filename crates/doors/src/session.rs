@@ -414,6 +414,8 @@ impl Session {
         // still print first, so a normal close still prints `fiber_exited`.
         self.printer_stop
             .push_kept(client::control_line(&self.gate.session_id, client::STOP, 0));
+        #[cfg(test)]
+        self.gate.note(tests::Probe::PrinterStopQueued);
         join(self.printer);
     }
 

@@ -113,6 +113,8 @@ pub(super) fn park_reader() {
 pub(crate) enum Probe {
     /// `close`'s first wait for the driver shells has returned.
     FirstShellWaitDone,
+    /// `close` has queued its `STOP` for the printer.
+    PrinterStopQueued,
     /// A wait for the driver shells is about to block on one still running.
     ShellsWaiting,
     /// A `full` subscribe has its watcher and seed queued, before the writer
@@ -1736,7 +1738,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
             lock(&resume_rx).recv().expect("the test resumes close");
         }
         Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
-        Probe::SubscribeSeeded | Probe::SubscribeAcknowledged => {}
+        Probe::SubscribeSeeded | Probe::SubscribeAcknowledged | Probe::PrinterStopQueued => {}
     }));
     let socket = opened.socket.clone();
     let mut connected = None;
@@ -2934,6 +2936,15 @@ fn close_prints_durable_lines_dropped_before_stop() {
     };
     let timed: Arc<dyn Clock> = clock;
     let session = Session::open(&home, &dir, &log, timed, Vec::new(), Box::new(out)).unwrap();
+    // Observed before the first release below: `close` queues its `STOP`
+    // while the printer still holds undrained lines.
+    let gate = Arc::clone(&session.gate);
+    let (stop_tx, stop_rx) = mpsc::channel();
+    *super::lock(&gate.probe) = Some(Arc::new(move |point| {
+        if point == Probe::PrinterStopQueued
+            && let Ok(()) = stop_tx.send(())
+        {}
+    }));
     // Prompted, so `close` keeps the session directory: the drain's
     // catch-up re-reads the dropped lines from `events.jsonl`.
     keep_dir(&log);
@@ -2954,9 +2965,16 @@ fn close_prints_durable_lines_dropped_before_stop() {
         if let Ok(()) = done_tx.send(()) {}
     });
     drop(log);
-    // Releases each write in turn until every line is through or the
-    // printer went away early; without the drain it ends on `STOP` with
-    // most lines still undelivered.
+    // Forced interleaving: `close` has queued its `STOP` before the printer
+    // is released, so the catch-up the drain recovers is really behind it.
+    Deadline::after(DEADLINE)
+        .recv(&stop_rx)
+        .expect("close queues its STOP while the printer is held");
+    // One deadline for the whole wait: the release loop and the completion
+    // receive below share it. Releases each write in turn until every line
+    // is through or the printer went away early; without the drain it ends
+    // on `STOP` with most lines still undelivered.
+    let wait = Deadline::after(DEADLINE);
     let mut released = 0;
     if release_tx.send(()).is_err() {
         panic!("the printer is still held on its first write");
@@ -2966,7 +2984,7 @@ fn close_prints_durable_lines_dropped_before_stop() {
         if done_rx.try_recv().is_ok() {
             break;
         }
-        match Deadline::after(DEADLINE).recv(&entered_rx) {
+        match wait.recv(&entered_rx) {
             Ok(()) => {
                 if release_tx.send(()).is_err() {
                     break;
@@ -2976,8 +2994,7 @@ fn close_prints_durable_lines_dropped_before_stop() {
             Err(_) => break,
         }
     }
-    Deadline::after(DEADLINE)
-        .recv(&done_rx)
+    wait.recv(&done_rx)
         .expect("close returns after the writer is released");
     let text = String::from_utf8(lock(&buf).clone()).expect("stdout is UTF-8");
     let lines = lines_of(&text);
