@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use contract::events::{
     DelegateFinished, Event, InstructionFile, InstructionReason, InstructionSent, JobCompleted,
-    Outcome, ToolCallRequested,
+    Outcome, SkillListed, SkillSource, SkillsChanged, ToolCallRequested,
 };
 use contract::provider::Input;
 use contract::{ActionId, Envelope, JobId, Seq, SessionId};
@@ -316,6 +316,15 @@ fn live_rendering_equals_rebuild() {
         Event::DateChanged(contract::events::DateChanged {
             date: "2023-11-15".into(),
         }),
+        Event::SkillsChanged(SkillsChanged {
+            added: vec![SkillListed {
+                name: "late".into(),
+                description: "Runs late.".into(),
+                path: "/w/.agents/skills/late/SKILL.md".into(),
+                source: SkillSource::Repository,
+            }],
+            removed: vec!["old".into()],
+        }),
         file(
             &path,
             InstructionReason::Deleted,
@@ -344,6 +353,8 @@ fn live_rendering_equals_rebuild() {
                 "instruction_file"
             } else if matches!(event, Event::DateChanged(_)) {
                 "date_changed"
+            } else if matches!(event, Event::SkillsChanged(_)) {
+                "skills_changed"
             } else {
                 unreachable!("only change lines are rendered here");
             };
@@ -2085,4 +2096,66 @@ fn rendering_line_by_line_and_rebuilding_agree_on_skills() {
     .unwrap();
     assert_eq!(live.skills, rebuilt.skills);
     assert_eq!(live.skills.len(), 2);
+}
+
+#[test]
+fn a_skills_change_renders_the_added_then_the_removed_line() {
+    let mut conversation = Vec::new();
+    let mut had = BTreeMap::new();
+    render(
+        &mut conversation,
+        &Event::SkillsChanged(SkillsChanged {
+            added: vec![SkillListed {
+                name: "late".into(),
+                description: "Runs late.".into(),
+                path: "/w/.agents/skills/late/SKILL.md".into(),
+                source: SkillSource::Repository,
+            }],
+            removed: vec!["old".into()],
+        }),
+        None,
+        "fake/model-1",
+        &mut had,
+        &mut crate::handoff::Carry::default(),
+    );
+    assert_eq!(conversation.len(), 1);
+    assert_eq!(
+        user_text(&conversation[0]),
+        "Fiber: skill late can now be loaded: Runs late.\nFiber: skill old was removed and can no longer be loaded."
+    );
+}
+
+#[test]
+fn a_skills_change_after_a_crash_follows_the_fixed_result() {
+    // A call with no result, then a skills change written at the next turn
+    // start: the fixed result flushes before the change message, so no
+    // message separates the call from its result.
+    let requested = Event::ToolCallRequested(ToolCallRequested {
+        name: "read".into(),
+        arguments: json!({"city": "Paris"}),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+        provider_item: None,
+    });
+    let changed = Event::SkillsChanged(SkillsChanged {
+        added: Vec::new(),
+        removed: vec!["old".into()],
+    });
+    let lines = vec![
+        line("tool_call_requested", &requested, Some("a_1")),
+        line("skills_changed", &changed, None),
+    ];
+    let conversation = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(conversation.len(), 3);
+    assert!(matches!(
+        &conversation[0],
+        Input::ToolCall { action_id, .. } if action_id.0 == "a_1"
+    ));
+    assert!(matches!(
+        &conversation[1],
+        Input::ToolResult { action_id, is_error, .. } if action_id.0 == "a_1" && *is_error
+    ));
+    assert!(matches!(&conversation[2], Input::User { .. }));
+    assert!(user_text(&conversation[2]).contains("was removed"));
 }

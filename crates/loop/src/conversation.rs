@@ -231,6 +231,7 @@ impl Rendered {
             | Event::OpeningMessage(_)
             | Event::SessionStarted(_)
             | Event::InstructionFile(_)
+            | Event::SkillsChanged(_)
             | Event::DateChanged(_)
             | Event::HandoffStarted(_)
             | Event::AssistantMessageStarted(_) => {
@@ -271,7 +272,6 @@ impl Rendered {
             | Event::Notice(_)
             | Event::PreambleBuilt(_)
             | Event::ModelChanged(_)
-            | Event::SkillsChanged(_)
             | Event::SkillsResent(_)
             | Event::HandoffCompleted(_)
             | Event::ContextNudged(_)
@@ -499,6 +499,12 @@ pub(crate) fn render(
                 ),
              images: Vec::new(),});
         }
+        // An added or removed skill appends what the turn sent, rendered
+        // from the event alone, so a resume renders the identical bytes
+        // (`docs/system-prompt.md`, "Recording").
+        Event::SkillsChanged(changed) => conversation.push(Input::User {
+            text: crate::skill_set::SkillSet::changed_text(changed),
+         images: Vec::new(),}),
         Event::ReasoningCompleted(reasoning) => conversation.push(Input::Reasoning {
             model: model.to_owned(),
             text: reasoning.text.clone(),
@@ -591,7 +597,6 @@ pub(crate) fn render(
         | Event::Notice(_)
         | Event::PreambleBuilt(_)
         | Event::ModelChanged(_)
-        | Event::SkillsChanged(_)
         | Event::SkillsResent(_)
         | Event::ReviewerKept(_)
         | Event::McpServerFailed(_)

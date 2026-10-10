@@ -1192,7 +1192,8 @@ fn a_skill_written_after_the_first_lookup_is_sent_as_written() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert_eq!(kinds(&session.lines()), plain());
     // Written after the opening's discovery, the skill is unknown to the
-    // maintained set: the prompt is sent as written.
+    // maintained set when it is admitted: the prompt is sent as written,
+    // and the turn-start check appends its added line.
     late_skill(&session.workspace);
     session.inbox.send(support::delivery("/late 1")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -1200,6 +1201,7 @@ fn a_skill_written_after_the_first_lookup_is_sent_as_written() {
     assert_eq!(
         kinds(&lines),
         [
+            "skills_changed",
             "turn_started",
             "step_started",
             "assistant_message_started",
