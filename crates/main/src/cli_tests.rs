@@ -7,8 +7,9 @@ use clap::error::ContextValue;
 use crate::completion::Shell;
 
 use super::{
-    Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation, MENU, SessionsArgs,
-    SessionsCommands, command, parse_from, usage_sentence, version_line,
+    ApproveArgs, AskArgs, Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation,
+    LoginArgs, LogoutArgs, MENU, SessionArgs, SessionsArgs, SessionsCommands, command, parse_from,
+    usage_sentence, version_line,
 };
 
 fn menu() -> String {
@@ -38,6 +39,24 @@ fn sentence(args: &[&str]) -> String {
     usage(args).1
 }
 
+/// The visible subcommands the menu does not name: a command line is a
+/// line under a group heading that is indented by two spaces, and its
+/// first whitespace-separated token is the command it documents. A
+/// substring match is not enough: the `sessions delete` description holds
+/// "the sessions that continue it", which contains "continue".
+fn missing_from_menu(menu: &str, names: &[String]) -> Vec<String> {
+    let tokens: Vec<&str> = menu
+        .lines()
+        .filter(|line| line.starts_with("  "))
+        .filter_map(|line| line.split_whitespace().next())
+        .collect();
+    names
+        .iter()
+        .filter(|name| !tokens.iter().any(|token| token == name))
+        .cloned()
+        .collect()
+}
+
 #[test]
 fn the_menu_is_hand_grouped_and_names_every_visible_subcommand() {
     let mut cmd = command();
@@ -47,12 +66,12 @@ fn the_menu_is_hand_grouped_and_names_every_visible_subcommand() {
     assert_eq!(short, menu());
     assert!(!long.contains("grep"), "{long}");
     assert!(!long.contains("find"), "{long}");
-    for name in visible() {
-        assert!(
-            long.contains(&name),
-            "{name} is missing from the menu\n{long}"
-        );
-    }
+    let names = visible();
+    assert_eq!(
+        missing_from_menu(&long, &names),
+        Vec::<String>::new(),
+        "{long}"
+    );
     assert!(
         cmd.get_subcommands().any(|sub| sub.get_name() == "help"),
         "the help command is missing from the parser"
@@ -75,6 +94,631 @@ fn the_menu_is_hand_grouped_and_names_every_visible_subcommand() {
         "{parsed:?}"
     );
     assert_eq!(super::render_help::<&str>(&[]).unwrap(), menu());
+}
+
+#[test]
+fn the_menu_check_fails_when_a_command_line_is_gone() {
+    let names = visible();
+    let without_continue: String = menu()
+        .lines()
+        .filter(|line| line.split_whitespace().next() != Some("continue"))
+        .collect::<Vec<&str>>()
+        .join("\n");
+    assert_eq!(
+        missing_from_menu(&without_continue, &names),
+        ["continue".to_owned()]
+    );
+    // `hub` stays while any of its lines stays: removing `hub install`
+    // leaves `hub status`, so `hub` is still found.
+    let without_install: String = menu()
+        .lines()
+        .filter(|line| !line.contains("hub install"))
+        .collect::<Vec<&str>>()
+        .join("\n");
+    assert!(
+        !missing_from_menu(&without_install, &names).contains(&"hub".to_owned()),
+        "hub is still named by its other lines"
+    );
+}
+
+/// Every successful parse the per-flag tests pinned, in one table: each
+/// row is the argv and the `Invocation` it parses to. The usage halves of
+/// those tests stay where they were, as one-sentence tests.
+#[test]
+fn parses_argv_into_its_invocation() {
+    let cases: Vec<(&[&str], Invocation)> = vec![
+        (
+            &["fiber", "extension", "update"],
+            Invocation::Run(Some(Commands::Extension(ExtensionCommands::Update {
+                name: None,
+            }))),
+        ),
+        (
+            &["fiber", "extension", "update", "x"],
+            Invocation::Run(Some(Commands::Extension(ExtensionCommands::Update {
+                name: Some("x".to_owned()),
+            }))),
+        ),
+        (
+            &["fiber", "extension", "test"],
+            Invocation::Run(Some(Commands::Extension(ExtensionCommands::Test {
+                path: None,
+            }))),
+        ),
+        (
+            &["fiber", "extension", "test", "./package"],
+            Invocation::Run(Some(Commands::Extension(ExtensionCommands::Test {
+                path: Some(PathBuf::from("./package")),
+            }))),
+        ),
+        (
+            &["fiber", "approve"],
+            Invocation::Run(Some(Commands::Approve(ApproveArgs { yes: false }))),
+        ),
+        (
+            &["fiber", "approve", "--yes"],
+            Invocation::Run(Some(Commands::Approve(ApproveArgs { yes: true }))),
+        ),
+        (
+            &["fiber", "login"],
+            Invocation::Run(Some(Commands::Login(LoginArgs {
+                name: None,
+                label: None,
+                device: false,
+            }))),
+        ),
+        (
+            &["fiber", "login", "openrouter"],
+            Invocation::Run(Some(Commands::Login(LoginArgs {
+                name: Some("openrouter".to_owned()),
+                label: None,
+                device: false,
+            }))),
+        ),
+        (
+            &["fiber", "login", "acme", "--as", "work"],
+            Invocation::Run(Some(Commands::Login(LoginArgs {
+                name: Some("acme".to_owned()),
+                label: Some("work".to_owned()),
+                device: false,
+            }))),
+        ),
+        (
+            &["fiber", "login", "codex", "--device"],
+            Invocation::Run(Some(Commands::Login(LoginArgs {
+                name: Some("codex".to_owned()),
+                label: None,
+                device: true,
+            }))),
+        ),
+        (
+            &["fiber", "logout"],
+            Invocation::Run(Some(Commands::Logout(LogoutArgs {
+                provider: None,
+                label: None,
+                all: false,
+            }))),
+        ),
+        (
+            &["fiber", "logout", "opencode-zen"],
+            Invocation::Run(Some(Commands::Logout(LogoutArgs {
+                provider: Some("opencode-zen".to_owned()),
+                label: None,
+                all: false,
+            }))),
+        ),
+        (
+            &["fiber", "logout", "acme", "--as", "work"],
+            Invocation::Run(Some(Commands::Logout(LogoutArgs {
+                provider: Some("acme".to_owned()),
+                label: Some("work".to_owned()),
+                all: false,
+            }))),
+        ),
+        (
+            &["fiber", "logout", "acme", "--all"],
+            Invocation::Run(Some(Commands::Logout(LogoutArgs {
+                provider: Some("acme".to_owned()),
+                label: None,
+                all: true,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "export", "s_abc"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Export {
+                    id: "s_abc".to_owned(),
+                    path: None,
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "export", "s_abc", "out"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Export {
+                    id: "s_abc".to_owned(),
+                    path: Some(PathBuf::from("out")),
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "delete", "s_abc"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Delete {
+                    cascade: false,
+                    yes: false,
+                    id: "s_abc".to_owned(),
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "delete", "--cascade", "--yes", "s_abc"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Delete {
+                    cascade: true,
+                    yes: true,
+                    id: "s_abc".to_owned(),
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "prune"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Prune {
+                    older_than: None,
+                    cascade: false,
+                    dry_run: false,
+                    yes: false,
+                    force: false,
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "sessions",
+                "prune",
+                "--older-than",
+                "30d",
+                "--cascade",
+                "--dry-run",
+                "--yes",
+                "--force",
+            ],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Prune {
+                    older_than: Some("30d".to_owned()),
+                    cascade: true,
+                    dry_run: true,
+                    yes: true,
+                    force: true,
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: None,
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "--all"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: None,
+                all: true,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "--json"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: None,
+                all: false,
+                json: true,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "--json", "--all"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: None,
+                all: true,
+                json: true,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "search", "x"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Search {
+                    all: false,
+                    json: false,
+                    text: "x".to_owned(),
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "search", "--all", "x"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Search {
+                    all: true,
+                    json: false,
+                    text: "x".to_owned(),
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "search", "--json", "x"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Search {
+                    all: false,
+                    json: true,
+                    text: "x".to_owned(),
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "search", "--all", "--json", "x"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Search {
+                    all: true,
+                    json: true,
+                    text: "x".to_owned(),
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "search", "--json", "--all", "x"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Search {
+                    all: true,
+                    json: true,
+                    text: "x".to_owned(),
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "sessions", "search", "--", "-n"],
+            Invocation::Run(Some(Commands::Sessions(SessionsArgs {
+                command: Some(SessionsCommands::Search {
+                    all: false,
+                    json: false,
+                    text: "-n".to_owned(),
+                }),
+                all: false,
+                json: false,
+            }))),
+        ),
+        (
+            &["fiber", "completion", "bash"],
+            Invocation::Run(Some(Commands::Completion { shell: Shell::Bash })),
+        ),
+        (
+            &["fiber", "completion", "zsh"],
+            Invocation::Run(Some(Commands::Completion { shell: Shell::Zsh })),
+        ),
+        (
+            &["fiber", "completion", "fish"],
+            Invocation::Run(Some(Commands::Completion { shell: Shell::Fish })),
+        ),
+        (
+            &["fiber", "ask", "--resume", "s_abc", "hi"],
+            Invocation::Run(Some(Commands::Ask(AskArgs {
+                model: None,
+                overrides: Vec::new(),
+                resume: Some("s_abc".to_owned()),
+                credential: None,
+                worktree: false,
+                prompt: vec!["hi".to_owned()],
+            }))),
+        ),
+        (
+            &["fiber", "ask", "--resume", "s_abc"],
+            Invocation::Run(Some(Commands::Ask(AskArgs {
+                model: None,
+                overrides: Vec::new(),
+                resume: Some("s_abc".to_owned()),
+                credential: None,
+                worktree: false,
+                prompt: Vec::new(),
+            }))),
+        ),
+        (
+            &["fiber", "ask", "hi"],
+            Invocation::Run(Some(Commands::Ask(AskArgs {
+                model: None,
+                overrides: Vec::new(),
+                resume: None,
+                credential: None,
+                worktree: false,
+                prompt: vec!["hi".to_owned()],
+            }))),
+        ),
+        (
+            &["fiber", "ask", "--worktree", "hi"],
+            Invocation::Run(Some(Commands::Ask(AskArgs {
+                model: None,
+                overrides: Vec::new(),
+                resume: None,
+                credential: None,
+                worktree: true,
+                prompt: vec!["hi".to_owned()],
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "ask",
+                "--resume",
+                "s_abc",
+                "--credential",
+                "home",
+                "hi",
+            ],
+            Invocation::Run(Some(Commands::Ask(AskArgs {
+                model: None,
+                overrides: Vec::new(),
+                resume: Some("s_abc".to_owned()),
+                credential: Some("home".to_owned()),
+                worktree: false,
+                prompt: vec!["hi".to_owned()],
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "session",
+                "--id",
+                "s_0123456789abcdef",
+                "--workspace",
+                "/home/u/proj",
+                "--worktree",
+            ],
+            Invocation::Run(Some(Commands::Session(SessionArgs {
+                id: "s_0123456789abcdef".to_owned(),
+                workspace: PathBuf::from("/home/u/proj"),
+                model: None,
+                overrides: Vec::new(),
+                prompt: None,
+                resume: false,
+                worktree: true,
+                rewound_from: None,
+                parent: None,
+                delegate_id: None,
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "session",
+                "--id",
+                "s_0123456789abcdef",
+                "--workspace",
+                "/home/u/proj",
+                "--model",
+                "fake/m",
+                "--prompt",
+                "hi",
+            ],
+            Invocation::Run(Some(Commands::Session(SessionArgs {
+                id: "s_0123456789abcdef".to_owned(),
+                workspace: PathBuf::from("/home/u/proj"),
+                model: Some("fake/m".to_owned()),
+                overrides: Vec::new(),
+                prompt: Some("hi".to_owned()),
+                resume: false,
+                worktree: false,
+                rewound_from: None,
+                parent: None,
+                delegate_id: None,
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "session",
+                "--id",
+                "s_0123456789abcdef",
+                "--workspace",
+                "/home/u/proj",
+            ],
+            Invocation::Run(Some(Commands::Session(SessionArgs {
+                id: "s_0123456789abcdef".to_owned(),
+                workspace: PathBuf::from("/home/u/proj"),
+                model: None,
+                overrides: Vec::new(),
+                prompt: None,
+                resume: false,
+                worktree: false,
+                rewound_from: None,
+                parent: None,
+                delegate_id: None,
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "session",
+                "--id",
+                "s_0123456789abcdef",
+                "--workspace",
+                "/home/u/proj",
+                "--resume",
+            ],
+            Invocation::Run(Some(Commands::Session(SessionArgs {
+                id: "s_0123456789abcdef".to_owned(),
+                workspace: PathBuf::from("/home/u/proj"),
+                model: None,
+                overrides: Vec::new(),
+                prompt: None,
+                resume: true,
+                worktree: false,
+                rewound_from: None,
+                parent: None,
+                delegate_id: None,
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "session",
+                "--id",
+                "s_0123456789abcdef",
+                "--workspace",
+                "/home/u/proj",
+                "--model",
+                "fake/m",
+                "--prompt",
+                "hi",
+                "--parent",
+                "s_aaaaaaaaaaaaaaaa",
+                "--delegate-id",
+                "j_bbbbbbbbbbbbbbbb",
+            ],
+            Invocation::Run(Some(Commands::Session(SessionArgs {
+                id: "s_0123456789abcdef".to_owned(),
+                workspace: PathBuf::from("/home/u/proj"),
+                model: Some("fake/m".to_owned()),
+                overrides: Vec::new(),
+                prompt: Some("hi".to_owned()),
+                resume: false,
+                worktree: false,
+                rewound_from: None,
+                parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+                delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "session",
+                "--id",
+                "s_0123456789abcdef",
+                "--workspace",
+                "/home/u/proj",
+                "--rewound-from",
+                "s_aaaaaaaaaaaaaaaa",
+            ],
+            Invocation::Run(Some(Commands::Session(SessionArgs {
+                id: "s_0123456789abcdef".to_owned(),
+                workspace: PathBuf::from("/home/u/proj"),
+                model: None,
+                overrides: Vec::new(),
+                prompt: None,
+                resume: false,
+                worktree: false,
+                rewound_from: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
+                parent: None,
+                delegate_id: None,
+            }))),
+        ),
+        (
+            &["fiber", "config", "get", "model"],
+            Invocation::Run(Some(Commands::Config(ConfigCommands::Get {
+                key: "model".to_owned(),
+            }))),
+        ),
+        (
+            &["fiber", "config", "set", "model", "a/b"],
+            Invocation::Run(Some(Commands::Config(ConfigCommands::Set {
+                project: false,
+                repo: false,
+                key: "model".to_owned(),
+                value: "a/b".to_owned(),
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "config",
+                "set",
+                "--project",
+                "handoff.tokens",
+                "200000",
+            ],
+            Invocation::Run(Some(Commands::Config(ConfigCommands::Set {
+                project: true,
+                repo: false,
+                key: "handoff.tokens".to_owned(),
+                value: "200000".to_owned(),
+            }))),
+        ),
+        (
+            &["fiber", "config", "set", "--repo", "model", "a/b"],
+            Invocation::Run(Some(Commands::Config(ConfigCommands::Set {
+                project: false,
+                repo: true,
+                key: "model".to_owned(),
+                value: "a/b".to_owned(),
+            }))),
+        ),
+        (
+            &["fiber", "hub", "serve"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Serve { installed: false }))),
+        ),
+        (
+            &["fiber", "hub", "serve", "--installed"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Serve { installed: true }))),
+        ),
+        (
+            &["fiber", "hub", "install"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: None }))),
+        ),
+        (
+            &["fiber", "hub", "install", "--port", "4040"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Install {
+                port: Some(4040),
+            }))),
+        ),
+        (
+            &["fiber", "hub", "install", "--port", "1"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: Some(1) }))),
+        ),
+        (
+            &["fiber", "hub", "install", "--port", "65535"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Install {
+                port: Some(65535),
+            }))),
+        ),
+        (
+            &["fiber", "hub", "uninstall"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Uninstall))),
+        ),
+        (
+            &["fiber", "hub", "status"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Status { json: false }))),
+        ),
+        (
+            &["fiber", "hub", "status", "--json"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Status { json: true }))),
+        ),
+    ];
+    for (argv, expected) in &cases {
+        let parsed = parse_from(argv.iter().copied());
+        assert_eq!(format!("{parsed:?}"), format!("{expected:?}"), "{argv:?}");
+    }
 }
 
 #[test]
@@ -141,37 +785,7 @@ fn an_unknown_subcommand_keeps_claps_suggestion() {
 }
 
 #[test]
-fn extension_update_parses_an_optional_name() {
-    let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Update { name }))) =
-        parse_from(["fiber", "extension", "update"])
-    else {
-        panic!("update with no name");
-    };
-    assert_eq!(name, None);
-    let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Update { name }))) =
-        parse_from(["fiber", "extension", "update", "x"])
-    else {
-        panic!("update with name");
-    };
-    assert_eq!(name.as_deref(), Some("x"));
-}
-
-#[test]
-fn extension_test_parses_an_optional_path_and_rejects_extra_arguments() {
-    let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Test { path }))) =
-        parse_from(["fiber", "extension", "test"])
-    else {
-        panic!("extension test without a path");
-    };
-    assert_eq!(path, None);
-
-    let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Test { path }))) =
-        parse_from(["fiber", "extension", "test", "./package"])
-    else {
-        panic!("extension test with a path");
-    };
-    assert_eq!(path, Some(PathBuf::from("./package")));
-
+fn extension_test_rejects_extra_arguments() {
     let error = sentence(&["fiber", "extension", "test", "a", "b"]);
     assert!(error.starts_with("Unexpected argument 'b'"), "{error}");
     assert!(error.ends_with("Run `fiber --help` for usage."), "{error}");
@@ -179,16 +793,7 @@ fn extension_test_parses_an_optional_path_and_rejects_extra_arguments() {
 }
 
 #[test]
-fn approve_parses_an_optional_yes_and_nothing_else() {
-    let Invocation::Run(Some(Commands::Approve(args))) = parse_from(["fiber", "approve"]) else {
-        panic!("approve");
-    };
-    assert!(!args.yes);
-    let Invocation::Run(Some(Commands::Approve(args))) = parse_from(["fiber", "approve", "--yes"])
-    else {
-        panic!("approve --yes");
-    };
-    assert!(args.yes);
+fn approve_rejects_anything_else() {
     assert!(
         sentence(&["fiber", "approve", "extra"]).starts_with("Unexpected argument 'extra'"),
         "{}",
@@ -211,26 +816,7 @@ fn the_menu_and_approve_help_say_what_approve_does() {
 }
 
 #[test]
-fn login_takes_an_optional_name_and_logout_an_optional_provider() {
-    for (args, provider) in [
-        (&["fiber", "login"][..], None),
-        (&["fiber", "login", "openrouter"], Some("openrouter")),
-    ] {
-        let Invocation::Run(Some(Commands::Login(login))) = parse_from(args.iter().copied()) else {
-            panic!("{args:?}");
-        };
-        assert_eq!(login.name.as_deref(), provider, "{args:?}");
-    }
-    for (args, provider) in [
-        (&["fiber", "logout"][..], None),
-        (&["fiber", "logout", "opencode-zen"], Some("opencode-zen")),
-    ] {
-        let Invocation::Run(Some(Commands::Logout(logout))) = parse_from(args.iter().copied())
-        else {
-            panic!("{args:?}");
-        };
-        assert_eq!(logout.provider.as_deref(), provider, "{args:?}");
-    }
+fn login_and_logout_reject_extra_arguments() {
     for args in [
         &["fiber", "login", "a", "b"][..],
         &["fiber", "logout", "a", "b"],
@@ -244,42 +830,7 @@ fn login_takes_an_optional_name_and_logout_an_optional_provider() {
 }
 
 #[test]
-fn login_and_logout_take_as_and_logout_takes_all() {
-    let Invocation::Run(Some(Commands::Login(login))) =
-        parse_from(["fiber", "login", "acme", "--as", "work"])
-    else {
-        panic!("login --as");
-    };
-    assert_eq!(login.label.as_deref(), Some("work"));
-    assert!(!login.device);
-    let Invocation::Run(Some(Commands::Login(login))) =
-        parse_from(["fiber", "login", "codex", "--device"])
-    else {
-        panic!("login --device");
-    };
-    assert!(login.device);
-    let Invocation::Run(Some(Commands::Login(login))) = parse_from(["fiber", "login", "acme"])
-    else {
-        panic!("login");
-    };
-    assert_eq!(login.label, None);
-    assert!(!login.device);
-    for (args, label, all) in [
-        (
-            &["fiber", "logout", "acme", "--as", "work"][..],
-            Some("work"),
-            false,
-        ),
-        (&["fiber", "logout", "acme", "--all"], None, true),
-        (&["fiber", "logout", "acme"], None, false),
-    ] {
-        let Invocation::Run(Some(Commands::Logout(logout))) = parse_from(args.iter().copied())
-        else {
-            panic!("{args:?}");
-        };
-        assert_eq!(logout.label.as_deref(), label, "{args:?}");
-        assert_eq!(logout.all, all, "{args:?}");
-    }
+fn logout_as_conflicts_with_all() {
     let said = sentence(&["fiber", "logout", "acme", "--as", "w", "--all"]);
     assert!(said.contains("cannot be used with"), "{said}");
     assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
@@ -287,25 +838,7 @@ fn login_and_logout_take_as_and_logout_takes_all() {
 }
 
 #[test]
-fn sessions_export_takes_an_id_and_an_optional_path() {
-    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-        command: Some(SessionsCommands::Export { id, path }),
-        ..
-    }))) = parse_from(["fiber", "sessions", "export", "s_abc"])
-    else {
-        panic!("export with an id");
-    };
-    assert_eq!(id, "s_abc");
-    assert_eq!(path, None);
-    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-        command: Some(SessionsCommands::Export { id, path }),
-        ..
-    }))) = parse_from(["fiber", "sessions", "export", "s_abc", "out"])
-    else {
-        panic!("export with an id and a path");
-    };
-    assert_eq!(id, "s_abc");
-    assert_eq!(path, Some(PathBuf::from("out")));
+fn sessions_export_without_an_id_is_a_usage_sentence() {
     assert!(
         sentence(&["fiber", "sessions", "export"])
             .starts_with("The following required arguments were not provided: <id>"),
@@ -315,128 +848,13 @@ fn sessions_export_takes_an_id_and_an_optional_path() {
 }
 
 #[test]
-fn sessions_delete_takes_cascade_yes_and_an_id() {
-    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-        command: Some(SessionsCommands::Delete { cascade, yes, id }),
-        ..
-    }))) = parse_from(["fiber", "sessions", "delete", "s_abc"])
-    else {
-        panic!("delete with an id");
-    };
-    assert_eq!((cascade, yes, id.as_str()), (false, false, "s_abc"));
-    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-        command: Some(SessionsCommands::Delete { cascade, yes, id }),
-        ..
-    }))) = parse_from(["fiber", "sessions", "delete", "--cascade", "--yes", "s_abc"])
-    else {
-        panic!("delete with both flags");
-    };
-    assert_eq!((cascade, yes, id.as_str()), (true, true, "s_abc"));
+fn sessions_delete_without_an_id_is_a_usage_sentence() {
     assert!(
         sentence(&["fiber", "sessions", "delete"])
             .starts_with("The following required arguments were not provided: <id>"),
         "{}",
         sentence(&["fiber", "sessions", "delete"])
     );
-}
-
-#[test]
-fn sessions_prune_takes_older_than_cascade_dry_run_and_yes() {
-    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-        command:
-            Some(SessionsCommands::Prune {
-                older_than,
-                cascade,
-                dry_run,
-                yes,
-                force,
-            }),
-        ..
-    }))) = parse_from(["fiber", "sessions", "prune"])
-    else {
-        panic!("bare prune");
-    };
-    assert_eq!(
-        (older_than, cascade, dry_run, yes, force),
-        (None, false, false, false, false)
-    );
-    let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-        command:
-            Some(SessionsCommands::Prune {
-                older_than,
-                cascade,
-                dry_run,
-                yes,
-                force,
-            }),
-        ..
-    }))) = parse_from([
-        "fiber",
-        "sessions",
-        "prune",
-        "--older-than",
-        "30d",
-        "--cascade",
-        "--dry-run",
-        "--yes",
-        "--force",
-    ])
-    else {
-        panic!("prune with every flag");
-    };
-    assert_eq!(
-        (older_than.as_deref(), cascade, dry_run, yes, force),
-        (Some("30d"), true, true, true, true)
-    );
-}
-
-#[test]
-fn the_menu_lists_sessions_prune_under_sessions() {
-    let menu = menu();
-    let sessions = menu
-        .split("\n\n")
-        .find(|group| group.starts_with("Sessions:"))
-        .unwrap();
-    assert!(
-        sessions.lines().any(|l|
-            l == "  sessions prune [--older-than <duration>] [--dry-run]               Delete old sessions, worktrees and diagnostic logs"),
-        "{sessions}"
-    );
-}
-
-#[test]
-fn the_menu_lists_sessions_delete_under_sessions() {
-    let menu = menu();
-    let sessions = menu
-        .split("\n\n")
-        .find(|group| group.starts_with("Sessions:"))
-        .unwrap();
-    assert!(
-        sessions.lines().any(|l|
-            l == "  sessions delete [--cascade] [--yes] <id>                           Delete a session, and with --cascade the sessions that continue it"),
-        "{sessions}"
-    );
-}
-
-#[test]
-fn sessions_alone_or_with_its_flags_is_the_list() {
-    for (args, all, json) in [
-        (&["fiber", "sessions"][..], false, false),
-        (&["fiber", "sessions", "--all"], true, false),
-        (&["fiber", "sessions", "--json"], false, true),
-        (&["fiber", "sessions", "--json", "--all"], true, true),
-    ] {
-        let parsed = parse_from(args.iter().copied());
-        let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-            command: None,
-            all: got_all,
-            json: got_json,
-        }))) = parsed
-        else {
-            panic!("{args:?} is not the list: {parsed:?}");
-        };
-        assert_eq!((got_all, got_json), (all, json), "{args:?}");
-    }
 }
 
 #[test]
@@ -495,109 +913,6 @@ fn resume_and_continue_reject_what_they_do_not_take() {
 }
 
 #[test]
-fn the_menu_lists_resume_and_continue_under_sessions() {
-    let menu = menu();
-    let sessions = menu
-        .split("\n\n")
-        .find(|group| group.starts_with("Sessions:"))
-        .unwrap();
-    assert!(
-        sessions.lines().any(|l|
-            l == "  resume [<id>]                                                      Open a session in the terminal, or home at the session list"),
-        "{sessions}"
-    );
-    assert!(
-        sessions.lines().any(|l|
-            l == "  continue                                                           Open the most recent session in this project"),
-        "{sessions}"
-    );
-}
-
-#[test]
-fn the_menu_lists_the_sessions_list_under_sessions() {
-    let menu = menu();
-    let sessions = menu
-        .split("\n\n")
-        .find(|group| group.starts_with("Sessions:"))
-        .unwrap();
-    assert!(
-        sessions.lines().any(|l|
-            l == "  sessions [--all] [--json]                                          List sessions: id, state, name, what it waits on, spend"),
-        "{sessions}"
-    );
-}
-
-#[test]
-fn the_menu_lists_sessions_export_under_sessions() {
-    let menu = menu();
-    let sessions = menu
-        .split("\n\n")
-        .find(|group| group.starts_with("Sessions:"))
-        .unwrap();
-    assert!(
-        sessions.lines().any(|l|
-            l == "  sessions export <id> [<path>]                                      Write the session's log and its artifacts to <path>"),
-        "{sessions}"
-    );
-}
-
-#[test]
-fn sessions_search_takes_flags_and_a_text() {
-    for (args, all, json, text) in [
-        (&["fiber", "sessions", "search", "x"][..], false, false, "x"),
-        (
-            &["fiber", "sessions", "search", "--all", "x"],
-            true,
-            false,
-            "x",
-        ),
-        (
-            &["fiber", "sessions", "search", "--json", "x"],
-            false,
-            true,
-            "x",
-        ),
-        (
-            &["fiber", "sessions", "search", "--all", "--json", "x"],
-            true,
-            true,
-            "x",
-        ),
-        (
-            &["fiber", "sessions", "search", "--json", "--all", "x"],
-            true,
-            true,
-            "x",
-        ),
-        (
-            &["fiber", "sessions", "search", "--", "-n"],
-            false,
-            false,
-            "-n",
-        ),
-    ] {
-        let parsed = parse_from(args.iter().copied());
-        let Invocation::Run(Some(Commands::Sessions(SessionsArgs {
-            command:
-                Some(SessionsCommands::Search {
-                    all: got_all,
-                    json: got_json,
-                    text: got_text,
-                }),
-            ..
-        }))) = parsed
-        else {
-            panic!("{args:?} is not the search: {parsed:?}");
-        };
-        assert_eq!(
-            (got_all, got_json, got_text.as_str()),
-            (all, json, text),
-            "{args:?}"
-        );
-    }
-}
-
-#[test]
 fn sessions_search_without_a_text_is_a_usage_sentence() {
     let missing = sentence(&["fiber", "sessions", "search"]);
     assert!(missing.contains("<text>"), "{missing}");
@@ -624,20 +939,6 @@ fn a_search_flag_with_a_list_flag_is_a_usage_sentence() {
 }
 
 #[test]
-fn the_menu_lists_sessions_search_under_sessions() {
-    let menu = menu();
-    let sessions = menu
-        .split("\n\n")
-        .find(|group| group.starts_with("Sessions:"))
-        .unwrap();
-    assert!(
-        sessions.lines().any(|l|
-            l == "  sessions search [--all] [--json] <text>                            Search the logs of past and running sessions for the text"),
-        "{sessions}"
-    );
-}
-
-#[test]
 fn models_takes_an_optional_search_and_json() {
     let Invocation::Run(Some(Commands::Models(models))) = parse_from(["fiber", "models"]) else {
         panic!("bare models");
@@ -656,61 +957,11 @@ fn models_takes_an_optional_search_and_json() {
         "{}",
         sentence(&["fiber", "models", "a", "b"])
     );
-}
-
-#[test]
-fn the_menu_lists_models_under_sessions() {
-    let menu = menu();
-    let sessions = menu
-        .split("\n\n")
-        .find(|group| group.starts_with("Sessions:"))
-        .unwrap();
-    assert!(
-        sessions.lines().any(|l|
-            l == "  models [<search>] [--json]                                         List the models the installed providers serve"),
-        "{sessions}"
-    );
     let help = super::render_help(&["models"]).unwrap();
     assert!(
         help.contains("List the models the installed providers serve"),
         "{help}"
     );
-    assert!(
-        help.lines()
-            .any(|line| line.starts_with("Usage: fiber models")),
-        "{help}"
-    );
-}
-
-#[test]
-fn the_menu_lists_login_and_logout_under_fiber_itself() {
-    let menu = menu();
-    let itself = menu
-        .split("\n\n")
-        .find(|group| group.starts_with("Fiber itself:"))
-        .unwrap();
-    for line in [
-        "  login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret",
-        "  logout <provider> [--as <label> | --all]  Delete a provider's stored key",
-    ] {
-        assert!(itself.lines().any(|l| l == line), "{line}\n{itself}");
-    }
-    assert!(::cli::LOGOUT_SHAPE.ends_with(" Run `fiber --help` for usage."));
-}
-
-#[test]
-fn completion_takes_bash_zsh_or_fish() {
-    for (word, shell) in [
-        ("bash", Shell::Bash),
-        ("zsh", Shell::Zsh),
-        ("fish", Shell::Fish),
-    ] {
-        let parsed = parse_from(["fiber", "completion", word]);
-        assert!(
-            matches!(parsed, Invocation::Run(Some(Commands::Completion { shell: parsed })) if parsed == shell),
-            "{word}: {parsed:?}"
-        );
-    }
 }
 
 #[test]
@@ -772,28 +1023,6 @@ fn completion_without_one_shell_is_a_usage_error() {
     assert_eq!(
         sentence,
         "Invalid value '\u{fffd}\u{fffd}' for '<shell>' [possible values: bash, zsh, fish]. Run `fiber --help` for usage."
-    );
-}
-
-#[test]
-fn the_menu_lists_completion_under_fiber_itself() {
-    let menu = menu();
-    let itself = menu
-        .split("\n\n")
-        .find(|group| group.starts_with("Fiber itself:"))
-        .unwrap();
-    let lines: Vec<&str> = itself.lines().collect();
-    assert_eq!(
-        lines,
-        [
-            "Fiber itself:",
-            "  approve [--yes]                           Show what this repository ships and approve it",
-            "  login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret",
-            "  logout <provider> [--as <label> | --all]  Delete a provider's stored key",
-            "  completion <shell>                        Print a completion script for bash, zsh or fish",
-            "  help [<command>]                          Print this menu, or a command's help",
-            "  version                                   Print the version",
-        ]
     );
 }
 
@@ -1017,32 +1246,6 @@ fn suggestions_are_the_text_clap_stored() {
 }
 
 #[test]
-fn ask_resume_takes_a_session_id() {
-    let Invocation::Run(Some(Commands::Ask(args))) =
-        parse_from(["fiber", "ask", "--resume", "s_abc", "hi"])
-    else {
-        panic!("resume with a prompt");
-    };
-    assert_eq!(args.resume.as_deref(), Some("s_abc"));
-    assert_eq!(
-        super::ask_parts(&args.prompt).unwrap(),
-        (Some("hi".to_owned()), false)
-    );
-
-    let Invocation::Run(Some(Commands::Ask(args))) =
-        parse_from(["fiber", "ask", "--resume", "s_abc"])
-    else {
-        panic!("resume without a prompt");
-    };
-    assert_eq!(args.resume.as_deref(), Some("s_abc"));
-
-    let Invocation::Run(Some(Commands::Ask(args))) = parse_from(["fiber", "ask", "hi"]) else {
-        panic!("no resume");
-    };
-    assert_eq!(args.resume, None);
-}
-
-#[test]
 fn ask_resume_without_an_id_is_a_usage_error() {
     assert_eq!(
         sentence(&["fiber", "ask", "--resume"]),
@@ -1057,20 +1260,6 @@ fn ask_resume_without_an_id_is_a_usage_error() {
 }
 
 #[test]
-fn ask_worktree_parses_and_defaults_off() {
-    let Invocation::Run(Some(Commands::Ask(args))) = parse_from(["fiber", "ask", "hi"]) else {
-        panic!("bare ask");
-    };
-    assert!(!args.worktree);
-    let Invocation::Run(Some(Commands::Ask(args))) =
-        parse_from(["fiber", "ask", "--worktree", "hi"])
-    else {
-        panic!("ask with --worktree");
-    };
-    assert!(args.worktree);
-}
-
-#[test]
 fn ask_worktree_with_resume_is_a_usage_error() {
     let (ask, said) = usage(&["fiber", "ask", "--resume", "s_abc", "--worktree", "hi"]);
     assert!(ask);
@@ -1079,21 +1268,7 @@ fn ask_worktree_with_resume_is_a_usage_error() {
 }
 
 #[test]
-fn session_worktree_parses_and_conflicts_with_resume() {
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
-        "fiber",
-        "session",
-        "--id",
-        "s_0123456789abcdef",
-        "--workspace",
-        "/home/u/proj",
-        "--worktree",
-    ]) else {
-        panic!("session with --worktree");
-    };
-    assert!(args.worktree);
-    assert!(!args.resume);
-
+fn session_worktree_conflicts_with_resume() {
     let (ask, said) = usage(&[
         "fiber",
         "session",
@@ -1268,57 +1443,7 @@ fn find_keeps_the_argv_delimiter_like_grep() {
 }
 
 #[test]
-fn session_parses_its_id_workspace_model_and_prompt() {
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
-        "fiber",
-        "session",
-        "--id",
-        "s_0123456789abcdef",
-        "--workspace",
-        "/home/u/proj",
-        "--model",
-        "fake/m",
-        "--prompt",
-        "hi",
-    ]) else {
-        panic!("session with all four flags");
-    };
-    assert_eq!(args.id, "s_0123456789abcdef");
-    assert_eq!(args.workspace, PathBuf::from("/home/u/proj"));
-    assert_eq!(args.model.as_deref(), Some("fake/m"));
-    assert_eq!(args.prompt.as_deref(), Some("hi"));
-
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
-        "fiber",
-        "session",
-        "--id",
-        "s_0123456789abcdef",
-        "--workspace",
-        "/home/u/proj",
-    ]) else {
-        panic!("session with only the required flags");
-    };
-    assert_eq!(args.model, None);
-    assert_eq!(args.prompt, None);
-    assert!(!args.resume);
-}
-
-#[test]
-fn session_resume_parses_and_conflicts_with_prompt() {
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
-        "fiber",
-        "session",
-        "--id",
-        "s_0123456789abcdef",
-        "--workspace",
-        "/home/u/proj",
-        "--resume",
-    ]) else {
-        panic!("session with --resume");
-    };
-    assert!(args.resume);
-    assert_eq!(args.prompt, None);
-
+fn session_resume_conflicts_with_prompt() {
     let said = sentence(&[
         "fiber",
         "session",
@@ -1360,32 +1485,6 @@ fn session_rejects_an_id_that_is_not_a_minted_session_id() {
         let said = sentence(&["fiber", "session", "--id", id, "--workspace", "/w"]);
         assert!(said.contains("session id"), "{id}: {said}");
     }
-}
-
-#[test]
-fn session_parent_parses_with_its_delegate_id_and_prompt() {
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
-        "fiber",
-        "session",
-        "--id",
-        "s_0123456789abcdef",
-        "--workspace",
-        "/home/u/proj",
-        "--model",
-        "fake/m",
-        "--prompt",
-        "hi",
-        "--parent",
-        "s_aaaaaaaaaaaaaaaa",
-        "--delegate-id",
-        "j_bbbbbbbbbbbbbbbb",
-    ]) else {
-        panic!("session with --parent");
-    };
-    assert_eq!(args.parent.as_deref(), Some("s_aaaaaaaaaaaaaaaa"));
-    assert_eq!(args.delegate_id.as_deref(), Some("j_bbbbbbbbbbbbbbbb"));
-    assert!(!args.resume);
-    assert!(!args.worktree);
 }
 
 #[test]
@@ -1552,59 +1651,6 @@ fn a_session_usage_error_fails_before_any_session_like_ask() {
 }
 
 #[test]
-fn config_get_takes_a_key() {
-    let Invocation::Run(Some(Commands::Config(ConfigCommands::Get { key }))) =
-        parse_from(["fiber", "config", "get", "model"])
-    else {
-        panic!("config get model");
-    };
-    assert_eq!(key, "model");
-}
-
-#[test]
-fn config_set_takes_scopes_a_key_and_a_value() {
-    let Invocation::Run(Some(Commands::Config(ConfigCommands::Set {
-        project,
-        repo,
-        key,
-        value,
-    }))) = parse_from(["fiber", "config", "set", "model", "a/b"])
-    else {
-        panic!("config set model a/b");
-    };
-    assert!(!project);
-    assert!(!repo);
-    assert_eq!(key, "model");
-    assert_eq!(value, "a/b");
-    let Invocation::Run(Some(Commands::Config(ConfigCommands::Set {
-        project,
-        repo,
-        key,
-        value,
-    }))) = parse_from([
-        "fiber",
-        "config",
-        "set",
-        "--project",
-        "handoff.tokens",
-        "200000",
-    ])
-    else {
-        panic!("config set --project");
-    };
-    assert!(project);
-    assert!(!repo);
-    assert_eq!(key, "handoff.tokens");
-    assert_eq!(value, "200000");
-    let Invocation::Run(Some(Commands::Config(ConfigCommands::Set { repo, .. }))) =
-        parse_from(["fiber", "config", "set", "--repo", "model", "a/b"])
-    else {
-        panic!("config set --repo");
-    };
-    assert!(repo);
-}
-
-#[test]
 fn config_set_with_both_scopes_is_a_usage_error() {
     assert!(
         sentence(&[
@@ -1640,30 +1686,7 @@ fn config_set_without_a_value_names_it() {
 }
 
 #[test]
-fn the_menu_lists_config_get_and_set_under_configuration() {
-    assert!(
-        menu().contains(
-            "Configuration:\n\
-             \x20\x20config get <key>                              Print the effective value and the layer it came from\n\
-             \x20\x20config set [--project | --repo] <key> <value>  Write one key in one layer's file\n"
-        ),
-        "{}",
-        menu()
-    );
-}
-
-#[test]
-fn hub_serve_parses_and_stays_hidden() {
-    let Invocation::Run(Some(Commands::Hub(HubCommands::Serve { installed: false }))) =
-        parse_from(["fiber", "hub", "serve"])
-    else {
-        panic!("hub serve parses");
-    };
-    let Invocation::Run(Some(Commands::Hub(HubCommands::Serve { installed: true }))) =
-        parse_from(["fiber", "hub", "serve", "--installed"])
-    else {
-        panic!("hub serve --installed parses");
-    };
+fn hub_serve_stays_hidden() {
     // `fiber hub` with no subcommand is a usage error, not the hub.
     let (_, missing) = usage(&["fiber", "hub"]);
     assert!(
@@ -1686,79 +1709,6 @@ fn hub_serve_parses_and_stays_hidden() {
     assert!(hub_help.contains("install"), "{hub_help}");
     let serve_help = super::render_help(&["hub", "serve"]).unwrap();
     assert!(!serve_help.contains("--installed"), "{serve_help}");
-}
-
-#[test]
-fn the_menu_lists_the_three_hub_commands_under_the_hub() {
-    assert!(
-        menu().contains(
-            "Configuration:\n\
-             \x20\x20config get <key>                              Print the effective value and the layer it came from\n\
-             \x20\x20config set [--project | --repo] <key> <value>  Write one key in one layer's file\n\
-             \n\
-             The hub:\n\
-             \x20\x20hub install [--port <port>]  Register the hub as a login service\n\
-             \x20\x20hub uninstall                Remove the hub's login service; running sessions carry on\n\
-             \x20\x20hub status [--json]          Print the hub's state: running, version, port, clients, devices, installed\n\
-             \n\
-             Flags:\n"
-        ),
-        "{}",
-        menu()
-    );
-    assert_eq!(
-        menu()
-            .lines()
-            .filter(|line| line.starts_with("  hub "))
-            .count(),
-        3,
-        "{}",
-        menu()
-    );
-    assert!(
-        visible().iter().any(|name| name == "hub"),
-        "hub is visible: {:?}",
-        visible()
-    );
-}
-
-#[test]
-fn hub_install_uninstall_and_status_parse() {
-    let Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: None }))) =
-        parse_from(["fiber", "hub", "install"])
-    else {
-        panic!("hub install");
-    };
-    let Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: Some(4040) }))) =
-        parse_from(["fiber", "hub", "install", "--port", "4040"])
-    else {
-        panic!("hub install --port 4040");
-    };
-    let Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: Some(1) }))) =
-        parse_from(["fiber", "hub", "install", "--port", "1"])
-    else {
-        panic!("hub install --port 1");
-    };
-    let Invocation::Run(Some(Commands::Hub(HubCommands::Install { port: Some(65535) }))) =
-        parse_from(["fiber", "hub", "install", "--port", "65535"])
-    else {
-        panic!("hub install --port 65535");
-    };
-    let Invocation::Run(Some(Commands::Hub(HubCommands::Uninstall))) =
-        parse_from(["fiber", "hub", "uninstall"])
-    else {
-        panic!("hub uninstall");
-    };
-    let Invocation::Run(Some(Commands::Hub(HubCommands::Status { json: false }))) =
-        parse_from(["fiber", "hub", "status"])
-    else {
-        panic!("hub status");
-    };
-    let Invocation::Run(Some(Commands::Hub(HubCommands::Status { json: true }))) =
-        parse_from(["fiber", "hub", "status", "--json"])
-    else {
-        panic!("hub status --json");
-    };
 }
 
 #[test]
@@ -1859,23 +1809,7 @@ fn the_hidden_refresh_child_takes_provider_names_only() {
 }
 
 #[test]
-fn session_rewound_from_parses_and_conflicts_with_a_fresh_start() {
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
-        "fiber",
-        "session",
-        "--id",
-        "s_0123456789abcdef",
-        "--workspace",
-        "/home/u/proj",
-        "--rewound-from",
-        "s_aaaaaaaaaaaaaaaa",
-    ]) else {
-        panic!("session with --rewound-from");
-    };
-    assert_eq!(args.rewound_from, Some("s_aaaaaaaaaaaaaaaa".to_owned()));
-    assert!(!args.resume);
-    assert!(!args.worktree);
-
+fn session_rewound_from_conflicts_with_a_fresh_start() {
     for extra in [
         vec!["--resume"],
         vec!["--prompt", "hi"],
@@ -1905,30 +1839,6 @@ fn session_rewound_from_parses_and_conflicts_with_a_fresh_start() {
         let (_, said) = usage(&argv);
         assert!(said.contains("--rewound-from"), "{said}");
     }
-}
-
-#[test]
-fn ask_resume_takes_a_credential_label() {
-    let Invocation::Run(Some(Commands::Ask(args))) = parse_from([
-        "fiber",
-        "ask",
-        "--resume",
-        "s_abc",
-        "--credential",
-        "home",
-        "hi",
-    ]) else {
-        panic!("resume with a credential label");
-    };
-    assert_eq!(args.resume.as_deref(), Some("s_abc"));
-    assert_eq!(args.credential.as_deref(), Some("home"));
-
-    let Invocation::Run(Some(Commands::Ask(args))) =
-        parse_from(["fiber", "ask", "--resume", "s_abc", "hi"])
-    else {
-        panic!("resume without a credential label");
-    };
-    assert_eq!(args.credential, None);
 }
 
 #[test]
