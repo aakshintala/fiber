@@ -9,6 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::read_to_eof;
+use crate::deadline::Deadline;
 
 /// How long a wait that must succeed may take. Every wait below ends as
 /// soon as its signal arrives; the deadline only reports a missed one.
@@ -55,13 +56,14 @@ impl Read for Script {
 
 /// Every value sent, in order, up to the end of file: the collector ends when
 /// the reader thread drops the callback. The whole wait has one deadline.
+#[track_caller]
 fn collect_to_eof<T: Send + 'static>(rx: mpsc::Receiver<T>, what: &str) -> Vec<T> {
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
         done_tx.send(rx.iter().collect::<Vec<T>>()).unwrap_or(());
     });
-    done_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&done_rx)
         .unwrap_or_else(|err| panic!("waited {WAIT:?} for {what}: {err}"))
 }
 
@@ -127,5 +129,5 @@ fn a_non_interrupted_error_ends_the_thread() {
             alive_tx.send(()).unwrap_or(());
         },
     );
-    disconnected(alive_rx.recv_timeout(WAIT), "the error");
+    disconnected(Deadline::after(WAIT).recv(&alive_rx), "the error");
 }

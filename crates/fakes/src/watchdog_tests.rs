@@ -7,6 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::Watchdog;
+use crate::deadline::Deadline;
 use crate::kill_group;
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -51,7 +52,7 @@ fn dropping_the_watchdog_kills_the_group() {
     drop(Watchdog::group(group));
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(DEADLINE) {
+    let status = match Deadline::after(DEADLINE).recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(_) => panic!("waited {DEADLINE:?} for the process group to die"),
     };
@@ -83,7 +84,7 @@ fn stand_down_leaves_the_group_alive() {
     }
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(DEADLINE) {
+    let status = match Deadline::after(DEADLINE).recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(_) => panic!("waited {DEADLINE:?} for the group to end on SIGTERM"),
     };
@@ -143,17 +144,20 @@ impl Piped {
     }
 
     /// Waits [`DEADLINE`] for the forked `sleep`'s pid line.
+    #[track_caller]
     fn forked(&self, what: &str) {
-        match self.0.recv_timeout(DEADLINE) {
+        match Deadline::after(DEADLINE).recv(&self.0) {
             Ok(Some(_)) => {}
             _ => panic!("waited {DEADLINE:?} for {what}"),
         }
     }
 
     /// Waits [`DEADLINE`] for end-of-file, proving the `sleep` exited.
+    #[track_caller]
     fn closed(self, what: &str) {
+        let wait = Deadline::after(DEADLINE);
         loop {
-            match self.0.recv_timeout(DEADLINE) {
+            match wait.recv(&self.0) {
                 Ok(Some(_)) => {}
                 Ok(None) => return,
                 Err(_) => panic!("waited {DEADLINE:?} for {what}"),
@@ -173,7 +177,7 @@ fn dropping_a_matching_watchdog_kills_every_match() {
     drop(Watchdog::matching(&marker));
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(DEADLINE) {
+    let status = match Deadline::after(DEADLINE).recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(_) => panic!("waited {DEADLINE:?} for the matching process to die"),
     };
@@ -201,7 +205,7 @@ fn stand_down_leaves_matching_processes_alive() {
     }
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(DEADLINE) {
+    let status = match Deadline::after(DEADLINE).recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(_) => panic!("waited {DEADLINE:?} for the group to end on SIGTERM"),
     };

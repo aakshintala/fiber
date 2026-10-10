@@ -57,10 +57,7 @@ fn no_time_left_gives_zero_and_never_renews() {
     let (tx, rx) = mpsc::channel();
     tx.send(7).unwrap();
     assert_eq!(deadline.recv(&rx), Ok(7));
-    assert_eq!(
-        deadline.recv(&rx),
-        Err(mpsc::RecvTimeoutError::Timeout)
-    );
+    assert_eq!(deadline.recv(&rx), Err(mpsc::RecvTimeoutError::Timeout));
 }
 
 #[test]
@@ -101,7 +98,10 @@ fn after_the_longest_duration_never_panics_and_leaves_years() {
 fn after_five_seconds_left_stays_within_its_span() {
     let wait = Deadline::after(Duration::from_secs(5));
     let left = wait.left();
-    assert!(left <= Duration::from_secs(5), "no more than it started with");
+    assert!(
+        left <= Duration::from_secs(5),
+        "no more than it started with"
+    );
     assert!(left > Duration::from_secs(4), "all but an instant of it");
 }
 

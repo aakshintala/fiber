@@ -16,7 +16,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use fakes::{ProviderServer, Request, Response, fingerprint};
+use fakes::{Deadline, ProviderServer, Request, Response, fingerprint};
 
 /// The deadline on each wait: connecting, writing the whole request, and
 /// reading the whole reply. A stall fails naming the wait (`docs/testing.md`,
@@ -46,6 +46,22 @@ fn post(server: &ProviderServer, path: &str, headers: &[(&str, &str)], body: &[u
     exchange(server, &request)
 }
 
+/// One step's report from the client thread: each step of one exchange
+/// takes what remains of the exchange's one deadline (`docs/testing.md`,
+/// "Waits and timeouts").
+#[track_caller]
+fn wait(
+    rx: &mpsc::Receiver<Result<Vec<u8>, io::Error>>,
+    step: &str,
+    deadline: &Deadline,
+) -> Vec<u8> {
+    match deadline.recv(rx) {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(e)) => panic!("{step}: {e}"),
+        Err(_) => panic!("{step}: not done within {DEADLINE:?}"),
+    }
+}
+
 /// Sends `request` as written, ends the write side, and reads the reply to
 /// the end of the connection. A client thread does the I/O and reports each
 /// step, so each wait has one overall deadline and a stall names its step.
@@ -68,14 +84,10 @@ fn exchange(server: &ProviderServer, request: &[u8]) -> Reply {
             tx.send(Err(e)).unwrap();
         }
     });
-    let wait = |step: &str| match rx.recv_timeout(DEADLINE) {
-        Ok(Ok(bytes)) => bytes,
-        Ok(Err(e)) => panic!("{step}: {e}"),
-        Err(_) => panic!("{step}: not done within {DEADLINE:?}"),
-    };
-    wait("connecting to the fake provider");
-    wait("writing the request to the fake provider");
-    let raw = wait("reading the fake provider's whole reply");
+    let step_wait = Deadline::after(DEADLINE);
+    wait(&rx, "connecting to the fake provider", &step_wait);
+    wait(&rx, "writing the request to the fake provider", &step_wait);
+    let raw = wait(&rx, "reading the fake provider's whole reply", &step_wait);
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
     let head = String::from_utf8(raw[..split].to_vec()).unwrap();
     let mut lines = head.split("\r\n");
@@ -305,7 +317,8 @@ fn await_requests_within(server: &Arc<ProviderServer>, count: usize) -> bool {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         },
     );
-    rx.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("waited for await_requests")
 }
 

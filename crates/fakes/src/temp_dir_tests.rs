@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::TempDir;
+use crate::deadline::Deadline;
 
 /// How long the killed-run test waits for the child to print, and to exit.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -204,8 +205,8 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
             }
         }
     });
-    let printed = rx
-        .recv_timeout(DEADLINE)
+    let printed = Deadline::after(DEADLINE)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the child to print its directory"));
     let Some(printed) = printed else {
         panic!("the child exited before printing its directory");
@@ -227,7 +228,8 @@ fn a_killed_run_leaves_a_directory_a_later_one_does_not_reuse() {
     thread::spawn(move || match tx.send(killed.wait()) {
         Ok(()) | Err(mpsc::SendError(_)) => {}
     });
-    rx.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the killed child to exit"))
         .unwrap();
     assert!(leftover.exists(), "the kill left {}", leftover.display());

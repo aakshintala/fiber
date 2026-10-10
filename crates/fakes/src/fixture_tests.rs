@@ -8,16 +8,18 @@ use std::time::Duration;
 
 use super::{mcp_fixture, script};
 use crate::TempDir;
+use crate::deadline::Deadline;
 
 /// How long a script child may take. A wait that reaches it fails the test.
 const DEADLINE: Duration = Duration::from_secs(10);
 
 /// Waits for `child` on a thread, so a hang fails at [`DEADLINE`].
+#[track_caller]
 fn waited(child: Child) -> Output {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the script: {err}"))
         .unwrap()
 }

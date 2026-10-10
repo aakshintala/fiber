@@ -171,6 +171,7 @@ impl FakeClock {
     }
 
     #[cfg(test)]
+    #[track_caller]
     fn await_any_predicate_checked(&self) {
         let pause = self
             .await_any_pause
@@ -179,8 +180,8 @@ impl FakeClock {
             .take();
         if let Some((checked, release)) = pause {
             let _sent = checked.send(());
-            release
-                .recv_timeout(Duration::from_secs(5))
+            crate::deadline::Deadline::after(Duration::from_secs(5))
+                .recv(&release)
                 .expect("waited for the test to release the await_any predicate");
         }
     }
