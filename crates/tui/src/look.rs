@@ -274,8 +274,18 @@ impl Look {
         }
     }
 
-    /// `colour` with a role marker resolved.
+    /// `colour` with a role marker resolved, and a literal `Rgb`
+    /// resolved by depth: unchanged in truecolour, the nearest text
+    /// entry at 256 colours, and the default with no colour (docs/tui.md,
+    /// "Look").
     fn resolved(&self, colour: Color) -> Color {
+        if let Color::Rgb(red, green, blue) = colour {
+            return match self.depth {
+                Depth::True => colour,
+                Depth::Ansi256 => Color::Indexed(ansi256((red, green, blue), among(Role::Text))),
+                Depth::NoColour => Color::Reset,
+            };
+        }
         role_of(colour).map_or(colour, |role| self.colour(role))
     }
 }

@@ -312,6 +312,31 @@ fn paint_at_256_writes_palette_entries() {
 }
 
 #[test]
+fn literal_rgb_resolves_by_depth() {
+    let fg = Style::new()
+        .fg(Color::Rgb(0, 0, 0))
+        .bg(Color::Rgb(255, 255, 255));
+    let mut true_buf = row(&[("a", fg)]);
+    look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]).paint(&mut true_buf);
+    assert_eq!(true_buf[(0, 0)].fg, Color::Rgb(0, 0, 0));
+    assert_eq!(true_buf[(0, 0)].bg, Color::Rgb(255, 255, 255));
+    let mut ansi_buf = row(&[("a", fg)]);
+    look(ThemeSetting::Dark, &[("TERM", "xterm-256color")]).paint(&mut ansi_buf);
+    assert_eq!(
+        ansi_buf[(0, 0)].fg,
+        Color::Indexed(ansi256((0, 0, 0), 16..=255))
+    );
+    assert_eq!(
+        ansi_buf[(0, 0)].bg,
+        Color::Indexed(ansi256((255, 255, 255), 16..=255))
+    );
+    let mut none_buf = row(&[("a", fg)]);
+    look(ThemeSetting::Dark, &[("NO_COLOR", "1")]).paint(&mut none_buf);
+    assert_eq!(none_buf[(0, 0)].fg, Color::Reset);
+    assert_eq!(none_buf[(0, 0)].bg, Color::Reset);
+}
+
+#[test]
 fn paint_leaves_reset_and_other_colours() {
     let look = Look::default();
     let mut buf = row(&[
