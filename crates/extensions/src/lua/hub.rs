@@ -136,29 +136,17 @@ impl Hub {
         shared: MutexGuard<'a, Shared>,
         until: Option<Instant>,
     ) -> MutexGuard<'a, Shared> {
-        let changed = &self.changed;
-        // `FnMut` cannot move the guard out and back. The slot holds it
-        // across the one call `wait_until` makes.
-        let mut slot = Some(shared);
-        self.clock.wait_until(until, &mut |bound| {
-            let Some(shared) = slot.take() else {
-                return;
-            };
-            // A zero bound returns at once: `wait_timeout` of zero does not block.
-            slot = Some(match bound {
-                Some(d) => {
-                    changed
-                        .wait_timeout(shared, d)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
-                }
-                None => changed.wait(shared).unwrap_or_else(PoisonError::into_inner),
-            });
-        });
-        match slot {
-            Some(shared) => shared,
-            None => self.lock(),
-        }
+        // The guard is held from the check into the condvar wait, so a wake
+        // under the same lock is never missed.
+        support::clock::park(
+            self.clock.as_ref(),
+            until,
+            None,
+            &self.changed,
+            shared,
+            |_| false,
+        )
+        .unwrap_or_else(|| self.lock())
     }
 
     /// Blocks until `done` holds, or `timeout` of real time passes. For a
