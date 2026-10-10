@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/model_picker_view_tests.rs
-assertion_line: 194
 expression: "screen(&app, 80, 24)"
 ---
 
@@ -25,5 +24,5 @@ Models                                                                         �
 No models. Install a provider: fiber extension install <name>.
 Enter set as default · s this session only · ↑↓ move · ←→ level · PageUp PageDow
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
->
+▌ >
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
