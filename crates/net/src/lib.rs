@@ -2,7 +2,8 @@
 //! each request's socket so another thread can close it, and the error its
 //! socket reports (`docs/architecture.md`, "The modules", "Cancellation";
 //! `docs/dependencies.md`, "Root certificates", "Proxies"). [`config`]
-//! carries the platform verifier and nothing else; each caller sets its own
+//! carries the platform verifier, or on Linux Mozilla's roots when the
+//! system store is empty, and nothing else; each caller sets its own
 //! proxy and request policy on top.
 
 use std::io;
@@ -17,7 +18,9 @@ use crate::socket::KeepSocket;
 
 mod socket;
 
-/// The TLS configuration every HTTPS call uses: the platform verifier.
+/// The TLS configuration every HTTPS call uses: the platform verifier, or
+/// on Linux Mozilla's roots compiled in through ureq when the system store
+/// has no certificates (`docs/dependencies.md`, "Root certificates").
 pub fn tls_config() -> TlsConfig {
     tls_config_with(
         &STORE_IS_EMPTY,
@@ -34,19 +37,33 @@ static STORE_IS_EMPTY: OnceLock<bool> = OnceLock::new();
 /// says the store is empty, else the platform verifier. `load` counts the
 /// store's certificates; it runs at most once per `cache`.
 fn tls_config_with(
-    _cache: &OnceLock<bool>,
-    _load: impl FnOnce() -> usize,
-    _fallback: RootCerts,
+    cache: &OnceLock<bool>,
+    load: impl FnOnce() -> usize,
+    fallback: RootCerts,
 ) -> TlsConfig {
+    let empty = cache.get_or_init(|| load() == 0);
     TlsConfig::builder()
-        .root_certs(RootCerts::PlatformVerifier)
+        .root_certs(if *empty {
+            fallback
+        } else {
+            RootCerts::PlatformVerifier
+        })
         .build()
 }
 
 /// How many certificates the platform's loader returns: the Linux system
 /// store's count, or 1 elsewhere, where the platform verifier always runs.
+/// One function with inner `cfg` blocks, so a mutant here is always
+/// compiled and never silently gated away.
 fn platform_certificate_count() -> usize {
-    1
+    #[cfg(target_os = "linux")]
+    {
+        rustls_native_certs::load_native_certs().certs.len()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        1
+    }
 }
 
 /// The agent config every HTTPS call starts from: [`tls_config`] and nothing

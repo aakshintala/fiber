@@ -1781,6 +1781,7 @@ dependencies = [
  "contract",
  "fakes",
  "rustls",
+ "rustls-native-certs",
  "thiserror 2.0.21",
  "ureq",
 ]
