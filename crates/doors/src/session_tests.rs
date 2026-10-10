@@ -2868,3 +2868,15 @@ fn close_connects_nowhere_through_the_socket_path() {
         ),
     }
 }
+
+#[test]
+fn close_with_nothing_written_and_the_log_held_returns() {
+    // A signal while the session process is armed, before `fiber_started`,
+    // is recorded and closes with nothing written, while another `Arc<Log>`
+    // (the jobs' emit) still holds the log: the printer's watcher never sees
+    // the log dropped, so `close` must still return (#830).
+    reset();
+    let opened = open();
+    let _held = Arc::clone(&opened.log);
+    close_within(opened.session, opened.log);
+}
