@@ -1067,7 +1067,9 @@ fn deny(path: &Path) {
 #[cfg(unix)]
 fn allow(path: &Path) {
     use std::os::unix::fs::PermissionsExt as _;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    // `0o755`, not `0o644`: a directory without its execute bit cannot
+    // be traversed again.
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 fn mtime_of(path: &Path) -> std::time::SystemTime {
