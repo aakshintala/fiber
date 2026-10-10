@@ -101,6 +101,8 @@ pub enum Command {
     Reply(Reply),
     /// Stops a running job.
     JobStop(JobStop),
+    /// Types into a running job started with `tty`.
+    JobInput(JobInput),
     /// Moves every shell call running in the current turn to the background.
     Background,
     /// Re-reads configuration and declares the tool set again.
@@ -286,6 +288,16 @@ pub enum RememberScope {
 pub struct JobStop {
     /// The running job.
     pub job_id: JobId,
+}
+
+/// The `args` of `job_input`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobInput {
+    /// The running job.
+    pub job_id: JobId,
+    /// The keys as typed, escape sequences included.
+    pub text: String,
 }
 
 /// The `args` of `history`.

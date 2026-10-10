@@ -327,19 +327,20 @@ impl Run {
     /// Reads until the output after the last match holds `needle`, under
     /// one named deadline for the whole wait, however much other output
     /// arrives. On expiry the panic names what it waited for and shows the
-    /// output, so a stall says how far the journey got.
+    /// output, so a stall says how far the journey got. A needle with a
+    /// space matches its words in order with only a terminal frame's gap
+    /// between them: spaces, cursor moves (`\x1b[<r>;<c>H`) and SGR
+    /// (`\x1b[...m`); unchanged cells are never rewritten, so a space can
+    /// arrive as a cursor move rather than a byte, and a style change can
+    /// split words with SGR.
     fn read_until(&mut self, needle: &str) {
         let (output, wakes, seen) = (Arc::clone(&self.output), Arc::clone(&self.wakes), self.seen);
-        let wanted = needle.as_bytes().to_vec();
+        let wanted = needle.to_owned();
         let (done, found) = mpsc::channel();
         thread::spawn(move || {
             let wakes = wakes.lock().unwrap();
             loop {
-                let end = output.lock().unwrap()[seen..]
-                    .windows(wanted.len())
-                    .position(|window| window == wanted)
-                    .map(|at| seen + at + wanted.len());
-                if let Some(end) = end {
+                if let Some(end) = phrase_end(&output.lock().unwrap(), seen, &wanted) {
                     done.send(end).unwrap_or(());
                     return;
                 }
@@ -409,6 +410,163 @@ fn contains(haystack: &[u8], needle: &str) -> bool {
     haystack
         .windows(needle.len())
         .any(|window| window == needle.as_bytes())
+}
+
+/// Where `needle` ends in `haystack` at or after `from`: an exact byte
+/// match, unless `needle` holds a space and starts with a non-escape
+/// byte, when each single space may instead be spaces, cursor moves and
+/// SGR in any mix, and nothing else.
+fn phrase_end(haystack: &[u8], from: usize, needle: &str) -> Option<usize> {
+    let wanted = needle.as_bytes();
+    if wanted.is_empty() {
+        return Some(from.min(haystack.len()));
+    }
+    if !needle.contains(' ') || wanted[0] == 0x1b {
+        return exact_end(haystack, from, wanted);
+    }
+    let words: Vec<&[u8]> = needle.split_whitespace().map(str::as_bytes).collect();
+    if words.len() < 2 {
+        return exact_end(haystack, from, wanted);
+    }
+    let mut cursor = from;
+    while cursor + words[0].len() <= haystack.len() {
+        let at = haystack[cursor..]
+            .windows(words[0].len())
+            .position(|window| window == words[0])?;
+        let mut pos = cursor + at + words[0].len();
+        let mut matched = true;
+        for word in &words[1..] {
+            let Some(gap) = frame_gap_end(haystack, pos) else {
+                matched = false;
+                break;
+            };
+            pos = gap;
+            if haystack[pos..].starts_with(word) {
+                pos += word.len();
+            } else {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            return Some(pos);
+        }
+        cursor += at + 1;
+    }
+    None
+}
+
+/// Where `needle` ends in `haystack` at or after `from`, as exact bytes.
+fn exact_end(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    if from > haystack.len() {
+        return None;
+    }
+    haystack[from..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|at| from + at + needle.len())
+}
+
+/// Where the terminal frame's gap starting at `pos` ends: one or more
+/// spaces, cursor moves and SGR sequences, and nothing else.
+fn frame_gap_end(haystack: &[u8], mut pos: usize) -> Option<usize> {
+    let start = pos;
+    loop {
+        if haystack.get(pos) == Some(&b' ') {
+            pos += 1;
+        } else if let Some(end) = cursor_move_end(haystack, pos).or_else(|| sgr_end(haystack, pos))
+        {
+            pos = end;
+        } else {
+            break;
+        }
+    }
+    (pos > start).then_some(pos)
+}
+
+/// Where the cursor move at `pos` ends: `\x1b[<row>;<col>H`.
+fn cursor_move_end(haystack: &[u8], pos: usize) -> Option<usize> {
+    if haystack.get(pos) != Some(&0x1b) || haystack.get(pos + 1) != Some(&b'[') {
+        return None;
+    }
+    let mut end = pos + 2;
+    let row = end;
+    while haystack.get(end).is_some_and(|byte| byte.is_ascii_digit()) {
+        end += 1;
+    }
+    if end == row || haystack.get(end) != Some(&b';') {
+        return None;
+    }
+    end += 1;
+    let col = end;
+    while haystack.get(end).is_some_and(|byte| byte.is_ascii_digit()) {
+        end += 1;
+    }
+    if end == col || haystack.get(end) != Some(&b'H') {
+        return None;
+    }
+    Some(end + 1)
+}
+
+/// Where the SGR sequence at `pos` ends: `\x1b[...m`.
+fn sgr_end(haystack: &[u8], pos: usize) -> Option<usize> {
+    if haystack.get(pos) != Some(&0x1b) || haystack.get(pos + 1) != Some(&b'[') {
+        return None;
+    }
+    let mut end = pos + 2;
+    while haystack
+        .get(end)
+        .is_some_and(|byte| byte.is_ascii_digit() || *byte == b';')
+    {
+        end += 1;
+    }
+    (haystack.get(end) == Some(&b'm')).then_some(end + 1)
+}
+
+#[test]
+fn phrase_end_matches_a_single_word_exactly() {
+    assert_eq!(phrase_end(b"completed ok", 0, "completed"), Some(9));
+}
+
+#[test]
+fn phrase_end_matches_one_space_gap() {
+    assert_eq!(phrase_end(b"fiber resume", 0, "fiber resume"), Some(12));
+}
+
+#[test]
+fn phrase_end_matches_a_cursor_move_gap() {
+    assert_eq!(
+        phrase_end(b"fiber\x1b[10;1Hresume", 0, "fiber resume"),
+        Some(18)
+    );
+}
+
+#[test]
+fn phrase_end_matches_an_sgr_gap() {
+    assert_eq!(
+        phrase_end(b"fiber\x1b[0mresume", 0, "fiber resume"),
+        Some(15)
+    );
+}
+
+#[test]
+fn phrase_end_rejects_a_letter_gap() {
+    assert_eq!(phrase_end(b"fiberXresume", 0, "fiber resume"), None);
+}
+
+#[test]
+fn phrase_end_rejects_an_erase_display_gap() {
+    assert_eq!(phrase_end(b"fiber\x1b[2Jresume", 0, "fiber resume"), None);
+}
+
+#[test]
+fn phrase_end_ignores_a_phrase_starting_before_from() {
+    assert_eq!(phrase_end(b"fiber resume", 1, "fiber resume"), None);
+}
+
+#[test]
+fn phrase_end_rejects_an_empty_gap() {
+    assert_eq!(phrase_end(b"fiberresume", 0, "fiber resume"), None);
 }
 
 /// "Hello." in two deltas.
@@ -583,6 +741,162 @@ fn a_standing_ask_opens_the_approval_panel_and_allow_once_runs_the_call() {
     assert_eq!(result["output"], "hi\nExit code 0.\n");
 }
 
+/// A script step that calls `ask_user` with four questions, then the shell.
+fn ask_then_echo_hi_script() -> Value {
+    let questions = json!([
+        {"header": "Timeout", "question": "How long?",
+         "options": [{"label": "1m"}, {"label": "5m"}]},
+        {"header": "Scope", "question": "Which scope?",
+         "options": [{"label": "a"}, {"label": "b"}]},
+        {"header": "Name", "question": "What name?"},
+        {"header": "Pick", "question": "Which one?",
+         "options": [{"label": "x"}, {"label": "y"}]},
+    ]);
+    json!({"steps": [{"tool_calls": [
+        {"name": "ask_user", "arguments": {"questions": questions}},
+        {"name": "shell", "arguments": {"command": "echo hi"}},
+    ]}]})
+}
+
+#[test]
+fn an_ask_and_a_shell_waiting_on_approval_show_no_call_json() {
+    let setup = Setup::new();
+    // The built-in `scripted` provider answers from a script in the
+    // workspace, named as an ordinary model (`docs/model-routing.md`,
+    // "The scripted provider"): one step carries both tool calls.
+    write(
+        &setup.workspace().join("s.json"),
+        &ask_then_echo_hi_script(),
+    );
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+    );
+    // A standing project ask for this exact command: with the terminal
+    // connected the loop asks a person (`docs/permissions.md`, "Headless").
+    // The project's rules live in Fiber home at `projects/<key>/rules`
+    // (`docs/state.md`, "Projects"), never in the workspace, so the harness
+    // places one through the canonical project key, as `Setup::sessions` does.
+    let key = log::project_key(&doors::project(&setup.workspace()));
+    let rule = setup.home().join("projects").join(key).join("rules");
+    fs::create_dir_all(rule.parent().unwrap()).unwrap();
+    fs::write(
+        rule,
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let mut run = Run::terminal(&setup);
+    // A 160x48 pty, as the ticket's screen: the resize lands before the
+    // first prompt, so every frame draws at the ticket's width.
+    rustix::termios::tcsetwinsize(
+        &run.main,
+        rustix::termios::Winsize {
+            ws_col: 160,
+            ws_row: 48,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .unwrap();
+    support::kill_pid(setup.deadline, run.child.id(), "WINCH").unwrap();
+    run.read_until(">");
+    run.write(b"run it\r");
+    // The collapsed group line counts the call's parsed form, before the
+    // shell's approval panel opens below it.
+    run.read_until("asked 4 questions");
+    run.read_until("asked by a project rule: echo hi");
+    run.read_until("allow once");
+    let output = run.output();
+    let text = String::from_utf8_lossy(&output);
+    // The one-row rule cannot be read from this raw byte stream without a
+    // terminal emulator, so this test does not assert it here: it is
+    // asserted by the 160-column screen tests
+    // `group_line_and_ledger_show_parsed_arguments_never_json` and
+    // `ledger_rows_show_parsed_arguments_never_json` in
+    // crates/tui/src/view_tests.rs and
+    // `group_summary_lines_are_cut_to_one_row_at_the_width` in
+    // crates/tui/src/turn_tests.rs.
+    // The approval panel shows the shell's arguments for review, so the
+    // shell's JSON is expected there; the `ask_user` call's JSON must
+    // never draw: neither on the group line nor in its ledger row.
+    assert!(!text.contains("{\"questions\""), "{text:?}");
+    assert!(!text.contains("\"header\""), "{text:?}");
+    assert!(text.contains("asked 4 questions"), "{text:?}");
+    assert!(!text.contains("ask_user {"), "{text:?}");
+    // No row of the conversation holds `{"` except the shell approval
+    // panel's arguments (`{\"command\":\"echo hi\"}`): every occurrence
+    // in the captured output is immediately followed by `command"`.
+    let mut rest = text.as_ref();
+    let mut calls = 0;
+    while let Some(at) = rest.find("{\"") {
+        calls += 1;
+        let after = &rest[at + 2..];
+        assert!(after.starts_with("command\""), "{text:?}");
+        rest = &rest[at + 2..];
+    }
+    assert!(calls > 0, "{text:?}");
+    // As above: quitting either exits at once or asks first.
+    run.write(b"\x03\x03\r");
+    run.read_until("fiber resume");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+/// An `ask_user` call stalled mid-arguments: the added event names the
+/// call, then one arguments delta carries the first part of its JSON and
+/// the body stalls, so the raw text stays on the group line.
+fn streaming_ask_stalls() -> Response {
+    let added = json!({"type": "response.output_item.added", "item": {
+        "type": "function_call", "id": "fc_ask", "name": "ask_user"
+    }});
+    let delta = json!({"type": "response.function_call_arguments.delta",
+        "item_id": "fc_ask", "delta": "{\"questions\""});
+    let prefix: String = [added, delta]
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stall(200, prefix.clone(), prefix.len() + 100000)
+        .header("content-type", "text/event-stream")
+}
+
+#[test]
+fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([streaming_ask_stalls()]).unwrap();
+    setup.provider(&server);
+    let mut run = Run::terminal(&setup);
+    // A 160x48 pty, as the ticket's screen: the resize lands before the
+    // first prompt, so every frame draws at the ticket's width.
+    rustix::termios::tcsetwinsize(
+        &run.main,
+        rustix::termios::Winsize {
+            ws_col: 160,
+            ws_row: 48,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        },
+    )
+    .unwrap();
+    support::kill_pid(setup.deadline, run.child.id(), "WINCH").unwrap();
+    run.read_until(">");
+    run.write(b"run it\r");
+    // The call is still streaming its arguments, so the group line shows
+    // the raw text; the scripted test above shows it gone once requested.
+    run.read_until("{\"questions\"");
+    // The turn stalls mid-arguments: Esc interrupts it, as the stalled
+    // turn test interrupts its stalled reply.
+    run.write(b"\x1b");
+    run.read_until("interrupted");
+    // As above: quitting either exits at once or asks first.
+    run.write(b"\x03\x03\r");
+    run.read_until("fiber resume");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
 #[test]
 fn a_repository_offer_swaps_in_and_approve_lets_the_turn_run() {
     let setup = Setup::new();
@@ -624,9 +938,10 @@ fn resize_redraws_the_input_line_on_the_new_last_row() {
     setup.provider(&server);
     let mut run = Run::terminal(&setup);
     run.read_until(">");
-    // The first frame paints every cell on the theme's background, so it
-    // is read through its last row before the resize.
-    run.read_until("\x1b[12;1H");
+    // Default-background cells stay unpainted, so no row is addressed
+    // whole; the footer's last word proves the last row drew before
+    // the resize.
+    run.read_until("quit");
     let marked = run.output().len();
     rustix::termios::tcsetwinsize(
         &run.main,

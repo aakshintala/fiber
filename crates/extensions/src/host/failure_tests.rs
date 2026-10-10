@@ -502,3 +502,43 @@ fn a_refresh_forwarding_an_unattended_failure_keeps_its_mapping() {
         }
     );
 }
+
+#[test]
+fn an_unattended_show_records_with_its_call() {
+    let lua = lua();
+    let lib = lib(&lua);
+    lua.globals().set("failure", lib.failure.clone()).unwrap();
+    let message = "host.oauth.show needs a person to log in, and nobody is attached";
+    let raise =
+        format!("error(failure('authentication_failed', '{message}', 'unattended:show'), 0)");
+    let thread = lua
+        .create_thread(lua.load(&raise).into_function().unwrap())
+        .unwrap();
+    let error = thread.resume::<()>(()).unwrap_err();
+    let pending = lib.state.take_matching(&error).unwrap();
+    assert_eq!(pending.message, message);
+    assert_eq!(
+        pending.boundary,
+        Boundary::Unattended {
+            call: "show".into()
+        }
+    );
+}
+
+#[test]
+fn an_unknown_boundary_is_refused() {
+    let lua = lua();
+    let lib = lib(&lua);
+    let error = lib
+        .failure
+        .call::<mlua::Table>((
+            "authentication_failed",
+            "host.oauth.show needs a person",
+            "unattended:projector",
+        ))
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("unknown failure boundary"),
+        "{error}"
+    );
+}

@@ -141,6 +141,30 @@ pub trait Jobs: Send + Sync {
     /// with it (`docs/tools.md`, "Background jobs"). Before this, an end or
     /// a batch sends nothing.
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<crate::inbox::Delivery>);
+
+    /// Writes `text` to a running job started with `tty`, as the `jobs`
+    /// action `write` does for the model (`docs/tools.md`, "Background
+    /// jobs"), and is accepted once written. The job's output reaches the
+    /// client on its stream as usual. Test fakes keep the default, which
+    /// reports every job as not running.
+    fn write(&self, job_id: &crate::JobId, text: &str) -> Result<(), WriteError> {
+        let _ = (job_id, text);
+        Err(WriteError::NotRunning)
+    }
+}
+
+/// `write` could not reach the job.
+#[derive(Debug, thiserror::Error)]
+pub enum WriteError {
+    /// No job has this id, or it already ended.
+    #[error("that job is not running")]
+    NotRunning,
+    /// The job was not started with `tty`.
+    #[error("that job was not started with `tty`")]
+    NotTty,
+    /// Writing to the terminal failed.
+    #[error("writing to the job's terminal failed: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// A running foreground call, as the `background` command reaches it. The

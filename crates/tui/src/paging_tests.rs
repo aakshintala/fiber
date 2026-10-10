@@ -2464,7 +2464,13 @@ fn a_running_turn_with_only_its_bubble_does_not_join() {
         .and_then(|part| part.turns.last())
         .map(|card| {
             let mut out = Rows::default();
-            let pieces = card.rows(40, &pages.zone, crate::surface::Edges::BOTH, &mut out);
+            let pieces = card.rows(
+                40,
+                &pages.zone,
+                crate::surface::Edges::BOTH,
+                &crate::image::Layout::default(),
+                &mut out,
+            );
             (pieces.first, pieces.last)
         });
     assert_eq!(before, Some((false, false)));

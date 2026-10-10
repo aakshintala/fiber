@@ -123,10 +123,16 @@ fn a_bare_id_two_providers_have_is_an_error_listing_both() {
 fn a_provider_that_is_not_installed_is_extension_missing() {
     let setup = Setup::new();
     let providers = installed(&setup, &[("openai", provider("openai", &["gpt-5.6"]))]);
-    for typed in ["openrouter/x", "openrouter/x:high", "nobody-has-this"] {
+    for typed in ["openrouter/x", "openrouter/x:high"] {
         let err = providers.resolve(typed).unwrap_err();
         assert_eq!(err.code(), ErrorCode::ExtensionMissing, "{typed}: {err:?}");
     }
+    let err = providers.resolve("nobody-has-this").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::NoModel, "{err:?}");
+    assert_eq!(
+        err.to_string(),
+        "No installed model matches `nobody-has-this`. Run `fiber models` to list them."
+    );
     let err = providers.resolve("openai/gpt-4").unwrap_err();
     assert!(matches!(err, Error::UnknownModel { .. }), "{err:?}");
     let (empty, _) = Providers::load(&setup.home().join("nowhere")).unwrap();

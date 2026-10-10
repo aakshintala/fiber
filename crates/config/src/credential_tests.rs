@@ -33,6 +33,7 @@ fn a_path_that_cannot_be_canonicalised_is_never_read() {
         placeholders: Default::default(),
         models: Vec::new(),
         reviewer_model: None,
+        login: None,
     };
     // Canonicalising fails, and before it returns another process points
     // the path at a key file.

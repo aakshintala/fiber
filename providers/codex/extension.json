@@ -1,0 +1,11 @@
+{
+  "name": "github.com/aakshintala/fiber/providers/codex",
+  "version": "0.0.0",
+  "fiber": "0.0.0",
+  "api": 1,
+  "providers": {
+    "codex": [
+      "https://chatgpt.com/backend-api/codex"
+    ]
+  }
+}

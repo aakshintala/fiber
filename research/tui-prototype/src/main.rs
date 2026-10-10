@@ -2,9 +2,15 @@
 //! `docs/events.md` lines in a real terminal. Throwaway code: the fold and the
 //! drawing side by side, the input parser in `input.rs`, a few tests.
 
+mod cases;
+mod completions;
+mod home;
 mod input;
 mod lua;
+mod model_picker;
+mod overlays;
 mod paged;
+mod panel;
 
 use crossterm::{execute, terminal};
 use input::{Ev, Key, Mouse};
@@ -94,6 +100,14 @@ enum Act {
     Context,
     /// leaves a swapped view
     Back,
+    /// the model picker's row for one model, by its flat index: focuses it
+    Pick(usize),
+    /// one thinking chip of one model: focuses that chip
+    PickChip(usize, usize),
+    /// the picker's show-all toggle
+    PickAll,
+    /// the picker's refresh-all button
+    PickRefresh,
     /// the rail's row for one fake session, by its index: moves the on-screen marker only
     Rail(usize),
     /// the rail's scope line: shows or hides sessions in other projects
@@ -2194,6 +2208,10 @@ struct Ui {
     cmd_n: u32,
     /// the context breakdown is swapped into the conversation area
     ctx_view: bool,
+    /// the model picker is swapped into the conversation area
+    picker: Option<model_picker::State>,
+    /// the `/` or `@` completion panel above the input box
+    completions: Option<completions::State>,
     /// the view's own scroll, rows from its top
     vscroll: usize,
     /// the rail design: 0 list, 1 cards, 2 tabs (`--rail`, or the A/B/C chips)
@@ -2228,7 +2246,7 @@ impl Ui {
         (!open.is_empty()).then(|| open[self.shown % open.len()])
     }
     fn nothing_open(&self, f: &Fold) -> bool {
-        self.search.is_none() && self.qsel.is_none() && !self.ctx_view && self.top(f).is_none()
+        self.search.is_none() && self.qsel.is_none() && !self.ctx_view && self.completions.is_none() && self.top(f).is_none()
     }
     /// Starts a fresh form state when the form on top changes.
     fn sync_form(&mut self, f: &Fold) {
@@ -2601,6 +2619,10 @@ fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, narrow: bool, ui: &
             ]));
         }
         out.push(row(vec![sp("      ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop", dim())]));
+    }
+    // the `/` and `@` completion panels sit above the input box, over the conversation's bottom
+    if let Some(c) = ui.completions.as_ref() {
+        out.extend(completions::view(c, &ui.input, w));
     }
     // search floats over the conversation, so the input box keeps its place and its draft
     let mut ib = match ui.top(f) {
@@ -3077,6 +3099,9 @@ struct Audit {
     rows_hist: BTreeMap<usize, u64>,
 }
 
+/// Every surface that declares cases; `--help` and `check/` are built from them.
+const SURFACES: &[cases::Surface] = &[home::SURFACE, overlays::SURFACE, model_picker::SURFACE, completions::SURFACE];
+
 // ============================================================ main
 struct Args {
     path: String,
@@ -3100,6 +3125,10 @@ struct Args {
     bench: bool,
     no_pending: bool,
     hover: bool,
+    /// the home screen case (`--home`), drawn instead of the conversation
+    home: Option<String>,
+    /// the overlay case (`--overlay`), drawn instead of the conversation
+    overlay: Option<String>,
     /// the rail design at start: 0 list, 1 cards, 2 tabs
     rail: u8,
     /// the B card density at start: 0 full, 1 medium, 2 compact
@@ -3108,6 +3137,10 @@ struct Args {
     rail_share: f64,
     /// the panel's width at start, as a percent of the window
     panel_share: f64,
+    /// `--picker CASE`: start with the model picker open
+    picker: Option<String>,
+    /// `--completions CASE`: start with the completion panel open
+    completions: Option<String>,
 }
 fn args() -> Args {
     let mut a = Args {
@@ -3131,10 +3164,14 @@ fn args() -> Args {
         bench: false,
         no_pending: false,
         hover: false,
+        home: None,
+        overlay: None,
         rail: 1,
         density: 2,
         rail_share: 15.0,
         panel_share: 21.0,
+        picker: None,
+        completions: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -3158,6 +3195,8 @@ fn args() -> Args {
             "--paging-bench" => a.bench = true,
             "--no-pending" => a.no_pending = true,
             "--hover" => a.hover = true,
+            "--home" => a.home = it.next(),
+            "--overlay" => a.overlay = it.next(),
             "--rail" => {
                 a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
                     Some("A") => 0,
@@ -3177,8 +3216,10 @@ fn args() -> Args {
                     _ => panic!("--density full|medium|three|compact"),
                 }
             }
+            "--picker" => a.picker = it.next(),
+            "--completions" => a.completions = it.next(),
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -3273,7 +3314,7 @@ fn main() -> io::Result<()> {
         out.write_all(HOVER_ON.as_bytes())?;
     }
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
-    let res = run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index);
+    let res = if a.home.is_some() { home::run_home(&a, &mut term) } else if a.overlay.is_some() { overlays::run_overlay(&a, &mut term) } else { run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index) };
     let b = term.backend_mut();
     if a.hover {
         b.write_all(HOVER_OFF.as_bytes())?;
@@ -3288,7 +3329,10 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
+    // home and the overlays draw no session, so there is nothing to resume
+    if a.home.is_none() && a.overlay.is_none() {
+        println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
+    }
     Ok(())
 }
 
@@ -3363,11 +3407,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut prev_buf: Option<Buffer> = None;
     let mut frames: u64 = 0;
 
-    let mut ui = Ui::default();
-    ui.rail = a.rail;
-    ui.density = a.density.min(2);
-    ui.rail_share = a.rail_share.clamp(1.0, 90.0);
-    ui.panel_share = a.panel_share.clamp(1.0, 90.0);
+    let mut ui = Ui {
+        // `--completions CASE` starts with its query already typed
+        input: a.completions.as_deref().map_or_else(String::new, completions::input_for),
+        rail: a.rail,
+        density: a.density.min(2),
+        rail_share: a.rail_share.clamp(1.0, 90.0),
+        panel_share: a.panel_share.clamp(1.0, 90.0),
+        picker: a.picker.as_deref().map(model_picker::for_case),
+        completions: a.completions.as_deref().map(completions::for_case),
+        ..Default::default()
+    };
+    model_picker::set_still(a.static_);
     let mut rd = input::Reader::new()?;
     let mut cmds = match &a.commands {
         Some(p) => Some(std::fs::OpenOptions::new().create(true).append(true).open(p)?),
@@ -3380,7 +3431,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut kitty_seen: Option<u32> = None;
     let mut det: Option<(bool, Duration)> = None;
     let mut pushed = false;
-    let mut links_at = (u64::MAX, usize::MAX, false, false);
+    let mut links_at = (u64::MAX, usize::MAX, false, false, false);
     let mut next_auto = Instant::now();
     const FLASH: Duration = Duration::from_secs(6);
 
@@ -3567,14 +3618,30 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 None => conv[start..end].iter().collect(),
             };
             let top_pad = tabs_h + vh.saturating_sub(vis.len());
-            // a swapped view: its header, then its rows from its own scroll
-            let vrows: Option<Vec<Row>> = ui.ctx_view.then(|| {
-                let body = context_view(f, cw);
-                ui.vscroll = ui.vscroll.min(body.len().saturating_sub(view_h.saturating_sub(1)));
-                let mut r = vec![view_header("Context", "/context")];
-                r.extend(body.into_iter().skip(ui.vscroll).take(view_h.saturating_sub(1)));
-                r
-            });
+            // a swapped view: its header, then its rows from its own scroll. The picker
+            // sits over the context breakdown.
+            let vrows: Option<Vec<Row>> = ui
+                .picker
+                .as_mut()
+                .map(|p| {
+                    p.tick = p.tick.wrapping_add(1);
+                    model_picker::view(p, cw)
+                })
+                .map(|body| {
+                    ui.vscroll = ui.vscroll.min(body.len().saturating_sub(view_h.saturating_sub(1)));
+                    let mut r = vec![view_header("Models", "/model")];
+                    r.extend(body.into_iter().skip(ui.vscroll).take(view_h.saturating_sub(1)));
+                    r
+                })
+                .or_else(|| {
+                    ui.ctx_view.then(|| {
+                        let body = context_view(f, cw);
+                        ui.vscroll = ui.vscroll.min(body.len().saturating_sub(view_h.saturating_sub(1)));
+                        let mut r = vec![view_header("Context", "/context")];
+                        r.extend(body.into_iter().skip(ui.vscroll).take(view_h.saturating_sub(1)));
+                        r
+                    })
+                });
             lay = (start, top_pad, if vrows.is_some() { 0 } else { vis.len() }, view_h, max_top);
             hits.clear();
             geom = (conv_w, cols, rail_w, show_tabs, panel_w);
@@ -3674,28 +3741,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     buf.set_string(x0 + pw - 1, y, "▌", fg(SEL));
                     hits.insert(0, (y, x0, x0 + pw, Act::End));
                 }
-                // search floats over the conversation's top-right corner, as an editor's find box does
-                if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 3) {
+                // search floats over the conversation's top-right corner, as an editor's find box does.
+                // The box reuses the padded panel frame, so text never touches its edges.
+                if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 5) {
                     let bw = SBOX_W.min(cw.saturating_sub(2));
                     let x0 = rail_w + 1 + (cw - bw) as u16;
-                    for x in x0..x0 + bw as u16 {
-                        for (y, ch) in [(0, "▄"), (1, " "), (2, "▀")] {
-                            let under = buf[(x, y)].bg;
-                            let c = &mut buf[(x, y)];
-                            c.reset();
-                            c.set_symbol(ch);
-                            if y == 1 {
-                                c.set_bg(BI);
-                            } else {
-                                c.set_fg(BI).set_bg(under);
-                            }
-                        }
+                    for (y, r) in panel::frame(None, vec![row(search_box(s))], None, bw).into_iter().enumerate() {
+                        paint(buf, x0, y as u16, bw as u16, &r);
                     }
-                    buf.set_line(x0, 1, &Line::from(tint(fit(&search_box(s), bw), BI)), bw as u16);
                 }
                 // the copy's confirmation: the top-right corner, below the search box when it is open
                 if let Some(m) = copied.filter(|_| vrows.is_none()) {
-                    let y = if search.is_some() && view_h >= 3 { 3 } else { 0 };
+                    let y = if search.is_some() && view_h >= 5 { 5 } else { 0 };
                     let s = vec![sp(format!(" {m} "), fg(CYAN))];
                     let mw = width(&s).min(cw);
                     if y < view_h && mw > 0 {
@@ -3744,16 +3801,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 // the left edge while the rail is hidden. On hover or while dragging the
                 // whole column tints and the grip goes bright in the accent colour.
                 // Hidden, the dead margin column beside the handle is cleared too.
+                // The rail-edge grip stops where the bottom stack starts: the input box,
+                // approvals and completion panels paint their own first cell there.
                 let rail_hid = ui.rail != 2 && rail_w == 1;
                 let rail_hx = if rail_hid { 0 } else { rail_w };
                 let rail_gap_hot = ptr.is_some_and(|(x, _)| x == rail_hx) && ui.rail != 2 && rail_w > 0;
                 let panel_gap_hot = ptr.is_some_and(|(x, _)| x == rail_w + conv_w) && panel_w > 0;
-                for (gx, active, clear_next) in [(rail_hx, ui.resize == Some(0) || rail_gap_hot, rail_hid), (rail_w + conv_w, ui.resize == Some(1) || panel_gap_hot, false)] {
+                for (gx, active, clear_next, y_end) in [(rail_hx, ui.resize == Some(0) || rail_gap_hot, rail_hid, view_h.min(rows as usize) as u16), (rail_w + conv_w, ui.resize == Some(1) || panel_gap_hot, false, rows)] {
                     if gx >= cols || (gx == rail_w && (rail_w == 0 || ui.rail == 2)) || (gx == rail_w + conv_w && panel_w == 0) {
                         continue;
                     }
                     let mid = rows / 2;
-                    for y in 0..rows {
+                    for y in 0..y_end {
                         let grip_row = y >= mid.saturating_sub(1) && y <= mid + 1;
                         let (sym, st) = match (grip_row, active) {
                             (true, true) => ("⋮", fg(BLUE).add_modifier(Modifier::BOLD)),
@@ -3843,7 +3902,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
             })?;
             rail_lay = (rrows.len(), rows as usize, rmap);
-            let frame_buf = (links_at != (conv_gen, start, ui.ctx_view, ui.search.is_some()) || a.audit).then(|| completed.buffer.clone());
+            let frame_buf = (links_at != (conv_gen, start, ui.ctx_view, ui.picker.is_some(), ui.search.is_some()) || a.audit).then(|| completed.buffer.clone());
             if a.audit && window.is_some() {
                 let cur = frame_buf.clone().unwrap();
                 if let Some(prev) = &prev_buf {
@@ -3863,8 +3922,8 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             }
             // links: mouse capture turns off the terminal's own link detection, so replies
             // mark URLs and paths with OSC 8, rewritten only when the conversation moves
-            if links_at != (conv_gen, start, ui.ctx_view, ui.search.is_some()) {
-                links_at = (conv_gen, start, ui.ctx_view, ui.search.is_some());
+            if links_at != (conv_gen, start, ui.ctx_view, ui.picker.is_some(), ui.search.is_some()) {
+                links_at = (conv_gen, start, ui.ctx_view, ui.picker.is_some(), ui.search.is_some());
                 let fb = frame_buf.unwrap();
                 let be = term.backend_mut();
                 for (k, r) in vis.iter().enumerate().filter(|(_, r)| r.link && vrows.is_none()) {
@@ -4014,6 +4073,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                     if k == Key::Char('f') && (m.ctrl || m.sup) {
                         ui.ctx_view = false;
+                        ui.picker = None;
                         let s = ui.search.get_or_insert_with(Search::default);
                         if !s.hits.is_empty() {
                             s.i = (s.i + 1) % s.hits.len();
@@ -4089,6 +4149,15 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         if let Some(s) = ui.search.as_mut() {
                             s.jump = true;
                         }
+                        continue;
+                    }
+                    // the model picker takes its keys while it is open; Ctrl+L and
+                    // `/model` open it over the conversation
+                    if model_picker::on_key(&mut ui, k, m) {
+                        continue;
+                    }
+                    // the `/` and `@` panels take their keys while open
+                    if completions::on_key(&mut ui, k, m) {
                         continue;
                     }
                     // Esc leaves a swapped view, back to where the conversation was
@@ -4228,10 +4297,17 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                 let i = ui.qsel.unwrap();
                                 queue_drop(f, &mut ui, &mut cmds, ts, i);
                             }
-                            // the one slash command the prototype has: there is no slash command panel yet
+                            // the slash commands the prototype runs locally: their views
+                            // open at once, anything else sends as usual
                             Key::Enter if ui.qsel.is_none() && ui.input.trim() == "/context" => {
                                 ui.input.clear();
                                 ui.ctx_view = true;
+                                ui.vscroll = 0;
+                            }
+                            Key::Enter if ui.qsel.is_none() && ui.input.trim() == "/model" => {
+                                ui.input.clear();
+                                ui.ctx_view = false;
+                                ui.picker = Some(model_picker::for_case("list"));
                                 ui.vscroll = 0;
                             }
                             Key::Enter => enter(f, &mut ui, &mut cmds, ts),
@@ -4247,7 +4323,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     let over_panel = x >= rail_w + conv_w && rail_w + conv_w < cols && panel_cache.is_some();
                     let over_rail = rail_w > 0 && ui.rail != 2 && x < rail_w;
                     let in_conv = !over_panel && (y as usize) < view_h;
-                    let in_sbox = ui.search.is_some() && y < 3 && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
+                    let in_sbox = ui.search.is_some() && y < 5 && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
                     // the resize handles: the rail's right edge and the panel's left edge,
                     // the one-column gaps beside them; hidden, the rail's 1-column handle
                     // at the screen's left edge
@@ -4268,7 +4344,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                             ui.resize = Some(if rail_edge { 0 } else { 1 });
                             ui.sel = None;
                         }
-                        Mouse::Down if in_conv && !ui.ctx_view && !in_sbox && !(show_tabs && y == 0) => {
+                        Mouse::Down if in_conv && !ui.ctx_view && ui.picker.is_none() && !in_sbox && !(show_tabs && y == 0) => {
                             ui.sel = at(x, y).map(|p| Sel { a: p, b: p, moved: false, down: true });
                         }
                         Mouse::Down => {
@@ -4353,9 +4429,17 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                 }
             }
+            // typing `/` or `@` at the input's start opens the panel; anything else closes it
+            {
+                let top_open = ui.top(f).is_some();
+                completions::sync(&mut ui, top_open);
+            }
             let Some(act) = click else { continue };
             changed = true;
             match act {
+                Act::Pick(_) | Act::PickChip(_, _) | Act::PickAll | Act::PickRefresh => {
+                    model_picker::click(&mut ui, act);
+                }
                 Act::Group(p, bi) if pager.is_some() => pager.as_mut().unwrap().toggle(p, bi, &v),
                 Act::Group(ti, bi) => {
                     if let Block::Group(g) = &mut f.turns[ti].blocks[bi] {
@@ -4407,10 +4491,14 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 Act::Context => {
                     ui.search = None;
+                    ui.picker = None;
                     ui.ctx_view = true;
                     ui.vscroll = 0;
                 }
-                Act::Back => ui.ctx_view = false,
+                Act::Back => {
+                    ui.ctx_view = false;
+                    ui.picker = None;
+                }
                 Act::Ext(i) => {
                     let id = v.lua.as_ref().map(|x| x.clicks.borrow()[i].clone()).unwrap_or_default();
                     say(&mut ui, format!("extension click: {id}"));
@@ -4531,6 +4619,36 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_case_names_are_pinned() {
+        let all: Vec<String> = SURFACES.iter().map(|s| format!("{} {}", s.flag, (s.docs)().iter().map(|d| d.name).collect::<Vec<_>>().join(", "))).collect();
+        assert_eq!(
+            all,
+            [
+                "--home empty, sessions, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
+                "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
+                "--picker list, levels, scoped, scoped-all, refreshing, session-only",
+                "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
+            ]
+        );
+        let h = cases::help(SURFACES);
+        assert!(SURFACES.iter().flat_map(|s| (s.docs)()).all(|d| h.contains(d.name)));
+    }
+
+    /// `check/<surface>.md` is the slices' check lines; `UPDATE_CHECK=1 cargo test` rewrites them.
+    #[test]
+    fn check_files_match_the_slices() {
+        for s in SURFACES {
+            let path = format!("{}/check/{}.md", env!("CARGO_MANIFEST_DIR"), s.file);
+            let want = cases::check_md(s);
+            if std::env::var_os("UPDATE_CHECK").is_some() {
+                std::fs::create_dir_all(format!("{}/check", env!("CARGO_MANIFEST_DIR"))).unwrap();
+                std::fs::write(&path, &want).unwrap();
+            }
+            assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), want, "{path} is stale: UPDATE_CHECK=1 cargo test");
+        }
+    }
 
     fn fold_with(prompt: &str, reply: &str) -> Fold {
         let mut f = Fold::default();

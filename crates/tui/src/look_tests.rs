@@ -1,8 +1,8 @@
 //! Tests for the look: colour depth, the 256-colour mapping and the paint
 //! pass.
 
-use super::{Depth, Look, ThemeSetting, ansi256, depth};
-use crate::theme::{Role, Theme};
+use super::{Depth, Look, ThemeSetting, among, ansi256, depth};
+use crate::theme::{ROLES, Role, Shade, Theme};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -113,6 +113,101 @@ fn at_256(look: &Look, role: Role) -> u8 {
 }
 
 #[test]
+fn among_by_role() {
+    // A neutral tint takes the grey ramp, any other tint the colour cube,
+    // and a text role either (`docs/tui.md`, "Look").
+    assert_eq!(among(Role::Surface), GREY);
+    assert_eq!(among(Role::Rule), GREY);
+    assert_eq!(among(Role::Handoff), CUBE);
+    assert_eq!(among(Role::Alert), CUBE);
+    assert_eq!(among(Role::Scroll), ALL);
+    assert_eq!(among(Role::Info), ALL);
+    assert_eq!(among(Role::Accent), ALL);
+}
+
+#[test]
+fn dark_at_256_known_entries() {
+    // The dark theme at 256 colours, role by role: the terminal's own
+    // colours stay the default, every other role its nearest xterm entry.
+    let look = look(ThemeSetting::Dark, &[("TERM", "xterm-256color")]);
+    for role in [
+        Role::Text,
+        Role::Muted,
+        Role::CodeText,
+        Role::Operator,
+        Role::Background,
+    ] {
+        assert_eq!(look.colour(role), Color::Reset, "{}", role.name());
+    }
+    let table = [
+        (Role::Accent, 75),
+        (Role::Heading, 215),
+        (Role::Success, 75),
+        (Role::Warning, 215),
+        (Role::Error, 203),
+        (Role::Attention, 215),
+        (Role::Added, 75),
+        (Role::Removed, 203),
+        (Role::Keyword, 75),
+        (Role::String, 174),
+        (Role::Comment, 244),
+        (Role::Number, 151),
+        (Role::Function, 117),
+        (Role::Type, 117),
+        (Role::Constant, 117),
+        (Role::Info, 117),
+        (Role::Secondary, 146),
+        (Role::Rule, 238),
+        (Role::Scroll, 244),
+        (Role::Panel, 233),
+        (Role::Surface, 234),
+        (Role::SurfaceRaised, 238),
+        (Role::Turn, 233),
+        (Role::Prompt, 237),
+        (Role::Code, 234),
+        (Role::Handoff, 16),
+        (Role::Approval, 234),
+        (Role::Alert, 52),
+        (Role::Hover, 234),
+        (Role::Selection, 24),
+        (Role::Match, 58),
+        (Role::MatchCurrent, 215),
+    ];
+    assert_eq!(table.len(), ROLES - 5);
+    for (role, index) in table {
+        assert_eq!(look.colour(role), Color::Indexed(index), "{}", role.name());
+    }
+}
+
+#[test]
+fn the_defaults_stay_the_default_at_every_depth() {
+    // In the dark theme `text`, `code_text`, `operator` and `background`
+    // are the terminal's own colours and `muted` is dim over the default
+    // foreground, so they stay the default at every depth (`docs/tui.md`,
+    // "Themes").
+    let depths: [&[(&str, &str)]; 3] = [
+        &[("COLORTERM", "truecolor")],
+        &[("TERM", "xterm-256color")],
+        &[("NO_COLOR", "1")],
+    ];
+    for (nth, vars) in depths.into_iter().enumerate() {
+        let look = look(ThemeSetting::Dark, vars);
+        for role in [
+            Role::Text,
+            Role::CodeText,
+            Role::Operator,
+            Role::Muted,
+            Role::Background,
+        ] {
+            assert_eq!(look.colour(role), Color::Reset, "{} {vars:?}", role.name());
+        }
+        if nth < 2 {
+            assert_ne!(look.colour(Role::Accent), Color::Reset, "{vars:?}");
+        }
+    }
+}
+
+#[test]
 fn each_role_resolves_among_its_entries_at_256() {
     let vars = [("TERM", "xterm-256color")];
     for (setting, theme) in [
@@ -121,15 +216,23 @@ fn each_role_resolves_among_its_entries_at_256() {
     ] {
         let look = look(setting, &vars);
         for role in Role::ALL {
-            let among = if role.grey() {
-                GREY
-            } else if role.tint() {
-                CUBE
+            let shade = theme.shade(role);
+            if matches!(shade, Shade::Terminal | Shade::Dim) {
+                assert_eq!(look.colour(role), Color::Reset, "{}", role.name());
             } else {
-                ALL
-            };
-            let index = at_256(&look, role);
-            assert_eq!(index, ansi256(theme.rgb(role), among), "{}", role.name());
+                let among = if role.grey() {
+                    GREY
+                } else if role.tint() {
+                    CUBE
+                } else {
+                    ALL
+                };
+                let Shade::Rgb(rgb) = shade else {
+                    panic!("{}: {shade:?}", role.name());
+                };
+                let index = at_256(&look, role);
+                assert_eq!(index, ansi256(rgb, among), "{}", role.name());
+            }
         }
     }
 }
@@ -137,11 +240,18 @@ fn each_role_resolves_among_its_entries_at_256() {
 #[test]
 fn grey_roles_resolve_in_the_ramp() {
     let vars = [("TERM", "xterm-256color")];
-    for setting in [ThemeSetting::Dark, ThemeSetting::Light] {
+    for (setting, theme) in [
+        (ThemeSetting::Dark, Theme::DARK),
+        (ThemeSetting::Light, Theme::LIGHT),
+    ] {
         let look = look(setting, &vars);
         for role in Role::ALL.into_iter().filter(|role| role.grey()) {
-            let index = at_256(&look, role);
-            assert!(GREY.contains(&index), "{}: {index}", role.name());
+            if matches!(theme.shade(role), Shade::Terminal | Shade::Dim) {
+                assert_eq!(look.colour(role), Color::Reset, "{}", role.name());
+            } else {
+                let index = at_256(&look, role);
+                assert!(GREY.contains(&index), "{}: {index}", role.name());
+            }
         }
     }
 }
@@ -157,9 +267,9 @@ fn alert_stays_coloured_at_256() {
 #[test]
 fn a_text_role_may_take_a_grey_at_256() {
     let look = look(ThemeSetting::Dark, &[("TERM", "xterm-256color")]);
-    // The dark text's nearest entry is grey 254, not the cube's 188.
-    assert_eq!(at_256(&look, Role::Text), 254);
-    assert_eq!(ansi256(Theme::DARK.rgb(Role::Text), CUBE), 188);
+    // The dark scroll's nearest entry is grey 244, not the cube's 102.
+    assert_eq!(at_256(&look, Role::Scroll), 244);
+    assert_eq!(ansi256((0x80, 0x80, 0x80), CUBE), 102);
 }
 
 /// A one-row buffer holding `cells`, each a symbol and its style.
@@ -186,11 +296,11 @@ fn paint_resolves_markers_to_the_theme() {
         ("▄", surface),
     ]);
     look.paint(&mut buf);
-    assert_eq!(buf[(0, 0)].fg, Color::Rgb(86, 182, 194));
-    assert_eq!(buf[(0, 0)].bg, Color::Rgb(0x1e, 0x21, 0x27));
+    assert_eq!(buf[(0, 0)].fg, Color::Rgb(0x6e, 0xaa, 0xfe));
+    assert_eq!(buf[(0, 0)].bg, Color::Reset);
     // With colour, an edge keeps its half block.
     assert_eq!(buf[(1, 0)].symbol(), "▄");
-    assert_eq!(buf[(1, 0)].fg, Color::Rgb(0x28, 0x2c, 0x34));
+    assert_eq!(buf[(1, 0)].fg, Color::Rgb(0x1a, 0x1a, 0x22));
 }
 
 #[test]
@@ -198,10 +308,7 @@ fn paint_at_256_writes_palette_entries() {
     let look = look(ThemeSetting::Dark, &[("TERM", "xterm-256color")]);
     let mut buf = row(&[("a", Style::new().fg(Role::Accent.color()))]);
     look.paint(&mut buf);
-    assert_eq!(
-        buf[(0, 0)].fg,
-        Color::Indexed(ansi256(Theme::DARK.rgb(Role::Accent), ALL))
-    );
+    assert_eq!(buf[(0, 0)].fg, Color::Indexed(75));
 }
 
 #[test]
@@ -211,7 +318,7 @@ fn paint_leaves_reset_and_other_colours() {
         ("a", Style::new().fg(Color::Reset).bg(Color::Reset)),
         (
             "b",
-            Style::new().fg(Color::Indexed(40)).bg(Color::Rgb(1, 2, 3)),
+            Style::new().fg(Color::Indexed(37)).bg(Color::Rgb(1, 2, 3)),
         ),
         ("c", Style::new().fg(Color::Red).bg(Color::Indexed(255))),
     ]);
@@ -247,12 +354,90 @@ fn no_color_blanks_edges_but_not_text_half_blocks() {
         ("▄", Style::new().fg(Role::Surface.color())),
         ("▀", Style::new().fg(Role::Prompt.color())),
         ("▄", Style::new().fg(Role::Accent.color())),
-        ("▀", Style::new().fg(Color::Indexed(40))),
+        ("▀", Style::new().fg(Color::Indexed(37))),
         ("x", Style::new().fg(Role::Surface.color())),
     ]);
     look.paint(&mut buf);
     let symbols: Vec<&str> = buf.content.iter().map(|cell| cell.symbol()).collect();
     assert_eq!(symbols, [" ", " ", "▄", "▀", "x"]);
+}
+
+#[test]
+fn paint_dims_a_dim_role_only() {
+    // Dark `muted` is the default foreground drawn dim: a cell it marks
+    // as a foreground gains DIM and keeps its other modifiers, while a
+    // background marker never adds DIM (`docs/tui.md`, "Themes").
+    let look = look(ThemeSetting::Dark, &[("COLORTERM", "truecolor")]);
+    let mut buf = row(&[
+        (
+            "m",
+            Style::new()
+                .fg(Role::Muted.color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        (
+            "a",
+            Style::new()
+                .fg(Role::Accent.color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        (
+            "b",
+            Style::new()
+                .bg(Role::Muted.color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        ("t", Style::new().fg(Role::Text.color())),
+    ]);
+    look.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].fg, Color::Reset);
+    assert_eq!(buf[(0, 0)].modifier, Modifier::BOLD | Modifier::DIM);
+    assert_eq!(buf[(1, 0)].modifier, Modifier::BOLD);
+    assert_eq!(buf[(2, 0)].modifier, Modifier::BOLD);
+    assert_eq!(buf[(3, 0)].modifier, Modifier::empty());
+}
+
+#[test]
+fn dim_follows_the_theme() {
+    // DIM follows the theme's shade for the role: light `muted` is a
+    // fixed colour, and a file that sets `muted` to a hex gets that colour
+    // with no dim. Under NO_COLOR `muted` keeps DIM over the default.
+    let truecolour = [("COLORTERM", "truecolor")];
+    let light = look(ThemeSetting::Light, &truecolour);
+    assert!(!light.dim(Role::Muted));
+    let mut buf = row(&[("m", Style::new().fg(Role::Muted.color()))]);
+    light.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].modifier, Modifier::empty());
+    let (solar, notice) = Look::new(
+        ThemeSetting::File {
+            name: "solar".to_owned(),
+            text: Ok(r##"{"base": "dark", "roles": {"muted": "#123456"}}"##.to_owned()),
+        },
+        &env(&truecolour),
+    );
+    assert_eq!(notice, None);
+    assert!(!solar.dim(Role::Muted));
+    let mut buf = row(&[("m", Style::new().fg(Role::Muted.color()))]);
+    solar.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].fg, Color::Rgb(0x12, 0x34, 0x56));
+    assert_eq!(buf[(0, 0)].modifier, Modifier::empty());
+    let dark = look(ThemeSetting::Dark, &[("NO_COLOR", "1")]);
+    assert!(dark.dim(Role::Muted));
+    let mut buf = row(&[("m", Style::new().fg(Role::Muted.color()))]);
+    dark.paint(&mut buf);
+    assert_eq!(buf[(0, 0)].fg, Color::Reset);
+    assert_eq!(buf[(0, 0)].modifier, Modifier::DIM);
+}
+
+#[test]
+fn a_report_re_resolves_dim() {
+    use super::Appearance;
+    let mut followed = following(&[("COLORTERM", "truecolor")]);
+    assert!(followed.dim(Role::Muted));
+    assert!(followed.appearance(Appearance::Light));
+    assert!(!followed.dim(Role::Muted));
+    assert!(followed.appearance(Appearance::Dark));
+    assert!(followed.dim(Role::Muted));
 }
 
 #[test]
@@ -285,10 +470,7 @@ fn new_with_dark_light_follow_and_a_file() {
     let colour = |look: &Look, role| look.colour(role);
     let dark = look(ThemeSetting::Dark, &vars);
     let light = look(ThemeSetting::Light, &vars);
-    assert_eq!(
-        colour(&dark, Role::Background),
-        Color::Rgb(0x1e, 0x21, 0x27)
-    );
+    assert_eq!(colour(&dark, Role::Background), Color::Reset);
     assert_eq!(
         colour(&light, Role::Background),
         Color::Rgb(0xfa, 0xfa, 0xfa)

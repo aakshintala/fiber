@@ -274,22 +274,48 @@ fn argument<'a>(arguments: &'a Value, key: &str) -> Option<&'a str> {
 }
 
 /// A call's arguments in brief: the path a file tool names, the command a
-/// shell runs, else the arguments as compact JSON, or raw text that was
-/// not JSON.
+/// shell runs, an `ask_user` call's question count, else the first useful
+/// string field, a short count of an array field, or nothing. Never JSON:
+/// the running line already holds the raw text until the call is requested
+/// (`docs/tui.md`, "Tool groups and the ledger").
 pub(crate) fn summary(name: &str, arguments: &Value) -> String {
-    let key = match name {
-        "read" | "edit" | "write" => Some("path"),
-        "shell" => Some("command"),
+    if let Some(text) = match name {
+        "read" | "edit" | "write" => argument(arguments, "path"),
+        "shell" => argument(arguments, "command"),
         _ => None,
-    };
-    if let Some(text) = key.and_then(|key| argument(arguments, key)) {
+    } {
         return text.to_owned();
     }
-    if let Value::String(raw) = arguments {
-        raw.clone()
-    } else {
-        arguments.to_string()
+    if let Kind::Ask(questions) = kind(name, arguments) {
+        return count(questions, "question", "questions");
     }
+    if let Value::Object(arguments) = arguments {
+        // The first useful string field, in the order tools take them;
+        // an empty value names nothing, so it is skipped.
+        for key in [
+            "query", "url", "pattern", "name", "text", "title", "session", "id",
+        ] {
+            if let Some(text) = arguments.get(key).and_then(Value::as_str) {
+                let text = oneline(text);
+                if !text.is_empty() {
+                    return text;
+                }
+            }
+        }
+        // Else a short count of the first array field with anything in it.
+        for (key, value) in arguments {
+            if let Some(list) = value.as_array().filter(|list| !list.is_empty()) {
+                return format!("{} {key}", list.len());
+            }
+        }
+    }
+    String::new()
+}
+
+/// `text` on one line: every run of whitespace, newlines included, reads
+/// as one space, with nothing left at either end.
+fn oneline(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// `name` and its arguments, or the name alone.
@@ -510,8 +536,17 @@ impl Group {
     }
 
     /// Its lines. A finished group with no call is its thinking, one line
-    /// a block; otherwise a summary line, and the ledger when open.
-    pub(crate) fn rows(&self, running: bool, out: &mut Rows) {
+    /// a block; otherwise a summary line, and the ledger when open. The
+    /// summary line is one row in `width` cells, whatever runs. A
+    /// call's images draw as their one line each under its ledger row
+    /// (`docs/tui.md`, "Images").
+    pub(crate) fn rows(
+        &self,
+        running: bool,
+        width: u16,
+        layout: &crate::image::Layout,
+        out: &mut Rows,
+    ) {
         if !running && !self.has_ledger() {
             for thought in self.thoughts() {
                 thought_rows(thought, "", out);
@@ -527,7 +562,7 @@ impl Group {
         if failed > 0 {
             parts.push(count(failed, "failed model call", "failed model calls"));
         }
-        if running {
+        let elapsed = if running {
             let flight: Vec<String> = self
                 .calls()
                 .filter(|call| call.status.is_none())
@@ -547,10 +582,28 @@ impl Group {
                     None => "Thinking".to_owned(),
                 });
             }
+            None
         } else {
-            parts.extend(seconds(self.last.saturating_sub(self.first)));
-        }
-        if parts.is_empty() {
+            seconds(self.last.saturating_sub(self.first))
+        };
+        // A finished group's duration stays whole at the end of the line:
+        // what does not fit is cut from the descriptive part with "…", so
+        // the duration is still there (`docs/tui.md`, "Tool groups and the
+        // ledger").
+        let body = parts.join(" · ");
+        let suffix = elapsed.as_deref().map(|span| {
+            if body.is_empty() {
+                format!(" {span}")
+            } else {
+                format!(" · {span}")
+            }
+        });
+        let head = if body.is_empty() {
+            "•".to_owned()
+        } else {
+            format!("• {body}")
+        };
+        if body.is_empty() && suffix.is_none() {
             return;
         }
         // A running summary line carries its spinner's cell: the draw
@@ -564,9 +617,25 @@ impl Group {
         } else {
             RowText::plain()
         };
+        let mut line = match &suffix {
+            Some(tail) => format!("{head}{tail}"),
+            None => head.clone(),
+        };
+        // What does not fit is cut with "…", so the line never wraps
+        // (`docs/tui.md`, "Tool groups and the ledger").
+        let max = usize::from(width);
+        if self::width(&line) > max {
+            match &suffix {
+                Some(tail) => {
+                    let keep = max.saturating_sub(self::width(tail) + self::width("…"));
+                    line = format!("{}…{tail}", cut(&head, keep));
+                }
+                None => line = format!("{}…", cut(&line, max.saturating_sub(1))),
+            }
+        }
         out.push_text(
             (
-                dim(format!("• {}", parts.join(" · "))),
+                dim(line),
                 self.key.as_deref().map(|key| Target::Group(target_id(key))),
             ),
             text,
@@ -579,13 +648,13 @@ impl Group {
         match self.key.as_deref().map(|key| Target::Group(target_id(key))) {
             Some(target) => {
                 if out.open_scope(target, draws) {
-                    self.ledger(out);
+                    self.ledger(width, layout, out);
                 }
                 out.end_scope();
             }
             None => {
                 if draws {
-                    self.ledger(out);
+                    self.ledger(width, layout, out);
                 }
             }
         }
@@ -593,7 +662,8 @@ impl Group {
 
     /// One row per call, split by step: the step's number in the gutter on
     /// its first row, the model calls that failed first, then its thinking.
-    fn ledger(&self, out: &mut Rows) {
+    /// Each call's images draw under its row, before its opened detail.
+    fn ledger(&self, width: u16, layout: &crate::image::Layout, out: &mut Rows) {
         for section in &self.sections {
             let mut gutter = format!("{:>3} ", section.step);
             for (code, attempt) in &section.failed {
@@ -647,6 +717,7 @@ impl Group {
                     .style(Style::default().add_modifier(Modifier::BOLD))
                 };
                 out.push((line, Some(Target::Call(call.id))));
+                crate::turn::images::call_rows(&call.images, width, layout, out);
                 if out.open_scope(Target::Call(call.id), call.open) {
                     if call.changes.is_empty() {
                         opened(&call.detail, GAP, out);

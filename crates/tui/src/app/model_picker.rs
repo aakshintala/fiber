@@ -7,7 +7,7 @@ use super::App;
 use crate::catalogue::{Catalogue, Refresh};
 use crate::configure::Layer;
 use crate::keys::{Edit, Key};
-use crate::model_picker::{Choice, Mode, command_args, saves};
+use crate::model_picker::{Choice, Mode, command_args, saves, scoped_save};
 use crate::swapped::{Frame, Spot, about, rows_height};
 
 /// The thinking levels `/thinking` takes, in order.
@@ -391,6 +391,52 @@ impl App {
         })
     }
 
+    /// Runs `/scoped-models`: the picker as a checklist over every
+    /// installed model, each row marked from the saved list. Text after
+    /// the command is ignored: the draft is cleared unread.
+    pub(crate) fn scoped_models_command(&mut self) -> super::Effect {
+        self.draft.clear();
+        self.open_model_picker(Mode::Scope)
+    }
+
+    /// Saves the checklist: the marked references in catalogue order,
+    /// then the old list's entries that are not installed, or `[]` when
+    /// none is marked. The write goes through the configuration seam to
+    /// the global file at once, on home and attached alike: no command
+    /// is sent. The picker's list follows a successful write, scoping
+    /// the next open. The picker closes either way.
+    fn save_scoped(&mut self) -> super::Effect {
+        let list = {
+            let picker = &self.model_picker;
+            let marks = picker
+                .open
+                .as_ref()
+                .map(|open| open.marks.as_slice())
+                .unwrap_or(&[]);
+            scoped_save(&picker.catalogue.models, marks, &picker.scoped)
+        };
+        // A string list always serialises; the fallback keeps the save
+        // total.
+        let text = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_owned());
+        let workspace = self.workspace();
+        match self.configure_seam() {
+            Some(seam) => match seam.set(&workspace, Layer::Global, "scoped_models", &text) {
+                Ok(_) => {
+                    self.model_picker.scoped = list;
+                    if let Some(home) = self.home.as_mut() {
+                        home.launch.scoped_models = self.model_picker.scoped.clone();
+                    }
+                }
+                Err(error) => {
+                    self.push_notice(format!("Saving scoped_models failed: {error}"));
+                }
+            },
+            None => self.push_notice("Saving is not available; nothing changed.".to_owned()),
+        }
+        self.model_picker.close();
+        super::Effect::None
+    }
+
     /// Refuses an unknown thinking word with the seven levels.
     fn refuse_level(&mut self, word: &str) -> super::Effect {
         self.push_notice(format!(
@@ -466,8 +512,12 @@ impl App {
                 Some(super::Effect::None)
             }
             Key::Enter => {
-                // With no scoped row to choose the picker stays open,
-                // sending nothing; the key never reaches the draft.
+                // The checklist saves its marks; choosing sends one
+                // command. With no scoped row to choose the picker stays
+                // open, sending nothing; the key never reaches the draft.
+                if self.model_picker.is_scope() {
+                    return Some(self.save_scoped());
+                }
                 Some(match self.model_picker.choice(false) {
                     Some(choice) => self.choose(choice),
                     None => super::Effect::None,
@@ -475,11 +525,18 @@ impl App {
             }
             Key::Char('s') => {
                 // `s` is the only path to a session-only choice: with no
-                // scoped row it stays open, sending nothing.
+                // scoped row it stays open, sending nothing. The
+                // checklist never chooses, so it stays open there too.
                 Some(match self.model_picker.choice(true) {
                     Some(choice) => self.choose(choice),
                     None => super::Effect::None,
                 })
+            }
+            Key::Char(' ') => {
+                // Space marks in the checklist; everywhere else it does
+                // nothing. Only the checklist keeps marks.
+                self.model_picker.toggle_mark();
+                Some(super::Effect::None)
             }
             // Every other key does nothing, and no key cycles.
             Key::Char(_)

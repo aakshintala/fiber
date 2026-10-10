@@ -613,13 +613,14 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
                 Target::Tool(format!("cancel-{id}")),
                 Request::Callback {
                     port: callback_port,
+                    path: None,
                 },
             ),
             _ => (
                 Target::Provider {
                     name: format!("cancel-{id}"),
                     function: "credential",
-                    credential: Some(pair),
+                    credential: Some(super::CredentialFor::Stored(pair)),
                 },
                 Request::Lock,
             ),
@@ -683,13 +684,13 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
         let target = Target::Provider {
             name: name.clone(),
             function: "credential",
-            credential: Some(crate::CredentialPair {
+            credential: Some(super::CredentialFor::Stored(crate::CredentialPair {
                 credential: "acme".to_owned(),
                 label: "default".to_owned(),
-            }),
+            })),
         };
         let request = if request_kind == "callback" {
-            Request::Callback { port }
+            Request::Callback { port, path: None }
         } else {
             Request::Lock
         };
@@ -820,17 +821,17 @@ fn a_failed_oauth_start_delivers_its_failure_after_releasing_the_lock() {
         let (target, request) = if request_kind == "callback" {
             (
                 Target::Tool("fail-oauth".to_owned()),
-                Request::Callback { port },
+                Request::Callback { port, path: None },
             )
         } else {
             (
                 Target::Provider {
                     name: "fail-oauth".to_owned(),
                     function: "credential",
-                    credential: Some(crate::CredentialPair {
+                    credential: Some(super::CredentialFor::Stored(crate::CredentialPair {
                         credential: "acme".to_owned(),
                         label: "default.lock".to_owned(),
-                    }),
+                    })),
                 },
                 Request::Lock,
             )

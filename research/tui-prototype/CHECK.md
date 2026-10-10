@@ -52,3 +52,10 @@ The rail (#692), at a window of at least 150 columns so rail, conversation and p
 - Hidden: with the rail hidden, "N waiting" should join the status rows (narrow) or the panel's Session card (clicking it brings the rail back).
 - Scope: in A, click "+1 other · show all". The long-named pi-rig session should appear under an "other projects" divider, truncated with …, and the row should offer "show less". B shows every project with no scope line.
 - Hover: run with `--hover` and hover a B card. The whole card should brighten; in compact a dim footer at the rail's bottom should name the full session, workspace, model and spend. In A one tooltip line should show the full name, workspace and spend.
+
+Each surface's cases are in `check/`, one file per surface, built from the cases the surface declares:
+
+- [check/model-picker.md](check/model-picker.md)
+- [check/home.md](check/home.md)
+- [check/overlays.md](check/overlays.md)
+- [check/completions.md](check/completions.md)

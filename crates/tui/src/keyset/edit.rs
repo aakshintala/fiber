@@ -182,6 +182,12 @@ impl Keyset {
             .join(", ")
     }
 
+    /// The label of the action's first bound key; `None` when the
+    /// action holds no key, as when `[]` leaves it unbound.
+    pub(crate) fn first_label(&self, id: &str) -> Option<String> {
+        self.current(id).first().map(Stroke::label)
+    }
+
     /// The variant's name for a variant action (`left`, `next`, `3`);
     /// `None` for a one-variant action.
     pub(crate) fn variant(id: &str, slot: usize) -> Option<String> {

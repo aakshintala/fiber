@@ -5,9 +5,9 @@
 use std::ops::RangeInclusive;
 
 use ratatui::buffer::Buffer;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 
-use crate::theme::{ROLES, Rgb, Role, Theme};
+use crate::theme::{ROLES, Rgb, Role, Shade, Theme};
 
 /// The theme `tui.theme` names (`docs/configuration.md`, "Keys").
 #[derive(Debug, Default)]
@@ -123,12 +123,20 @@ pub(crate) enum Appearance {
     Light,
 }
 
+/// A role's resolved colour and whether it draws dim: `muted` is the
+/// default foreground drawn dim (`docs/tui.md`, "Themes").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Paint {
+    colour: Color,
+    dim: bool,
+}
+
 /// The theme in use, resolved for the terminal's colour depth.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Look {
     depth: Depth,
-    /// Each role's colour, by index.
-    colours: [Color; ROLES],
+    /// Each role's paint, by index.
+    colours: [Paint; ROLES],
     /// Whether the theme follows the terminal's appearance.
     follow: bool,
     /// The terminal's appearance, as it last reported it.
@@ -203,14 +211,26 @@ impl Look {
         }
     }
 
-    /// Each role's colour in `theme` at `depth`.
-    fn colours(theme: &Theme, depth: Depth) -> [Color; ROLES] {
+    /// Each role's paint in `theme` at `depth`. A role the terminal
+    /// draws itself stays the default at every depth, and a `Dim` shade
+    /// draws dim at every depth, `NO_COLOR` included (`docs/tui.md`,
+    /// "Themes").
+    fn colours(theme: &Theme, depth: Depth) -> [Paint; ROLES] {
         Role::ALL.map(|role| {
-            let rgb = theme.rgb(role);
-            match depth {
-                Depth::NoColour => Color::Reset,
-                Depth::True => Color::Rgb(rgb.0, rgb.1, rgb.2),
-                Depth::Ansi256 => Color::Indexed(ansi256(rgb, among(role))),
+            let shade = theme.shade(role);
+            match shade {
+                Shade::Terminal | Shade::Dim => Paint {
+                    colour: Color::Reset,
+                    dim: matches!(shade, Shade::Dim),
+                },
+                Shade::Rgb(rgb) => Paint {
+                    colour: match depth {
+                        Depth::NoColour => Color::Reset,
+                        Depth::True => Color::Rgb(rgb.0, rgb.1, rgb.2),
+                        Depth::Ansi256 => Color::Indexed(ansi256(rgb, among(role))),
+                    },
+                    dim: false,
+                },
             }
         })
     }
@@ -219,12 +239,21 @@ impl Look {
     pub(crate) fn colour(&self, role: Role) -> Color {
         self.colours
             .get(usize::from(role as u8))
-            .copied()
+            .map(|paint| paint.colour)
             .unwrap_or(Color::Reset)
     }
 
+    /// Whether `role` draws dim: its shade is `Dim`, at every depth.
+    pub(crate) fn dim(&self, role: Role) -> bool {
+        self.colours
+            .get(usize::from(role as u8))
+            .is_some_and(|paint| paint.dim)
+    }
+
     /// Resolves every role marker in `buf` to its colour; any other colour
-    /// is left as it is. With no colour, a half-block edge (▄ or ▀ drawn in
+    /// is left as it is. A cell a dim role marks as a foreground gains
+    /// DIM and keeps its other modifiers; a background marker never adds
+    /// DIM. With no colour, a half-block edge (▄ or ▀ drawn in
     /// a tint) becomes a blank cell: with no tint there is no surface to
     /// edge, and the row stays so row counts do not change. Runs once per
     /// frame, on the copy written to the terminal.
@@ -236,8 +265,12 @@ impl Look {
             if edge {
                 cell.set_symbol(" ");
             }
+            let dimmed = role_of(cell.fg).is_some_and(|role| self.dim(role));
             cell.fg = self.resolved(cell.fg);
             cell.bg = self.resolved(cell.bg);
+            if dimmed {
+                cell.modifier.insert(Modifier::DIM);
+            }
         }
     }
 

@@ -210,6 +210,31 @@ fn another_clients_resolution_closes_it() {
 }
 
 #[test]
+fn the_badge_names_the_next_requests_bound_key() {
+    let mut app = attached();
+    let mut user = serde_json::Map::new();
+    user.insert("next_request".to_owned(), json!("alt+n"));
+    app.set_keys(crate::KeysSetup { user });
+    assert!(app.on_line(offer(S_A)).is_empty());
+    assert_eq!(press(&mut app, Key::Esc), Effect::None);
+    assert_eq!(
+        app.badge().as_deref(),
+        Some("! 1 waiting · /approvals or ⌥N")
+    );
+}
+
+#[test]
+fn the_badge_leaves_the_key_out_when_unbound() {
+    let mut app = attached();
+    let mut user = serde_json::Map::new();
+    user.insert("next_request".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert!(app.on_line(offer(S_A)).is_empty());
+    assert_eq!(press(&mut app, Key::Esc), Effect::None);
+    assert_eq!(app.badge().as_deref(), Some("! 1 waiting · /approvals"));
+}
+
+#[test]
 fn the_badge_counts_it_after_esc() {
     let mut app = offered();
     assert!(app.badge().is_none());

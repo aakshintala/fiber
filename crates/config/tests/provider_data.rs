@@ -7,7 +7,7 @@
 mod common;
 
 use common::Setup;
-use config::{CredentialSource, Protocol, read_manifest, read_package_text, read_providers};
+use config::{CredentialSource, Login, Protocol, read_manifest, read_package_text, read_providers};
 use contract::ErrorCode;
 
 const DATABRICKS: &str = r#"{
@@ -575,6 +575,7 @@ fn reads_web_search_reads_one_type_per_protocol() {
                 (protocol, kind),
                 (Protocol::AnthropicMessages, "web_search_20250305")
                     | (Protocol::OpenaiResponses, "web_search")
+                    | (Protocol::GoogleGenerativeAi, "google_search")
             );
             assert_eq!(
                 protocol.reads_web_search(kind),
@@ -689,6 +690,32 @@ fn a_secret_name_with_dots_reads() {
         read_manifest(&dir).unwrap().secrets,
         [".hidden", "mcp.server.KEY"]
     );
+}
+
+#[test]
+fn login_reads_browser_and_defaults_to_none() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{"name":"p","login":"browser","models":[]}"#,
+    );
+    assert_eq!(read_providers(&dir).unwrap()[0].login, Some(Login::Browser));
+    setup.write(&dir.join("providers/p.json"), r#"{"name":"p","models":[]}"#);
+    assert_eq!(read_providers(&dir).unwrap()[0].login, None);
+}
+
+#[test]
+fn an_unknown_login_is_a_provider_data_error() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{"name":"p","login":"key","models":[]}"#,
+    );
+    let err = read_providers(&dir).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    assert!(err.to_string().contains("a provider's data"), "{err}");
 }
 
 #[test]

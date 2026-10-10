@@ -10,20 +10,27 @@
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::Path;
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use config::{
-    Config, ConfigError, CredentialFile, CredentialSource, ProviderData, Secret, Sources,
+    Config, ConfigError, CredentialFile, CredentialSource, Login, ProviderData, Secret, Sources,
     credential_labels, delete_credential, delete_credential_held, read_credential, read_secret,
     set_global_if_unset, store_credential, store_secret,
 };
 use contract::ErrorCode;
+use contract::clock::Clock;
 use contract::shapes::Failure;
 use doors::failure;
 use extensions::Providers;
 use rustix::termios::{self, LocalModes, OptionalActions, Termios};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::{Handle, Signals};
+
+mod browser;
+
+pub use browser::browser_login;
+use browser::login_with;
 
 use crate::{LOGOUT_SHAPE, fail, project_of};
 
@@ -176,6 +183,11 @@ pub(crate) struct LoginIo<'a> {
     pub(crate) err: &'a mut dyn Write,
     /// Reads the key.
     pub(crate) keys: &'a mut dyn KeyReader,
+    /// Whether to log in with a device code instead of the browser, for a
+    /// provider that logs in by browser.
+    pub(crate) device: bool,
+    /// The process clock, which a browser login's timeouts read.
+    pub(crate) clock: Arc<dyn Clock>,
 }
 
 fn usage(message: impl Into<String>) -> Failure {
@@ -389,7 +401,7 @@ fn store(
 ) -> Result<LoginStored, StoreFailure> {
     if let Some(data) = providers.get(name) {
         let stored = stored_name(data);
-        // A key login reveals no email; the OAuth login of #311 passes its own.
+        // A key login reveals no email; the browser login passes its own.
         let label = chosen_label(label, None);
         let file = CredentialFile::new(home, stored, label).map_err(config_failure)?;
         // Held until the login ends, so two logins never both pass the check.
@@ -403,9 +415,7 @@ fn store(
             .map_err(config_failure)?
             .is_some()
         {
-            return Err(StoreFailure::Refused(format!(
-                "credentials/{stored}/{label} is already stored; log in under another label with --as <label>, or run `fiber logout {name} --as {label}` first."
-            )));
+            return Err(StoreFailure::Refused(already_stored(name, stored, label)));
         }
         let key = read(&format!("Key for {name}: "))?;
         if key.expose().is_empty() {
@@ -447,6 +457,14 @@ fn store(
     }
 }
 
+/// Why a store failed to start: the label is already stored, naming
+/// `--as` (`docs/model-routing.md`, "Logging in").
+fn already_stored(name: &str, stored: &str, label: &str) -> String {
+    format!(
+        "credentials/{stored}/{label} is already stored; log in under another label with --as <label>, or run `fiber logout {name} --as {label}` first."
+    )
+}
+
 /// The installed providers by name, then the declared secrets.
 pub fn login_targets(home: &Path) -> Result<Vec<LoginName>, Failure> {
     Ok(targets(&providers_in(home)?))
@@ -482,6 +500,23 @@ pub(crate) fn login(
         Some(name) => name.to_owned(),
         None => choose(io)?,
     };
+    // A provider that logs in by browser runs its `credential()` login
+    // instead of reading a key (`docs/model-routing.md`, "Logging in").
+    if io
+        .providers
+        .get(&name)
+        .is_some_and(|data| data.login == Some(Login::Browser))
+    {
+        return login_with(io, &name, label);
+    }
+    if io.device
+        && (io.providers.get(&name).is_some()
+            || io.providers.secrets().any(|secret| secret == name))
+    {
+        return Err(usage(
+            "--device applies only to a provider that logs in by browser.",
+        ));
+    }
     let home = io.home;
     let providers = io.providers;
     let terminal = io.terminal;
@@ -624,8 +659,13 @@ fn home_and_providers() -> Result<(std::path::PathBuf, Providers), Failure> {
     Ok((home.clone(), providers_in(&home)?))
 }
 
-/// `fiber login [<name>] [--as <label>]`.
-pub fn run_login(name: Option<&str>, label: Option<&str>) -> i32 {
+/// `fiber login [<name>] [--as <label>] [--device]`.
+pub fn run_login(
+    name: Option<&str>,
+    label: Option<&str>,
+    device: bool,
+    clock: Arc<dyn Clock>,
+) -> i32 {
     let ran = home_and_providers().and_then(|(home, providers)| {
         let stdin = io::stdin();
         let on_terminal = stdin.is_terminal();
@@ -646,6 +686,8 @@ pub fn run_login(name: Option<&str>, label: Option<&str>) -> i32 {
                 stdin: &mut stdin.lock(),
                 err: &mut err,
                 keys: keys.as_mut(),
+                device,
+                clock,
             },
         )
     });

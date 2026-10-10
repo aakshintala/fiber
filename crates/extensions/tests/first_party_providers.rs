@@ -104,8 +104,8 @@ fn a_provider_no_first_party_package_serves_gets_the_generic_hint() {
 }
 
 /// The first-party models whose provider hosts a search (`docs/tools.md`,
-/// "Hosted by the provider"): every Anthropic model, both muse models on
-/// `/v1/responses`, and OpenCode's OpenAI pass-through.
+/// "Hosted by the provider"): every Anthropic model, every muse model on
+/// `/v1/responses`, every Gemini model, and OpenCode's OpenAI pass-through.
 #[test]
 fn first_party_hosted_searches_are_the_marked_models() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers");
@@ -151,18 +151,38 @@ fn first_party_hosted_searches_are_the_marked_models() {
         ("anthropic/claude-fable-5", "web_search_20250305"),
         ("anthropic/claude-fable-5-1", "web_search_20250305"),
         ("anthropic/claude-haiku-4-5", "web_search_20250305"),
+        ("anthropic/claude-haiku-4-5-20251001", "web_search_20250305"),
+        ("anthropic/claude-haiku-5-5", "web_search_20250305"),
         ("anthropic/claude-opus-4-5", "web_search_20250305"),
+        ("anthropic/claude-opus-4-5-20251101", "web_search_20250305"),
         ("anthropic/claude-opus-4-6", "web_search_20250305"),
         ("anthropic/claude-opus-4-7", "web_search_20250305"),
         ("anthropic/claude-opus-4-8", "web_search_20250305"),
         ("anthropic/claude-opus-5", "web_search_20250305"),
         ("anthropic/claude-opus-5-5", "web_search_20250305"),
         ("anthropic/claude-sonnet-4-5", "web_search_20250305"),
+        (
+            "anthropic/claude-sonnet-4-5-20250929",
+            "web_search_20250305",
+        ),
         ("anthropic/claude-sonnet-4-6", "web_search_20250305"),
         ("anthropic/claude-sonnet-5", "web_search_20250305"),
         ("anthropic/claude-sonnet-5-5", "web_search_20250305"),
+        ("muse/muse-spark-1.1", "web_search"),
+        ("muse/muse-spark-1.2", "web_search"),
+        ("muse/muse-spark-1.2-contributor", "web_search"),
         ("muse/muse-spark-1.3", "web_search"),
         ("muse/muse-spark-1.3-contributor", "web_search"),
+        ("gemini/gemini-3.1-flash-lite", "google_search"),
+        ("gemini/gemini-3.1-flash-lite-preview", "google_search"),
+        ("gemini/gemini-3.1-pro-preview", "google_search"),
+        ("gemini/gemini-3.1-pro-preview-customtools", "google_search"),
+        ("gemini/gemini-3.5-flash", "google_search"),
+        ("gemini/gemini-3.5-flash-lite", "google_search"),
+        ("gemini/gemini-3.6-flash", "google_search"),
+        ("gemini/gemini-3.7-flash", "google_search"),
+        ("gemini/gemini-3.8-flash", "google_search"),
+        ("gemini/gemini-3-flash-preview", "google_search"),
         ("opencode-zen/gpt-6.1-sol", "web_search"),
     ]
     .into_iter()
