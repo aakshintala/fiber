@@ -185,6 +185,38 @@ fn later_text_turn() -> Vec<&'static str> {
     ]
 }
 
+/// A first turn answering with text through the resumed harness, whose
+/// lines are read from the log file: the ephemeral deltas never reach
+/// it.
+fn resumed_first_text_turn() -> Vec<&'static str> {
+    vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+}
+
+/// A later turn answering with text through the resumed harness: as
+/// [`later_text_turn`], without the ephemeral deltas.
+fn resumed_later_text_turn() -> Vec<&'static str> {
+    vec![
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+}
+
 #[test]
 fn a_first_turn_has_no_change() {
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
@@ -1407,19 +1439,33 @@ fn switching_a_skill_off_and_on_is_removed_then_added() {
     let (tx1, rx1) = mpsc::channel();
     let looped = session.start(rx1);
     session.drive(looped, &tx1, "hi");
+    let first = session.new_lines();
+    assert_eq!(kinds(&first), resumed_first_text_turn());
     let (tx2, rx2) = mpsc::channel();
     let looped = session.resume(rx2);
     session.drive(looped, &tx2, "again");
+    let second = session.new_lines();
+    let mut resumed = vec!["preamble_built"];
+    resumed.extend(resumed_later_text_turn());
+    assert_eq!(kinds(&second), resumed);
     // Switched off: one removed line at the next turn start.
     *disabled.lock().unwrap() = vec!["late".into()];
     let (tx3, rx3) = mpsc::channel();
     let looped = session.resume(rx3);
     session.drive(looped, &tx3, "third");
+    let third = session.new_lines();
+    let mut removed = vec!["preamble_built", "skills_changed"];
+    removed.extend(resumed_later_text_turn());
+    assert_eq!(kinds(&third), removed);
     // Switched back on: one added line.
     *disabled.lock().unwrap() = Vec::new();
     let (tx4, rx4) = mpsc::channel();
     let looped = session.resume(rx4);
     session.drive(looped, &tx4, "fourth");
+    let fourth = session.new_lines();
+    let mut added = vec!["preamble_built", "skills_changed"];
+    added.extend(resumed_later_text_turn());
+    assert_eq!(kinds(&fourth), added);
     let lines = session.lines();
     assert_eq!(
         lines
@@ -1437,15 +1483,18 @@ fn switching_a_skill_off_and_on_is_removed_then_added() {
             line.payload["reason"]
         );
     }
-    let changed: Vec<&Envelope> = lines
+    let removed = third
         .iter()
-        .filter(|line| line.kind == "skills_changed")
-        .collect();
-    assert_eq!(changed.len(), 2);
-    assert!(changed[0].payload["added"].as_array().unwrap().is_empty());
-    assert_eq!(changed[0].payload["removed"], json!(["late"]));
-    assert_eq!(changed[1].payload["added"][0]["name"], "late");
-    assert!(changed[1].payload["removed"].as_array().unwrap().is_empty());
+        .find(|line| line.kind == "skills_changed")
+        .unwrap();
+    assert!(removed.payload["added"].as_array().unwrap().is_empty());
+    assert_eq!(removed.payload["removed"], json!(["late"]));
+    let added = fourth
+        .iter()
+        .find(|line| line.kind == "skills_changed")
+        .unwrap();
+    assert_eq!(added.payload["added"][0]["name"], "late");
+    assert!(added.payload["removed"].as_array().unwrap().is_empty());
     // Each request carries its turn's line.
     let requests = session.provider.requests();
     assert_eq!(requests.len(), 4);
@@ -1487,11 +1536,11 @@ fn a_resumed_turn_replays_the_live_conversation_and_checks_silently() {
     let looped = session.resume(rx3);
     session.drive(looped, &tx3, "third");
     let lines = session.new_lines();
-    assert!(
-        !lines.iter().any(|line| line.kind == "skills_changed"),
-        "{:?}",
-        kinds(&lines)
-    );
+    // The resumed turn replays the same shape, with no `skills_changed`:
+    // the resume folded the live baseline, so the check stays silent.
+    let mut silent = vec!["preamble_built"];
+    silent.extend(resumed_later_text_turn());
+    assert_eq!(kinds(&lines), silent);
     let requests = session.provider.requests();
     assert_eq!(requests.len(), 3);
     let live: Vec<String> = live[1]

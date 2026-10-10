@@ -687,15 +687,15 @@ fn changed_text_renders_added_then_removed_on_one_line_each() {
     let changed = SkillsChanged {
         added: vec![
             SkillListed {
-                name: "zeta".into(),
-                description: "last".into(),
-                path: "z".into(),
-                source: SkillSource::Repository,
-            },
-            SkillListed {
                 name: "a\nb".into(),
                 description: "x\r\ny".into(),
                 path: "p".into(),
+                source: SkillSource::Repository,
+            },
+            SkillListed {
+                name: "zeta".into(),
+                description: "last".into(),
+                path: "z".into(),
                 source: SkillSource::Repository,
             },
         ],
@@ -714,4 +714,40 @@ fn a_lookup_consults_the_reader_before_any_check() {
     let set = reading_set(&tree, shared_reader(Arc::new(Mutex::new(vec!["a".into()]))));
     assert_eq!(set.command("a"), None);
     assert!(set.is_disabled("a"));
+}
+
+#[test]
+fn a_lookup_after_a_check_ignores_a_switch_made_mid_turn() {
+    let tree = Tree::new();
+    skill(&tree.top().join(".agents/skills"), "a", "a", "d");
+    let disabled = Arc::new(Mutex::new(Vec::new()));
+    let set = reading_set(&tree, shared_reader(disabled.clone()));
+    open(&set, &tree);
+    // Switched off with no check since: the lookup still answers from
+    // the last check, before any durable announcement.
+    *disabled.lock().unwrap() = vec!["a".into()];
+    assert!(set.command("a").is_some());
+    assert!(set.listed_file("a").is_some());
+    assert!(!set.is_disabled("a"));
+    // The next turn-start check announces it.
+    let checked = set.check();
+    assert_eq!(removed_names(&checked.changed), ["a"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_skill_that_is_switched_off_is_removed() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    skill(&place, "a", "a", "d");
+    let set = tree.set();
+    open(&set, &tree);
+    deny(&place);
+    set.set_disabled(vec!["a".into()]);
+    let checked = set.check();
+    allow(&place);
+    // Unreadable, but the switch still counts: one removed line, and the
+    // tool refuses it, as for a readable skill.
+    assert_eq!(removed_names(&checked.changed), ["a"]);
+    assert_eq!(set.listed_file("a"), None);
 }

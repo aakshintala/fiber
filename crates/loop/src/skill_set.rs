@@ -182,8 +182,9 @@ impl SkillSet {
         }
         // A listed skill the check could not read keeps its last-known
         // entry: no removed line, and the `skill` tool still resolves it.
-        // Not-found means removed (`docs/system-prompt.md`, "Added and
-        // removed skills").
+        // Not-found means removed. A switch still counts while unreadable:
+        // a name `skills.disabled` names is removed, as the tool refuses
+        // it (`docs/system-prompt.md`, "Added and removed skills").
         for (name, entry) in &inner.listed {
             if current.contains_key(name) {
                 continue;
@@ -192,7 +193,7 @@ impl SkillSet {
                 .unread
                 .iter()
                 .any(|unread| Path::new(&entry.path).starts_with(unread));
-            if !unreadable {
+            if !unreadable || disabled.iter().any(|off| off == name) {
                 continue;
             }
             if let Some(found) = old.iter().find(|found| found.listed.name == *name) {
@@ -282,16 +283,12 @@ impl SkillSet {
     /// Renders a `skills_changed` from the event alone, so a resume, a
     /// fork and a rewind render what the live turn sent
     /// (`docs/system-prompt.md`, "Recording"): each added line, then each
-    /// removed line.
+    /// removed line, both in the name order the check wrote.
     pub(crate) fn changed_text(changed: &SkillsChanged) -> String {
-        let mut entries = changed.added.clone();
-        entries.sort_by(|left, right| left.name.cmp(&right.name));
-        let mut names = changed.removed.clone();
-        names.sort();
         let added = crate::prompt::body(crate::conversation::MESSAGES_MD, "skill-added");
         let removed = crate::prompt::body(crate::conversation::MESSAGES_MD, "skill-removed");
-        let mut lines = Vec::with_capacity(entries.len() + names.len());
-        for entry in &entries {
+        let mut lines = Vec::with_capacity(changed.added.len() + changed.removed.len());
+        for entry in &changed.added {
             lines.push(crate::prompt::fill(
                 &added,
                 &[
@@ -300,7 +297,7 @@ impl SkillSet {
                 ],
             ));
         }
-        for name in &names {
+        for name in &changed.removed {
             lines.push(crate::prompt::fill(
                 &removed,
                 &[("name", one_line(name).as_str())],
@@ -314,7 +311,7 @@ impl SkillSet {
     /// skills count, as `/name` expands them
     /// (`docs/system-prompt.md`, "Skills").
     pub(crate) fn command(&self, name: &str) -> Option<PathBuf> {
-        self.refresh_disabled();
+        self.ensure_read();
         let mut inner = lock(&self.0);
         ensure(&mut inner);
         if inner.inputs.skills_disabled.iter().any(|off| off == name) {
@@ -333,7 +330,7 @@ impl SkillSet {
     /// and it is not switched off, as the `skill` tool loads it
     /// (`docs/tools.md`, "Skills").
     pub(crate) fn listed_file(&self, name: &str) -> Option<PathBuf> {
-        self.refresh_disabled();
+        self.ensure_read();
         let mut inner = lock(&self.0);
         ensure(&mut inner);
         if inner.inputs.skills_disabled.iter().any(|off| off == name) {
@@ -350,7 +347,7 @@ impl SkillSet {
 
     /// Whether `name` is switched off.
     pub(crate) fn is_disabled(&self, name: &str) -> bool {
-        self.refresh_disabled();
+        self.ensure_read();
         let mut inner = lock(&self.0);
         ensure(&mut inner);
         inner.inputs.skills_disabled.iter().any(|off| off == name)
@@ -370,6 +367,20 @@ impl SkillSet {
         }
         let cloned = lock(&from.0).clone();
         *lock(&self.0) = cloned;
+    }
+
+    /// Discovers once when nothing is read yet, after one
+    /// `skills.disabled` re-read: the resumed process's one read at
+    /// start. Any later lookup answers from the maintained state, so a
+    /// switch made mid-turn changes nothing before the turn-start check
+    /// announces it (`docs/configuration.md`, "When Fiber reads
+    /// configuration").
+    fn ensure_read(&self) {
+        if lock(&self.0).known.is_some() {
+            return;
+        }
+        self.refresh_disabled();
+        ensure(&mut lock(&self.0));
     }
 
     /// One `skills.disabled` re-read with no lock held, applied when it
