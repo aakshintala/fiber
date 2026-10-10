@@ -855,6 +855,11 @@ impl Run {
             &self.hub_home,
             "the hub process to exit",
         );
+        // The hub and its sessions are gone: the sessions watchdog has
+        // nothing left to kill.
+        if let Some(sessions) = self.sessions.take() {
+            sessions.stand_down(self.deadline.cleanup());
+        }
         Exited {
             status: output.status,
             terminal: self.shared.lock().unwrap().output(),
