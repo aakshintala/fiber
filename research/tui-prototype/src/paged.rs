@@ -54,7 +54,10 @@ pub struct Pager {
 }
 
 fn kind_sid(e: &Value) -> (&str, &str) {
-    (e["kind"].as_str().unwrap_or(""), e["session_id"].as_str().unwrap_or(""))
+    (
+        e["kind"].as_str().unwrap_or(""),
+        e["session_id"].as_str().unwrap_or(""),
+    )
 }
 
 impl Pager {
@@ -99,16 +102,42 @@ impl Pager {
                     }
                     turns.push(i);
                     calls = 0;
-                    cur = Some(Page { first: i, end: i, head: true, tail: false, turn_ts: e["ts"].as_i64().unwrap_or(0), calls_before: 0, after_band: false, fresh: false });
-                } else if kind == "assistant_message_started" && open == 0 && !in_group && !handing && cur.as_ref().is_some_and(|p| i - p.first >= page_lines) {
+                    cur = Some(Page {
+                        first: i,
+                        end: i,
+                        head: true,
+                        tail: false,
+                        turn_ts: e["ts"].as_i64().unwrap_or(0),
+                        calls_before: 0,
+                        after_band: false,
+                        fresh: false,
+                    });
+                } else if kind == "assistant_message_started"
+                    && open == 0
+                    && !in_group
+                    && !handing
+                    && cur.as_ref().is_some_and(|p| i - p.first >= page_lines)
+                {
                     let mut p = cur.take().unwrap();
                     p.end = i;
                     let ts = p.turn_ts;
                     pages.push(p);
                     // the turn's blocks so far are still in the summary fold, which trims only their text
                     let blocks = sum.turns.last().map_or(&[][..], |t| &t.blocks[..]);
-                    let (after_band, fresh) = (matches!(blocks.last(), Some(Block::Handoff(_))), blocks.is_empty());
-                    cur = Some(Page { first: i, end: i, head: false, tail: false, turn_ts: ts, calls_before: calls, after_band, fresh });
+                    let (after_band, fresh) = (
+                        matches!(blocks.last(), Some(Block::Handoff(_))),
+                        blocks.is_empty(),
+                    );
+                    cur = Some(Page {
+                        first: i,
+                        end: i,
+                        head: false,
+                        tail: false,
+                        turn_ts: ts,
+                        calls_before: calls,
+                        after_band,
+                        fresh,
+                    });
                 }
                 match kind {
                     "tool_call_requested" => {
@@ -128,17 +157,24 @@ impl Pager {
                             in_group = false;
                         }
                     }
-                    "steering_applied" | "interaction_resolved" | "turn_completed" => in_group = false,
+                    "steering_applied" | "interaction_resolved" | "turn_completed" => {
+                        in_group = false
+                    }
                     "handoff_started" => handing = true,
                     "handoff_completed" => {
                         handing = false;
-                        waiting = (e["payload"]["outcome"].as_str().unwrap_or("completed") == "completed").then_some(i);
+                        waiting = (e["payload"]["outcome"].as_str().unwrap_or("completed")
+                            == "completed")
+                            .then_some(i);
                     }
                     _ => {}
                 }
             }
             sum.apply(&e);
-            if kind == "usage_recorded" && sid == sum.session_id && let Some(l) = waiting.take() {
+            if kind == "usage_recorded"
+                && sid == sum.session_id
+                && let Some(l) = waiting.take()
+            {
                 afters.insert(l, sum.ctx);
             }
             trim(&mut sum, kind, sid, e["action_id"].as_str().unwrap_or(""));
@@ -151,7 +187,22 @@ impl Pager {
             pages.push(p);
         }
         let sid = sum.session_id.clone();
-        let pager = Pager { file, offsets, turns, pages, counts: vec![], starts: vec![0], key: None, find: String::new(), hits: vec![], resident: HashMap::new(), afters, opened: HashSet::new(), sid, resident_max: 0 };
+        let pager = Pager {
+            file,
+            offsets,
+            turns,
+            pages,
+            counts: vec![],
+            starts: vec![0],
+            key: None,
+            find: String::new(),
+            hits: vec![],
+            resident: HashMap::new(),
+            afters,
+            opened: HashSet::new(),
+            sid,
+            resident_max: 0,
+        };
         Ok((pager, sum))
     }
 
@@ -159,12 +210,24 @@ impl Pager {
     pub fn fold_page(&mut self, p: usize) -> Fold {
         let pg = &self.pages[p];
         let (a, b) = (self.offsets[pg.first], self.offsets[pg.end]);
-        let mut f = Fold { session_id: self.sid.clone(), ..Default::default() };
+        let mut f = Fold {
+            session_id: self.sid.clone(),
+            ..Default::default()
+        };
         if !pg.head {
-            f.turns.push(Turn { ts: pg.turn_ts, calls_before: pg.calls_before, after_band: pg.after_band, fresh: pg.fresh, ..Default::default() });
+            f.turns.push(Turn {
+                ts: pg.turn_ts,
+                calls_before: pg.calls_before,
+                after_band: pg.after_band,
+                fresh: pg.fresh,
+                ..Default::default()
+            });
         }
         let mut bytes = vec![0u8; (b - a) as usize];
-        self.file.seek(SeekFrom::Start(a)).and_then(|_| self.file.read_exact(&mut bytes)).expect("the log is readable");
+        self.file
+            .seek(SeekFrom::Start(a))
+            .and_then(|_| self.file.read_exact(&mut bytes))
+            .expect("the log is readable");
         let first = pg.first;
         for (k, l) in bytes.split(|&c| c == b'\n').enumerate() {
             if let Ok(e) = serde_json::from_slice::<Value>(l) {
@@ -190,13 +253,17 @@ impl Pager {
     fn render(&self, p: usize, f: &Fold, v: &View) -> Vec<Row> {
         let w = self.key.as_ref().map_or(80, |k| k.0);
         let pg = &self.pages[p];
-        f.turns.first().map_or_else(Vec::new, |t| turn_rows(p, t, w, v, pg.head, pg.tail))
+        f.turns
+            .first()
+            .map_or_else(Vec::new, |t| turn_rows(p, t, w, v, pg.head, pg.tail))
     }
     fn restart(&mut self) {
-        self.starts = std::iter::once(0).chain(self.counts.iter().scan(0, |s, &c| {
-            *s += c;
-            Some(*s)
-        })).collect();
+        self.starts = std::iter::once(0)
+            .chain(self.counts.iter().scan(0, |s, &c| {
+                *s += c;
+                Some(*s)
+            }))
+            .collect();
     }
     pub fn total(&self) -> usize {
         *self.starts.last().unwrap()
@@ -206,7 +273,9 @@ impl Pager {
     }
     /// The page holding row `r`.
     pub fn page_at(&self, r: usize) -> usize {
-        self.starts[..self.pages.len()].partition_point(|&s| s <= r).saturating_sub(1)
+        self.starts[..self.pages.len()]
+            .partition_point(|&s| s <= r)
+            .saturating_sub(1)
     }
 
     /// Renders every page at the width, keeping only the row counts and, when `find` is
@@ -228,7 +297,11 @@ impl Pager {
             let rows = self.render(p, &f, v);
             self.counts.push(rows.len());
             if !find.is_empty() {
-                self.hits.extend(find_all(&rows, find).into_iter().map(|(r, c, n)| (p, r, c, n)));
+                self.hits.extend(
+                    find_all(&rows, find)
+                        .into_iter()
+                        .map(|(r, c, n)| (p, r, c, n)),
+                );
             }
         }
         self.restart();
@@ -248,7 +321,11 @@ impl Pager {
             if !self.resident.contains_key(&p) {
                 let f = self.fold_page(p);
                 let rows = self.render(p, &f, v);
-                debug_assert_eq!(rows.len(), self.counts[p], "a page renders to the rows it was counted at");
+                debug_assert_eq!(
+                    rows.len(),
+                    self.counts[p],
+                    "a page renders to the rows it was counted at"
+                );
                 self.resident.insert(p, (f, rows));
                 n += 1;
             }
@@ -309,7 +386,10 @@ fn trim(f: &mut Fold, kind: &str, sid: &str, aid: &str) {
     let Some(&(ti, bi, ii)) = f.at.get(aid) else {
         if kind == "turn_completed" {
             if let Some(t) = f.turns.last_mut() {
-                *t = Turn { ts: t.ts, ..Default::default() };
+                *t = Turn {
+                    ts: t.ts,
+                    ..Default::default()
+                };
             }
             f.at.clear();
             f.text_start.clear();
@@ -343,7 +423,9 @@ fn prefix(c: &[usize]) -> Vec<usize> {
         .collect()
 }
 fn at(s: &[usize], r: usize) -> usize {
-    s[..s.len() - 1].partition_point(|&x| x <= r).saturating_sub(1)
+    s[..s.len() - 1]
+        .partition_point(|&x| x <= r)
+        .saturating_sub(1)
 }
 /// The scroll bar's thumb top, in cells, as the prototype draws it.
 fn thumb(start: usize, total: usize, vh: usize) -> usize {
@@ -361,7 +443,12 @@ fn thumb(start: usize, total: usize, vh: usize) -> usize {
 /// move in one step (cells), how many steps moved it more than one cell, and how many
 /// moved it down while scrolling up, and the largest distance (cells) from where exact counts
 /// would draw the thumb for the same row.
-pub fn thumb_jumps(real: &[usize], weight: &[u64], vh: usize, m: usize) -> (f64, usize, usize, usize, usize) {
+pub fn thumb_jumps(
+    real: &[usize],
+    weight: &[u64],
+    vh: usize,
+    m: usize,
+) -> (f64, usize, usize, usize, usize) {
     let n = real.len();
     let real_total: usize = real.iter().sum();
     let mut known = vec![false; n];
@@ -372,9 +459,21 @@ pub fn thumb_jumps(real: &[usize], weight: &[u64], vh: usize, m: usize) -> (f64,
         got += real[p];
     }
     let est = |known: &[bool]| -> Vec<usize> {
-        let (r, w) = (0..n).filter(|&i| known[i]).fold((0u64, 0u64), |(r, w), i| (r + real[i] as u64, w + weight[i]));
+        let (r, w) = (0..n)
+            .filter(|&i| known[i])
+            .fold((0u64, 0u64), |(r, w), i| {
+                (r + real[i] as u64, w + weight[i])
+            });
         let ratio = r as f64 / w.max(1) as f64;
-        (0..n).map(|i| if known[i] { real[i] } else { (ratio * weight[i] as f64).round() as usize }).collect()
+        (0..n)
+            .map(|i| {
+                if known[i] {
+                    real[i]
+                } else {
+                    (ratio * weight[i] as f64).round() as usize
+                }
+            })
+            .collect()
     };
     let s = prefix(&est(&known));
     let total = s[n];
@@ -399,8 +498,15 @@ pub fn thumb_jumps(real: &[usize], weight: &[u64], vh: usize, m: usize) -> (f64,
         }
         let s = prefix(&est(&known));
         let start = s[ap] + off;
-        let (lo, hi) = (start.saturating_sub(m * vh), (start + vh + m * vh).min(s[n]));
-        for p in known.iter_mut().take(at(&s, hi.saturating_sub(1).max(lo)) + 1).skip(at(&s, lo)) {
+        let (lo, hi) = (
+            start.saturating_sub(m * vh),
+            (start + vh + m * vh).min(s[n]),
+        );
+        for p in known
+            .iter_mut()
+            .take(at(&s, hi.saturating_sub(1).max(lo)) + 1)
+            .skip(at(&s, lo))
+        {
             *p = true;
         }
         let s = prefix(&est(&known));
@@ -425,7 +531,14 @@ fn pct(v: &mut [Duration], q: f64) -> Duration {
 
 /// `--paging-bench`: the measurements that need no terminal, one run, as key<TAB>value.
 /// `cw` is the conversation's text width and `vh` its height.
-pub fn bench(path: &str, page_lines: usize, margins: &[usize], cw: usize, vh: usize, words: &[&str]) -> io::Result<String> {
+pub fn bench(
+    path: &str,
+    page_lines: usize,
+    margins: &[usize],
+    cw: usize,
+    vh: usize,
+    words: &[&str],
+) -> io::Result<String> {
     use std::fmt::Write as _;
     let mut s = String::new();
     let mut v = View::default();
@@ -436,12 +549,36 @@ pub fn bench(path: &str, page_lines: usize, margins: &[usize], cw: usize, vh: us
     let (mut pg, _sum) = Pager::open(path, page_lines)?;
     let _ = writeln!(s, "open_index_ms\t{}", ms(t.elapsed()));
     let _ = writeln!(s, "open_count_ms\t{}", ms(pg.sync(cw, &v, "").unwrap()));
-    let _ = writeln!(s, "lines\t{}\nturns\t{}\npages\t{}\ntotal_rows\t{}", pg.offsets.len() - 1, pg.turns.len(), pg.pages.len(), pg.total());
+    let _ = writeln!(
+        s,
+        "lines\t{}\nturns\t{}\npages\t{}\ntotal_rows\t{}",
+        pg.offsets.len() - 1,
+        pg.turns.len(),
+        pg.pages.len(),
+        pg.total()
+    );
     let mut rows: Vec<usize> = pg.counts.clone();
     rows.sort();
-    let _ = writeln!(s, "page_rows_median\t{}\npage_rows_max\t{}", rows[rows.len() / 2], rows[rows.len() - 1]);
-    let _ = writeln!(s, "page_lines_max\t{}", pg.pages.iter().map(|p| p.end - p.first).max().unwrap_or(0));
-    let _ = writeln!(s, "page_bytes_max\t{}", pg.pages.iter().map(|p| pg.offsets[p.end] - pg.offsets[p.first]).max().unwrap_or(0));
+    let _ = writeln!(
+        s,
+        "page_rows_median\t{}\npage_rows_max\t{}",
+        rows[rows.len() / 2],
+        rows[rows.len() - 1]
+    );
+    let _ = writeln!(
+        s,
+        "page_lines_max\t{}",
+        pg.pages.iter().map(|p| p.end - p.first).max().unwrap_or(0)
+    );
+    let _ = writeln!(
+        s,
+        "page_bytes_max\t{}",
+        pg.pages
+            .iter()
+            .map(|p| pg.offsets[p.end] - pg.offsets[p.first])
+            .max()
+            .unwrap_or(0)
+    );
     // (a): exact counts; their cost again on a resize (to 120 columns) and on Ctrl+O
     let real = pg.counts.clone();
     let _ = writeln!(s, "resize_ms\t{}", ms(pg.sync(84, &v, "").unwrap()));
@@ -459,35 +596,65 @@ pub fn bench(path: &str, page_lines: usize, margins: &[usize], cw: usize, vh: us
             t.elapsed()
         })
         .collect();
-    let _ = writeln!(s, "page_load_median_ms\t{}\npage_load_p90_ms\t{}\npage_load_max_ms\t{}", ms(pct(&mut loads, 0.5)), ms(pct(&mut loads, 0.9)), ms(pct(&mut loads, 1.0)));
+    let _ = writeln!(
+        s,
+        "page_load_median_ms\t{}\npage_load_p90_ms\t{}\npage_load_max_ms\t{}",
+        ms(pct(&mut loads, 0.5)),
+        ms(pct(&mut loads, 0.9)),
+        ms(pct(&mut loads, 1.0))
+    );
     // search over the whole log: stream it, render each page to text, keep only the matches
     for w in words {
-        v.q = if w.chars().count() >= 3 { w.to_string() } else { String::new() };
+        v.q = if w.chars().count() >= 3 {
+            w.to_string()
+        } else {
+            String::new()
+        };
         let d = pg.sync(cw, &v, w).unwrap();
-        let _ = writeln!(s, "search_{w}_ms\t{}\nsearch_{w}_hits\t{}\nsearch_{w}_hit_bytes\t{}", ms(d), pg.hits.len(), pg.hits.len() * std::mem::size_of::<(usize, usize, usize, usize)>());
+        let _ = writeln!(
+            s,
+            "search_{w}_ms\t{}\nsearch_{w}_hits\t{}\nsearch_{w}_hit_bytes\t{}",
+            ms(d),
+            pg.hits.len(),
+            pg.hits.len() * std::mem::size_of::<(usize, usize, usize, usize)>()
+        );
         // jumping to the first match, the one furthest from the end: its page and a screen either side
         if let Some(&(p, r, _, _)) = pg.hits.first() {
             let top = (pg.start_of(p) + r).saturating_sub(vh / 2);
             pg.resident.clear();
             let t = Instant::now();
             let n = pg.ensure(top.saturating_sub(vh), (top + 2 * vh).min(pg.total()), &v);
-            let _ = writeln!(s, "search_{w}_jump_ms\t{}\nsearch_{w}_jump_pages\t{n}", ms(t.elapsed()));
+            let _ = writeln!(
+                s,
+                "search_{w}_jump_ms\t{}\nsearch_{w}_jump_pages\t{n}",
+                ms(t.elapsed())
+            );
         }
     }
     v.q.clear();
     pg.sync(cw, &v, "");
     // (b): estimates from bytes and from lines, corrected as pages load
-    let bytes: Vec<u64> = pg.pages.iter().map(|p| pg.offsets[p.end] - pg.offsets[p.first]).collect();
+    let bytes: Vec<u64> = pg
+        .pages
+        .iter()
+        .map(|p| pg.offsets[p.end] - pg.offsets[p.first])
+        .collect();
     let lines: Vec<u64> = pg.pages.iter().map(|p| (p.end - p.first) as u64).collect();
     for &m in margins {
         for (name, wt) in [("bytes", &bytes), ("lines", &lines)] {
             let (e, j, b, k, d) = thumb_jumps(&real, wt, vh, m);
-            let _ = writeln!(s, "thumb_{name}_m{m}\topen_err_pct {e:.1} max_jump {j} jumps_over_1 {b} backwards {k} max_off_true {d}");
+            let _ = writeln!(
+                s,
+                "thumb_{name}_m{m}\topen_err_pct {e:.1} max_jump {j} jumps_over_1 {b} backwards {k} max_off_true {d}"
+            );
         }
     }
     let exact: Vec<u64> = real.iter().map(|&c| c as u64).collect();
     let (e, j, b, k, d) = thumb_jumps(&real, &exact, vh, 1);
-    let _ = writeln!(s, "thumb_exact\topen_err_pct {e:.1} max_jump {j} jumps_over_1 {b} backwards {k} max_off_true {d}");
+    let _ = writeln!(
+        s,
+        "thumb_exact\topen_err_pct {e:.1} max_jump {j} jumps_over_1 {b} backwards {k} max_off_true {d}"
+    );
     // the whole-file mode, for comparison: fold everything, render everything, search it
     let t = Instant::now();
     let mut f = Fold::default();
@@ -498,14 +665,29 @@ pub fn bench(path: &str, page_lines: usize, margins: &[usize], cw: usize, vh: us
     }
     let all = crate::conversation(&f, cw, &v);
     let _ = writeln!(s, "whole_load_ms\t{}", ms(t.elapsed()));
-    let same = all.len() == pg.total() && pg.rows(0, pg.total() - 1, &v).1.iter().zip(&all).all(|(a, b)| crate::plain(a) == crate::plain(b));
+    let same = all.len() == pg.total()
+        && pg
+            .rows(0, pg.total() - 1, &v)
+            .1
+            .iter()
+            .zip(&all)
+            .all(|(a, b)| crate::plain(a) == crate::plain(b));
     let _ = writeln!(s, "whole_rows\t{}\nrows_match_whole\t{same}", all.len());
     for w in words {
-        v.q = if w.chars().count() >= 3 { w.to_string() } else { String::new() };
+        v.q = if w.chars().count() >= 3 {
+            w.to_string()
+        } else {
+            String::new()
+        };
         let t = Instant::now();
         let all = crate::conversation(&f, cw, &v);
         let h = find_all(&all, w);
-        let _ = writeln!(s, "whole_search_{w}_ms\t{}\nwhole_search_{w}_hits\t{}", ms(t.elapsed()), h.len());
+        let _ = writeln!(
+            s,
+            "whole_search_{w}_ms\t{}\nwhole_search_{w}_hits\t{}",
+            ms(t.elapsed()),
+            h.len()
+        );
     }
     Ok(s)
 }
@@ -528,15 +710,29 @@ mod tests {
 
     #[test]
     fn pages_join_into_the_rows_of_the_whole_file() {
-        for path in ["fixtures/session.jsonl", "fixtures/idle.jsonl", "fixtures/large-median.jsonl"] {
+        for path in [
+            "fixtures/session.jsonl",
+            "fixtures/idle.jsonl",
+            "fixtures/large-median.jsonl",
+        ] {
             for (page_lines, all_open, w) in [(8, false, 124), (8, true, 84), (64, false, 124)] {
-                let v = View { all_open, ..Default::default() };
+                let v = View {
+                    all_open,
+                    ..Default::default()
+                };
                 let (mut pg, _) = Pager::open(path, page_lines).unwrap();
                 pg.sync(w, &v, "");
-                assert!(pg.pages.len() > pg.turns.len() || page_lines == 64, "{path}: turns are cut into pages");
+                assert!(
+                    pg.pages.len() > pg.turns.len() || page_lines == 64,
+                    "{path}: turns are cut into pages"
+                );
                 let (base, rows) = pg.rows(0, pg.total() - 1, &v);
                 assert_eq!(base, 0);
-                assert_eq!(text(&rows), text(&whole(path, w, &v)), "{path} at {page_lines} lines, open {all_open}, width {w}");
+                assert_eq!(
+                    text(&rows),
+                    text(&whole(path, w, &v)),
+                    "{path} at {page_lines} lines, open {all_open}, width {w}"
+                );
             }
         }
     }
@@ -555,7 +751,10 @@ mod tests {
         assert!(pg.resident(pa));
         // auto-scroll carries it down several pages; the window moves with it, dropping where it began
         let b = (pg.start_of(pg.page_at(a.0) + 5) + 2, 40);
-        assert!(pg.page_at(b.0) >= pa + 5, "the selection crosses page boundaries");
+        assert!(
+            pg.page_at(b.0) >= pa + 5,
+            "the selection crosses page boundaries"
+        );
         pg.ensure(b.0 + 1 - vh, b.0 + 1, &v);
         assert!(!pg.resident(pa), "the page the drag began in was dropped");
         for (x, y) in [(a, b), (b, a)] {
@@ -568,7 +767,10 @@ mod tests {
         let top = (pg.start_of(1) + 1, 0);
         pg.ensure(top.0, top.0 + vh, &v);
         let (base, rows) = pg.rows(top.0, b.0, &v);
-        assert_eq!(selection_text(&rows, (b.0 - base, b.1), (top.0 - base, top.1)), selection_text(&all, b, top));
+        assert_eq!(
+            selection_text(&rows, (b.0 - base, b.1), (top.0 - base, top.1)),
+            selection_text(&all, b, top)
+        );
     }
 
     /// A session with a handoff mid-turn, its note, and a person's handoff whose size after
@@ -579,53 +781,120 @@ mod tests {
             n += 1;
             serde_json::json!({ "kind": kind, "session_id": "s", "ts": 1000 * n, "action_id": aid, "payload": payload }).to_string() + "\n"
         };
-        let usage = |n: u64| serde_json::json!({ "tokens": { "input": n, "cache_read": 0, "output": 0 } });
+        let usage =
+            |n: u64| serde_json::json!({ "tokens": { "input": n, "cache_read": 0, "output": 0 } });
         let text = |t: &str| serde_json::json!({ "text": t });
         let mut out = String::new();
-        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "go" }], "source": "driver", "command_id": "c" }] }));
+        out += &e(
+            "turn_started",
+            "",
+            serde_json::json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "go" }], "source": "driver", "command_id": "c" }] }),
+        );
         for (i, t) in ["one", "two", "three"].iter().enumerate() {
-            out += &e("assistant_message_started", &format!("b{i}"), serde_json::json!({}));
-            out += &e("assistant_message_completed", &format!("b{i}"), text(&format!("before {t}")));
+            out += &e(
+                "assistant_message_started",
+                &format!("b{i}"),
+                serde_json::json!({}),
+            );
+            out += &e(
+                "assistant_message_completed",
+                &format!("b{i}"),
+                text(&format!("before {t}")),
+            );
         }
         out += &e("usage_recorded", "", usage(402_000));
-        out += &e("handoff_started", "", serde_json::json!({ "trigger": "auto" }));
+        out += &e(
+            "handoff_started",
+            "",
+            serde_json::json!({ "trigger": "auto" }),
+        );
         out += &e("assistant_message_started", "n1", serde_json::json!({}));
         out += &e("assistant_message_completed", "n1", text("THE NOTE"));
         out += &e("usage_recorded", "", usage(403_000));
-        out += &e("handoff_completed", "", serde_json::json!({ "outcome": "completed", "tokens_before": 402_000, "note": ["n1"] }));
+        out += &e(
+            "handoff_completed",
+            "",
+            serde_json::json!({ "outcome": "completed", "tokens_before": 402_000, "note": ["n1"] }),
+        );
         for (i, t) in ["four", "five"].iter().enumerate() {
-            out += &e("assistant_message_started", &format!("c{i}"), serde_json::json!({}));
-            out += &e("assistant_message_completed", &format!("c{i}"), text(&format!("after {t}")));
+            out += &e(
+                "assistant_message_started",
+                &format!("c{i}"),
+                serde_json::json!({}),
+            );
+            out += &e(
+                "assistant_message_completed",
+                &format!("c{i}"),
+                text(&format!("after {t}")),
+            );
             if i == 0 {
                 out += &e("usage_recorded", "", usage(32_000));
             }
         }
-        out += &e("turn_completed", "", serde_json::json!({ "outcome": "completed" }));
-        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "/handoff" }], "source": "driver", "command_id": "c" }] }));
-        out += &e("handoff_started", "", serde_json::json!({ "trigger": "person" }));
-        out += &e("handoff_completed", "", serde_json::json!({ "outcome": "completed", "tokens_before": 40_000, "note": [] }));
-        out += &e("turn_completed", "", serde_json::json!({ "outcome": "completed" }));
-        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "next" }], "source": "driver", "command_id": "c" }] }));
+        out += &e(
+            "turn_completed",
+            "",
+            serde_json::json!({ "outcome": "completed" }),
+        );
+        out += &e(
+            "turn_started",
+            "",
+            serde_json::json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "/handoff" }], "source": "driver", "command_id": "c" }] }),
+        );
+        out += &e(
+            "handoff_started",
+            "",
+            serde_json::json!({ "trigger": "person" }),
+        );
+        out += &e(
+            "handoff_completed",
+            "",
+            serde_json::json!({ "outcome": "completed", "tokens_before": 40_000, "note": [] }),
+        );
+        out += &e(
+            "turn_completed",
+            "",
+            serde_json::json!({ "outcome": "completed" }),
+        );
+        out += &e(
+            "turn_started",
+            "",
+            serde_json::json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "next" }], "source": "driver", "command_id": "c" }] }),
+        );
         out += &e("assistant_message_started", "d0", serde_json::json!({}));
         out += &e("assistant_message_completed", "d0", text("fresh"));
         out += &e("usage_recorded", "", usage(12_000));
-        out += &e("turn_completed", "", serde_json::json!({ "outcome": "completed" }));
+        out += &e(
+            "turn_completed",
+            "",
+            serde_json::json!({ "outcome": "completed" }),
+        );
         out
     }
 
     #[test]
     fn handoff_bands_render_the_same_paged_as_whole() {
-        let path = std::env::temp_dir().join(format!("tui-prototype-handoff-{}.jsonl", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "tui-prototype-handoff-{}.jsonl",
+            std::process::id()
+        ));
         std::fs::write(&path, handoff_fixture()).unwrap();
         let path = path.to_str().unwrap().to_string();
         let v = View::default();
         let all = text(&whole(&path, 90, &v));
-        assert!(all.iter().any(|l| l.contains("402k → 32k")) && all.iter().any(|l| l.contains("40k → 12k")), "{all:#?}");
+        assert!(
+            all.iter().any(|l| l.contains("402k → 32k"))
+                && all.iter().any(|l| l.contains("40k → 12k")),
+            "{all:#?}"
+        );
         assert!(!all.iter().any(|l| l.contains("THE NOTE")));
         for page_lines in [1, 2, 3, 64] {
             let (mut pg, _) = Pager::open(&path, page_lines).unwrap();
             if page_lines == 1 {
-                assert!(pg.pages.iter().any(|p| p.after_band), "a page starts right after a band");
+                assert!(
+                    pg.pages.iter().any(|p| p.after_band),
+                    "a page starts right after a band"
+                );
             }
             pg.sync(90, &v, "");
             let (_, rows) = pg.rows(0, pg.total() - 1, &v);
@@ -637,8 +906,13 @@ mod tests {
         if std::path::Path::new(real).exists() {
             let all = text(&whole(real, 124, &v));
             assert_eq!(all.iter().filter(|l| l.contains("⇄ handoff")).count(), 3);
-            let bands: Vec<usize> = (0..all.len()).filter(|&i| all[i].contains("⇄ handoff")).collect();
-            assert!(bands.iter().all(|&i| !all[i].contains('…')), "every band has its size after");
+            let bands: Vec<usize> = (0..all.len())
+                .filter(|&i| all[i].contains("⇄ handoff"))
+                .collect();
+            assert!(
+                bands.iter().all(|&i| !all[i].contains('…')),
+                "every band has its size after"
+            );
             for page_lines in [1, 8, 50, 64] {
                 let (mut pg, _) = Pager::open(real, page_lines).unwrap();
                 pg.sync(124, &v, "");
@@ -647,7 +921,11 @@ mod tests {
                 // the rows around each band first, so a failure points at the handoff
                 for &i in &bands {
                     let (a, b) = (i.saturating_sub(8), (i + 8).min(all.len()));
-                    assert_eq!(rows.get(a..b), Some(&all[a..b]), "around the band at row {i}, {page_lines} lines a page");
+                    assert_eq!(
+                        rows.get(a..b),
+                        Some(&all[a..b]),
+                        "around the band at row {i}, {page_lines} lines a page"
+                    );
                 }
                 assert_eq!(rows, all, "{real} at {page_lines} lines a page");
             }
@@ -657,10 +935,17 @@ mod tests {
     #[test]
     fn search_over_pages_finds_what_the_whole_file_finds() {
         let path = "fixtures/large-median.jsonl";
-        let v = View { q: "tool".into(), ..Default::default() };
+        let v = View {
+            q: "tool".into(),
+            ..Default::default()
+        };
         let (mut pg, _) = Pager::open(path, 8).unwrap();
         pg.sync(124, &v, "tool");
-        let paged: Vec<_> = pg.hits.iter().map(|&(p, r, c, n)| (pg.start_of(p) + r, c, n)).collect();
+        let paged: Vec<_> = pg
+            .hits
+            .iter()
+            .map(|&(p, r, c, n)| (pg.start_of(p) + r, c, n))
+            .collect();
         assert_eq!(paged, find_all(&whole(path, 124, &v), "tool"));
         assert!(!paged.is_empty());
     }
@@ -673,7 +958,12 @@ mod tests {
         for l in std::fs::read_to_string(path).unwrap().lines() {
             f.apply(&serde_json::from_str(l).unwrap());
         }
-        let panel = |f: &Fold| crate::panel_rows(f, 0, "", 34, 0).iter().map(plain).collect::<Vec<_>>();
+        let panel = |f: &Fold| {
+            crate::panel_rows(f, 0, "", 34, 0)
+                .iter()
+                .map(plain)
+                .collect::<Vec<_>>()
+        };
         assert_eq!(panel(&sum), panel(&f));
         assert_eq!(sum.pending.len(), f.pending.len());
         assert_eq!(sum.queue, f.queue);

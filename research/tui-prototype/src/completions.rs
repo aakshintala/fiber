@@ -4,7 +4,7 @@
 
 use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
-use crate::{bold, dim, fg, left_cut, panel, row, sp, Row, Ui, BLUE, ORANGE};
+use crate::{BLUE, ORANGE, Row, Ui, bold, dim, fg, left_cut, panel, row, sp};
 use ratatui::style::Style;
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
@@ -20,51 +20,246 @@ pub struct Entry {
 /// Forty entries covering every tag kind.
 pub fn entries() -> Vec<Entry> {
     vec![
-        Entry { name: "context", desc: "show the context breakdown", hint: None, tag: "command" },
-        Entry { name: "model", desc: "pick the model for this session", hint: None, tag: "command" },
-        Entry { name: "help", desc: "list every binding by area", hint: None, tag: "command" },
-        Entry { name: "new", desc: "start a new session", hint: None, tag: "command" },
-        Entry { name: "home", desc: "go back to the home screen", hint: None, tag: "command" },
-        Entry { name: "quit", desc: "clear the draft, then quit", hint: None, tag: "command" },
-        Entry { name: "approvals", desc: "reopen a request put aside", hint: None, tag: "command" },
-        Entry { name: "panel", desc: "show or hide the side panel", hint: None, tag: "command" },
-        Entry { name: "search", desc: "search the conversation", hint: None, tag: "command" },
+        Entry {
+            name: "context",
+            desc: "show the context breakdown",
+            hint: None,
+            tag: "command",
+        },
+        Entry {
+            name: "model",
+            desc: "pick the model for this session",
+            hint: None,
+            tag: "command",
+        },
+        Entry {
+            name: "help",
+            desc: "list every binding by area",
+            hint: None,
+            tag: "command",
+        },
+        Entry {
+            name: "new",
+            desc: "start a new session",
+            hint: None,
+            tag: "command",
+        },
+        Entry {
+            name: "home",
+            desc: "go back to the home screen",
+            hint: None,
+            tag: "command",
+        },
+        Entry {
+            name: "quit",
+            desc: "clear the draft, then quit",
+            hint: None,
+            tag: "command",
+        },
+        Entry {
+            name: "approvals",
+            desc: "reopen a request put aside",
+            hint: None,
+            tag: "command",
+        },
+        Entry {
+            name: "panel",
+            desc: "show or hide the side panel",
+            hint: None,
+            tag: "command",
+        },
+        Entry {
+            name: "search",
+            desc: "search the conversation",
+            hint: None,
+            tag: "command",
+        },
         Entry {
             name: "login",
             desc: "sign in to a provider and refresh every cached credential, then retry the queued requests",
             hint: None,
             tag: "command",
         },
-        Entry { name: "review", desc: "review this change for correctness", hint: Some("<path>"), tag: "skill" },
-        Entry { name: "test-plan", desc: "draft a test plan for the ticket", hint: Some("<ticket>"), tag: "skill" },
-        Entry { name: "refactor", desc: "restructure without changing behaviour", hint: None, tag: "skill" },
-        Entry { name: "explain", desc: "explain this code in plain words", hint: Some("<symbol>"), tag: "skill" },
-        Entry { name: "commit", desc: "write a commit message for the diff", hint: None, tag: "skill" },
-        Entry { name: "changelog", desc: "draft the release notes", hint: None, tag: "skill" },
-        Entry { name: "onboard", desc: "tour the repo for a newcomer", hint: None, tag: "skill" },
-        Entry { name: "debug", desc: "find the root cause of a failure", hint: Some("<test>"), tag: "skill" },
-        Entry { name: "perf", desc: "profile the slow path and report", hint: None, tag: "skill" },
-        Entry { name: "docs", desc: "write the missing documentation", hint: None, tag: "skill" },
-        Entry { name: "plan", desc: "a plan the owner can approve", hint: None, tag: "template" },
-        Entry { name: "bug", desc: "a bug report with repro steps", hint: None, tag: "template" },
-        Entry { name: "feature", desc: "a feature spec with acceptance", hint: None, tag: "template" },
-        Entry { name: "rfc", desc: "a design proposal for review", hint: None, tag: "template" },
-        Entry { name: "retro", desc: "a retrospective with lessons", hint: None, tag: "template" },
-        Entry { name: "spike", desc: "a timeboxed investigation", hint: None, tag: "template" },
-        Entry { name: "adr", desc: "an architecture decision record", hint: None, tag: "template" },
-        Entry { name: "release", desc: "release notes and rollout steps", hint: None, tag: "template" },
-        Entry { name: "summarize", desc: "summarize the thread for handoff", hint: None, tag: "review" },
-        Entry { name: "inline-comments", desc: "post review comments inline", hint: Some("<path>"), tag: "review" },
-        Entry { name: "approve-pr", desc: "approve the pull request", hint: None, tag: "review" },
-        Entry { name: "request-changes", desc: "ask for changes on the diff", hint: None, tag: "review" },
-        Entry { name: "re-review", desc: "re-check after the fixes land", hint: None, tag: "review" },
-        Entry { name: "dismiss", desc: "dismiss a stale review", hint: None, tag: "review" },
-        Entry { name: "ticket", desc: "open a Linear issue from this thread", hint: None, tag: "linear" },
-        Entry { name: "triage", desc: "triage the backlog by priority", hint: None, tag: "linear" },
-        Entry { name: "cycle", desc: "show the current cycle's burndown", hint: None, tag: "linear" },
-        Entry { name: "assign", desc: "assign the issue to an owner", hint: Some("<user>"), tag: "linear" },
-        Entry { name: "label", desc: "label the issue by area", hint: None, tag: "linear" },
-        Entry { name: "close-ticket", desc: "close the issue with a note", hint: None, tag: "linear" },
+        Entry {
+            name: "review",
+            desc: "review this change for correctness",
+            hint: Some("<path>"),
+            tag: "skill",
+        },
+        Entry {
+            name: "test-plan",
+            desc: "draft a test plan for the ticket",
+            hint: Some("<ticket>"),
+            tag: "skill",
+        },
+        Entry {
+            name: "refactor",
+            desc: "restructure without changing behaviour",
+            hint: None,
+            tag: "skill",
+        },
+        Entry {
+            name: "explain",
+            desc: "explain this code in plain words",
+            hint: Some("<symbol>"),
+            tag: "skill",
+        },
+        Entry {
+            name: "commit",
+            desc: "write a commit message for the diff",
+            hint: None,
+            tag: "skill",
+        },
+        Entry {
+            name: "changelog",
+            desc: "draft the release notes",
+            hint: None,
+            tag: "skill",
+        },
+        Entry {
+            name: "onboard",
+            desc: "tour the repo for a newcomer",
+            hint: None,
+            tag: "skill",
+        },
+        Entry {
+            name: "debug",
+            desc: "find the root cause of a failure",
+            hint: Some("<test>"),
+            tag: "skill",
+        },
+        Entry {
+            name: "perf",
+            desc: "profile the slow path and report",
+            hint: None,
+            tag: "skill",
+        },
+        Entry {
+            name: "docs",
+            desc: "write the missing documentation",
+            hint: None,
+            tag: "skill",
+        },
+        Entry {
+            name: "plan",
+            desc: "a plan the owner can approve",
+            hint: None,
+            tag: "template",
+        },
+        Entry {
+            name: "bug",
+            desc: "a bug report with repro steps",
+            hint: None,
+            tag: "template",
+        },
+        Entry {
+            name: "feature",
+            desc: "a feature spec with acceptance",
+            hint: None,
+            tag: "template",
+        },
+        Entry {
+            name: "rfc",
+            desc: "a design proposal for review",
+            hint: None,
+            tag: "template",
+        },
+        Entry {
+            name: "retro",
+            desc: "a retrospective with lessons",
+            hint: None,
+            tag: "template",
+        },
+        Entry {
+            name: "spike",
+            desc: "a timeboxed investigation",
+            hint: None,
+            tag: "template",
+        },
+        Entry {
+            name: "adr",
+            desc: "an architecture decision record",
+            hint: None,
+            tag: "template",
+        },
+        Entry {
+            name: "release",
+            desc: "release notes and rollout steps",
+            hint: None,
+            tag: "template",
+        },
+        Entry {
+            name: "summarize",
+            desc: "summarize the thread for handoff",
+            hint: None,
+            tag: "review",
+        },
+        Entry {
+            name: "inline-comments",
+            desc: "post review comments inline",
+            hint: Some("<path>"),
+            tag: "review",
+        },
+        Entry {
+            name: "approve-pr",
+            desc: "approve the pull request",
+            hint: None,
+            tag: "review",
+        },
+        Entry {
+            name: "request-changes",
+            desc: "ask for changes on the diff",
+            hint: None,
+            tag: "review",
+        },
+        Entry {
+            name: "re-review",
+            desc: "re-check after the fixes land",
+            hint: None,
+            tag: "review",
+        },
+        Entry {
+            name: "dismiss",
+            desc: "dismiss a stale review",
+            hint: None,
+            tag: "review",
+        },
+        Entry {
+            name: "ticket",
+            desc: "open a Linear issue from this thread",
+            hint: None,
+            tag: "linear",
+        },
+        Entry {
+            name: "triage",
+            desc: "triage the backlog by priority",
+            hint: None,
+            tag: "linear",
+        },
+        Entry {
+            name: "cycle",
+            desc: "show the current cycle's burndown",
+            hint: None,
+            tag: "linear",
+        },
+        Entry {
+            name: "assign",
+            desc: "assign the issue to an owner",
+            hint: Some("<user>"),
+            tag: "linear",
+        },
+        Entry {
+            name: "label",
+            desc: "label the issue by area",
+            hint: None,
+            tag: "linear",
+        },
+        Entry {
+            name: "close-ticket",
+            desc: "close the issue with a note",
+            hint: None,
+            tag: "linear",
+        },
     ]
 }
 
@@ -103,11 +298,7 @@ pub fn filter_files<'a>(all: &'a [&'static str], query: &str) -> Vec<&'a str> {
 /// The focused row, clamped into the filtered list wherever it is used, so
 /// rendering and selection always agree on the same row.
 fn clamped(focus: usize, len: usize) -> usize {
-    if len == 0 {
-        0
-    } else {
-        focus.min(len - 1)
-    }
+    if len == 0 { 0 } else { focus.min(len - 1) }
 }
 
 pub struct State {
@@ -117,14 +308,51 @@ pub struct State {
 
 /// Every `--completions` case.
 pub(crate) const CASES: &[Case<State>] = &[
-    Case { name: "slash", help: "the `/` list, eight of forty rows", check: "the panel sits above the input box in the shared frame with ▄ ▀ edges and the ▌ stripe; eight rows of name in one fixed column, dim description and right-aligned tag, the focused row `›` on a full-width accent bar, sized to its content and centred, with a `1–8 of 40 · ↓ 32 more` footer.", build: || State { focus: 0 } },
-    Case { name: "slash-filtered", help: "the `/` list filtered to `/re`", check: "the input reads `/re`, only matching rows show, matched letters bold; same frame, names aligned, first row barred.", build: || State { focus: 0 } },
+    Case {
+        name: "slash",
+        help: "the `/` list, eight of forty rows",
+        check: "the panel sits above the input box in the shared frame with ▄ ▀ edges and the ▌ stripe; eight rows of name in one fixed column, dim description and right-aligned tag, the focused row `›` on a full-width accent bar, sized to its content and centred, with a `1–8 of 40 · ↓ 32 more` footer.",
+        build: || State { focus: 0 },
+    },
+    Case {
+        name: "slash-filtered",
+        help: "the `/` list filtered to `/re`",
+        check: "the input reads `/re`, only matching rows show, matched letters bold; same frame, names aligned, first row barred.",
+        build: || State { focus: 0 },
+    },
     // the skill with an argument-hint, focused so its row shows
-    Case { name: "slash-hint", help: "the `review` row with its argument hint", check: "the `review` row `›` on the accent bar with its `<path>` hint, and the `login` description cut with … keeping its `command` tag; same frame.", build: || State { focus: entries().iter().position(|e| e.hint.is_some()).unwrap_or(0) } },
-    Case { name: "at", help: "the `@` file search with matches", check: "the input reads `@test`, two file rows (lock.rs, cancel.rs) in the shared frame, the first `›` on the accent bar.", build: || State { focus: 0 } },
-    Case { name: "at-empty", help: "the `@` search with no match", check: "the input reads `@zzz`, one dim `no files match` row in the shared frame.", build: || State { focus: 0 } },
-    Case { name: "narrow-slash", help: "the `/` list in a narrow terminal", check: "the same framed `/` panel in a 100x40 terminal, above the input box with the narrow status rows below.", build: || State { focus: 0 } },
-    Case { name: "narrow-at", help: "the `@` search in a narrow terminal", check: "the same framed `@` panel in a 100x40 terminal, above the input box with the narrow status rows below.", build: || State { focus: 0 } },
+    Case {
+        name: "slash-hint",
+        help: "the `review` row with its argument hint",
+        check: "the `review` row `›` on the accent bar with its `<path>` hint, and the `login` description cut with … keeping its `command` tag; same frame.",
+        build: || State {
+            focus: entries().iter().position(|e| e.hint.is_some()).unwrap_or(0),
+        },
+    },
+    Case {
+        name: "at",
+        help: "the `@` file search with matches",
+        check: "the input reads `@test`, two file rows (lock.rs, cancel.rs) in the shared frame, the first `›` on the accent bar.",
+        build: || State { focus: 0 },
+    },
+    Case {
+        name: "at-empty",
+        help: "the `@` search with no match",
+        check: "the input reads `@zzz`, one dim `no files match` row in the shared frame.",
+        build: || State { focus: 0 },
+    },
+    Case {
+        name: "narrow-slash",
+        help: "the `/` list in a narrow terminal",
+        check: "the same framed `/` panel in a 100x40 terminal, above the input box with the narrow status rows below.",
+        build: || State { focus: 0 },
+    },
+    Case {
+        name: "narrow-at",
+        help: "the `@` search in a narrow terminal",
+        check: "the same framed `@` panel in a 100x40 terminal, above the input box with the narrow status rows below.",
+        build: || State { focus: 0 },
+    },
 ];
 
 /// `--completions`, for `--help` and `check/completions.md`.
@@ -329,11 +557,7 @@ fn content_w(r: &Row) -> usize {
             left += s.content.width();
         }
     }
-    if seen {
-        left + 1 + right
-    } else {
-        left
-    }
+    if seen { left + 1 + right } else { left }
 }
 
 /// The panel's rows at an inner width, unframed, the focus barred.
@@ -366,7 +590,11 @@ fn content(s: &State, input: &str, inner: usize) -> Vec<Row> {
             let focus = clamped(s.focus, m.len());
             let (start, end) = window(s.focus, m.len());
             // The name column, computed once over the rows shown.
-            let name_w = m[start..end].iter().map(|e| e.name.len()).max().unwrap_or(0);
+            let name_w = m[start..end]
+                .iter()
+                .map(|e| e.name.len())
+                .max()
+                .unwrap_or(0);
             let mut rows: Vec<Row> = m[start..end]
                 .iter()
                 .enumerate()
@@ -381,7 +609,7 @@ fn content(s: &State, input: &str, inner: usize) -> Vec<Row> {
 }
 
 /// The panel above the input box: sized to its content between the shared
-/// minimum and maximum, centred over the input area through the module. 
+/// minimum and maximum, centred over the input area through the module.
 /// Rows stay area-wide, so existing coordinates keep working; the rows carry
 /// no click targets to translate.
 pub fn view(s: &State, input: &str, w: usize) -> Vec<Row> {
@@ -580,7 +808,10 @@ mod tests {
         s.focus = 9; // login
         for w in [59, 60, 61] {
             let rows = view(&s, "/", w);
-            assert!(rows.iter().all(|r| width(&r.spans) <= w), "slash row over {w}");
+            assert!(
+                rows.iter().all(|r| width(&r.spans) <= w),
+                "slash row over {w}"
+            );
             let t = text(&rows);
             assert!(t.contains('…'), "the long description is cut at {w}");
             assert!(t.contains("command"), "the tag survives at {w}");
@@ -588,7 +819,10 @@ mod tests {
         // A longer path forces the left cut, keeping its file name.
         for w in [39, 40, 41] {
             let rows = view(&for_case("at"), "@model", w);
-            assert!(rows.iter().all(|r| width(&r.spans) <= w), "file row over {w}");
+            assert!(
+                rows.iter().all(|r| width(&r.spans) <= w),
+                "file row over {w}"
+            );
             assert!(
                 text(&rows).contains("model_picker.rs"),
                 "the file name survives at {w}"
@@ -655,7 +889,10 @@ mod tests {
         // every row. The stripe and marker are multibyte, so count cells.
         let mut cols = vec![];
         for l in t.split('\n') {
-            for d in ["show the context breakdown", "pick the model for this session"] {
+            for d in [
+                "show the context breakdown",
+                "pick the model for this session",
+            ] {
                 if let Some(i) = l.find(d) {
                     cols.push(l[..i].width());
                 }
@@ -675,7 +912,10 @@ mod tests {
     fn the_panel_sizes_to_content_and_sits_centred() {
         fn span(rows: &[Row]) -> (usize, usize) {
             let t = text(rows);
-            let edge = t.split('\n').find(|l| l.contains("\u{2584}\u{2584}")).unwrap();
+            let edge = t
+                .split('\n')
+                .find(|l| l.contains("\u{2584}\u{2584}"))
+                .unwrap();
             let cells: Vec<char> = edge.chars().collect();
             let x0 = cells.iter().take_while(|&&c| c == ' ').count();
             let mut w = 0;
@@ -706,7 +946,11 @@ mod tests {
             let t = text(&rows);
             let lines: Vec<&str> = t.split('\n').collect();
             assert!(lines[1].trim().is_empty(), "{}: no top pad", c.name);
-            assert!(lines[lines.len() - 2].trim().is_empty(), "{}: no bottom pad", c.name);
+            assert!(
+                lines[lines.len() - 2].trim().is_empty(),
+                "{}: no bottom pad",
+                c.name
+            );
         }
     }
 
@@ -731,7 +975,9 @@ mod tests {
             let at = line.find(word).unwrap();
             let col = line[..at].chars().count();
             assert!(
-                buf[(col as u16, y as u16)].modifier.contains(Modifier::BOLD),
+                buf[(col as u16, y as u16)]
+                    .modifier
+                    .contains(Modifier::BOLD),
                 "{word} not bold"
             );
         }

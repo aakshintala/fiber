@@ -32,13 +32,31 @@ struct G {
 }
 
 enum R {
-    Ok { lines: usize, head: String },
-    Changed { path: String, added: u32, removed: u32 },
-    Proc { lines: usize, exit: i32, dur: i64 },
-    Fail { code: &'static str, msg: String, exit: Option<i32> },
+    Ok {
+        lines: usize,
+        head: String,
+    },
+    Changed {
+        path: String,
+        added: u32,
+        removed: u32,
+    },
+    Proc {
+        lines: usize,
+        exit: i32,
+        dur: i64,
+    },
+    Fail {
+        code: &'static str,
+        msg: String,
+        exit: Option<i32>,
+    },
     Running,
     /// `ask_user`: one `form` interaction; `None` leaves it pending
-    Ask { answer: Option<Value>, result: String },
+    Ask {
+        answer: Option<Value>,
+        result: String,
+    },
 }
 
 struct C {
@@ -48,32 +66,63 @@ struct C {
 }
 
 fn read(path: &str, lines: usize) -> C {
-    C { name: "read", args: json!({ "path": path }), r: R::Ok { lines, head: format!("1\t// {path}") } }
+    C {
+        name: "read",
+        args: json!({ "path": path }),
+        r: R::Ok {
+            lines,
+            head: format!("1\t// {path}"),
+        },
+    }
 }
 fn grep(pat: &str, dir: &str, lines: usize) -> C {
     C {
         name: "shell",
         args: json!({ "command": format!("grep -rn '{pat}' {dir}") }),
-        r: R::Proc { lines, exit: 0, dur: 300 },
+        r: R::Proc {
+            lines,
+            exit: 0,
+            dur: 300,
+        },
     }
 }
 fn find(dir: &str) -> C {
-    C { name: "shell", args: json!({ "command": format!("find {dir} -name '*.rs'") }), r: R::Proc { lines: 9, exit: 0, dur: 200 } }
+    C {
+        name: "shell",
+        args: json!({ "command": format!("find {dir} -name '*.rs'") }),
+        r: R::Proc {
+            lines: 9,
+            exit: 0,
+            dur: 200,
+        },
+    }
 }
 fn edit(path: &str, added: u32, removed: u32) -> C {
     C {
         name: "edit",
         args: json!({ "path": path, "edits": [{ "old_text": "    thread::sleep(Duration::from_millis(200));", "new_text": "    wait_for_path(&ready, Duration::from_secs(5))?;" }] }),
-        r: R::Changed { path: path.into(), added, removed },
+        r: R::Changed {
+            path: path.into(),
+            added,
+            removed,
+        },
     }
 }
 fn cargo(cmd: &str, exit: i32, lines: usize, dur: i64) -> C {
     let r = if exit == 0 {
         R::Proc { lines, exit, dur }
     } else {
-        R::Fail { code: "nonzero_exit", msg: format!("exit {exit}"), exit: Some(exit) }
+        R::Fail {
+            code: "nonzero_exit",
+            msg: format!("exit {exit}"),
+            exit: Some(exit),
+        }
     };
-    C { name: "shell", args: json!({ "command": cmd }), r }
+    C {
+        name: "shell",
+        args: json!({ "command": cmd }),
+        r,
+    }
 }
 
 /// The `rule` a `review` request offers (`docs/permissions.md`, "What a rule matches"):
@@ -88,7 +137,9 @@ fn rule_of(c: &C) -> Option<Value> {
         let mut w = cmd.split_whitespace();
         let first = w.next()?;
         let prefix = match w.next() {
-            Some(x) if !x.starts_with('-') && !x.contains(['/', '.', '=']) => format!("{first} {x}"),
+            Some(x) if !x.starts_with('-') && !x.contains(['/', '.', '=']) => {
+                format!("{first} {x}")
+            }
             _ => first.to_string(),
         };
         return Some(json!({ "subject": cmd, "prefix": prefix }));
@@ -162,7 +213,12 @@ impl G {
             self.m("reasoning_delta", dt, Some(&a), json!({ "text": c }));
         }
         if finish {
-            self.m("reasoning_completed", 100, Some(&a), json!({ "text": text, "provider_item": { "type": "reasoning" } }));
+            self.m(
+                "reasoning_completed",
+                100,
+                Some(&a),
+                json!({ "text": text, "provider_item": { "type": "reasoning" } }),
+            );
         }
     }
     /// A model call whose reply is text. Every model call opens with
@@ -174,9 +230,19 @@ impl G {
             self.think(t, s, true);
         }
         for c in Self::chunks(text) {
-            self.m("assistant_message_delta", 90, Some(&a), json!({ "text": c }));
+            self.m(
+                "assistant_message_delta",
+                90,
+                Some(&a),
+                json!({ "text": c }),
+            );
         }
-        self.m("assistant_message_completed", 60, Some(&a), json!({ "text": text, "outcome": "completed" }));
+        self.m(
+            "assistant_message_completed",
+            60,
+            Some(&a),
+            json!({ "text": text, "outcome": "completed" }),
+        );
         self.usage(Some(&a), text.len() as u64 / 4);
     }
     fn usage(&mut self, aid: Option<&str>, out: u64) {
@@ -201,10 +267,20 @@ impl G {
         let ids: Vec<String> = calls.iter().map(|_| self.id("a")).collect();
         for (c, a) in calls.iter().zip(&ids) {
             let pid = format!("toolu_{a}");
-            self.m("tool_call_requested", 700, Some(a), json!({ "name": c.name, "arguments": c.args, "provider_id": pid }));
+            self.m(
+                "tool_call_requested",
+                700,
+                Some(a),
+                json!({ "name": c.name, "arguments": c.args, "provider_id": pid }),
+            );
         }
         // a reply with only tool calls: the message completes with no text
-        self.m("assistant_message_completed", 60, Some(&msg), json!({ "text": "", "outcome": "completed" }));
+        self.m(
+            "assistant_message_completed",
+            60,
+            Some(&msg),
+            json!({ "text": "", "outcome": "completed" }),
+        );
         self.usage(Some(&msg), 300 + 120 * calls.len() as u64);
         for (c, a) in calls.iter().zip(&ids) {
             let effects = match c.name {
@@ -222,9 +298,19 @@ impl G {
                     req["rule"] = rule;
                 }
                 self.m("permission_requested", 40, Some(a), req);
-                self.m("permission_resolved", 6000, Some(a), json!({ "request_id": rid, "decision": "allow", "decided_by": "person" }));
+                self.m(
+                    "permission_resolved",
+                    6000,
+                    Some(a),
+                    json!({ "request_id": rid, "decision": "allow", "decided_by": "person" }),
+                );
             }
-            self.m("tool_call_started", 40, Some(a), json!({ "effects": effects, "reversible": c.name == "read", "paths": paths }));
+            self.m(
+                "tool_call_started",
+                40,
+                Some(a),
+                json!({ "effects": effects, "reversible": c.name == "read", "paths": paths }),
+            );
             let lines = |n: usize, head: &str| {
                 let mut s = String::from(head);
                 for k in 1..n {
@@ -242,19 +328,39 @@ impl G {
                     res["request_id"] = json!(rid);
                     res["by"] = json!("person");
                     self.m("interaction_resolved", 38_000, None, res);
-                    (20, json!({ "status": "completed", "content": [{ "type": "text", "text": result }] }))
+                    (
+                        20,
+                        json!({ "status": "completed", "content": [{ "type": "text", "text": result }] }),
+                    )
                 }
-                R::Ok { lines: n, head } => (250, json!({ "status": "completed", "content": lines(*n, head) })),
-                R::Changed { path, added, removed } => (300, json!({
-                    "status": "completed",
-                    "content": [{ "type": "text", "text": "block 1: replaced" }],
-                    "changes": [{ "path": path, "added": added, "removed": removed }],
-                })),
-                R::Proc { lines: n, exit, dur } => (*dur, json!({
-                    "status": "completed",
-                    "content": lines(*n, "running…"),
-                    "process": { "exit_code": exit, "timed_out": false },
-                })),
+                R::Ok { lines: n, head } => (
+                    250,
+                    json!({ "status": "completed", "content": lines(*n, head) }),
+                ),
+                R::Changed {
+                    path,
+                    added,
+                    removed,
+                } => (
+                    300,
+                    json!({
+                        "status": "completed",
+                        "content": [{ "type": "text", "text": "block 1: replaced" }],
+                        "changes": [{ "path": path, "added": added, "removed": removed }],
+                    }),
+                ),
+                R::Proc {
+                    lines: n,
+                    exit,
+                    dur,
+                } => (
+                    *dur,
+                    json!({
+                        "status": "completed",
+                        "content": lines(*n, "running…"),
+                        "process": { "exit_code": exit, "timed_out": false },
+                    }),
+                ),
                 R::Fail { code, msg, exit } => {
                     let mut p = json!({ "status": "failed", "content": lines(6, "error"), "error": { "code": code, "message": msg } });
                     if let Some(x) = exit {
@@ -276,8 +382,20 @@ impl G {
         for f in files {
             let a = self.id("a");
             self.emit(DELEGATE, "tool_call_requested", 400, Some(&a), json!({ "name": "read", "arguments": { "path": f }, "provider_id": format!("toolu_{a}") }));
-            self.emit(DELEGATE, "tool_call_started", 30, Some(&a), json!({ "effects": ["reads"], "reversible": true, "paths": [f] }));
-            self.emit(DELEGATE, "tool_call_completed", 200, Some(&a), json!({ "status": "completed", "content": [{ "type": "text", "text": "…" }] }));
+            self.emit(
+                DELEGATE,
+                "tool_call_started",
+                30,
+                Some(&a),
+                json!({ "effects": ["reads"], "reversible": true, "paths": [f] }),
+            );
+            self.emit(
+                DELEGATE,
+                "tool_call_completed",
+                200,
+                Some(&a),
+                json!({ "status": "completed", "content": [{ "type": "text", "text": "…" }] }),
+            );
         }
     }
 }
@@ -325,7 +443,14 @@ const REPLY2: &str = "## Done: one helper, 23 sleeps replaced
 A background stress run is still going, and a reviewer delegate is reading the diff.";
 
 fn ask(questions: Value, answer: Option<Value>, result: &str) -> C {
-    C { name: "ask_user", args: json!({ "questions": questions }), r: R::Ask { answer, result: result.into() } }
+    C {
+        name: "ask_user",
+        args: json!({ "questions": questions }),
+        r: R::Ask {
+            answer,
+            result: result.into(),
+        },
+    }
 }
 
 fn main() {
@@ -339,8 +464,18 @@ fn main() {
         gen_n: 0,
         review: None,
     };
-    g.m("fiber_started", 0, None, json!({ "version": "0.0.1", "resumed": false, "mode": "ask" }));
-    g.m("session_started", 5, None, json!({ "workspace": "~/work/fiber" }));
+    g.m(
+        "fiber_started",
+        0,
+        None,
+        json!({ "version": "0.0.1", "resumed": false, "mode": "ask" }),
+    );
+    g.m(
+        "session_started",
+        5,
+        None,
+        json!({ "workspace": "~/work/fiber" }),
+    );
     g.m("opening_message", 5, None, json!({
         "environment": { "date": "2026-09-28", "os": "macos", "arch": "aarch64", "shell": "zsh", "workspace": "~/work/fiber",
             "git": { "branch": "fix/wait-for-path" }, "session_log": "~/.fiber/projects/fiber/sessions/s_9c41e2/events.jsonl" },
@@ -356,17 +491,35 @@ fn main() {
         "reason": "start", "model": "anthropic/claude-opus-5-5", "context_window": 1_000_000, "trigger_at": 400_000, "effort": "high", "thinking": "adaptive",
         "tool_choice": "auto", "cache_lifetime": "1h", "system_prompt": "…", "tools": tools,
     }));
-    g.m("mode_changed", 3000, None, json!({ "before": "ask", "after": "auto", "by": "command" }));
+    g.m(
+        "mode_changed",
+        3000,
+        None,
+        json!({ "before": "ask", "after": "auto", "by": "command" }),
+    );
 
     // ---- turn 1: find the flake, answered in markdown
-    g.turn("The lock test in crates/log is flaky on Linux CI. Find out why before changing anything.");
+    g.turn(
+        "The lock test in crates/log is flaky on Linux CI. Find out why before changing anything.",
+    );
     g.step(
         Some(("**Where the lock is taken**\nThe test spawns a second process that tries to open the same session and expects `session_held`. If the child starts before the parent has flushed its lock file, the child can win.\n\n**What to check**\nWhether the child waits on anything but a sleep.", 9)),
         vec![read("crates/log/tests/lock.rs", 142), read("crates/log/src/lock.rs", 214)],
     );
-    g.step(None, vec![grep("thread::sleep", "crates", 31), read("crates/testutil/src/child.rs", 88)]);
-    g.review = Some(json!({ "cause": "session_blocks", "reason": "the reviewer blocked 3 calls this session and hands the next to you" }));
-    g.step(None, vec![cargo("cargo test -p log --test lock", 0, 14, 21000)]);
+    g.step(
+        None,
+        vec![
+            grep("thread::sleep", "crates", 31),
+            read("crates/testutil/src/child.rs", 88),
+        ],
+    );
+    g.review = Some(
+        json!({ "cause": "session_blocks", "reason": "the reviewer blocked 3 calls this session and hands the next to you" }),
+    );
+    g.step(
+        None,
+        vec![cargo("cargo test -p log --test lock", 0, 14, 21000)],
+    );
     g.say(None, REPLY1);
     g.end_turn("completed");
 
@@ -395,9 +548,23 @@ fn main() {
         })),
         "Helper: crates/testutil (Recommended)\nDeadline: 5 s (Recommended) \"10 s for the doors tests\"\nLoop timing: skipped\nnote: Keep the diff small; no refactors on the way.",
     )]);
-    g.review = Some(json!({ "cause": "consecutive_blocks", "reason": "edits outside the crate the task names" }));
-    g.step(None, vec![read("crates/testutil/src/lib.rs", 64), edit("crates/testutil/src/child.rs", 14, 0)]);
-    g.step(None, vec![edit("crates/log/tests/lock.rs", 3, 1), cargo("cargo test -p log --test lock", 0, 12, 19000)]);
+    g.review = Some(
+        json!({ "cause": "consecutive_blocks", "reason": "edits outside the crate the task names" }),
+    );
+    g.step(
+        None,
+        vec![
+            read("crates/testutil/src/lib.rs", 64),
+            edit("crates/testutil/src/child.rs", 14, 0),
+        ],
+    );
+    g.step(
+        None,
+        vec![
+            edit("crates/log/tests/lock.rs", 3, 1),
+            cargo("cargo test -p log --test lock", 0, 12, 19000),
+        ],
+    );
     let tests = [
         ("crates/log/tests/append.rs", "crates/log"),
         ("crates/log/tests/torn_tail.rs", "crates/log"),
@@ -410,11 +577,20 @@ fn main() {
     ];
     for (i, (t, dir)) in tests.iter().enumerate() {
         let thought = match i {
-            2 => Some(("**The loop tests**\nTwo of these sleeps measure time on purpose. Only the child waits change.", 6)),
-            5 => Some(("**The failed edit**\nThe block moved when the helper import went in. Read the file again before editing.", 5)),
+            2 => Some((
+                "**The loop tests**\nTwo of these sleeps measure time on purpose. Only the child waits change.",
+                6,
+            )),
+            5 => Some((
+                "**The failed edit**\nThe block moved when the helper import went in. Read the file again before editing.",
+                5,
+            )),
             _ => None,
         };
-        g.step(thought, vec![grep("thread::sleep", dir, 3 + i), read(t, 90 + 20 * i)]);
+        g.step(
+            thought,
+            vec![grep("thread::sleep", dir, 3 + i), read(t, 90 + 20 * i)],
+        );
         if i == 5 {
             // a failed edit, then the re-read that fixes it
             g.step(None, vec![C {
@@ -424,10 +600,19 @@ fn main() {
             }]);
             g.step(None, vec![read(t, 188), edit(t, 4, 2)]);
         } else {
-            g.step(None, vec![edit(t, 3 + (i as u32 % 3), 1 + (i as u32 % 2)), find(&format!("{dir}/tests"))]);
+            g.step(
+                None,
+                vec![
+                    edit(t, 3 + (i as u32 % 3), 1 + (i as u32 % 2)),
+                    find(&format!("{dir}/tests")),
+                ],
+            );
         }
         if i == 1 {
-            g.queue(&[("c_71a2", "Leave the timing tests in crates/loop alone; their sleeps are what they measure.")]);
+            g.queue(&[(
+                "c_71a2",
+                "Leave the timing tests in crates/loop alone; their sleeps are what they measure.",
+            )]);
             g.m("notice", 800, None, json!({ "code": "config_key_ignored", "message": "~/.fiber/config.json sets tools.enabeld, which is not a configuration key. It was ignored." }));
         }
         if i == 2 {
@@ -436,7 +621,14 @@ fn main() {
         }
         if i == 3 {
             g.step(None, vec![cargo("cargo test -p loop", 101, 22, 18000)]);
-            g.step(None, vec![read("crates/loop/tests/cancel.rs", 160), edit("crates/loop/tests/cancel.rs", 2, 2), cargo("cargo test -p loop", 0, 18, 24000)]);
+            g.step(
+                None,
+                vec![
+                    read("crates/loop/tests/cancel.rs", 160),
+                    edit("crates/loop/tests/cancel.rs", 2, 2),
+                    cargo("cargo test -p loop", 0, 18, 24000),
+                ],
+            );
         }
         if i == 4 {
             g.m("mcp_server_failed", 300, None, json!({ "server": "linear", "reason": "died", "will_restart": true,
@@ -468,7 +660,10 @@ fn main() {
         vec![read("artifacts/j_5e10.log", 40)],
     );
     g.queue(&[("c_8b04", "If it passes, run it on the Linux box too.")]);
-    g.delegate_calls(&["crates/loop/tests/cancel.rs", "crates/tools/tests/jobs_wait.rs"]);
+    g.delegate_calls(&[
+        "crates/loop/tests/cancel.rs",
+        "crates/tools/tests/jobs_wait.rs",
+    ]);
     // the reviewer delegate hits a standing ask rule: its approval is relayed to the person
     let da = g.id("a");
     g.emit(DELEGATE, "tool_call_requested", 600, Some(&da), json!({ "name": "shell", "arguments": { "command": "cargo mutants -p testutil --in-place --timeout 60" }, "provider_id": format!("toolu_{da}") }));

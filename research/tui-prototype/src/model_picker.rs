@@ -4,7 +4,7 @@
 
 use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
-use crate::{bold, dim, fg, hot_row, panel, row, sp, width, Act, Row, Ui, BLUE, ORANGE, SPIN};
+use crate::{Act, BLUE, ORANGE, Row, SPIN, Ui, bold, dim, fg, hot_row, panel, row, sp, width};
 use ratatui::style::{Modifier, Style};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use unicode_width::UnicodeWidthStr;
@@ -191,23 +191,95 @@ pub struct State {
 
 /// Every `--picker` case.
 pub(crate) const CASES: &[Case<State>] = &[
-    Case { name: "list", help: "providers and models, current marked", check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below; a centred panel with ▄ ▀ edges and the ▌ stripe, dim providers with a blank row between sections, the focused model `›` on a full-width accent bar with its rebuild cost right-aligned, and a bold-key legend foot.", build: base },
+    Case {
+        name: "list",
+        help: "providers and models, current marked",
+        check: "three providers with a dozen models between them, roles on the rows, `● current` on claude-opus-5-5, its level chips on the row below; a centred panel with ▄ ▀ edges and the ▌ stripe, dim providers with a blank row between sections, the focused model `›` on a full-width accent bar with its rebuild cost right-aligned, and a bold-key legend foot.",
+        build: base,
+    },
     // after a click on the thinking chip: the current level focused
-    Case { name: "levels", help: "the current model's thinking chips focused", check: "the current model's thinking chips focused (`[high]`), the rest dim; same panel, bar and legend.", build: || State { chip: Some(2), ..base() } },
-    Case { name: "scoped", help: "five scoped models only", check: "five models only, a `scoped · 5 of 12` chip and a `[show all]` toggle; same panel, bar and legend.", build: || State { scoped: SCOPED.to_vec(), ..base() } },
-    Case { name: "scoped-all", help: "all models, scoped ones marked", check: "all twelve models, the scoped five marked `· scoped`; same panel, bar and legend.", build: || State { scoped: SCOPED.to_vec(), show_all: true, ..base() } },
-    Case { name: "refreshing", help: "one provider refreshing", check: "openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end; same panel, bar and legend.", build: || State { refreshing: vec![1], ..base() } },
+    Case {
+        name: "levels",
+        help: "the current model's thinking chips focused",
+        check: "the current model's thinking chips focused (`[high]`), the rest dim; same panel, bar and legend.",
+        build: || State {
+            chip: Some(2),
+            ..base()
+        },
+    },
+    Case {
+        name: "scoped",
+        help: "five scoped models only",
+        check: "five models only, a `scoped · 5 of 12` chip and a `[show all]` toggle; same panel, bar and legend.",
+        build: || State {
+            scoped: SCOPED.to_vec(),
+            ..base()
+        },
+    },
+    Case {
+        name: "scoped-all",
+        help: "all models, scoped ones marked",
+        check: "all twelve models, the scoped five marked `· scoped`; same panel, bar and legend.",
+        build: || State {
+            scoped: SCOPED.to_vec(),
+            show_all: true,
+            ..base()
+        },
+    },
+    Case {
+        name: "refreshing",
+        help: "one provider refreshing",
+        check: "openai-codex reads `⟳ refreshing` with a still spinner glyph, the other two `updated … ago`, and a `⟳ refresh all` button sits at the controls row's right end; same panel, bar and legend.",
+        build: || State {
+            refreshing: vec![1],
+            ..base()
+        },
+    },
     // a non-current model focused, the `s` mark applied
-    Case { name: "session-only", help: "a model picked for this session only", check: "claude-sonnet-5-5 `›` on the accent bar with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row; same panel and legend.", build: || State { focus: 1, session_only: Some(1), ..base() } },
-    Case { name: "filtered", help: "a typed query narrowing the list, matches underlined", check: "the query `mini` in bold after `›` with a block cursor, four models across openai-codex and google, the matched id chars underlined and bold on and off the accent bar, a `4 of 12 models` chip; same panel and legend.", build: || State { focus: 5, query: "mini".into(), ..base() } },
-    Case { name: "filtered-empty", help: "a query nothing matches", check: "the query `zzz` in bold after `›` with a block cursor, one muted `No models match` line and no provider sections, a `0 of 12 models` chip; same panel and legend.", build: || State { query: "zzz".into(), ..base() } },
+    Case {
+        name: "session-only",
+        help: "a model picked for this session only",
+        check: "claude-sonnet-5-5 `›` on the accent bar with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row; same panel and legend.",
+        build: || State {
+            focus: 1,
+            session_only: Some(1),
+            ..base()
+        },
+    },
+    Case {
+        name: "filtered",
+        help: "a typed query narrowing the list, matches underlined",
+        check: "the query `mini` in bold after `›` with a block cursor, four models across openai-codex and google, the matched id chars underlined and bold on and off the accent bar, a `4 of 12 models` chip; same panel and legend.",
+        build: || State {
+            focus: 5,
+            query: "mini".into(),
+            ..base()
+        },
+    },
+    Case {
+        name: "filtered-empty",
+        help: "a query nothing matches",
+        check: "the query `zzz` in bold after `›` with a block cursor, one muted `No models match` line and no provider sections, a `0 of 12 models` chip; same panel and legend.",
+        build: || State {
+            query: "zzz".into(),
+            ..base()
+        },
+    },
 ];
 
 /// `--picker`, for `--help` and `check/model-picker.md`.
-pub(crate) const SURFACE: Surface = Surface { flag: "--picker", file: "model-picker", title: "Model picker (#1629)", docs: || crate::cases::docs(CASES) };
+pub(crate) const SURFACE: Surface = Surface {
+    flag: "--picker",
+    file: "model-picker",
+    title: "Model picker (#1629)",
+    docs: || crate::cases::docs(CASES),
+};
 
 fn base() -> State {
-    State { still: STILL.load(Relaxed), ..Default::default() }
+    State {
+        still: STILL.load(Relaxed),
+        ..Default::default()
+    }
 }
 
 /// The picker's choice as an id and a level: the focused model's id, and
@@ -249,7 +321,8 @@ pub fn opened_at(model: &str, level: Option<&str>) -> State {
 }
 
 pub fn for_case(case: &str) -> State {
-    crate::cases::lookup(CASES, case).unwrap_or_else(|| panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")))
+    crate::cases::lookup(CASES, case)
+        .unwrap_or_else(|| panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")))
 }
 
 fn count() -> usize {
@@ -259,7 +332,10 @@ fn count() -> usize {
 /// The text one query token must subsequence-match: provider, id and
 /// display name, so a token can name any of the three.
 fn haystack(provider: &str, m: &Model) -> String {
-    format!("{provider} {provider}/{} {provider} {} {}", m.id, m.id, m.name)
+    format!(
+        "{provider} {provider}/{} {provider} {} {}",
+        m.id, m.id, m.name
+    )
 }
 
 /// Whether every whitespace-separated token of the query is a
@@ -268,13 +344,15 @@ fn matches(query: &str, haystack: &str) -> bool {
     let hay: Vec<char> = haystack.to_lowercase().chars().collect();
     query.split_whitespace().all(|tok| {
         let mut i = 0;
-        tok.to_lowercase().chars().all(|c| match hay[i..].iter().position(|&h| h == c) {
-            Some(j) => {
-                i += j + 1;
-                true
-            }
-            None => false,
-        })
+        tok.to_lowercase()
+            .chars()
+            .all(|c| match hay[i..].iter().position(|&h| h == c) {
+                Some(j) => {
+                    i += j + 1;
+                    true
+                }
+                None => false,
+            })
     })
 }
 
@@ -306,7 +384,10 @@ fn id_hits(query: &str, id: &str) -> Vec<usize> {
             }
         }
     }
-    hits.iter().enumerate().filter_map(|(i, &h)| h.then_some(i)).collect()
+    hits.iter()
+        .enumerate()
+        .filter_map(|(i, &h)| h.then_some(i))
+        .collect()
 }
 
 /// The flat indices on screen: the scoped set, or everything.
@@ -425,9 +506,10 @@ fn provider_row(p: &Provider, refreshing: bool, s: &State) -> Row {
 }
 
 fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool, hits: &[usize]) -> Row {
-    let mut spans = vec![
-        sp(if focused { "› " } else { "  " }, if focused { bold() } else { Style::new() }),
-    ];
+    let mut spans = vec![sp(
+        if focused { "› " } else { "  " },
+        if focused { bold() } else { Style::new() },
+    )];
     // The id reads as one word even underlined per matched char: matched
     // chars carry underline plus bold over the row's own colour.
     for (i, ch) in m.id.chars().enumerate() {
@@ -459,7 +541,11 @@ fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool, hits: &[usiz
             s.style = s.style.patch(bold());
         }
     }
-    Row { spans, act: Some(Act::Pick(f)), ..Default::default() }
+    Row {
+        spans,
+        act: Some(Act::Pick(f)),
+        ..Default::default()
+    }
 }
 
 fn chips_row(s: &State, f: usize, m: &Model, focused: bool) -> Row {
@@ -502,7 +588,11 @@ fn search_row(query: &str) -> Row {
     if query.is_empty() {
         row(vec![sp("Type to search ", dim()), sp("█", dim())])
     } else {
-        row(vec![sp("› ", dim()), sp(query.to_string(), bold()), sp("█", dim())])
+        row(vec![
+            sp("› ", dim()),
+            sp(query.to_string(), bold()),
+            sp("█", dim()),
+        ])
     }
 }
 
@@ -584,7 +674,13 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
             let scoped_mark = s.show_all && s.scoped.contains(&f);
             let hits = id_hits(&s.query, m.id);
             if focused {
-                out.extend(panel::bar(vec![model_row(f, m, focused, scoped_mark, &hits)]));
+                out.extend(panel::bar(vec![model_row(
+                    f,
+                    m,
+                    focused,
+                    scoped_mark,
+                    &hits,
+                )]));
             } else {
                 out.push(model_row(f, m, focused, scoped_mark, &hits));
             }
@@ -605,7 +701,13 @@ pub fn view(s: &State, w: usize) -> Vec<Row> {
     // The search and controls rows pad to their width, so neither sizes the panel.
     // The legend sizes unfitted now, straight from its row.
     let legend_w = width(&footer().spans);
-    let natural = probe.iter().skip(2).map(|r| width(&r.spans)).max().unwrap_or(0).max(legend_w);
+    let natural = probe
+        .iter()
+        .skip(2)
+        .map(|r| width(&r.spans))
+        .max()
+        .unwrap_or(0)
+        .max(legend_w);
     // The legend always fits: the preferred width stretches past the usual
     // cap rather than cutting the foot.
     let prefer = w.saturating_sub(4).min(96).max(legend_w);
@@ -753,11 +855,21 @@ mod tests {
         assert!(edge.starts_with(' '), "panel flush left");
         assert!(run < 100, "panel fills the area");
         // The focused model rides a full-width accent bar inside blank margins.
-        let picked = rows.iter().find(|r| matches!(r.act, Some(Act::Pick(0)))).unwrap();
+        let picked = rows
+            .iter()
+            .find(|r| matches!(r.act, Some(Act::Pick(0))))
+            .unwrap();
         assert_eq!(picked.spans[0].style.bg, None, "no margin");
-        let ink: Vec<_> = picked.spans.iter().filter(|s| !s.content.trim().is_empty()).collect();
+        let ink: Vec<_> = picked
+            .spans
+            .iter()
+            .filter(|s| !s.content.trim().is_empty())
+            .collect();
         assert!(!ink.is_empty());
-        assert!(ink.iter().all(|s| s.style.bg == Some(BLUE)), "bar is not full width");
+        assert!(
+            ink.iter().all(|s| s.style.bg == Some(BLUE)),
+            "bar is not full width"
+        );
         // Only the focused model rides the bar.
         let barred = rows
             .iter()
@@ -766,13 +878,25 @@ mod tests {
         assert_eq!(barred, 1, "more than the focus is barred");
         // Provider sections split on a blank row under a dim header.
         let b = body(&for_case("list"), 90);
-        let provider = b.iter().find(|r| plain(r).contains("openai-codex")).unwrap();
+        let provider = b
+            .iter()
+            .find(|r| plain(r).contains("openai-codex"))
+            .unwrap();
         assert!(
-            provider.spans[0].style.add_modifier.contains(ratatui::style::Modifier::DIM),
+            provider.spans[0]
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::DIM),
             "section header is not dim"
         );
-        let pi = b.iter().position(|r| plain(r).contains("openai-codex")).unwrap();
-        assert!(plain(&b[pi - 1]).trim().is_empty(), "no blank before the section");
+        let pi = b
+            .iter()
+            .position(|r| plain(r).contains("openai-codex"))
+            .unwrap();
+        assert!(
+            plain(&b[pi - 1]).trim().is_empty(),
+            "no blank before the section"
+        );
         // The foot is a bold-key legend.
         assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"));
     }
@@ -784,7 +908,11 @@ mod tests {
             let t = text(&rows);
             let lines: Vec<&str> = t.split('\n').collect();
             assert!(lines[1].trim().is_empty(), "{}: no top pad", c.name);
-            assert!(lines[lines.len() - 2].trim().is_empty(), "{}: no bottom pad", c.name);
+            assert!(
+                lines[lines.len() - 2].trim().is_empty(),
+                "{}: no bottom pad",
+                c.name
+            );
         }
     }
 
@@ -799,14 +927,32 @@ mod tests {
             crate::paint(&mut buf, 0, y as u16, 100, r);
         }
         let t = text(&rows);
-        let y = t.split('\n').position(|l| l.contains("claude-opus-5-5")).unwrap() as u16;
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("claude-opus-5-5"))
+            .unwrap() as u16;
         // The role reads bold on the focused row; the same role stays plain below.
-        let hit = t.split('\n').nth(y as usize).unwrap().find("[main]").unwrap();
-        let col = t.split('\n').nth(y as usize).unwrap()[..hit].chars().count();
-        assert!(buf[(col as u16, y)].modifier.contains(Modifier::BOLD), "role not bold");
-        let y2 = t.split('\n').position(|l| l.contains("gpt-6-sol [main]")).unwrap() as u16;
+        let hit = t
+            .split('\n')
+            .nth(y as usize)
+            .unwrap()
+            .find("[main]")
+            .unwrap();
+        let col = t.split('\n').nth(y as usize).unwrap()[..hit]
+            .chars()
+            .count();
         assert!(
-            !(0..100).any(|x| buf[(x, y2)].modifier.contains(Modifier::BOLD) && buf[(x, y2)].symbol() == "["),
+            buf[(col as u16, y)].modifier.contains(Modifier::BOLD),
+            "role not bold"
+        );
+        let y2 = t
+            .split('\n')
+            .position(|l| l.contains("gpt-6-sol [main]"))
+            .unwrap() as u16;
+        assert!(
+            !(0..100)
+                .any(|x| buf[(x, y2)].modifier.contains(Modifier::BOLD)
+                    && buf[(x, y2)].symbol() == "["),
             "unfocused role went bold"
         );
     }
@@ -849,7 +995,10 @@ mod tests {
         assert_eq!(id_hits("opus", "claude-opus-5-5"), vec![7, 8, 9, 10]);
         assert_eq!(id_hits("OPUS", "claude-opus-5-5"), vec![7, 8, 9, 10]);
         assert_eq!(id_hits("anthropic", "claude-opus-5-5"), Vec::<usize>::new());
-        assert_eq!(id_hits("opus anthropic", "claude-opus-5-5"), vec![7, 8, 9, 10]);
+        assert_eq!(
+            id_hits("opus anthropic", "claude-opus-5-5"),
+            vec![7, 8, 9, 10]
+        );
         assert_eq!(id_hits("opusz", "claude-opus-5-5"), Vec::<usize>::new());
         assert_eq!(id_hits("so", "gpt-6-sol"), vec![6, 7]);
     }
@@ -875,7 +1024,17 @@ mod tests {
             }
             visible(&all).iter().map(|&i| flat[i]).collect()
         };
-        assert_eq!(ids, vec!["claude-opus-5-5", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6-sol-mini", "gpt-6-sol", "gemini-3-flash"]);
+        assert_eq!(
+            ids,
+            vec![
+                "claude-opus-5-5",
+                "claude-sonnet-5-5",
+                "gpt-6.1-sol",
+                "gpt-6-sol-mini",
+                "gpt-6-sol",
+                "gemini-3-flash"
+            ]
+        );
         // Nothing matches: the screen is empty.
         all.query = "zzz".into();
         assert!(visible(&all).is_empty());
@@ -883,7 +1042,11 @@ mod tests {
 
     #[test]
     fn typing_filters_and_never_reaches_the_draft() {
-        let mut ui = Ui { input: "hello".into(), picker: Some(for_case("list")), ..Ui::default() };
+        let mut ui = Ui {
+            input: "hello".into(),
+            picker: Some(for_case("list")),
+            ..Ui::default()
+        };
         assert!(on_key(&mut ui, Key::Char('s'), Mods::default()));
         assert!(on_key(&mut ui, Key::Char('o'), Mods::default()));
         let p = ui.picker.as_ref().unwrap();
@@ -894,7 +1057,10 @@ mod tests {
 
     #[test]
     fn bare_s_a_r_extend_the_query() {
-        let mut ui = Ui { picker: Some(for_case("list")), ..Ui::default() };
+        let mut ui = Ui {
+            picker: Some(for_case("list")),
+            ..Ui::default()
+        };
         for c in ['s', 'a', 'r'] {
             assert!(on_key(&mut ui, Key::Char(c), Mods::default()));
         }
@@ -907,7 +1073,10 @@ mod tests {
 
     #[test]
     fn backspace_edits_the_query() {
-        let mut ui = Ui { picker: Some(for_case("list")), ..Ui::default() };
+        let mut ui = Ui {
+            picker: Some(for_case("list")),
+            ..Ui::default()
+        };
         for c in ['s', 'o'] {
             on_key(&mut ui, Key::Char(c), Mods::default());
         }
@@ -941,7 +1110,10 @@ mod tests {
         assert!(on_key(&mut ui, Key::Enter, Mods::default()));
         assert!(ui.picker.is_some());
         // With matches Enter still closes.
-        let mut live = Ui { picker: Some(for_case("list")), ..Ui::default() };
+        let mut live = Ui {
+            picker: Some(for_case("list")),
+            ..Ui::default()
+        };
         assert!(on_key(&mut live, Key::Enter, Mods::default()));
         assert!(live.picker.is_none());
     }
@@ -952,7 +1124,10 @@ mod tests {
         let mut p = for_case("scoped");
         p.query = "so".into();
         ui.picker = Some(p);
-        let ctrl = Mods { ctrl: true, ..Default::default() };
+        let ctrl = Mods {
+            ctrl: true,
+            ..Default::default()
+        };
         assert!(on_key(&mut ui, Key::Char('s'), ctrl));
         assert_eq!(ui.picker.as_ref().unwrap().session_only, Some(0));
         assert!(on_key(&mut ui, Key::Tab, Mods::default()));
@@ -977,7 +1152,10 @@ mod tests {
         let p = ui.picker.as_ref().unwrap();
         assert_eq!((p.focus, p.chip), (8, None));
         // A hidden focus jumps to the first visible row.
-        let mut hidden = Ui { picker: Some(for_case("list")), ..Ui::default() };
+        let mut hidden = Ui {
+            picker: Some(for_case("list")),
+            ..Ui::default()
+        };
         for c in ['m', 'i', 'n', 'i'] {
             on_key(&mut hidden, Key::Char(c), Mods::default());
         }
@@ -1008,8 +1186,14 @@ mod tests {
         q.query = "so".into();
         let t = text(&view(&q, 100));
         assert!(t.contains("› so"), "missing the typed query");
-        assert!(!t.contains("Type to search"), "placeholder behind the query");
-        assert!(t.contains("6 of 12 models"), "controls miss the match count");
+        assert!(
+            !t.contains("Type to search"),
+            "placeholder behind the query"
+        );
+        assert!(
+            t.contains("6 of 12 models"),
+            "controls miss the match count"
+        );
     }
 
     #[test]
@@ -1026,22 +1210,36 @@ mod tests {
             crate::paint(&mut buf, 0, y as u16, 100, r);
         }
         let lines: Vec<String> = rows.iter().map(plain).collect();
-        let y = lines.iter().position(|l| l.contains("gpt-6-sol-mini")).unwrap() as u16;
-        let start = lines[y as usize][..lines[y as usize].find("gpt-6-sol-mini").unwrap()].chars().count();
+        let y = lines
+            .iter()
+            .position(|l| l.contains("gpt-6-sol-mini"))
+            .unwrap() as u16;
+        let start = lines[y as usize][..lines[y as usize].find("gpt-6-sol-mini").unwrap()]
+            .chars()
+            .count();
         let hits = id_hits("mini", "gpt-6-sol-mini");
         assert_eq!(hits, vec![10, 11, 12, 13]);
         for (i, _) in "gpt-6-sol-mini".chars().enumerate() {
             let cell = &buf[(start as u16 + i as u16, y)];
             if hits.contains(&i) {
-                assert!(cell.modifier.contains(Modifier::UNDERLINED), "hit {i} not underlined");
+                assert!(
+                    cell.modifier.contains(Modifier::UNDERLINED),
+                    "hit {i} not underlined"
+                );
                 assert!(cell.modifier.contains(Modifier::BOLD), "hit {i} not bold");
             } else {
-                assert!(!cell.modifier.contains(Modifier::UNDERLINED), "char {i} underlined");
+                assert!(
+                    !cell.modifier.contains(Modifier::UNDERLINED),
+                    "char {i} underlined"
+                );
             }
         }
         // The row is off the bar: none of its spans carry the accent behind.
         assert!(
-            rows[y as usize].spans.iter().all(|s| s.style.bg != Some(BLUE)),
+            rows[y as usize]
+                .spans
+                .iter()
+                .all(|s| s.style.bg != Some(BLUE)),
             "plain row picked up the bar"
         );
     }
@@ -1059,15 +1257,26 @@ mod tests {
             crate::paint(&mut buf, 0, y as u16, 100, r);
         }
         let lines: Vec<String> = rows.iter().map(plain).collect();
-        let y = lines.iter().position(|l| l.contains("gpt-6-sol-mini")).unwrap() as u16;
-        let start = lines[y as usize][..lines[y as usize].find("gpt-6-sol-mini").unwrap()].chars().count();
+        let y = lines
+            .iter()
+            .position(|l| l.contains("gpt-6-sol-mini"))
+            .unwrap() as u16;
+        let start = lines[y as usize][..lines[y as usize].find("gpt-6-sol-mini").unwrap()]
+            .chars()
+            .count();
         assert!(
-            rows[y as usize].spans.iter().any(|s| s.style.bg == Some(BLUE)),
+            rows[y as usize]
+                .spans
+                .iter()
+                .any(|s| s.style.bg == Some(BLUE)),
             "focus lost the bar"
         );
         for i in id_hits("mini", "gpt-6-sol-mini") {
             let cell = &buf[(start as u16 + i as u16, y)];
-            assert!(cell.modifier.contains(Modifier::UNDERLINED), "bar stripped hit {i}");
+            assert!(
+                cell.modifier.contains(Modifier::UNDERLINED),
+                "bar stripped hit {i}"
+            );
             assert_eq!(cell.bg, BLUE, "hit {i} left the bar");
         }
     }
@@ -1083,9 +1292,19 @@ mod tests {
         for id in ["claude-opus-5-5", "anthropic", "thinking"] {
             assert!(!t.contains(id), "empty list still draws {id}");
         }
-        let line = rows.iter().find(|r| plain(r).contains("No models match")).unwrap();
-        let ink = line.spans.iter().find(|s| s.content.contains("No models match")).unwrap();
-        assert!(ink.style.add_modifier.contains(Modifier::DIM), "empty line is not muted");
+        let line = rows
+            .iter()
+            .find(|r| plain(r).contains("No models match"))
+            .unwrap();
+        let ink = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("No models match"))
+            .unwrap();
+        assert!(
+            ink.style.add_modifier.contains(Modifier::DIM),
+            "empty line is not muted"
+        );
         assert_eq!(picks(&rows), 0);
     }
 

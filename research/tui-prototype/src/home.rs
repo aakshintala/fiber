@@ -9,36 +9,144 @@
 use super::input::{Ev, Key, Mods, Mouse};
 use super::{Act, Args, Term, Ui};
 use super::{
-    BI, BLUE, CYAN, ORANGE, RED, SEL, SState, bold, dim, fg, fit, lift, paint,
-    row, slab, sp, state_glyph,
+    BI, BLUE, CYAN, ORANGE, RED, SEL, SState, bold, dim, fg, fit, lift, paint, row, slab, sp,
+    state_glyph,
 };
+use crate::cases::{Case, Surface};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
-use crate::cases::{Case, Surface};
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
 /// Every `--home` case, named in README.md.
 const CASES: &[Case<Look>] = &[
-    Case { name: "empty", help: "no sessions yet: logo, input box, chips", check: "the pixel logo four rows tall with `0.0.1` dim on the last row; under it the large input box with `/? for shortcuts`, the chip row and `enter starts a session`; under the box one dim `No sessions yet` line and no headers; the key hint at the foot.", build: || Look { list: List::None, ..base() } },
-    Case { name: "sessions", help: "live and past sessions in two-line rows", check: "a bold `Live sessions` header with `2 waiting on you` in orange, then five two-line live rows; one blank row, then a bold `Past sessions` header with `/resume lists all`, then six two-line exited rows; line one is the glyph, the name or first prompt, its age and its verb, line two dim `id · turns · branch · spend` with the workspace segment and the wait.", build: || base() },
-    Case { name: "live-only", help: "live sessions only, a still frame", check: "the `Live sessions` header and its five two-line rows; no `Past sessions` header.", build: || Look { list: List::Live, ..base() } },
-    Case { name: "past-only", help: "past sessions only, a still frame", check: "the `Past sessions` header and its six two-line rows; no `Live sessions` header.", build: || Look { list: List::Past, ..base() } },
-    Case { name: "selected", help: "the first live row selected, a still frame", check: "the first live row with the blue `▸` marker, its prompt bold and its verb blue; the other rows unmarked.", build: || Look { sel: Some(0), ..base() } },
-    Case { name: "live", help: "the interactive home: type, pick, open rows", check: "not a still frame: `--home` with no case runs the event loop, and this name only names it in `--help`.", build: base },
-    Case { name: "hover-workspace", help: "the workspace chip hovered, a still frame", check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Workspace), ..base() } },
-    Case { name: "hover-worktree", help: "the worktree switch hovered, a still frame", check: "a still frame of the hover tint: the switch chip should sit lighter with its ● still blue.", build: || Look { hover: Some(Hover::Worktree), ..base() } },
-    Case { name: "hover-model", help: "the model chip hovered, a still frame", check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Model), ..base() } },
-    Case { name: "hover-thinking", help: "the thinking chip hovered, a still frame", check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Thinking), ..base() } },
-    Case { name: "worktree-on", help: "new worktree switched on", check: "the switch should read `[● new worktree]` in blue.", build: || base() },
-    Case { name: "worktree-off", help: "new worktree switched off", check: "the switch should read `[○ new worktree]` dim.", build: || Look { worktree: false, ..base() } },
-    Case { name: "picker-recent", help: "workspace picker over home, recents", check: "the picker should float centred over home with ▄ ▀ edges and the ▌ stripe; `Workspaces` bold accent; four recent workspaces, the first `›` on a full-width accent bar; a bold-key legend foot.", build: || Look { picker: Some(Picker::Recent), ..base() } },
-    Case { name: "picker-typed", help: "workspace picker with a typed path", check: "the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first `›` on the accent bar; the recents below dimmed; same frame and legend foot.", build: || Look { picker: Some(Picker::Typed), ..base() } },
+    Case {
+        name: "empty",
+        help: "no sessions yet: logo, input box, chips",
+        check: "the pixel logo four rows tall with `0.0.1` dim on the last row; under it the large input box with `/? for shortcuts`, the chip row and `enter starts a session`; under the box one dim `No sessions yet` line and no headers; the key hint at the foot.",
+        build: || Look {
+            list: List::None,
+            ..base()
+        },
+    },
+    Case {
+        name: "sessions",
+        help: "live and past sessions in two-line rows",
+        check: "a bold `Live sessions` header with `2 waiting on you` in orange, then five two-line live rows; one blank row, then a bold `Past sessions` header with `/resume lists all`, then six two-line exited rows; line one is the glyph, the name or first prompt, its age and its verb, line two dim `id · turns · branch · spend` with the workspace segment and the wait.",
+        build: || base(),
+    },
+    Case {
+        name: "live-only",
+        help: "live sessions only, a still frame",
+        check: "the `Live sessions` header and its five two-line rows; no `Past sessions` header.",
+        build: || Look {
+            list: List::Live,
+            ..base()
+        },
+    },
+    Case {
+        name: "past-only",
+        help: "past sessions only, a still frame",
+        check: "the `Past sessions` header and its six two-line rows; no `Live sessions` header.",
+        build: || Look {
+            list: List::Past,
+            ..base()
+        },
+    },
+    Case {
+        name: "selected",
+        help: "the first live row selected, a still frame",
+        check: "the first live row with the blue `▸` marker, its prompt bold and its verb blue; the other rows unmarked.",
+        build: || Look {
+            sel: Some(0),
+            ..base()
+        },
+    },
+    Case {
+        name: "live",
+        help: "the interactive home: type, pick, open rows",
+        check: "not a still frame: `--home` with no case runs the event loop, and this name only names it in `--help`.",
+        build: base,
+    },
+    Case {
+        name: "hover-workspace",
+        help: "the workspace chip hovered, a still frame",
+        check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.",
+        build: || Look {
+            hover: Some(Hover::Workspace),
+            ..base()
+        },
+    },
+    Case {
+        name: "hover-worktree",
+        help: "the worktree switch hovered, a still frame",
+        check: "a still frame of the hover tint: the switch chip should sit lighter with its ● still blue.",
+        build: || Look {
+            hover: Some(Hover::Worktree),
+            ..base()
+        },
+    },
+    Case {
+        name: "hover-model",
+        help: "the model chip hovered, a still frame",
+        check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.",
+        build: || Look {
+            hover: Some(Hover::Model),
+            ..base()
+        },
+    },
+    Case {
+        name: "hover-thinking",
+        help: "the thinking chip hovered, a still frame",
+        check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.",
+        build: || Look {
+            hover: Some(Hover::Thinking),
+            ..base()
+        },
+    },
+    Case {
+        name: "worktree-on",
+        help: "new worktree switched on",
+        check: "the switch should read `[● new worktree]` in blue.",
+        build: || base(),
+    },
+    Case {
+        name: "worktree-off",
+        help: "new worktree switched off",
+        check: "the switch should read `[○ new worktree]` dim.",
+        build: || Look {
+            worktree: false,
+            ..base()
+        },
+    },
+    Case {
+        name: "picker-recent",
+        help: "workspace picker over home, recents",
+        check: "the picker should float centred over home with ▄ ▀ edges and the ▌ stripe; `Workspaces` bold accent; four recent workspaces, the first `›` on a full-width accent bar; a bold-key legend foot.",
+        build: || Look {
+            picker: Some(Picker::Recent),
+            ..base()
+        },
+    },
+    Case {
+        name: "picker-typed",
+        help: "workspace picker with a typed path",
+        check: "the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first `›` on the accent bar; the recents below dimmed; same frame and legend foot.",
+        build: || Look {
+            picker: Some(Picker::Typed),
+            ..base()
+        },
+    },
 ];
 
 /// `--home`, for `--help` and `check/home.md`.
-pub(crate) const SURFACE: Surface = Surface { flag: "--home", file: "home", title: "Home (#1628)", docs: || crate::cases::docs(CASES) };
+pub(crate) const SURFACE: Surface = Surface {
+    flag: "--home",
+    file: "home",
+    title: "Home (#1628)",
+    docs: || crate::cases::docs(CASES),
+};
 
 /// The home input box and session list width at 160 columns.
 const HOME_W: usize = 84;
@@ -98,8 +206,7 @@ struct Look {
 }
 
 fn base() -> Look {
-    let (model, level) =
-        crate::model_picker::chosen(&crate::model_picker::for_case("list"));
+    let (model, level) = crate::model_picker::chosen(&crate::model_picker::for_case("list"));
     Look {
         list: List::Both,
         sel: None,
@@ -311,10 +418,20 @@ fn chips(c: &Look) -> Vec<(Target, String, Style, bool)> {
         ("○ new worktree", dim())
     };
     vec![
-        (Target::Workspace, format!("▣ {}", c.workspace), Style::new(), h(Hover::Workspace)),
+        (
+            Target::Workspace,
+            format!("▣ {}", c.workspace),
+            Style::new(),
+            h(Hover::Workspace),
+        ),
         (Target::Worktree, worktree.into(), wst, h(Hover::Worktree)),
         (Target::Model, c.model.into(), fg(CYAN), h(Hover::Model)),
-        (Target::Thinking, c.level.into(), fg(ORANGE), h(Hover::Thinking)),
+        (
+            Target::Thinking,
+            c.level.into(),
+            fg(ORANGE),
+            h(Hover::Thinking),
+        ),
     ]
 }
 
@@ -421,7 +538,10 @@ fn session_line_one(s: &Session, selected: bool, rw: usize) -> Vec<Span<'static>
 /// session, red dim for a crashed one, else dim.
 fn session_line_two(s: &Session, rw: usize) -> Vec<Span<'static>> {
     let turns = format!("{} turn{}", s.turns, if s.turns == 1 { "" } else { "s" });
-    let mut body = vec![sp(format!("{} · {turns} · {} · {}", s.id, s.branch, s.spend), dim())];
+    let mut body = vec![sp(
+        format!("{} · {turns} · {} · {}", s.id, s.branch, s.spend),
+        dim(),
+    )];
     if let Some(ws) = s.ws {
         body.push(sp(format!(" · {ws}"), dim()));
     }
@@ -455,7 +575,10 @@ fn live_header() -> Vec<Span<'static>> {
 /// The past section's header: bold `Past sessions`, then where the whole
 /// list lives, dim.
 fn past_header() -> Vec<Span<'static>> {
-    vec![sp("Past sessions", bold()), sp("  /resume lists all", dim())]
+    vec![
+        sp("Past sessions", bold()),
+        sp("  /resume lists all", dim()),
+    ]
 }
 
 /// One list line: its left edge, its spans, and the session's index for
@@ -564,7 +687,11 @@ fn picker(p: Picker, wsel: usize, cols: usize) -> Vec<super::Row> {
     super::panel::frame(
         Some(super::panel::title_row(TITLE, None)),
         body,
-        Some(super::panel::footer_legend(&[("↑↓", "move"), ("enter", "open"), ("esc", "closes")])),
+        Some(super::panel::footer_legend(&[
+            ("↑↓", "move"),
+            ("enter", "open"),
+            ("esc", "closes"),
+        ])),
         w,
     )
 }
@@ -636,11 +763,13 @@ fn put(
 }
 
 fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
-    let blank = || vec![Placed {
-        x: 0,
-        w: cols as u16,
-        row: row(vec![]),
-    }];
+    let blank = || {
+        vec![Placed {
+            x: 0,
+            w: cols as u16,
+            row: row(vec![]),
+        }]
+    };
     let mut screen: Vec<Vec<Placed>> = (0..rows).map(|_| blank()).collect();
     let mut hits: Vec<(u16, u16, u16, Target)> = vec![];
     // The model picker opens over home as a full-screen swapped view, as
@@ -752,13 +881,29 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
         let mut lines: Vec<Line> = vec![];
         let (mut at, mut sel_end) = (0, 0);
         if !live.is_empty() {
-            push_section(&mut lines, (x0, rw), live_header(), live, c.sel, &mut at, &mut sel_end);
+            push_section(
+                &mut lines,
+                (x0, rw),
+                live_header(),
+                live,
+                c.sel,
+                &mut at,
+                &mut sel_end,
+            );
         }
         if !live.is_empty() && !past.is_empty() {
             lines.push(None);
         }
         if !past.is_empty() {
-            push_section(&mut lines, (x0, rw), past_header(), past, c.sel, &mut at, &mut sel_end);
+            push_section(
+                &mut lines,
+                (x0, rw),
+                past_header(),
+                past,
+                c.sel,
+                &mut at,
+                &mut sel_end,
+            );
         }
         if c.sel.is_some_and(|s| s >= at) {
             sel_end = lines.len();
@@ -773,7 +918,9 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
                 // An open workspace picker covers the list: its blank
                 // rows and footer are not session targets, so clicking
                 // them never enters a conversation.
-                if c.picker.is_none() && let Some(k) = sess {
+                if c.picker.is_none()
+                    && let Some(k) = sess
+                {
                     hits.push((sy as u16, *x as u16, (*x + rw) as u16, Target::Session(*k)));
                 }
             }
@@ -799,7 +946,12 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
             let bg = r.bg;
             let text: String = r.spans.iter().map(|s| s.content.as_ref()).collect();
             if let Some(i) = recent_at(&text) {
-                hits.push(((12 + k) as u16, px0 as u16, (px0 + pw) as u16, Target::Recent(i)));
+                hits.push((
+                    (12 + k) as u16,
+                    px0 as u16,
+                    (px0 + pw) as u16,
+                    Target::Recent(i),
+                ));
             }
             put(&mut screen, 12 + k, px0, pw, r.spans, bg);
         }
@@ -879,23 +1031,27 @@ fn wait_for(deadline: Option<Instant>, now: Instant) -> Option<Duration> {
     deadline.map(|d| d.saturating_duration_since(now))
 }
 
-fn draw(term: &mut Term, c: &Look, img: &mut Image, supported: bool, first: bool) -> io::Result<()> {
+fn draw(
+    term: &mut Term,
+    c: &Look,
+    img: &mut Image,
+    supported: bool,
+    first: bool,
+) -> io::Result<()> {
     let size = term.size()?;
     let (cols, rows) = (size.width.max(1), size.height.max(1));
     let w = HOME_W.min(cols.saturating_sub(4) as usize).max(20);
-    let shown = image_shown(
-        supported,
-        first,
-        c,
-        cols as usize,
-        rows as usize,
-    );
+    let shown = image_shown(supported, first, c, cols as usize, rows as usize);
     let x0 = (cols as usize).saturating_sub(w) / 2;
     let esc = img.escapes(shown, logo_x(x0, w) as u16, LOGO_Y as u16);
     term.backend_mut().write_all(b"\x1b[?2026h")?;
     term.draw(|fr| {
         let buf = fr.buffer_mut();
-        for (y, placements) in frame(c, cols as usize, rows as usize, shown).screen.iter().enumerate() {
+        for (y, placements) in frame(c, cols as usize, rows as usize, shown)
+            .screen
+            .iter()
+            .enumerate()
+        {
             for p in placements {
                 paint(buf, p.x, y as u16, p.w, &p.row);
             }
@@ -970,14 +1126,12 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
     // matching row Enter keeps the picker open and records nothing.
     if c.ui.picker.is_some() {
         if k == Key::Enter && !m.ctrl && !m.alt && !m.sup {
-            let empty = c
-                .ui
-                .picker
-                .as_ref()
-                .is_some_and(|p| crate::model_picker::visible(p).is_empty());
+            let empty =
+                c.ui.picker
+                    .as_ref()
+                    .is_some_and(|p| crate::model_picker::visible(p).is_empty());
             if !empty {
-                let (model, level) =
-                    crate::model_picker::chosen(c.ui.picker.as_ref().unwrap());
+                let (model, level) = crate::model_picker::chosen(c.ui.picker.as_ref().unwrap());
                 c.model = model;
                 c.level = level;
             }
@@ -1054,7 +1208,11 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
 fn on_click(c: &mut Look, x: u16, y: u16, cols: usize, rows: usize) -> Step {
     let fr = frame(c, cols, rows, false);
     // Later hits sit above earlier ones: the picker floats over the list.
-    let hit = fr.hits.iter().rev().find(|&&(hy, x0, x1, _)| hy == y && x >= x0 && x < x1);
+    let hit = fr
+        .hits
+        .iter()
+        .rev()
+        .find(|&&(hy, x0, x1, _)| hy == y && x >= x0 && x < x1);
     let Some((_, _, _, t)) = hit.copied() else {
         return Step::Stay;
     };
@@ -1074,14 +1232,17 @@ fn on_click(c: &mut Look, x: u16, y: u16, cols: usize, rows: usize) -> Step {
             Step::Stay
         }
         Target::Thinking => {
-            c.ui.picker =
-                Some(crate::model_picker::opened_at(c.model, Some(c.level)));
+            c.ui.picker = Some(crate::model_picker::opened_at(c.model, Some(c.level)));
             c.ui.vscroll = 0;
             Step::Stay
         }
         Target::Session(i) => {
             let foreign = sessions_of(c).get(i).is_some_and(|s| s.foreign);
-            if foreign { Step::Stay } else { Step::Conversation }
+            if foreign {
+                Step::Stay
+            } else {
+                Step::Conversation
+            }
         }
         Target::Recent(i) => {
             c.workspace = RECENTS[i];
@@ -1119,7 +1280,10 @@ fn run_home_inner(a: &Args, term: &mut Term) -> io::Result<Done> {
     let Some(c) = crate::cases::lookup(CASES, &name) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("unknown --home case {name:?}; one of: {}", crate::cases::names(CASES)),
+            format!(
+                "unknown --home case {name:?}; one of: {}",
+                crate::cases::names(CASES)
+            ),
         ));
     };
     let supported = crate::logo::supported(|k| std::env::var(k).ok());
@@ -1213,7 +1377,11 @@ mod tests {
 
     #[test]
     fn every_case_parses_and_unknown_does_not() {
-        assert!(CASES.iter().all(|c| crate::cases::lookup(CASES, c.name).is_some()));
+        assert!(
+            CASES
+                .iter()
+                .all(|c| crate::cases::lookup(CASES, c.name).is_some())
+        );
         assert_eq!(CASES.len(), 14);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
@@ -1234,7 +1402,11 @@ mod tests {
 
     fn painted(c: &Look, cols: u16, rows: u16, image: bool) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, cols, rows));
-        for (y, placements) in frame(c, cols as usize, rows as usize, image).screen.iter().enumerate() {
+        for (y, placements) in frame(c, cols as usize, rows as usize, image)
+            .screen
+            .iter()
+            .enumerate()
+        {
             for p in placements {
                 paint(&mut buf, p.x, y as u16, p.w, &p.row);
             }
@@ -1296,7 +1468,10 @@ mod tests {
 
     #[test]
     fn image_escapes_sequence() {
-        let mut img = Image { transmitted: false, placed: false };
+        let mut img = Image {
+            transmitted: false,
+            placed: false,
+        };
         assert_eq!(img.escapes(false, 38, 2), "");
         assert_eq!(
             img.escapes(true, 38, 2),
@@ -1313,9 +1488,15 @@ mod tests {
         use std::time::{Duration, Instant};
         let now = Instant::now();
         assert_eq!(wait_for(None, now), None);
-        assert_eq!(wait_for(Some(now + Duration::from_millis(30)), now), Some(Duration::from_millis(30)));
+        assert_eq!(
+            wait_for(Some(now + Duration::from_millis(30)), now),
+            Some(Duration::from_millis(30))
+        );
         assert_eq!(wait_for(Some(now), now), Some(Duration::ZERO));
-        assert_eq!(wait_for(Some(now - Duration::from_millis(5)), now), Some(Duration::ZERO));
+        assert_eq!(
+            wait_for(Some(now - Duration::from_millis(5)), now),
+            Some(Duration::ZERO)
+        );
     }
 
     #[test]
@@ -1366,7 +1547,13 @@ mod tests {
             .into_iter()
             .map(|ps| {
                 ps.iter()
-                    .map(|p| p.row.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                    .map(|p| {
+                        p.row
+                            .spans
+                            .iter()
+                            .map(|s| s.content.as_ref())
+                            .collect::<String>()
+                    })
                     .collect::<Vec<_>>()
                     .join("")
             })
@@ -1415,7 +1602,11 @@ mod tests {
         assert!(buf[(40, past_y)].modifier.contains(Modifier::BOLD));
         assert_eq!(run_text(&buf, 53, live_y, 18), "  2 waiting on you");
         for x in 55..69 {
-            assert_eq!(buf[(x, live_y)].fg, ORANGE, "waiting count not orange at {x}");
+            assert_eq!(
+                buf[(x, live_y)].fg,
+                ORANGE,
+                "waiting count not orange at {x}"
+            );
         }
         assert!(run_text(&buf, 53, past_y, 19).contains("/resume lists all"));
     }
@@ -1428,11 +1619,26 @@ mod tests {
             .iter()
             .rposition(|l| l.chars().filter(|&c| c == '▀').count() >= 40)
             .unwrap();
-        assert!(home_col(lines[edge + 1], 38, 84).trim().is_empty(), "no first blank");
-        assert!(home_col(lines[edge + 2], 38, 84).trim().is_empty(), "no second blank");
-        let past = lines.iter().position(|l| l.contains("Past sessions")).unwrap();
-        assert!(lines[past - 1].trim().is_empty(), "no blank over the past header");
-        assert!(lines[past - 2].contains("s_5e91b4"), "the last live row is not above the blank");
+        assert!(
+            home_col(lines[edge + 1], 38, 84).trim().is_empty(),
+            "no first blank"
+        );
+        assert!(
+            home_col(lines[edge + 2], 38, 84).trim().is_empty(),
+            "no second blank"
+        );
+        let past = lines
+            .iter()
+            .position(|l| l.contains("Past sessions"))
+            .unwrap();
+        assert!(
+            lines[past - 1].trim().is_empty(),
+            "no blank over the past header"
+        );
+        assert!(
+            lines[past - 2].contains("s_5e91b4"),
+            "the last live row is not above the blank"
+        );
     }
 
     #[test]
@@ -1445,18 +1651,30 @@ mod tests {
         assert!(buf[(41, y1)].modifier.contains(Modifier::BOLD));
         assert_eq!(run_text(&buf, 43, y1, 21), "cut the 0.0.1 release");
         for x in 43..64 {
-            assert!(!buf[(x, y1)].modifier.contains(Modifier::BOLD), "prompt went bold at {x}");
+            assert!(
+                !buf[(x, y1)].modifier.contains(Modifier::BOLD),
+                "prompt went bold at {x}"
+            );
         }
         // The age sits right-aligned in its 9-cell field, the verb after two spaces.
         assert_eq!(run_text(&buf, 97, y1, 9), "   2h ago");
         for x in 97..106 {
-            assert!(buf[(x, y1)].modifier.contains(Modifier::DIM), "age not dim at {x}");
+            assert!(
+                buf[(x, y1)].modifier.contains(Modifier::DIM),
+                "age not dim at {x}"
+            );
         }
         assert_eq!(run_text(&buf, 108, y1, 13), "attach       ");
         assert!(buf[(108, y1)].modifier.contains(Modifier::DIM));
-        assert_eq!(run_text(&buf, 43, y2, 34), "s_7f20aa · 5 turns · release/0.0.1");
+        assert_eq!(
+            run_text(&buf, 43, y2, 34),
+            "s_7f20aa · 5 turns · release/0.0.1"
+        );
         for x in 43..80 {
-            assert!(buf[(x, y2)].modifier.contains(Modifier::DIM), "line two not dim at {x}");
+            assert!(
+                buf[(x, y2)].modifier.contains(Modifier::DIM),
+                "line two not dim at {x}"
+            );
         }
         let note_y = find_row(&buf, 160, 48, "approval:");
         assert_eq!(note_y, y2);
@@ -1540,7 +1758,10 @@ mod tests {
         assert_eq!(buf[(39, y1)].symbol(), "▸");
         assert_eq!(buf[(39, y1)].fg, BLUE);
         for x in 43..64 {
-            assert!(buf[(x, y1)].modifier.contains(Modifier::BOLD), "prompt not bold at {x}");
+            assert!(
+                buf[(x, y1)].modifier.contains(Modifier::BOLD),
+                "prompt not bold at {x}"
+            );
         }
         assert_eq!(run_text(&buf, 108, y1, 13), "attach       ");
         assert_eq!(buf[(108, y1)].fg, BLUE);
@@ -1606,7 +1827,10 @@ mod tests {
 
     #[test]
     fn selected_last_row_stays_visible() {
-        let c = Look { sel: Some(10), ..base() };
+        let c = Look {
+            sel: Some(10),
+            ..base()
+        };
         let buf = buffer(&c, 160, 30);
         let y1 = find_row(&buf, 160, 30, "rewrite onboarding tour");
         // Both lines sit above the hint row.
@@ -1677,7 +1901,10 @@ mod tests {
         c.sel = Some(10);
         press(&mut c, Key::Down);
         assert_eq!(c.sel, Some(10));
-        let mut empty = Look { list: List::None, ..base() };
+        let mut empty = Look {
+            list: List::None,
+            ..base()
+        };
         press(&mut empty, Key::Down);
         assert_eq!(empty.sel, None);
         let mut c = live_look();
@@ -1725,7 +1952,10 @@ mod tests {
     fn ctrl_c_always_quits() {
         let mut c = live_look();
         c.ui.picker = Some(crate::model_picker::for_case("list"));
-        let m = Mods { ctrl: true, ..Default::default() };
+        let m = Mods {
+            ctrl: true,
+            ..Default::default()
+        };
         assert!(matches!(on_key(&mut c, Key::Char('c'), m), Step::Quit));
     }
 
@@ -1814,7 +2044,13 @@ mod tests {
 
     #[test]
     fn picker_scroll_follows_focus() {
-        let last = crate::model_picker::fixture().last().unwrap().models.last().unwrap().id;
+        let last = crate::model_picker::fixture()
+            .last()
+            .unwrap()
+            .models
+            .last()
+            .unwrap()
+            .id;
         let mut c = live_look();
         let (x, y) = hit(&c, Target::Model);
         on_click(&mut c, x, y, 160, 48);
@@ -1903,7 +2139,12 @@ mod tests {
         assert!(!rows.is_empty());
         let (wx, wy) = hit(&c, Target::Workspace);
         let fr = frame(&c, 160, 48, false);
-        let (cy, cx0, _, _) = fr.hits.iter().find(|h| h.3 == Target::Worktree).copied().unwrap();
+        let (cy, cx0, _, _) = fr
+            .hits
+            .iter()
+            .find(|h| h.3 == Target::Worktree)
+            .copied()
+            .unwrap();
         on_click(&mut c, wx, wy, 160, 48);
         assert_eq!(c.picker, Some(Picker::Recent));
         // Clicking where a session row sits now does nothing: the
@@ -1918,10 +2159,14 @@ mod tests {
     }
 
     #[test]
-    fn row_click_switches() {        let c = live_look();
+    fn row_click_switches() {
+        let c = live_look();
         for (x, y) in session_hits(&c, 0) {
             let mut c = live_look();
-            assert!(matches!(on_click(&mut c, x, y, 160, 48), Step::Conversation));
+            assert!(matches!(
+                on_click(&mut c, x, y, 160, 48),
+                Step::Conversation
+            ));
         }
         assert_eq!(session_hits(&c, 0).len(), 2);
         let c = live_look();
@@ -1937,7 +2182,12 @@ mod tests {
             let rows = picker(p, 0, 160);
             let t = rows
                 .iter()
-                .map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                .map(|r| {
+                    r.spans
+                        .iter()
+                        .map(|s| s.content.as_ref())
+                        .collect::<String>()
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             let lines: Vec<&str> = t.split('\n').collect();
@@ -1964,13 +2214,23 @@ mod tests {
             .unwrap();
         assert!(edge.x > 0, "picker flush left");
         assert!(edge.x + edge.w < 160, "picker fills the row");
-        let typed = text(&crate::cases::lookup(CASES, "picker-typed").unwrap(), 160, 48);
+        let typed = text(
+            &crate::cases::lookup(CASES, "picker-typed").unwrap(),
+            160,
+            48,
+        );
         assert!(typed.contains("› ~/work/fi"));
         assert!(typed.contains("── recents ──"));
         // The dim section header stands off on a blank row.
         let lines: Vec<&str> = typed.split('\n').collect();
-        let div = lines.iter().position(|l| l.contains("── recents ──")).unwrap();
-        assert!(lines[div - 1].trim().is_empty(), "no blank over the recents");
+        let div = lines
+            .iter()
+            .position(|l| l.contains("── recents ──"))
+            .unwrap();
+        assert!(
+            lines[div - 1].trim().is_empty(),
+            "no blank over the recents"
+        );
     }
 
     #[test]
@@ -1986,14 +2246,25 @@ mod tests {
         }
         let t = rows
             .iter()
-            .map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|r| {
+                r.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         // The first workspace row is the selected one.
-        let y = t.split('\n').position(|l| l.contains("~/work/fiber")).unwrap() as u16;
+        let y = t
+            .split('\n')
+            .position(|l| l.contains("~/work/fiber"))
+            .unwrap() as u16;
         let line = t.split('\n').nth(y as usize).unwrap();
         let at = line.find("~/work/fiber").unwrap();
         let col = line[..at].chars().count();
-        assert!(buf[(col as u16, y)].modifier.contains(Modifier::BOLD), "selection not bold");
+        assert!(
+            buf[(col as u16, y)].modifier.contains(Modifier::BOLD),
+            "selection not bold"
+        );
     }
 }

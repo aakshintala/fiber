@@ -54,11 +54,26 @@ pub const GUTTER: usize = 6;
 impl Ext {
     pub fn new(name: &str, src: &str, cached: bool) -> mlua::Result<Ext> {
         // the stripped standard library of docs/extensions.md
-        let lua = Lua::new_with(StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE, LuaOptions::default())?;
+        let lua = Lua::new_with(
+            StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE,
+            LuaOptions::default(),
+        )?;
         let t: Table = lua.load(src).set_name(format!("@{name}")).eval()?;
         let tool: String = t.get("tool")?;
         let render: Function = t.get("render")?;
-        Ok(Ext { lua, tool, render, cached, cache: Default::default(), calls: Cell::new(0), ns: Cell::new(0), ns_in: Cell::new(0), failure: Default::default(), told: Cell::new(false), clicks: Default::default() })
+        Ok(Ext {
+            lua,
+            tool,
+            render,
+            cached,
+            cache: Default::default(),
+            calls: Cell::new(0),
+            ns: Cell::new(0),
+            ns_in: Cell::new(0),
+            failure: Default::default(),
+            told: Cell::new(false),
+            clicks: Default::default(),
+        })
     }
 
     pub fn used_memory(&self) -> usize {
@@ -72,7 +87,10 @@ impl Ext {
         }
         let f = self.failure.borrow().clone()?;
         self.told.set(true);
-        Some(format!("{} renderer failed, built-in rows shown: {f}", self.tool))
+        Some(format!(
+            "{} renderer failed, built-in rows shown: {f}",
+            self.tool
+        ))
     }
 
     /// The ledger rows for a call, or None to use the built-in row.
@@ -98,11 +116,20 @@ impl Ext {
                 .into_iter()
                 .enumerate()
                 .map(|(i, l)| {
-                    let g = if i == 0 { gutter.to_string() } else { " ".repeat(GUTTER) };
+                    let g = if i == 0 {
+                        gutter.to_string()
+                    } else {
+                        " ".repeat(GUTTER)
+                    };
                     let mut parts = vec![(sp(g, dim()), None)];
                     parts.extend(l);
                     let mut r = hot_row(parts);
-                    r.lua = Some(Rc::new(LuaSrc { input: input.clone(), w, gutter: gutter.to_string(), line: i }));
+                    r.lua = Some(Rc::new(LuaSrc {
+                        input: input.clone(),
+                        w,
+                        gutter: gutter.to_string(),
+                        line: i,
+                    }));
                     r
                 })
                 .collect(),
@@ -114,7 +141,11 @@ impl Ext {
     pub fn frame_spans(&self, s: &LuaSrc, cw: usize, bg: Color) -> Option<Vec<Span<'static>>> {
         let lines = self.call(&s.input, s.w)?;
         let l = lines.into_iter().nth(s.line)?;
-        let g = if s.line == 0 { s.gutter.clone() } else { " ".repeat(GUTTER) };
+        let g = if s.line == 0 {
+            s.gutter.clone()
+        } else {
+            " ".repeat(GUTTER)
+        };
         let mut body = vec![sp(g, dim())];
         body.extend(l.into_iter().map(|p| p.0));
         let mut spans = vec![sp(" ", Style::new())];
@@ -128,7 +159,10 @@ impl Ext {
         let res = (|| -> Result<_, String> {
             let arg = self.lua.to_value(input).map_err(|e| e.to_string())?;
             let t1 = Instant::now();
-            let out: LV = self.render.call((arg, w.saturating_sub(GUTTER))).map_err(|e| e.to_string())?;
+            let out: LV = self
+                .render
+                .call((arg, w.saturating_sub(GUTTER)))
+                .map_err(|e| e.to_string())?;
             self.ns_in.set(self.ns_in.get() + t1.elapsed().as_nanos());
             self.lines(out)
         })();
@@ -148,13 +182,22 @@ impl Ext {
 
     /// Reads `render`'s return value; anything but the documented shape is an error.
     fn lines(&self, out: LV) -> Result<LuaLines, String> {
-        let LV::Table(t) = out else { return Err(format!("render returned {}, not a list of lines", out.type_name())) };
+        let LV::Table(t) = out else {
+            return Err(format!(
+                "render returned {}, not a list of lines",
+                out.type_name()
+            ));
+        };
         let mut lines = vec![];
         for l in t.sequence_values::<LV>() {
-            let LV::Table(l) = l.map_err(|e| e.to_string())? else { return Err("a line is not a list of spans".into()) };
+            let LV::Table(l) = l.map_err(|e| e.to_string())? else {
+                return Err("a line is not a list of spans".into());
+            };
             let mut spans = vec![];
             for s in l.sequence_values::<LV>() {
-                let LV::Table(s) = s.map_err(|e| e.to_string())? else { return Err("a span is not a table".into()) };
+                let LV::Table(s) = s.map_err(|e| e.to_string())? else {
+                    return Err("a span is not a table".into());
+                };
                 spans.push(self.span(&s)?);
             }
             lines.push(spans);
@@ -179,7 +222,8 @@ impl Ext {
             match s.get::<LV>(k).map_err(|e| e.to_string())? {
                 LV::Nil => {}
                 LV::String(c) => {
-                    let c = colour(&c.to_string_lossy()).ok_or_else(|| format!("{k} is not a colour"))?;
+                    let c = colour(&c.to_string_lossy())
+                        .ok_or_else(|| format!("{k} is not a colour"))?;
                     st = if bgnd { st.bg(c) } else { st.fg(c) };
                 }
                 _ => return Err(format!("{k} is not a colour")),

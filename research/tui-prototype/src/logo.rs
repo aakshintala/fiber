@@ -242,7 +242,10 @@ pub(crate) fn supported(env: impl Fn(&str) -> Option<String>) -> bool {
     if term == "xterm-kitty" || term == "xterm-ghostty" {
         return true;
     }
-    matches!(env("TERM_PROGRAM").as_deref(), Some("ghostty") | Some("WezTerm"))
+    matches!(
+        env("TERM_PROGRAM").as_deref(),
+        Some("ghostty") | Some("WezTerm")
+    )
 }
 
 /// A mask column's tint: the wave is accent blue, each letter its step of
@@ -293,10 +296,7 @@ pub(crate) fn transmit() -> String {
             ));
             first = false;
         } else {
-            out.push_str(&format!(
-                "\x1b_Gm={m};{}",
-                String::from_utf8_lossy(chunk)
-            ));
+            out.push_str(&format!("\x1b_Gm={m};{}", String::from_utf8_lossy(chunk)));
         }
         out.push_str("\x1b\\");
     }
@@ -437,7 +437,12 @@ mod tests {
     }
 
     fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
-        move |k| pairs.iter().find(|&&(kk, _)| kk == k).map(|&(_, v)| v.to_string())
+        move |k| {
+            pairs
+                .iter()
+                .find(|&&(kk, _)| kk == k)
+                .map(|&(_, v)| v.to_string())
+        }
     }
 
     #[test]
@@ -454,8 +459,14 @@ mod tests {
             (&[("TERM_PROGRAM", "iTerm.app")], false),
             (&[("TERM_PROGRAM", "ghostty"), ("TMUX", "x")], false),
             (&[("TERM_PROGRAM", "ghostty"), ("STY", "x")], false),
-            (&[("KITTY_WINDOW_ID", "1"), ("TERM", "screen-256color")], false),
-            (&[("KITTY_WINDOW_ID", "1"), ("TERM", "tmux-256color")], false),
+            (
+                &[("KITTY_WINDOW_ID", "1"), ("TERM", "screen-256color")],
+                false,
+            ),
+            (
+                &[("KITTY_WINDOW_ID", "1"), ("TERM", "tmux-256color")],
+                false,
+            ),
         ];
         for (pairs, want) in cases {
             assert_eq!(supported(env_of(pairs)), *want, "env {pairs:?}");
@@ -538,8 +549,10 @@ mod tests {
         }
         assert!(last.starts_with("\x1b_Gm=0;"), "the last chunk: {last:?}");
         // Base64 carries no `;`, so the payload follows the last one.
-        let payloads: Vec<&str> =
-            parts.iter().map(|c| c.split(';').next_back().unwrap()).collect();
+        let payloads: Vec<&str> = parts
+            .iter()
+            .map(|c| c.split(';').next_back().unwrap())
+            .collect();
         for p in &payloads[..payloads.len() - 1] {
             assert!(p.len() <= 4096, "a chunk carries more than 4096 bytes");
             assert_eq!(p.len() % 4, 0, "a chunk is not base64-aligned");
