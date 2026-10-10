@@ -1,6 +1,7 @@
 //! Tests for [`super`]: the stoppable read ends a reader whose peer stays
-//! open and writes nothing, with a bounded join. Every result receive goes
-//! through `fakes::Deadline::after(..).recv(..)`, and no test sleeps. No
+//! open and writes nothing, with a bounded join. Every blocking read runs
+//! on a thread and its result is received through
+//! `fakes::Deadline::after(..).recv(..)`, and no test sleeps. No
 //! case calls `shutdown`, which proves the end does not depend on its
 //! wakeup: each passes with `shutdown` removed from the stop path.
 
@@ -62,10 +63,19 @@ fn bytes_before_a_stop_are_delivered() {
     let (mut peer, stream) = UnixStream::pair().unwrap();
     let (reader, stop) = super::reader(stream).unwrap();
     peer.write_all(b"a\n").unwrap();
-    let mut read = BufReader::new(reader);
-    let mut buf = Vec::new();
-    let got = read.read_until(b'\n', &mut buf).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let reading = thread::spawn(move || {
+        let mut read = BufReader::new(reader);
+        let mut buf = Vec::new();
+        let got = read.read_until(b'\n', &mut buf);
+        tx.send((got, buf)).unwrap_or(());
+    });
+    let (got, buf) = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the read delivers what the peer wrote");
+    let got = got.unwrap();
     assert_eq!((got, buf), (2, b"a\n".to_vec()));
+    reading.join().unwrap();
     drop(peer);
     drop(stop);
 }
@@ -75,8 +85,16 @@ fn a_stop_before_the_first_read_answers_at_once() {
     let (_peer, stream) = UnixStream::pair().unwrap();
     let (mut reader, stop) = super::reader(stream).unwrap();
     stop.stop();
-    let mut buf = [0_u8; 8];
-    assert_stopped(reader.read(&mut buf));
+    let (tx, rx) = mpsc::channel();
+    let reading = thread::spawn(move || {
+        let mut buf = [0_u8; 8];
+        tx.send(reader.read(&mut buf)).unwrap_or(());
+    });
+    let got = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("a stop before the first read answers");
+    assert_stopped(got);
+    reading.join().unwrap();
 }
 
 #[test]
@@ -85,8 +103,16 @@ fn a_stop_wins_over_pending_data() {
     let (mut reader, stop) = super::reader(stream).unwrap();
     peer.write_all(b"b\n").unwrap();
     stop.stop();
-    let mut buf = [0_u8; 8];
-    assert_stopped(reader.read(&mut buf));
+    let (tx, rx) = mpsc::channel();
+    let reading = thread::spawn(move || {
+        let mut buf = [0_u8; 8];
+        tx.send(reader.read(&mut buf)).unwrap_or(());
+    });
+    let got = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the stop answers before the pending data");
+    assert_stopped(got);
+    reading.join().unwrap();
     drop(peer);
 }
 
@@ -142,8 +168,16 @@ fn a_second_stop_does_nothing() {
     let (mut reader, stop) = super::reader(stream).unwrap();
     stop.stop();
     stop.stop();
-    let mut buf = [0_u8; 8];
-    assert_stopped(reader.read(&mut buf));
+    let (tx, rx) = mpsc::channel();
+    let reading = thread::spawn(move || {
+        let mut buf = [0_u8; 8];
+        tx.send(reader.read(&mut buf)).unwrap_or(());
+    });
+    let got = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the read answers after two stops");
+    assert_stopped(got);
+    reading.join().unwrap();
 }
 
 #[test]
@@ -181,10 +215,19 @@ fn the_peer_closing_ends_the_read_with_no_stop() {
     let (peer, stream) = UnixStream::pair().unwrap();
     let (reader, stop) = super::reader(stream).unwrap();
     drop(peer);
-    let mut read = BufReader::new(reader);
-    let mut buf = Vec::new();
-    let got = read.read_until(b'\n', &mut buf).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let reading = thread::spawn(move || {
+        let mut read = BufReader::new(reader);
+        let mut buf = Vec::new();
+        let got = read.read_until(b'\n', &mut buf);
+        tx.send((got, buf)).unwrap_or(());
+    });
+    let (got, buf) = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the peer closing ends the read");
+    let got = got.unwrap();
     assert_eq!((got, buf), (0, Vec::new()));
+    reading.join().unwrap();
     drop(stop);
 }
 
@@ -195,9 +238,17 @@ fn get_ref_returns_the_wrapped_stream() {
     // A write through the wrapped stream reaches the peer.
     let mut through = reader.get_ref().try_clone().unwrap();
     through.write_all(b"ping").unwrap();
-    let mut buf = [0_u8; 4];
-    peer.read_exact(&mut buf).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let reading = thread::spawn(move || {
+        let mut buf = [0_u8; 4];
+        let got = peer.read_exact(&mut buf);
+        tx.send(got.map(|()| buf)).unwrap_or(());
+    });
+    let buf = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the write through the wrapped stream arrives")
+        .unwrap();
     assert_eq!(buf, *b"ping");
-    drop(peer);
+    reading.join().unwrap();
     drop(stop);
 }
