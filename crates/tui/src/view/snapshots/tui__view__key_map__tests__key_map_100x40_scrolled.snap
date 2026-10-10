@@ -1,0 +1,45 @@
+---
+source: crates/tui/src/view/key_map_tests.rs
+assertion_line: 78
+expression: "screen(&app, 100, 40)"
+---
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+  Key map                                                                                        ✕
+
+  Every binding by area, with its other paths.
+  36 actions, 26 with other paths
+
+  All  Sessions  The input box  The conversation  Steering  Requests, models and help
+  Type to search shortcuts› █
+    The conversation           Show or hide the panel                  ⌥P · /panel
+    The conversation           Show or hide the rail                   ⌥R · drag its edge
+    The conversation           Search (where forwarded)                Ctrl+F; Cmd+F
+    The conversation           Open the search results (with search    Ctrl+F · click the match
+                               open)                                   count
+    The conversation           Next or previous match (with search     Enter or ↓, Shift+Enter or
+                               open)                                   ↑
+    The conversation           Jump to the end                         End · click "↓ New messages
+                                                                       below"
+    Steering                   Select a queued steering message        ⌥↑ ⌥↓ · its mouse target
+    Steering                   Amend it                                Enter · its mouse target
+    Steering                   Drop it                                 ⌥X · its mouse target
+    Requests, models and help  Reopen a request put aside, or move to  ⌥A · /approvals; click the
+                               the next, the oldest first, switching   badge or a waiting card
+                               to its session
+    Requests, models and help  Open the model picker                   Ctrl+L · /model
+    Requests, models and help  Choose in the model picker for this     Ctrl+S
+                               session only
+    Requests, models and help  Show every model in the model picker,   Tab · click "[show all]"
+                               or only the scoped ones
+    Requests, models and help  Refresh every model list in the model   Ctrl+R · click "⟳ refresh
+                               picker                                  all"
+  › Requests, models and help  Open the key map                        F1 · /? or /help
+  ↑ 21 more
+
+  ↑↓ move · ←→ tabs · esc closes
+
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ › █
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

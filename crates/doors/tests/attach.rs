@@ -30,6 +30,7 @@ use contract::inbox::{Ack, Delivery, Rejection};
 use contract::shapes::{ContentPart, Failure, Origin, Sender, Tokens, Usage};
 use contract::{CommandId, ErrorCode, SCHEMA_VERSION, SessionId, TurnId};
 use doors::{Session, attach, failure, mint};
+use fakes::Deadline;
 use log::Log;
 use serde_json::Value;
 
@@ -111,9 +112,10 @@ impl Opened {
     /// session on a thread, bounded the same way. Consumes the fixture so
     /// the log is dropped: [`Session::close`] joins the printer, which wakes
     /// only once the log is gone.
+    #[track_caller]
     fn close(self, inbox: Receiver<(Result<(), Failure>, Session)>) -> Result<(), Failure> {
-        let (ran, session) = inbox
-            .recv_timeout(DEADLINE)
+        let (ran, session) = Deadline::after(DEADLINE)
+            .recv(&inbox)
             .expect("waited for the inbox thread to finish");
         let log = self.log;
         let (done, finished) = mpsc::channel();
@@ -123,8 +125,8 @@ impl Opened {
                 Ok(()) | Err(_) => {}
             }
         });
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .expect("waited for the session to close");
         ran
     }
@@ -152,13 +154,15 @@ fn attach_on_thread<W: Write + Send + 'static>(
 }
 
 /// The helper thread's result, waited for within [`DEADLINE`].
+#[track_caller]
 fn attached<T>(
     finished: Receiver<(Result<i32, Failure>, T)>,
     operation: &str,
 ) -> (Result<i32, Failure>, T) {
-    finished.recv_timeout(DEADLINE).unwrap_or_else(|_| {
-        panic!("waited {DEADLINE:?} for {operation}");
-    })
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(value) => value,
+        Err(_) => panic!("waited {DEADLINE:?} for {operation}"),
+    }
 }
 
 /// The refusal `attach` returns when nothing accepts: the holder names it,
@@ -200,8 +204,12 @@ fn turn_input(text: &str, command: &CommandId) -> Vec<InputItem> {
 /// The prompt's delivery, with its acknowledgement for the test to answer
 /// once the turn it starts is written, as the loop does: `turn_started`
 /// first, then the accept (`loop`, `turn`).
+#[track_caller]
 fn prompt_of(inbox: &Receiver<Delivery>) -> (Vec<ContentPart>, CommandId, Ack) {
-    match inbox.recv_timeout(DEADLINE).expect("the prompt arrives") {
+    match Deadline::after(DEADLINE)
+        .recv(inbox)
+        .expect("the prompt arrives")
+    {
         Delivery::Prompt(message, ack) => (
             message.content,
             message
@@ -412,7 +420,10 @@ fn a_failed_turn_prints_its_lines_and_returns_1() {
 fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
     let mut opened = Opened::open();
     let inbox = opened.run(move |inbox| {
-        match inbox.recv_timeout(DEADLINE).expect("the prompt arrives") {
+        match Deadline::after(DEADLINE)
+            .recv(&inbox)
+            .expect("the prompt arrives")
+        {
             Delivery::Prompt(_, ack) => ack.0(Err(Rejection {
                 code: ErrorCode::Busy,
                 message: "A turn is running; send `steer` to add to it.".into(),
@@ -565,11 +576,13 @@ fn stand_in(
 /// The stand-in thread's received lines, waited for within [`DEADLINE`].
 /// The thread sends its lines as its last act; the handle is dropped,
 /// never joined, so only the deadline bounds its end.
+#[track_caller]
 fn stood_in(server: (JoinHandle<()>, Receiver<Vec<String>>), operation: &str) -> Vec<String> {
     let (_handle, finished) = server;
-    finished.recv_timeout(DEADLINE).unwrap_or_else(|_| {
-        panic!("waited {DEADLINE:?} for {operation}");
-    })
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(value) => value,
+        Err(_) => panic!("waited {DEADLINE:?} for {operation}"),
+    }
 }
 
 fn accepted(command: &Value, schema_version: u32, session: &SessionId) -> String {

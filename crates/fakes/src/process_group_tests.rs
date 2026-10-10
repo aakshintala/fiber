@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::panic::{self, AssertUnwindSafe};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -14,9 +14,10 @@ use std::io;
 use rustix::process::{Pid, Signal};
 
 use super::{
-    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, alive, bounded, group_empties,
-    group_lives, kill_group, kill_matching, kill_pid, listed_exit, matching, matching_exits,
-    pattern, pids_exit, signal_group, signal_named, signal_pid,
+    GONE_ARGS, MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, PS_TIMEOUT, WATCHDOG_SCRIPT, alive,
+    bounded, group_empties, group_lives, kill_group, kill_matching, kill_pid, listed_exit,
+    matching, matching_exits, pattern, pids_exit, read_lookup, signal_group, signal_named,
+    signal_pid, spawn_lookup, try_matching_exits,
 };
 use crate::deadline::Deadline;
 
@@ -390,8 +391,52 @@ fn matching_refuses_an_empty_match() {
 
 #[test]
 fn pattern_escapes_every_regex_metacharacter() {
-    assert_eq!(pattern("/tmp/a-b_c"), "/tmp/a-b_c");
+    assert_eq!(pattern("/tmp/a-b_c"), "[/]tmp/a-b_c");
     assert_eq!(pattern(r".[]()*+?{}|^$\"), r"\.\[\]\(\)\*\+\?\{\}\|\^\$\\");
+}
+
+#[test]
+fn listings_do_not_list_the_listing_pgrep() {
+    // No metacharacters: the pattern's spelling equals the text, the way
+    // a workspace path does.
+    let text = format!("pg1837-{}-w", std::process::id());
+    // A holder carrying the pattern in its argv the way a listing pgrep
+    // does; its blocking read is the pause point, so it stays listed
+    // until released.
+    let mut holder = Command::new("sh")
+        .args(["-c", "read -r l", "pgrep", "-f", "--", &pattern(&text)])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let holder_guard = KillOnDrop(holder.id());
+    let holder_pid = holder.id();
+    let mut hidden = holder.stdin.take().unwrap();
+    // A real match.
+    let mut marked_shell = marked(&text);
+    let marked_guard = KillOnDrop(marked_shell.id());
+    let marked_pid = marked_shell.id();
+    let out = marked_shell.stdout.take().unwrap();
+    Piped::new(out).forked("the marked shell to fork");
+    // The listing names the match, never the holder.
+    let found = matching(&text).unwrap();
+    assert!(found.contains(&marked_pid), "{found:?}");
+    assert!(
+        !found.contains(&holder_pid),
+        "a listing pgrep must not list itself: {found:?}"
+    );
+    // A sweep kills the match and spares the holder.
+    kill_matching(&text).unwrap();
+    assert!(alive(holder_pid), "the sweep killed the listing holder");
+    // Release and reap both.
+    hidden.write_all(b"\n").unwrap();
+    drop(hidden);
+    reaped(holder, "the holder to exit once its stdin got a line");
+    drop(holder_guard);
+    drop(marked_guard);
+    reaped(marked_shell, "the swept marked shell");
 }
 
 #[test]
@@ -655,12 +700,242 @@ fn matching_exits_waits_for_a_live_match() {
 }
 
 #[test]
-fn listed_exit_is_false_when_the_second_listing_still_matches() {
+fn listed_exit_names_a_first_listing_failure() {
+    let err = listed_exit(
+        || Err::<Vec<u32>, _>(io::Error::other("pgrep blew up")),
+        DEADLINE,
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+    let text = err.to_string();
+    assert!(text.contains("first pgrep failed"), "{text}");
+    assert!(text.contains("pgrep blew up"), "{text}");
+}
+
+#[test]
+fn listed_exit_names_a_second_listing_failure() {
+    let mut child = held();
+    let pid = child.id();
+    drop(child.stdin.take().unwrap());
+    reaped(child, "the held child to exit once its stdin closed");
+    let mut calls = 0;
+    let err = listed_exit(
+        move || {
+            calls += 1;
+            if calls == 1 {
+                Ok(vec![pid])
+            } else {
+                Err(io::Error::other("pgrep fell over"))
+            }
+        },
+        DEADLINE,
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+    let text = err.to_string();
+    assert!(text.contains("second pgrep failed"), "{text}");
+    assert!(text.contains("pgrep fell over"), "{text}");
+}
+
+#[test]
+fn a_stalled_lookup_times_out_and_reaps_the_lookup() {
+    // A lookup that never prints: `sleep` ignores stdin, so a null one
+    // still stalls it past the lookup's own deadline. Its own process
+    // group, watched: a hung helper still leaves nothing behind, on pass,
+    // on panic, and when the test process dies.
+    let child = spawn_lookup("sh", &["-c", "exec sleep 30"]).unwrap();
+    let group = child.id();
+    let watchdog = crate::Watchdog::group(group);
+    let pid = child.id();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || {
+        match answered.send(read_lookup(
+            child,
+            "the stalled lookup",
+            Duration::from_millis(200),
+        )) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let text = match Deadline::after(DEADLINE).recv(&answer) {
+        Ok(text) => text,
+        Err(_) => panic!("waited {DEADLINE:?} for the stalled lookup to time out"),
+    };
+    assert_eq!(text, PS_TIMEOUT, "a stalled lookup must read as timed out");
+    assert!(
+        pids_exit(&[pid], DEADLINE),
+        "waited {DEADLINE:?} for the timed-out lookup to be reaped"
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_lookup_that_fails_or_prints_nothing_reads_gone() {
+    let child = spawn_lookup("sh", &["-c", "exit 3"]).unwrap();
+    assert_eq!(read_lookup(child, "the failed lookup", DEADLINE), GONE_ARGS);
+    let child = spawn_lookup("sh", &["-c", "exit 0"]).unwrap();
+    assert_eq!(read_lookup(child, "the silent lookup", DEADLINE), GONE_ARGS);
+}
+
+#[test]
+fn a_lookup_that_prints_then_fails_reads_gone_not_its_output() {
+    let child = spawn_lookup("sh", &["-c", "echo stale; exit 1"]).unwrap();
+    assert_eq!(
+        read_lookup(child, "the failed lookup", DEADLINE),
+        GONE_ARGS,
+        "a failed lookup's output must not be read as the process's command line"
+    );
+}
+
+#[test]
+fn a_lookup_that_succeeds_reads_its_trimmed_output() {
+    let child = spawn_lookup("sh", &["-c", "printf '  listed  \\n'; exit 0"]).unwrap();
+    assert_eq!(read_lookup(child, "the listed lookup", DEADLINE), "listed");
+}
+
+#[test]
+fn a_lookup_that_cannot_be_bounded_reads_gone_not_timed_out() {
+    // A child with no piped stdout: `bounded` fails with an error that is
+    // not a timeout, before it waits on anything. The shell is in its own
+    // group, watched, and killed by the test, then reaped by the test.
+    let child = Command::new("sh")
+        .args(["-c", "exec sleep 30"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    let pid = Pid::from_raw(i32::try_from(group).unwrap()).unwrap();
+    let watchdog = crate::Watchdog::group(group);
+    assert_eq!(
+        read_lookup(child, "the unbounded lookup", DEADLINE),
+        GONE_ARGS,
+        "a lookup that failed for a reason other than a timeout reads gone"
+    );
+    kill_group(group, "KILL").unwrap();
+    // `read_lookup` dropped the child unreaped: reap it here, on a thread
+    // under the deadline, and check it was the signalled lookup.
+    let (waited, reap) = mpsc::channel();
+    thread::spawn(move || {
+        match waited.send(rustix::process::waitpid(
+            Some(pid),
+            rustix::process::WaitOptions::empty(),
+        )) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let reaped = match Deadline::after(DEADLINE).recv(&reap) {
+        Ok(result) => result.unwrap(),
+        Err(_) => panic!("waited {DEADLINE:?} for the unbounded lookup to be reaped"),
+    };
+    let (reaped_pid, status) = reaped.expect("the killed lookup is waited on");
+    assert_eq!(reaped_pid, pid);
+    assert_eq!(status.terminating_signal(), Some(9));
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn listed_exit_names_the_holders_when_the_deadline_expires() {
+    let mut child = held();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let err = listed_exit(move || Ok(vec![pid]), Duration::from_millis(200)).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    let text = err.to_string();
+    assert!(text.contains("deadline expired waiting for exit"), "{text}");
+    assert!(text.contains(&pid.to_string()), "{text}");
+    assert!(text.contains("sh"), "{text}");
+    drop(stdin);
+    reaped(child, "the held child to exit once its stdin closed");
+}
+
+#[test]
+fn listed_exit_reports_expiry_with_no_listing_yet() {
+    // A listing that never answers: the deadline expires with nothing
+    // published, so the error names no holder.
+    let (never, unanswered) = mpsc::channel::<()>();
+    let err = listed_exit(
+        move || match Deadline::after(DEADLINE).recv(&unanswered) {
+            Ok(()) | Err(_) => Err::<Vec<u32>, _>(io::Error::other("the listing never answered")),
+        },
+        Duration::from_millis(200),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert!(
+        err.to_string()
+            .contains("deadline expired waiting for exit"),
+        "{err}"
+    );
+    drop(never);
+}
+
+#[test]
+fn try_matching_exits_is_ok_when_nothing_matches() {
+    let dir = crate::TempDir::new("px-try");
+    let marker = dir
+        .path()
+        .join("nothing-matches-this-marker")
+        .to_string_lossy()
+        .into_owned();
+    assert!(try_matching_exits(&marker, DEADLINE).is_ok());
+}
+
+#[test]
+fn listed_exit_waits_for_a_process_started_after_the_first_listing() {
+    let mut child = held();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let (second_listed, second) = mpsc::channel::<()>();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || {
+        let mut calls = 0;
+        let result = listed_exit(
+            move || {
+                calls += 1;
+                if calls == 1 {
+                    Ok(vec![])
+                } else if calls == 2 {
+                    match second_listed.send(()) {
+                        Ok(()) | Err(_) => {}
+                    }
+                    Ok(vec![pid])
+                } else {
+                    Ok(vec![])
+                }
+            },
+            DEADLINE,
+        );
+        match answered.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    // The child started after the first listing: it is released only
+    // once the second listing has seen it, forcing the interleaving.
+    assert!(
+        Deadline::after(DEADLINE).recv(&second).is_ok(),
+        "waited {DEADLINE:?} for the second listing to see the late process"
+    );
+    drop(stdin);
+    reaped(child, "the held child to exit once its stdin closed");
+    match Deadline::after(DEADLINE).recv(&answer) {
+        Ok(result) => assert!(
+            result.is_ok(),
+            "waited {DEADLINE:?} for the late process to exit: {result:?}"
+        ),
+        Err(_) => panic!("waited {DEADLINE:?} for listed_exit to answer"),
+    }
+}
+
+#[test]
+fn listed_exit_reports_expiry_when_a_late_process_never_exits() {
     let mut child = held();
     let pid = child.id();
     let stdin = child.stdin.take().unwrap();
     let mut calls = 0;
-    let listed = listed_exit(
+    let err = listed_exit(
         move || {
             calls += 1;
             if calls == 1 {
@@ -669,12 +944,16 @@ fn listed_exit_is_false_when_the_second_listing_still_matches() {
                 Ok(vec![pid])
             }
         },
-        DEADLINE,
-    );
+        Duration::from_millis(200),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    let text = err.to_string();
     assert!(
-        !listed,
-        "a second listing that still matches must read as live"
+        text.contains("deadline expired waiting for exit"),
+        "a late process that never exits must expire the deadline: {text}"
     );
+    assert!(text.contains(&pid.to_string()), "{text}");
     drop(stdin);
     reaped(child, "the held child to exit once its stdin closed");
 }
@@ -697,5 +976,8 @@ fn listed_exit_is_true_when_the_second_listing_is_empty() {
         },
         DEADLINE,
     );
-    assert!(listed, "waited {DEADLINE:?} for the listed pid to exit");
+    assert!(
+        listed.is_ok(),
+        "waited {DEADLINE:?} for the listed pid to exit"
+    );
 }

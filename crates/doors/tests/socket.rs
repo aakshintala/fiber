@@ -35,6 +35,7 @@ use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, CommandId, ErrorCode, GenerationId, SessionId};
 use doors::{Session, mint};
 use fakes::Client;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::jobs::FakeJobs;
 use log::Log;
@@ -142,6 +143,7 @@ impl Opened {
 
     /// Closes the session and returns its temporary directory, still present
     /// when the session kept it.
+    #[track_caller]
     fn close(self) -> Temp {
         let Opened {
             session,
@@ -154,7 +156,7 @@ impl Opened {
             session.close(log);
             if let Ok(()) = tx.send(()) {}
         });
-        rx.recv_timeout(DEADLINE).expect("close returned");
+        Deadline::after(DEADLINE).recv(&rx).expect("close returned");
         _temp
     }
 }
@@ -166,9 +168,10 @@ fn next(client: &Client) -> Value {
 /// Lines up to and including the first one `done` accepts, read under one
 /// [`UNTIL`] deadline for the whole wait, not one per line. Fails naming the
 /// wait when it passes.
+#[track_caller]
 fn until(client: &Client, mut done: impl FnMut(&Value) -> bool + Send) -> Vec<Value> {
     let stop = AtomicBool::new(false);
-    thread::scope(|scope| {
+    let got = thread::scope(|scope| {
         let (tx, rx) = mpsc::channel();
         let stop = &stop;
         scope.spawn(move || {
@@ -192,10 +195,11 @@ fn until(client: &Client, mut done: impl FnMut(&Value) -> bool + Send) -> Vec<Va
                 }
             }
         });
-        let got = rx.recv_timeout(UNTIL);
+        let waited = Deadline::after(UNTIL).recv(&rx);
         stop.store(true, Ordering::SeqCst);
-        got.expect("the awaited line arrived within one deadline for the whole wait")
-    })
+        waited
+    });
+    got.expect("the awaited line arrived within one deadline for the whole wait")
 }
 
 fn kind(line: &Value) -> &str {
@@ -222,6 +226,7 @@ fn send(client: &Client, line: &str) {
 }
 
 /// The acknowledgement for `id`, skipping events that belong to the session.
+#[track_caller]
 fn response(client: &Client, id: &str) -> Value {
     until(client, |line| command_id(line) == Some(id))
         .into_iter()
@@ -349,8 +354,9 @@ fn text_of(message: &Message) -> String {
 }
 
 /// What the stand-in took, and it accepts the delivery.
-fn take(inbox: &Receiver<Delivery>) -> String {
-    match inbox.recv_timeout(DEADLINE).expect("a delivery") {
+#[track_caller]
+fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
+    match wait.recv(inbox).expect("a delivery") {
         Delivery::Prompt(message, ack) => {
             let text = text_of(&message);
             ack.0(Ok(None));
@@ -1133,8 +1139,9 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
             send(&sender, r#"{"id":"c_bare","command":"handoff","args":{}}"#);
             send(&sender, r#"{"id":"c_noargs","command":"handoff"}"#);
             send(&sender, r#"{"id":"c_close","command":"close"}"#);
+            let wait = Deadline::after(DEADLINE);
             assert_eq!(
-                (0..8).map(|_| take(&inbox)).collect::<Vec<_>>(),
+                (0..8).map(|_| take(&inbox, &wait)).collect::<Vec<_>>(),
                 vec![
                     "prompt hi".to_owned(),
                     "steer more".to_owned(),
@@ -1200,8 +1207,8 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 &sender,
                 r#"{"id":"c_m1","command":"model","args":{"model":"fake/n","thinking":"high"}}"#,
             );
-            match inbox
-                .recv_timeout(DEADLINE)
+            match Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("the model is delivered")
             {
                 Delivery::Model(args, ack) => {
@@ -1232,8 +1239,8 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 &sender,
                 r#"{"id":"c_m2","command":"model","args":{"model":"fake/nope"}}"#,
             );
-            match inbox
-                .recv_timeout(DEADLINE)
+            match Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("the second model is delivered")
             {
                 Delivery::Model(args, ack) => {
@@ -1318,8 +1325,8 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 &sender,
                 r#"{"id":"c_cred","command":"credential","args":{"label":"work"}}"#,
             );
-            match inbox
-                .recv_timeout(DEADLINE)
+            match Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("the credential is delivered")
             {
                 Delivery::Credential(args, ack) => {
@@ -1375,8 +1382,8 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 &sender,
                 r#"{"id":"c_r1","command":"rewind","args":{"seq":5}}"#,
             );
-            match inbox
-                .recv_timeout(DEADLINE)
+            match Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("the rewind is delivered")
             {
                 Delivery::Rewind(args, ack) => {
@@ -1414,8 +1421,8 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
             // A rejection sends `command_rejected` and frees the id: it
             // can be used again.
             send(&sender, r#"{"id":"c_r2","command":"rewind"}"#);
-            match inbox
-                .recv_timeout(DEADLINE)
+            match Deadline::after(DEADLINE)
+                .recv(&inbox)
                 .expect("the second rewind is delivered")
             {
                 Delivery::Rewind(args, ack) => {
@@ -1515,8 +1522,7 @@ fn an_acknowledgement_dropped_uncalled_answers_closing() {
                 &client,
                 r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
             );
-            let Delivery::Prompt(_, ack) = inbox
-                .recv_timeout(DEADLINE)
+            let Delivery::Prompt(_, ack) = Deadline::after(DEADLINE).recv(&inbox)
                 .expect("the prompt is delivered")
             else {
                 panic!("the prompt is delivered");
@@ -1548,7 +1554,9 @@ fn close_delivers_fiber_exited_to_a_client_that_is_still_reading() {
             Ok(())
         })
         .unwrap();
-    let client = rx.recv_timeout(DEADLINE).expect("the client subscribed");
+    let client = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the client subscribed");
     let lines = until(&client, |line| kind(line) == "fiber_exited");
     assert_eq!(kind(lines.last().unwrap()), "fiber_exited");
     assert_eq!(lines.last().unwrap()["payload"]["exit_code"], 0);
@@ -1614,7 +1622,7 @@ fn cancel_with_a_turn_running_is_accepted_and_wakes_the_inbox() {
             assert_eq!(command_id(&accepted), Some("c_1"));
             // The wake carries no meaning beyond waking the loop.
             assert!(matches!(
-                inbox.recv_timeout(DEADLINE),
+                Deadline::after(DEADLINE).recv(&inbox),
                 Ok(Delivery::Cancelled)
             ));
             Ok(())
@@ -1962,8 +1970,8 @@ fn shell_exit_zero_stays_on_the_sending_connection() {
                     }
                 }
             });
-            let rejected = rx
-                .recv_timeout(DEADLINE)
+            let rejected = Deadline::after(DEADLINE)
+                .recv(&rx)
                 .expect("the finished shell left the running list");
             assert_eq!(
                 rejection(&rejected),
@@ -2055,7 +2063,7 @@ fn shell_is_answered_while_a_turn_sits_in_the_inbox() {
             send(&client, &shell_line("c_shell", "echo hi"));
             let line = response(&client, "c_shell");
             assert_eq!(line["payload"]["result"]["output"], "hi\n");
-            let delivery = inbox.recv_timeout(DEADLINE).expect("the prompt is still queued");
+            let delivery = Deadline::after(DEADLINE).recv(&inbox).expect("the prompt is still queued");
             assert!(matches!(delivery, Delivery::Prompt(..)));
             no_durable(&dir);
             Ok(())
@@ -2081,8 +2089,8 @@ fn cancel_from_another_connection_stops_a_driver_shell() {
             let other = Client::connect(&socket).unwrap();
             subscribe(&other, "c_other", "full");
             send(&client, &shell_line("c_shell", "sleep 60"));
-            entered_rx
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&entered_rx)
                 .expect("the shell is running");
             send(&other, r#"{"id":"c_cancel","command":"cancel"}"#);
             let accepted = response(&other, "c_cancel");
@@ -2153,8 +2161,8 @@ fn cancel_on_the_same_connection_stops_a_driver_shell() {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
             send(&client, &shell_line("c_shell", "sleep 60"));
-            entered_rx
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&entered_rx)
                 .expect("the shell is running");
             send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
             // The cancel wakes the shell before its own answer is queued,
@@ -2239,8 +2247,8 @@ fn a_connection_reads_on_while_its_driver_shell_runs() {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
             send(&client, &shell_line("c_held", "sleep 60"));
-            entered_rx
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&entered_rx)
                 .expect("the shell is running");
             send(&client, r#"{"id":"c_tools","command":"tools"}"#);
             let tools = answer_within(&client, "c_tools");
@@ -2279,8 +2287,8 @@ fn close_cancels_a_shell_blocked_in_its_tool() {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
             send(&client, &shell_line("c_shell", "sleep 60"));
-            entered_rx
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&entered_rx)
                 .expect("the shell is running");
             Ok(())
         })
@@ -2292,8 +2300,8 @@ fn close_cancels_a_shell_blocked_in_its_tool() {
         session.close(log);
         if let Ok(()) = done_tx.send(()) {}
     });
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("close returned without the shell's timeout");
     assert!(
         saw_cancel.load(Ordering::Relaxed),
@@ -2430,7 +2438,7 @@ fn job_stop_is_answered_on_the_reader_thread_while_the_loop_is_blocked() {
             assert_eq!(kind(&accepted), "command_accepted");
             assert_eq!(command_id(&accepted), Some("c_stop"));
             assert!(
-                fired_rx.recv_timeout(DEADLINE).is_ok(),
+                Deadline::after(DEADLINE).recv(&fired_rx).is_ok(),
                 "the job's stop was not sent"
             );
             assert!(
@@ -2598,6 +2606,7 @@ impl Jobs for WritableJobs {
         self.inner.deliver_to(inbox)
     }
 
+    #[track_caller]
     fn write(
         &self,
         job_id: &contract::JobId,
@@ -2637,7 +2646,7 @@ impl Jobs for WritableJobs {
                 self.clock.wait_until(None, &mut |_| {
                     // Bounded in real time: a hang-guard expiry fails
                     // the test with another error instead of the timeout.
-                    if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+                    if Deadline::after(Duration::from_secs(10)).recv(&rx).is_err() {
                         expired = true;
                     }
                 });
@@ -2846,8 +2855,8 @@ fn job_stop_is_answered_after_a_stuck_job_input_times_out() {
             send(&client, &job_input_line("c_in", &job_id, "x"));
             // The reader is stuck in the write: parked inside the clock
             // wait, past its own check, before the clock moves.
-            parked
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&parked)
                 .expect("the write parked in the terminal");
             assert!(
                 clock.await_parked_unbounded(DEADLINE),
@@ -3269,7 +3278,9 @@ fn command_accepted_arrives_before_run_starts_and_text_absent_is_empty() {
             assert_eq!(kind(&accepted), "command_accepted");
             // The fake's release blocks until the test lets it go; the
             // acceptance above arrived first, which is the order asserted.
-            entered_rx.recv_timeout(DEADLINE).expect("admitted");
+            Deadline::after(DEADLINE)
+                .recv(&entered_rx)
+                .expect("admitted");
             release_tx.send(()).unwrap();
             Ok(())
         })
@@ -3447,6 +3458,7 @@ impl contract::clock::Wake for PasteWake {
 }
 
 impl contract::images::Images for BlockingImage {
+    #[track_caller]
     fn process(
         &self,
         _bytes: &[u8],
@@ -3467,7 +3479,7 @@ impl contract::images::Images for BlockingImage {
         if cancel.is_cancelled() {
             return Err(contract::images::ImageError::Cancelled);
         }
-        if let Ok(()) = rx.recv_timeout(PASTE_LIMIT) {}
+        if let Ok(()) = Deadline::after(PASTE_LIMIT).recv(&rx) {}
         if cancel.is_cancelled() {
             return Err(contract::images::ImageError::Cancelled);
         }
@@ -3491,7 +3503,7 @@ fn prompt_with_an_image_is_delivered_with_the_processed_part() {
                 &client,
                 r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"look"},{"type":"image","data":"YQ==","mime_type":"image/png"}]}}"#,
             );
-            let delivery = inbox.recv_timeout(DEADLINE).expect("the prompt is delivered");
+            let delivery = Deadline::after(DEADLINE).recv(&inbox).expect("the prompt is delivered");
             let Delivery::Prompt(message, ack) = delivery else {
                 panic!("a prompt: {delivery:?}");
             };
@@ -3560,7 +3572,7 @@ fn steer_with_an_image_is_delivered_with_the_processed_part() {
                 &client,
                 r#"{"id":"c_steer","command":"steer","args":{"content":[{"type":"image","data":"YQ==","mime_type":"image/png"}]}}"#,
             );
-            let delivery = inbox.recv_timeout(DEADLINE).expect("the steer is delivered");
+            let delivery = Deadline::after(DEADLINE).recv(&inbox).expect("the steer is delivered");
             let Delivery::Steer(message, ack) = delivery else {
                 panic!("a steer: {delivery:?}");
             };
@@ -3629,8 +3641,7 @@ fn the_stopper_cancels_a_pasted_image_in_flight() {
                 &client,
                 r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"image","data":"YQ==","mime_type":"image/png"}]}}"#,
             );
-            entered_rx
-                .recv_timeout(PASTE_LIMIT)
+            Deadline::after(PASTE_LIMIT).recv(&entered_rx)
                 .expect("the image started");
             stopper();
             let line = response(&client, "c_prompt");
@@ -3668,7 +3679,9 @@ fn close_now_starts_the_shutdown_and_sends_the_loop_nothing() {
                 &client,
                 r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
             );
-            hook_rx.recv_timeout(DEADLINE).expect("the hook runs");
+            Deadline::after(DEADLINE)
+                .recv(&hook_rx)
+                .expect("the hook runs");
             // The answer was queued before the hook ran: if the order were
             // reversed, this read would wait out its deadline and fail.
             let answer = response(&client, "c_close_now");
@@ -3688,8 +3701,8 @@ fn close_now_starts_the_shutdown_and_sends_the_loop_nothing() {
             );
             let second = response(&client, "c_close_now_2");
             assert_eq!(kind(&second), "command_accepted", "{second}");
-            hook_rx
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&hook_rx)
                 .expect("a repeat is answered too");
             release_tx.send(()).unwrap();
             Ok(())
@@ -3716,8 +3729,9 @@ fn close_without_now_starts_no_shutdown() {
                 &client,
                 r#"{"id":"c_close_false","command":"close","args":{"now":false}}"#,
             );
-            assert_eq!(take(&inbox), "close");
-            assert_eq!(take(&inbox), "close");
+            let wait = Deadline::after(DEADLINE);
+            assert_eq!(take(&inbox, &wait), "close");
+            assert_eq!(take(&inbox, &wait), "close");
             for id in ["c_close_bare", "c_close_false"] {
                 let answer = response(&client, id);
                 assert_eq!(kind(&answer), "command_accepted", "{answer}");
@@ -3747,7 +3761,7 @@ fn close_now_with_no_shutdown_wired_is_a_plain_close() {
                 &client,
                 r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
             );
-            assert_eq!(take(&inbox), "close");
+            assert_eq!(take(&inbox, &Deadline::after(DEADLINE)), "close");
             let answer = response(&client, "c_close_now");
             assert_eq!(kind(&answer), "command_accepted", "{answer}");
             Ok(())

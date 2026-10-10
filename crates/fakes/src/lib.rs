@@ -38,7 +38,7 @@ pub use emit::Recorder;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{
     WATCHDOG_SCRIPT, group_empties, kill_group, kill_matching, kill_pid, matching, matching_exits,
-    pids_exit,
+    pids_exit, try_matching_exits,
 };
 pub use provider_server::{ProviderServer, Request, Responder, Response, fingerprint};
 pub use rerun::{rerun, rerun_within};

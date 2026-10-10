@@ -1,16 +1,17 @@
 ---
 source: crates/tui/src/view_tests.rs
+assertion_line: 1140
 expression: "sized(&mut app, 40, 12)"
 ---
-Sessions                               ✕
-  Send a prompt, or a steering message
-during a turn · Enter
-  Insert a line break · Shift+Enter ·
-Ctrl+J
-  Close what is on top; interrupt the
-turn when nothing is open · Esc · click
-the overlay's ✕ or outside it; click
-"esc to interrupt"
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+  Key map                            ✕
+
+  All  Sessions  The input box  The co
+  Type to search shortcuts› █
+  › Sessions         Send a     Enter
+
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

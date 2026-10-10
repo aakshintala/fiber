@@ -1266,6 +1266,8 @@ Fiber records the exact commit it installed and loads only that. Nothing is
 signed. The fetch runs over TLS or SSH, and a binary is checked against the
 sha256 in its manifest. Fiber downloads only the binary for the platform it is
 running on.
+A download that connects to no address within 15 seconds, or receives nothing
+for 300 seconds, fails with `fetch_failed`.
 
 ### Installing
 

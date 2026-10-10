@@ -1,0 +1,53 @@
+---
+source: crates/tui/src/view/key_map_tests.rs
+assertion_line: 59
+expression: "screen(&app, 160, 48)"
+---
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+  Key map                                                                                                                                                    ✕
+
+  Every binding by area, with its other paths.
+  36 actions, 26 with other paths
+
+  All  Sessions  The input box  The conversation  Steering  Requests, models and help
+  Type to search shortcuts› █
+  › Sessions                   Send a prompt, or a steering message during a turn                        Enter
+    Sessions                   Insert a line break                                                       Shift+Enter · Ctrl+J
+    Sessions                   Close what is on top; interrupt the turn when nothing is open             Esc · click the overlay's ✕ or outside it; click "esc
+                                                                                                         to interrupt"
+    Sessions                   Clear the draft, then quit (twice within about a second on an empty box)  Ctrl+C · /quit
+    Sessions                   Go home                                                                   ⌥0 · /home
+    Sessions                   Start a new session                                                       Ctrl+N · /new
+    Sessions                   Switch to the session of rail card N                                      ⌥1 to ⌥9 · click the card
+    Sessions                   Delete the selected exited session in the session list (on the row)       Delete, or Backspace · click the row's ✕
+    The input box              Recall an earlier prompt from the project of the session on screen (in    ↑
+                               an empty box)
+    The input box              Search those prompts                                                      Ctrl+R
+    The input box              Move by word                                                              ⌥← ⌥→, Ctrl+← Ctrl+→
+    The input box              Delete a word                                                             ⌥Backspace
+    The input box              Start or end of the line (where the terminal passes them)                 ⌘← ⌘→
+    The input box              Open the draft, or a pasted token, in $VISUAL or $EDITOR                  Ctrl+G · click the token
+    The input box              Paste an image                                                            Ctrl+V
+    The conversation           Open or close the ledgers                                                 Ctrl+O · click a group's line
+    The conversation           Move focus from the input box into the conversation                       Shift+Tab · click an item
+    The conversation           Move focus to the next or previous item                                   ↓ ↑, j k · click an item
+    The conversation           Open the focused item                                                     Enter · click it
+    The conversation           Copy the focused item                                                     y · select it
+    The conversation           Move focus to the panel, the rail, then the conversation                  Tab · click the area
+    The conversation           Show or hide the panel                                                    ⌥P · /panel
+    The conversation           Show or hide the rail                                                     ⌥R · drag its edge
+    The conversation           Search (where forwarded)                                                  Ctrl+F; Cmd+F
+    The conversation           Open the search results (with search open)                                Ctrl+F · click the match count
+    The conversation           Next or previous match (with search open)                                 Enter or ↓, Shift+Enter or ↑
+    The conversation           Jump to the end                                                           End · click "↓ New messages below"
+    Steering                   Select a queued steering message                                          ⌥↑ ⌥↓ · its mouse target
+    Steering                   Amend it                                                                  Enter · its mouse target
+  ↓ Steering                   Drop it                                                                   ⌥X · its mouse target
+
+  ↑↓ move · ←→ tabs · esc closes
+
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ › █
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

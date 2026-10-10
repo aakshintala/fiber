@@ -59,6 +59,46 @@ fn doc_rows() -> Vec<Vec<String>> {
 }
 
 #[test]
+fn every_condition_is_a_suffix_of_its_keys() {
+    for binding in BINDINGS {
+        if binding.when.is_empty() {
+            continue;
+        }
+        let comma = format!(", {}", binding.when);
+        let space = format!(" {}", binding.when);
+        assert!(
+            binding.keys.ends_with(&comma) || binding.keys.ends_with(&space),
+            "{}: {:?} is not a suffix of {:?}",
+            binding.id,
+            binding.when,
+            binding.keys
+        );
+    }
+}
+
+#[test]
+fn only_the_conditional_rows_carry_a_condition() {
+    let mut conditioned: Vec<&str> = BINDINGS
+        .iter()
+        .filter(|binding| !binding.when.is_empty())
+        .map(|binding| binding.id)
+        .collect();
+    conditioned.sort_unstable();
+    assert_eq!(
+        conditioned,
+        [
+            "clear_then_quit",
+            "delete_session",
+            "line_start_end",
+            "recall_prompt",
+            "search",
+            "search_next_prev",
+            "search_results",
+        ]
+    );
+}
+
+#[test]
 fn the_table_matches_the_doc_row_for_row() {
     let doc = doc_rows();
     let ours: Vec<Vec<String>> = BINDINGS

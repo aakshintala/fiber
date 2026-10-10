@@ -9,6 +9,7 @@ use contract::events::{
     SessionStatus, TextDelta,
 };
 use contract::shapes::{Tokens, Usage};
+use fakes::Deadline;
 const DEADLINE: Duration = Duration::from_secs(10);
 
 fn relay(mut watcher: Watcher) -> mpsc::Receiver<Option<Envelope>> {
@@ -186,9 +187,10 @@ fn a_line_written_between_registration_and_the_read_arrives_once() {
     let rx = relay(watcher);
 
     let mut got = Vec::new();
+    let wait = Deadline::after(DEADLINE);
     loop {
-        let line = rx
-            .recv_timeout(DEADLINE)
+        let line = wait
+            .recv(&rx)
             .expect("the line written between registration and the read arrives")
             .expect("the watcher stays open until that line");
         let done = line.seq == later.seq;
@@ -444,8 +446,8 @@ fn newer_status_replaces_older_and_a_clear_removes_it() {
         .unwrap();
     let seeded = log.watch_all_seeded();
     let rx = relay(seeded);
-    let first = rx
-        .recv_timeout(DEADLINE)
+    let first = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the seeded status arrives")
         .expect("open");
     assert_eq!(first.kind, "extension_ui");
@@ -456,8 +458,9 @@ fn newer_status_replaces_older_and_a_clear_removes_it() {
     let rx = relay(seeded);
     // A clearing line removes its key: no `extension_ui` seed follows.
     let mut seen_ui = false;
+    let wait = Deadline::after(Duration::from_millis(200));
     for _ in 0..16 {
-        match rx.recv_timeout(Duration::from_millis(200)) {
+        match wait.recv(&rx) {
             Ok(Some(line)) if line.kind == "extension_ui" => {
                 seen_ui = true;
                 break;
@@ -471,8 +474,8 @@ fn newer_status_replaces_older_and_a_clear_removes_it() {
         .unwrap();
     let seeded = log2.watch_all_seeded();
     let rx = relay(seeded);
-    let line = rx
-        .recv_timeout(DEADLINE)
+    let line = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the status after a clear arrives")
         .expect("open");
     assert_eq!(line.kind, "extension_ui");
@@ -499,8 +502,9 @@ fn widgets_are_kept_per_extension_and_id() {
     let seeded = log.watch_all_seeded();
     let rx = relay(seeded);
     let mut widgets = Vec::new();
+    let wait = Deadline::after(Duration::from_millis(200));
     for _ in 0..8 {
-        match rx.recv_timeout(Duration::from_millis(200)) {
+        match wait.recv(&rx) {
             Ok(Some(line)) if line.kind == "extension_ui" => widgets.push(line),
             Ok(_) => continue,
             Err(_) => break,
@@ -530,13 +534,14 @@ fn watch_all_seeded_delivers_seeds_before_later_lines() {
     let rx = relay(seeded);
     log.append(&ui_status("fiber.test/a", "later"), None, None)
         .unwrap();
-    let first = rx
-        .recv_timeout(DEADLINE)
+    let wait = Deadline::after(DEADLINE);
+    let first = wait
+        .recv(&rx)
         .expect("the first seed arrives")
         .expect("open");
     assert_eq!(first.kind, "session_status");
-    let second = rx
-        .recv_timeout(DEADLINE)
+    let second = wait
+        .recv(&rx)
         .expect("the second seed arrives")
         .expect("open");
     assert_eq!(second.kind, "extension_ui");
@@ -595,13 +600,13 @@ fn watch_all_seeded_prunes_a_dropped_watcher_and_keeps_a_live_one() {
     let live_rx = relay(live);
     let seeded_rx = relay(seeded);
     let line = log.append(&step(), None, None).unwrap();
-    let got = live_rx
-        .recv_timeout(DEADLINE)
+    let got = Deadline::after(DEADLINE)
+        .recv(&live_rx)
         .expect("the live watcher still receives a later line")
         .expect("open");
     assert_eq!(got.seq, line.seq);
-    let got = seeded_rx
-        .recv_timeout(DEADLINE)
+    let got = Deadline::after(DEADLINE)
+        .recv(&seeded_rx)
         .expect("the reseeded watcher receives a later line")
         .expect("open");
     assert_eq!(got.seq, line.seq);

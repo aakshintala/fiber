@@ -219,6 +219,7 @@ mod tests {
     use contract::clock::Clock;
     use contract::events::{ToolInfo, ToolSource, ToolState};
     use doors::{Session, mint};
+    use fakes::Deadline;
     use fakes::clock::FakeClock;
     use log::Log;
 
@@ -342,9 +343,11 @@ mod tests {
             session.close(log);
             if let Ok(()) = closed_tx.send(()) {}
         });
-        closed_rx.recv_timeout(DEADLINE).expect("close returned");
-        done_rx
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&closed_rx)
+            .expect("close returned");
+        Deadline::after(DEADLINE)
+            .recv(&done_rx)
             .expect("the jig returns when the socket closes")
             .expect("the jig returns when the socket closes");
         drop(typed);
@@ -392,8 +395,8 @@ mod tests {
         printed.wait_for("\"kind\":\"hub_hello\"");
         writeln!(typed, r#"{{"id":"c_1","command":"status"}}"#).unwrap();
         printed.wait_for("\"command_id\":\"c_1\"");
-        done_rx
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&done_rx)
             .expect("the jig returns when the socket closes")
             .expect("the jig returns when the socket closes");
         drop(typed);

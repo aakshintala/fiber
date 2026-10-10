@@ -10,6 +10,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::*;
+use fakes::Deadline;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 const STEP: Duration = Duration::from_millis(10);
@@ -121,7 +122,7 @@ fn add_if_listed_decides_under_the_lock() {
         })
     };
     assert!(
-        held_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&held_rx).is_ok(),
         "waited {DEADLINE:?} for the remover to hold the write"
     );
     let (done_a, done_a_rx) = mpsc::channel();
@@ -153,16 +154,16 @@ fn add_if_listed_decides_under_the_lock() {
         if waiting() == 1 {
             break;
         }
-        assert!(never.recv_timeout(STEP).is_err());
+        assert!(Deadline::after(STEP).recv(&never).is_err());
     }
     assert_eq!(waiting(), 1, "the adder waits on the file's lock");
     go.send(()).unwrap();
     assert!(
-        done_b_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_b_rx).is_ok(),
         "waited {DEADLINE:?} for the remover to finish"
     );
     assert!(
-        done_a_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_a_rx).is_ok(),
         "waited {DEADLINE:?} for the adder to finish"
     );
     remover.join().unwrap();

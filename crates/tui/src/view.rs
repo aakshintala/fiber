@@ -21,9 +21,12 @@ mod drag;
 mod home;
 mod input_box;
 pub(crate) mod item;
+mod key_map;
 mod marks;
 mod offer;
+mod overlay;
 pub(crate) mod panel;
+mod quit;
 pub(crate) mod rail;
 pub(crate) mod request;
 mod results;
@@ -109,6 +112,12 @@ pub(crate) fn render(
         let mut targets = Vec::new();
         crate::swapped::draw(app, area, buf, &mut targets);
         notices(app, area, buf, &mut targets);
+        // The quit question takes every key over these views, so it
+        // draws over them too: without it Enter would quit while the
+        // choices never show.
+        if app.quit_open() {
+            quit::draw(app, area, buf, &mut targets);
+        }
         if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
             for target in targets.iter().filter(|target| target.id == id) {
                 buf.set_style(target.rect, HOVER_TINT);
@@ -168,12 +177,8 @@ pub(crate) fn render(
     let rows = bottom.saturating_sub(area.y);
     let conversation = Rect::new(area.x, area.y, area.width, rows);
     match app.keymap_top() {
-        Some(top) => {
-            Paragraph::new(crate::keymap::lines(app.keys()).join("\n"))
-                .wrap(Wrap { trim: false })
-                .scroll((to_u16(top), 0))
-                .render(conversation, buf);
-            overlay_cross(buf, conversation, &mut targets);
+        Some(_) => {
+            key_map::draw(app, conversation, buf, &mut targets);
         }
         // A swapped view takes the conversation's place: the `/keys`
         // screen, the configuration view, model picker or session view.
@@ -247,6 +252,9 @@ pub(crate) fn render(
         }
     }
     drag::draw(app, buf, pointer);
+    if app.quit_open() {
+        quit::draw(app, area, buf, &mut targets);
+    }
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, HOVER_TINT);

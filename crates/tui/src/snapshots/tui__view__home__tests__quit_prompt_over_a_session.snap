@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/home_view_tests.rs
+assertion_line: 1070
 expression: "screen(&app, 80, 24)"
 ---
 
@@ -7,22 +8,22 @@ expression: "screen(&app, 80, 24)"
 
 
 
+                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+                  Quit                                       ✕
+
+                  1 session working
+
+                  › enter  leave them running
+                    c      close all
+                    esc    stay
+
+                  click a choice · they keep running meanwhile
+
+                ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-1 session working · enter leave them running · c close all · esc stay
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

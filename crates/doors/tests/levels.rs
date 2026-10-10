@@ -27,6 +27,7 @@ use contract::shapes::{Tokens, Usage};
 use contract::{ErrorCode, SessionId};
 use doors::{Session, mint};
 use fakes::Client;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
 use serde_json::Value;
@@ -108,6 +109,7 @@ impl Opened {
         }
     }
 
+    #[track_caller]
     fn close(self) -> Temp {
         let Opened {
             session,
@@ -120,7 +122,7 @@ impl Opened {
             session.close(log);
             if let Ok(()) = tx.send(()) {}
         });
-        rx.recv_timeout(DEADLINE).expect("close returned");
+        Deadline::after(DEADLINE).recv(&rx).expect("close returned");
         _temp
     }
 }
@@ -272,8 +274,9 @@ fn prompt_line(id: &str, command: &str) -> String {
 
 /// Takes the next inbox delivery, which is a prompt, and holds its
 /// acknowledgement.
+#[track_caller]
 fn take_prompt(inbox: &mpsc::Receiver<Delivery>) -> contract::inbox::Ack {
-    let delivery = inbox.recv_timeout(DEADLINE).expect("a delivery");
+    let delivery = Deadline::after(DEADLINE).recv(inbox).expect("a delivery");
     if let Delivery::Prompt(_, ack) = delivery {
         ack
     } else {
@@ -283,8 +286,9 @@ fn take_prompt(inbox: &mpsc::Receiver<Delivery>) -> contract::inbox::Ack {
 
 /// Takes the next inbox delivery, which is a steer, and holds its
 /// acknowledgement.
+#[track_caller]
 fn take_steer(inbox: &mpsc::Receiver<Delivery>) -> contract::inbox::Ack {
-    let delivery = inbox.recv_timeout(DEADLINE).expect("a delivery");
+    let delivery = Deadline::after(DEADLINE).recv(inbox).expect("a delivery");
     if let Delivery::Steer(_, ack) = delivery {
         ack
     } else {
@@ -375,7 +379,9 @@ fn summary_then_full_folds_the_stream_and_counts_in_clients() {
             Ok(())
         })
         .unwrap();
-    let client = rx.recv_timeout(DEADLINE).expect("the client outlives run");
+    let client = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the client outlives run");
     let _temp = opened.close();
     assert!(drain(&client).is_empty(), "nothing arrives after the fold");
 }
@@ -454,7 +460,9 @@ fn full_then_summary_stops_the_stream_and_the_count() {
             Ok(())
         })
         .unwrap();
-    let client = rx.recv_timeout(DEADLINE).expect("the client outlives run");
+    let client = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the client outlives run");
     let _temp = opened.close();
     assert!(
         drain(&client).is_empty(),
@@ -508,7 +516,9 @@ fn a_downgrade_is_acknowledged_after_every_full_line_before_it() {
             Ok(())
         })
         .unwrap();
-    let client = rx.recv_timeout(DEADLINE).expect("the client outlives run");
+    let client = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the client outlives run");
     let _temp = opened.close();
     assert!(
         drain(&client).is_empty(),
@@ -798,7 +808,9 @@ fn two_changes_in_one_write_apply_in_order() {
             Ok(())
         })
         .unwrap();
-    let client = rx.recv_timeout(DEADLINE).expect("the client outlives run");
+    let client = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the client outlives run");
     let _temp = opened.close();
     assert!(
         drain(&client).is_empty(),

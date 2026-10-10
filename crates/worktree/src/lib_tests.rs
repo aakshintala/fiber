@@ -19,6 +19,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 
 use super::*;
+use fakes::Deadline;
 
 fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -388,7 +389,7 @@ fn git_environment_cannot_redirect_the_ignored_listing() {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for the ignored-listing child to exit");
     };

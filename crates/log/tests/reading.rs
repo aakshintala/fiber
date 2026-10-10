@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use common::*;
 use contract::Envelope;
+use fakes::Deadline;
 use log::{Log, Watcher, lines, read};
 
 fn kinds(lines: &[Envelope]) -> Vec<&str> {
@@ -46,8 +47,9 @@ fn relay(mut watcher: Watcher) -> Receiver<Option<Envelope>> {
 }
 
 /// The watcher's next line, or the end.
-fn next(rx: &Receiver<Option<Envelope>>) -> Option<Envelope> {
-    rx.recv_timeout(DEADLINE)
+#[track_caller]
+fn next(rx: &Receiver<Option<Envelope>>, wait: &Deadline) -> Option<Envelope> {
+    wait.recv(rx)
         .expect("the watcher to receive a line before the deadline")
 }
 
@@ -175,8 +177,9 @@ fn a_watcher_receives_what_is_written_after_it_subscribes() {
     let rx = relay(log.watch());
     let step = log.append(&empty("step_started"), None, None).unwrap();
     let delta = log.append(&delta("Hel"), None, None).unwrap();
-    assert_eq!(next(&rx), Some(step));
-    assert_eq!(next(&rx), Some(delta));
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(next(&rx, &wait), Some(step));
+    assert_eq!(next(&rx, &wait), Some(delta));
 }
 
 #[test]
@@ -189,9 +192,10 @@ fn a_watcher_ends_with_its_log_once_it_has_every_line() {
         log.append(&delta("a"), None, None).unwrap(),
     ];
     drop(log);
-    assert_eq!(next(&rx), Some(written[0].clone()));
-    assert_eq!(next(&rx), Some(written[1].clone()));
-    assert_eq!(next(&rx), None);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(next(&rx, &wait), Some(written[0].clone()));
+    assert_eq!(next(&rx, &wait), Some(written[1].clone()));
+    assert_eq!(next(&rx, &wait), None);
 }
 
 #[test]
@@ -209,8 +213,9 @@ fn a_watcher_that_falls_behind_rereads_durable_lines_from_the_log() {
     let rx = relay(watcher);
     let mut got = Vec::new();
     let mut ephemeral = 0;
+    let wait = Deadline::after(DEADLINE);
     while got.len() < durable.len() {
-        let line = next(&rx).unwrap();
+        let line = next(&rx, &wait).unwrap();
         if line.is_durable() {
             got.push(line);
         } else {
@@ -222,7 +227,7 @@ fn a_watcher_that_falls_behind_rereads_durable_lines_from_the_log() {
     assert!(ephemeral < durable.len(), "{ephemeral} ephemeral lines");
     // Once caught up, lines arrive as they are written.
     let live = log.append(&delta("live"), None, None).unwrap();
-    assert_eq!(next(&rx), Some(live));
+    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
 }
 
 #[test]
@@ -356,7 +361,7 @@ fn a_dropped_watcher_does_not_stop_the_log() {
     drop(log.watch());
     let rx = relay(log.watch());
     let line = log.append(&session_started(), None, None).unwrap();
-    assert_eq!(next(&rx), Some(line));
+    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(line));
     assert_eq!(
         kinds(&read(&tmp.session(&id("s_1"))).unwrap()),
         ["session_started"]
@@ -417,7 +422,7 @@ fn a_writer_in_another_process_holds_the_session() {
         }
         done.send(out).unwrap_or(());
     });
-    let _out = match holding.recv_timeout(DEADLINE) {
+    let _out = match Deadline::after(DEADLINE).recv(&holding) {
         Ok(out) => out,
         Err(_) => {
             match fakes::kill_pid(pid, "KILL") {
@@ -427,7 +432,7 @@ fn a_writer_in_another_process_holds_the_session() {
             thread::spawn(move || {
                 done.send(child.wait()).unwrap_or(());
             });
-            let reaped = exited.recv_timeout(DEADLINE).is_ok();
+            let reaped = Deadline::after(DEADLINE).recv(&exited).is_ok();
             panic!("waited {DEADLINE:?} for the child's holding line (reaped: {reaped})");
         }
     };
@@ -442,13 +447,13 @@ fn a_writer_in_another_process_holds_the_session() {
     thread::spawn(move || {
         done.send(child.wait()).unwrap_or(());
     });
-    let status = match exited.recv_timeout(DEADLINE) {
+    let status = match Deadline::after(DEADLINE).recv(&exited) {
         Ok(status) => status,
         Err(_) => {
             match fakes::kill_pid(pid, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            let reaped = exited.recv_timeout(DEADLINE).is_ok();
+            let reaped = Deadline::after(DEADLINE).recv(&exited).is_ok();
             panic!("waited {DEADLINE:?} for the child to exit (reaped: {reaped})");
         }
     };
@@ -556,10 +561,11 @@ fn a_range_parses_only_its_own_lines() {
 
 /// Receives from `rx` until `count` durable lines have arrived, and returns
 /// them.
-fn durable(rx: &Receiver<Option<Envelope>>, count: usize) -> Vec<Envelope> {
+#[track_caller]
+fn durable(rx: &Receiver<Option<Envelope>>, count: usize, wait: &Deadline) -> Vec<Envelope> {
     let mut got = Vec::new();
     while got.len() < count {
-        let line = next(rx).unwrap();
+        let line = next(rx, wait).unwrap();
         if line.is_durable() {
             got.push(line);
         }
@@ -578,10 +584,13 @@ fn a_watcher_that_falls_behind_by_more_than_two_pages_gets_every_line_once() {
         })
         .collect();
     let rx = relay(watcher);
-    assert_eq!(durable(&rx, written.len()), written);
+    assert_eq!(
+        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
+        written
+    );
     // Once caught up, lines arrive as they are written, and none came twice.
     let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(durable(&rx, 1), [live]);
+    assert_eq!(durable(&rx, 1, &Deadline::after(DEADLINE)), [live]);
 }
 
 #[test]
@@ -594,9 +603,12 @@ fn a_catch_up_page_ending_at_the_end_of_the_log_carries_on_live() {
         .map(|_| log.append(&empty("step_started"), None, None).unwrap())
         .collect();
     let rx = relay(watcher);
-    assert_eq!(durable(&rx, written.len()), written);
+    assert_eq!(
+        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
+        written
+    );
     let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(next(&rx), Some(live));
+    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
 }
 
 #[test]
@@ -608,7 +620,10 @@ fn a_catch_up_never_parses_a_line_before_the_watcher_subscribed() {
         .map(|_| log.append(&empty("step_started"), None, None).unwrap())
         .collect();
     let rx = relay(watcher);
-    assert_eq!(durable(&rx, written.len()), written);
+    assert_eq!(
+        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
+        written
+    );
 }
 
 #[test]
@@ -627,9 +642,12 @@ fn a_watcher_behind_by_more_than_a_queue_catches_up_through_pages_cut_by_bytes()
         written.push(log.append(&empty("step_started"), None, None).unwrap());
     }
     let rx = relay(watcher);
-    assert_eq!(durable(&rx, written.len()), written);
+    assert_eq!(
+        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
+        written
+    );
     let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(next(&rx), Some(live));
+    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
 }
 
 #[test]
@@ -645,9 +663,12 @@ fn a_watch_all_watcher_that_falls_behind_catches_up_past_its_end_bound() {
         .collect();
     let rx = relay(watcher);
     let expected: Vec<Envelope> = written.into_iter().chain(flood).collect();
-    assert_eq!(durable(&rx, expected.len()), expected);
+    assert_eq!(
+        durable(&rx, expected.len(), &Deadline::after(DEADLINE)),
+        expected
+    );
     let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(next(&rx), Some(live));
+    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
 }
 
 #[test]

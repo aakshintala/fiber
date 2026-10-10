@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use common::*;
 use contract::ErrorCode;
+use fakes::Deadline;
 use log::{Error, Log, read};
 use serde_json::json;
 
@@ -80,8 +81,8 @@ fn child_writing_past_a_file_size_limit() {
         };
         tx.send((durable, ended.code())).unwrap();
     });
-    let (durable, ended) = rx
-        .recv_timeout(DEADLINE)
+    let (durable, ended) = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the watcher to end with the failure before the deadline");
     assert_eq!(durable, written);
     assert_eq!(ended, ErrorCode::IoFailed);
@@ -93,8 +94,8 @@ fn child_writing_past_a_file_size_limit() {
         tx.send(late.recv().map(|l| l.is_some()).map_err(|e| e.code()))
             .unwrap();
     });
-    let got = rx
-        .recv_timeout(DEADLINE)
+    let got = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("a watcher of a stopped log to return at once");
     assert_eq!(got, Err(ErrorCode::IoFailed));
 

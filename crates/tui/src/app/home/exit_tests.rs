@@ -185,10 +185,7 @@ fn each_working_state_counts() {
         linked(&mut app);
         app.on_line(live("s_aaaaaaaaaaaaaaaa", state, 0, 0, 0));
         assert_eq!(ctrl_c(&mut app), Effect::None);
-        assert_eq!(
-            foot(&app),
-            "1 session working · enter leave them running · c close all · esc stay"
-        );
+        assert_eq!(app.quit_question(), Some((1, 0)));
     }
 }
 
@@ -205,10 +202,7 @@ fn an_idle_row_with_a_job_or_a_delegate_counts() {
             delegates,
         ));
         assert_eq!(ctrl_c(&mut app), Effect::None);
-        assert_eq!(
-            foot(&app),
-            "1 session working · enter leave them running · c close all · esc stay"
-        );
+        assert_eq!(app.quit_question(), Some((1, 0)));
     }
 }
 
@@ -263,10 +257,7 @@ fn the_attached_busy_session_counts_once() {
     let clock = fakes::clock::FakeClock::new();
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
-    assert_eq!(
-        app.hint_text(),
-        "1 session working · enter leave them running · c close all · esc stay"
-    );
+    assert_eq!(app.quit_question(), Some((1, 0)));
 }
 
 #[test]
@@ -281,10 +272,7 @@ fn the_attached_busy_session_counts_without_the_feed() {
     let clock = fakes::clock::FakeClock::new();
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
-    assert_eq!(
-        app.hint_text(),
-        "1 session working · enter leave them running · c close all · esc stay"
-    );
+    assert_eq!(app.quit_question(), Some((1, 0)));
 }
 
 #[test]
@@ -294,10 +282,7 @@ fn the_prompt_names_sessions_working() {
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(ctrl_c(&mut app), Effect::None);
-    assert_eq!(
-        foot(&app),
-        "2 sessions working · enter leave them running · c close all · esc stay"
-    );
+    assert_eq!(app.quit_question(), Some((2, 0)));
 }
 
 #[test]
@@ -319,10 +304,7 @@ fn clients_two_held_full_is_open_elsewhere() {
         home.subs.answered("c_1", true);
     }
     assert_eq!(ctrl_c(&mut app), Effect::None);
-    assert_eq!(
-        foot(&app),
-        "1 session working, 1 also open elsewhere · enter leave them running · c close all · esc stay"
-    );
+    assert_eq!(app.quit_question(), Some((1, 1)));
 }
 
 #[test]
@@ -343,10 +325,7 @@ fn clients_one_held_full_is_not() {
         home.subs.answered("c_1", true);
     }
     assert_eq!(ctrl_c(&mut app), Effect::None);
-    assert_eq!(
-        foot(&app),
-        "1 session working · enter leave them running · c close all · esc stay"
-    );
+    assert_eq!(app.quit_question(), Some((1, 0)));
 }
 
 #[test]
@@ -361,10 +340,7 @@ fn clients_one_not_held_full_is() {
         0,
     ));
     assert_eq!(ctrl_c(&mut app), Effect::None);
-    assert_eq!(
-        foot(&app),
-        "1 session working, 1 also open elsewhere · enter leave them running · c close all · esc stay"
-    );
+    assert_eq!(app.quit_question(), Some((1, 1)));
 }
 
 #[test]
@@ -433,10 +409,10 @@ fn other_keys_and_ctrl_c_do_nothing_while_it_is_open() {
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
-    let question = foot(&app);
+    let shown = foot(&app);
     assert_eq!(app.on_key(Key::Char('x'), clock.now()), Effect::None);
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
-    assert_eq!(foot(&app), question);
+    assert_eq!(foot(&app), shown);
     assert!(app.input().expand().is_empty());
 }
 
@@ -450,29 +426,27 @@ fn slash_quit_goes_through_the_same_prompt() {
         assert_eq!(app.on_key(Key::Char(ch), clock.now()), Effect::None);
     }
     assert_eq!(app.on_key(Key::Enter, clock.now()), Effect::None);
-    assert_eq!(
-        foot(&app),
-        "1 session working · enter leave them running · c close all · esc stay"
-    );
+    assert_eq!(app.quit_question(), Some((1, 0)));
 }
 
 #[test]
-fn hint_text_is_the_prompt_while_open_and_the_quit_hint_otherwise() {
+fn hint_text_is_the_quit_hint_and_the_question_is_an_overlay() {
     let mut app = home();
     linked(&mut app);
     working(&mut app, "s_aaaaaaaaaaaaaaaa");
     assert_eq!(app.hint_text(), crate::app::QUIT_HINT);
     assert!(!app.hint());
     assert_eq!(ctrl_c(&mut app), Effect::None);
-    assert!(app.hint());
-    assert_eq!(
-        app.hint_text(),
-        "1 session working · enter leave them running · c close all · esc stay"
-    );
+    // The question draws as an overlay: opening it clears the arming,
+    // so no hint shows, and the counts read through the question.
+    assert!(!app.hint());
+    assert_eq!(app.hint_text(), crate::app::QUIT_HINT);
+    assert_eq!(app.quit_question(), Some((1, 0)));
     let clock = fakes::clock::FakeClock::new();
     assert_eq!(app.on_key(Key::Esc, clock.now()), Effect::None);
     assert_eq!(app.hint_text(), crate::app::QUIT_HINT);
     assert!(!app.hint());
+    assert_eq!(app.quit_question(), None);
 }
 
 #[test]
@@ -483,10 +457,7 @@ fn a_session_that_leaves_while_the_question_shows_gets_no_close() {
     working(&mut app, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(ctrl_c(&mut app), Effect::None);
     app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
-    assert_eq!(
-        foot(&app),
-        "1 session working · enter leave them running · c close all · esc stay"
-    );
+    assert_eq!(app.quit_question(), Some((1, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");
@@ -542,10 +513,7 @@ fn a_newly_working_session_shows_in_the_question_and_gets_a_close() {
         0,
         0,
     ));
-    assert_eq!(
-        foot(&app),
-        "2 sessions working · enter leave them running · c close all · esc stay"
-    );
+    assert_eq!(app.quit_question(), Some((2, 0)));
     let clock = fakes::clock::FakeClock::new();
     let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
         panic!("`c` closes all");

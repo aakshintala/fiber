@@ -4,7 +4,8 @@ use serde_json::json;
 
 use super::*;
 use crate::events::{
-    CallStatus, ReasoningCompleted, TextCompleted, ToolCallCompleted, ToolCallRequested,
+    CacheLifetime, CallStatus, ReasoningCompleted, TextCompleted, ToolCallCompleted,
+    ToolCallRequested,
 };
 use crate::shapes::Failure;
 use crate::shapes::Tokens;
@@ -357,6 +358,24 @@ fn a_reply_the_provider_never_named_has_an_unnamed_usage() {
     let mut unnamed = reply(Vec::new());
     unnamed.generation_id = None;
     assert_eq!(unnamed.usage().generation_id, None);
+}
+
+#[test]
+fn default_warms_is_true() {
+    let request = ModelRequest {
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: CacheLifetime::FiveMinutes,
+        cache_key: String::new(),
+        conversation: Vec::new(),
+        sent_tools: None,
+        previous_end: None,
+        max_output_tokens: None,
+        session_dir: PathBuf::new(),
+    };
+    assert!(Fake.warms(&request));
 }
 
 #[test]

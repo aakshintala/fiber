@@ -151,6 +151,10 @@ pub struct Compat {
     /// such as OpenRouter's `session_id` (`docs/prompt-cache.md`, "Cache
     /// markers and keys").
     pub cache_key_field: Option<String>,
+    /// `anthropic-messages`: the thinking level goes in
+    /// `thinking: {type: "enabled", budget_tokens}`, not in
+    /// `thinking: {type: "adaptive"}` and `output_config: {effort}`.
+    pub thinking_budget: bool,
 }
 
 impl Compat {
@@ -167,6 +171,7 @@ impl Compat {
                 .get("cache_key_field")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            thinking_budget: flag("thinking_budget").unwrap_or(false),
         }
     }
 }

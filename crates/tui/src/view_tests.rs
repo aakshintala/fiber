@@ -1872,14 +1872,20 @@ fn an_open_overlay_draws_its_cross_as_a_target() {
     attach(&mut app, S_A);
     app.on_key(Key::F1, fakes::clock::FakeClock::new().now());
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
-    assert!(
-        targets
-            .iter()
-            .any(|target| target.id == TargetId::CloseOverlay && target.rect == cross),
-        "the key map draws its cross"
-    );
+    // The key map's ✕ sits on its title row's right end, closing it.
+    let key_cross = targets
+        .iter()
+        .find(|target| target.id == TargetId::CloseOverlay)
+        .expect("the key map draws its cross");
+    assert_eq!(key_cross.rect.x, WIDTH - 3);
+    assert_eq!(key_cross.rect.width, 1);
+    let row: String = (0..WIDTH)
+        .map(|x| buf[(x, key_cross.rect.y)].symbol().to_owned())
+        .collect();
+    assert!(row.contains("Key map"), "{row}");
     assert_eq!(
-        buf.cell((WIDTH - 1, 0)).map(|cell| cell.symbol()),
+        buf.cell((WIDTH - 3, key_cross.rect.y))
+            .map(|cell| cell.symbol()),
         Some("✕")
     );
     let mut app = empty();
