@@ -148,11 +148,8 @@ impl KeyMap {
             return;
         }
         self.focus = self.focus.min(total.saturating_sub(1));
-        if self.focus < self.top {
-            self.top = self.focus;
-            return;
-        }
-        while self.top < self.focus {
+        self.top = self.top.min(self.focus);
+        loop {
             let shown = fits(self.top).max(1);
             if self.focus < self.top.saturating_add(shown) {
                 break;
@@ -299,10 +296,15 @@ pub(crate) fn columns(visible: &[&Binding], keys: &Keyset, inner: u16) -> Column
         u16::try_from(u32::from(wide) * u32::from(rest) / u32::from(total)).unwrap_or(u16::MAX)
     };
     let (mut action, mut keys) = (share(widest.1).max(1), share(widest.2).max(1));
-    while action.saturating_add(keys) < rest && (action < widest.1 || keys < widest.2) {
+    // The floored shares leave at most one column unused
+    // (`share` floors two proportions of `rest`, so their deficit is
+    // below two), so one step fills it: the action takes it while
+    // narrower than its widest text, else the keys while narrower
+    // than theirs, else it stays unused rather than widen past both.
+    if action.saturating_add(keys) < rest {
         if action < widest.1 {
             action = action.saturating_add(1);
-        } else {
+        } else if keys < widest.2 {
             keys = keys.saturating_add(1);
         }
     }

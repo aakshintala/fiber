@@ -143,19 +143,10 @@ fn binding_rows(
     down: bool,
 ) -> Vec<Row> {
     let (_, _, paths) = keymap::row_text(binding, shown);
-    let mut areas = column(binding.area, cols.area);
-    let mut acted = action_rows(binding.description, binding.when, cols.action);
-    let mut keys = column(&paths, cols.keys);
+    let areas = column(binding.area, cols.area);
+    let acted = action_rows(binding.description, binding.when, cols.action);
+    let keys = column(&paths, cols.keys);
     let rows = areas.len().max(acted.len()).max(keys.len());
-    while areas.len() < rows {
-        areas.push(" ".repeat(usize::from(cols.area)));
-    }
-    while acted.len() < rows {
-        acted.push((String::new(), String::new()));
-    }
-    while keys.len() < rows {
-        keys.push(" ".repeat(usize::from(cols.keys)));
-    }
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let dim = Style::new().add_modifier(Modifier::DIM);
     let mut out = Vec::new();
@@ -172,8 +163,14 @@ fn binding_rows(
         let cond_style = if focused { bold } else { dim };
         let keys_style = if focused { bold } else { dim };
         let (head, tail) = acted.get(row).cloned().unwrap_or_default();
-        let area_text = areas.get(row).cloned().unwrap_or_default();
-        let keys_text = keys.get(row).cloned().unwrap_or_default();
+        let area_text = areas
+            .get(row)
+            .cloned()
+            .unwrap_or_else(|| " ".repeat(usize::from(cols.area)));
+        let keys_text = keys
+            .get(row)
+            .cloned()
+            .unwrap_or_else(|| " ".repeat(usize::from(cols.keys)));
         let fill = usize::from(cols.action)
             .saturating_sub(width(&head))
             .saturating_sub(width(&tail));
@@ -242,7 +239,7 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     // While bindings hide above, the last line counts them by binding.
     let counts = top > 0;
     let room = chrome.body.saturating_sub(usize::from(counts));
-    if end == top && room > 0 {
+    if end == top {
         // The focused binding is taller than the body rows left: it
         // shows its top rows only, cut at the body's last row, with no
         // ↓ gutter marker. The window keeps it whole, so it is the
@@ -258,7 +255,7 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
                 binding,
                 &keys.shown(binding),
                 &cols,
-                at == focus && total > 0,
+                at == focus,
                 down,
             ));
         }

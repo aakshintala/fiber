@@ -315,3 +315,107 @@ fn fits_from_leaves_the_above_count_row_once_scrolled() {
     assert_eq!(fits_from(0, &[1, 1, 1], 2), 2);
     assert_eq!(fits_from(1, &[1, 1, 1], 2), 1);
 }
+
+#[test]
+fn columns_grow_by_a_single_step() {
+    use super::{Columns, columns, row_text};
+    use crate::bindings::Binding;
+    use crate::format::width;
+    let keys = Keyset::default();
+    let binding =
+        |area: &'static str, description: &'static str, shown: &'static str, id: &'static str| {
+            Binding {
+                area,
+                id,
+                description,
+                keys: shown,
+                when: "",
+                other_paths: "",
+                contexts: crate::keyset::Contexts::ALL,
+                defaults: &[],
+                events: &[],
+            }
+        };
+    // Widest (7, 2, 2): at inner 16 the room is 10, the area takes 5
+    // and the floored shares are (2, 2), both already at their
+    // widest with one column unused: no step widens past either.
+    let short = binding("AAAAAAA", "aa", "bb", "t_short");
+    assert_eq!(
+        columns(&[&short], &keys, 16),
+        Columns {
+            area: 5,
+            action: 2,
+            keys: 2
+        }
+    );
+    // Widest (7, 6, 2): the same room shares (3, 1), one short of
+    // the rest with the action below its widest: one step grows the
+    // action to (4, 1).
+    let medium = binding("AAAAAAA", "aaaaaa", "bb", "t_medium");
+    assert_eq!(
+        columns(&[&medium], &keys, 16),
+        Columns {
+            area: 5,
+            action: 4,
+            keys: 1
+        }
+    );
+    // Widest (20, 4, 4): at inner 18 the room is 12, the area takes
+    // 6 and the shares are exactly (3, 3): no step runs at an exact
+    // fit.
+    let even = binding("AAAAAAAAAAAAAAAAAAAA", "aaaa", "bbbb", "t_even");
+    assert_eq!(
+        columns(&[&even], &keys, 18),
+        Columns {
+            area: 6,
+            action: 3,
+            keys: 3
+        }
+    );
+    // The short row fits whole at inner 21: each column keeps its
+    // widest text.
+    assert_eq!(
+        columns(&[&short], &keys, 21),
+        Columns {
+            area: 7,
+            action: 2,
+            keys: 2
+        }
+    );
+    // Across widths the floored shares leave at most one column
+    // unused: the single step fills it, so past the early return the
+    // rest holds at most one more than the two columns take.
+    let visible: Vec<&Binding> = BINDINGS.iter().collect();
+    let mut widest = (1u16, 1u16, 1u16);
+    for row in &visible {
+        let (area, action, paths) = row_text(row, &keys.shown(row));
+        widest.0 = widest
+            .0
+            .max(u16::try_from(width(&area)).unwrap_or(u16::MAX));
+        widest.1 = widest
+            .1
+            .max(u16::try_from(width(&action)).unwrap_or(u16::MAX));
+        widest.2 = widest
+            .2
+            .max(u16::try_from(width(&paths)).unwrap_or(u16::MAX));
+    }
+    for inner in 0..200u16 {
+        let cols = columns(&visible, &keys, inner);
+        assert!(cols.area >= 1 && cols.action >= 1 && cols.keys >= 1);
+        let room = inner.saturating_sub(6);
+        if widest.0.saturating_add(widest.1).saturating_add(widest.2) <= room {
+            assert_eq!((cols.area, cols.action, cols.keys), widest);
+        } else {
+            assert_eq!(cols.area, widest.0.min(room / 2).max(1));
+            let rest = room.saturating_sub(cols.area);
+            if rest >= 2 {
+                let sum = cols.action.saturating_add(cols.keys);
+                assert!(sum <= rest, "inner {inner}: {cols:?} past {rest}");
+                assert!(
+                    rest.saturating_sub(sum) <= 1,
+                    "inner {inner}: {cols:?} leaves more than one of {rest}"
+                );
+            }
+        }
+    }
+}

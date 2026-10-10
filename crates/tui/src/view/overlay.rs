@@ -412,9 +412,6 @@ pub(crate) fn draw(
     for slot in &stack {
         let row_y = y;
         y = y.saturating_add(1);
-        if row_y < area.y || row_y >= area.bottom() {
-            continue;
-        }
         let line = match slot {
             Slot::Title => overlay
                 .title
@@ -523,13 +520,11 @@ fn draw_line(buf: &mut Buffer, slab: &Rect, area: Rect, row_y: u16, line: &Line,
     };
     let room = usize::from(inner_w);
     let right_w = spans_width(&line.right);
-    let (left, right) = if spans_width(&line.spans).saturating_add(right_w) > room {
-        let right = cut_spans(&line.right, room.min(right_w));
-        let left = cut_spans(&line.spans, room.saturating_sub(spans_width(&right)));
-        (left, right)
-    } else {
-        (cut_spans(&line.spans, room), line.right.clone())
-    };
+    // Cutting text that already fits keeps it, so one branch cuts
+    // both ends whether or not they overflow: at an exact fit it
+    // keeps both, agreeing with the old fit branch.
+    let right = cut_spans(&line.right, room.min(right_w));
+    let left = cut_spans(&line.spans, room.saturating_sub(spans_width(&right)));
     let mut cells: Vec<Span<'static>> = vec![paint(Span::raw("  ".to_owned()))];
     for span in left {
         cells.push(paint(span));
