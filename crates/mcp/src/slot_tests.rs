@@ -9,9 +9,9 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{McpServerFailed, ServerFailure};
 use contract::tool::ServerRecord;
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::server::ListedTool;
+use crate::server_json::ListedTool;
 use crate::slot::{Run, Served, State};
 use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Started};
 use crate::test_support::{Setup, WITHIN, await_until};
@@ -20,7 +20,7 @@ impl Setup {
 
     /// Writes the cache for `spec` holding `tools` and no prompts, as a
     /// first start would.
-    fn write_cache(&self, spec: &ServerSpec, tools: &[Value]) {
+    fn write_cache(&self, spec: &ServerSpec, tools: &[ListedTool]) {
         crate::cache::write(
             &self.cache(),
             &spec.name,
@@ -79,11 +79,11 @@ impl Setup {
         .expect("the cache holds lists")
         .tools
         .iter()
-        .map(|entry| ListedTool::read(entry).name)
+        .map(|tool| tool.name.clone())
         .collect()
     }
 
-    fn cached_prompts(&self) -> Vec<Value> {
+    fn cached_prompts(&self) -> Vec<crate::server_json::ListedPrompt> {
         crate::cache::read(
             &self.cache(),
             "fx",
@@ -97,8 +97,8 @@ impl Setup {
         .prompts
     }
 
-    fn listed(name: &str) -> Vec<Value> {
-        vec![json!({"name": name})]
+    fn listed(name: &str) -> Vec<ListedTool> {
+        vec![serde_json::from_value(json!({"name": name})).expect("listed")]
     }
 }
 
@@ -341,7 +341,7 @@ fn a_call_to_a_removed_tool_fails_without_calling_and_updates_the_cache() {
     assert_eq!(
         live.tools
             .iter()
-            .map(|entry| ListedTool::read(entry).name)
+            .map(|tool| tool.name.clone())
             .collect::<Vec<_>>(),
         ["echo"],
     );
@@ -775,7 +775,7 @@ fn a_changed_prompt_list_rewrites_the_cache() {
     setup.tools(&json!([{"name": "echo"}]));
     setup.result("echo", HI);
     setup.populate(setup.spec("fx"));
-    assert_eq!(setup.cached_prompts(), Vec::<Value>::new());
+    assert!(setup.cached_prompts().is_empty());
     // Only the prompt list changes: the tools are untouched.
     std::fs::write(
         setup.dir.path().join("prompts.json"),
@@ -789,10 +789,7 @@ fn a_changed_prompt_list_rewrites_the_cache() {
     assert!(output.error.is_none());
     assert_eq!(
         setup.cached_prompts(),
-        json!([{"name": "greet", "description": "Greets."}])
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
+        vec![serde_json::from_value(json!({"name": "greet", "description": "Greets."})).expect("prompt")]
     );
     assert_eq!(setup.cached_names(), ["echo"]);
     setup.stop(started.servers);

@@ -132,7 +132,8 @@ impl Live {
             .unwrap_or_else(|_| panic!("the server starts within {WITHIN:?}"))
             .expect("the fixture server starts")
             .server;
-        let listed: Vec<Value> = tools.as_array().cloned().unwrap_or_default();
+        let listed: Vec<crate::server_json::ListedTool> =
+            crate::server_json::entries(tools.as_array().cloned().unwrap_or_default());
         let clock: Arc<dyn Clock> = fake.clone();
         let workspace = dir.path().to_path_buf();
         let slot = Slot::running(

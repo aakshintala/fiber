@@ -19,10 +19,11 @@ use contract::events::{McpServerFailed, ServerFailure, ToolInfo, ToolSource, Too
 use contract::shapes::Failure;
 use contract::tool::Tool;
 
-use crate::cache::{self, Cached};
+use crate::cache;
 use crate::effects::Hints;
-use crate::prompt::{ListedPrompt, PromptSource, Prompts};
-use crate::server::{ListedTool, Server};
+use crate::prompt::{PromptSource, Prompts};
+use crate::server::Server;
+use crate::server_json::{ListedPrompt, ListedTool};
 use crate::slot::Slot;
 use crate::tool::McpTool;
 
@@ -217,8 +218,7 @@ pub fn start(
             &link,
             spec.call_timeout,
         ));
-        let listed: Vec<ListedTool> = cached.tools.iter().map(ListedTool::read).collect();
-        tools.extend(declare(&spec, &listed, &link).into_iter().map(|tool| {
+        tools.extend(declare(&spec, &cached.tools, &link).into_iter().map(|tool| {
             let info = info(&tool);
             let registered_by = tool.registered_by.clone();
             let tool: Arc<dyn Tool> = Arc::new(tool.tool);
@@ -279,18 +279,15 @@ pub(crate) fn open(
             };
         }
     };
-    let live = Cached {
-        tools: open.tools,
-        prompts: open.prompts,
-    };
+    let live = open.listed;
     cache::write(
         cache,
         &name,
         &cache::key(&spec.command, &spec.args, &spec.env),
         &live,
     );
-    let tools: Vec<ListedTool> = live.tools.iter().map(ListedTool::read).collect();
     let listed_prompts = live.prompts.clone();
+    let tools = live.tools.clone();
     let slot = Slot::running(
         spec.clone(),
         workspace,
@@ -309,15 +306,15 @@ pub(crate) fn open(
 /// One prompt row source per listed prompt of `server`.
 fn sources_of(
     server: &str,
-    prompts: &[serde_json::Value],
+    prompts: &[ListedPrompt],
     slot: &Weak<Slot>,
     timeout: Duration,
 ) -> Vec<PromptSource> {
     prompts
         .iter()
-        .map(|entry| PromptSource {
+        .map(|prompt| PromptSource {
             server: server.to_owned(),
-            prompt: ListedPrompt::read(entry),
+            prompt: prompt.clone(),
             slot: slot.clone(),
             timeout,
         })
@@ -360,7 +357,8 @@ pub(crate) fn declare(spec: &ServerSpec, tools: &[ListedTool], link: &Weak<Slot>
         if !kept(spec, &tool.name) {
             continue;
         }
-        let hints = spec.hints.get(&tool.name).unwrap_or(&tool.hints);
+        let hints = spec.hints.get(&tool.name).cloned().unwrap_or_else(|| tool.hints());
+        let hints = &hints;
         declared.push(Declared {
             registered_by: spec.name.clone(),
             tool: McpTool::declare(

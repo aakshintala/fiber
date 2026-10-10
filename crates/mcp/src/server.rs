@@ -18,8 +18,9 @@ use contract::tool::Cancel;
 use rustix::process::Signal;
 use serde_json::{Map, Value};
 
-use crate::effects::Hints;
+use crate::cache::Cached;
 use crate::registry::{LIVE, Stopping, before_lock, before_signal, lock, signal};
+use crate::server_json::{ListedPrompt, ListedTool, entries};
 use crate::rpc::{Outcome, encode_notification, encode_request};
 use crate::wait::{CancelBridge, NoCancel, Shared, park};
 
@@ -30,20 +31,6 @@ const PROTOCOL_VERSION: &str = "2025-06-18";
 /// The grace between closing stdin and killing the child: the shell's
 /// `GRACE` (`crates/tools/src/shell/command.rs`).
 const GRACE: Duration = Duration::from_millis(800);
-
-/// One tool the server lists: its name, description, schema and hints, as
-/// [`crate::tool`] declares them.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ListedTool {
-    /// The server's own name for it.
-    pub name: String,
-    /// Its description; `""` when the server gave none.
-    pub description: String,
-    /// Its input schema; `{"type":"object"}` when the server gave none.
-    pub schema: Value,
-    /// Its hints; absent when the server gave none.
-    pub hints: Hints,
-}
 
 /// Why [`Server::start`] failed: the session records it as
 /// `mcp_server_failed` and leaves the server out.
@@ -67,15 +54,15 @@ fn shutting_down() -> StartError {
 /// fresh cursor still ends at it (`docs/mcp.md`, "Starting servers"). A
 /// missed deadline fails the start; any other failure runs `fail`, which
 /// fails the start for tools and keeps no prompts for prompts.
-fn list_pages(
+fn list_pages<T: serde::de::DeserializeOwned>(
     server: &Server,
     clock: &Arc<dyn Clock>,
     method: &str,
     entry: &str,
     deadline: Instant,
     cancel: &dyn Cancel,
-    fail: impl Fn() -> Result<Vec<Value>, StartError>,
-) -> Result<Vec<Value>, StartError> {
+    fail: impl Fn() -> Result<Vec<T>, StartError>,
+) -> Result<Vec<T>, StartError> {
     let mut listed = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -96,7 +83,7 @@ fn list_pages(
             None => return fail(),
         };
         match object.get(entry).and_then(Value::as_array) {
-            Some(entries) => listed.extend(entries.iter().cloned()),
+            Some(found) => listed.extend(entries(found.clone())),
             None => return fail(),
         }
         cursor = object
@@ -152,12 +139,8 @@ struct Inner {
 pub(crate) struct OpenServer {
     /// The running server.
     pub server: Server,
-    /// Its raw `tools/list` entries, in the order listed; empty when
-    /// the server advertises no tools capability.
-    pub tools: Vec<Value>,
-    /// Its raw `prompts/list` entries, in the order listed; empty when
-    /// the server advertises no prompts or its list failed.
-    pub prompts: Vec<Value>,
+    /// The tools and prompts it listed.
+    pub listed: Cached,
 }
 
 impl Server {
@@ -227,7 +210,7 @@ impl Server {
         // `Cancelled` is just another failed start, not a deadline.
         let not_a_list =
             || StartError::StartFailed("The server's tool list was not a result.".to_owned());
-        let handshake = |server: &Server| -> Result<(Vec<Value>, Vec<Value>), StartError> {
+        let handshake = |server: &Server| -> Result<Cached, StartError> {
             let initialize = match server.request(
                 "initialize",
                 &serde_json::json!({
@@ -256,7 +239,7 @@ impl Server {
                 .get("capabilities")
                 .and_then(|capabilities| capabilities.get("tools"))
                 .is_some_and(Value::is_object);
-            let tools = if advertises_tools {
+            let tools: Vec<ListedTool> = if advertises_tools {
                 list_pages(
                     server,
                     clock,
@@ -278,7 +261,7 @@ impl Server {
                 .get("capabilities")
                 .and_then(|capabilities| capabilities.get("prompts"))
                 .is_some_and(Value::is_object);
-            let prompts = if advertises {
+            let prompts: Vec<ListedPrompt> = if advertises {
                 list_pages(
                     server,
                     clock,
@@ -291,13 +274,12 @@ impl Server {
             } else {
                 Vec::new()
             };
-            Ok((tools, prompts))
+            Ok(Cached { tools, prompts })
         };
         match handshake(&server) {
-            Ok((tools, prompts)) => Ok(OpenServer {
+            Ok(listed) => Ok(OpenServer {
                 server,
-                tools,
-                prompts,
+                listed,
             }),
             Err(error) => {
                 if stopping.is_cancelled() {
@@ -488,37 +470,6 @@ impl Drop for Server {
     fn drop(&mut self) {
         self.shutdown();
         self.reap();
-    }
-}
-
-impl ListedTool {
-    /// Reads one `tools/list` entry. A nameless entry becomes `""`, and a
-    /// missing description or schema takes the default the tool declares.
-    pub(crate) fn read(entry: &Value) -> Self {
-        let name = entry
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let description = entry
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let schema = entry
-            .get("inputSchema")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({"type": "object"}));
-        let hints = entry
-            .get("annotations")
-            .map(Hints::from_annotations)
-            .unwrap_or_default();
-        Self {
-            name,
-            description,
-            schema,
-            hints,
-        }
     }
 }
 

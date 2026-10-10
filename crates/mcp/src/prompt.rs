@@ -14,79 +14,8 @@ use contract::tool::{Cancel, Output, ServerRecord};
 use serde_json::{Map, Value};
 
 use crate::server::CallError;
+use crate::server_json::{Argument, Content, ListedPrompt, PromptResult};
 use crate::slot::{self, Served, Slot};
-
-/// One prompt a server lists: its name, description and arguments, as
-/// [`Prompts::commands`] rows them.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ListedPrompt {
-    /// The server's own name for it.
-    pub name: String,
-    /// Its description; `""` when the server gave none.
-    pub description: String,
-    /// Its arguments, in the order the server lists them.
-    pub arguments: Vec<Argument>,
-}
-
-/// One argument a prompt takes.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Argument {
-    /// The server's own name for it.
-    pub name: String,
-    /// Whether running the prompt without it is rejected.
-    pub required: bool,
-}
-
-impl ListedPrompt {
-    /// Reads one `prompts/list` entry. A missing description takes `""`,
-    /// and an argument without a name is dropped: nothing could fill it.
-    pub(crate) fn read(entry: &Value) -> Self {
-        let name = entry
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let description = entry
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let arguments = entry
-            .get("arguments")
-            .and_then(Value::as_array)
-            .map(|listed| {
-                listed
-                    .iter()
-                    .filter_map(|argument| {
-                        let name = argument.get("name").and_then(Value::as_str)?;
-                        if name.is_empty() {
-                            return None;
-                        }
-                        Some(Argument {
-                            name: name.to_owned(),
-                            required: argument
-                                .get("required")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Self {
-            name,
-            description,
-            arguments,
-        }
-    }
-
-    /// Whether `/name` can run it: a prompt whose name is empty or holds
-    /// whitespace is left out, because `split_command` could never name it
-    /// (`docs/mcp.md`, "Prompts and resources").
-    pub(crate) fn runnable(&self) -> bool {
-        !self.name.is_empty() && !self.name.chars().any(|char| char.is_whitespace())
-    }
-}
 
 /// The `commands` row's `argument_hint`: each argument as `<name>` when
 /// required and `[name]` when not, space-separated; absent when the prompt
@@ -195,61 +124,36 @@ fn take_word(rest: &str) -> (Option<&str>, &str) {
 /// "Prompts and resources"): the text of every message in order, joined
 /// by one blank line, whatever its role; an embedded text resource counts
 /// as text. `Err` is the reason for the rejection's sentence: any image,
-/// audio, binary resource or resource link, a result with no message
-/// list, or one with no text.
-pub(crate) fn text(result: &Value) -> Result<String, String> {
-    let messages = result
-        .get("messages")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "no messages".to_owned())?;
+/// audio, binary resource or resource link, or a result with no text.
+pub(crate) fn text(result: &PromptResult) -> Result<String, String> {
     let mut texts = Vec::new();
-    for message in messages {
-        match message.get("content") {
-            None => {}
-            Some(Value::Array(parts)) => {
-                for part in parts {
-                    part_text(part, &mut texts)?;
+    for message in &result.messages {
+        for part in &message.content {
+            match part {
+                Content::Text { text: Some(found) } if !found.is_empty() => {
+                    texts.push(found.clone());
                 }
+                Content::Text { .. } => {}
+                Content::Image => return Err("an image".to_owned()),
+                Content::Audio => return Err("audio".to_owned()),
+                Content::Resource { resource } => match &resource.text {
+                    Some(found) if !found.is_empty() => texts.push(found.clone()),
+                    Some(_) => {}
+                    None if resource.blob.is_some() => {
+                        return Err("a binary resource".to_owned());
+                    }
+                    None => return Err("an unreadable resource".to_owned()),
+                },
+                Content::ResourceLink => return Err("a resource link".to_owned()),
+                Content::Other => return Err("unsupported content".to_owned()),
+                Content::Unreadable => return Err("unreadable content".to_owned()),
             }
-            Some(part) => part_text(part, &mut texts)?,
         }
     }
     if texts.is_empty() {
         return Err("no text".to_owned());
     }
     Ok(texts.join("\n\n"))
-}
-
-/// The text `part` contributes, if any: an empty text counts as none, so
-/// an answer with no text is rejected rather than sent blank.
-fn part_text(part: &Value, texts: &mut Vec<String>) -> Result<(), String> {
-    match part.get("type").and_then(Value::as_str) {
-        Some("text") => {
-            let found = part.get("text").and_then(Value::as_str).unwrap_or_default();
-            if !found.is_empty() {
-                texts.push(found.to_owned());
-            }
-            Ok(())
-        }
-        Some("image") => Err("an image".to_owned()),
-        Some("audio") => Err("audio".to_owned()),
-        Some("resource") => match part.get("resource") {
-            Some(resource) => match resource.get("text").and_then(Value::as_str) {
-                Some(found) => {
-                    if !found.is_empty() {
-                        texts.push(found.to_owned());
-                    }
-                    Ok(())
-                }
-                None if resource.get("blob").is_some() => Err("a binary resource".to_owned()),
-                None => Err("an unreadable resource".to_owned()),
-            },
-            None => Err("an unreadable resource".to_owned()),
-        },
-        Some("resource_link") => Err("a resource link".to_owned()),
-        Some(_) => Err("unsupported content".to_owned()),
-        None => Err("unreadable content".to_owned()),
-    }
 }
 
 /// One prompt row's source: whose list it came from, and what running it
@@ -364,7 +268,15 @@ impl Prompts {
                     entry.timeout,
                     cancel,
                 ) {
-                    Ok(result) => match text(&result) {
+                    Ok(result) => match serde_json::from_value::<PromptResult>(result) {
+                        Err(_) => failed(
+                            ErrorCode::McpPromptFailed,
+                            format!(
+                                "The MCP server `{server}`'s prompt `/{prompt}` returned no messages, \
+                                 which Fiber cannot send as a message."
+                            ),
+                        ),
+                        Ok(result) => match text(&result) {
                         Ok(body) => {
                             let mut full = body;
                             if let Some(appended) = filled.appended {
@@ -383,6 +295,7 @@ impl Prompts {
                                  which Fiber cannot send as a message."
                             ),
                         ),
+                        },
                     },
                     Err(CallError::Timeout) => failed(
                         ErrorCode::McpPromptFailed,

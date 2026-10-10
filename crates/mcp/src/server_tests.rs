@@ -12,7 +12,7 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use super::{CallError, ListedTool, Server, StartError};
+use super::{CallError, Server, StartError};
 use crate::test_support::{Setup, WITHIN};
 
 fn echo_tools() -> Value {
@@ -33,12 +33,12 @@ fn initialize_and_list_succeed() {
     let setup = Setup::with_tools(&echo_tools());
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     let opened = setup.start_expect(Duration::from_secs(5));
-    assert_eq!(opened.tools.len(), 1);
-    let tool = ListedTool::read(&opened.tools[0]);
+    assert_eq!(opened.listed.tools.len(), 1);
+    let tool = opened.listed.tools[0].clone();
     assert_eq!(tool.name, "echo");
     assert_eq!(tool.description, "Echoes.");
-    assert_eq!(tool.hints.read_only, Some(true));
-    assert_eq!(tool.hints.destructive, None);
+    assert_eq!(tool.hints().read_only, Some(true));
+    assert_eq!(tool.hints().destructive, None);
     // The start sends `notifications/initialized`: without it the fixture's
     // log would miss the notification.
     let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");

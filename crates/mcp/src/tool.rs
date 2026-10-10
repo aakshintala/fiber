@@ -17,6 +17,7 @@ use serde_json::{Map, Value};
 use crate::effects::Hints;
 use crate::name::qualified;
 use crate::server::CallError;
+use crate::server_json::{CallResult, Content};
 use crate::slot::{self, Run, Slot};
 
 /// One server tool declared to the model.
@@ -122,7 +123,11 @@ impl Tool for McpTool {
                     self.call.timeout,
                     cancel,
                 ) {
-                    Ok(result) => answer(&self.call.server, &self.call.tool, &result),
+                    Ok(result) => {
+                        let result: CallResult =
+                            serde_json::from_value(result).unwrap_or_default();
+                        answer(&self.call.server, &self.call.tool, &result)
+                    }
                     Err(CallError::Timeout) => failed(ErrorCode::Timeout, timed_out(&self.call)),
                     Err(CallError::Cancelled) => {
                         failed(ErrorCode::McpCancelRequested, cancelled(&self.call))
@@ -155,29 +160,19 @@ impl Tool for McpTool {
 /// Reads a `tools/call` result: text blocks become content in order, and a
 /// result the server marks as an error ends failed with code `tool_error`.
 /// Non-text parts and `structuredContent` are dropped in this slice.
-fn answer(server: &str, tool: &str, result: &Value) -> Output {
-    let texts: Vec<String> = result
-        .get("content")
-        .and_then(Value::as_array)
-        .map(|parts| {
-            parts
-                .iter()
-                .filter_map(|part| {
-                    if part.get("type").and_then(Value::as_str) == Some("text") {
-                        part.get("text").and_then(Value::as_str).map(str::to_owned)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+fn answer(server: &str, tool: &str, result: &CallResult) -> Output {
+    let mut texts = Vec::new();
+    for part in &result.content {
+        if let Content::Text { text: Some(text) } = part {
+            texts.push(text.clone());
+        }
+    }
     let text = texts.join("");
     let content = texts
         .into_iter()
         .map(|text| ContentPart::Text { text })
         .collect();
-    if result.get("isError").and_then(Value::as_bool) == Some(true) {
+    if result.is_error {
         let message = if text.is_empty() {
             format!("The MCP server `{server}` reported an error for `{tool}`.")
         } else {

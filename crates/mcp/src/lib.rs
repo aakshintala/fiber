@@ -12,6 +12,7 @@ mod prompt;
 mod registry;
 mod rpc;
 mod server;
+mod server_json;
 mod slot;
 mod start;
 mod tool;

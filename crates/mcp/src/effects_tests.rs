@@ -1,70 +1,79 @@
 //! The hint table in `docs/mcp.md`, one row per line, plus the override rule.
 
 use contract::shapes::{DeclaredEffects, Effect};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::Hints;
 
-fn annotations(value: Value) -> Hints {
-    Hints::from_annotations(&value)
+fn hints(read_only: Option<bool>, destructive: Option<bool>, open_world: Option<bool>) -> Hints {
+    Hints {
+        read_only,
+        destructive,
+        open_world,
+    }
 }
 
 #[test]
 fn each_hint_combination_declares_its_effects() {
-    let rows: &[(&str, Value, Vec<Effect>, bool)] = &[
-        ("empty", json!({}), vec![Effect::Executes, Effect::Network], false),
+    let rows: &[(&str, Hints, Vec<Effect>, bool)] = &[
+        (
+            "empty",
+            hints(None, None, None),
+            vec![Effect::Executes, Effect::Network],
+            false,
+        ),
         (
             "readOnly true",
-            json!({"readOnlyHint": true}),
+            hints(Some(true), None, None),
             vec![Effect::Reads, Effect::Network],
             true,
         ),
         (
             "readOnly true with destructive true",
-            json!({"readOnlyHint": true, "destructiveHint": true}),
+            hints(Some(true), Some(true), None),
             vec![Effect::Reads, Effect::Network],
             true,
         ),
         (
             "readOnly false",
-            json!({"readOnlyHint": false}),
+            hints(Some(false), None, None),
             vec![Effect::Executes, Effect::Network],
             false,
         ),
         (
             "destructive true",
-            json!({"destructiveHint": true}),
+            hints(None, Some(true), None),
             vec![Effect::Writes, Effect::Network],
             false,
         ),
         (
             "destructive false",
-            json!({"destructiveHint": false}),
+            hints(None, Some(false), None),
             vec![Effect::Writes, Effect::Network],
             true,
         ),
         (
             "openWorld true",
-            json!({"openWorldHint": true}),
+            hints(None, None, Some(true)),
             vec![Effect::Executes, Effect::Network],
             false,
         ),
         (
             "openWorld false",
-            json!({"openWorldHint": false}),
+            hints(None, None, Some(false)),
             vec![Effect::Executes],
             false,
         ),
         (
             "readOnly true with openWorld false",
-            json!({"readOnlyHint": true, "openWorldHint": false}),
+            hints(Some(true), None, Some(false)),
             vec![Effect::Reads],
             true,
         ),
     ];
     for (name, hints, effects, reversible) in rows {
         assert_eq!(
-            annotations(hints.clone()).declared(),
+            hints.declared(),
             DeclaredEffects {
                 effects: effects.clone(),
                 reversible: *reversible,

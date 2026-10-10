@@ -17,10 +17,10 @@ use contract::clock::Clock;
 use contract::events::{McpServerFailed, McpServerReady, ServerFailure};
 use contract::shapes::Failure;
 use contract::tool::ServerRecord;
-use serde_json::Value;
 
 use crate::cache::{self, Cached};
-use crate::server::{ListedTool, Server};
+use crate::server::Server;
+use crate::server_json::ListedTool;
 use crate::start::{ServerSpec, failed};
 
 /// One server's place in the session: what [`Slot::run`] starts, calls,
@@ -211,10 +211,7 @@ impl Slot {
                 // The session keeps the tools it declared, because a tool
                 // set that changes mid-session misses the whole prompt
                 // cache; the cache is updated for the next session.
-                let live = Cached {
-                    tools: open.tools,
-                    prompts: open.prompts,
-                };
+                let live = open.listed;
                 if live != listed {
                     cache::write(
                         &self.cache,
@@ -356,12 +353,9 @@ impl Slot {
     }
 }
 
-/// Every name in raw `tools/list` entries.
-fn names(listed: &[Value]) -> HashSet<String> {
-    listed
-        .iter()
-        .map(|entry| ListedTool::read(entry).name)
-        .collect()
+/// Every name in the listed tools.
+fn names(listed: &[ListedTool]) -> HashSet<String> {
+    listed.iter().map(|tool| tool.name.clone()).collect()
 }
 
 /// The record of a server that exited: Fiber restarts it on the next call

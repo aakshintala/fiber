@@ -40,16 +40,12 @@ fn a_server_with_prompts_lists_them_at_start() {
     setup.prompts(&greet_prompts());
     let open = setup.start_expect(Duration::from_secs(5));
     assert_eq!(
-        open.prompts,
-        greet_prompts().as_array().cloned().unwrap_or_default()
+        open.listed.prompts,
+        serde_json::from_value::<Vec<crate::server_json::ListedPrompt>>(greet_prompts())
+            .expect("prompts read")
     );
-    assert_eq!(
-        open.tools,
-        json!([{"name": "echo"}])
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-    );
+    assert_eq!(open.listed.tools.len(), 1);
+    assert_eq!(open.listed.tools[0].name, "echo");
     let log = setup.requests();
     let initialized = log
         .find("notifications/initialized")
@@ -69,7 +65,7 @@ fn a_server_without_the_prompts_capability_is_never_asked_for_prompts() {
     let setup = Setup::new();
     setup.tools(&json!([{"name": "echo"}]));
     let open = setup.start_expect(Duration::from_secs(5));
-    assert!(open.prompts.is_empty());
+    assert!(open.listed.prompts.is_empty());
     assert!(
         !setup.requests().contains(r#""method":"prompts/list""#),
         "no prompts/list without the capability",
@@ -83,7 +79,7 @@ fn tool_listing_follows_the_tools_capability() {
     let present = Setup::new();
     present.tools(&json!([{"name": "echo"}]));
     let open = present.start_expect(Duration::from_secs(5));
-    assert_eq!(open.tools.len(), 1);
+    assert_eq!(open.listed.tools.len(), 1);
     assert!(
         present.requests().contains(r#""method":"tools/list""#),
         "the handshake lists tools when advertised",
@@ -95,7 +91,7 @@ fn tool_listing_follows_the_tools_capability() {
     let absent = Setup::new();
     write(&absent.dir, "tools.json", "error");
     let open = absent.start_expect(Duration::from_secs(5));
-    assert!(open.tools.is_empty());
+    assert!(open.listed.tools.is_empty());
     assert!(
         !absent.requests().contains(r#""method":"tools/list""#),
         "no tools/list without the capability",
@@ -112,10 +108,11 @@ fn a_prompt_only_server_lists_prompts_with_no_tools() {
     setup.write("tools.json", "error");
     setup.prompts(&greet_prompts());
     let open = setup.start_expect(Duration::from_secs(5));
-    assert!(open.tools.is_empty());
+    assert!(open.listed.tools.is_empty());
     assert_eq!(
-        open.prompts,
-        greet_prompts().as_array().cloned().unwrap_or_default()
+        open.listed.prompts,
+        serde_json::from_value::<Vec<crate::server_json::ListedPrompt>>(greet_prompts())
+            .expect("prompts read")
     );
     let log = setup.requests();
     assert!(
@@ -135,8 +132,8 @@ fn a_failing_prompt_list_leaves_the_server_started_with_no_prompts() {
     setup.tools(&json!([{"name": "echo"}]));
     setup.prompts_raw("error");
     let open = setup.start_expect(Duration::from_secs(5));
-    assert!(open.prompts.is_empty());
-    assert_eq!(open.tools.len(), 1, "the tools still list");
+    assert!(open.listed.prompts.is_empty());
+    assert_eq!(open.listed.tools.len(), 1, "the tools still list");
     open.server.stop();
 }
 
@@ -217,23 +214,13 @@ fn endless_tool_pages_end_at_the_startup_deadline() {
 }
 
 #[test]
-fn a_prompt_entry_reads_with_defaults() {
-    let read = super::ListedPrompt::read(&json!({"name": "greet"}));
-    assert_eq!(read.name, "greet");
-    assert_eq!(read.description, String::new());
-    assert!(read.arguments.is_empty());
-    let read = super::ListedPrompt::read(
-        &json!({"name": 7, "description": 7, "arguments": [{"required": true}, {"name": "", "required": true}]}),
-    );
-    assert_eq!(read.name, String::new());
-    assert_eq!(read.description, String::new());
-    assert!(read.arguments.is_empty(), "a nameless argument is dropped");
-}
-
-#[test]
 fn runnable_names_hold_no_whitespace() {
-    use super::ListedPrompt;
-    let runnable = |name: &str| ListedPrompt::read(&json!({"name": name})).runnable();
+    use crate::server_json::ListedPrompt;
+    let runnable = |name: &str| {
+        serde_json::from_value::<ListedPrompt>(json!({"name": name}))
+            .expect("a prompt reads")
+            .runnable()
+    };
     assert!(!runnable(""));
     assert!(!runnable("a b"));
     assert!(!runnable("a\tb"));
@@ -243,17 +230,20 @@ fn runnable_names_hold_no_whitespace() {
 
 #[test]
 fn the_hint_marks_required_arguments() {
-    use super::{Argument, hint};
+    use crate::server_json::Argument;
+    use super::hint;
     assert_eq!(hint(&[]), None);
     assert_eq!(
         hint(&[
             Argument {
                 name: "who".to_owned(),
-                required: true
+                required: true,
+                rest: Default::default(),
             },
             Argument {
                 name: "tone".to_owned(),
-                required: false
+                required: false,
+                rest: Default::default(),
             },
         ]),
         Some("<who> [tone]".to_owned())
@@ -262,16 +252,19 @@ fn the_hint_marks_required_arguments() {
 
 #[test]
 fn fill_gives_one_word_per_argument_with_the_rest_to_the_last() {
-    use super::{Argument, fill};
+    use crate::server_json::Argument;
+    use super::fill;
     let args = || {
         vec![
             Argument {
                 name: "who".to_owned(),
                 required: true,
+                rest: Default::default(),
             },
             Argument {
                 name: "tone".to_owned(),
                 required: false,
+                rest: Default::default(),
             },
         ]
     };
@@ -299,10 +292,12 @@ fn fill_gives_one_word_per_argument_with_the_rest_to_the_last() {
             Argument {
                 name: "a".to_owned(),
                 required: true,
+                rest: Default::default(),
             },
             Argument {
                 name: "b".to_owned(),
                 required: true,
+                rest: Default::default(),
             },
         ],
         "",
@@ -323,18 +318,26 @@ fn fill_with_no_arguments_appends_the_text() {
     assert_eq!(filled.appended, None);
 }
 
+fn read_text(result: Value) -> Result<String, String> {
+    use super::text;
+    use crate::server_json::PromptResult;
+    match serde_json::from_value::<PromptResult>(result) {
+        Err(_) => Err("no messages".to_owned()),
+        Ok(result) => text(&result),
+    }
+}
+
 #[test]
 fn text_joins_every_message_in_order() {
-    use super::text;
     assert_eq!(
-        text(&json!({"messages": [
+        read_text(json!({"messages": [
             {"role": "user", "content": {"type": "text", "text": "First."}},
             {"role": "assistant", "content": {"type": "text", "text": "Second."}},
         ]})),
         Ok("First.\n\nSecond.".to_owned())
     );
     assert_eq!(
-        text(&json!({"messages": [
+        read_text(json!({"messages": [
             {"role": "user", "content": {"type": "resource", "resource": {"text": "From a file."}}},
         ]})),
         Ok("From a file.".to_owned())
@@ -363,28 +366,26 @@ fn text_joins_every_message_in_order() {
             "no text",
         ),
     ] {
-        assert_eq!(text(&result), Err(kind.to_owned()), "kind: {kind}");
+        assert_eq!(read_text(result), Err(kind.to_owned()), "kind: {kind}");
     }
 }
 
 #[test]
 fn embedded_resource_text_and_blob_guard_are_distinct() {
-    use super::text;
-
     assert_eq!(
-        text(
-            &json!({"messages": [{"content": {"type": "resource", "resource": {"text": "Available text"}}}]})
+        read_text(
+            json!({"messages": [{"content": {"type": "resource", "resource": {"text": "Available text"}}}]})
         ),
         Ok("Available text".to_owned()),
     );
     assert_eq!(
-        text(
-            &json!({"messages": [{"content": {"type": "resource", "resource": {"blob": "aGk="}}}]})
+        read_text(
+            json!({"messages": [{"content": {"type": "resource", "resource": {"blob": "aGk="}}}]})
         ),
         Err("a binary resource".to_owned()),
     );
     assert_eq!(
-        text(&json!({"messages": [{"content": {"type": "resource", "resource": {}}}]})),
+        read_text(json!({"messages": [{"content": {"type": "resource", "resource": {}}}]})),
         Err("an unreadable resource".to_owned()),
     );
 }
