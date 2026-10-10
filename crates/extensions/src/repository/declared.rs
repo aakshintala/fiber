@@ -275,17 +275,16 @@ fn git_files(name: &str, dir: &Path, clock: &dyn Clock) -> Result<Vec<String>, E
         args: vec![
             "-c".to_owned(),
             "core.fsmonitor=false".to_owned(),
-            "-C".to_owned(),
-            // The directory just canonicalized, so it exists; its UTF-8
-            // text keeps the call matchable in the process list.
-            dir.to_string_lossy().into_owned(),
             "ls-files".to_owned(),
             "-z".to_owned(),
             "--cached".to_owned(),
             "--others".to_owned(),
             "--exclude-standard".to_owned(),
         ],
-        cwd: Path::new(".").to_path_buf(),
+        // The directory itself, already canonicalized above: `Command`
+        // hands it to the kernel without turning it into text, so a
+        // workspace path that is not UTF-8 still reaches `git` intact.
+        cwd: dir.to_path_buf(),
         // The file list is not capped today.
         cap: usize::MAX,
         // In Fiber's process group, so terminal prompts still work as they
@@ -297,12 +296,6 @@ fn git_files(name: &str, dir: &Path, clock: &dyn Clock) -> Result<Vec<String>, E
     // this returns.
     let (_cancel, cancel) = mpsc::channel::<()>();
     let out = match exec::run(&req, clock, Some(deadline), cancel) {
-        Err(stalled) if stalled.ran.as_ref().is_some_and(|ran| ran.timed_out) => {
-            return Err(fail(format!(
-                "`git ls-files` did not finish within {} s, so it was stopped",
-                GIT_DEADLINE.as_secs()
-            )));
-        }
         Err(failed) => match failed.source {
             Some(source) => return Err(spawn_error(dir, source)),
             // After the spawn: a reader thread that could not start.

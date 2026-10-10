@@ -457,6 +457,11 @@ fn marking_a_hook_required_changes_its_hash() {
 /// files with the fixture directory first on its `PATH`.
 const LS_FILES_CHILD: &str = "FIBER_TEST_LS_FILES_CHILD";
 
+/// The fixture's stall marker: the parent sets it to a value unique to the
+/// run, and the fixture carries it in the stall's argv, so the child matches
+/// the stalled process without reading its working directory.
+const STALL_MARKER: &str = "FIBER_TEST_STALL_MARKER";
+
 /// `git ls-files` through the fixture stalls: the file list is bounded at
 /// the git deadline, and the stall is gone afterwards. The stall runs in a
 /// re-executed child with the fixture directory first on `PATH` (tests
@@ -470,9 +475,15 @@ fn a_stalled_ls_files_fails_at_the_git_deadline() {
     }
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-git");
     let path = format!("{}:{}", fixture.display(), std::env::var("PATH").unwrap());
+    // Unique to the run: no two re-executed children match each other's stall.
+    let marker = format!("stall-ls-files-{}", std::process::id());
     let output = fakes::rerun(
         "repository::declared_tests::a_stalled_ls_files_fails_at_the_git_deadline",
-        &[(LS_FILES_CHILD, "1"), ("PATH", path.as_str())],
+        &[
+            (LS_FILES_CHILD, "1"),
+            ("PATH", path.as_str()),
+            (STALL_MARKER, marker.as_str()),
+        ],
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -490,6 +501,45 @@ fn a_stalled_ls_files_fails_at_the_git_deadline() {
 /// `ls-files` stalls, and the file list fails at the git deadline.
 fn stalled_ls_files_child() {
     const WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
+    /// One sighting round's wait for the run's answer.
+    const SIGHT: Duration = Duration::from_millis(200);
+    /// Rounds of waiting for the stalled process to prove it is stuck: 8
+    /// rounds of two bounded waits are about 3 s of wall clock, the hang
+    /// guard for a stall that never appears.
+    const STUCK_ROUNDS: u32 = 8;
+
+    /// Waits until the process holding `stall` on its command line has
+    /// outlived a bounded wait, returning an early answer at once. A process
+    /// seen running across the wait is stuck, not starting: stopping a
+    /// starter reports a timeout the stall never caused, so the clock moves
+    /// only after the second sighting. A stall that answers instead fails on
+    /// its own answer.
+    fn await_stuck<T: Send>(done: &mpsc::Receiver<T>, stall: &str) -> Option<T> {
+        for _ in 0..STUCK_ROUNDS {
+            if !fakes::matching(stall).unwrap().is_empty() {
+                // Up: still up after a bounded wait means stuck, not
+                // starting; an answer meanwhile ends this at once.
+                match done.recv_timeout(SIGHT) {
+                    Ok(done) => return Some(done),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        panic!("the stalled run returns")
+                    }
+                }
+                if !fakes::matching(stall).unwrap().is_empty() {
+                    return None;
+                }
+            }
+            match done.recv_timeout(SIGHT) {
+                Ok(done) => return Some(done),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("the stalled run returns")
+                }
+            }
+        }
+        panic!("the stalled process runs");
+    }
 
     // No `git init`: the fixture stalls `ls-files` whatever the directory
     // holds, and a real `git` here would resolve to the fixture first on
@@ -500,9 +550,10 @@ fn stalled_ls_files_child() {
     let clock = FakeClock::new();
     let worker_clock = Arc::clone(&clock);
     let root = repo.root();
-    // The fixture keeps `-C <dir>` in the stall's argv, so the stalled
-    // process matches this repository alone.
-    let unique = root.display().to_string();
+    // The run passes no directory on the command line anymore, so the
+    // stalled process matches the marker the parent set alone.
+    let marker = std::env::var(STALL_MARKER).expect("the parent sets the stall marker");
+    let watching = marker.clone();
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("stalled ls-files".into())
@@ -514,6 +565,10 @@ fn stalled_ls_files_child() {
         clock.await_parked(clock.now() + GROUP_POLL, WITHIN),
         "waited {WITHIN:?} for ls-files to park while running"
     );
+    // The stall proves it is stuck before the clock first moves: stopping
+    // a starter on the way up reports a timeout the stall never caused.
+    let early = await_stuck(&done_rx, &watching);
+    assert!(early.is_none(), "the stall answers only at its deadline");
     // Past the git deadline the run stops.
     clock.advance(GIT_DEADLINE + Duration::from_secs(1));
     let kill_at = clock.now() + GRACE;
@@ -536,7 +591,7 @@ fn stalled_ls_files_child() {
     );
     // The run kills what it stopped, so leftovers fail the test without
     // leaking. By pid, never by group: the stall shares this child's group.
-    let leftovers = fakes::matching(&unique).unwrap();
+    let leftovers = fakes::matching(&marker).unwrap();
     for pid in &leftovers {
         drop(fakes::kill_pid(*pid, "KILL"));
     }

@@ -116,16 +116,6 @@ fn run_step(
     // this returns.
     let (_cancel, cancel) = mpsc::channel::<()>();
     match exec::run(&req, clock, Some(deadline), cancel) {
-        Err(stalled) if stalled.ran.as_ref().is_some_and(|ran| ran.timed_out) => {
-            Err(Error::InstallExited {
-                name: name.into(),
-                why: format!(
-                    "`{}` did not finish within {} s, so it was stopped",
-                    step.join(" "),
-                    INSTALL_STEP_DEADLINE.as_secs()
-                ),
-            })
-        }
         Err(failed_run) => match failed_run.source {
             Some(source) => Err(failed(format!("`{program}`: {source}"))),
             // After the spawn: a reader thread that could not start.
