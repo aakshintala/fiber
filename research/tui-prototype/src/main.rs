@@ -5670,6 +5670,10 @@ fn run(
                             (rail_w + 1, cw as u16)
                         };
                         paint(buf, x, k as u16, w, r);
+                        // a row's own targets come first: hits are matched first-found
+                        for &(x0, x1, act) in &r.hot {
+                            hits.push((k as u16, x + x0, x + x1, act));
+                        }
                         if let Some(act) = r.act {
                             hits.push((k as u16, rail_w, rail_w + conv_w, act));
                         }
