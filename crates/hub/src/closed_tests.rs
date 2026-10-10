@@ -784,3 +784,40 @@ fn a_disconnected_connection_skips_the_check() {
     );
     drop(bound);
 }
+
+#[test]
+fn a_relay_ending_while_the_connection_closes_never_waits_on_the_relays_lock() {
+    // `close_all` runs under the relays lock and wakes the relay threads
+    // before it returns. The end of such a thread reads the closed state
+    // while that lock is still held: it must skip the check without
+    // waiting on the lock, and so keep the level.
+    let fixture = Fixture::new("cs9");
+    let bound = FakeSession::bind(&fixture.home, SID);
+    let (rig, client_peer, _session_peer, _reader, _park) =
+        rig(&fixture.home, FakeStarter::hang(&fixture.home), SID, false);
+    lock(&rig.relays)
+        .subscribed
+        .push((SID.to_owned(), subscribe("c_sub", "full")));
+    let mut held = lock(&rig.relays);
+    held.close_all();
+    let (hub, client, relays) = (
+        Arc::clone(&rig.hub),
+        Arc::clone(&rig.client),
+        Arc::clone(&rig.relays),
+    );
+    let ending = thread::spawn(move || on_end(SID, true, &hub, &client, &relays));
+    // The lock stays held across the wait: an `on_end` that needs it
+    // cannot finish, and the deadline fails the test.
+    join(ending, "on_end to skip the check without the relays lock");
+    drop(held);
+    assert_eq!(
+        lock(&rig.relays).subscription(SID),
+        Some(subscribe("c_sub", "full")),
+        "the disconnected connection keeps its level"
+    );
+    assert!(
+        drain_now(&client_peer).is_empty(),
+        "the gone client receives nothing"
+    );
+    drop(bound);
+}
