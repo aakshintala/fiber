@@ -1577,7 +1577,75 @@ fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
         160,
         panel,
         workspace.to_str().unwrap(),
+    );#[test]
+fn journey_prompt_answer_approval_resize_quit() {
+    let setup = Setup::new();
+    // Three responses, each held until the test sees its request and lets
+    // it go: the answer, the tool call, and the answer after the call.
+    let server = ProviderServer::start([reply("Hello."), calls_echo_hi(), reply("Done.")]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    // A standing ask for this exact command: with the terminal connected
+    // the loop asks a person (`docs/permissions.md`, "Headless").
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let mut run = Run::terminal(&setup);
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    // Prompt one: the test releases the answer once the server holds its
+    // request, never on a timer.
+    run.write(b"say hi\r");
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the first request to reach the server"
     );
+    server.release_one();
+    run.wait_screen("the answer", |grid| {
+        grid.alternate_screen && grid.contents.contains("Hello.")
+    });
+    // Prompt two ends in a tool call the rule asks about.
+    run.write(b"run it\r");
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the second request to reach the server"
+    );
+    server.release_one();
+    run.wait_screen("the approval panel", |grid| {
+        grid.alternate_screen && grid.contents.contains("asked by a global rule: echo hi")
+    });
+    run.wait_screen("the approval choices", |grid| {
+        grid.contents.contains("allow once")
+    });
+    // Enter on the first choice allows once; the call runs, the loop sends
+    // its output, and the server holds that follow-up request too.
+    run.write(b"\r");
+    assert!(
+        server.await_requests(3, setup.deadline.left()),
+        "the follow-up request to reach the server"
+    );
+    server.release_one();
+    // The conversation grid before quitting: the call's answer on the
+    // alternate screen.
+    run.wait_screen("the answer after the call", |grid| {
+        grid.alternate_screen && grid.contents.contains("Done.")
+    });
+    // A resize mid-session: the grid follows to the new size with the
+    // conversation still on it.
+    run.resize(100, 30);
+    run.wait_screen("the redrawn grid at the new size", |grid| {
+        grid.rows.len() == 30 && grid.contents.contains("Done.")
+    });
+    // Quit: the terminal is restored, with one resume line per live
+    // session on the primary screen ("On exit").
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the primary screen with the resume line", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor && grid.contents.contains("fiber resume")
+    });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
 }
