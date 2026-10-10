@@ -2,15 +2,17 @@
 //! "Skills listing"): the places a skill is read from, the one skill each
 //! name keeps, and the entries the opening message lists.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use contract::ErrorCode;
 use contract::events::{CommandInfo, Notice, SkillInfo, SkillListed, SkillSource};
 use contract::shapes::ContentPart;
 
+use crate::changes::{Stat, stat_of};
 use crate::opening::canonical;
 use crate::prompt::PromptInputs;
-use crate::skill_header::{self, Invalid};
+use crate::skill_header::{self, Header, Invalid};
 
 /// A skill found in one place.
 #[derive(Clone, Debug)]
@@ -44,6 +46,12 @@ pub(crate) struct Discovered {
     /// `io_failed`, `skill_invalid` and `skill_shadowed`, in discovery
     /// order.
     pub(crate) notices: Vec<Notice>,
+    /// Each place directory, skill entry or `SKILL.md` whose read failed
+    /// with an error other than not-found, as discovery logs it: the
+    /// turn-start check keeps those skills from their last-known entries
+    /// instead of reading them as removed (`docs/system-prompt.md`,
+    /// "Added and removed skills").
+    pub(crate) unread: Vec<PathBuf>,
 }
 
 /// A skill another skill shadows: the loser, and its winner's `SKILL.md`
@@ -142,13 +150,40 @@ fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
     places
 }
 
+/// What the turn-start check remembers per `SKILL.md`: its size and
+/// modification time when last read, and the header that read parsed.
+/// A file whose size and time match is not read again, mirroring the
+/// instruction-file check (`docs/system-prompt.md`, "When something
+/// changes").
+#[derive(Clone, Default)]
+pub(crate) struct Cache {
+    /// Each `SKILL.md` the last check read, by path as discovery logs it.
+    entries: BTreeMap<PathBuf, (Stat, Result<Header, Invalid>)>,
+}
+
 /// Reads every place once and keeps the first skill under each name. A
 /// place whose canonical path an earlier place already had is skipped.
 pub(crate) fn discover(inputs: &PromptInputs, top: &Path) -> Discovered {
+    discover_cached(inputs, top, &mut Cache::default())
+}
+
+/// Reads every place once and keeps the first skill under each name, as
+/// [`discover`] does, but answers a `SKILL.md` from the cache when its
+/// size and modification time match the last read. Paths the check no
+/// longer sees leave the cache, so it never grows past the skills on
+/// disk. A place whose canonical path an earlier place already had is
+/// skipped.
+pub(crate) fn discover_cached(
+    inputs: &PromptInputs,
+    top: &Path,
+    cache: &mut Cache,
+) -> Discovered {
     let mut skills: Vec<Found> = Vec::new();
     let mut shadowed: Vec<Shadowed> = Vec::new();
     let mut notices = Vec::new();
+    let mut unread = Vec::new();
     let mut read: Vec<PathBuf> = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
     for place in places(inputs, top) {
         let dir = canonical(&place.dir);
         if read.contains(&dir) {
@@ -158,16 +193,17 @@ pub(crate) fn discover(inputs: &PromptInputs, top: &Path) -> Discovered {
             .label
             .clone()
             .unwrap_or_else(|| dir.display().to_string());
-        for (path, text) in read_place(&dir, &mut notices) {
-            let header = match skill_header::parse(&text) {
+        for skill in read_place(&dir, &mut notices, &mut unread, cache) {
+            seen.push(skill.path.clone());
+            let header = match skill.header {
                 Ok(header) => header,
                 Err(invalid) => {
-                    notices.push(invalid_notice(&path, &invalid));
+                    notices.push(invalid_notice(&skill.path, &invalid));
                     continue;
                 }
             };
-            let file = path.clone();
-            let path = path.display().to_string();
+            let file = skill.path.clone();
+            let path = skill.path.display().to_string();
             let found = Found {
                 file,
                 listed: SkillListed {
@@ -201,21 +237,41 @@ pub(crate) fn discover(inputs: &PromptInputs, top: &Path) -> Discovered {
         }
         read.push(dir);
     }
+    cache.entries.retain(|path, _| seen.contains(path));
     Discovered {
         skills,
         shadowed,
         notices,
+        unread,
     }
 }
 
-/// Each skill's `SKILL.md` path and text in `dir`, in byte order of the
-/// directory names. Only `<entry>/SKILL.md` is opened: nothing deeper.
-fn read_place(dir: &Path, notices: &mut Vec<Notice>) -> Vec<(PathBuf, String)> {
+/// One `SKILL.md` read: its path as discovery logs it, and its header
+/// or why it was left out. From the cache when its size and
+/// modification time match the last read, read and parsed otherwise.
+struct Read {
+    path: PathBuf,
+    header: Result<Header, Invalid>,
+}
+
+/// Each skill's `SKILL.md` in `dir`, in byte order of the directory
+/// names. Only `<entry>/SKILL.md` is opened: nothing deeper. A place
+/// directory, entry or file that cannot be read for an error other than
+/// not-found joins `unread`, with the file and place failures also
+/// keeping their `io_failed` notice; a missing place, a plain file, and
+/// a link to nothing are skipped as today, with no notice.
+fn read_place(
+    dir: &Path,
+    notices: &mut Vec<Notice>,
+    unread: &mut Vec<PathBuf>,
+    cache: &mut Cache,
+) -> Vec<Read> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
         Err(e) => {
             notices.push(io_failed(dir, &e));
+            unread.push(dir.to_path_buf());
             return Vec::new();
         }
     };
@@ -230,16 +286,48 @@ fn read_place(dir: &Path, notices: &mut Vec<Notice>) -> Vec<(PathBuf, String)> {
     let mut found = Vec::new();
     for name in names {
         let entry = dir.join(name);
-        // A symlink is followed; a plain file, or a link to nothing, is no
-        // skill.
-        if !std::fs::metadata(&entry).is_ok_and(|meta| meta.is_dir()) {
-            continue;
+        // A symlink is followed; a plain file, or a link to nothing, is
+        // no skill. An entry that cannot be reached at all joins
+        // `unread` with no notice: the turn-start check keeps its skill
+        // from the last-known entry.
+        match std::fs::metadata(&entry) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                unread.push(entry);
+                continue;
+            }
         }
         let path = entry.join("SKILL.md");
+        // The size-and-time shortcut: unchanged without reading, as the
+        // instruction-file check reads (`docs/system-prompt.md`, "When
+        // something changes").
+        if let (Some(now), Some((known, header))) =
+            (stat_of(&path.display().to_string()), cache.entries.get(&path))
+            && now == *known
+        {
+            found.push(Read {
+                path,
+                header: header.clone(),
+            });
+            continue;
+        }
         match std::fs::read(&path) {
-            Ok(bytes) => found.push((path, String::from_utf8_lossy(&bytes).into_owned())),
+            Ok(bytes) => {
+                let header = skill_header::parse(&String::from_utf8_lossy(&bytes));
+                if let Some(now) = stat_of(&path.display().to_string()) {
+                    cache
+                        .entries
+                        .insert(path.clone(), (now, header.clone()));
+                }
+                found.push(Read { path, header });
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => notices.push(io_failed(&path, &e)),
+            Err(e) => {
+                notices.push(io_failed(&path, &e));
+                unread.push(path);
+            }
         }
     }
     found
