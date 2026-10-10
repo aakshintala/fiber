@@ -122,8 +122,9 @@ fn stripe(on: bool, colour: Role, tint: Role, right: bool) -> Span<'static> {
 /// covers the rect where it sits inside the buffer and leaves symbols
 /// and foregrounds; each edge row sets only its foreground, so its
 /// background stays the colour around the slab. The stripe draws where
-/// the text insets past it, and the edges clip on their own rows,
-/// whether or not any of the slab's rows shows.
+/// the text insets past it, clipped to the buffer at the slab's own
+/// column; the edges clip on their own rows and columns, whether or not
+/// any of the slab's rows shows.
 pub(crate) fn draw_slab(
     buf: &mut Buffer,
     rect: Rect,
@@ -139,19 +140,7 @@ pub(crate) fn draw_slab(
         && rect.height > 0
         && inset(rect.width) < rect.width
     {
-        let area = buf.area;
-        let column = if stripe.right {
-            rect.right().saturating_sub(1)
-        } else {
-            rect.x
-        };
-        if column >= area.left()
-            && column < area.right()
-            && rect.top() < area.bottom()
-            && rect.bottom() > area.y
-        {
-            draw_stripe(buf, rect, stripe.colour, tint, stripe.right);
-        }
+        draw_stripe(buf, rect, stripe.colour, tint, stripe.right);
     }
     if edges.top {
         draw_edge(buf, rect, tint, true);
@@ -162,7 +151,8 @@ pub(crate) fn draw_slab(
 }
 
 /// Draws one edge row for `rect` in `tint`: above it (`top`) or below
-/// it, where that row sits inside `buf` (`docs/tui.md`, "Look").
+/// it, where that row sits inside `buf`, across the columns where the
+/// rect and the buffer overlap (`docs/tui.md`, "Look").
 fn draw_edge(buf: &mut Buffer, rect: Rect, tint: Role, top: bool) {
     let area = buf.area;
     let y = if top {
@@ -176,12 +166,13 @@ fn draw_edge(buf: &mut Buffer, rect: Rect, tint: Role, top: bool) {
     if y < area.y || y >= area.bottom() {
         return;
     }
-    buf.set_line(
-        rect.x,
-        y,
-        &edge_row(usize::from(rect.width), tint, top),
-        rect.width,
-    );
+    let left = rect.x.max(area.left());
+    let right = rect.right().min(area.right());
+    if left >= right {
+        return;
+    }
+    let width = right - left;
+    buf.set_line(left, y, &edge_row(usize::from(width), tint, top), width);
 }
 
 /// Draws the edge rows above and below `rect` in `tint`, where they sit
@@ -192,19 +183,24 @@ pub(crate) fn draw_edges(buf: &mut Buffer, rect: Rect, tint: Role) {
 }
 
 /// Draws the stripe over `rect`'s rows in `colour`: its left column, or
-/// its right one (`right`), on `tint` (`docs/tui.md`, "Look").
+/// its right one (`right`), on `tint`, where that column and each row
+/// sit inside `buf` (`docs/tui.md`, "Look").
 pub(crate) fn draw_stripe(buf: &mut Buffer, rect: Rect, colour: Role, tint: Role, right: bool) {
     if rect.width == 0 || rect.height == 0 {
         return;
     }
+    let area = buf.area;
     let x = if right {
         rect.right().saturating_sub(1)
     } else {
         rect.x
     };
+    if x < area.left() || x >= area.right() {
+        return;
+    }
     let stripe = stripe_cell(colour, tint, right);
     let line = Line::from(stripe);
-    for y in rect.top()..rect.bottom() {
+    for y in rect.top().max(area.top())..rect.bottom().min(area.bottom()) {
         buf.set_line(x, y, &line, 1);
     }
 }

@@ -572,3 +572,245 @@ fn a_slab_above_the_buffer_still_draws_its_bottom_edge() {
         }
     }
 }
+
+#[test]
+fn a_slab_overhanging_the_bottom_clips_its_stripe_and_edges() {
+    // The slab's last row sits past the buffer: its tint and stripe
+    // cover only row 3, its top edge shows on row 2, and its bottom
+    // edge stays off screen (`docs/tui.md`, "Look").
+    let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+    draw_slab(
+        &mut buf,
+        Rect::new(0, 3, 6, 2),
+        Role::Surface,
+        Some(Stripe {
+            colour: Role::Accent,
+            right: false,
+        }),
+        Edges::BOTH,
+    );
+    for x in 0..6 {
+        assert_eq!(buf[(x, 2)].symbol(), "▄", "x {x}");
+        assert_eq!(buf[(x, 2)].fg, Role::Surface.color(), "x {x}");
+    }
+    assert_eq!(buf[(0, 3)].symbol(), "▌");
+    assert_eq!(buf[(0, 3)].fg, Role::Accent.color());
+    for x in 0..6 {
+        assert_eq!(buf[(x, 3)].bg, Role::Surface.color(), "x {x}");
+    }
+    for y in 0..2 {
+        for x in 0..6 {
+            assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
+            assert_ne!(buf[(x, y)].bg, Role::Surface.color(), "({x}, {y})");
+        }
+    }
+    for x in 1..6 {
+        assert_eq!(buf[(x, 3)].symbol(), " ", "x {x}");
+    }
+}
+
+#[test]
+fn a_slab_overhanging_the_top_clips_its_stripe_and_edges() {
+    // Rows 0 and 1 sit above the buffer: the tint and stripe cover rows
+    // 2 to 4, no top edge draws, and the bottom edge lands on the slab's
+    // last shown row, over its stripe (`docs/tui.md`, "Look").
+    let mut buf = Buffer::empty(Rect::new(0, 2, 6, 4));
+    draw_slab(
+        &mut buf,
+        Rect::new(0, 0, 6, 4),
+        Role::Surface,
+        Some(Stripe {
+            colour: Role::Accent,
+            right: false,
+        }),
+        Edges::BOTH,
+    );
+    for y in 2..4 {
+        for x in 0..6 {
+            assert_eq!(buf[(x, y)].bg, Role::Surface.color(), "({x}, {y})");
+        }
+    }
+    for y in 2..4 {
+        assert_eq!(buf[(0, y)].symbol(), "▌", "y {y}");
+        assert_eq!(buf[(0, y)].fg, Role::Accent.color(), "y {y}");
+    }
+    for x in 0..6 {
+        assert_eq!(buf[(x, 4)].symbol(), "▀", "x {x}");
+        assert_eq!(buf[(x, 4)].fg, Role::Surface.color(), "x {x}");
+        assert_eq!(
+            buf[(x, 4)].bg,
+            ratatui::style::Color::Reset,
+            "the edge keeps the untinted background at {x}"
+        );
+    }
+    for x in 1..6 {
+        for y in 2..4 {
+            assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
+        }
+    }
+    for y in 5..6 {
+        for x in 0..6 {
+            assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
+            assert_ne!(buf[(x, y)].bg, Role::Surface.color(), "({x}, {y})");
+        }
+    }
+}
+
+#[test]
+fn a_slab_overhanging_the_left_keeps_its_stripe_column() {
+    // Columns 0 and 1 sit left of the buffer: the tint and edges cover
+    // columns 2 to 5, and no stripe draws, since its column stays where
+    // the rect puts it (`docs/tui.md`, "Look").
+    let mut buf = Buffer::empty(Rect::new(2, 0, 6, 4));
+    draw_slab(
+        &mut buf,
+        Rect::new(0, 1, 6, 2),
+        Role::Surface,
+        Some(Stripe {
+            colour: Role::Accent,
+            right: false,
+        }),
+        Edges::BOTH,
+    );
+    for cell in &buf.content {
+        assert_ne!(cell.symbol(), "▌");
+    }
+    for y in 1..3 {
+        for x in 2..6 {
+            assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
+            assert_eq!(buf[(x, y)].bg, Role::Surface.color(), "({x}, {y})");
+        }
+        for x in 6..8 {
+            assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
+            assert_ne!(buf[(x, y)].bg, Role::Surface.color(), "({x}, {y})");
+        }
+    }
+    for (y, edge) in [(0, "▄"), (3, "▀")] {
+        for x in 2..6 {
+            assert_eq!(buf[(x, y)].symbol(), edge, "({x}, {y})");
+            assert_eq!(buf[(x, y)].fg, Role::Surface.color(), "({x}, {y})");
+        }
+        for x in 6..8 {
+            assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
+        }
+    }
+}
+
+#[test]
+fn a_slab_overhanging_both_sides_draws_a_right_stripe_inside() {
+    // The buffer starts at column 2: the left stripe's column sits
+    // outside and draws nothing, while the right stripe's sits inside
+    // and draws (`docs/tui.md`, "Look").
+    let mut buf = Buffer::empty(Rect::new(2, 0, 8, 4));
+    draw_slab(
+        &mut buf,
+        Rect::new(0, 1, 8, 2),
+        Role::Surface,
+        Some(Stripe {
+            colour: Role::Accent,
+            right: true,
+        }),
+        Edges::BOTH,
+    );
+    for cell in &buf.content {
+        assert_ne!(cell.symbol(), "▌");
+    }
+    for y in 1..3 {
+        assert_eq!(buf[(7, y)].symbol(), "▐", "y {y}");
+        assert_eq!(buf[(7, y)].fg, Role::Accent.color(), "y {y}");
+        assert_eq!(buf[(7, y)].bg, Role::Surface.color(), "y {y}");
+        for x in 2..8 {
+            if x != 7 {
+                assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
+            }
+            assert_eq!(buf[(x, y)].bg, Role::Surface.color(), "({x}, {y})");
+        }
+        for x in 8..10 {
+            assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
+            assert_ne!(buf[(x, y)].bg, Role::Surface.color(), "({x}, {y})");
+        }
+    }
+    for (y, edge) in [(0, "▄"), (3, "▀")] {
+        for x in 2..8 {
+            assert_eq!(buf[(x, y)].symbol(), edge, "({x}, {y})");
+            assert_eq!(buf[(x, y)].fg, Role::Surface.color(), "({x}, {y})");
+        }
+        for x in 8..10 {
+            assert_eq!(buf[(x, y)].symbol(), " ", "({x}, {y})");
+        }
+    }
+}
+
+#[test]
+fn draw_stripe_clips_its_rows_and_columns_to_the_buffer() {
+    // Rows past the buffer never draw: a stripe overhanging the bottom
+    // tints only the rows inside.
+    let mut buf = Buffer::empty(Rect::new(0, 0, 6, 4));
+    super::draw_stripe(
+        &mut buf,
+        Rect::new(1, 3, 2, 3),
+        Role::Accent,
+        Role::Surface,
+        false,
+    );
+    assert_eq!(buf[(1, 3)].symbol(), "▌");
+    for y in 0..3 {
+        for x in 0..6 {
+            assert_ne!(buf[(x, y)].symbol(), "▌", "({x}, {y})");
+        }
+    }
+    // A stripe column outside the buffer draws nothing.
+    let mut outside = Buffer::empty(Rect::new(0, 0, 6, 4));
+    super::draw_stripe(
+        &mut outside,
+        Rect::new(7, 0, 3, 2),
+        Role::Accent,
+        Role::Surface,
+        false,
+    );
+    super::draw_stripe(
+        &mut outside,
+        Rect::new(4, 0, 6, 2),
+        Role::Accent,
+        Role::Surface,
+        true,
+    );
+    for cell in &outside.content {
+        assert_ne!(cell.symbol(), "▌");
+        assert_ne!(cell.symbol(), "▐");
+    }
+    // Rows above a nonzero-origin buffer never draw.
+    let mut above = Buffer::empty(Rect::new(0, 2, 6, 4));
+    super::draw_stripe(
+        &mut above,
+        Rect::new(0, 0, 6, 4),
+        Role::Accent,
+        Role::Surface,
+        false,
+    );
+    for y in 2..4 {
+        assert_eq!(above[(0, y)].symbol(), "▌", "y {y}");
+    }
+    for y in 4..6 {
+        for x in 0..6 {
+            assert_ne!(above[(x, y)].symbol(), "▌", "({x}, {y})");
+        }
+    }
+}
+
+#[test]
+fn draw_edges_clips_its_columns_at_a_nonzero_origin() {
+    // Columns 0, 1, 8 and past sit outside the buffer: both edge rows
+    // cover columns 2 to 7 only.
+    let mut buf = Buffer::empty(Rect::new(2, 1, 6, 3));
+    draw_edges(&mut buf, Rect::new(0, 2, 10, 1), Role::Surface);
+    for (y, edge) in [(1, "▄"), (3, "▀")] {
+        for x in 2..8 {
+            assert_eq!(buf[(x, y)].symbol(), edge, "({x}, {y})");
+            assert_eq!(buf[(x, y)].fg, Role::Surface.color(), "({x}, {y})");
+        }
+    }
+    for x in 2..8 {
+        assert_eq!(buf[(x, 2)].symbol(), " ", "x {x}");
+    }
+}
