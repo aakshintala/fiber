@@ -554,7 +554,9 @@ tests in `crates/main/src/`. A pass on retry does not block the
 merge. CI opens a flake issue naming the test and its first failure, or
 comments on the open one. The issue's title is `Flaky test: ` followed by
 the test as nextest prints it. A flake issue closes when the test is rewritten to be
-deterministic, never by rerunning.
+deterministic, never by rerunning. A failure on a commit that does not contain
+the fix (`git merge-base --is-ancestor <fix> <commit>` is false) neither
+reopens the closed issue nor counts against the fix.
 
 Crate-level and cross-crate tests never retry: they are deterministic, so a
 failure there is signal.
