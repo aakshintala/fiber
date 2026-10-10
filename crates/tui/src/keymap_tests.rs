@@ -305,3 +305,13 @@ fn the_counts_are_bindings_above_and_below() {
     let total = state.visible(&keys).len();
     assert_eq!((state.top(), total.saturating_sub(fits(0))), (0, 0));
 }
+
+#[test]
+fn fits_from_leaves_the_above_count_row_once_scrolled() {
+    use super::fits_from;
+    // From the top the whole body holds the rows. Once bindings hide
+    // above, the count line takes the body's last row, so one row less
+    // is left for bindings.
+    assert_eq!(fits_from(0, &[1, 1, 1], 2), 2);
+    assert_eq!(fits_from(1, &[1, 1, 1], 2), 1);
+}

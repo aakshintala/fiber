@@ -306,13 +306,6 @@ pub(crate) fn columns(visible: &[&Binding], keys: &Keyset, inner: u16) -> Column
             keys = keys.saturating_add(1);
         }
     }
-    while action.saturating_add(keys) > rest && (action > 1 || keys > 1) {
-        if keys > 1 {
-            keys = keys.saturating_sub(1);
-        } else {
-            action = action.saturating_sub(1);
-        }
-    }
     Columns { area, action, keys }
 }
 

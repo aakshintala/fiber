@@ -62,14 +62,20 @@ pub(crate) enum Place {
     Centre,
     /// Above the input box: the slab's ▀ edge on the row above `bottom`.
     /// The completion panels take it (a later lane).
-    #[expect(dead_code, reason = "the completion panels take it in a later lane")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the completion panels take it in a later lane")
+    )]
     Across {
         /// The input box's top-edge row.
         bottom: u16,
     },
     /// Under a view's top row: the slab's ▄ edge on `top`. The model
     /// picker takes it (a later lane).
-    #[expect(dead_code, reason = "the model picker takes it in a later lane")]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the model picker takes it in a later lane")
+    )]
     Under {
         /// The first row below the header.
         top: u16,

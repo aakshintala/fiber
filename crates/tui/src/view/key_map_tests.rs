@@ -286,3 +286,80 @@ fn draw_takes_no_room_and_keeps_the_screen() {
     assert!(targets.is_empty());
     assert_eq!(buf, Buffer::empty(area));
 }
+
+#[test]
+fn action_rows_split_the_description_from_its_condition() {
+    use super::action_rows;
+    // One row: the condition keeps the space that follows the description.
+    assert_eq!(
+        action_rows("Open", "idle", 80),
+        [("Open".to_owned(), " (idle)".to_owned())]
+    );
+    // Wrapped: each row starts where the last one ended, past the space
+    // the wrap dropped, and the condition lands in the tail once the
+    // description is used up.
+    assert_eq!(
+        action_rows("aaa bbb ccc", "ddd", 8),
+        [
+            ("aaa bbb".to_owned(), String::new()),
+            ("ccc".to_owned(), String::new()),
+            (String::new(), "(ddd)".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn every_row_of_a_binding_keeps_its_columns_full_width() {
+    use super::binding_rows;
+    let binding = crate::bindings::BINDINGS
+        .iter()
+        .find(|row| row.id == "send")
+        .expect("the row");
+    let cols = crate::keymap::Columns {
+        area: 6,
+        action: 12,
+        keys: 8,
+    };
+    let rows = binding_rows(binding, "Enter", &cols, false, false);
+    // The action wraps past the keys: the keys column pads the rows its
+    // text does not reach, so every row is as wide as the three columns.
+    assert!(rows.len() > 1, "the action should wrap");
+    for row in &rows {
+        let wide: usize = row
+            .spans
+            .iter()
+            .map(|span| crate::format::width(&span.content))
+            .sum();
+        assert_eq!(wide, 2 + 6 + 2 + 12 + 2 + 8);
+    }
+}
+
+#[test]
+fn a_map_showing_every_binding_marks_no_more_and_no_gutter() {
+    let mut app = attached(200, 120);
+    open(&mut app);
+    let shown = rows(&buffer(&app, 200, 120));
+    assert!(shown.iter().all(|row| !row.contains("more")), "{shown:?}");
+    assert!(
+        shown.iter().all(|row| !row.starts_with("  ↓ ")),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn a_scrolled_map_counts_the_bindings_below() {
+    let mut app = attached(80, 24);
+    open(&mut app);
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..12 {
+        app.on_key(Key::Down, now);
+    }
+    assert!(app.keymap_top().unwrap_or(0) > 0);
+    let shown = rows(&buffer(&app, 80, 24));
+    assert!(
+        shown
+            .iter()
+            .any(|row| row.contains("↑") && row.contains("↓ ") && row.contains("more")),
+        "{shown:?}"
+    );
+}

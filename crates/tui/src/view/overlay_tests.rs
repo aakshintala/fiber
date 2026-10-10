@@ -527,3 +527,87 @@ fn the_right_end_keeps_priority_when_cut() {
         .collect();
     assert!(text.ends_with("tag  "), "{text}");
 }
+
+/// A body row of one plain span.
+fn one_row() -> Row {
+    Row {
+        spans: vec![Span::raw("row")],
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
+    }
+}
+
+#[test]
+fn height_counts_the_title_its_gap_and_the_footer() {
+    let overlay = |title: bool, body: usize, footer: bool| super::Overlay {
+        title: title.then(|| ("Title".to_owned(), None)),
+        close: None,
+        body: (0..body).map(|_| one_row()).collect(),
+        footer: footer.then(|| hint("foot")),
+        prefer: 71,
+    };
+    assert_eq!(height(&overlay(false, 0, false)), 4);
+    // The title is a row; its gap comes only with a body or footer.
+    assert_eq!(height(&overlay(true, 0, false)), 5);
+    assert_eq!(height(&overlay(false, 1, false)), 5);
+    assert_eq!(height(&overlay(true, 1, false)), 7);
+    assert_eq!(height(&overlay(false, 0, true)), 5);
+    assert_eq!(height(&overlay(true, 0, true)), 7);
+    assert_eq!(height(&overlay(false, 1, true)), 7);
+}
+
+#[test]
+fn choices_wrap_at_the_width_left_after_the_key_column() {
+    // A four-wide key column and two columns of gutter put the
+    // description eight columns in: an inner width of 18 leaves ten.
+    let made = choices(&[("abcd", "one two three four")], 0, 18);
+    assert_eq!(made.len(), 2);
+    let text: String = made[1]
+        .spans
+        .iter()
+        .map(|span| span.content.to_string())
+        .collect();
+    assert_eq!(text, format!("{}three four", " ".repeat(8)));
+}
+
+#[test]
+fn across_and_under_centre_the_slab_across_the_width() {
+    let framed = super::Overlay {
+        title: None,
+        close: None,
+        body: vec![Row {
+            spans: vec![Span::raw("x".repeat(36))],
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        }],
+        footer: None,
+        prefer: 71,
+    };
+    // Content 36 gives width 40: a margin of 40 splits to 20 a side.
+    let area = Rect::new(0, 0, 80, 24);
+    let (_, across, _) = drawn(&framed, area, Place::Across { bottom: 20 });
+    assert_eq!(across.x, 20);
+    let (_, under, _) = drawn(&framed, area, Place::Under { top: 5 });
+    assert_eq!(under.x, 20);
+}
+
+#[test]
+fn a_lone_bottom_edge_draws_no_tint() {
+    // With no title, body or footer, a two-row area keeps its two edge
+    // slots and no text row between them: nothing is tinted.
+    let bare = super::Overlay {
+        title: None,
+        close: None,
+        body: Vec::new(),
+        footer: None,
+        prefer: 71,
+    };
+    let (buf, _, _) = drawn(&bare, Rect::new(0, 0, 40, 2), Place::Dock);
+    let shown = rows(&buf);
+    assert!(
+        shown.iter().all(|row| row.chars().all(|ch| ch == ' ')),
+        "{shown:?}"
+    );
+}
