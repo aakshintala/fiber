@@ -164,6 +164,17 @@ fn text_joins_every_message_in_order() {
 }
 
 #[test]
+fn an_empty_text_part_adds_nothing_to_the_joined_text() {
+    assert_eq!(
+        read_text(json!({"messages": [
+            {"role": "user", "content": {"type": "text", "text": ""}},
+            {"role": "user", "content": {"type": "text", "text": "Only this."}},
+        ]})),
+        Ok("Only this.".to_owned())
+    );
+}
+
+#[test]
 fn embedded_resource_text_and_blob_guard_are_distinct() {
     assert_eq!(
         read_text(
