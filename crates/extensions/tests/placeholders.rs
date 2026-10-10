@@ -565,8 +565,16 @@ fn assert_not_a_host(value: &str, class: &str) {
         .unwrap();
     assert_eq!(notices.len(), 1, "{class}: {value:?}");
     let notice = notices.first().unwrap();
-    assert_eq!(notice.code, ErrorCode::ModelUnconfigured, "{class}: {value:?}");
-    assert_eq!(notice.extension.as_deref(), Some("acme"), "{class}: {value:?}");
+    assert_eq!(
+        notice.code,
+        ErrorCode::ModelUnconfigured,
+        "{class}: {value:?}"
+    );
+    assert_eq!(
+        notice.extension.as_deref(),
+        Some("acme"),
+        "{class}: {value:?}"
+    );
     assert_eq!(
         notice.message,
         "The model `acme/m` needs the setting `workspace` for its base URL, \
@@ -575,7 +583,11 @@ fn assert_not_a_host(value: &str, class: &str) {
     );
     assert!(!notice.message.contains(value), "{class}: {value:?}");
     let err = providers.resolve("acme/m").unwrap_err();
-    assert_eq!(err.code(), ErrorCode::ModelUnconfigured, "{class}: {value:?}");
+    assert_eq!(
+        err.code(),
+        ErrorCode::ModelUnconfigured,
+        "{class}: {value:?}"
+    );
     assert_eq!(err.to_string(), notice.message, "{class}: {value:?}");
 }
 
