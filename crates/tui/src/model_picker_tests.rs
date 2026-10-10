@@ -1101,6 +1101,35 @@ fn backspace_on_an_empty_query_changes_nothing() {
 }
 
 #[test]
+fn backspace_drops_the_last_letter_and_widens_the_filter() {
+    let mut picker = open_over(catalogue());
+    picker.push_query('m');
+    picker.push_query('2');
+    let (narrow, _) = shown_in(
+        &picker.catalogue.models,
+        &picker.scoped,
+        false,
+        Mode::Choose,
+        None,
+        picker.query(),
+    );
+    assert_eq!(narrow, [1]);
+    picker.pop_query();
+    assert_eq!(picker.query(), "m");
+    // `acme/m1` shows again; the selection stays on `acme/m2`.
+    let (wide, _) = shown_in(
+        &picker.catalogue.models,
+        &picker.scoped,
+        false,
+        Mode::Choose,
+        None,
+        picker.query(),
+    );
+    assert_eq!(wide, [0, 1]);
+    assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
+}
+
+#[test]
 fn with_no_row_shown_choice_is_none_and_chips_do_not_move() {
     let mut picker = open_over(catalogue());
     picker.push_query('q');

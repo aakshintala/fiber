@@ -1610,6 +1610,41 @@ fn ctrl_s_sends_one_model_command_and_waits_on_nothing() {
 }
 
 #[test]
+fn ctrl_s_with_the_quit_question_up_sends_nothing_from_a_choosable_row() {
+    let mut app = quitting();
+    // A row is there to choose, so only the quit question keeps it back.
+    // The question takes Ctrl+S before the keymap, so this calls the
+    // guard directly.
+    assert!(app.model_picker.choice(true).is_some());
+    assert_eq!(app.model_picker_session_only(), Effect::None);
+    assert!(app.quit_open());
+    assert!(app.model_picker_open());
+    assert!(app.model_picker.start_model.is_none());
+}
+
+/// Types one letter into the open picker.
+fn type_letter(app: &mut App, c: char) {
+    let stroke = Stroke::parse(&c.to_string()).unwrap();
+    assert_eq!(app.on_press(stroke, now()), Effect::None);
+}
+
+#[test]
+fn backspace_shortens_the_query_of_a_choosing_picker_only() {
+    let (mut app, _) = choosing_app();
+    open(&mut app);
+    type_letter(&mut app, 'm');
+    type_letter(&mut app, '2');
+    assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+    assert_eq!(app.model_picker.query(), "m");
+    // The checklist takes no backspace: the query it holds stays.
+    let _ = app.scoped_models_command();
+    assert!(app.model_picker.is_scope());
+    app.model_picker.push_query('m');
+    assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+    assert_eq!(app.model_picker.query(), "m");
+}
+
+#[test]
 fn ctrl_s_under_the_key_map_sends_nothing_and_stays_open() {
     let (mut app, _) = choosing_app();
     open(&mut app);
