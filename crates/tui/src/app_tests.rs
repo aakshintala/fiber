@@ -841,7 +841,7 @@ fn slash_rows(app: &mut App, query: &str, now: std::time::Instant) -> Vec<String
     }
     let rows = app
         .completions()
-        .map(|completions| completions.lines)
+        .map(|completions| completions.lines())
         .unwrap_or_default();
     app.on_key(Key::CtrlC, now);
     rows

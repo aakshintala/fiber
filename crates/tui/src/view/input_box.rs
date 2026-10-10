@@ -88,7 +88,8 @@ pub(super) fn draw(
     if let Some(completions) = app.completions()
         && matches!(completions.rows, Rows::Search(_))
     {
-        for (at, line) in completions.lines.iter().enumerate().rev() {
+        let lines = completions.lines();
+        for (at, line) in lines.iter().enumerate().rev() {
             let style = if completions.selected == Some(at) {
                 Style::new().add_modifier(Modifier::REVERSED)
             } else {

@@ -134,11 +134,17 @@ fn matched_is_the_first_case_folded_occurrence_on_char_boundaries() {
     assert_eq!(matched("reload", "RE"), Some(0..2));
     assert_eq!(matched("close", "ose"), Some(2..5));
     assert_eq!(matched("caf\u{e9}", "F\u{c9}"), Some(2..5));
-    // A fold that widens past the match leaves no range to bold: İ
-    // lowercases to two code points, so the query's end falls inside
-    // the name's first character.
-    assert_eq!(matched("\u{130}", "i"), None);
     assert_eq!(matched("reload", "zzz"), None);
     assert_eq!(matched("reload", ""), None);
     assert_eq!(matched("", "re"), None);
+    // Folding can expand past the original string: İ lowercases to
+    // two code points, so the walk maps back to the name's own bytes.
+    assert_eq!(matched("\u{130}\u{130}abc", "c"), Some(6..7));
+    assert_eq!(matched("\u{130}\u{130}abc", "bc"), Some(5..7));
+    assert_eq!(matched("\u{130}\u{130}abc", "ab"), Some(4..6));
+    assert_eq!(matched("\u{130}\u{130}abc", "d"), None);
+    // A query landing mid-expansion finds no character to bold.
+    assert_eq!(matched("\u{130}x", "\u{307}x"), None);
+    // A query matching a fold's head bolds the whole character.
+    assert_eq!(matched("\u{130}", "i"), Some(0..2));
 }

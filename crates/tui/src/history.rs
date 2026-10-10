@@ -355,8 +355,7 @@ impl App {
         if matches.is_empty() {
             lines.push(NO_MATCH.to_owned());
             return Some(Completions {
-                rows: Rows::Search(lines.clone()),
-                lines,
+                rows: Rows::Search(lines),
                 selected: None,
                 start: 0,
                 total: 0,
@@ -375,8 +374,7 @@ impl App {
         );
         let row = selected.saturating_sub(start).saturating_add(1);
         Some(Completions {
-            rows: Rows::Search(lines.clone()),
-            lines,
+            rows: Rows::Search(lines),
             selected: Some(row),
             start,
             total,

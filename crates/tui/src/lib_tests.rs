@@ -1934,7 +1934,7 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
     let (generation, result) = next_result(&rx, "the listing's first search");
     assert_eq!(generation, lp.app.generation());
     assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
-    let shown = lp.app.completions().map(|c| c.lines).unwrap_or_default();
+    let shown = lp.app.completions().map(|c| c.lines()).unwrap_or_default();
     assert_eq!(shown, owned(&["a.txt", "sub/b.rs"]));
     assert_eq!(lp.step(Input::Bytes(b"b".to_vec()), &idle), None);
     let (generation, result) = next_result(&rx, "the search for b");

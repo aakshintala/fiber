@@ -394,7 +394,12 @@ fn a_paste_with_the_ctrl_r_panel_open_goes_to_the_panel() {
     assert_eq!(app.on_edit(Edit::Paste("xy".to_owned())), Effect::None);
     assert_eq!(query(&app), "a");
     let panel = app.search_panel().expect("the panel stays open");
-    assert!(panel.lines.first().is_some_and(|line| line.ends_with("xy")));
+    assert!(
+        panel
+            .lines()
+            .first()
+            .is_some_and(|line| line.ends_with("xy"))
+    );
 }
 
 #[test]
@@ -1766,7 +1771,12 @@ fn the_ctrl_r_panel_takes_typing_over_the_bar() {
     assert_eq!(app.on_key(Key::Char('x'), now()), Effect::None);
     assert_eq!(query(&app), "");
     let panel = app.search_panel().expect("the panel keeps typing");
-    assert!(panel.lines.first().is_some_and(|line| line.ends_with('x')));
+    assert!(
+        panel
+            .lines()
+            .first()
+            .is_some_and(|line| line.ends_with('x'))
+    );
 }
 
 #[test]

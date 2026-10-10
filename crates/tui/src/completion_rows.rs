@@ -20,11 +20,9 @@ pub(crate) enum Rows {
 /// The open completion panel's rows as drawn, and which is selected.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Completions {
-    /// The rows as drawn, today's text form, filled for every kind.
-    pub(crate) lines: Vec<String>,
-    /// The selected row among `lines`, when one is selectable.
+    /// The selected row among [`Completions::lines`], when one is selectable.
     pub(crate) selected: Option<usize>,
-    /// The kind behind `lines`: the window and its match counts.
+    /// The kind behind the panel: the window and its match counts.
     pub(crate) rows: Rows,
     /// The window's first row in the whole match list.
     pub(crate) start: usize,
@@ -35,11 +33,20 @@ pub(crate) struct Completions {
 }
 
 impl Completions {
+    /// The rows as drawn, today's text form, derived from the window.
+    pub(crate) fn lines(&self) -> Vec<String> {
+        match &self.rows {
+            Rows::Slash(rows) => rows.iter().map(slash::Row::line).collect(),
+            Rows::Files(rows) => rows.clone(),
+            Rows::Search(lines) => lines.clone(),
+            Rows::Message(text) => vec![text.clone()],
+        }
+    }
+
     /// One dim row with no selection and no range line.
     pub(crate) fn message(text: impl Into<String>, query: String) -> Self {
         let text = text.into();
         Self {
-            lines: vec![text.clone()],
             selected: None,
             rows: Rows::Message(text),
             start: 0,
@@ -59,7 +66,6 @@ impl Completions {
         let start = slash::window_start(selected);
         let rows: Vec<slash::Row> = all.into_iter().skip(start).take(SHOWN).collect();
         Self {
-            lines: rows.iter().map(slash::Row::line).collect(),
             selected: Some(selected.saturating_sub(start)),
             rows: Rows::Slash(rows),
             start,
@@ -79,7 +85,6 @@ impl Completions {
         let start = slash::window_start(selected);
         let rows: Vec<String> = paths.iter().skip(start).take(SHOWN).cloned().collect();
         Self {
-            lines: rows.clone(),
             selected: Some(selected.saturating_sub(start)),
             rows: Rows::Files(rows),
             start,

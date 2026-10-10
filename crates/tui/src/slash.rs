@@ -122,12 +122,6 @@ pub(crate) fn filter<'a>(rows: &'a [Row], query: &str) -> Vec<&'a Row> {
     starts.chain(contains).map(|(row, _)| row).collect()
 }
 
-/// The rows matching `query`, the text after `/`, in `filter` order,
-/// owned for the panel's window.
-pub(crate) fn filtered(rows: &[Row], query: &str) -> Vec<Row> {
-    filter(rows, query).into_iter().cloned().collect()
-}
-
 /// The first row shown so that `selected` is in view: rows
 /// scroll once the selection passes the last of [`SHOWN`].
 pub(crate) fn window_start(selected: usize) -> usize {
@@ -136,23 +130,47 @@ pub(crate) fn window_start(selected: usize) -> usize {
 
 /// The first case-folded occurrence of `query` in `name`, as byte
 /// offsets on char boundaries; `None` when the query is empty or the
-/// name holds none of it (`docs/tui.md`, "Rules").
+/// name holds none of it (`docs/tui.md`, "Rules"). The walk runs over
+/// the name's own characters, folding each for comparison, and maps
+/// back to the name's byte offsets: folding can expand (İ lowercases
+/// to two code points), so folded offsets can lie past the original
+/// string, and every loop here is bounded by the two lengths.
 pub(crate) fn matched(name: &str, query: &str) -> Option<std::ops::Range<usize>> {
+    let query: Vec<char> = query.to_lowercase().chars().collect();
     if query.is_empty() {
         return None;
     }
-    let at = name.to_lowercase().find(&query.to_lowercase())?;
-    // The fold can move byte offsets across char boundaries, so each
-    // end widens to one it can cut at.
-    let mut start = at;
-    while !name.is_char_boundary(start) {
-        start = start.saturating_add(1);
+    let chars: Vec<(usize, char)> = name.char_indices().collect();
+    for (s, &(start, _)) in chars.iter().enumerate() {
+        // The fold from `s`, each character with its origin: enough
+        // folded characters to cover the query, and no more.
+        let mut folded: Vec<(usize, char)> = Vec::new();
+        for (oi, &(_, ch)) in chars.iter().enumerate().skip(s) {
+            folded.extend(ch.to_lowercase().map(|fold| (oi, fold)));
+            if folded.len() >= query.len() {
+                break;
+            }
+        }
+        let same = folded.len() >= query.len()
+            && folded
+                .iter()
+                .map(|&(_, fold)| fold)
+                .zip(query.iter().copied())
+                .all(|(fold, want)| fold == want);
+        if !same {
+            continue;
+        }
+        // The match ends where the last character it consumed ends.
+        let end = folded
+            .iter()
+            .map(|&(oi, _)| oi)
+            .take(query.len())
+            .last()
+            .and_then(|oi| chars.get(oi + 1))
+            .map_or(name.len(), |(at, _)| *at);
+        return Some(start..end);
     }
-    let mut end = at.saturating_add(query.len()).min(name.len());
-    while !name.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    (start < end).then_some(start..end)
+    None
 }
 
 #[cfg(test)]

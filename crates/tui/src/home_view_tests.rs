@@ -1197,7 +1197,7 @@ fn only_the_selected_completion_sits_on_the_bar() {
     type_draft(&mut app, "/");
     let completions = app.completions().unwrap_or_else(|| panic!("completions"));
     assert_eq!(completions.selected, Some(0));
-    assert!(completions.lines.len() > 1);
+    assert!(completions.lines().len() > 1);
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);

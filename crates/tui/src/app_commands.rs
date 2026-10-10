@@ -201,7 +201,7 @@ impl App {
     pub(super) fn completion_rows(&self) -> usize {
         self.completions()
             .filter(|completions| matches!(completions.rows, Rows::Search(_)))
-            .map_or(0, |completions| completions.lines.len())
+            .map_or(0, |completions| completions.lines().len())
     }
 
     /// The completion panel above the input line, while one is open and
@@ -217,7 +217,10 @@ impl App {
         }
         if self.slash_open() {
             let query = self.slash_query();
-            let all = slash::filtered(&self.overlays.slash_rows, &query);
+            let all: Vec<slash::Row> = slash::filter(&self.overlays.slash_rows, &query)
+                .into_iter()
+                .cloned()
+                .collect();
             return Some(Completions::slash(all, self.overlays.selected, query));
         }
         let query = self.file_query().unwrap_or_default();

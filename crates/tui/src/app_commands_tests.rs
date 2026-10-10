@@ -127,14 +127,14 @@ fn turn_starts(app: &mut App) {
 /// The completion panel's rows.
 fn shown(app: &App) -> Vec<String> {
     app.completions()
-        .map(|completions| completions.lines)
+        .map(|completions| completions.lines())
         .unwrap_or_default()
 }
 
 /// The selected completion row's text.
 fn selected(app: &App) -> Option<String> {
     let completions = app.completions()?;
-    completions.lines.get(completions.selected?).cloned()
+    completions.lines().get(completions.selected?).cloned()
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn typing_filters_prefix_matches_first() {
     type_text(&mut app, "zz");
     // An empty list shows its dim row, with no selection and no range.
     let completions = app.completions().expect("the dim row shows");
-    assert_eq!(completions.lines, ["no matches"]);
+    assert_eq!(completions.lines(), ["no matches"]);
     assert_eq!(completions.selected, None);
     assert!(matches!(completions.rows, super::Rows::Message(_)));
 }
@@ -411,7 +411,7 @@ fn home_and_new_return_to_the_screen_before_a_session() {
         // nothing, so the panel holds only its dim row.
         type_text(&mut app, "/td");
         let completions = app.completions().expect("the dim row shows");
-        assert_eq!(completions.lines, ["no matches"], "{command}");
+        assert_eq!(completions.lines(), ["no matches"], "{command}");
         assert_eq!(completions.selected, None, "{command}");
         app.on_key(Key::Esc, now());
         app.on_key(Key::CtrlC, now());
@@ -735,7 +735,7 @@ fn a_failed_listing_is_one_row_that_cannot_be_chosen() {
     );
     let completions = app.completions();
     assert_eq!(
-        completions.as_ref().map(|c| c.lines.clone()),
+        completions.as_ref().map(|c| c.lines()),
         Some(vec!["No files: fatal: not a git repository".to_owned()])
     );
     assert_eq!(completions.and_then(|c| c.selected), None);
@@ -1103,7 +1103,7 @@ fn slash_completions_carry_their_window() {
     };
     assert_eq!(names, ["resume", "reload", "areview"]);
     assert_eq!(
-        completions.lines,
+        completions.lines(),
         [
             "/resume  Opens home at the session list.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
@@ -1153,7 +1153,7 @@ fn an_empty_slash_list_shows_no_matches() {
     assert_eq!(completions.total, 0);
     assert_eq!(completions.start, 0);
     assert_eq!(completions.selected, None);
-    assert_eq!(completions.lines, ["no matches"]);
+    assert_eq!(completions.lines(), ["no matches"]);
     assert!(matches!(completions.rows, super::Rows::Message(_)));
     assert_eq!(app.completion_rows(), 0);
 }
@@ -1177,7 +1177,7 @@ fn file_completions_carry_their_window() {
             panic!("a file window, not {:?}", completions.rows)
         }
     }
-    assert_eq!(completions.lines, ["src/a.rs", "src/b.rs"]);
+    assert_eq!(completions.lines(), ["src/a.rs", "src/b.rs"]);
     assert_eq!(app.completion_rows(), 0);
 }
 
@@ -1192,7 +1192,7 @@ fn an_empty_file_result_shows_no_files_match() {
     assert_eq!(completions.total, 0);
     assert_eq!(completions.start, 0);
     assert_eq!(completions.selected, None);
-    assert_eq!(completions.lines, ["no files match"]);
+    assert_eq!(completions.lines(), ["no files match"]);
     assert!(matches!(completions.rows, super::Rows::Message(_)));
 }
 
@@ -1203,7 +1203,7 @@ fn a_file_error_is_a_message_with_no_selection() {
     assert_eq!(key(&mut app, '@'), Effect::ListFiles);
     app.on_files(app.generation(), Err("gone".to_owned()));
     let completions = app.completions().expect("the dim row shows");
-    assert_eq!(completions.lines, ["No files: gone"]);
+    assert_eq!(completions.lines(), ["No files: gone"]);
     assert_eq!(completions.selected, None);
     assert!(matches!(completions.rows, super::Rows::Message(_)));
 }

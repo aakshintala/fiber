@@ -474,7 +474,7 @@ fn attaching_moves_that_sessions_hub_lines_out() {
 /// The search panel's rows and selected row.
 fn panel(app: &App) -> (Vec<String>, Option<usize>) {
     app.completions()
-        .map(|panel| (panel.lines, panel.selected))
+        .map(|panel| (panel.lines(), panel.selected))
         .unwrap_or_default()
 }
 
@@ -862,8 +862,8 @@ fn the_search_panel_is_search_rows_and_reserves_its_lines() {
         super::super::commands::Rows::Search(_)
     ));
     assert_eq!(
-        completions.lines,
+        completions.lines(),
         ["search prompts: build", "Fix the Build"]
     );
-    assert_eq!(app.completion_rows(), completions.lines.len());
+    assert_eq!(app.completion_rows(), completions.lines().len());
 }
