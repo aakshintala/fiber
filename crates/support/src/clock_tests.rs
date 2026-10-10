@@ -84,8 +84,7 @@ impl Clock for TestClock {
         System.sleep(d);
     }
 
-    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        let _ = until;
+    fn wait_until(&self, _until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
         let _sent = self.entered.send("entered");
         wait(self.bound);
     }
@@ -158,31 +157,45 @@ fn a_park_that_is_not_done_blocks_until_a_notify() {
 #[test]
 fn a_zero_bound_returns_without_a_notify() {
     let (clock, _entered) = TestClock::named(Some(Duration::ZERO));
-    let mutex = Mutex::new(0_u64);
-    let cv = Condvar::new();
-    // Called directly: a bound that waited for a notify would hang the test.
-    let guard = park(&clock, None, None, &cv, lock(&mutex), |_| false);
-    match guard {
-        Some(guard) => assert_eq!(*guard, 0),
-        None => panic!("a zero bound returns its guard with no notify"),
-    }
+    let mutex = Arc::new(Mutex::new(0_u64));
+    let cv = Arc::new(Condvar::new());
+    let (result_tx, result_rx) = mpsc::channel();
+    let cv_t = Arc::clone(&cv);
+    let mutex_t = Arc::clone(&mutex);
+    // On a helper thread: a bound that waited for a notify would never answer.
+    thread::spawn(move || {
+        let guard = park(&clock, None, None, &cv_t, lock(&mutex_t), |_| false);
+        let _sent = result_tx.send(guard.map(|guard| *guard));
+    });
+    assert_eq!(
+        Deadline::after(Duration::from_secs(5)).recv(&result_rx),
+        Ok(Some(0)),
+        "a zero bound returns its guard with no notify"
+    );
 }
 
 #[test]
 fn done_writes_to_the_state_are_visible_in_the_returned_guard() {
     let (clock, entered) = TestClock::named(Some(Duration::ZERO));
-    let mutex = Mutex::new(0_u64);
-    let cv = Condvar::new();
-    // A `done` check replaced with `false` parks on a zero bound and hands
-    // back the unwritten state, failing the assertion below.
-    let guard = park(&clock, None, None, &cv, lock(&mutex), |state| {
-        *state = 7;
-        true
+    let mutex = Arc::new(Mutex::new(0_u64));
+    let cv = Arc::new(Condvar::new());
+    let (result_tx, result_rx) = mpsc::channel();
+    let cv_t = Arc::clone(&cv);
+    let mutex_t = Arc::clone(&mutex);
+    // On a helper thread. A `done` check replaced with `false` parks on a
+    // zero bound and hands back the unwritten state, failing the assertion
+    // below.
+    thread::spawn(move || {
+        let guard = park(&clock, None, None, &cv_t, lock(&mutex_t), |state| {
+            *state = 7;
+            true
+        });
+        let _sent = result_tx.send(guard.map(|guard| *guard));
     });
-    match guard {
-        Some(guard) => assert_eq!(*guard, 7),
-        None => panic!("a done park returns its guard"),
-    }
+    assert_eq!(
+        Deadline::after(Duration::from_secs(5)).recv(&result_rx),
+        Ok(Some(7))
+    );
     assert_eq!(
         Deadline::after(Duration::from_secs(2)).recv(&entered),
         Ok("entered")
