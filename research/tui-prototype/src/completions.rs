@@ -694,6 +694,17 @@ mod tests {
     }
 
     #[test]
+    fn every_completion_panel_pads_text_off_both_edges() {
+        for c in CASES {
+            let rows = view(&for_case(c.name), &input_for(c.name), 100);
+            let t = text(&rows);
+            let lines: Vec<&str> = t.split('\n').collect();
+            assert!(lines[1].trim().is_empty(), "{}: no top pad", c.name);
+            assert!(lines[lines.len() - 2].trim().is_empty(), "{}: no bottom pad", c.name);
+        }
+    }
+
+    #[test]
     fn the_window_follows_the_focus() {
         let (a, b) = (window(0, 40), window(7, 40));
         assert_eq!((a, b), ((0, 8), (0, 8)), "the first window holds eight");

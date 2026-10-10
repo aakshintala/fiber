@@ -441,20 +441,9 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
 pub fn view(s: &State, w: usize) -> Vec<Row> {
     let probe = body(s, 10_000);
     // The controls row pads to its width, so it never sizes the panel.
+    // The legend sizes unfitted now, straight from its row.
     let natural = probe.iter().skip(1).map(|r| width(&r.spans)).max().unwrap_or(0);
-    // The legend's unfitted width: `fit` would pad it to the probe width.
-    let foot: Vec<ratatui::text::Span<'static>> = footer_pairs()
-        .iter()
-        .flat_map(|(k, l)| {
-            vec![
-                crate::sp(*k, crate::bold()),
-                crate::sp(" ", ratatui::style::Style::new()),
-                crate::sp(*l, crate::dim()),
-                crate::sp(" · ", crate::dim()),
-            ]
-        })
-        .collect();
-    let natural = natural.max(width(&foot).saturating_sub(3));
+    let natural = natural.max(width(&footer().spans));
     let panel_w = panel::fit_width(natural, w.saturating_sub(4).min(96), w);
     let inner = panel::inner_w(panel_w);
     let rows = panel::frame(None, body(s, inner), Some(footer()), panel_w);
@@ -594,6 +583,17 @@ mod tests {
         assert!(plain(&b[pi - 1]).trim().is_empty(), "no blank before the section");
         // The foot is a bold-key legend.
         assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · enter choose · s session only · a show all · r refresh · esc close"));
+    }
+
+    #[test]
+    fn every_picker_case_pads_text_off_both_edges() {
+        for c in CASES {
+            let rows = view(&for_case(c.name), 100);
+            let t = text(&rows);
+            let lines: Vec<&str> = t.split('\n').collect();
+            assert!(lines[1].trim().is_empty(), "{}: no top pad", c.name);
+            assert!(lines[lines.len() - 2].trim().is_empty(), "{}: no bottom pad", c.name);
+        }
     }
 
     #[test]

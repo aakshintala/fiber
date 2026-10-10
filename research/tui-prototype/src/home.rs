@@ -285,8 +285,8 @@ fn picker_body(p: Picker) -> Vec<super::Row> {
 /// bold-key legend foot.
 fn picker(p: Picker, cols: usize) -> Vec<super::Row> {
     const TITLE: &str = "Workspaces";
-    let probe = picker_body(p);
-    let natural = probe
+    let body = picker_body(p);
+    let natural = body
         .iter()
         .map(|r| super::width(&r.spans))
         .max()
@@ -296,7 +296,7 @@ fn picker(p: Picker, cols: usize) -> Vec<super::Row> {
     let w = super::panel::fit_width(natural, 55, cols);
     super::panel::frame(
         Some(super::panel::title_row(TITLE, None)),
-        picker_body(p),
+        body,
         Some(super::panel::footer_legend(&[("↑↓", "move"), ("enter", "open"), ("esc", "closes")])),
         w,
     )
@@ -475,6 +475,21 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn every_workspace_picker_pads_text_off_both_edges() {
+        for p in [Picker::Recent, Picker::Typed] {
+            let rows = picker(p, 160);
+            let t = rows
+                .iter()
+                .map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let lines: Vec<&str> = t.split('\n').collect();
+            assert!(lines[1].trim().is_empty(), "no top pad");
+            assert!(lines[lines.len() - 2].trim().is_empty(), "no bottom pad");
+        }
     }
 
     #[test]

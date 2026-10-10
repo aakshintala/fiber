@@ -186,44 +186,6 @@ fn keys_spans(b: &Binding) -> Vec<Span<'static>> {
     }
 }
 
-/// Splits styled spans into word tokens, as `wrap` does. Kept beside `wrap`: one binding row flows two independent columns, which a single `wrap` call cannot express.
-fn toks(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
-    let mut out = vec![];
-    for s in spans {
-        let mut cur = String::new();
-        for ch in s.content.chars() {
-            if ch == ' ' && !cur.is_empty() && !cur.ends_with(' ') {
-                out.push(Span::styled(std::mem::take(&mut cur), s.style));
-            }
-            cur.push(ch);
-        }
-        if !cur.is_empty() {
-            out.push(Span::styled(cur, s.style));
-        }
-    }
-    out
-}
-
-/// Packs tokens into lines this wide; the first token always fits.
-fn pack(toks: Vec<Span<'static>>, w: usize) -> Vec<Vec<Span<'static>>> {
-    let mut lines: Vec<Vec<Span<'static>>> = vec![vec![]];
-    let mut n = 0;
-    for t in toks {
-        let tw = t.content.width();
-        if n > 0 && n + tw > w {
-            lines.push(vec![]);
-            n = 0;
-            let tt = t.content.trim_start().to_string();
-            n += tt.width();
-            lines.last_mut().unwrap().push(Span::styled(tt, t.style));
-        } else {
-            n += tw;
-            lines.last_mut().unwrap().push(t);
-        }
-    }
-    lines
-}
-
 /// The bindings a tab and query leave visible, in table order. Tabs filter
 /// the group; the query narrows names, keys and other paths.
 fn visible(tab: Option<&str>, query: &str) -> Vec<&'static Binding> {
@@ -246,8 +208,8 @@ fn visible(tab: Option<&str>, query: &str) -> Vec<&'static Binding> {
 /// chars is padding by cells.
 fn binding_row(b: &Binding, selected: bool, gw: usize, aw: usize, kw: usize) -> Vec<super::Row> {
     let gutter = if selected { vec![sp("› ", bold())] } else { vec![sp("  ", Style::new())] };
-    let a = pack(toks(desc_spans(b)), aw.max(1));
-    let k = pack(toks(keys_spans(b)), kw.max(1));
+    let a = wrap(desc_spans(b), aw.max(1), vec![], vec![]);
+    let k = wrap(keys_spans(b), kw.max(1), vec![], vec![]);
     let mut out = vec![];
     for i in 0..a.len().max(k.len()) {
         let mut s = if i == 0 { gutter.clone() } else { vec![sp("  ", Style::new())] };
@@ -313,21 +275,20 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
     let vis = visible(c.tab, c.query);
     let others = BINDINGS.iter().filter(|b| !b.other.is_empty()).count();
     let mut chrome = vec![
+        row(vec![]),
         panel::title_row("Key map", Some(sp("✕", dim()))),
-        row(fit(&[sp("Every binding by area, with its other paths.", dim())], inner)),
-        row(fit(
-            &[sp(format!("{} actions, {} with other paths", BINDINGS.len(), others), dim())],
-            inner,
-        )),
+        row(vec![sp("Every binding by area, with its other paths.", dim())]),
+        row(vec![sp(format!("{} actions, {} with other paths", BINDINGS.len(), others), dim())]),
         row(vec![]),
         tabs_row(c.tab, inner),
         search_row(c.query, inner),
     ];
     let mut body = bind_rows(&vis, true, inner);
     let total = body.len();
-    // The chrome around the body: edges, blank, footer, and the scroll
-    // indicator's line in the narrowed view, so the ▀ edge never drops.
-    let cap = rows.saturating_sub(chrome.len() + if c.narrow { 5 } else { 4 });
+    // The chrome around the body: pad rows, edges, blank, footer, and the
+    // scroll indicator's line in the narrowed view, so no edge is touched.
+    let suffix = if c.narrow { 4 } else { 3 };
+    let cap = rows.saturating_sub(chrome.len() + suffix + 2);
     let off = if c.narrow { clamp_scroll(NARROW_SCROLL, total, cap) } else { 0 };
     let rest = total.saturating_sub(off + cap);
     let mut shown: Vec<super::Row> = body.drain(off..).take(cap).collect();
@@ -337,10 +298,11 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
     }
     chrome.append(&mut shown);
     if c.narrow && rest > 0 {
-        chrome.push(row(fit(&[sp(format!("↑ {off} more · ↓ {rest} more"), dim())], inner)));
+        chrome.push(row(vec![sp(format!("↑ {off} more · ↓ {rest} more"), dim())]));
     }
     chrome.push(row(vec![]));
     chrome.push(panel::footer_legend(&[("↑↓", "move"), ("←→", "tabs"), ("esc", "closes")]));
+    chrome.push(row(vec![]));
     panel::slab_rows(chrome, cols)
 }
 
@@ -473,6 +435,28 @@ fn small_w(natural: usize, cols: usize) -> usize {
     panel::fit_width(natural, 71, cols)
 }
 
+/// An overlay's panel rows and width, before placement: the docked key map
+/// or a content-sized small panel.
+fn panel_rows(c: &Look, cols: usize, rows: usize) -> (usize, Vec<super::Row>) {
+    if c.kind == Kind::Keymap {
+        return (cols, keymap_panel(c, cols, rows));
+    }
+    let probe = small_content(c.kind, 10_000);
+    let natural = probe
+        .1
+        .iter()
+        .map(|r| super::width(&r.spans))
+        .max()
+        .unwrap_or(0)
+        .max(probe.0.width())
+        .max(super::width(&probe.2.spans));
+    let ow = small_w(natural, cols);
+    let inner = panel::inner_w(ow);
+    let (title, body, foot) = small_content(c.kind, inner);
+    let close = c.kind == Kind::CloseMouse;
+    (ow, overlay(title, body, foot, ow, close))
+}
+
 /// The dimmed conversation under an overlay: static dim rows and the input
 /// box, never the replayed session.
 fn backdrop(cols: usize, rows: usize) -> Vec<super::Row> {
@@ -548,19 +532,7 @@ fn frame(c: &Look, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
         return screen;
     }
     // A small overlay sizes to its content and floats centred.
-    let probe = small_content(c.kind, 10_000);
-    let natural = probe
-        .1
-        .iter()
-        .map(|r| super::width(&r.spans))
-        .max()
-        .unwrap_or(0)
-        .max(probe.0.width())
-        .max(super::width(&probe.2.spans));
-    let ow = small_w(natural, cols);
-    let inner = panel::inner_w(ow);
-    let (title, body, foot) = small_content(c.kind, inner);
-    let ov = overlay(title, body, foot, ow, close);
+    let (ow, ov) = panel_rows(c, cols, rows);
     let oh = ov.len();
     let side = if close { 2 } else { 0 };
     let x0 = panel::x_for(ow, cols);
@@ -903,6 +875,34 @@ mod tests {
         // The docked key map spans its area uncapped; MAX binds only
         // content-sized panels (see panel's width table).
         assert_eq!(panel_span(&parse("keymap").unwrap(), 200, 48), (0, 200));
+    }
+
+    #[test]
+    fn every_panel_pads_text_off_both_edges() {
+        for c in CASES {
+            let look: Look = crate::cases::lookup(CASES, c.name).unwrap();
+            let cols = if c.name == "keymap-narrow" { 100 } else { 160 };
+            let rows = if c.name == "keymap-narrow" { 40 } else { 48 };
+            let (_, panel) = panel_rows(&look, cols, rows);
+            let t = panel
+                .iter()
+                .map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let lines: Vec<&str> = t.split('\n').collect();
+            // The first and last interior rows are blank in every case.
+            assert!(lines[1].trim().is_empty(), "{}: no top pad", c.name);
+            assert!(lines[lines.len() - 2].trim().is_empty(), "{}: no bottom pad", c.name);
+        }
+    }
+
+    #[test]
+    fn the_docked_panel_clamps_to_the_viewport() {
+        // Overflowing content fills the viewport exactly, never more.
+        assert_eq!(keymap_panel(&parse("keymap-narrow").unwrap(), 100, 40).len(), 40);
+        assert_eq!(keymap_panel(&parse("keymap").unwrap(), 160, 30).len(), 30);
+        // Fitting content fills the viewport exactly with room to spare nowhere.
+        assert_eq!(keymap_panel(&parse("keymap").unwrap(), 160, 48).len(), 48);
     }
 
     #[test]

@@ -54,8 +54,6 @@ pub(crate) fn key_width(keys: &[&str]) -> usize {
 }
 
 /// A panel's title row: the title bold in the accent, an optional right end
-/// (a ✕, a count) dim. Content coordinates: the frame adds the stripe.
-/// A panel's title row: the title bold in the accent, an optional right end
 /// (a cross, a count) dim. Content coordinates: the frame fits and stripes.
 /// Callers measuring content width read true widths, never padding.
 pub(crate) fn title_row(title: &str, right: Option<Span<'static>>) -> Row {
@@ -164,8 +162,9 @@ pub(crate) fn slab_rows(rows: Vec<Row>, panel_w: usize) -> Vec<Row> {
     )
 }
 
-/// Assembles a panel: the title, a blank row, the body, a blank row, the
-/// footer, striped and edged. The body's section gaps are the body's own.
+/// Assembles a panel: a blank row below the top edge and above the bottom
+/// edge, so no text touches either; the title, body and footer keep one
+/// blank row between them. The body's section gaps are the body's own.
 /// Panels with custom chrome assemble their own rows and call [`slab_rows`].
 pub(crate) fn frame(
     title: Option<Row>,
@@ -173,16 +172,17 @@ pub(crate) fn frame(
     footer: Option<Row>,
     panel_w: usize,
 ) -> Vec<Row> {
-    let mut rows = vec![];
+    let mut rows = vec![Row::default()];
     if let Some(t) = title {
         rows.push(t);
+        rows.push(Row::default());
     }
-    rows.push(Row::default());
     rows.extend(body);
-    rows.push(Row::default());
     if let Some(f) = footer {
+        rows.push(Row::default());
         rows.push(f);
     }
+    rows.push(Row::default());
     slab_rows(rows, panel_w)
 }
 
@@ -248,37 +248,35 @@ mod tests {
             assert_eq!(buf[(x, y)].fg, BI);
         }
         // A raised surface behind the content, the stripe opening each row.
-        assert_eq!(buf[(0, 1)].symbol(), "▌");
-        assert_eq!(buf[(0, 1)].fg, BLUE);
-        assert_eq!(buf[(4, 3)].bg, BI);
+        assert_eq!(buf[(0, 2)].symbol(), "▌");
+        assert_eq!(buf[(0, 2)].fg, BLUE);
+        assert_eq!(buf[(4, 4)].bg, BI);
         // No new frame style: no border glyphs anywhere.
         assert!(!text(&rows).chars().any(|c| "│─┌┐└┘├┤┬┴┼".contains(c)));
     }
 
     #[test]
     fn padding_keeps_text_off_every_edge() {
-        let rows = demo(Some(title_row("Title", None)));
-        let t = text(&rows);
-        let lines: Vec<&str> = t.split('\n').collect();
-        // A blank row after the title and before the footer.
-        assert!(lines[2].trim().is_empty(), "no top pad: {:?}", lines[2]);
-        let foot = lines.iter().position(|l| l.contains("a hint")).unwrap();
-        assert!(lines[foot - 1].trim().is_empty(), "no bottom pad");
-        // Without a title the first interior row is the blank pad itself.
-        let plain = text(&demo(None));
-        assert!(plain.split('\n').nth(1).unwrap().trim().is_empty());
-        // Two blank columns after the stripe and at the row's end.
-        for (i, l) in lines.iter().enumerate().skip(1).take(lines.len() - 2) {
-            if l.trim().is_empty() {
-                continue;
+        for title in [Some(title_row("Title", None)), None] {
+            let rows = demo(title);
+            let t = text(&rows);
+            let lines: Vec<&str> = t.split('\n').collect();
+            // The first and last interior rows are blank: no text touches an edge.
+            assert!(lines[1].trim().is_empty(), "no top pad: {:?}", lines[1]);
+            assert!(lines[lines.len() - 2].trim().is_empty(), "no bottom pad");
+            // Two blank columns after the stripe and at the row's end.
+            for (i, l) in lines.iter().enumerate().skip(1).take(lines.len() - 2) {
+                if l.trim().is_empty() {
+                    continue;
+                }
+                let cells: Vec<char> = l.chars().collect();
+                assert_eq!(&cells[1..3], &[' ', ' '], "row {i} touches the stripe");
+                assert_eq!(
+                    &cells[cells.len() - 2..],
+                    &[' ', ' '],
+                    "row {i} touches the edge"
+                );
             }
-            let cells: Vec<char> = l.chars().collect();
-            assert_eq!(&cells[1..3], &[' ', ' '], "row {i} touches the stripe");
-            assert_eq!(
-                &cells[cells.len() - 2..],
-                &[' ', ' '],
-                "row {i} touches the edge"
-            );
         }
     }
 

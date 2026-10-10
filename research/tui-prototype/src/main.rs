@@ -3742,17 +3742,17 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     hits.insert(0, (y, x0, x0 + pw, Act::End));
                 }
                 // search floats over the conversation's top-right corner, as an editor's find box does.
-                // The box reuses the panel frame, so it keeps the stripe and edges.
-                if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 3) {
+                // The box reuses the padded panel frame, so text never touches its edges.
+                if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 5) {
                     let bw = SBOX_W.min(cw.saturating_sub(2));
                     let x0 = rail_w + 1 + (cw - bw) as u16;
-                    for (y, r) in panel::slab_rows(vec![row(search_box(s))], bw).into_iter().enumerate() {
+                    for (y, r) in panel::frame(None, vec![row(search_box(s))], None, bw).into_iter().enumerate() {
                         paint(buf, x0, y as u16, bw as u16, &r);
                     }
                 }
                 // the copy's confirmation: the top-right corner, below the search box when it is open
                 if let Some(m) = copied.filter(|_| vrows.is_none()) {
-                    let y = if search.is_some() && view_h >= 3 { 3 } else { 0 };
+                    let y = if search.is_some() && view_h >= 5 { 5 } else { 0 };
                     let s = vec![sp(format!(" {m} "), fg(CYAN))];
                     let mw = width(&s).min(cw);
                     if y < view_h && mw > 0 {
@@ -4323,7 +4323,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     let over_panel = x >= rail_w + conv_w && rail_w + conv_w < cols && panel_cache.is_some();
                     let over_rail = rail_w > 0 && ui.rail != 2 && x < rail_w;
                     let in_conv = !over_panel && (y as usize) < view_h;
-                    let in_sbox = ui.search.is_some() && y < 3 && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
+                    let in_sbox = ui.search.is_some() && y < 5 && (x as usize) + SBOX_W + 2 > (rail_w + conv_w) as usize;
                     // the resize handles: the rail's right edge and the panel's left edge,
                     // the one-column gaps beside them; hidden, the rail's 1-column handle
                     // at the screen's left edge
