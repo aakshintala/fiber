@@ -3407,12 +3407,18 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
 }
 
 #[test]
-fn a_skill_added_mid_session_is_refused_until_the_listing_has_it() {
+fn a_skill_added_mid_session_reaches_the_model_and_loads() {
     let setup = Setup::new();
     let server = ProviderServer::start([
         hello(),
         stream(&[function_call(
             "call_late",
+            "skill",
+            &json!({"name": "late"}),
+        )]),
+        hello(),
+        stream(&[function_call(
+            "call_late_again",
             "skill",
             &json!({"name": "late"}),
         )]),
@@ -3469,10 +3475,8 @@ fn a_skill_added_mid_session_is_refused_until_the_listing_has_it() {
             .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
         "the first turn ran: {first:?}"
     );
-    // Installed mid-session, after the listing the model was given, the
-    // skill stays unknown to the shared set: the `skill` tool refuses it.
-    // A reader of its own would read lazily at the call and find it, so
-    // this fails when the loop is built without its shared set.
+    // Installed mid-session, the skill reaches the model at the next turn
+    // start as one added line, and the `skill` tool loads it.
     let dir = setup.workspace().join(".agents/skills/late");
     fs::create_dir_all(&dir).unwrap();
     fs::write(
@@ -3490,6 +3494,7 @@ fn a_skill_added_mid_session_is_refused_until_the_listing_has_it() {
     assert_eq!(
         kinds(&second),
         [
+            "skills_changed",
             "turn_started",
             "command_accepted",
             "step_started",
@@ -3509,7 +3514,75 @@ fn a_skill_added_mid_session_is_refused_until_the_listing_has_it() {
             "turn_completed",
         ]
     );
+    let changed = second
+        .iter()
+        .find(|line| line["kind"] == "skills_changed")
+        .expect("the check announced the added skill");
+    assert_eq!(changed["payload"]["added"][0]["name"], "late");
+    assert_eq!(
+        changed["payload"]["added"][0]["description"],
+        "Runs late."
+    );
+    let path = changed["payload"]["added"][0]["path"].clone();
+    // The second request carries the added line's text.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        String::from_utf8_lossy(&requests[1].body)
+            .contains("Fiber: skill late can now be loaded: Runs late."),
+        "the added line reached the model"
+    );
     let completed = second
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the skill call completed");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed["payload"]["control"],
+        json!({"skill": {"name": "late", "path": path}})
+    );
+    // Switched off in `skills.disabled`, the skill is removed at the next
+    // turn start, and the `skill` tool refuses it again.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "skills": {"disabled": ["late"]}}),
+    );
+    send(
+        &client,
+        r#"{"id":"c_load_off","command":"prompt","args":{"content":[{"type":"text","text":"load the skill"}]}}"#,
+    );
+    let third = until(&client, "the third turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert_eq!(
+        kinds(&third),
+        [
+            "skills_changed",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let removed = third
+        .iter()
+        .find(|line| line["kind"] == "skills_changed")
+        .expect("the check announced the removed skill");
+    assert_eq!(removed["payload"]["removed"], json!(["late"]));
+    let completed = third
         .iter()
         .find(|line| line["kind"] == "tool_call_completed")
         .expect("the skill call completed");
@@ -3540,6 +3613,24 @@ fn a_skill_added_mid_session_is_refused_until_the_listing_has_it() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
+            "skills_changed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "skills_changed",
             "turn_started",
             "step_started",
             "assistant_message_started",
