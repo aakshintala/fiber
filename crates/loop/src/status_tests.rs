@@ -894,6 +894,29 @@ fn a_clients_line_reads_the_count_and_leaves_since() {
 }
 
 #[test]
+fn a_settled_clients_count_emits_no_status_line() {
+    // Red on base if the fold ever reads the line's own count instead of the settled one.
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    w.live();
+    assert_eq!(w.status().clients, 0);
+    // The 0 -> 1 -> 0 change settles to 0 before the fold sees the lagging line.
+    *w.count.lock().unwrap() = 1;
+    *w.count.lock().unwrap() = 0;
+    w.ts += 1;
+    let line = envelope("clients", w.ts, None, None, &json!({"count": 1}));
+    assert!(!w.fold.observe(&line));
+    assert_eq!(w.status().clients, 0);
+    // A count still held at 1 while the fold reads does emit a line.
+    *w.count.lock().unwrap() = 1;
+    w.ts += 1;
+    let line = envelope("clients", w.ts, None, None, &json!({"count": 1}));
+    assert!(w.fold.observe(&line));
+    assert_eq!(w.status().clients, 1);
+}
+
+#[test]
 fn the_count_is_read_from_live_on_at_each_durable_line_and_not_on_a_delta() {
     let mut w = world();
     *w.count.lock().unwrap() = 3;
