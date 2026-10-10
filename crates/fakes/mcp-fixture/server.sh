@@ -41,7 +41,9 @@
 # 3600) &` with stdout still on the pipe, before it reads, and write its
 # pid to `grandchild.txt`: the grandchild ignores SIGTERM and holds
 # stdout open past the server's exit, so only a signal to the server's
-# process group takes it with the server.
+# process group takes it with the server. Its argv[0] is
+# `<dir>/grandchild`, so a watchdog matching the directory finds it after
+# the server exits.
 #
 # It answers `initialize`, `tools/list`, `tools/call`, `prompts/list`,
 # `prompts/get` and `ping`, appends
@@ -57,7 +59,7 @@ printf '%s\n' "$$" > "$dir/pid.txt"
 # stdout open, before anything is read: stopping the server must take it
 # with the server, through the server's process group.
 if [ -f "$dir/grandchild" ]; then
-    (trap '' TERM; exec sleep 3600) &
+    (trap '' TERM; exec -a "$dir/grandchild" sleep 3600) &
     printf '%s\n' "$!" > "$dir/grandchild.txt"
 fi
 if [ -f "$dir/fail-start" ]; then
