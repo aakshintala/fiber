@@ -259,9 +259,11 @@ jobs:
       - name: Record tests that passed on retry
         id: flaky
         if: always()
+        env:
+          LIST: ${{ runner.temp }}/flaky-tests-${{ matrix.runner }}.txt
         run: |
-          scripts/flaky-tests target/nextest/ci/junit.xml > "$RUNNER_TEMP/flaky-tests.txt"
-          if [ -s "$RUNNER_TEMP/flaky-tests.txt" ]; then
+          scripts/flaky-tests target/nextest/ci/junit.xml > "$LIST"
+          if [ -s "$LIST" ]; then
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
@@ -271,7 +273,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: flaky-tests-${{ matrix.runner }}
-          path: ${{ runner.temp }}/flaky-tests.txt
+          path: ${{ runner.temp }}/flaky-tests-${{ matrix.runner }}.txt
           if-no-files-found: ignore
       # The hub's login service against systemd's user instance
       # (crates/main/tests/hub_service.rs). The runner has no user instance
@@ -667,7 +669,7 @@ jobs:
         if: steps.lists.outputs.count != '0'
         with:
           pattern: flaky-tests-*
-          merge-multiple: false
+          merge-multiple: true
           path: ${{ runner.temp }}/flaky
       - name: File or comment on the flake issues
         if: always()
@@ -675,12 +677,11 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           dir=$RUNNER_TEMP/flaky
-          find "$dir" -ls || true
           [ -d "$dir" ] || exit 0
-          for file in "$dir"/flaky-tests-*/flaky-tests.txt; do
+          for file in "$dir"/flaky-tests-*.txt; do
             [ -f "$file" ] || continue
-            runner=${file#"$dir"/}
-            runner=${runner%/flaky-tests.txt}
+            runner=${file#"$dir"/flaky-tests-}
+            runner=${runner%.txt}
             while IFS= read -r name || [ -n "$name" ]; do
               [ -n "$name" ] || continue
               title="Flaky test: $name"
