@@ -39,7 +39,12 @@
       "token": "old",
       "expires_at": 1700000060,
       "refresh_token": "rt_1",
-      "account_id": "acct_1"
+      "account_id": "acct_1",
+      "access_token": null,
+      "email": null,
+      "expires_in": null,
+      "headers": null,
+      "id_token": null
     }
   }
 }
