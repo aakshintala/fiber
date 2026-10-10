@@ -267,9 +267,11 @@ fn kill_every_group_kills_a_listed_live_group() {
 
 #[test]
 fn kill_every_group_drops_an_empty_group() {
+    assert!(live().is_empty(), "nothing is listed in a fresh process");
     let listing = live().list(UNUSED).expect("listed");
     kill_every_group();
     assert!(!live().contains(UNUSED), "the empty group was dropped");
+    assert!(live().is_empty(), "the dropped group was the only entry");
     live().unlist(listing);
 }
 
