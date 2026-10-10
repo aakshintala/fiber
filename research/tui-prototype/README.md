@@ -46,7 +46,13 @@ The key map is under "Stage 2".
 
 `--home CASE` draws the home screen instead of the conversation: the logo,
 the large input box with its chip row, and the session list, or the workspace
-picker over home. Each case draws one static frame from the fixtures in
+picker over home. The logo is real Fiber's: the pixel letters copied from
+`crates/tui/src/logo.rs`, and where the terminal speaks kitty graphics (kitty,
+Ghostty or WezTerm, never under tmux or screen) an image tints the checked-in
+`assets/logo-mask.bin` copy with the theme's accents and replaces the pixel
+letters in exactly the same cells. The pixel logo draws first and the image
+replaces it from the second draw, so detection never delays the first frame.
+iTerm2 and Sixel are not drawn; the pixel logo stays there. Each case draws one static frame from the fixtures in
 `src/home.rs` (six exited sessions with name or first prompt, spend and
 workspace segment; four recent workspaces; `~/work/fi` completing to `fiber`
 and `fiber-worktrees`) and waits for a key; Esc, q or Ctrl+C quits. Combine

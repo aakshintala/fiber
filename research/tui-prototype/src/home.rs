@@ -16,6 +16,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use crate::cases::{Case, Surface};
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
 
 /// Every `--home` case, named in README.md.
@@ -309,7 +310,7 @@ fn put(
     }
 }
 
-fn frame(c: &Look, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
+fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Vec<Vec<Placed>> {
     let blank = || vec![Placed {
         x: 0,
         w: cols as u16,
@@ -320,7 +321,7 @@ fn frame(c: &Look, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
     let x0 = cols.saturating_sub(w) / 2;
     let mut y = LOGO_Y;
     if rows >= tall_min() {
-        for l in crate::logo::rows(VERSION, false) {
+        for l in crate::logo::rows(VERSION, image) {
             put(&mut screen, y, x0, w, l, None);
             y += 1;
         }
@@ -384,22 +385,96 @@ fn frame(c: &Look, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
     screen
 }
 
-fn draw(term: &mut Term, c: &Look) -> io::Result<()> {
+/// Whether the kitty image covers the logo on this draw: supported, past
+/// the first draw (the pixel logo draws first and the image replaces it,
+/// so the first frame never waits), no overlay open (an image at z=0
+/// draws above text and would cover a panel), the four-row logo drawn,
+/// and room for its 32 cells.
+fn image_shown(supported: bool, first: bool, c: &Look, cols: usize, rows: usize) -> bool {
+    if !supported || first {
+        return false;
+    }
+    if c.picker.is_some() {
+        return false;
+    }
+    if rows < tall_min() {
+        return false;
+    }
+    HOME_W.min(cols.saturating_sub(4)).max(20) >= crate::logo::CELLS_W as usize
+}
+
+/// The image's wire state across draws: whether its bytes are up, and
+/// whether a placement is up. One pure state machine decides every
+/// escape per draw.
+#[derive(Default)]
+struct Image {
+    transmitted: bool,
+    placed: bool,
+}
+
+impl Image {
+    /// The escapes for this draw: when shown, the transmit (once per run)
+    /// then the placement; when hidden, the hide (once per placement).
+    fn escapes(&mut self, shown: bool, x: u16, y: u16) -> String {
+        if shown {
+            let mut out = String::new();
+            if !self.transmitted {
+                out.push_str(&crate::logo::transmit());
+                self.transmitted = true;
+            }
+            out.push_str(&crate::logo::place(x, y));
+            self.placed = true;
+            out
+        } else if self.placed {
+            self.placed = false;
+            crate::logo::HIDE.to_string()
+        } else {
+            String::new()
+        }
+    }
+}
+
+/// How long the home loop waits for input: the reader's Esc deadline, as
+/// the conversation loop does. `wait(None)` would hold a lone Esc in the
+/// reader until the next byte, so Esc would not close a panel or quit
+/// until another key.
+fn wait_for(deadline: Option<Instant>, now: Instant) -> Option<Duration> {
+    deadline.map(|d| d.saturating_duration_since(now))
+}
+
+fn draw(term: &mut Term, c: &Look, img: &mut Image, supported: bool, first: bool) -> io::Result<()> {
     let size = term.size()?;
     let (cols, rows) = (size.width.max(1), size.height.max(1));
+    let w = HOME_W.min(cols.saturating_sub(4) as usize).max(20);
+    let shown = image_shown(
+        supported,
+        first,
+        c,
+        cols as usize,
+        rows as usize,
+    );
+    let esc = img.escapes(shown, (cols.saturating_sub(w as u16)) / 2, LOGO_Y as u16);
     term.backend_mut().write_all(b"\x1b[?2026h")?;
     term.draw(|fr| {
         let buf = fr.buffer_mut();
-        for (y, placements) in frame(c, cols as usize, rows as usize).iter().enumerate() {
+        for (y, placements) in frame(c, cols as usize, rows as usize, shown).iter().enumerate() {
             for p in placements {
                 paint(buf, p.x, y as u16, p.w, &p.row);
             }
         }
     })?;
     let be = term.backend_mut();
+    be.write_all(esc.as_bytes())?;
     be.write_all(b"\x1b[?2026l")?;
     be.flush()?;
     Ok(())
+}
+
+/// Frees the image: every exit from home leaves no placement behind.
+fn free(term: &mut Term) {
+    let be = term.backend_mut();
+    let _ = be.write_all(crate::logo::FREE.as_bytes());
+    let _ = be.flush();
 }
 
 /// Draws the `--home` case and waits for a key. Mutually exclusive with the
@@ -412,18 +487,43 @@ pub(crate) fn run_home(a: &Args, term: &mut Term) -> io::Result<String> {
             format!("unknown --home case {name:?}; one of: {}", crate::cases::names(CASES)),
         ));
     };
-    draw(term, &c)?;
+    let supported = crate::logo::supported(|k| std::env::var(k).ok());
+    let mut img = Image::default();
+    // The first frame always draws the pixel logo; where supported, a
+    // second draw at once transmits and places the image, so it shows
+    // without a keystroke.
+    let mut err = draw(term, &c, &mut img, supported, true).err();
+    if err.is_none() && supported {
+        err = draw(term, &c, &mut img, supported, false).err();
+    }
+    if let Some(e) = err {
+        free(term);
+        return Err(e);
+    }
     let mut rd = super::input::Reader::new()?;
     loop {
-        let (evs, resized) = rd.wait(None)?;
-        if resized {
-            draw(term, &c)?;
+        let (evs, resized) = rd.wait(wait_for(rd.deadline(), Instant::now()))?;
+        let err = if resized {
+            draw(term, &c, &mut img, supported, false).err()
+        } else {
+            None
+        };
+        if let Some(e) = err {
+            free(term);
+            return Err(e);
         }
         for ev in evs {
             match ev {
-                Ev::Key(Key::Char('c'), m) if m.ctrl => return Ok(format!("home {name}\n")),
-                Ev::Key(Key::Esc, _) => return Ok(format!("home {name}\n")),
+                Ev::Key(Key::Char('c'), m) if m.ctrl => {
+                    free(term);
+                    return Ok(format!("home {name}\n"));
+                }
+                Ev::Key(Key::Esc, _) => {
+                    free(term);
+                    return Ok(format!("home {name}\n"));
+                }
                 Ev::Key(Key::Char('q'), m) if !m.ctrl && !m.alt && !m.sup => {
+                    free(term);
                     return Ok(format!("home {name}\n"));
                 }
                 _ => {}
@@ -449,8 +549,17 @@ mod tests {
 
     /// `frame` painted with `paint` exactly as `draw` does.
     fn buffer(c: &Look, cols: u16, rows: u16) -> Buffer {
+        painted(c, cols, rows, false)
+    }
+
+    /// `buffer` with the image shown, as the second startup draw paints it.
+    fn buffer_image(c: &Look, cols: u16, rows: u16) -> Buffer {
+        painted(c, cols, rows, true)
+    }
+
+    fn painted(c: &Look, cols: u16, rows: u16, image: bool) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, cols, rows));
-        for (y, placements) in frame(c, cols as usize, rows as usize).iter().enumerate() {
+        for (y, placements) in frame(c, cols as usize, rows as usize, image).iter().enumerate() {
             for p in placements {
                 paint(&mut buf, p.x, y as u16, p.w, &p.row);
             }
@@ -481,6 +590,69 @@ mod tests {
     }
 
     #[test]
+    fn image_shown_boundaries() {
+        let plain = || crate::cases::lookup(CASES, "empty").unwrap();
+        // Supported and past the first draw, nothing open: the image shows.
+        assert!(image_shown(true, false, &plain(), 160, 48));
+        // Without support, or on the first draw, the pixel logo stays.
+        assert!(!image_shown(false, false, &plain(), 160, 48));
+        assert!(!image_shown(true, true, &plain(), 160, 48));
+        // An open overlay covers the logo's cells, so the image hides.
+        assert!(!image_shown(
+            true,
+            false,
+            &crate::cases::lookup(CASES, "picker-recent").unwrap(),
+            160,
+            48
+        ));
+        // The image needs the four-row logo and its 32 cells.
+        assert!(image_shown(true, false, &plain(), 160, tall_min()));
+        assert!(!image_shown(true, false, &plain(), 160, tall_min() - 1));
+        assert!(image_shown(true, false, &plain(), 36, 48));
+        assert!(!image_shown(true, false, &plain(), 35, 48));
+    }
+
+    #[test]
+    fn image_escapes_sequence() {
+        let mut img = Image { transmitted: false, placed: false };
+        assert_eq!(img.escapes(false, 38, 2), "");
+        assert_eq!(
+            img.escapes(true, 38, 2),
+            crate::logo::transmit() + &crate::logo::place(38, 2)
+        );
+        assert_eq!(img.escapes(true, 38, 2), crate::logo::place(38, 2));
+        assert_eq!(img.escapes(false, 38, 2), crate::logo::HIDE);
+        assert_eq!(img.escapes(false, 38, 2), "");
+        assert_eq!(img.escapes(true, 38, 2), crate::logo::place(38, 2));
+    }
+
+    #[test]
+    fn wait_for_boundaries() {
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        assert_eq!(wait_for(None, now), None);
+        assert_eq!(wait_for(Some(now + Duration::from_millis(30)), now), Some(Duration::from_millis(30)));
+        assert_eq!(wait_for(Some(now), now), Some(Duration::ZERO));
+        assert_eq!(wait_for(Some(now - Duration::from_millis(5)), now), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn home_blanks_the_logo_under_the_image() {
+        let c = crate::cases::lookup(CASES, "empty").unwrap();
+        let buf = buffer_image(&c, 160, 48);
+        for y in 2..6 {
+            for x in 38..70 {
+                assert_eq!(buf[(x, y)].symbol(), " ", "cell ({x}, {y})");
+            }
+        }
+        let mut text = String::new();
+        for x in 71..76 {
+            text.push_str(buf[(x, 5)].symbol());
+        }
+        assert_eq!(text, "0.0.1");
+    }
+
+    #[test]
     fn short_screens_get_the_one_row_logo() {
         let tall = tall_min();
         let empty = || crate::cases::lookup(CASES, "empty").unwrap();
@@ -506,7 +678,7 @@ mod tests {
     }
 
     fn text(c: &Look, cols: usize, rows: usize) -> String {
-        frame(c, cols, rows)
+        frame(c, cols, rows, false)
             .into_iter()
             .map(|ps| {
                 ps.iter()
@@ -542,7 +714,7 @@ mod tests {
         assert!(t.contains("~/work/fiber-worktrees"));
         assert!(t.contains("↑↓ move · enter open · esc closes"));
         // Centred: the picker's edges sit inside the margins, not full width.
-        let fr = frame(&c, 160, 48);
+        let fr = frame(&c, 160, 48, false);
         let edge = fr
             .iter()
             .flatten()
