@@ -426,7 +426,12 @@ it on a thread and receives its result with a deadline. A fake's own sleep or po
 loop is a wait too, with a deadline on the wall clock. A fake that holds until
 the test releases it blocks on a channel whose sender the test owns, and needs
 no deadline of its own: the test sends to release it, and the test ending or
-panicking drops the sender, which releases it too. The test's own deadline on
+panicking drops the sender, which releases it too. That holds only when the
+sender drops before anything joins the holder: inside a `thread::scope` the
+test creates the sender in the scope's closure or moves it in, as
+`a_writer_never_exposes_a_file_wider_than_0600`
+(`crates/config/src/credential_file_tests.rs`) does, and a fake that joins its
+thread on drop owns the release sender itself or drops it first. The test's own deadline on
 the fake's signal names the failure. nextest's per-test timeout is at least twice the test's longest
 single deadline plus its normal run time, so a hang, which fails at the first wait
 that expires, reports that wait, not a harness kill.
