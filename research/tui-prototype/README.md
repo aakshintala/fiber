@@ -25,6 +25,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
 | `--panel-share P` | the panel's width at start, as a percent of the window; the default is 21 (34 columns at 160), clamped to [30, 60] columns |
 | `--picker CASE` | starts with the model picker open; see "Model picker (#1629)" |
+| `--login CASE` | draws one login case over a dimmed conversation; see "Login (#1736)" |
 | `--stats FILE` | writes the measurement below to FILE on exit |
 | `--exit-after S` | exits after S seconds |
 | `--warmup S` | starts the measurement window after S seconds; default 2 |
@@ -142,6 +143,43 @@ cargo run --release -- fixtures/session.jsonl --static --overlay close-mouse
 
 `./capture-overlays.sh` captures every case in tmux, plain text and SGR, for
 the ticket's PR body: `keymap-narrow` at 100 by 40, the rest at 160 by 48.
+
+## Login (#1736)
+
+`--login CASE` draws one `/login` case as a centred panel over a dimmed
+conversation instead of the conversation: the provider list, the browser
+wait, key entry, and the two outcomes. Each case draws one static frame
+from the fixtures in `src/login.rs` (four providers, two with `browser`
+tags and two with `key` tags; two extension credentials) and waits for a
+key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture still
+loads but the login ignores it.
+
+```sh
+cargo run --release -- fixtures/session.jsonl --static --login providers
+cargo run --release -- fixtures/session.jsonl --static --login waiting
+cargo run --release -- fixtures/session.jsonl --static --login key
+cargo run --release -- fixtures/session.jsonl --static --login done
+cargo run --release -- fixtures/session.jsonl --static --login failed
+```
+
+- `providers`: four providers under `Providers`, OAuth rows tagged
+  `browser` and key rows tagged `key`, then two extension credentials under
+  `Secrets`; the first row focused.
+- `waiting`: the list stays with `Open this URL to log in to anthropic:`
+  below it, the long URL cut from the left keeping its tail, `y` to copy,
+  and a dim `Waiting for the browser…` line.
+- `key`: the list stays with `Label (--as): default.` and
+  `Key for google:` below it, the key masked as eight dots with a block
+  cursor. The key panel sits in the centred overlay with the list, not in a
+  bottom panel like the built view: the static cases share one frame.
+- `done`: the list stays with a `✓ Logged in to anthropic.` outcome line
+  in the success colour.
+- `failed`: the list stays with a `Login to anthropic failed:` outcome
+  line, the `token expired` reason in the error colour.
+
+`./capture-login.sh` captures every case in tmux, plain text and SGR, for
+the ticket's PR body: `waiting-narrow` and `key-narrow` are the same cases
+at 100 by 40, the rest at 160 by 48.
 
 `cargo run --bin gen` rewrites the fixtures from `src/bin/gen.rs`. `fixtures/session.jsonl` ends with a turn still running, waiting on an approval from the reviewer delegate and on a question form from the main session. `fixtures/idle.jsonl` is the same session cut after its last finished turn.
 

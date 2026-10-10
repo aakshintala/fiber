@@ -475,7 +475,7 @@ fn panel_rows(c: &Look, cols: usize, rows: usize) -> (usize, Vec<super::Row>) {
 
 /// The dimmed conversation under an overlay: static dim rows and the input
 /// box, never the replayed session.
-fn backdrop(cols: usize, rows: usize) -> Vec<super::Row> {
+pub(crate) fn backdrop(cols: usize, rows: usize) -> Vec<super::Row> {
     let blank = || row(vec![]);
     let mut out: Vec<super::Row> = (0..rows).map(|_| blank()).collect();
     if rows > 9 {
