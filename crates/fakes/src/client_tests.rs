@@ -13,6 +13,7 @@ use serde_json::Value;
 use super::*;
 use crate::TempDir;
 use crate::clock::FakeClock;
+use crate::deadline::Deadline;
 use crate::within;
 
 /// A wait that must succeed.
@@ -22,12 +23,13 @@ const MUST: Duration = crate::MUST_SUCCEED_WITHIN;
 const DEADLINE: Duration = Duration::from_secs(2);
 
 /// `accept` on a thread, so the test's wait is the deadline below.
+#[track_caller]
 fn accept_within(listener: &UnixListener) -> UnixStream {
     let listener = listener.try_clone().unwrap();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || if let Ok(()) = tx.send(listener.accept()) {});
-    let (stream, _) = rx
-        .recv_timeout(MUST)
+    let (stream, _) = Deadline::after(MUST)
+        .recv(&rx)
         .expect("a client is accepted")
         .unwrap();
     stream
@@ -100,8 +102,8 @@ fn recv_returns_a_buffered_line_without_waiting_for_the_socket_to_close() {
             if let Ok(()) = tx.send(client.recv(Duration::from_secs(60))) {}
         },
     );
-    let line = rx
-        .recv_timeout(MUST)
+    let line = Deadline::after(MUST)
+        .recv(&rx)
         .expect("recv returns when the line is buffered")
         .expect("recv returns the line");
     assert_eq!(line["ok"], true);
@@ -267,8 +269,8 @@ fn send_by_delivers_the_line_with_a_newline() {
         client
     });
     drop(client);
-    let got = read
-        .recv_timeout(MUST)
+    let got = Deadline::after(MUST)
+        .recv(&read)
         .expect("the peer reads to end-of-file");
     assert_eq!(got, b"{\"id\":1}\n");
 }
@@ -282,8 +284,8 @@ fn send_by_keeps_a_newline_the_line_already_has() {
         client
     });
     drop(client);
-    let got = read
-        .recv_timeout(MUST)
+    let got = Deadline::after(MUST)
+        .recv(&read)
         .expect("the peer reads to end-of-file");
     assert_eq!(got, b"{}\n");
 }
@@ -307,8 +309,8 @@ fn send_by_does_not_renew_its_deadline_across_partial_writes() {
         (sent, client)
     });
     drop(client);
-    let got = read
-        .recv_timeout(MUST)
+    let got = Deadline::after(MUST)
+        .recv(&read)
         .expect("the peer reads to end-of-file");
     assert_eq!(
         sent.expect_err("the deadline passes before the line is written")
@@ -330,8 +332,8 @@ fn send_by_at_zero_writes_nothing() {
         (client.send_by("{}", &|| Duration::ZERO), client)
     });
     drop(client);
-    let got = read
-        .recv_timeout(MUST)
+    let got = Deadline::after(MUST)
+        .recv(&read)
         .expect("the peer reads to end-of-file");
     assert_eq!(
         sent.expect_err("no time is left").kind(),
@@ -357,8 +359,8 @@ fn send_by_reads_what_is_left_once_per_4_kib_chunk() {
             (calls.into_inner(), client)
         });
         drop(client);
-        let got = read
-            .recv_timeout(MUST)
+        let got = Deadline::after(MUST)
+            .recv(&read)
             .expect("the peer reads to end-of-file");
         assert_eq!(got.len(), len + 1, "the whole line and its newline arrive");
         assert_eq!(
@@ -418,8 +420,8 @@ fn a_client_dropped_during_an_unwind_keeps_the_first_panic() {
     let (blocked, is_blocked) = mpsc::channel();
     client.notify_when_blocked(blocked);
     client.slow(false);
-    is_blocked
-        .recv_timeout(MUST)
+    Deadline::after(MUST)
+        .recv(&is_blocked)
         .expect("the reader to block in read");
     // Without its shutdown stream, `Drop` cannot wake the reader, which
     // stays blocked in `read` and would miss `READER_STOP`.

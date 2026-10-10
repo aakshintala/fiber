@@ -18,6 +18,8 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Duration;
 
+use crate::deadline::Deadline;
+
 /// How long [`Ready::new`] waits for its reader to open the FIFO.
 const OPEN_DEADLINE: Duration = Duration::from_secs(5);
 
@@ -39,6 +41,7 @@ impl Ready {
         clippy::panic,
         reason = "a ready fifo that cannot be created means the test cannot proceed"
     )]
+    #[track_caller]
     pub fn new(dir: &Path) -> Self {
         let path = dir.join("ready.fifo");
         match Command::new("mkfifo").arg(&path).status() {
@@ -56,6 +59,7 @@ impl Ready {
         clippy::panic,
         reason = "a ready fifo that does not open means the test cannot proceed"
     )]
+    #[track_caller]
     pub fn at(fifo: &Path, left: &dyn Fn() -> Duration) -> Self {
         let path = fifo.to_path_buf();
         let within = left();
@@ -66,7 +70,7 @@ impl Ready {
         let (tx, rx) = mpsc::channel();
         let (opened_tx, opened_rx) = mpsc::channel();
         thread::spawn(move || read_fifo(&reading, &tx, &opened_tx));
-        match opened_rx.recv_timeout(within) {
+        match Deadline::after(within).recv(&opened_rx) {
             Ok(()) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => panic!(
                 "waited {within:?} for ready fifo {} to open",
@@ -91,8 +95,9 @@ impl Ready {
         clippy::panic,
         reason = "a ready line that never arrives means the test cannot proceed"
     )]
+    #[track_caller]
     pub fn wait(&self, within: Duration) -> Vec<u32> {
-        match self.lines.recv_timeout(within) {
+        match Deadline::after(within).recv(&self.lines) {
             Ok(Line::Text(line)) => pids(&line, &self.path),
             Ok(Line::End) => panic!(
                 "ready fifo {} closed before a line arrived",

@@ -10,6 +10,7 @@ use contract::provider::{
     CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
 };
 
+use crate::deadline::Deadline;
 use crate::reply;
 
 /// How long a blocked call waits for its cancel before giving up and
@@ -56,13 +57,14 @@ impl BlockingProvider {
     /// Blocks until the first call starts to block, failing the test at
     /// `timeout` naming the missing call. The test fires its cancel after
     /// this, so the cancel lands mid-stream.
+    #[track_caller]
     pub fn wait_started(&self, timeout: Duration) {
         let started = self
             .inner
             .started_rx
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let got = started.recv_timeout(timeout);
+        let got = Deadline::after(timeout).recv(&started);
         assert!(got.is_ok(), "timed out waiting for the model call to start");
     }
 }
@@ -85,6 +87,7 @@ struct BlockingCall {
 }
 
 impl ModelCall for BlockingCall {
+    #[track_caller]
     fn run(&self, _sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         // Buffered, so a cancel before `run` still ends the call at once
         // below.
@@ -94,7 +97,7 @@ impl ModelCall for BlockingCall {
             .cancel_rx
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let got = cancel.recv_timeout(LIMIT);
+        let got = Deadline::after(LIMIT).recv(&cancel);
         // A call the cancel never reached is a missed signal, not a
         // cancellation: it must not report `Cancelled` after its timeout.
         assert!(got.is_ok(), "timed out waiting for the call's cancel");

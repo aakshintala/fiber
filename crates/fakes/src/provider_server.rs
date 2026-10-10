@@ -9,6 +9,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::deadline::Deadline;
+
 /// Header names whose values are credentials, lowercase. Their values are
 /// replaced by a fingerprint before a request is recorded, as is a `key`
 /// query parameter, which Google's API also accepts (`docs/model-routing.md`).
@@ -446,7 +448,7 @@ fn stop(addr: SocketAddr, accept: JoinHandle<()>, deadline: Duration) -> bool {
             }
         }
     });
-    joined.recv_timeout(deadline).is_ok()
+    Deadline::after(deadline).recv(&joined).is_ok()
 }
 
 /// Whether `have` arrivals are still fewer than the `count` waited for.

@@ -18,6 +18,7 @@ use super::{
     group_lives, kill_group, kill_matching, kill_pid, listed_exit, matching, matching_exits,
     pattern, pids_exit, signal_group, signal_named, signal_pid,
 };
+use crate::deadline::Deadline;
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
@@ -62,17 +63,20 @@ impl Piped {
     }
 
     /// Waits [`DEADLINE`] for the forked `sleep`'s pid line.
+    #[track_caller]
     fn forked(&self, what: &str) {
-        match self.0.recv_timeout(DEADLINE) {
+        match Deadline::after(DEADLINE).recv(&self.0) {
             Ok(Some(_)) => {}
             _ => panic!("waited {DEADLINE:?} for {what}"),
         }
     }
 
     /// Waits [`DEADLINE`] for end-of-file, proving the `sleep` exited.
+    #[track_caller]
     fn closed(self, what: &str) {
+        let wait = Deadline::after(DEADLINE);
         loop {
-            match self.0.recv_timeout(DEADLINE) {
+            match wait.recv(&self.0) {
                 Ok(Some(_)) => {}
                 Ok(None) => return,
                 Err(_) => panic!("waited {DEADLINE:?} for {what}"),
@@ -82,10 +86,11 @@ impl Piped {
 }
 
 /// Reaps `child` under [`DEADLINE`], naming `what` on expiry.
+#[track_caller]
 fn reaped(mut child: Child, what: &str) -> std::process::ExitStatus {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    match finished.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(_) => panic!("waited {DEADLINE:?} for {what}"),
     }
@@ -482,13 +487,15 @@ fn group_empties_keeps_waiting_while_the_group_lives_and_returns_once_it_empties
     // running after several probe intervals: a wait that gave up after one
     // live probe would have answered `false` by now.
     assert!(
-        answer.recv_timeout(Duration::from_millis(500)).is_err(),
+        Deadline::after(Duration::from_millis(500))
+            .recv(&answer)
+            .is_err(),
         "group_empties answered while the group was alive"
     );
     drop(stdin);
     reaped(child, "the group leader to exit once its stdin closed");
     assert_eq!(
-        answer.recv_timeout(DEADLINE),
+        Deadline::after(DEADLINE).recv(&answer),
         Ok(true),
         "waited {DEADLINE:?} for group_empties to see the emptied group"
     );
@@ -564,13 +571,15 @@ fn pids_exit_waits_for_both_pids() {
     drop(stdin_a);
     reaped(a, "the first child to exit once its stdin closed");
     assert!(
-        answer.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&answer)
+            .is_err(),
         "pids_exit answered while the second child lived"
     );
     drop(stdin_b);
     reaped(b, "the second child to exit once its stdin closed");
     assert_eq!(
-        answer.recv_timeout(DEADLINE),
+        Deadline::after(DEADLINE).recv(&answer),
         Ok(true),
         "waited {DEADLINE:?} for both pids to exit"
     );
@@ -631,13 +640,15 @@ fn matching_exits_waits_for_a_live_match() {
             .unwrap()
     });
     assert!(
-        answer.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&answer)
+            .is_err(),
         "matching_exits answered while the match lived"
     );
     kill_group(group, "KILL").unwrap();
     reaped(child, "the killed marked shell");
     assert_eq!(
-        answer.recv_timeout(DEADLINE),
+        Deadline::after(DEADLINE).recv(&answer),
         Ok(true),
         "waited {DEADLINE:?} for the match to exit"
     );

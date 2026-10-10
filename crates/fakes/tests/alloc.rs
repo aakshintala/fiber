@@ -14,6 +14,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::alloc::{CHAIN, Counting, LARGE, bytes_during, large_blocks_during};
 
 #[global_allocator]
@@ -137,8 +138,8 @@ fn a_block_made_before_the_scope_and_grown_inside_is_not_counted() {
 fn a_block_made_on_another_thread_and_freed_here_changes_nothing() {
     let (send, receive) = mpsc::channel();
     thread::spawn(move || send.send(large()).unwrap_or(()));
-    let theirs = receive
-        .recv_timeout(HANDOFF)
+    let theirs = Deadline::after(HANDOFF)
+        .recv(&receive)
         .expect("waited for the other thread's block");
     let ((), peak) = large_blocks_during(|| {
         drop(theirs);
@@ -158,8 +159,8 @@ fn a_block_freed_on_another_thread_stays_counted() {
             drop(mine);
             send.send(()).unwrap_or(());
         });
-        receive
-            .recv_timeout(HANDOFF)
+        Deadline::after(HANDOFF)
+            .recv(&receive)
             .expect("waited for the other thread to free the block");
         drop(large());
     });

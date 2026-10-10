@@ -12,6 +12,7 @@ pub mod clock;
 mod connect_proxy;
 #[cfg(target_os = "macos")]
 mod crash_ports;
+pub mod deadline;
 pub mod emit;
 pub mod jobs;
 mod oauth_server;
@@ -32,6 +33,7 @@ pub use blocking::BlockingProvider;
 pub use cancel::CancelToken;
 pub use client::Client;
 pub use connect_proxy::ConnectProxy;
+pub use deadline::Deadline;
 pub use emit::Recorder;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{

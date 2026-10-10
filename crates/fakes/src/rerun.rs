@@ -8,6 +8,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use crate::deadline::Deadline;
+
 /// How long [`rerun`] waits for the child to exit, and for it to be reaped
 /// after a kill.
 const CHILD_WITHIN: Duration = Duration::from_secs(10);
@@ -35,6 +37,7 @@ const SCRUBBED: [&str; 8] = [
 /// # Panics
 ///
 /// As [`rerun_within`], with a 10 s bound.
+#[track_caller]
 pub fn rerun(test: &str, env: &[(&str, &str)]) -> Output {
     rerun_within(test, env, CHILD_WITHIN)
 }
@@ -50,6 +53,7 @@ pub fn rerun(test: &str, env: &[(&str, &str)]) -> Output {
 /// When the test binary cannot be re-run, or the child is still running
 /// after `within`: the child is killed first, so a hung child never keeps
 /// running.
+#[track_caller]
 pub fn rerun_within(test: &str, env: &[(&str, &str)], within: Duration) -> Output {
     rerun_prepared(test, env, within, |_| {})
 }
@@ -64,6 +68,7 @@ pub fn rerun_within(test: &str, env: &[(&str, &str)], within: Duration) -> Outpu
     clippy::panic,
     reason = "a child that cannot run means the test cannot proceed"
 )]
+#[track_caller]
 fn rerun_prepared(
     test: &str,
     env: &[(&str, &str)],
@@ -96,7 +101,7 @@ fn rerun_prepared(
             Ok(()) | Err(_) => {}
         }
     });
-    match finished.recv_timeout(within) {
+    match Deadline::after(within).recv(&finished) {
         Ok(output) => match output {
             Ok(output) => output,
             Err(err) => panic!("`{test}` has no output: {err}"),
@@ -105,7 +110,7 @@ fn rerun_prepared(
             match crate::kill_pid(pid, "KILL") {
                 Ok(_) | Err(_) => {}
             }
-            let reaped = finished.recv_timeout(within).is_ok();
+            let reaped = Deadline::after(within).recv(&finished).is_ok();
             panic!("waited {within:?} for `{test}` to exit (reaped: {reaped})");
         }
     }

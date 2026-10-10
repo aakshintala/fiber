@@ -171,6 +171,7 @@ impl FakeClock {
     }
 
     #[cfg(test)]
+    #[track_caller]
     fn await_any_predicate_checked(&self) {
         let pause = self
             .await_any_pause
@@ -179,8 +180,8 @@ impl FakeClock {
             .take();
         if let Some((checked, release)) = pause {
             let _sent = checked.send(());
-            release
-                .recv_timeout(Duration::from_secs(5))
+            crate::deadline::Deadline::after(Duration::from_secs(5))
+                .recv(&release)
                 .expect("waited for the test to release the await_any predicate");
         }
     }
@@ -298,6 +299,45 @@ impl Clock for FakeClock {
     fn subscribe(&self, waker: Weak<dyn Wake>) {
         lock(&self.state).wakers.push(waker);
     }
+}
+
+/// The process clock behind [`Clock`].
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the process clock behind contract::clock::Clock::now"
+    )]
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the process clock behind contract::clock::Clock::wall"
+    )]
+    fn wall(&self) -> SystemTime {
+        SystemTime::now()
+    }
+
+    // A wall-clock sleep; docs/testing.md, "Values that change every run",
+    // permits only main's real-clock sleep test.
+    #[cfg_attr(false, mutants::skip)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the process clock behind contract::clock::Clock::sleep"
+    )]
+    fn sleep(&self, d: Duration) {
+        std::thread::sleep(d);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        let bound = until.map(|until| until.saturating_duration_since(self.now()));
+        wait(bound);
+    }
+
+    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
 }
 
 /// Drops a thread's parked entry when [`Clock::wait_until`] returns, a panic
