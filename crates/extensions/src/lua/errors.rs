@@ -122,7 +122,11 @@ impl StopReason {
     /// for them, and every other is `Stopped` for `name`.
     pub(super) fn error(&self, name: &str) -> Error {
         match self {
-            Self::Io { path, kind, message } => Error::Io {
+            Self::Io {
+                path,
+                kind,
+                message,
+            } => Error::Io {
                 path: path.clone(),
                 source: io::Error::new(*kind, message.clone()),
             },

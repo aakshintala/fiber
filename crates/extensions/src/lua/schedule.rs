@@ -749,10 +749,7 @@ fn settle(
                     None
                 }
             };
-            Admitted {
-                cancel,
-                wake: None,
-            }
+            Admitted { cancel, wake: None }
         }
         Request::Sleep(d) => {
             drop(shared);
