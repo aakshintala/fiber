@@ -8,7 +8,7 @@ Fiber today, for reference (`origin/main@554a1e904a94`): `crates/main/tests/term
 
 ## Findings in brief
 
-- Every project that tests its real terminal does it without a model. Two harness shapes exist: a real binary in a PTY whose output feeds a terminal emulator that rebuilds the screen grid (codex, gemini-cli's PTY rig for text, television, Go's `vttest`), and an in-process emulator or test backend (pi, opencode, crush, gitui). Raw-byte phrase matching, which is Fiber's present method, is the weakest of them: gemini-cli's `stripAnsi` substring check shares its blind spot (layout, cursor placement, overlap).
+- Every project that tests its real terminal does it without a model. Three harness shapes exist. (a) A real binary in a PTY whose output feeds a terminal emulator that rebuilds the screen grid: codex (`PtyCodex` plus `vt100`), television (`phantom-test`), Go's `vttest`. (b) A real binary in a PTY asserted on stripped output: gemini-cli (`stripAnsi` substring), the same blind spot as Fiber's phrase matching (layout, cursor placement, overlap). (c) An in-process emulator or test backend with no binary: pi, opencode, crush, gitui, and codex's `VT100Backend` widget tests. Only (a) checks the grid of the real binary.
 - Snapshots of a rebuilt grid are common for widgets (codex 1387 `.snap` files, crush 363 goldens, gemini-cli 112) and rare for whole-binary journeys (codex 5, opencode 1, gitui 3, pi 0). Where journeys are snapshotted, they are few.
 - Nobody runs a model or a fuzzer against its own TUI. Model-in-the-loop work exists (gemini-cli `evals/`, terminal-bench, aider's benchmark, `claude plugin eval`) but grades agent behaviour, never rendering. No project property-tests TUI input sequences either.
 - Flake control that recurs: pinned size, pinned `TERM`/colour, predicate polling with a deadline rather than sleeps, serial or capped parallelism for PTY tests, and CI-scaled budgets. The flaky cases the projects admit to are timing (gemini-cli `retry: 2` and a deflake workflow; television's fast-exit race; bubbletea's skipped teatest tests) and ambient size and colour (teatest).
@@ -295,9 +295,13 @@ request-body invariant validation on every mock call (`:740,748`) plus
 4. Scope. Narrow per-feature. `grep -rn '#\[test\]\|#\[tokio::test'`
 counts: **5768** markers across `tui/src` + `tui/tests` (of which 3473
 plain `#[test]` in `src/`), i.e. thousands of in-process widget tests;
-the real-binary PTY suite is **~28 tests in 14 files**
-(`grep -c` per file in `tests/suite/`: focus_palette 6,
-vt100_history 7, resize_reflow 4, rest 1 each). CI time: not found in
+the real-binary suite is **15 tests that start `PtyCodex`** (`grep -c
+'#\[test\]\|#\[tokio::test'` in the 10 `tests/suite/` files that use
+`PtyCodex`: focus_palette 6, nine files with 1 each) **plus 4 `#[ignore]`d tmux
+tests** in `resize_reflow.rs`. `vt100_history.rs` (7 tests) and
+`vt100_live_commit.rs` are in-process: they build a `Terminal<VT100Backend>`
+and call `insert_history_lines`, with no binary or PTY
+(`vt100_history.rs:23-36`). CI time: not found in
 repo (no published durations); `rust-ci.yml` sets per-platform
 `timeout_minutes: 30`
 (`codex@4bad6d78e9b5:.github/workflows/rust-ci.yml:167,184`) and runs
@@ -693,10 +697,12 @@ test usage.
    expect exit 0 (tests/pty/channels.rs:7-16). (b) `tests/headless/`: in-process
    `App` driven by sending `Action`s over its channel, 10 `#[tokio::test(flavor =
    "multi_thread", worker_threads = 3)]` tests (`grep -c "async fn test"` → 10).
-2. What is asserted. Live-screen **text presence** (polled every 50 ms), exit
+2. What is asserted. Live-screen **text presence** read from `phantom-test`'s
+   emulator grid (`s.screenshot().text()`, `tests/pty/common.rs:124-125,140-143`;
+   `wait().text()` polls it every 50 ms), exit
    codes, and post-exit stdout (`exit_and_output` — with a comment explaining
    that polling can miss a ms-lived alt-to-primary transition under contention,
-   common.rs `exit_and_output`). No snapshots, no grid rebuild, no images.
+   common.rs `exit_and_output`). No snapshot files and no images; the grid rebuild is inside `phantom-test`.
    Churn (6 mo): `tests/pty` 5 commits, `tests/headless` 3 — active but stable.
 3. The model. n/a (fuzzy finder; no provider). Repeatability via hermetic local
    config/cable dirs passed as CLI flags (`--cable-dir ./cable/unix --config-file
@@ -718,9 +724,9 @@ test usage.
 
 Copy / avoid. Copy: phantom-test's API shape (`run→send→wait.text→wait.exit_code`)
 and television's two-tier split (broad PTY journeys + fast headless logic tests);
-CI-aware timeout scaling via env. Avoid: pure text-polling without a grid —
-Fiber already does phrase matching; the upgrade is a grid rebuild, not more
-polling.
+CI-aware timeout scaling via env. Note: television already asserts on a rebuilt grid (through
+`phantom-test`), as text only; its remaining race is polling a screen that
+changes faster than the poll.
 
 ### gitui (extrawurst/gitui)
 
@@ -820,14 +826,14 @@ checked — a genuine gap Fiber could pioneer, cheaply, on top of a vt100 grid.
 | opencode v2 | in-process `@opentui/core/testing` renderer, full-app fixture | char-frame `toContain`; 1 bun `.snap` (9 commits/6 mo) | scripted fetch/SSE; `@opencode/simulation` fake provider | 169 narrow test files; 6 full-app | `OPENCODE_DRIVE` headless renderer plus websocket control: infrastructure only, no runs found | `waitForFrame` polling, fixed size, `animations:false` |
 | opencode dev | same, hand-rolled `mock.module` injection | char-frame; same 1 `.snap` (5/6 mo) | scripted fetch/event source | 46 files | none | as v2 |
 | pi | in-process `VirtualTerminal` on `@xterm/headless` | emulator viewport strings, raw-write capture, 12 inline snapshots, 0 `.snap` | scripted `streamFn` | 43 + 210 narrow files; no agent-plus-TUI journey | none (`packages/evals` is model-in-loop, not TUI) | `waitForRender` (fixed 20 ms), fixed sizes |
-| codex | `TestBackend`; `VT100Backend` (`vt100::Parser`); real-binary PTY and tmux | substring in `vt100` grid; insta, 1387 `.snap` (PTY goldens: 5, 9 changes) | wiremock scripted SSE, whole-body replay | thousands of widget tests; about 28 PTY tests | none found | pinned 120x32, `TERM`, answers the binary's capability probes, poll with deadline, `#[ignore]` on tmux tests |
+| codex | `TestBackend`; `VT100Backend` (`vt100::Parser`); real-binary PTY and tmux | substring in `vt100` grid; insta, 1387 `.snap` (PTY goldens: 5, 9 changes) | wiremock scripted SSE, whole-body replay | thousands of widget tests; 15 PTY tests plus 4 ignored tmux tests; 7+ in-process `VT100Backend` tests | none found | pinned 120x32, `TERM`, answers the binary's capability probes, poll with deadline, `#[ignore]` on tmux tests |
 | gemini-cli | real bundle in `@lydell/node-pty` 80x80; ink plus `@xterm/headless` for units | `stripAnsi` substring plus telemetry; 112 vitest `.snap` (units only) | recorded `*.responses` replay with a record mode | 48 short journeys | `evals/` live-model agent evals, tiered | `retry: 2`, deflake workflow, scaled timeouts, per-char echo wait |
 | Claude Code | none public | n/a | n/a | n/a | `claude plugin eval` (plugin behaviour, cost-capped) | nothing public |
 | aider | in-process, `DummyInput` | return values, files | mocked completion | 32 unit files | benchmark harness (real models) | none needed |
 | goose | stub ACP agents; Playwright for desktop; no PTY | protocol payloads, replay parity, DOM | canned SSE; MCP record/playback | about 30 Rust files plus 5 serial Playwright journeys | `evals/harbor` (model-eval) | `workers:1`, trace and video on failure |
 | crush | in-process render | escaped-ANSI goldens (363) plus stripped structural asserts | none in UI tests | narrow per-widget | none | synchronous render, no sleeps, per-case width |
 | vttest (Go) | real PTY plus emulator plus `Snapshot` | marshalable cell snapshots; text predicates in real adopter | n/a | one example; adopter `lkshrk/omni` | none | explicit size; real colour negotiation |
-| television | real binary via `phantom-test` 0.3; headless `App` tier | polled screen text, exit code | none (no provider) | 138 PTY tests plus 10 headless | none | `TV_CI` scaled budgets, `--test-threads=4`, stabilize-before-absence |
+| television | real binary via `phantom-test` 0.3; headless `App` tier | polled text of `phantom-test`'s emulator grid, exit code | none (no provider) | 138 PTY tests plus 10 headless | none | `TV_CI` scaled budgets, `--test-threads=4`, stabilize-before-absence |
 | gitui | `TestBackend` plus key-injection seam | insta, 3 `.snap`; widget state | none | 79 tests, 1 whole-app journey | none | insta filters for paths and hashes |
 
 ## Can terminal QA be scripted so no model has to run it?
@@ -842,7 +848,7 @@ These are evidence-backed proposals, not rulings; surveyor turns them into rulin
 2. **What to assert.** Wait on a grid predicate with one named deadline (`docs/testing.md`, "Waits and timeouts"), never a sleep; the television comment on missing a millisecond-lived alt-to-primary switch is a reason to also assert exit status and final output. Snapshot the settled grid, as plain text rows plus cursor position, at a few named moments per journey with `insta` and its filters for temp paths, ids and timestamps (gitui's `apply_common_filters!`, `gitui@d7214eccb3ca:src/gitui.rs:214-231`). Pin the size (codex: 120x32) and `TERM`/colour in the harness, and answer the binary's own capability probes as codex does. Colour and style belong in the existing in-process snapshots; keep PTY snapshots to text and cursor so a theme change does not break every journey.
 3. **Scope: few long journeys, many in-process snapshots.** codex keeps 1382 widget snapshots against 5 PTY goldens, and the PTY ones almost never change (5 commits in six months against 52 for one widget directory), while gemini-cli's journey suite is dominated by deflake commits (19 touching `integration-tests/`, most of them fixes). A journey costs flake risk each time it is added. The evidence supports three to six journeys that cross features (prompt, tool approval, resize, resume, image paste) after the Look group (#1604), snapshotted at key moments, run on every merge in the existing Linux and macOS legs.
 4. **The model: the existing scripted `fakes::ProviderServer`.** Scripted replies are what codex (wiremock SSE), gemini-cli (`*.responses` replay) and opencode (fake provider) all use. gemini-cli's `--record-responses` mode and goose's record/playback for MCP are worth copying only if recorded real-provider replies are wanted; Fiber's probe keys already allow that for a ticket that asks. Release streamed chunks on a signal the test waits for, not on a timer.
-5. **Deleting narrow tests: the evidence supports a narrow yes and no more.** No surveyed project replaced narrow PTY tests with journeys; television has 138 narrow PTY tests and codex about 28. What the evidence does support: the eight `phrase_end_*` tests and the roughly 110 lines of gap helpers in `terminal.rs` (409-525) go when the grid replaces them, and a narrow PTY test may go when a journey snapshot asserts everything it asserts, shown by `cargo-mutants` on CI. Do not delete in-process screen tests: they are the layer that carries layout regressions in every project that has one.
+5. **Deleting narrow tests: the evidence supports a narrow yes and no more.** No surveyed project replaced narrow PTY tests with journeys; television has 138 narrow PTY tests and codex 15 (plus 4 manual tmux tests). What the evidence does support: the eight `phrase_end_*` tests and the roughly 110 lines of gap helpers in `terminal.rs` (409-525) go when the grid replaces them, and a narrow PTY test may go when a journey snapshot asserts everything it asserts, shown by `cargo-mutants` on CI. Do not delete in-process screen tests: they are the layer that carries layout regressions in every project that has one.
 6. **Exploration.** Do not build model-driven TUI QA now: no precedent, unbounded cost, unauditable failures. If wanted later, `claude plugin eval`'s per-case runs, threshold and `--max-cost-usd` ceiling are the template, kept off the merge path. A `proptest` run over key sequences against a `vt100` grid is a cheap gap nobody has filled; `proptest` is already listed in `docs/dependencies.md`.
 7. **Dependencies against `docs/dependencies.md`.** One new dev-dependency: `vt100` 0.16.2 (MIT, `crates.io` 2025-07-12, 13.6M downloads, MSRV 1.70). Its normal dependencies are `itoa`, `unicode-width` (both already in `Cargo.lock`) and `vte`; it has no async runtime. The "Tests and development tools" table needs one row. `insta` and `proptest` are already listed. Open points for surveyor: whether the admission rules' memory measurement applies to a crate only the test binaries link (the `tui` section says memory is not a reason to refuse a crate that never reaches a session), and `cargo deny check` on the new tree before the ticket's PR.
 8. **First build step: a spike.** Not probed here (no cargo builds in this ticket): how `vt100` renders what Fiber emits (synchronized output, kitty keyboard queries, OSC 9 notifications, alternate screen). Two journeys on the new harness will answer it before any narrow test is deleted.
