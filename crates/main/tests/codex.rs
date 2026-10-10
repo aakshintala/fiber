@@ -256,6 +256,27 @@ fn a_codex_usage_limit_is_quota_exceeded_with_its_wait_and_not_retried() {
 }
 
 #[test]
+fn a_thinking_suffix_is_sent_and_an_undeclared_level_is_invalid_arguments() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.install(&server);
+    setup.store(&token("acct_secret"), "acct_secret");
+
+    let run = setup.fiber(&["ask", "--model", "codex/gpt-6-luna:xhigh", "hi"], "");
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["reasoning"], json!({"effort": "xhigh"}));
+
+    let bad = setup.fiber(&["ask", "--model", "codex/gpt-6-luna:minimal", "hi"], "");
+    assert_eq!(bad.code, Some(1), "{}", bad.stderr);
+    assert_eq!(bad.last()["payload"]["error"]["code"], "invalid_arguments");
+    assert_eq!(server.requests().len(), 1, "no second request is sent");
+}
+
+#[test]
 fn a_codex_ask_with_nothing_stored_is_authentication_failed_naming_login() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();

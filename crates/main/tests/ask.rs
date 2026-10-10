@@ -2955,6 +2955,56 @@ fn the_muse_1_3_entries_declare_the_thinking_levels_their_routes_accept() {
 }
 
 #[test]
+fn the_codex_entries_declare_the_thinking_levels_their_routes_accept() {
+    use contract::ThinkingLevel::{High, Low, Max, Medium, Xhigh};
+    let levels = vec![Low, Medium, High, Xhigh, Max];
+    let codex = config::read_providers(&package("codex")).unwrap();
+    let codex = codex.iter().find(|p| p.name == "codex").unwrap();
+    for (id, default) in [
+        ("gpt-6.1-sol", Low),
+        ("gpt-6-sol", Medium),
+        ("gpt-6-astra", Low),
+        ("gpt-6-luna", Medium),
+    ] {
+        let model = codex.models.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(model.thinking_levels, levels, "{id}");
+        assert_eq!(model.thinking_default, Some(default), "{id}");
+    }
+    let anthropic = config::read_providers(&package("anthropic")).unwrap();
+    let anthropic = anthropic.iter().find(|p| p.name == "anthropic").unwrap();
+    let model = anthropic
+        .models
+        .iter()
+        .find(|m| m.id == "claude-opus-4-7")
+        .unwrap();
+    assert_eq!(
+        model.thinking_levels,
+        vec![contract::ThinkingLevel::Off, Low, Medium, High, Xhigh, Max]
+    );
+    assert_eq!(model.thinking_default, None);
+    let gemini = config::read_providers(&package("gemini")).unwrap();
+    let gemini = gemini.iter().find(|p| p.name == "gemini").unwrap();
+    let model = gemini
+        .models
+        .iter()
+        .find(|m| m.id == "gemini-3.8-flash")
+        .unwrap();
+    assert_eq!(model.thinking_levels, vec![Low, Medium, High]);
+    assert_eq!(model.thinking_default, None);
+    let openai = config::read_providers(&package("openai")).unwrap();
+    let openai = openai.iter().find(|p| p.name == "openai").unwrap();
+    let model = openai.models.iter().find(|m| m.id == "gpt-5.2").unwrap();
+    assert_eq!(
+        model.thinking_levels,
+        vec![contract::ThinkingLevel::Off, Low, Medium, High, Xhigh]
+    );
+    assert_eq!(model.thinking_default, None);
+    let plain = openai.models.iter().find(|m| m.id == "gpt-4o").unwrap();
+    assert!(plain.thinking_levels.is_empty());
+    assert_eq!(plain.thinking_default, None);
+}
+
+#[test]
 fn install_takes_one_name_or_path() {
     let setup = Setup::new();
     let missing = setup.fiber(&["extension", "install"], None);
@@ -3501,6 +3551,24 @@ fn a_thinking_suffix_is_recorded_and_an_unsupported_level_fails_first() {
         1,
         "invalid_arguments",
     );
+}
+
+#[test]
+fn a_declared_thinking_default_is_sent_when_no_level_is_given() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_thinking(&server);
+
+    let run = setup.fiber(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "waited for the model request"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["reasoning"], json!({"effort": "low"}));
 }
 
 #[test]
