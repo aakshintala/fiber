@@ -27,6 +27,7 @@ use crate::connection::Hub;
 use crate::diag::Diag;
 use crate::fake::FakeStarter;
 use crate::listen::Held;
+use fakes::Deadline;
 
 /// One named deadline per wait: the hub answers before it.
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -181,6 +182,7 @@ fn serve_with_hub_at_peak_between(
 
 /// Waits, at most `WITHIN`, until the hub's only park has no deadline: it
 /// saw a client open. Panics past the deadline naming the wait.
+#[track_caller]
 fn await_open_park(clock: &Arc<fakes::clock::FakeClock>, what: &str) {
     let (done_tx, done_rx) = mpsc::channel();
     thread::Builder::new()
@@ -195,13 +197,14 @@ fn await_open_park(clock: &Arc<fakes::clock::FakeClock>, what: &str) {
             }
         })
         .unwrap();
-    done_rx
-        .recv_timeout(WITHIN)
+    Deadline::after(WITHIN)
+        .recv(&done_rx)
         .unwrap_or_else(|_| panic!("the hub parks with no deadline {what}"));
 }
 
 /// Waits, at most `WITHIN`, until the hub parks until `zero + IDLE`: it saw
 /// the count reach 0 at `zero`. Panics past the deadline naming the wait.
+#[track_caller]
 fn await_idle_park(clock: &Arc<fakes::clock::FakeClock>, zero: Instant, what: &str) {
     assert!(
         clock.await_parked(zero + IDLE, WITHIN),
@@ -241,7 +244,12 @@ fn with_no_clients_the_hub_exits_at_idle_exit() {
     await_idle_park(&clock, clock.origin(), "at start");
     // Exactly the deadline: the exit is due at, not after, it.
     clock.advance(IDLE);
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
     assert!(!temp.socket().exists());
     let log = temp.log();
     assert!(log.contains("\"code\":\"hub_started\""));
@@ -273,7 +281,12 @@ fn a_debug_hub_writes_peak_memory_just_before_its_idle_stop() {
     let done = serve_at(&temp, IDLE, Arc::clone(&clock), Level::Debug);
     await_idle_park(&clock, clock.origin(), "at start");
     clock.advance(IDLE);
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
     let (before, last, peak) = last_two(&temp.log());
     assert_eq!(
         (before.as_str(), last.as_str()),
@@ -290,7 +303,12 @@ fn a_hub_whose_socket_was_removed_still_exits_at_idle_exit() {
     await_idle_park(&clock, clock.origin(), "at start");
     fs::remove_file(temp.socket()).unwrap();
     clock.advance(IDLE);
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
     assert!(temp.log().contains("The hub stopped: idle."));
 }
 
@@ -309,7 +327,12 @@ fn one_tick_before_idle_exit_the_hub_still_answers() {
     let zero = clock.now();
     await_idle_park(&clock, zero, "after the departure");
     clock.advance(IDLE);
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
 }
 
 #[test]
@@ -328,7 +351,12 @@ fn a_connected_client_keeps_the_hub_and_leaving_starts_the_timer() {
     let zero = clock.now();
     await_idle_park(&clock, zero, "after the departure");
     clock.advance(IDLE);
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
     assert!(!temp.socket().exists());
 }
 
@@ -354,7 +382,12 @@ fn a_reconnect_clears_the_timer_and_a_later_departure_restarts_it() {
     let second_zero = clock.now();
     await_idle_park(&clock, second_zero, "after the second departure");
     clock.advance(IDLE);
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
     assert!(!temp.socket().exists());
 }
 
@@ -374,7 +407,12 @@ fn a_spawn_failure_rollback_restarts_the_timer() {
     let zero = clock.now();
     await_idle_park(&clock, zero, "after the rollback");
     clock.advance(IDLE);
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
     assert!(!temp.log().contains("client_disconnected"));
 }
 
@@ -423,7 +461,12 @@ fn a_signal_stops_the_hub_with_its_code() {
     // What the signal arm does: record, then wake.
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
     assert!(!temp.socket().exists());
     assert!(temp.log().contains("The hub stopped: signal."));
     assert!(!temp.log().contains("peak_memory"));
@@ -437,7 +480,12 @@ fn a_debug_hub_writes_peak_memory_just_before_its_signal_stop() {
     await_idle_park(&clock, clock.origin(), "at start");
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
     let (before, last, peak) = last_two(&temp.log());
     assert_eq!(
         (before.as_str(), last.as_str()),
@@ -457,7 +505,12 @@ fn a_signal_shuts_down_connected_clients() {
     await_open_park(&clock, "after the arrival");
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
     // The shutdown closed the hub's end: EOF, and nothing after the hello.
     let mut tail = String::new();
     assert_eq!(
@@ -479,7 +532,9 @@ fn zero_idle_exit_stops_at_the_first_empty_wait() {
         Arc::clone(&fakes::clock::FakeClock::new()),
     );
     assert_eq!(
-        done.recv_timeout(DEADLINE).expect("the hub exits at once"),
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits at once"),
         0
     );
 }
@@ -516,8 +571,8 @@ fn join_after_wake_unblocks_and_joins_a_blocked_acceptor() {
             done_tx.send(()).unwrap_or(());
         })
         .unwrap();
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("the wake joins the acceptor");
     assert!(
         ended.load(Ordering::SeqCst),
@@ -539,8 +594,8 @@ fn join_after_wake_returns_when_the_socket_path_is_gone() {
             done_tx.send(()).unwrap_or(());
         })
         .unwrap();
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("the wake returns without a join");
     assert!(!ended.load(Ordering::SeqCst), "nothing woke the acceptor");
 }
@@ -571,7 +626,12 @@ fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
     await_open_park(&clock, "after the arrival");
     got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
     hub.waker().wake();
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
     drop(client);
     assert_eq!(*calls.lock().unwrap(), [true]);
     let lines: Vec<serde_json::Value> = temp
@@ -619,11 +679,16 @@ fn an_installed_hub_never_exits_for_idleness_and_stops_on_sigterm() {
     let client = connect(&temp);
     drop(client);
     assert!(
-        done.recv_timeout(STILL).is_err(),
+        Deadline::after(STILL).recv(&done).is_err(),
         "the installed hub exited for idleness"
     );
     raise_sigterm();
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
     assert!(!temp.socket().exists());
     assert!(temp.log().contains("The hub stopped: signal."));
 }
@@ -643,7 +708,7 @@ fn an_installed_hub_waits_for_the_lock_then_binds() {
         crate::Mode::Installed,
     );
     assert!(
-        done.recv_timeout(STILL).is_err(),
+        Deadline::after(STILL).recv(&done).is_err(),
         "the installed hub returned while another held the lock"
     );
     assert!(!temp.socket().exists(), "a waiting hub binds nothing");
@@ -658,7 +723,12 @@ fn an_installed_hub_waits_for_the_lock_then_binds() {
     );
     drop(connect(&temp));
     raise_sigterm();
-    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
 }
 
 #[test]

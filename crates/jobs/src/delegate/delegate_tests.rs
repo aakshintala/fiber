@@ -18,6 +18,7 @@ use contract::inbox::Delivery;
 use contract::jobs::{JobRecord, Jobs as _};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::Tool as _;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, within};
 
@@ -101,6 +102,7 @@ fn resolve() -> Resolve {
 
 /// The `sleep` the rig's launcher started, read from its pidfile: armed
 /// as its watchdog so a failing test leaves no child behind.
+#[track_caller]
 fn child_group(rig: &Rig) -> Watchdog {
     let pid = rig._dir.path().join("child.pid");
     let pid: u32 = within("the child writes its pid", DEADLINE, move || {
@@ -262,9 +264,8 @@ fn a_good_call_returns_its_receipt_with_started_records() {
     assert!(std::path::Path::new(&started.output_path).is_absolute());
     // The launch the tool ran names the same job the record names, and
     // carries the parent the child's argv is built from.
-    let launched = rig
-        .launched
-        .recv_timeout(DEADLINE)
+    let launched = Deadline::after(DEADLINE)
+        .recv(&rig.launched)
         .expect("the launcher ran");
     assert_eq!(launched.job_id, started.job_id);
     assert_eq!(launched.session_id, delegate.delegate_session_id);
@@ -357,7 +358,9 @@ fn a_stop_before_the_runner_connects_still_ends_cancelled() {
         rig.clock.advance(Duration::from_millis(50));
         // Wall time for the runner thread: advances alone cost it none.
         // The wait itself may hold the notice, so it is read here too.
-        if let Ok(Delivery::Job(notice)) = rig.inbox.recv_timeout(Duration::from_millis(5)) {
+        if let Ok(Delivery::Job(notice)) =
+            Deadline::after(Duration::from_millis(5)).recv(&rig.inbox)
+        {
             assert_eq!(
                 notice.completed.status,
                 contract::events::Outcome::Cancelled

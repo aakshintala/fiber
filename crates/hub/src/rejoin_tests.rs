@@ -20,6 +20,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -220,10 +221,25 @@ impl Client {
         serde_json::from_str(&text).unwrap()
     }
 
+    /// Takes the scoped reader's first accepted line with one deadline for
+    /// the whole wait, failing naming `what`: `#[track_caller]` reports the
+    /// test's line, which the `thread::scope` closure below cannot.
+    #[track_caller]
+    fn take_waited(rx: &mpsc::Receiver<Option<Value>>, stop: &AtomicBool, what: &str) -> Value {
+        let got = Deadline::after(DEADLINE).recv(rx);
+        stop.store(true, Ordering::SeqCst);
+        match got {
+            Ok(Some(line)) => line,
+            Ok(None) => panic!("the hub closed before {what}"),
+            Err(_) => panic!("never received {what}"),
+        }
+    }
+
     /// The first line `done` accepts: a scoped thread reads the lines in
     /// short slices and sends it over a channel, and this takes it with
-    /// one `recv_timeout` for the whole wait, never one deadline per
+    /// one `Deadline` receive for the whole wait, never one deadline per
     /// line. A closed socket sends nothing, failing naming `what` too.
+    #[track_caller]
     fn wait_for(&mut self, what: &str, mut done: impl FnMut(&Value) -> bool + Send) -> Value {
         let stop = AtomicBool::new(false);
         thread::scope(|scope| {
@@ -258,17 +274,12 @@ impl Client {
                     }
                 }
             });
-            let got = rx.recv_timeout(DEADLINE);
-            stop.store(true, Ordering::SeqCst);
-            match got {
-                Ok(Some(line)) => line,
-                Ok(None) => panic!("the hub closed before {what}"),
-                Err(_) => panic!("never received {what}"),
-            }
+            Self::take_waited(&rx, stop, what)
         })
     }
 
     /// The next `session_status`, skipping `attention` hub lines.
+    #[track_caller]
     fn next_status(&mut self, what: &str) -> Value {
         self.wait_for(what, |line| {
             line.get("kind").and_then(Value::as_str) == Some("session_status")
@@ -277,6 +288,7 @@ impl Client {
 
     /// The acknowledgement for command `id`, skipping statuses and
     /// `attention` other sessions' relays forward meanwhile.
+    #[track_caller]
     fn next_ack(&mut self, id: &str, what: &str) -> Value {
         self.wait_for(what, |line| {
             line.get("kind").and_then(Value::as_str) == Some("command_accepted")
@@ -398,8 +410,9 @@ impl Fake {
 
     /// Stops the listener; the socket file stays until `unlink`. The
     /// wake-up connect and the join run on a thread whose end this takes
-    /// with one `recv_timeout`, so a stalled listener fails the test
+    /// with one `Deadline` receive, so a stalled listener fails the test
     /// instead of reaching the runner's kill.
+    #[track_caller]
     fn stop_listening(&self) {
         {
             lock(&self.shared.state).closed = true;
@@ -418,7 +431,7 @@ impl Fake {
             })
             .unwrap();
         assert!(
-            stopped.recv_timeout(DEADLINE).is_ok() || thread::panicking(),
+            Deadline::after(DEADLINE).recv(&stopped).is_ok() || thread::panicking(),
             "the fake session's listener never stopped"
         );
     }
@@ -502,6 +515,7 @@ impl Fake {
 
     /// Exits: stops the listener, unlinks the socket, then shuts every
     /// connection, as a session's exit does.
+    #[track_caller]
     fn exit(&self) {
         self.stop_listening();
         self.unlink();
@@ -613,9 +627,10 @@ fn arm_pass(hub: &Arc<Hub>) -> mpsc::Receiver<()> {
     done
 }
 
+#[track_caller]
 fn await_pass(done: &mpsc::Receiver<()>, what: &str) {
     assert!(
-        done.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(done).is_ok(),
         "the worker's pass never ended for {what}"
     );
 }
@@ -623,9 +638,10 @@ fn await_pass(done: &mpsc::Receiver<()>, what: &str) {
 /// Waits, at most [`UNREGISTERED`] of real time, until the registry drops
 /// every connection: a scoped thread waits on the hub's tick, which
 /// `serve_connection` wakes after it unregisters, and this takes its
-/// notice with one `recv_timeout`. The fake clock never moves during the
+/// notice with one `Deadline` receive. The fake clock never moves during the
 /// wait, so the bound is the channel's, never the clock's. Fails naming
 /// `what` when the deadline passes first.
+#[track_caller]
 fn await_unregistered(hub: &Hub, clock: &FakeClock, what: &str) {
     let given_up = AtomicBool::new(false);
     thread::scope(|scope| {
@@ -641,7 +657,7 @@ fn await_unregistered(hub: &Hub, clock: &FakeClock, what: &str) {
             });
             tx.send(()).unwrap_or(());
         });
-        if rx.recv_timeout(UNREGISTERED).is_err() {
+        if Deadline::after(UNREGISTERED).recv(&rx).is_err() {
             // The wake takes the tick lock, so the waiter sees the flag.
             given_up.store(true, Ordering::SeqCst);
             hub.tick.wake();
@@ -1898,7 +1914,7 @@ fn route_and_the_sweep_open_only_one_relay() {
         "args": {"content": [{"type": "text", "text": "hi"}]},
     }));
     assert!(
-        paused.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&paused).is_ok(),
         "route paused after its opening"
     );
     // The sweep runs while route waits: the peer rejoins, and the paused
@@ -1966,7 +1982,7 @@ fn route_and_the_sweep_open_only_one_relay() {
     clock.advance(RUN_SCAN);
     await_scanner(&clock);
     assert!(
-        paused.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&paused).is_ok(),
         "the worker paused before its connect"
     );
     client.send(&json!({
@@ -2029,7 +2045,7 @@ fn a_level_changed_while_the_worker_waits_is_the_one_rejoined() {
     clock.advance(RUN_SCAN);
     await_scanner(&clock);
     assert!(
-        paused.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&paused).is_ok(),
         "the worker paused before its connect"
     );
     // While the worker waits with the summary candidate, the client moves
@@ -2144,7 +2160,7 @@ fn follow_and_the_sweep_open_only_one_relay() {
     old_fake.unlink();
     old_fake.shutdown_write();
     assert!(
-        entered.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&entered).is_ok(),
         "follow reached its gated start"
     );
     // The next session binds meanwhile: the sweep skips it while the
@@ -2213,7 +2229,7 @@ fn a_paused_worker_blocks_no_scan_and_starts_no_second_worker() {
     clock.advance(RUN_SCAN);
     await_scanner(&clock);
     assert!(
-        paused.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&paused).is_ok(),
         "the worker paused before its connect"
     );
     // Further scans complete while it waits, and start no second worker:
@@ -2230,7 +2246,7 @@ fn a_paused_worker_blocks_no_scan_and_starts_no_second_worker() {
         stopped_tx.send(()).unwrap_or(());
     });
     assert!(
-        stopped.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&stopped).is_ok(),
         "stop never waits for the worker"
     );
     drop(release_tx);
@@ -2367,7 +2383,7 @@ fn a_scan_during_a_pass_queues_none_and_the_notice_follows_busy_clearing() {
     clock.advance(RUN_SCAN);
     await_scanner(&clock);
     assert!(
-        paused.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&paused).is_ok(),
         "the worker paused mid-pass"
     );
     clock.advance(RUN_SCAN);
@@ -2381,7 +2397,9 @@ fn a_scan_during_a_pass_queues_none_and_the_notice_follows_busy_clearing() {
     let registry = lock(&hub.rejoins.inner);
     drop(release_tx);
     assert!(
-        done.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&done)
+            .is_err(),
         "no notice while busy is still set"
     );
     drop(registry);

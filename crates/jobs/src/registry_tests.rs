@@ -14,6 +14,7 @@ use contract::inbox::Delivery;
 use contract::jobs::{Foreground, JobRecord, Jobs, OpenError, Opening, Stop};
 use contract::shapes::{Failure, Process};
 use contract::{ErrorCode, JobId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, TempDir};
 
@@ -288,8 +289,8 @@ fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
         let answer = waiting.wait(&id, 60_000, &CancelToken::new()).unwrap();
         let _sent = tx.send(answer);
     });
-    let answer = rx
-        .recv_timeout(Duration::from_secs(5))
+    let answer = Deadline::after(Duration::from_secs(5))
+        .recv(&rx)
         .expect("the wait returned after a wake that landed before it parked");
     let [JobRecord::Completed(completed)] = &answer.records[..] else {
         panic!("the wait did not deliver the completion: {}", answer.text);
@@ -642,8 +643,8 @@ fn write_returns_the_output_after_the_write_when_the_wait_passes() {
     );
     assert!(rx.try_recv().is_err(), "the write returned before its wait");
     clock.advance(Duration::from_millis(250));
-    let answer = rx
-        .recv_timeout(DEADLINE)
+    let answer = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the write returned")
         .ok()
         .unwrap();
@@ -663,8 +664,8 @@ fn write_returns_at_once_with_the_final_state_when_the_job_ends_in_the_wait() {
     let rx = writing(&registry, &id, "hi\n", 250, CancelToken::new());
     assert!(clock.await_parked(deadline, DEADLINE));
     (opened.end.0)(ended_ok(&id));
-    let answer = rx
-        .recv_timeout(DEADLINE)
+    let answer = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the write returned")
         .ok()
         .unwrap();
@@ -686,8 +687,8 @@ fn a_cancel_returns_the_write_at_once_with_what_arrived() {
     let rx = writing(&registry, &id, "x", 250, cancel.clone());
     assert!(clock.await_parked(deadline, DEADLINE));
     cancel.cancel();
-    let answer = rx
-        .recv_timeout(DEADLINE)
+    let answer = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the cancelled write returned")
         .ok()
         .unwrap();
@@ -846,7 +847,7 @@ fn wait_for_cancel(
         let mut expired = false;
         clock.wait_until(None, &mut |_| {
             // Bounded in real time: every path below moves the clock first.
-            if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+            if Deadline::after(Duration::from_secs(10)).recv(&rx).is_err() {
                 expired = true;
             }
         });
@@ -884,8 +885,8 @@ fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
     let (_dir, clock, registry) = clocked_world();
     let (id, opened, entered) = open_stuck(&registry);
     let rx = seam_writing(&registry, &id, "hi".to_owned());
-    entered
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&entered)
         .expect("the write reached the terminal");
     // Parked inside the clock wait, past the writer's own check.
     assert!(
@@ -905,8 +906,8 @@ fn seam_write_times_out_once_the_deadline_passes_and_not_before() {
     );
     // At the deadline it reports that the terminal never took the input.
     clock.advance(Duration::from_millis(1));
-    let err = rx
-        .recv_timeout(DEADLINE)
+    let err = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the write returned at its deadline");
     assert!(
         matches!(&err, Err(contract::jobs::WriteError::Io(error))
@@ -946,8 +947,8 @@ fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
         .unwrap();
     let id = opened.started.job_id.0.clone();
     let rx = seam_writing(&registry, &id, "hi".to_owned());
-    entry_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&entry_rx)
         .expect("the write reached the terminal");
     // The other writer releases, long after, on the wall clock: the
     // deadline on the session clock still bounds the write.
@@ -959,8 +960,8 @@ fn seam_write_behind_another_writer_still_times_out_at_the_deadline() {
         "the write did not park on the clock"
     );
     clock.advance(Duration::from_millis(1001));
-    let err = rx
-        .recv_timeout(DEADLINE)
+    let err = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the write returned at its deadline");
     assert!(
         matches!(&err, Err(contract::jobs::WriteError::Io(error))
@@ -1001,7 +1002,7 @@ fn seam_write_wakes_through_the_deadline_subscription_alone() {
                     clock.wait_until(Some(clock.now() + Duration::from_secs(3600)), &mut |_| {
                         // Bounded in real time: expiry fails the
                         // test with another error.
-                        if rx.recv_timeout(Duration::from_secs(10)).is_err() {
+                        if Deadline::after(Duration::from_secs(10)).recv(&rx).is_err() {
                             expired = true;
                         }
                     });
@@ -1017,8 +1018,8 @@ fn seam_write_wakes_through_the_deadline_subscription_alone() {
         .unwrap();
     let id = opened.started.job_id.0.clone();
     let rx = seam_writing(&registry, &id, "hi".to_owned());
-    entry_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&entry_rx)
         .expect("the write reached the terminal");
     // Parked inside the clock wait, past the writer's own check, before
     // the clock moves.
@@ -1030,8 +1031,8 @@ fn seam_write_wakes_through_the_deadline_subscription_alone() {
     // The only wake is the clock passing the deadline: no second
     // advance, no cancel call.
     clock.advance(Duration::from_secs(2));
-    let err = rx
-        .recv_timeout(DEADLINE)
+    let err = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the write returned at its deadline");
     assert!(
         matches!(&err, Err(contract::jobs::WriteError::Io(error))

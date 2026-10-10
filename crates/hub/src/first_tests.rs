@@ -20,6 +20,7 @@ use super::*;
 use crate::diag::Diag;
 use crate::fake::{FakeStarter, Handshake};
 use crate::start::Outcome;
+use fakes::Deadline;
 
 /// One named deadline per wait.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -65,8 +66,19 @@ fn setup() -> Setup {
     }
 }
 
+/// Takes the arming notice with the deadline, failing at the caller's
+/// line: the `before_check` hook below is a closure, which
+/// `#[track_caller]` cannot cross.
+#[track_caller]
+fn await_armed(armed: &mpsc::Receiver<()>) {
+    Deadline::after(DEADLINE)
+        .recv(armed)
+        .expect("arm dropped the deadline guard");
+}
+
 /// Runs `start` with content on a thread and returns its session id and
 /// held prompt.
+#[track_caller]
 fn held(setup: &Setup) -> (String, Held) {
     let hub = Arc::clone(&setup.hub);
     let workspace = setup.dir.join("w").to_string_lossy().into_owned();
@@ -87,7 +99,9 @@ fn held(setup: &Setup) -> (String, Held) {
     let Outcome::Accepted {
         session_id,
         first: Some(held),
-    } = done.recv_timeout(DEADLINE).expect("start answered")
+    } = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("start answered")
     else {
         panic!("the start is accepted with its prompt held");
     };
@@ -132,14 +146,12 @@ fn arm_while_the_waiter_checks_does_not_deadlock() {
     let (armed_tx, armed) = mpsc::channel::<()>();
     *lock(&first.before_check) = Some(Box::new(move || {
         checking_tx.send(()).unwrap_or(());
-        armed
-            .recv_timeout(DEADLINE)
-            .expect("arm dropped the deadline guard");
+        await_armed(&armed);
     }));
     *lock(&first.armed) = Some(Box::new(move || armed_tx.send(()).unwrap_or(())));
     later(&setup.hub, &setup.relays, held, Arc::clone(&first)).unwrap();
-    checking
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&checking)
         .expect("the waiter is in its check");
     let due = setup.clock.now() + FIRST_PROMPT_WAIT;
     let (done_tx, done) = mpsc::channel();
@@ -152,7 +164,7 @@ fn arm_while_the_waiter_checks_does_not_deadlock() {
         setup.clock.await_parked(due, DEADLINE),
         "the waiter read the deadline"
     );
-    done.recv_timeout(DEADLINE).expect("arm returned");
+    Deadline::after(DEADLINE).recv(&done).expect("arm returned");
     setup.clock.advance(FIRST_PROMPT_WAIT);
     assert!(setup.starter.await_received(2, DEADLINE));
 }

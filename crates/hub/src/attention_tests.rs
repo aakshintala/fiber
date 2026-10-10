@@ -15,6 +15,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::events::SessionStatus;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -597,6 +598,7 @@ fn read_line(read: &mut BufReader<UnixStream>, what: &str) -> Value {
 }
 
 /// Waits under [`DEADLINE`] until `done` holds, naming `what` on expiry.
+#[track_caller]
 fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
     let (tx, rx) = mpsc::channel();
     let (cancel_tx, cancel_rx) = mpsc::channel();
@@ -609,7 +611,7 @@ fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
         }
         tx.send(()).unwrap_or(());
     });
-    if rx.recv_timeout(DEADLINE).is_err() {
+    if Deadline::after(DEADLINE).recv(&rx).is_err() {
         cancel_tx.send(()).unwrap_or(());
         panic!("waited for {what}");
     }
@@ -617,6 +619,7 @@ fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
 
 /// Drops listener `id` on a thread and receives its return under
 /// [`DEADLINE`]: joining the writer blocks.
+#[track_caller]
 fn unlisten_within(attention: &Arc<Attention>, id: u64, what: &str) {
     let (done_tx, done_rx) = mpsc::channel();
     let ending = Arc::clone(attention);
@@ -624,7 +627,7 @@ fn unlisten_within(attention: &Arc<Attention>, id: u64, what: &str) {
         ending.unlisten(id);
         done_tx.send(()).unwrap_or(());
     });
-    assert!(done_rx.recv_timeout(DEADLINE).is_ok(), "{what}");
+    assert!(Deadline::after(DEADLINE).recv(&done_rx).is_ok(), "{what}");
 }
 
 #[test]
@@ -700,7 +703,10 @@ fn a_dead_or_slow_listener_does_not_stop_a_live_one() {
         }
         tx.send(()).unwrap_or(());
     });
-    assert!(rx.recv_timeout(DEADLINE).is_ok(), "the dead writer ends");
+    assert!(
+        Deadline::after(DEADLINE).recv(&rx).is_ok(),
+        "the dead writer ends"
+    );
     assert_eq!(
         attention.listeners(),
         3,
@@ -847,15 +853,17 @@ fn unlisten_waits_for_its_writer_still_draining_its_backlog() {
             assert!(!text.is_empty());
         }
     });
-    let left = rx.recv_timeout(DEADLINE).expect("unlisten returns");
+    let left = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("unlisten returns");
     // The test's handle, `watched`, and none from the writer thread.
     assert_eq!(left, 2, "unlisten returned before its writer ended");
     let (joined_tx, joined_rx) = mpsc::channel();
     thread::spawn(move || {
         joined_tx.send(drained.join()).unwrap_or(());
     });
-    let joined = joined_rx
-        .recv_timeout(DEADLINE)
+    let joined = Deadline::after(DEADLINE)
+        .recv(&joined_rx)
         .expect("the far end drains");
     joined.unwrap();
 }

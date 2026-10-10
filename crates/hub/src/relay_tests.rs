@@ -14,6 +14,7 @@ use std::os::unix::net::UnixStream;
 use serde_json::{Value, json};
 
 use super::*;
+use fakes::Deadline;
 
 #[test]
 fn a_stale_relay_never_overwrites_a_reconnects_subscription() {
@@ -539,8 +540,8 @@ fn a_relay_without_a_thread_is_recovered_with_its_queue_first() {
             );
             done.send(()).unwrap_or(());
         });
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .expect("the route returns before its deadline");
         let mut read = BufReader::new(client_read);
         for expected in ["c_1", "c_2"] {
@@ -915,8 +916,8 @@ fn a_recovered_command_never_queues_behind_an_older_relay() {
         );
         done.send(()).unwrap_or(());
     });
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("the route returns before its deadline");
     let mut read = BufReader::new(client_read);
     for expected in ["c_2", "c_3"] {
@@ -1126,6 +1127,14 @@ fn a_transfer_lands_on_the_live_relay() {
     assert_eq!(*replayed.lock().unwrap(), vec![id]);
 }
 
+/// Takes the test's release with the deadline, failing at the caller's
+/// line: the fake session below runs on its own thread, which
+/// `#[track_caller]` cannot cross.
+#[track_caller]
+fn await_release(reply: &std::sync::mpsc::Receiver<()>, wait: &Deadline) {
+    wait.recv(reply).expect("the test releases the fake reply");
+}
+
 #[test]
 fn a_transfer_registers_before_the_session_can_answer() {
     use std::io::{BufRead, BufReader, Write};
@@ -1213,9 +1222,7 @@ fn a_transfer_registers_before_the_session_can_answer() {
             }
             let command: Value = serde_json::from_str(buf.trim_end()).unwrap();
             let id = command.get("id").cloned().unwrap();
-            reply_rx
-                .recv_timeout(DEADLINE)
-                .expect("the test releases the fake reply");
+            await_release(&reply_rx, &Deadline::after(DEADLINE));
             let mut ack = serde_json::to_vec(&json!({
                 "kind": "command_accepted", "ts": 1, "schema_version": 1,
                 "payload": {"command_id": id},
@@ -1250,10 +1257,10 @@ fn a_transfer_registers_before_the_session_can_answer() {
         })
         .unwrap();
 
-    let write_reached = written_rx.recv_timeout(DEADLINE).is_ok();
+    let write_reached = Deadline::after(DEADLINE).recv(&written_rx).is_ok();
     reply_tx.send(()).unwrap_or(());
     let filter_result = if write_reached {
-        filter_rx.recv_timeout(DEADLINE).ok()
+        Deadline::after(DEADLINE).recv(&filter_rx).ok()
     } else {
         None
     };
@@ -1344,8 +1351,8 @@ fn the_acknowledgement_queue_orders_a_retiring_relays_handovers() {
         })
         .unwrap();
     order.done(SID, "c_1");
-    done_rx
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
         .expect("the handover follows the re-routed answer");
     // One entry, not two: the second enqueue changed nothing.
     assert_eq!(order.session_for("c_1"), None);
@@ -1428,6 +1435,8 @@ fn acknowledgement_wait_ignores_other_sessions_epochs_and_itself() {
     const EPOCH: u64 = 7;
     const NEWER: u64 = 8;
 
+    /// Receives with the deadline, failing at the caller's line.
+    #[track_caller]
     fn returns_without_waiting(
         held_session: &str,
         held_epoch: u64,
@@ -1449,11 +1458,11 @@ fn acknowledgement_wait_ignores_other_sessions_epochs_and_itself() {
                 returned_tx.send(()).unwrap_or(());
             })
             .unwrap();
-        let timely = returned_rx.recv_timeout(DEADLINE).is_ok();
+        let timely = Deadline::after(DEADLINE).recv(&returned_rx).is_ok();
         order.done(held_session, held_id);
         if !timely {
-            returned_rx
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&returned_rx)
                 .expect("releasing the handover wakes the bounded waiter");
         }
         thread.join().unwrap();
@@ -1520,7 +1529,7 @@ fn forwarding_does_not_wait_for_a_different_epoch_to_retire() {
         .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_later\"}}\n")
         .unwrap();
     session_peer.flush().unwrap();
-    let timely = noticed_rx.recv_timeout(DEADLINE).is_ok();
+    let timely = Deadline::after(DEADLINE).recv(&noticed_rx).is_ok();
     if !timely {
         order.done(SID, "c_earlier");
     }
@@ -1544,6 +1553,8 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
     const SID: &str = "s_0123456789abcdef";
     const EPOCH: u64 = 7;
 
+    /// Receives with the deadline, failing at the caller's line.
+    #[track_caller]
     fn run_case(entry_session: &str, entry_epoch: u64, expect_pop: bool) {
         let held = fakes::TempDir::new("ri");
         let hub = Arc::new(hub(&held));
@@ -1600,7 +1611,7 @@ fn retiring_relays_pass_queues_only_for_their_session_and_epoch() {
             .write_all(b"{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_ack\"}}\n")
             .unwrap();
         session_peer.flush().unwrap();
-        let passed = passed_rx.recv_timeout(DEADLINE);
+        let passed = Deadline::after(DEADLINE).recv(&passed_rx);
         let mut client_peer = client_peer;
         let mut text = String::new();
         std::io::BufReader::new(&mut client_peer)
@@ -1730,8 +1741,8 @@ fn a_relay_end_drops_sent_commands_and_clears_only_unsent_commands() {
     session_peer
         .shutdown(std::net::Shutdown::Both)
         .unwrap_or(());
-    let passed = passed_rx
-        .recv_timeout(DEADLINE)
+    let passed = Deadline::after(DEADLINE)
+        .recv(&passed_rx)
         .expect("the relay end drains and clears its queue");
     thread.join().unwrap();
 
@@ -1810,7 +1821,7 @@ fn a_relay_drops_unknown_acknowledgements_but_forwards_its_own() {
     let (ended_tx, ended) = std::sync::mpsc::channel();
     std::thread::spawn(move || ended_tx.send(thread.join().is_ok()).unwrap_or(()));
     assert_eq!(
-        ended.recv_timeout(DEADLINE).ok(),
+        Deadline::after(DEADLINE).recv(&ended).ok(),
         Some(true),
         "the relay thread ends once the session closes"
     );

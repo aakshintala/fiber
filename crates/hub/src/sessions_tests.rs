@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -97,22 +98,27 @@ fn args(value: Value) -> Map<String, Value> {
 
 /// `sessions` answered on a thread under [`DEADLINE`], then the feed
 /// stopped.
+#[track_caller]
 fn answered(feed: &Arc<Feed>, home: &std::path::Path, args: Value) -> Value {
     let (tx, rx) = mpsc::channel();
     let (answering, home, args) = (Arc::clone(feed), home.to_path_buf(), self::args(args));
     thread::spawn(move || {
         tx.send(answer(&answering, &home, &args)).unwrap_or(());
     });
-    let got = rx.recv_timeout(DEADLINE).expect("sessions answers");
+    let got = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("sessions answers");
     feed_stop(feed);
     got.unwrap().unwrap()
 }
 
 /// The live and exited ids `sessions` answers.
+#[track_caller]
 fn listed(feed: &Arc<Feed>, home: &std::path::Path, args: Value) -> (Vec<String>, Vec<String>) {
     ids_of(&answered(feed, home, args))
 }
 
+#[track_caller]
 fn feed_stop(feed: &Arc<Feed>) {
     let (tx, rx) = mpsc::channel();
     let feed = Arc::clone(feed);
@@ -120,7 +126,10 @@ fn feed_stop(feed: &Arc<Feed>) {
         feed.stop();
         tx.send(()).unwrap_or(());
     });
-    assert!(rx.recv_timeout(DEADLINE).is_ok(), "the feed stops");
+    assert!(
+        Deadline::after(DEADLINE).recv(&rx).is_ok(),
+        "the feed stops"
+    );
 }
 
 fn ids_of(answer: &Value) -> (Vec<String>, Vec<String>) {
@@ -204,7 +213,9 @@ fn arguments_that_do_not_fit_are_invalid_arguments() {
         thread::spawn(move || {
             tx.send(answer(&answering, &home, &sent)).unwrap_or(());
         });
-        let got = rx.recv_timeout(DEADLINE).expect("refused without a wait");
+        let got = Deadline::after(DEADLINE)
+            .recv(&rx)
+            .expect("refused without a wait");
         let (code, _) = got.unwrap_err();
         assert_eq!(code, ErrorCode::InvalidArguments, "{bad}");
     }

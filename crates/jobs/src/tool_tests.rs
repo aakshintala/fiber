@@ -13,6 +13,7 @@ use contract::jobs::{End, JobRecord, Opening, Stop};
 use contract::shapes::{ContentPart, Effect, Failure, Process};
 use contract::tool::{Cancel, Output, Tool};
 use contract::{ErrorCode, JobId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value, json};
@@ -29,6 +30,13 @@ fn args(value: Value) -> Map<String, Value> {
             panic!("arguments are an object")
         }
     }
+}
+
+/// Takes a wait's output with the deadline, failing at the caller's
+/// line: `#[track_caller]` cannot cross the `map` closure below.
+#[track_caller]
+fn take_output(rx: &mpsc::Receiver<Output>) -> Output {
+    Deadline::after(DEADLINE).recv(rx).expect("a wait returned")
 }
 
 fn text_of(output: &Output) -> &str {
@@ -448,7 +456,9 @@ fn a_zero_timeout_on_a_running_job_returns_at_once() {
             &CancelToken::new(),
         ));
     });
-    let output = rx.recv_timeout(DEADLINE).expect("a zero timeout returned");
+    let output = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("a zero timeout returned");
     assert!(output.error.is_none());
     assert!(output.jobs.is_empty());
     assert!(
@@ -529,7 +539,9 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
     );
     // Exactly the deadline: `now > until` would leave the wait parked.
     clock.advance(Duration::from_millis(timeout_ms));
-    let output = rx.recv_timeout(DEADLINE).expect("the timeout returned");
+    let output = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the timeout returned");
     assert!(output.error.is_none());
     assert!(output.jobs.is_empty());
     assert!(
@@ -555,7 +567,9 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
     });
     assert!(clock.await_parked(deadline, DEADLINE));
     (opened.end.0)(completed(&id, Outcome::Completed));
-    let output = rx.recv_timeout(DEADLINE).expect("the wait returned");
+    let output = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the wait returned");
     assert!(output.error.is_none());
     assert!(
         matches!(output.jobs.as_slice(), [JobRecord::Completed(done)] if done.status == Outcome::Completed)
@@ -615,7 +629,9 @@ fn a_timeout_that_overflows_the_clock_waits_until_the_job_ends() {
     assert_eq!(clock.await_first(), vec![None]);
     assert!(rx.try_recv().is_err(), "the overflow wait returned early");
     (opened.end.0)(completed(&end_id, Outcome::Completed));
-    let output = rx.recv_timeout(DEADLINE).expect("the wait returned");
+    let output = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the wait returned");
     assert!(output.error.is_none());
     assert!(matches!(
         output.jobs.as_slice(),
@@ -652,8 +668,8 @@ fn cancelling_a_wait_leaves_the_job_running() {
     });
     assert!(clock.await_parked(deadline, DEADLINE));
     cancel.cancel();
-    let output = rx
-        .recv_timeout(DEADLINE)
+    let output = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the cancelled wait returned");
     assert!(output.error.is_none());
     assert!(output.jobs.is_empty());
@@ -703,10 +719,7 @@ fn two_waits_deliver_the_completion_once() {
         "both waits did not park"
     );
     (opened.end.0)(completed(&id, Outcome::Failed));
-    let outputs: Vec<Output> = handles
-        .into_iter()
-        .map(|rx| rx.recv_timeout(DEADLINE).expect("a wait returned"))
-        .collect();
+    let outputs: Vec<Output> = handles.into_iter().map(|rx| take_output(&rx)).collect();
     let records = outputs
         .iter()
         .filter(|output| !output.jobs.is_empty())
@@ -779,7 +792,7 @@ fn stop_calls_stop_once_and_returns_the_end_it_reports() {
             &CancelToken::new(),
         ));
     });
-    let output = rx.recv_timeout(DEADLINE).expect("stop returned");
+    let output = Deadline::after(DEADLINE).recv(&rx).expect("stop returned");
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(output.error.is_none());
     assert!(
@@ -836,8 +849,8 @@ fn cancelling_stop_after_the_stop_was_sent_returns_at_once() {
         "stop returned before it was cancelled"
     );
     cancel.cancel();
-    let output = rx
-        .recv_timeout(DEADLINE)
+    let output = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the cancelled stop returned");
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(output.error.is_none());
@@ -962,7 +975,9 @@ fn a_failed_write_to_the_terminal_is_a_tool_error() {
 }
 
 /// The instant a `write` call with these arguments parks at, and the answer
-/// it returns once the clock reaches it.
+/// it returns once the clock reaches it. Receives with the deadline,
+/// failing at the caller's line.
+#[track_caller]
 fn write_parks_at(arguments: Value, wait: Duration) {
     let clock = FakeClock::new();
     let as_clock: Arc<dyn Clock> = clock.clone();
@@ -993,7 +1008,9 @@ fn write_parks_at(arguments: Value, wait: Duration) {
         "the write returned a millisecond early"
     );
     clock.advance(Duration::from_millis(1));
-    let output = rx.recv_timeout(DEADLINE).expect("the write returned");
+    let output = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the write returned");
     assert!(output.error.is_none(), "{}", text_of(&output));
     drop(opened.end);
 }

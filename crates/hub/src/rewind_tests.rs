@@ -27,6 +27,7 @@ use crate::Starter;
 use crate::connection::serve_connection;
 use crate::diag::Diag;
 use crate::fake::{FakeStarter, Handshake};
+use fakes::Deadline;
 
 /// One named deadline per wait: every start and acknowledgement lands
 /// before it.
@@ -321,7 +322,7 @@ fn a_slow_start_of_one_session_does_not_block_another() {
     // The slow start is inside `rewind`, holding only its own session's
     // lock: no sleep, the channel says so.
     assert!(
-        entered.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&entered).is_ok(),
         "the slow start reached the starter"
     );
     // On a thread with a named deadline: a shared-lock regression would
@@ -339,8 +340,8 @@ fn a_slow_start_of_one_session_does_not_block_another() {
             }
         })
         .unwrap();
-    let stream = done
-        .recv_timeout(DEADLINE)
+    let stream = Deadline::after(DEADLINE)
+        .recv(&done)
         .expect("the other session starts while the slow one waits");
     assert!(stream.is_some());
     assert!(
@@ -779,8 +780,8 @@ fn follow_transfers_the_kept_level_onto_an_unsubscribed_relay() {
         starter.rewound().is_empty(),
         "no start for a running session"
     );
-    let (got, line) = heard
-        .recv_timeout(DEADLINE)
+    let (got, line) = Deadline::after(DEADLINE)
+        .recv(&heard)
         .expect("the transfer sends the level");
     assert!(got > 0, "the relay's connection carries it");
     let sent: Value = serde_json::from_str(line.trim_end()).unwrap();
@@ -865,6 +866,7 @@ impl OpenSession {
     /// so the accept loop lagging behind the openers cannot hide one.
     /// One deadline bounds the whole wait: a worker collects the accepts
     /// while the test takes its result once.
+    #[track_caller]
     fn await_accepts(&self, count: usize, what: &str) {
         let accepted = lock(&self.accepted).take().expect("one wait per session");
         let (done_tx, done) = mpsc::channel();
@@ -882,7 +884,7 @@ impl OpenSession {
             })
             .expect("the waiter spawns");
         assert_eq!(
-            done.recv_timeout(OPEN_DEADLINE).unwrap_or(count),
+            Deadline::after(OPEN_DEADLINE).recv(&done).unwrap_or(count),
             0,
             "{what} reached the session"
         );
@@ -892,6 +894,7 @@ impl OpenSession {
     /// serve thread lagging behind the openers cannot hide one. One
     /// deadline bounds the whole wait: a worker collects the lines while
     /// the test takes its result once.
+    #[track_caller]
     fn await_lines(&self, count: usize, what: &str) {
         let heard = lock(&self.heard).take().expect("one wait per session");
         let (done_tx, done) = mpsc::channel();
@@ -909,7 +912,7 @@ impl OpenSession {
             })
             .expect("the waiter spawns");
         assert_eq!(
-            done.recv_timeout(OPEN_DEADLINE).unwrap_or(count),
+            Deadline::after(OPEN_DEADLINE).recv(&done).unwrap_or(count),
             0,
             "{what} reached the session"
         );
@@ -1021,6 +1024,7 @@ fn spawn_opener(job: impl FnOnce() + Send + 'static, name: &str) -> mpsc::Receiv
 /// the gate instead of pausing, and the wait below times out. When the
 /// waiter is the redirect it pauses in the hook once the gate frees it;
 /// when it is the command it takes the existing relay outright.
+#[track_caller]
 fn race_openers(
     hub: &Arc<Hub>,
     relays: &Arc<Mutex<crate::relay::Relays>>,
@@ -1031,7 +1035,7 @@ fn race_openers(
     let (paused_first, release_first) = arm_before_open(hub);
     let done_first = spawn_opener(first, "race-first");
     assert!(
-        paused_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+        Deadline::after(OPEN_DEADLINE).recv(&paused_first).is_ok(),
         "the first opener parked after its opening"
     );
     // Arm the gate seam now: the first opener already passed it (it is
@@ -1046,24 +1050,24 @@ fn race_openers(
     // gate: releasing it on a thread start alone could release it
     // before any contention.
     assert!(
-        reached.recv_timeout(OPEN_DEADLINE).is_ok(),
+        Deadline::after(OPEN_DEADLINE).recv(&reached).is_ok(),
         "the second opener reached the gate"
     );
-    if paused_second.recv_timeout(OPEN_DEADLINE).is_err() {
+    if Deadline::after(OPEN_DEADLINE).recv(&paused_second).is_err() {
         drop(release_first);
         assert!(
-            done_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+            Deadline::after(OPEN_DEADLINE).recv(&done_first).is_ok(),
             "the first opener finished"
         );
         if second_is_follow {
             assert!(
-                paused_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+                Deadline::after(OPEN_DEADLINE).recv(&paused_second).is_ok(),
                 "the waiter parked after the first published"
             );
             drop(release_second);
         }
         assert!(
-            done_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+            Deadline::after(OPEN_DEADLINE).recv(&done_second).is_ok(),
             "the second opener finished"
         );
     } else {
@@ -1074,23 +1078,23 @@ fn race_openers(
         if second_is_follow {
             drop(release_second);
             assert!(
-                done_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+                Deadline::after(OPEN_DEADLINE).recv(&done_second).is_ok(),
                 "the second opener finished"
             );
             drop(release_first);
             assert!(
-                done_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+                Deadline::after(OPEN_DEADLINE).recv(&done_first).is_ok(),
                 "the first opener finished"
             );
         } else {
             drop(release_first);
             assert!(
-                done_first.recv_timeout(OPEN_DEADLINE).is_ok(),
+                Deadline::after(OPEN_DEADLINE).recv(&done_first).is_ok(),
                 "the first opener finished"
             );
             drop(release_second);
             assert!(
-                done_second.recv_timeout(OPEN_DEADLINE).is_ok(),
+                Deadline::after(OPEN_DEADLINE).recv(&done_second).is_ok(),
                 "the second opener finished"
             );
         }
@@ -1144,6 +1148,7 @@ fn follow_job(
 /// Asserts the race published exactly one live relay for `next`: one
 /// entry, one accept, the kept level, and both lines on the one
 /// connection — the client's command once, and the transfer's subscribe.
+#[track_caller]
 fn assert_single_relay(
     relays: &Arc<Mutex<crate::relay::Relays>>,
     session: &OpenSession,

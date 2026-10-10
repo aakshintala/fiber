@@ -25,6 +25,7 @@ use crate::Starter as _;
 use crate::connection::{Hub, lock};
 use crate::fake::{FakeSession, FakeStarter};
 use crate::relay::{Kept, Relay, Replayed};
+use fakes::Deadline;
 
 /// One hang-guard deadline per wait: every close lands before it.
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -198,19 +199,39 @@ fn spawn(rig: &Rig, session: &str, reader: UnixStream) -> thread::JoinHandle<()>
 
 /// Joins `thread` on a thread of its own: code that blocks is a wait, so
 /// the join is received with the deadline.
+#[track_caller]
 fn join(thread: thread::JoinHandle<()>, what: &str) {
     let (done_tx, done) = mpsc::channel();
     thread::spawn(move || {
         thread.join().unwrap();
         done_tx.send(()).unwrap_or(());
     });
-    assert!(done.recv_timeout(DEADLINE).is_ok(), "{what}");
+    assert!(Deadline::after(DEADLINE).recv(&done).is_ok(), "{what}");
+}
+
+/// Takes the scoped reader's lines with one deadline for the whole wait,
+/// failing naming `what`: `#[track_caller]` reports the test's line, which
+/// the `thread::scope` closure below cannot.
+#[track_caller]
+fn take_collected(
+    lines: &mpsc::Receiver<Option<Vec<String>>>,
+    stop: &AtomicBool,
+    what: &str,
+) -> Vec<String> {
+    let got = Deadline::after(DEADLINE).recv(lines);
+    stop.store(true, Ordering::SeqCst);
+    match got {
+        Ok(Some(got)) => got,
+        Ok(None) => panic!("the hub closed before {what}"),
+        Err(_) => panic!("never received {what}"),
+    }
 }
 
 /// Reads `reader` to the first line `done` accepts: a scoped thread reads
-/// the lines in short slices, and this takes them with one `recv_timeout`
+/// the lines in short slices, and this takes them with one `Deadline` receive
 /// for the whole wait, never one deadline per line. Raw lines, newlines
 /// included. A closed socket fails naming `what` too.
+#[track_caller]
 fn collect_until(
     reader: UnixStream,
     what: &str,
@@ -253,13 +274,7 @@ fn collect_until(
                 }
             }
         });
-        let got = lines.recv_timeout(DEADLINE);
-        stop.store(true, Ordering::SeqCst);
-        match got {
-            Ok(Some(got)) => got,
-            Ok(None) => panic!("the hub closed before {what}"),
-            Err(_) => panic!("never received {what}"),
-        }
+        take_collected(&lines, stop, what)
     })
 }
 
@@ -348,6 +363,7 @@ fn assert_stream_closed(lines: &[String], first: &str, second: &str, ts: u64) {
 
 /// Routes `stripped` for [`SID`] on a thread of its own, received with the
 /// deadline: code that blocks is a wait too.
+#[track_caller]
 fn route_on_thread(rig: &Rig, id: &str, stripped: Map<String, Value>) {
     let (done_tx, done) = mpsc::channel();
     let hub = Arc::clone(&rig.hub);
@@ -368,7 +384,7 @@ fn route_on_thread(rig: &Rig, id: &str, stripped: Map<String, Value>) {
         done_tx.send(()).unwrap_or(());
     });
     assert!(
-        done.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done).is_ok(),
         "the routed command is queued before its deadline"
     );
 }
@@ -441,8 +457,8 @@ fn a_session_whose_socket_refuses_keeps_the_level() {
     join(thread, "the relay thread to end");
     drop(rig.client);
     drop(rig.hub);
-    let lines = eof
-        .recv_timeout(DEADLINE)
+    let lines = Deadline::after(DEADLINE)
+        .recv(&eof)
         .expect("the client read ends after the relay");
     assert_eq!(
         lines,
@@ -477,8 +493,8 @@ fn a_log_ending_fiber_exited_keeps_the_level() {
     join(thread, "the relay thread to end");
     drop(rig.client);
     drop(rig.hub);
-    let lines = eof
-        .recv_timeout(DEADLINE)
+    let lines = Deadline::after(DEADLINE)
+        .recv(&eof)
         .expect("the client read ends after the relay");
     assert_eq!(
         lines,
@@ -602,7 +618,7 @@ fn a_command_racing_buffered_lines_waits_for_the_end_and_reaches_the_session_uns
     }));
     let thread = spawn(&rig, SID, reader);
     assert!(
-        reached.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&reached).is_ok(),
         "the relay paused before its first read"
     );
     // The racing command's write fails: it queues unsent on the dead relay.
@@ -675,7 +691,7 @@ fn a_command_racing_the_end_is_answered_after_stream_closed() {
     drop(session_peer);
     let thread = spawn(&rig, SID, reader);
     assert!(
-        reached.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&reached).is_ok(),
         "the relay paused at its end"
     );
     // The racing command's write fails: it queues unsent on the dead relay.
