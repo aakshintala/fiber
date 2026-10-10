@@ -123,6 +123,20 @@ fn io_bound(idle: Duration, timeout: NextTimeout) -> (Duration, bool) {
     }
 }
 
+/// Reads once, retrying a read a signal interrupted. Linux never restarts a
+/// socket read that has a receive timeout set, even for a handler installed
+/// with `SA_RESTART`, so a signal aimed at the process would otherwise fail
+/// the call (signal(7), "Interruption of system calls and library functions
+/// by signal handlers").
+fn read_retrying(reader: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
+    loop {
+        match reader.read(buf) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            done => return done,
+        }
+    }
+}
+
 /// A plain TCP transport over the kept socket.
 #[derive(Debug)]
 pub(crate) struct Socket {
@@ -176,7 +190,7 @@ impl Transport for Socket {
         let (bound, ureq_wins) = io_bound(self.idle, timeout);
         self.stream.set_read_timeout(Some(bound))?;
         let input = self.buffers.input_append_buf();
-        let read = match self.stream.read(input) {
+        let read = match read_retrying(&mut self.stream, input) {
             Ok(read) => read,
             Err(error) => return Err(self.timed_out(error, timeout, ureq_wins)),
         };

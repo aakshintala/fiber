@@ -8,7 +8,7 @@ use ureq::unversioned::resolver::DefaultResolver;
 use ureq::unversioned::transport::time::Duration;
 use ureq::unversioned::transport::{LazyBuffers, NextTimeout, Transport};
 
-use super::{Socket, open};
+use super::{Socket, open, read_retrying};
 use crate::{Error, Keep, LIMITS, Limits};
 
 fn wait() -> NextTimeout {
@@ -564,4 +564,39 @@ fn a_tls_handshake_that_never_answers_fails_timed_out() {
         crate::timed_out(&error),
         "a silent TLS handshake times out: {error}"
     );
+}
+
+/// Yields `Interrupted` `interruptions` times, then one byte, then a failure.
+struct Interrupting {
+    interruptions: usize,
+}
+
+impl Read for Interrupting {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.interruptions > 0 {
+            self.interruptions -= 1;
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        match buf.first_mut() {
+            Some(byte) => {
+                *byte = 7;
+                Ok(1)
+            }
+            None => Err(io::ErrorKind::UnexpectedEof.into()),
+        }
+    }
+}
+
+#[test]
+fn a_read_a_signal_interrupted_is_retried() {
+    let mut buf = [0_u8; 4];
+    let read = read_retrying(&mut Interrupting { interruptions: 3 }, &mut buf).unwrap();
+    assert_eq!((read, buf[0]), (1, 7));
+}
+
+#[test]
+fn a_read_failure_that_is_not_an_interruption_is_returned() {
+    let error = read_retrying(&mut Interrupting { interruptions: 0 }, &mut [])
+        .expect_err("the reader fails");
+    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
 }
