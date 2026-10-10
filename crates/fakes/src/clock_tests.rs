@@ -930,12 +930,12 @@ fn await_any_parked_since_needs_an_id_past_the_mark() {
 fn await_any_parked_since_ignores_a_thread_absent_from_the_mark() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
-    let (parked_a, release_a, exit_a) = park_once(&clock, Some(until));
+    let (parked_a, release_a, exit_a, _) = park_once(&clock, Some(until));
     parked_a
         .recv_timeout(Duration::from_secs(5))
         .expect("waited for the first thread to park");
     let mark = clock.advance_marked(Duration::from_millis(1));
-    let (parked_b, release_b, exit_b) = park_once(&clock, Some(until));
+    let (parked_b, release_b, exit_b, _) = park_once(&clock, Some(until));
     parked_b
         .recv_timeout(Duration::from_secs(5))
         .expect("waited for the second thread to park");
