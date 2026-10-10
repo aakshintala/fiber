@@ -349,13 +349,28 @@ fn a_seen_row_that_leaves_stays_cleared() {
 }
 
 #[test]
-fn an_attention_for_a_row_already_past_waiting_shows_no_title() {
+fn an_attention_before_the_waiting_status_of_a_listed_row_titles_its_kind() {
     let mut app = home(Attention::default());
     app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
     app.on_line(attention(SESSION, "waiting"));
-    assert_eq!(app.title(), "fiber");
-    // Waiting later without a new attention line never shows.
     app.on_line(waiting_row(SESSION, "approval"));
+    assert_eq!(app.title(), "! fiber · approval");
+}
+
+#[test]
+fn a_waiting_status_before_the_attention_titles_its_kind() {
+    let mut app = home(Attention::default());
+    app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
+    app.on_line(waiting_row(SESSION, "approval"));
+    app.on_line(attention(SESSION, "waiting"));
+    assert_eq!(app.title(), "! fiber · approval");
+}
+
+#[test]
+fn a_listed_row_that_never_waits_titles_nothing() {
+    let mut app = home(Attention::default());
+    app.on_line(live(SESSION, serde_json::json!({"state": "streaming"})));
+    app.on_line(attention(SESSION, "waiting"));
     assert_eq!(app.title(), "fiber");
 }
 
