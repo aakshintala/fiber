@@ -1637,14 +1637,6 @@ pub(crate) fn completed(lines: &[Envelope]) -> Vec<&Envelope> {
         .collect()
 }
 
-/// The first `tool_call_completed` line.
-pub(crate) fn completed_first(lines: &[Envelope]) -> &Envelope {
-    lines
-        .iter()
-        .find(|line| line.kind == "tool_call_completed")
-        .unwrap()
-}
-
 /// The first text part of a completed call's content.
 pub(crate) fn text_first(line: &Envelope) -> &str {
     line.payload["content"][0]["text"].as_str().unwrap()

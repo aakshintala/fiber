@@ -39,7 +39,7 @@ use serde_json::{Map, Value, json};
 
 use support::{
     DEADLINE, Gate, OPENING, STEP, Session, Tap, TestTool, answer_value, assert_kinds, calls_reply,
-    delivery, kinds,
+    delivery, kinds, of_kind,
 };
 
 /// The idle delay every test but the no-timeout one sets.
@@ -330,10 +330,6 @@ fn main_branch() -> Value {
 
 fn request_id(line: &Envelope) -> String {
     line.payload["request_id"].as_str().unwrap().to_owned()
-}
-
-fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
-    lines.iter().filter(|line| line.kind == kind).collect()
 }
 
 fn no_resolution(tap: &Tap) {
