@@ -83,6 +83,28 @@ struct State {
     session: Option<SessionId>,
 }
 
+/// One diagnostic line in the field order `docs/state.md` lists: `ts`,
+/// `level`, `process`, `session_id` when one is known, `code` and
+/// `message`, and on a `debug` line `data` last.
+#[derive(serde::Serialize)]
+struct Line<'a, D: serde::Serialize> {
+    ts: u64,
+    level: &'a str,
+    process: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<&'a str>,
+    code: &'a str,
+    message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<D>,
+}
+
+/// The `data` of a `peak_memory` line.
+#[derive(serde::Serialize)]
+struct Peak {
+    peak_kib: u64,
+}
+
 /// One process's diagnostic writer. One lock serializes `attach`, rotation
 /// and append, so concurrent callers never lose a line to two rotations or
 /// split one across files.
@@ -179,7 +201,21 @@ impl Diag {
     /// Writes one `error`, `warn` or `info` line. `session` falls back to
     /// the attached session.
     pub fn line(&self, severity: Severity, session: Option<&SessionId>, code: &str, message: &str) {
-        self.write(severity.name(), session, code, message, None);
+        self.write(severity.name(), session, code, message, None::<()>);
+    }
+
+    /// Appends the `peak_memory` debug line for `kib` while the caller
+    /// holds the state lock, so [`Diag::peak_memory_then_info`] writes its
+    /// pair with nothing between them.
+    fn peak_line(&self, state: &State, kib: u64) {
+        self.append(
+            state,
+            "debug",
+            None,
+            "peak_memory",
+            "The process's peak memory so far.",
+            Some(Peak { peak_kib: kib }),
+        );
     }
 
     /// Writes a `peak_memory` line at the debug level with the process's
@@ -189,16 +225,8 @@ impl Diag {
             return;
         }
         if let Some(kib) = (self.peak)() {
-            let data = format!("{{\"peak_kib\":{kib}}}");
             let state = lock(&self.state);
-            self.append(
-                &state,
-                "debug",
-                None,
-                "peak_memory",
-                "The process's peak memory so far.",
-                Some(&data),
-            );
+            self.peak_line(&state, kib);
         }
     }
 
@@ -210,15 +238,7 @@ impl Diag {
         if self.debugging()
             && let Some(kib) = (self.peak)()
         {
-            let data = format!("{{\"peak_kib\":{kib}}}");
-            self.append(
-                &state,
-                "debug",
-                None,
-                "peak_memory",
-                "The process's peak memory so far.",
-                Some(&data),
-            );
+            self.peak_line(&state, kib);
         }
         // The same thread still owns `state`, so `try_lock` never
         // blocks: it reports `WouldBlock` exactly when the single lock
@@ -226,16 +246,16 @@ impl Diag {
         if let Some(between) = &self.between {
             between(self.state.try_lock().is_err());
         }
-        self.append(&state, "info", None, code, message, None);
+        self.append(&state, "info", None, code, message, None::<()>);
     }
 
-    fn write(
+    fn write<D: serde::Serialize>(
         &self,
         level: &str,
         session: Option<&SessionId>,
         code: &str,
         message: &str,
-        data: Option<&str>,
+        data: Option<D>,
     ) {
         // The file and the attached id are read under the lock that also
         // covers rotation and append.
@@ -243,49 +263,36 @@ impl Diag {
         self.append(&state, level, session, code, message, data);
     }
 
-    /// Formats one line and appends it while the caller holds the state
+    /// Serializes one line and appends it while the caller holds the state
     /// lock, so [`Diag::peak_memory_then_info`] can write its pair with
-    /// nothing between them.
-    fn append(
+    /// nothing between them. A line that does not serialize writes nothing.
+    fn append<D: serde::Serialize>(
         &self,
         state: &State,
         level: &str,
         session: Option<&SessionId>,
         code: &str,
         message: &str,
-        data: Option<&str>,
+        data: Option<D>,
     ) {
         let session = session.or(state.session.as_ref());
-        // The fields are in the order `docs/state.md` lists them, so they
-        // are formatted by hand: a `serde_json::Map` would order them
-        // alphabetically.
-        let mut line = format!(
-            "{{\"ts\":{},\"level\":{},\"process\":{}",
-            wall_ms(self.clock.wall()),
-            quoted(level),
-            quoted(self.process.name()),
-        );
-        if let Some(session) = session {
-            line.push_str(&format!(",\"session_id\":{}", quoted(&session.0)));
-        }
-        line.push_str(&format!(
-            ",\"code\":{},\"message\":{}",
-            quoted(code),
-            quoted(message)
-        ));
-        if let Some(data) = data {
-            line.push_str(&format!(",\"data\":{data}"));
-        }
-        line.push_str("}\n");
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&self.logs)
-            .unwrap_or(());
+        let line = Line {
+            ts: wall_ms(self.clock.wall()),
+            level,
+            process: self.process.name(),
+            session_id: session.map(|session| session.0.as_str()),
+            code,
+            message,
+            data,
+        };
+        let Ok(mut bytes) = serde_json::to_vec(&line) else {
+            return;
+        };
+        bytes.push(b'\n');
         if let Some(at) = self.rotate_at {
             rotate(&state.file, at);
         }
-        append(&state.file, line.as_bytes());
+        append(&state.file, &self.logs, &bytes);
     }
 }
 
@@ -298,20 +305,14 @@ impl DebugLog for Diag {
         if !self.debugging() {
             return;
         }
-        if let Ok(data) = serde_json::to_string(request) {
-            self.write(
-                "debug",
-                None,
-                "provider_request",
-                "A provider request ended.",
-                Some(&data),
-            );
-        }
+        self.write(
+            "debug",
+            None,
+            "provider_request",
+            "A provider request ended.",
+            Some(request),
+        );
     }
-}
-
-fn quoted(value: &str) -> String {
-    serde_json::to_string(value).unwrap_or_default()
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -328,13 +329,30 @@ fn rotate(file: &Path, at: u64) {
     fs::rename(file, Path::new(&previous)).unwrap_or(());
 }
 
-fn append(file: &Path, bytes: &[u8]) {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(file)
-        .and_then(|mut file| file.write_all(bytes))
-        .unwrap_or(());
+fn append(file: &Path, logs: &Path, bytes: &[u8]) {
+    let open = || {
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(file)
+            .and_then(|mut file| file.write_all(bytes))
+    };
+    match open() {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // The `logs/` directory is missing: it was never created, or
+            // it was removed while the process runs. Creating it here, and
+            // only here, makes it again on the next line with no flag and
+            // no `mkdir` on the common path.
+            DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(logs)
+                .unwrap_or(());
+            open().unwrap_or(());
+        }
+        Err(_) => {}
+    }
 }
 
 #[cfg(test)]
