@@ -22,6 +22,7 @@ use contract::shapes::Failure;
 use extensions::{Origin, Request};
 
 use super::{Io, install, list, remove, update_all};
+use fakes::Deadline;
 
 /// The Fiber version an install checks against, as the manifest states.
 const FIBER_VERSION: &str = "0.1.0";
@@ -673,6 +674,7 @@ fn child_test_name(case: &str) -> &'static str {
     }
 }
 
+#[track_caller]
 fn run_case(case: &str) {
     if let Ok(child_case) = std::env::var(CHILD) {
         assert_eq!(child_case, case);
@@ -737,9 +739,10 @@ fn run_case(case: &str) {
     let (tx, rx) = mpsc::channel();
     // The outputs are a few lines, so the pipes cannot fill while the child runs.
     thread::spawn(move || tx.send(child.wait_with_output()));
-    let Ok(output) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(output) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         assert!(fakes::kill_group(group, "KILL").unwrap());
-        rx.recv_timeout(REAP_DEADLINE)
+        Deadline::after(REAP_DEADLINE)
+            .recv(&rx)
             .expect("the killed extension child must be reaped")
             .unwrap();
         panic!("waited {CHILD_DEADLINE:?} for `fiber extension {case}` to exit");

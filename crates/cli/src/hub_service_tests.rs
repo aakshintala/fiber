@@ -21,6 +21,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::shapes::Failure;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -947,6 +948,7 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Runs the child case `case` with `vars` in its environment and returns
 /// its exit code.
+#[track_caller]
 fn child_exit(test: &str, case: &str, vars: &[(&str, &Path)]) -> i32 {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -972,7 +974,7 @@ fn child_exit(test: &str, case: &str, vars: &[(&str, &Path)]) -> i32 {
     let pid = child.id();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for the hub wrapper child to exit");
     };

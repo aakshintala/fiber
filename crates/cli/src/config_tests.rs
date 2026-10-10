@@ -18,6 +18,7 @@ use contract::shapes::Failure;
 use serde_json::json;
 
 use super::{run_get, run_set};
+use fakes::Deadline;
 
 /// Fiber home and a workspace in a temporary directory, removed on drop.
 struct Setup {
@@ -224,6 +225,7 @@ const REAP_DEADLINE: Duration = Duration::from_secs(10);
 /// nothing behind. On expiry the test kills the group, checks within
 /// [`REAP_DEADLINE`] that the child was reaped as killed, and fails naming
 /// `what`.
+#[track_caller]
 fn reap_group_leader(
     child: std::process::Child,
     deadline: Duration,
@@ -234,10 +236,10 @@ fn reap_group_leader(
     let watchdog = fakes::Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()));
-    let Ok(received) = finished.recv_timeout(deadline) else {
+    let Ok(received) = Deadline::after(deadline).recv(&finished) else {
         fakes::kill_group(group, "KILL").unwrap();
-        let killed = finished
-            .recv_timeout(REAP_DEADLINE)
+        let killed = Deadline::after(REAP_DEADLINE)
+            .recv(&finished)
             .map(|output| output.map(|output| output.status.signal()));
         assert!(
             matches!(killed, Ok(Ok(Some(9)))),
@@ -251,6 +253,7 @@ fn reap_group_leader(
 
 /// Spawns this test binary filtered to `test`, with `FIBER_HOME` and the
 /// working directory set, and waits for it under a deadline.
+#[track_caller]
 fn spawn_child(name: &str, test: &str, setup: &Setup) -> std::process::Output {
     let child = Command::new(std::env::current_exe().unwrap())
         .args([

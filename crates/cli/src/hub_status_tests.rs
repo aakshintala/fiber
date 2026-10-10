@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::shapes::Failure;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -88,6 +89,7 @@ fn hold(stream: &UnixStream) {
     BufReader::new(stream).read_line(&mut rest).unwrap_or(0);
 }
 
+#[track_caller]
 fn probed(home: &Path, within: Duration) -> Result<Status, Failure> {
     let home = home.to_path_buf();
     let clock = FakeClock::new();
@@ -147,7 +149,8 @@ fn a_running_hub_reports_its_version_and_the_other_clients() {
     assert!(status.running);
     assert_eq!(status.version.as_deref(), Some("1.2.3"));
     assert_eq!(status.clients, 2);
-    let request: Value = serde_json::from_str(&got.recv_timeout(DEADLINE).unwrap()).unwrap();
+    let request: Value =
+        serde_json::from_str(&Deadline::after(DEADLINE).recv(&got).unwrap()).unwrap();
     assert_eq!(request, json!({"id": "c_status", "command": "status"}));
 }
 
@@ -221,16 +224,16 @@ fn an_eof_retry_does_not_extend_the_total_deadline() {
     // The handshake reader has checked the deadline after consuming the
     // first byte and is paused before its next read. Advance time, close
     // that peer, then let the reader observe EOF and retry with 100 ms left.
-    checked.recv_timeout(DEADLINE).unwrap();
+    Deadline::after(DEADLINE).recv(&checked).unwrap();
     clock.advance(ANSWER.checked_sub(Duration::from_millis(100)).unwrap());
     go.send(()).unwrap();
     resume.send(()).unwrap();
-    second.recv_timeout(DEADLINE).unwrap();
+    Deadline::after(DEADLINE).recv(&second).unwrap();
     // The retry's silent peer gets the remaining 100 ms, not a fresh
     // 5 s: the whole probe fails at the one deadline, well within a wall
     // bound far below a fresh handshake.
-    let error = result
-        .recv_timeout(Duration::from_secs(2))
+    let error = Deadline::after(Duration::from_secs(2))
+        .recv(&result)
         .expect("the probe fails at its total deadline, not a fresh one")
         .unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
@@ -281,12 +284,16 @@ fn unrelated_lines_past_the_deadline_end_the_probe() {
     let clock = FakeClock::new();
     let (read, result) = probe_signalled(&home, &clock);
     // The second read is due once the first unrelated line was read.
-    read.recv_timeout(DEADLINE).unwrap();
-    read.recv_timeout(DEADLINE).unwrap();
+    let wait = Deadline::after(DEADLINE);
+    wait.recv(&read).unwrap();
+    wait.recv(&read).unwrap();
     // Exactly at the deadline no time is left.
     clock.advance(ANSWER);
     go.send(()).unwrap();
-    let error = result.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    let error = Deadline::after(DEADLINE)
+        .recv(&result)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert_eq!(error.message, "the hub did not answer status in 5 s");
     assert!(read.try_recv().is_err(), "no third read");
@@ -300,10 +307,11 @@ fn an_answer_in_two_writes_inside_the_deadline_is_read() {
     let go = two_part_hub(&home, first.to_owned(), second.to_owned());
     let clock = FakeClock::new();
     let (read, result) = probe_signalled(&home, &clock);
-    read.recv_timeout(DEADLINE).unwrap();
-    read.recv_timeout(DEADLINE).unwrap();
+    let wait = Deadline::after(DEADLINE);
+    wait.recv(&read).unwrap();
+    wait.recv(&read).unwrap();
     go.send(()).unwrap();
-    let status = result.recv_timeout(DEADLINE).unwrap().unwrap();
+    let status = Deadline::after(DEADLINE).recv(&result).unwrap().unwrap();
     assert_eq!(status.version.as_deref(), Some("1.2.3"));
 }
 
@@ -605,6 +613,7 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Runs the child case `case` with `vars` in its environment and returns
 /// its exit code.
+#[track_caller]
 fn child_exit(test: &str, case: &str, vars: &[(&str, &Path)]) -> i32 {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -630,7 +639,7 @@ fn child_exit(test: &str, case: &str, vars: &[(&str, &Path)]) -> i32 {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for the hub status child to exit");
     };

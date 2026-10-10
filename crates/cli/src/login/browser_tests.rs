@@ -22,6 +22,7 @@ use config::CredentialFile;
 use contract::ErrorCode;
 use contract::shapes::Failure;
 use extensions::{Browser, LoginMethod, Providers};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{OauthReply, OauthServer, jwt};
 use serde_json::{Value, json};
@@ -214,15 +215,18 @@ impl Browser for RedirectBrowser {
 /// Waits for the package's `open` notification, without reading the clock:
 /// nothing here parks on it. The bound is the wall-clock [`BROWSER_WAIT`],
 /// so a package that never opens fails there instead of hanging.
-fn await_opened(opened: &mpsc::Receiver<String>) -> String {
-    opened.recv_timeout(BROWSER_WAIT).unwrap_or_else(|_| {
-        panic!("the package never opened the authorize URL within {BROWSER_WAIT:?}")
-    })
+#[track_caller]
+fn await_opened(opened: &mpsc::Receiver<String>, wait: &Deadline) -> String {
+    wait.recv_or_fail(
+        opened,
+        &format!("the package never opened the authorize URL within {BROWSER_WAIT:?}"),
+    )
 }
 
 /// GETs the callback's `target` on `port`, retrying a refused connection
 /// until the listener binds. The bound is the wall-clock [`BROWSER_WAIT`],
 /// so a listener that never binds fails there instead of hanging.
+#[track_caller]
 fn redirect(port: u16, target: &str) {
     let target = target.to_owned();
     fakes::within("the callback to listen", BROWSER_WAIT, move || {
@@ -281,6 +285,7 @@ fn exchange(access: &str, id: &str) -> OauthReply {
 /// Runs the browser login to completion, performing the redirect from a
 /// scoped thread once the authorize URL is recorded, and returns what
 /// `browser_login` returned.
+#[track_caller]
 fn browser_flow(
     setup: &Setup,
     providers: &Providers,
@@ -308,14 +313,14 @@ fn browser_flow(
             Ok(()) | Err(_) => {}
         }
     });
-    let url = await_opened(opened);
+    let wait = Deadline::after(BROWSER_WAIT);
+    let url = await_opened(opened, &wait);
     let port = free_port_of(&url);
     redirect(
         port,
         &format!("/auth/callback?code=authcode-1&state={}", state_of(&url)),
     );
-    rx.recv_timeout(WAIT)
-        .unwrap_or_else(|_| panic!("the login did not return within {WAIT:?}"))
+    Deadline::after(WAIT).recv_or_fail(&rx, &format!("the login did not return within {WAIT:?}"))
 }
 
 /// The redirect port the authorize URL names.
@@ -549,8 +554,8 @@ fn a_device_login_shows_its_code_and_stores_the_email_label() {
     });
     // The scripted poll answers 200 at once, so nothing parks on the
     // clock: the login lands on its own under the wall-clock bound.
-    let path = rx
-        .recv_timeout(WAIT)
+    let path = Deadline::after(WAIT)
+        .recv(&rx)
         .unwrap_or_else(|_| {
             panic!(
                 "the device login did not return within {WAIT:?}; requests: {}",
@@ -735,8 +740,8 @@ fn login_with_runs_the_provider_and_prints_its_stored_result() {
             Ok(()) | Err(_) => {}
         }
     });
-    let (result, output) = finished
-        .recv_timeout(WAIT)
+    let (result, output) = Deadline::after(WAIT)
+        .recv(&finished)
         .unwrap_or_else(|_| panic!("login_with did not finish within {WAIT:?}"));
     result.unwrap();
 
@@ -823,10 +828,10 @@ fn run_login_of_a_key_provider_with_device_is_a_usage_failure() {
     let watchdog = fakes::Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()));
-    let Ok(received) = finished.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(received) = Deadline::after(CHILD_DEADLINE).recv(&finished) else {
         fakes::kill_group(group, "KILL").unwrap();
-        let killed = finished
-            .recv_timeout(REAP_DEADLINE)
+        let killed = Deadline::after(REAP_DEADLINE)
+            .recv(&finished)
             .map(|output| output.map(|output| output.status.signal()));
         assert!(
             matches!(killed, Ok(Ok(Some(9)))),
@@ -947,7 +952,9 @@ fn a_cancel_during_the_store_waits_for_it() {
         });
         commit_tx.send(result).unwrap();
     });
-    entered_rx.recv_timeout(WAIT).expect("the store is entered");
+    Deadline::after(WAIT)
+        .recv(&entered_rx)
+        .expect("the store is entered");
     let cancelling = Arc::clone(&cancel);
     let (attempt_tx, attempt_rx) = mpsc::channel();
     let (cancel_done_tx, cancel_done_rx) = mpsc::channel();
@@ -956,26 +963,34 @@ fn a_cancel_during_the_store_waits_for_it() {
         cancelling.cancel();
         cancel_done_tx.send(()).unwrap();
     });
-    attempt_rx.recv_timeout(WAIT).expect("the cancel starts");
+    Deadline::after(WAIT)
+        .recv(&attempt_rx)
+        .expect("the cancel starts");
     // The cancel blocks on the store's mutex: it attempted, yet must
     // still be running while the store is held. A cancel that skipped
     // the mutex would have finished by now and fail here.
     assert!(
-        cancel_done_rx.recv_timeout(STILL_HELD).is_err(),
+        Deadline::after(STILL_HELD).recv(&cancel_done_rx).is_err(),
         "the cancel finished while the store was held"
     );
     // The cancel waits for the store: releasing it lets both finish in
     // order.
     release_tx.send(()).unwrap();
-    let result = commit_rx.recv_timeout(WAIT).expect("the commit returns");
+    let result = Deadline::after(WAIT)
+        .recv(&commit_rx)
+        .expect("the commit returns");
     assert_eq!(result.unwrap(), 7);
-    stopped_rx.recv_timeout(WAIT).expect("the stop ran");
-    let inner = inner_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&stopped_rx)
+        .expect("the stop ran");
+    let inner = Deadline::after(WAIT)
+        .recv(&inner_rx)
         .expect("the inner commit returns");
     cancelled_of(&inner.unwrap_err());
     assert_eq!(log.lock().unwrap().as_slice(), ["stored", "stopped"]);
-    cancel_done_rx.recv_timeout(WAIT).expect("cancel returned");
+    Deadline::after(WAIT)
+        .recv(&cancel_done_rx)
+        .expect("cancel returned");
 }
 
 #[test]
@@ -1010,11 +1025,12 @@ fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
             Ok(()) | Err(_) => {}
         }
     });
-    let url = await_opened(&opened);
+    let wait = Deadline::after(BROWSER_WAIT);
+    let url = await_opened(&opened, &wait);
     let callback_port = free_port_of(&url);
     cancel.cancel();
-    let result = rx
-        .recv_timeout(WAIT)
+    let result = Deadline::after(WAIT)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the cancelled login did not return within {WAIT:?}"));
     assert!(result.is_err(), "{result:?}");
     assert!(setup.stored(EMAIL).is_none());

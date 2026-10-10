@@ -5,6 +5,7 @@
 use std::process::ExitStatus;
 
 use super::*;
+use fakes::Deadline;
 
 const NAME: &str = "acme.api_key";
 
@@ -230,6 +231,7 @@ fn a_declared_secret_over_a_providers_directory_fails_and_leaves_it() {
 /// Runs the test `test` of this module in a child with `FIBER_HOME` set to
 /// `home` and `stdin` on a pipe, and returns how it exited. The child is
 /// killed, and the test fails, at `CHILD_DEADLINE`.
+#[track_caller]
 fn child(test: &str, home: &Path, stdin: &str) -> ExitStatus {
     let module = module_path!().split_once("::").unwrap().1;
     let mut child = Command::new(std::env::current_exe().unwrap())
@@ -253,7 +255,7 @@ fn child(test: &str, home: &Path, stdin: &str) -> ExitStatus {
     let pid = child.id();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
         fakes::kill_pid(pid, "KILL").unwrap();
         panic!("waited {CHILD_DEADLINE:?} for `fiber login` in {test} to exit");
     };
