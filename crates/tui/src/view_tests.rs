@@ -1110,25 +1110,43 @@ fn asked_nothing() -> App {
 }
 
 #[test]
-fn the_selected_completion_is_reversed_and_the_others_are_not() {
+fn the_focused_completion_sits_on_the_bar_and_the_others_do_not() {
     let mut app = empty();
     let now = fakes::clock::FakeClock::new().now();
     for ch in "/h".chars() {
         app.on_key(Key::Char(ch), now);
     }
     let (shown, buf) = wide(&mut app);
-    let rows: Vec<&str> = shown.lines().collect();
-    // `/h` matches `/home`, `/handoff` and `/help` first, then
-    // `/thinking`: four rows above the input line.
-    assert!(rows[HEIGHT as usize - 7].starts_with("/home"), "{shown}");
-    let reversed = |row: u16| {
-        buf.cell((0, row))
-            .is_some_and(|cell| cell.modifier.contains(Modifier::REVERSED))
+    // `/h` matches home, handoff and help first, then thinking: four
+    // rows in the overlay above the input line, the first focused. Its
+    // cells sit on the bar in `accent`; the rest keep the surface tint.
+    let row = |y: u16| {
+        (0..80)
+            .map(|x| buf[(x, y)].symbol().to_owned())
+            .collect::<String>()
     };
-    assert!(reversed(HEIGHT - 7), "{shown}");
-    assert!(!reversed(HEIGHT - 6), "{shown}");
-    assert!(!reversed(HEIGHT - 5), "{shown}");
-    assert!(!reversed(HEIGHT - 4), "{shown}");
+    let accent = crate::theme::Role::Accent.color();
+    let surface = crate::theme::Role::Surface.color();
+    for (name, barred) in [
+        ("home", true),
+        ("handoff", false),
+        ("help", false),
+        ("thinking", false),
+    ] {
+        let y = u16::try_from(
+            shown
+                .lines()
+                .position(|line| line.contains(name))
+                .unwrap_or_else(|| panic!("the {name} row in {shown}")),
+        )
+        .unwrap_or(u16::MAX);
+        let text = row(y);
+        // Cell columns, not byte indices: the focused row's gutter
+        // holds a three-byte `›` in one cell.
+        let at = text.find(name).unwrap_or_else(|| panic!("the {name} in {shown}"));
+        let x = u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX);
+        assert_eq!(buf[(x, y)].bg, if barred { accent } else { surface }, "{name} in {shown}");
+    }
 }
 
 #[test]

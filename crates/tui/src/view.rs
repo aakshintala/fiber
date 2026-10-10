@@ -11,10 +11,12 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 
 use crate::app::App;
+use crate::completion_rows::Rows;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
 mod banner;
+mod completions;
 pub(crate) mod chrome;
 mod drag;
 #[path = "home_view.rs"]
@@ -148,12 +150,15 @@ pub(crate) fn render(
         rail::draw(app, rect, buf, pointer, &mut targets);
     }
     let mut bottom = area.bottom();
+    // The input box's top-edge row, once it draws; the `/` and `@`
+    // overlay sits above it.
+    let mut box_top = bottom;
     status_rows::draw_status(app, area, buf, &mut bottom, &mut targets);
     if let Some(panel) = app.panel() {
         bottom = request::draw(&panel, area, bottom, buf, &mut targets);
     }
     if app.panel().is_none() {
-        input_box::draw(app, area, &mut bottom, buf, &mut targets);
+        box_top = input_box::draw(app, area, &mut bottom, buf, &mut targets);
     }
     status_rows::draw_widget(app, area, buf, &mut bottom, &mut targets);
     // The steering queue sits above the input box, its newest row lowest;
@@ -252,6 +257,17 @@ pub(crate) fn render(
         }
     }
     drag::draw(app, buf, pointer);
+    // The `/` and `@` panels draw over the conversation's bottom rows,
+    // above the input box's top edge, after everything under them, so
+    // their cells win. The Ctrl+R panel drew in its reserved rows.
+    if let Some(completions) = app.completions()
+        && matches!(
+            completions.rows,
+            Rows::Slash(_) | Rows::Files(_) | Rows::Message(_)
+        )
+    {
+        completions::draw(&completions, conversation, box_top, buf, &mut targets);
+    }
     if app.quit_open() {
         quit::draw(app, area, buf, &mut targets);
     }
