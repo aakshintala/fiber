@@ -387,12 +387,14 @@ fn a_member_whose_tree_names_an_image_crate_is_reported_once_per_crate() {
             "provider".to_owned(),
             tree(&["provider", "fast_image_resize"]),
         ),
+        ("tools".to_owned(), tree(&["tools", "lopdf"])),
     ];
     assert_eq!(
         leaks(&trees, &IMAGE),
         [
             "provider: its normal dependency tree holds fast_image_resize; only the image child links image code",
             "tools: its normal dependency tree holds image; only the image child links image code",
+            "tools: its normal dependency tree holds lopdf; only the image child links image code",
         ]
     );
 }
@@ -406,7 +408,7 @@ fn a_clean_tree_passes_and_picture_and_main_are_exempt() {
         ),
         (
             "picture".to_owned(),
-            tree(&["picture", "image", "fast_image_resize"]),
+            tree(&["picture", "image", "fast_image_resize", "lopdf"]),
         ),
         ("main".to_owned(), tree(&["main", "picture", "image"])),
     ];

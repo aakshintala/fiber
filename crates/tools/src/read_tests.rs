@@ -54,6 +54,11 @@ fn the_schema_leaves_offset_and_limit_optional() {
     assert!(properties.contains_key("path"));
     assert!(properties.contains_key("offset"));
     assert!(properties.contains_key("limit"));
+    assert!(properties.contains_key("pages"));
+    assert_eq!(
+        properties.get("pages").and_then(|value| value.get("type")),
+        Some(&Value::String("string".to_owned()))
+    );
     assert!(schema.get("pages").is_none());
     assert!(
         properties
@@ -291,10 +296,9 @@ fn a_fifo_does_not_block() {
 }
 
 #[test]
-fn pdfs_binary_and_non_utf8_are_unsupported() {
+fn binary_and_non_utf8_are_unsupported() {
     let dir = TempDir::new("fiber-read-types");
     let cases: &[(&str, &[u8], &str)] = &[
-        ("a.pdf", b"%PDF-1.4", "PDF"),
         ("a.bin", b"hello\0world", "binary data"),
         ("a.dat", b"\xff\xfe", "not UTF-8 text"),
     ];
@@ -308,10 +312,20 @@ fn pdfs_binary_and_non_utf8_are_unsupported() {
             message.contains(&bytes.len().to_string()),
             "{name}: {message}"
         );
-        if *expect == "PDF" {
-            assert!(message.contains("PDFs are not read yet"), "{message}");
-        }
     }
+}
+
+#[test]
+fn a_pdf_without_a_configured_child_is_tool_error() {
+    let dir = TempDir::new("fiber-read-pdf-unconfigured");
+    fs::write(dir.path().join("a.pdf"), b"%PDF-1.4").unwrap();
+    let output = run(dir.path(), json!({"path": "a.pdf"}));
+    assert_eq!(code(&output), Some(ErrorCode::ToolError));
+    assert!(
+        text(&output).contains("PDF reading is not configured"),
+        "{}",
+        text(&output)
+    );
 }
 
 #[test]

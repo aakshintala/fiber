@@ -667,11 +667,13 @@ rationale and the rejected layouts are
   is gone, and the delegate shuts down ("Shutdown"). A dropped socket
   connection is only a client leaving; the parent reconnects. Delegates on
   other harnesses are child processes too (`docs/delegates.md`).
-- **An image child is a short-lived process, one per image.** The session
+- **An image child is a short-lived process, one per image or PDF.** The session
   starts it by running `fiber` again with an internal command, not a door,
   so the child always matches its parent's version. The session process
   runs no image code; the child reads the header too
-  (`docs/model-routing.md`, "Image limits"). Spawning a child that does
+  (`docs/model-routing.md`, "Image limits"). The same child, run with `pdf`,
+  counts a PDF's pages and cuts a page range (`docs/tools.md`, "read").
+  Spawning a child that does
   nothing takes 1.7 ms on macOS, measured with the probe in
   `research/image-limits/README.md`.
 - **The terminal is its own process, a client of the hub.** It has a `full`

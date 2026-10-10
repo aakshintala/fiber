@@ -138,6 +138,22 @@ fn edit_of(dir: &Path, value: Value) -> contract::tool::Output {
 }
 
 #[test]
+fn a_pdf_is_unsupported_and_names_text_only() {
+    let dir = fakes::TempDir::new("fiber-edit-pdf");
+    std::fs::write(dir.path().join("a.pdf"), b"%PDF-1.4").unwrap();
+    let output = edit_of(
+        dir.path(),
+        serde_json::json!({"path": "a.pdf", "edits": [{"old_text": "x", "new_text": "y"}]}),
+    );
+    assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
+    assert!(
+        text(&output).contains("Edit changes text files only"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
 fn the_schema_fits_the_strict_shape() {
     let files = Files::new(Path::new("/ws").to_path_buf());
     let definition = files.edit().definition();

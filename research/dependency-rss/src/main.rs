@@ -6,6 +6,21 @@ use std::hint::black_box;
 #[cfg(any(feature = "image", feature = "image-fir"))]
 mod image_timing;
 
+#[cfg(feature = "lopdf")]
+/// The image child's per-stream object-stream decompression limit, separate
+/// from the 100 MiB file cap (`docs/tools.md`, "read"): the probe loads
+/// with the same limit.
+const MAX_DECOMPRESSED_BYTES: usize = 67_108_864;
+
+#[cfg(feature = "lopdf")]
+fn load_pdf(bytes: &[u8]) -> lopdf::Document {
+    lopdf::Document::load_mem_with_options(
+        bytes,
+        lopdf::LoadOptions::with_max_decompressed_size(MAX_DECOMPRESSED_BYTES),
+    )
+    .unwrap()
+}
+
 fn text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {i}: the quick brown fox_{i} jumps over 42 lazy dogs\n")).collect()
 }
@@ -470,6 +485,112 @@ fn main() {
             shown.push(zoned.strftime("%H:%M").to_string());
         }
         black_box(shown);
+    }
+    #[cfg(feature = "lopdf")]
+    {
+        // With PDF_FIXTURE set, the workload is what the image child does
+        // for a PDF input (crates/picture/src/pdf.rs, `pages=1-20`): read the
+        // file, load it with the child's decompression limit, count its
+        // pages, cut the range, write a temp file.
+        // run.sh sets PDF_FIXTURE to one scanned-document-like fixture per
+        // row (research/dependency-rss/gen). Without it, the small
+        // in-memory workload below is the `lopdf` row of the main table.
+        if let Ok(path) = std::env::var("PDF_FIXTURE") {
+            let bytes = std::fs::read(&path).unwrap();
+            let mut document = load_pdf(&bytes);
+            let total = document.get_pages().len();
+            let total_u32 = u32::try_from(total).unwrap();
+            assert!(total_u32 >= 20, "{path} has only {total_u32} pages");
+            let (first, last) = (1u32, 20u32);
+            let remove: Vec<u32> = (1..=total_u32)
+                .filter(|page| *page < first || *page > last)
+                .collect();
+            document.delete_pages(&remove);
+            document.prune_objects();
+            let mut cut = Vec::new();
+            document.save_to(&mut cut).unwrap();
+            let out = std::env::temp_dir()
+                .join(format!("dep-rss-pdf-{}.pdf", std::process::id()));
+            std::fs::write(&out, &cut).unwrap();
+            assert_eq!(
+                load_pdf(&cut).get_pages().len() as u32,
+                last - first + 1
+            );
+            eprintln!(
+                "{path}: {} -> {} bytes, {total_u32} pages, deterministic",
+                bytes.len(),
+                cut.len()
+            );
+            black_box(cut);
+        } else {
+        // The image child: build a 20-page PDF in memory, load it,
+        // count its pages, cut pages 3 to 7, and save the cut to a `Vec`.
+        use lopdf::content::{Content, Operation};
+        use lopdf::{Document, Object, Stream, dictionary};
+        let mut doc = Document::with_version("1.5");
+        let info_id = doc.add_object(dictionary! {
+            "Title" => Object::string_literal("probe"),
+            "CreationDate" => Object::string_literal("D:19700101000000Z"),
+        });
+        let pages_id = doc.new_object_id();
+        let font_id = doc.add_object(dictionary! {
+            "Type" => "Font",
+            "Subtype" => "Type1",
+            "BaseFont" => "Courier",
+        });
+        let resources_id = doc.add_object(dictionary! {
+            "Font" => dictionary! {
+                "F1" => font_id,
+            },
+        });
+        let mut kids = Vec::new();
+        for n in 1..=20u32 {
+            let text = format!("page {n}");
+            let content = Content {
+                operations: vec![
+                    Operation::new("BT", vec![]),
+                    Operation::new("Tf", vec!["F1".into(), 48.into()]),
+                    Operation::new("Td", vec![100.into(), 600.into()]),
+                    Operation::new("Tj", vec![Object::string_literal(text.as_str())]),
+                    Operation::new("ET", vec![]),
+                ],
+            };
+            let content_id =
+                doc.add_object(Stream::new(dictionary! {}, content.encode().unwrap()));
+            kids.push(Object::from(doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => pages_id,
+                "Contents" => content_id,
+            })));
+        }
+        doc.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => kids,
+                "Count" => 20,
+                "Resources" => resources_id,
+                "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()],
+            }),
+        );
+        let catalog_id = doc.add_object(dictionary! {
+            "Type" => "Catalog",
+            "Pages" => pages_id,
+        });
+        doc.trailer.set("Root", catalog_id);
+        doc.trailer.set("Info", info_id);
+        let mut built = Vec::new();
+        doc.save_to(&mut built).unwrap();
+        let mut loaded = load_pdf(&built);
+        assert_eq!(loaded.get_pages().len(), 20);
+        let remove: Vec<u32> = (1..=20u32).filter(|p| *p < 3 || *p > 7).collect();
+        loaded.delete_pages(&remove);
+        loaded.prune_objects();
+        let mut cut = Vec::new();
+        loaded.save_to(&mut cut).unwrap();
+        assert_eq!(load_pdf(&cut).get_pages().len(), 5);
+        black_box(cut);
+        }
     }
     #[cfg(feature = "arborium")]
     {

@@ -45,6 +45,7 @@ image-webp = { version = "0.2", optional = true }
 fast_image_resize = { version = "6", optional = true }
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"], optional = true }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"], optional = true }
+lopdf = { version = "0.45", default-features = false, optional = true }
 
 [features]
 # The shell completion scripts `fiber completion` prints, generated from a
@@ -72,6 +73,8 @@ encoding_rs = ["dep:encoding_rs"]
 flate2 = ["dep:flate2"]
 # The terminal's time of day under a prompt bubble: the system zone, read once, formatting times of day.
 jiff = ["dep:jiff"]
+# The image child: counting a PDF's pages and cutting a page range.
+lopdf = ["dep:lopdf"]
 
 [profile.release]
 lto = "thin"

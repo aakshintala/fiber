@@ -27,7 +27,6 @@ pub use locks::{PathGuard, PathLocks};
 /// no call needs.
 const MAX_SYMLINKS: u32 = 40;
 
-const PDF_HINT: &str = "PDFs are not read yet.";
 const DIRECTORY_HINT: &str = "List it through the shell.";
 
 /// Why a path could not be resolved.
@@ -65,6 +64,22 @@ pub(crate) enum Inspected {
         size: u64,
         /// The hash of the bytes read, for the stale-file check.
         hash: u64,
+    },
+    /// A PDF file, by its first bytes. The image child counts and cuts it
+    /// (`docs/tools.md`, "read").
+    Pdf {
+        /// Size in bytes.
+        size: u64,
+        /// The hash of the bytes read, for the stale-file check.
+        hash: u64,
+    },
+    /// A PDF over the 100 MiB cap, by its metadata length and first bytes.
+    /// Its bytes were never loaded, so there is no hash and no stale-file
+    /// check: `read` refuses it before the child loads it
+    /// (`docs/tools.md`, "read").
+    PdfOverCap {
+        /// Size in bytes, from the file's metadata.
+        size: u64,
     },
 }
 
@@ -202,6 +217,20 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
     if let Some((kind, hint)) = kind_of(meta.file_type()) {
         return Ok(unsupported(kind, size, hint));
     }
+    // A PDF over the cap is refused from its metadata length and first
+    // bytes, before its whole bytes are read below or loaded by the child.
+    if crate::pdf::pdf_over_cap(size) {
+        match pdf_magic(path) {
+            Ok(true) => return Ok(Inspected::PdfOverCap { size }),
+            Ok(false) => {}
+            Err(error) => {
+                return Err(InspectError::Tool(format!(
+                    "`{}` could not be read: {error}.",
+                    path.display()
+                )));
+            }
+        }
+    }
     let bytes = read_regular(path)?;
     let size = u64::try_from(bytes.len()).map_err(|_| {
         InspectError::Tool(format!(
@@ -214,7 +243,12 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
             let hash = hash_bytes(&bytes);
             return Ok(Inspected::Image { kind, size, hash });
         }
-        Some(Magic::Pdf) => return Ok(unsupported("a PDF", size, PDF_HINT)),
+        Some(Magic::Pdf) => {
+            return Ok(Inspected::Pdf {
+                size,
+                hash: hash_bytes(&bytes),
+            });
+        }
         None => {}
     }
     if bytes.contains(&0) {
@@ -223,6 +257,25 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
     match String::from_utf8(bytes) {
         Ok(text) => Ok(Inspected::Text { text }),
         Err(_) => Ok(unsupported("not UTF-8 text", size, "")),
+    }
+}
+
+/// Whether `path` starts with PDF magic, reading at most its first four
+/// bytes. A shorter file, or one that has vanished, is not a PDF: the caller's
+/// own read reports a vanished file. Other errors are the caller's to report,
+/// so `inspect` and `write` keep their own sentences.
+pub(crate) fn pdf_magic(path: &Path) -> io::Result<bool> {
+    use std::io::Read as _;
+    let mut head = [0u8; 4];
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    match file.read_exact(&mut head) {
+        Ok(()) => Ok(head == *b"%PDF"),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(error),
     }
 }
 
@@ -291,6 +344,10 @@ pub(crate) struct Shared {
     state: Mutex<Session>,
     /// How to run the image child, set once by [`Files::with_images`].
     images: OnceLock<ImageChild>,
+    /// The program that renders a PDF's pages, set once by
+    /// [`Files::with_renderer`]. Tests point it at a stub; production
+    /// never calls it and the child default (`pdftoppm` on `PATH`) applies.
+    renderer: OnceLock<PathBuf>,
 }
 
 struct Session {
@@ -317,6 +374,7 @@ impl Files {
                     judged: BTreeMap::new(),
                 }),
                 images: OnceLock::new(),
+                renderer: OnceLock::new(),
             }),
         }
     }
@@ -326,10 +384,20 @@ impl Files {
     /// `artifacts`, the session's `artifacts/` directory.
     #[must_use]
     pub fn with_images(self, fiber: PathBuf, artifacts: PathBuf) -> Self {
-        self.shared
-            .images
-            .set(ImageChild::new(fiber, artifacts))
-            .unwrap_or(());
+        let mut child = ImageChild::new(fiber, artifacts);
+        if let Some(renderer) = self.shared.renderer.get() {
+            child.renderer = renderer.clone();
+        }
+        self.shared.images.set(child).unwrap_or(());
+        self
+    }
+
+    /// Points `read`'s PDF rendering at `program` instead of `pdftoppm`.
+    /// Tests point it at a stub; production never calls it. Set before
+    /// [`Files::with_images`], which builds the child with this program.
+    #[must_use]
+    pub fn with_renderer(self, program: PathBuf) -> Self {
+        self.shared.renderer.set(program).unwrap_or(());
         self
     }
 
