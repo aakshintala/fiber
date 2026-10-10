@@ -84,6 +84,7 @@ const ANTHROPIC: Package = Package {
         ("claude-opus-4-7", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         ("claude-opus-4-8", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         ("claude-opus-5", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
+        ("claude-haiku-5-5", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         ("claude-opus-5-5", LOW_MEDIUM_HIGH_XHIGH_MAX, None),
         ("claude-sonnet-4-6", OFF_LOW_MEDIUM_HIGH_MAX, None),
         ("claude-sonnet-5", OFF_LOW_MEDIUM_HIGH_XHIGH_MAX, None),
