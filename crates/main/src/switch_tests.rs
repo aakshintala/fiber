@@ -81,18 +81,18 @@ fn fixture(name: &str) -> Fixture {
         &[(
             "fake",
             json!({
-            "name": "fake",
-            "models": [
-                {"id": "m", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 100000},
-                {"id": "n", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
-                 "thinking_levels": ["low", "high"], "thinking_default": "low",
-                 "prompt_addendum": "extra.md"},
-                {"id": "r", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-            ],
-        }),
+                "name": "fake",
+                "models": [
+                    {"id": "m", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 100000},
+                    {"id": "n", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
+                     "thinking_levels": ["low", "high"], "thinking_default": "low",
+                     "prompt_addendum": "extra.md"},
+                    {"id": "r", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                ],
+            }),
         )],
     );
     std::fs::write(fake.join("extra.md"), "The extra paragraph.\n").unwrap();
@@ -103,13 +103,13 @@ fn fixture(name: &str) -> Fixture {
         &[(
             "claude",
             json!({
-            "name": "claude",
-            "models": [
-                {"id": "w", "protocol": "anthropic-messages",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 500,
-                 "web_search": "web_search_20250305"},
-            ],
-        }),
+                "name": "claude",
+                "models": [
+                    {"id": "w", "protocol": "anthropic-messages",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 500,
+                     "web_search": "web_search_20250305"},
+                ],
+            }),
         )],
     );
     install_extension(
@@ -119,18 +119,18 @@ fn fixture(name: &str) -> Fixture {
         &[(
             "other",
             json!({
-            "name": "other",
-            "credential": {"command": sh(&format!(
-                "echo x >> '{}'; echo other-key", marker.display()
-            ))},
-            "models": [
-                {"id": "m", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-                {"id": "m2", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
-                 "thinking_levels": ["low"], "thinking_default": "low"},
-            ],
-        }),
+                "name": "other",
+                "credential": {"command": sh(&format!(
+                    "echo x >> '{}'; echo other-key", marker.display()
+                ))},
+                "models": [
+                    {"id": "m", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                    {"id": "m2", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
+                     "thinking_levels": ["low"], "thinking_default": "low"},
+                ],
+            }),
         )],
     );
     install_extension(
@@ -140,15 +140,15 @@ fn fixture(name: &str) -> Fixture {
         &[(
             "bed",
             json!({
-            "name": "bed",
-            "credential": {"command": sh(&format!(
-                "echo x >> '{}'; echo bed-key", marker.display()
-            ))},
-            "models": [
-                {"id": "bk", "protocol": "bedrock-converse",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-            ],
-        }),
+                "name": "bed",
+                "credential": {"command": sh(&format!(
+                    "echo x >> '{}'; echo bed-key", marker.display()
+                ))},
+                "models": [
+                    {"id": "bk", "protocol": "bedrock-converse",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                ],
+            }),
         )],
     );
     data_extension(
@@ -750,15 +750,15 @@ fn with_literal_provider(fixture: &Fixture) {
         &[(
             "lit",
             json!({
-            "name": "lit",
-            "models": [
-                {"id": "n", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
-                 "thinking_levels": ["low", "high"], "thinking_default": "low"},
-                {"id": "n:high", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-            ],
-        }),
+                "name": "lit",
+                "models": [
+                    {"id": "n", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000,
+                     "thinking_levels": ["low", "high"], "thinking_default": "low"},
+                    {"id": "n:high", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                ],
+            }),
         )],
     );
 }
@@ -843,15 +843,15 @@ fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
         &[(
             "lit",
             json!({
-            "name": "lit",
-            "placeholders": {"workspace": {}},
-            "models": [
-                {"id": "n", "protocol": "openai-responses",
-                 "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-                {"id": "n:high", "protocol": "openai-responses",
-                 "base_url": "https://{workspace}/v1", "context_window": 1000},
-            ],
-        }),
+                "name": "lit",
+                "placeholders": {"workspace": {}},
+                "models": [
+                    {"id": "n", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                    {"id": "n:high", "protocol": "openai-responses",
+                     "base_url": "https://{workspace}/v1", "context_window": 1000},
+                ],
+            }),
         )],
     );
     let config = config(&fixture, &[]);
@@ -900,11 +900,11 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         &[(
             "acme",
             json!({
-            "name": "acme",
-            "placeholders": {"workspace": {}},
-            "models": [{"id": "m", "protocol": "openai-responses",
-                        "base_url": "https://{workspace}/v1", "context_window": 1000}],
-        }),
+                "name": "acme",
+                "placeholders": {"workspace": {}},
+                "models": [{"id": "m", "protocol": "openai-responses",
+                            "base_url": "https://{workspace}/v1", "context_window": 1000}],
+            }),
         )],
     );
     let config = config(&fixture, &[]);
@@ -1259,12 +1259,12 @@ fn with_two_literal_providers(fixture: &Fixture) {
             &[(
                 name,
                 json!({
-                "name": name,
-                "models": [
-                    {"id": "n:high", "protocol": "openai-responses",
-                     "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
-                ],
-            }),
+                    "name": name,
+                    "models": [
+                        {"id": "n:high", "protocol": "openai-responses",
+                         "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+                    ],
+                }),
             )],
         );
     }

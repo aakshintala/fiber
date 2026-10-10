@@ -34,10 +34,10 @@ impl Setup {
             &[(
                 name,
                 json!({
-                "name": name,
-                "models": [{"id": "m", "protocol": "openai-responses",
-                    "base_url": "http://x/v1", "context_window": 1000}],
-            }),
+                    "name": name,
+                    "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": "http://x/v1", "context_window": 1000}],
+                }),
             )],
         );
     }

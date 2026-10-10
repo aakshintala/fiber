@@ -21,8 +21,8 @@ pub(crate) fn write_record(dir: &Path) {
 }
 
 /// Loads the configuration for `home` and `workspace` under `project`,
-/// with `overrides` as `-c key=value` reads them. The one `Config::load`
-/// in this crate's unit tests: every test reaches it through here, so
+/// with `overrides` as `-c key=value` reads them. The one configuration
+/// read in this crate's unit tests: every test reaches it through here, so
 /// caller-prepared files (credentials, global, repository and project
 /// configuration) are read as the caller left them, and `home` and
 /// `workspace` may be one directory.
