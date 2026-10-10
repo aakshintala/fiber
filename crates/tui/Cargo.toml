@@ -25,9 +25,12 @@ proptest.workspace = true
 name = "draw"
 test = true
 
+# The paging jig has no unit tests of its own: `crates/tui/tests/paging_open.rs`
+# runs the built jig as a child (`docs/testing.md`, "Jigs"), so the example
+# stays a runnable binary.
 [[example]]
 name = "paging"
-test = true
+test = false
 
 [[example]]
 name = "hover"
