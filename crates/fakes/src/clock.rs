@@ -176,6 +176,17 @@ impl FakeClock {
         })
     }
 
+    /// Waits, at most `within` of real time, until a thread in `mark` is
+    /// parked again, in a later park, with any deadline.
+    pub fn await_any_parked_since(&self, mark: &Mark, within: Duration) -> bool {
+        let state = lock(&self.state);
+        let (guard, _) = self
+            .parked_cv
+            .wait_timeout_while(state, within, |state| !parked_after(state, mark))
+            .unwrap_or_else(PoisonError::into_inner);
+        parked_after(&guard, mark)
+    }
+
     /// [`FakeClock::await_parked`] for a park with no deadline.
     pub fn await_parked_unbounded(&self, within: Duration) -> bool {
         let state = lock(&self.state);
@@ -277,6 +288,14 @@ fn parked_since(state: &State, mark: &Mark, until: Option<Instant>) -> bool {
                 .0
                 .iter()
                 .any(|(thread, id0)| *thread == parked.thread && parked.id > *id0)
+    })
+}
+
+fn parked_after(state: &State, mark: &Mark) -> bool {
+    state.parked.iter().any(|parked| {
+        mark.0
+            .iter()
+            .any(|(thread, id0)| *thread == parked.thread && parked.id > *id0)
     })
 }
 

@@ -19,11 +19,10 @@ use serde_json::{Value, json};
 /// bound, so the deadline, the grace and the drain all elapse.
 const FAR: Duration = Duration::from_secs(24 * 3600);
 
-/// Rounds of driving a stalled calibration: each jumps a day, and waits
-/// for the run to answer.
+/// Bounds the fake-clock jumps while driving a stalled calibration.
 const ROUNDS: u32 = 30;
 
-/// One round's wait for the run's answer.
+/// One bounded wait for the run's answer or park signal.
 const ROUND: Duration = Duration::from_millis(200);
 
 /// Rounds of waiting for the stalled run to wait on the clock: 15 waits of
@@ -91,20 +90,42 @@ fn await_stuck<T: Send>(done: &std::sync::mpsc::Receiver<T>, stall: &str) -> Opt
     panic!("the stalled process runs");
 }
 
+/// Waits for the run's next park after a clock advance, or returns an early
+/// answer. A later clock advance cannot collapse the park's boundary.
+fn wait_parked_since<T: Send>(
+    clock: &fakes::clock::FakeClock,
+    mark: &fakes::clock::Mark,
+    done: &std::sync::mpsc::Receiver<T>,
+) -> Option<T> {
+    for _ in 0..PARK_ROUNDS {
+        if clock.await_any_parked_since(mark, ROUND) {
+            return None;
+        }
+        match done.try_recv() {
+            Ok(done) => return Some(done),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("the stalled run returns")
+            }
+        }
+    }
+    panic!("the stalled run parks on the clock after an advance");
+}
+
 /// Drives `clock` until the stalled run on `done` answers: the run first
 /// parks on the clock, and the process holding `stall` on its command line
 /// first proves it is stuck, so whatever instant the run computes its bounds
-/// at, the next jump lands past them, and the deadline, the grace and the
-/// drain each take one round. An early answer ends the rounds; a run that
-/// never answers fails, naming the stall.
+/// at, the next jump lands past them. Each later jump waits for a fresh park
+/// acknowledgement, so the deadline, grace and drain cannot collapse into
+/// one instant. An early answer ends the rounds; a run that never answers
+/// fails, naming the stall.
 pub(crate) fn drive<T: Send>(
     clock: &fakes::clock::FakeClock,
     done: std::sync::mpsc::Receiver<T>,
     stall: &str,
 ) -> T {
     // Both acknowledgements precede the first jump: stopping a starter on
-    // the way up reports a timeout the stall never caused. Every jump after
-    // that waits for the run's answer, so the run has room to act on it.
+    // the way up reports a timeout the stall never caused.
     if let Some(done) = wait_parked(clock, &done) {
         return done;
     }
@@ -112,11 +133,16 @@ pub(crate) fn drive<T: Send>(
         return done;
     }
     for _ in 0..ROUNDS {
-        clock.advance(FAR);
-        match done.recv_timeout(ROUND) {
+        match done.try_recv() {
             Ok(done) => return done,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("the stalled run returns")
+            }
+        }
+        let mark = clock.advance_marked(FAR);
+        if let Some(done) = wait_parked_since(clock, &mark, &done) {
+            return done;
         }
     }
     panic!("the stalled run returns");

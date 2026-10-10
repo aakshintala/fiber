@@ -21,6 +21,7 @@ use super::{
 };
 /// How long a test waits on the run before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
+const DRAIN_BOUNDARY_DEADLINE: Duration = Duration::from_secs(4);
 
 /// Runs `work` on a worker and returns its answer within `DEADLINE`: a call
 /// that blocks, such as a `Command::status` or a fifo, is a wait too.
@@ -1038,16 +1039,32 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         );
         // The reap starts the 2 s drain on the fake clock.
         assert!(
-            clock.mark_parked(drain_until, DEADLINE).is_some(),
-            "waited {DEADLINE:?} for the pid-mode run to park for the 2 s drain ({case})"
+            clock
+                .mark_parked(drain_until, DRAIN_BOUNDARY_DEADLINE)
+                .is_some(),
+            "waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to park for the 2 s drain ({case})"
         );
-        // To the first bound, then past the later one: the run answers at
-        // the drain bound in every case, before any stop could start.
-        let first = deadline.min(drain_until);
-        clock.advance(first - clock.now());
-        let last = deadline.max(drain_until) + Duration::from_secs(1);
-        clock.advance(last - clock.now());
-        let outcome = done.recv_timeout(DEADLINE);
+        // Reach one step before the drain bound first. For the `before`
+        // case this is also the deadline: expiry must not start a stop once
+        // the child has been reaped and draining has begun.
+        let before_drain = drain_until
+            .checked_sub(step)
+            .expect("the before-drain boundary stays after the start");
+        let mark = clock.advance_marked(before_drain - clock.now());
+        assert!(
+            clock.await_parked_since(&mark, Some(drain_until), DRAIN_BOUNDARY_DEADLINE),
+            "waited {DRAIN_BOUNDARY_DEADLINE:?} for the pid-mode run to keep draining ({case})"
+        );
+        assert!(
+            matches!(done.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "the pid-mode run is still draining just before the bound ({case})"
+        );
+
+        // At the drain bound the child status wins for deadlines just before,
+        // exactly at, and just after it. Do not jump past the bound before
+        // observing the result.
+        clock.advance(step);
+        let outcome = done.recv_timeout(DRAIN_BOUNDARY_DEADLINE);
         // The holder keeps the pipe whether the wait ended or not: kill it
         // by its pid file before asserting, so no `sleep` outlives the test.
         let holder: Option<u32> = std::fs::read_to_string(&holder_file)
@@ -1057,7 +1074,9 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
             kill_pid_now(holder);
         }
         let ran = outcome
-            .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the drained run ({case})"))
+            .unwrap_or_else(|_| {
+                panic!("waited {DRAIN_BOUNDARY_DEADLINE:?} for the drained run ({case})")
+            })
             .unwrap_or_else(|err| panic!("the drained run returns ({case}): {}", err.message));
         assert_eq!(
             ran.exit_code,
@@ -1068,7 +1087,7 @@ fn a_drain_crossing_the_deadline_returns_without_timeout() {
         assert!(!ran.timed_out, "no stop started, so no timeout ({case})");
         let holder = holder.expect("the script wrote its holder's pid");
         assert!(
-            fakes::pids_exit(&[holder], DEADLINE),
+            fakes::pids_exit(&[holder], DRAIN_BOUNDARY_DEADLINE),
             "the holder is gone ({case})"
         );
     }
