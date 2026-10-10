@@ -5,7 +5,7 @@
 
 use std::fs::File;
 use std::io::{self, Read as _, Seek as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use contract::Envelope;
@@ -61,6 +61,26 @@ impl Offsets {
             path,
             table: Mutex::new(Table { starts, end }),
         }
+    }
+
+    /// The table of the log in `dir`: where each of its first `limit`
+    /// complete lines starts, and the end of the last of them. It parses
+    /// nothing, a torn tail is not a line, and a missing log is
+    /// [`Error::NotFound`].
+    pub(crate) fn scan(dir: &Path, limit: u64) -> Result<Offsets, Error> {
+        let mut lines = crate::read::lines(dir)?;
+        let path = dir.join(crate::EVENTS);
+        let mut starts = Vec::new();
+        while u64::try_from(starts.len()).unwrap_or(u64::MAX) < limit {
+            let start = lines.offset();
+            match lines.next_raw() {
+                None => break,
+                Some(Err(error)) => return Err(error),
+                Some(Ok(_)) => starts.push(start),
+            }
+        }
+        let end = lines.offset();
+        Ok(Offsets::new(path, starts, end))
     }
 
     fn lock(&self) -> MutexGuard<'_, Table> {

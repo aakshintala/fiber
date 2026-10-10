@@ -289,3 +289,68 @@ fn a_range_over_a_failed_window_is_an_error_with_no_lines() {
     corrupt(&session, 4);
     assert_eq!(seqs(&offsets.range(0, 2).unwrap()), seqs(&written[..2]));
 }
+
+#[test]
+fn scan_records_every_complete_line_and_stops_at_a_torn_tail() {
+    // A torn tail is not a line: appending torn bytes leaves the table
+    // unchanged.
+    let (dir, offsets, lines) = written("scan-whole", &[10; 3]);
+    let session = dir.path().join("s_1");
+    let scanned = Offsets::scan(&session, u64::MAX).unwrap();
+    {
+        let expected = offsets.lock();
+        let found = scanned.lock();
+        assert_eq!(found.starts, expected.starts);
+        assert_eq!(found.end, expected.end);
+    }
+    assert_eq!(scanned.count(), 3);
+    assert_eq!(seqs(&scanned.range(0, 10).unwrap()), seqs(&lines));
+    assert_eq!(shape(&scanned.page(0, u64::MAX)).0, seqs(&lines));
+    drop(dir);
+    let (dir, offsets, _) = written("scan-tail", &[10; 3]);
+    let session = dir.path().join("s_1");
+    let mut bytes = std::fs::read(session.join("events.jsonl")).unwrap();
+    bytes.extend_from_slice(b"{\"torn");
+    std::fs::write(session.join("events.jsonl"), &bytes).unwrap();
+    let scanned = Offsets::scan(&session, u64::MAX).unwrap();
+    {
+        let expected = offsets.lock();
+        let found = scanned.lock();
+        assert_eq!(found.starts, expected.starts);
+        assert_eq!(found.end, expected.end);
+    }
+    assert_eq!(scanned.count(), 3);
+}
+
+#[test]
+fn scan_reads_at_most_limit_lines() {
+    let (dir, _, _) = written("scan-limit", &[10; 5]);
+    let session = dir.path().join("s_1");
+    for (limit, expected) in [(0, 0), (2, 2), (4, 4), (5, 5), (6, 5)] {
+        let scanned = Offsets::scan(&session, limit).unwrap();
+        assert_eq!(scanned.count(), expected, "limit {limit}");
+        assert_eq!(scanned.range(0, 100).unwrap().len() as u64, expected, "limit {limit}");
+    }
+}
+
+#[test]
+fn scan_parses_nothing() {
+    let (dir, _, _) = written("scan-corrupt", &[10; 3]);
+    let session = dir.path().join("s_1");
+    corrupt(&session, 1);
+    let scanned = Offsets::scan(&session, u64::MAX).unwrap();
+    assert_eq!(scanned.count(), 3);
+    let one = Offsets::scan(&session, 1).unwrap();
+    assert_eq!(one.count(), 1);
+}
+
+#[test]
+fn scan_of_a_missing_log_is_not_found() {
+    let home = fakes::TempDir::new("log-offsets-scan-missing");
+    let missing = home.path().join("s_1");
+    let error = match Offsets::scan(&missing, u64::MAX) {
+        Ok(_) => panic!("a missing log is not found"),
+        Err(error) => error,
+    };
+    assert!(matches!(&error, Error::NotFound(path) if *path == missing), "{error}");
+}
