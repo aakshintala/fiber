@@ -6,13 +6,12 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use config::Manifest;
 use contract::clock::Clock;
-use ureq::Agent;
-use ureq::tls::{RootCerts, TlsConfig};
+use ureq::unversioned::resolver::DefaultResolver;
 
 use crate::Error;
 use crate::host::exec;
@@ -150,19 +149,34 @@ fn binary_name(url: &str) -> Option<&str> {
     (!name.is_empty() && name != "." && name != "..").then_some(name)
 }
 
+/// Downloads `url` with the production limits and the proxy the environment
+/// names, as ureq's default config does. Nothing cancels a download, so its
+/// `Keep` holds no socket and is never stopped.
 pub(crate) fn download(name: &str, url: &str) -> Result<Vec<u8>, Error> {
+    download_with(name, url, ureq::Proxy::try_from_env(), net::LIMITS)
+}
+
+/// Downloads `url` over the shared connector, so a download that connects
+/// to no address within the connect bound, or waits out the idle bound for
+/// a byte, fails instead of hanging the install. Redirects are followed and
+/// a non-2xx status is an error, as ureq's defaults have it; any failure is
+/// the install's own `Download` error, not a connection error.
+fn download_with(
+    name: &str,
+    url: &str,
+    proxy: Option<ureq::Proxy>,
+    limits: net::Limits,
+) -> Result<Vec<u8>, Error> {
     let fail = |why: String| Error::Download {
         name: name.into(),
         why: format!("{url}: {why}"),
     };
-    let config = Agent::config_builder()
-        .tls_config(
-            TlsConfig::builder()
-                .root_certs(RootCerts::PlatformVerifier)
-                .build(),
-        )
-        .build();
-    let agent: Agent = config.into();
+    let agent = net::agent(
+        net::config().proxy(proxy).build(),
+        Arc::new(()),
+        DefaultResolver::default(),
+        limits,
+    );
     let mut response = agent.get(url).call().map_err(|e| fail(e.to_string()))?;
     response
         .body_mut()
