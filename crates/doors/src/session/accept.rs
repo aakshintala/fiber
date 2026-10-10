@@ -4,7 +4,7 @@ use std::io;
 use std::os::unix::net::UnixListener;
 use std::sync::{Arc, mpsc};
 
-use super::{Gate, spawn};
+use super::{Gate, join, spawn};
 use crate::client;
 
 pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
@@ -14,10 +14,10 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
         }
         match listener.accept() {
             Ok((stream, _)) => {
-                if gate.stopped() {
-                    return;
-                }
                 let Ok(shutdown_stream) = stream.try_clone() else {
+                    if gate.stopped() {
+                        return;
+                    }
                     continue;
                 };
                 let (tx, rx) = mpsc::channel();
@@ -28,9 +28,22 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                     };
                     client::serve(stream, child, id);
                 }) {
-                    let id = gate.push_reader(handle, client::shutdown_both(shutdown_stream));
-                    if tx.send(id).is_err() {
-                        gate.finish(id);
+                    // Atomic: `push_reader` checks the stop under the same
+                    // lock `mark_stopped`/`join_clients` share, so a reader
+                    // admitted after the stop is rejected instead of leaked:
+                    // its stream is already shut, dropping `tx` ends its
+                    // thread, and joining reaps it.
+                    match gate.push_reader(handle, client::shutdown_both(shutdown_stream)) {
+                        Ok(id) => {
+                            if tx.send(id).is_err() {
+                                gate.finish(id);
+                            }
+                        }
+                        Err(handle) => {
+                            drop(tx);
+                            join(handle);
+                            return;
+                        }
                     }
                 }
             }

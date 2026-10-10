@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -367,18 +367,22 @@ impl Session {
         self.gate.wait_shells();
     }
 
-    /// Ends the door side: marks the gate stopped and makes a best-effort
-    /// wake of `accept`, unlinks the socket, drops `log`
+    /// Ends the door side: marks the gate stopped, unlinks the socket,
+    /// drops `log`
     /// (the last handle, which releases the lock), waits up to [`conns::GRACE`] for
     /// each writer, then shuts down whatever is still open. Every driver
     /// shell is cancelled first, since shutting its socket does not stop the
     /// tool, and waited for: its thread is not joined, and its answer is
-    /// queued before it ends. The accept thread is never joined either: when
-    /// the socket path is gone, or was rebound by another listener, the wake
-    /// misses and the thread stays blocked until the process exit ends it. A
-    /// connection the loop admits after the stop is dropped, not served: the
-    /// loop checks `stopped()` after `accept` returns before serving
-    /// anything. A reader can still admit one until it is
+    /// queued before it ends. The accept thread is detached, never joined
+    /// and never woken: a wake would take a blocking `UnixStream::connect`,
+    /// which on Linux blocks forever when a replacement listener's backlog
+    /// is full, and when the path is gone, or was rebound by another
+    /// listener, nothing can wake this session's `accept`, so a join would
+    /// block forever; process exit ends the thread. A connection the loop
+    /// admits after the stop is rejected, not served: the stopped check and
+    /// the reader's publication share the connection lock, so a late
+    /// reader's stream is shut down and its thread ends instead of leaking.
+    /// A reader can still admit one until it is
     /// joined; that shell starts cancelled and is waited for once no reader
     /// is left, though its answer may reach no writer.
     pub fn close(self, log: Arc<Log>) {
@@ -387,10 +391,12 @@ impl Session {
         #[cfg(test)]
         self.gate.note(tests::Probe::FirstShellWaitDone);
         self.gate.mark_stopped();
-        // Best effort only: when the path is gone, or reaches another
-        // listener, nothing wakes this session's `accept`.
-        drop(UnixStream::connect(&self.socket));
-        // Detached, never joined: a missed wake would block the join forever.
+        // The inbox sender is dropped here, so a kept receiver sees
+        // `Disconnected`: the detached accept thread keeps its own `Arc`
+        // until process exit and can no longer be relied on to release it.
+        drop(lock(&self.gate.inbox).take());
+        // Detached, never joined and never woken (see above): process exit
+        // ends the thread.
         let _accept = lock(&self.accept).take();
         drop(lock(&self.listener).take());
         remove_socket(&self.socket);

@@ -16,7 +16,6 @@
 //! writes an `error` line and returns 1: it never served, so it did not
 //! exit for idleness.
 
-use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread;
@@ -55,7 +54,6 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
         Ok(accept) => accept,
         Err(error) => return failed(hub, &format!("cloning run/hub's listener: {error}")),
     };
-    let socket = held.socket.clone();
     let stop = Arc::new(AtomicBool::new(false));
     let acceptor = thread::Builder::new().name("hub-accept".to_owned()).spawn({
         let hub = Arc::clone(hub);
@@ -96,9 +94,16 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
             }
         }
     });
-    // The acceptor is never joined (`wake_acceptor` says why no wake
-    // through the socket path can be relied on), so the handle is dropped
-    // here and the thread is detached. Process exit ends it.
+    // The acceptor is detached, never joined and never woken: waking it
+    // through the socket path would take a blocking `UnixStream::connect`,
+    // which on Linux blocks forever when a replacement listener's backlog
+    // is full, and when the path is gone, or reaches another listener
+    // after `run/` was removed and recreated, nothing can wake it, so a
+    // join would block forever. Process exit ends the thread. A late
+    // connection is never counted: [`Hub::poll_accept`] checks `stop`
+    // under the same connection lock the exit claim takes and answers
+    // [`Accept::Exiting`], so the stream is dropped unanswered, EOF with no
+    // `hub_hello`, and the client retries.
     match acceptor {
         Ok(_) => {}
         Err(error) => return failed(hub, &format!("starting the accept thread: {error}")),
@@ -107,13 +112,11 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
         match hub.idle_wait(idle_exit, &stop, got) {
             Idle::Signal(signal) => {
                 stop.store(true, Ordering::SeqCst);
-                wake_acceptor(&socket);
                 hub.shutdown_clients();
                 hub.diag.stopped("The hub stopped: signal.");
                 return Exit::Signal(signal);
             }
             Idle::Expired => {
-                wake_acceptor(&socket);
                 hub.diag.stopped("The hub stopped: idle.");
                 return Exit::Idle;
             }
@@ -129,22 +132,6 @@ fn failed(hub: &Hub, what: &str) -> Exit {
         &format!("The hub cannot accept connections: {what}"),
     );
     Exit::Failed
-}
-
-/// Makes a best-effort wake of the acceptor's blocking `accept`: when the
-/// socket path still reaches this hub's listener, the connection lands
-/// there, the loop sees `stop` and returns, and the thread ends promptly.
-/// The wake connection is dropped unanswered; the client retries. The hub
-/// never joins the acceptor: a `UnixListener` has no portable way to wake
-/// its own blocked `accept`, so when the path is gone, or reaches another
-/// listener after `run/` was removed and recreated, nothing can wake it,
-/// and a join would block forever. A late connection is never counted:
-/// [`Hub::poll_accept`] checks `stop` under the same connection lock the
-/// exit claim takes and answers [`Accept::Exiting`], so the stream is
-/// dropped unanswered, EOF with no `hub_hello`, and the client retries. A
-/// missed wake leaves the acceptor blocked, and the process exit ends it.
-fn wake_acceptor(socket: &std::path::Path) {
-    drop(UnixStream::connect(socket));
 }
 
 #[cfg(test)]

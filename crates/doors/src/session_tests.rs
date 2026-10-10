@@ -527,13 +527,15 @@ fn attach_held(gate: &Arc<super::Gate>, held: &Arc<Held>, watcher: log::Watcher)
         Ok(()) | Err(_) => {}
     });
     let fail = Arc::clone(held);
-    let id = gate.push_reader(
-        reader,
-        Box::new(move || {
-            fail.fail();
-            if let Ok(()) = stop_tx.send(()) {}
-        }),
-    );
+    let id = gate
+        .push_reader(
+            reader,
+            Box::new(move || {
+                fail.fail();
+                if let Ok(()) = stop_tx.send(()) {}
+            }),
+        )
+        .expect("the gate is running");
     crate::client::spawn_writer(
         Arc::clone(gate),
         id,
@@ -727,13 +729,15 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
     // The shutdown ends the reader by EOF, so it works whether the reader
     // has reached `read` yet or not.
     let flag = Arc::clone(&shut);
-    let id = gate.push_reader(
-        reader,
-        Box::new(move || {
-            flag.store(true, Ordering::SeqCst);
-            drop(lock(&peer).take());
-        }),
-    );
+    let id = gate
+        .push_reader(
+            reader,
+            Box::new(move || {
+                flag.store(true, Ordering::SeqCst);
+                drop(lock(&peer).take());
+            }),
+        )
+        .expect("the gate is running");
     let (done_tx, done_rx) = mpsc::channel();
     let finishing = Arc::clone(&gate);
     thread::spawn(move || {
@@ -764,7 +768,9 @@ fn a_reader_that_reaps_itself_finishes() {
         crate::client::serve(stream, child, id);
         if let Ok(()) = done_tx.send(()) {}
     });
-    let id = gate.push_reader(reader, crate::client::shutdown_both(shutdown));
+    let id = gate
+        .push_reader(reader, crate::client::shutdown_both(shutdown))
+        .expect("the gate is running");
     if let Ok(()) = id_tx.send(id) {}
     drop(peer);
     Deadline::after(DEADLINE)
@@ -2769,6 +2775,104 @@ fn close_returns_when_the_socket_path_was_rebound() {
     // Another listener answers at the path now: the wake connect reaches it,
     // not this session's accept.
     let _other = UnixListener::bind(&opened.socket).unwrap();
+    let dir = opened.session.dir.clone();
+    close_within(opened.session, opened.log);
+    assert_lock_released(&dir);
+}
+
+#[test]
+fn a_reader_published_after_stop_is_rejected_not_leaked() {
+    reset();
+    let opened = open();
+    let gate = Arc::clone(&opened.session.gate);
+    // The acceptor passed its stopped check before close began.
+    assert!(!gate.stopped());
+    let (checked_tx, checked_rx) = mpsc::channel();
+    let (stopped_tx, stopped_rx) = mpsc::channel();
+    let closer = Arc::clone(&gate);
+    thread::spawn(move || {
+        Deadline::after(DEADLINE)
+            .recv(&checked_rx)
+            .expect("the acceptor checked before the stop");
+        closer.mark_stopped();
+        closer.join_clients();
+        stopped_tx.send(()).unwrap_or(());
+    });
+    checked_tx.send(()).unwrap();
+    Deadline::after(DEADLINE)
+        .recv(&stopped_rx)
+        .expect("the stop and the join land before the publish");
+    // The acceptor now publishes after the stop, as the racy loop did: the
+    // publication is rejected, its stream shut, its thread ended.
+    let (_peer, stream) = UnixStream::pair().unwrap();
+    let shutdown = stream.try_clone().unwrap();
+    let shut = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&shut);
+    let both = crate::client::shutdown_both(shutdown);
+    let (id_tx, id_rx) = mpsc::channel::<u64>();
+    let (exited_tx, exited_rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let _received = id_rx.recv();
+        exited_tx.send(()).unwrap_or(());
+    });
+    let handle = match gate.push_reader(
+        reader,
+        Box::new(move || {
+            flag.store(true, Ordering::SeqCst);
+            both();
+        }),
+    ) {
+        Ok(_) => panic!("a reader published after the stop is rejected"),
+        Err(handle) => handle,
+    };
+    assert!(shut.load(Ordering::SeqCst), "the rejection shuts the stream");
+    assert!(
+        super::lock(&gate.conns).live.is_empty(),
+        "the rejected reader is never published"
+    );
+    drop(id_tx);
+    Deadline::after(DEADLINE)
+        .recv(&exited_rx)
+        .expect("the rejected reader's thread ends");
+    match handle.join() {
+        Ok(()) | Err(_) => {}
+    }
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn close_returns_when_the_socket_path_was_rebound_with_a_full_backlog() {
+    reset();
+    let opened = open();
+    keep_dir(&opened.log);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_inbox| Ok(()))
+        .unwrap();
+    fs::remove_file(&opened.socket).unwrap();
+    let _other = UnixListener::bind(&opened.socket).unwrap();
+    // Fill the replacement's backlog with connected-but-unaccepted clients:
+    // a close that made a blocking `connect` wake here would block forever
+    // on Linux once the queue is full, so close must never make one.
+    let path = opened.socket.clone();
+    let (queued_tx, queued_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut held = Vec::new();
+        for _ in 0..512 {
+            match UnixStream::connect(&path) {
+                Ok(stream) => {
+                    held.push(stream);
+                    queued_tx.send(()).unwrap_or(());
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    for _ in 0..128 {
+        Deadline::after(DEADLINE)
+            .recv(&queued_rx)
+            .expect("the replacement backlog fills");
+    }
     let dir = opened.session.dir.clone();
     close_within(opened.session, opened.log);
     assert_lock_released(&dir);

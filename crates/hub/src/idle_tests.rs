@@ -11,7 +11,7 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -539,45 +539,6 @@ fn zero_idle_exit_stops_at_the_first_empty_wait() {
     );
 }
 
-/// An acceptor that ends once `stop` is set, woken by one connection, on a
-/// listener at `socket`: what the hub's accept loop does. The sender fires
-/// as the thread ends.
-fn stop_checked_thread(socket: &std::path::Path, stop: Arc<AtomicBool>) -> mpsc::Receiver<()> {
-    let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
-    let (ended_tx, ended_rx) = mpsc::channel();
-    thread::Builder::new()
-        .name("hub-test-acceptor".to_owned())
-        .spawn(move || {
-            if listener.accept().is_ok() && stop.load(Ordering::SeqCst) {
-                ended_tx.send(()).unwrap_or(());
-            }
-        })
-        .unwrap();
-    ended_rx
-}
-
-#[test]
-fn wake_acceptor_ends_a_blocked_acceptor_without_waiting_for_it() {
-    let temp = Temp::new();
-    let socket = temp.dir.join("wake");
-    let ended = stop_checked_thread(&socket, Arc::new(AtomicBool::new(true)));
-    // The wake returns at once: the hub never joins the thread. The
-    // acceptor ends on its own once the connection arrives.
-    wake_acceptor(&socket);
-    Deadline::after(DEADLINE)
-        .recv(&ended)
-        .expect("the acceptor ends after the wake");
-}
-
-#[test]
-fn wake_acceptor_returns_when_the_socket_path_is_gone() {
-    let temp = Temp::new();
-    let socket = temp.dir.join("wake");
-    // No listener: the connect fails, nothing is woken, and the hub still
-    // exits instead of joining a thread that can never wake.
-    wake_acceptor(&socket);
-}
-
 #[test]
 fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
     let temp = Temp::new();
@@ -797,6 +758,48 @@ fn an_idle_exit_lands_when_run_is_gone_entirely() {
     let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
     await_idle_park(&clock, clock.origin(), "at start");
     fs::remove_dir_all(temp.dir.join("run")).unwrap();
+    clock.advance(IDLE);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
+}
+
+#[test]
+fn an_idle_exit_lands_when_the_socket_was_rebound_with_a_full_backlog() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    fs::remove_file(temp.socket()).unwrap();
+    let _other = UnixListener::bind(temp.socket()).unwrap();
+    // Fill the replacement's backlog with connected-but-unaccepted clients:
+    // an exit that made a blocking `connect` wake here would block forever
+    // on Linux once the queue is full, so the exit must never make one.
+    let path = temp.socket();
+    let (queued_tx, queued_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-backlog".to_owned())
+        .spawn(move || {
+            let mut held = Vec::new();
+            for _ in 0..512 {
+                match UnixStream::connect(&path) {
+                    Ok(stream) => {
+                        held.push(stream);
+                        queued_tx.send(()).unwrap_or(());
+                    }
+                    Err(_) => break,
+                }
+            }
+        })
+        .unwrap();
+    for _ in 0..128 {
+        Deadline::after(DEADLINE)
+            .recv(&queued_rx)
+            .expect("the replacement backlog fills");
+    }
     clock.advance(IDLE);
     assert_eq!(
         Deadline::after(DEADLINE)
