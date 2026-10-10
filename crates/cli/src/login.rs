@@ -728,7 +728,7 @@ pub fn run_logout(provider: Option<&str>, target: LogoutTarget<'_>) -> i32 {
     if provider.is_none() {
         return finish(Err(failure(ErrorCode::Usage, LOGOUT_SHAPE)));
     }
-    let ran = home_and_providers().and_then(|(home, providers, _)| {
+    let ran = home_and_providers().and_then(|(home, providers, loading)| {
         let workspace = std::env::current_dir()
             .map_err(|e| failure(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
         let (_, project) = project_of(&home, &workspace)?;
@@ -739,13 +739,16 @@ pub fn run_logout(provider: Option<&str>, target: LogoutTarget<'_>) -> i32 {
             overrides: Vec::new(),
         })
         .map_err(config_failure)?;
+        let mut err = io::stderr();
+        let notices: Vec<Notice> = config.notices().iter().cloned().chain(loading).collect();
+        crate::config::print_notices(&mut err, &notices);
         logout(
             provider,
             target,
             &home,
             &providers,
             &config,
-            &mut io::stderr(),
+            &mut err,
         )
     });
     finish(ran)
