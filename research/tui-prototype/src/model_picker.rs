@@ -543,7 +543,7 @@ fn footer() -> Row {
         ("←→", "levels"),
         ("enter", "choose"),
         ("tab", "show all"),
-        ("ctrl+s", "session only"),
+        ("ctrl+s", "session"),
         ("ctrl+r", "refresh"),
         ("esc", "close"),
     ])
@@ -774,7 +774,7 @@ mod tests {
         let pi = b.iter().position(|r| plain(r).contains("openai-codex")).unwrap();
         assert!(plain(&b[pi - 1]).trim().is_empty(), "no blank before the section");
         // The foot is a bold-key legend.
-        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · enter choose · tab show all · ctrl+s session only · ctrl+r refresh · esc close"));
+        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · enter choose · tab show all · ctrl+s session · ctrl+r refresh · esc close"));
     }
 
     #[test]

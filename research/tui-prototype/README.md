@@ -448,7 +448,7 @@ A second swapped view, drawn like the context breakdown: Ctrl+L and `/model` ope
 | `scoped` | `cargo run --release -- fixtures/idle.jsonl --static --picker scoped`: the `scoped_models` set, five of twelve, with a show-all toggle |
 | `scoped-all` | `cargo run --release -- fixtures/idle.jsonl --static --picker scoped-all`: all twelve, the scoped five marked |
 | `refreshing` | `cargo run --release -- fixtures/idle.jsonl --static --picker refreshing`: one provider refreshing in the background, the others with an updated-ago age |
-| `session-only` | `cargo run --release -- fixtures/idle.jsonl --static --picker session-only`: a non-current model focused with the `s` mark, "this session only · nothing saved" |
+| `session-only` | `cargo run --release -- fixtures/idle.jsonl --static --picker session-only`: a non-current model focused with the Ctrl+S mark, "this session only · nothing saved" |
 | `filtered` | `cargo run --release -- fixtures/idle.jsonl --static --picker filtered`: the query `mini`, four matching models across two providers, matched letters underlined |
 | `filtered-empty` | `cargo run --release -- fixtures/idle.jsonl --static --picker filtered-empty`: the query `zzz`, one muted `No models match` line |
 
