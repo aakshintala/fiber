@@ -635,11 +635,7 @@ fn range_and_count_return_while_append_is_in_its_fsync() {
             in_fsync_tx.send(()).unwrap();
             release_rx.recv().unwrap();
         });
-        let appended = appender_log.append(
-            &Event::AssistantMessageStarted(Empty {}),
-            None,
-            None,
-        );
+        let appended = appender_log.append(&Event::AssistantMessageStarted(Empty {}), None, None);
         done_tx.send(appended).unwrap();
     });
     let wait = Deadline::after(DEADLINE);

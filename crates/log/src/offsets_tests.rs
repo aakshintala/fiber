@@ -329,7 +329,11 @@ fn scan_reads_at_most_limit_lines() {
     for (limit, expected) in [(0, 0), (2, 2), (4, 4), (5, 5), (6, 5)] {
         let scanned = Offsets::scan(&session, limit).unwrap();
         assert_eq!(scanned.count(), expected, "limit {limit}");
-        assert_eq!(scanned.range(0, 100).unwrap().len() as u64, expected, "limit {limit}");
+        assert_eq!(
+            scanned.range(0, 100).unwrap().len() as u64,
+            expected,
+            "limit {limit}"
+        );
     }
 }
 
@@ -352,5 +356,8 @@ fn scan_of_a_missing_log_is_not_found() {
         Ok(_) => panic!("a missing log is not found"),
         Err(error) => error,
     };
-    assert!(matches!(&error, Error::NotFound(path) if *path == missing), "{error}");
+    assert!(
+        matches!(&error, Error::NotFound(path) if *path == missing),
+        "{error}"
+    );
 }
