@@ -23,7 +23,7 @@ use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::tool::Tool;
 use contract::{CommandId, ErrorCode, SessionId};
-use log::{Log, Watcher};
+use log::{Injector, Log, Watcher};
 
 mod accept;
 mod conns;
@@ -45,6 +45,7 @@ pub struct Session {
     dir: PathBuf,
     socket: PathBuf,
     printer: JoinHandle<()>,
+    printer_stop: Injector,
     gate: Arc<Gate>,
     listener: Mutex<Option<UnixListener>>,
     accept: Mutex<Option<JoinHandle<()>>>,
@@ -407,6 +408,12 @@ impl Session {
         self.gate.wait_writers();
         self.gate.join_clients();
         self.gate.wait_shells();
+        // The printer's watcher returns only on a `client::STOP` line or
+        // the log's end: with nothing written and another `Arc<Log>` still
+        // held, neither comes, so stop it directly. Lines already queued
+        // still print first, so a normal close still prints `fiber_exited`.
+        self.printer_stop
+            .push_kept(client::control_line(&self.gate.session_id, client::STOP, 0));
         join(self.printer);
     }
 
@@ -593,6 +600,7 @@ fn open_in(
     let wake = Arc::clone(&gate);
     let wake: Arc<dyn Wake> = wake;
     clock.subscribe(Arc::downgrade(&wake));
+    let printer_stop = printer_watcher.injector();
     let printer = match spawn("stdout", move || print(printer_watcher, out)) {
         Ok(printer) => printer,
         Err(error) => {
@@ -604,6 +612,7 @@ fn open_in(
         dir: dir.to_owned(),
         socket,
         printer,
+        printer_stop,
         gate,
         listener: Mutex::new(Some(listener)),
         accept: Mutex::new(None),
