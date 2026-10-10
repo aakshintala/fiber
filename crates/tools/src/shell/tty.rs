@@ -7,8 +7,8 @@ use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::os::fd::OwnedFd;
 use std::path::Path;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
 use contract::jobs::Input;
@@ -20,6 +20,7 @@ use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 
 use super::drive::park;
 use super::output::{Shared, lock};
+use support::clock::Parker;
 
 /// A `tty` call's receipt carries the output that arrives in this long
 /// (`docs/tools.md`, "Terminal (`tty`)").
@@ -101,12 +102,9 @@ fn lock_writer<'a>(
     clock: &dyn Clock,
     cancel: &dyn Cancel,
 ) -> Option<MutexGuard<'a, File>> {
-    let nudge = Arc::new(Nudge::default());
-    let wake: Arc<dyn Wake> = nudge.clone();
-    cancel.subscribe(Arc::downgrade(&wake));
-    clock.subscribe(Arc::downgrade(&wake));
+    let (nudge, _wake) = nudge(clock, cancel);
     loop {
-        let seen = nudge.seen();
+        let seen = nudge.generation();
         if cancel.is_cancelled() {
             return None;
         }
@@ -120,62 +118,15 @@ fn lock_writer<'a>(
     }
 }
 
-/// Wakes a write that is waiting for room: the clock moved or the call was
-/// cancelled.
-#[derive(Default)]
-struct Nudge {
-    seq: Mutex<u64>,
-    cv: Condvar,
-}
-
-impl Wake for Nudge {
-    fn wake(&self) {
-        let mut seq = self
-            .seq
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *seq = seq.wrapping_add(1);
-        self.cv.notify_all();
-    }
-}
-
-impl Nudge {
-    fn seen(&self) -> u64 {
-        *self
-            .seq
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Waits until `until` on `clock` or a wake after `seen`.
-    fn park(&self, clock: &dyn Clock, until: Option<Instant>, seen: u64) {
-        let mut slot = Some(
-            self.seq
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
-        clock.wait_until(until, &mut |bound| {
-            let Some(guard) = slot.take() else {
-                return;
-            };
-            if *guard != seen {
-                slot = Some(guard);
-                return;
-            }
-            slot = Some(match bound {
-                Some(bound) => {
-                    self.cv
-                        .wait_timeout(guard, bound)
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .0
-                }
-                None => self
-                    .cv
-                    .wait(guard)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner),
-            });
-        });
-    }
+/// Builds the parker a write waits on, subscribed to the cancel and the
+/// clock. The returned `Arc<dyn Wake>` is the same parker, held so the
+/// weak subscriptions stay alive for the whole wait loop.
+fn nudge(clock: &dyn Clock, cancel: &dyn Cancel) -> (Arc<Parker>, Arc<dyn Wake>) {
+    let parker = Arc::new(Parker::new());
+    let wake: Arc<dyn Wake> = parker.clone();
+    cancel.subscribe(Arc::downgrade(&wake));
+    clock.subscribe(Arc::downgrade(&wake));
+    (parker, wake)
 }
 
 /// Writes `bytes` to the nonblocking primary as the queue takes them. A
@@ -188,13 +139,10 @@ fn write_chunks(
     clock: &dyn Clock,
     cancel: &dyn Cancel,
 ) -> std::io::Result<usize> {
-    let nudge = Arc::new(Nudge::default());
-    let wake: Arc<dyn Wake> = nudge.clone();
-    cancel.subscribe(Arc::downgrade(&wake));
-    clock.subscribe(Arc::downgrade(&wake));
+    let (nudge, _wake) = nudge(clock, cancel);
     let mut done = 0;
     while done < bytes.len() {
-        let seen = nudge.seen();
+        let seen = nudge.generation();
         if cancel.is_cancelled() {
             break;
         }

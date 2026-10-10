@@ -137,32 +137,16 @@ impl net::Keep for Hop {
 impl Hop {
     /// Waits until `until` on `clock`, or a wake after `seen`.
     fn park(&self, clock: &dyn Clock, until: Instant, seen: u64) {
-        // Taken before `wait_until`, and held until the condvar wait, so a
-        // wake blocks on this lock instead of notifying nobody. `FnMut`
-        // cannot move the guard out and back; the slot holds it across the
-        // one call.
-        let mut slot = Some(self.lock());
-        clock.wait_until(Some(until), &mut |bound| {
-            let Some(guard) = slot.take() else {
-                return;
-            };
-            if guard.seq != seen || guard.done {
-                slot = Some(guard);
-                return;
-            }
-            slot = Some(match bound {
-                Some(bound) => {
-                    self.changed
-                        .wait_timeout(guard, bound)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
-                }
-                None => self
-                    .changed
-                    .wait(guard)
-                    .unwrap_or_else(PoisonError::into_inner),
-            });
-        });
+        // The guard is held from the check into the condvar wait, so a wake
+        // under the same lock is never missed.
+        let _guard = support::clock::park(
+            clock,
+            Some(until),
+            None,
+            &self.changed,
+            self.lock(),
+            |state| state.seq != seen || state.done,
+        );
     }
 }
 
