@@ -31,6 +31,7 @@ use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 /// truncates whatever part of a line the failure left.
 pub struct Log {
     inner: Mutex<Inner>,
+    offsets: Arc<Offsets>,
     clock: Arc<dyn Clock>,
     /// The session directory, copied out of `inner` so [`Log::dir`] can lend it.
     dir: PathBuf,
@@ -205,7 +206,7 @@ impl Log {
 
     /// How many durable lines the log holds: the `seq` the next one gets.
     pub fn count(&self) -> u64 {
-        self.lock().offsets.count()
+        self.offsets.count()
     }
 
     /// The durable lines whose `seq` is `from..from + max`, in order, fewer
@@ -213,8 +214,7 @@ impl Log {
     /// Reads and parses only those lines (`docs/events.md`, "Resume"): a
     /// line outside the window that does not parse is never seen.
     pub fn range(&self, from: u64, max: usize) -> Result<Vec<Envelope>, Error> {
-        let offsets = Arc::clone(&self.lock().offsets);
-        offsets.range(from, max)
+        self.offsets.range(from, max)
     }
 
     /// A watcher that receives every event appended from now on. On a log
@@ -388,6 +388,7 @@ impl Log {
     fn from_parts(inner: Inner, clock: Arc<dyn Clock>) -> Self {
         Self {
             dir: inner.dir.clone(),
+            offsets: Arc::clone(&inner.offsets),
             inner: Mutex::new(inner),
             clock,
         }
@@ -463,6 +464,12 @@ impl Inner {
         self.offsets
             .push(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
         if sync {
+            #[cfg(test)]
+            BEFORE_SYNC.with(|cell| {
+                if let Some(hook) = cell.borrow().as_ref() {
+                    hook();
+                }
+            });
             self.fsyncs += 1;
             self.events.sync_data().map_err(io_at(&path))?;
         }
@@ -628,6 +635,26 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
 /// The session's lock, held while the file is open. Letting go clears the
 /// holder's pid, so a later refusal never names a process that let go.
 struct Lock(File);
+
+// Pause point between publishing a line's offset and fsyncing it
+// (`docs/testing.md`, "Waits and timeouts"): the reader-during-fsync test
+// installs a hook to hold the appender there, so the race between the
+// offset being visible and the fsync happens on every run instead of being
+// waited for. Test-only; non-test builds never call it.
+#[cfg(test)]
+thread_local! {
+    static BEFORE_SYNC: std::cell::RefCell<Option<Box<dyn Fn()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Installs the pause-point hook run after a line's offset is published and
+/// before its fsync (`docs/testing.md`, "Waits and timeouts"), on the
+/// current thread. The reader-during-fsync test uses it to hold the appender
+/// with the line visible, so the race happens on every run.
+#[cfg(test)]
+pub(crate) fn before_sync(hook: impl Fn() + 'static) {
+    BEFORE_SYNC.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
+}
 
 impl Drop for Lock {
     fn drop(&mut self) {
