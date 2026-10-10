@@ -337,21 +337,17 @@ fn append(file: &Path, logs: &Path, bytes: &[u8]) {
             .open(file)
             .and_then(|mut file| file.write_all(bytes))
     };
-    match open() {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            // The `logs/` directory is missing: it was never created, or
-            // it was removed while the process runs. Creating it here, and
-            // only here, makes it again on the next line with no flag and
-            // no `mkdir` on the common path.
-            DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(logs)
-                .unwrap_or(());
-            open().unwrap_or(());
-        }
-        Err(_) => {}
+    if open().is_err() {
+        // The `logs/` directory may be missing: it was never created, or it
+        // was removed while the process runs. Creating it only after a
+        // failed write makes it again on the next line with no flag and no
+        // `mkdir` on the common path; a failure that persists stays silent.
+        DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(logs)
+            .unwrap_or(());
+        open().unwrap_or(());
     }
 }
 
