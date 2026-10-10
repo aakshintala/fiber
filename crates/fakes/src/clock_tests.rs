@@ -946,3 +946,191 @@ fn await_any_parked_since_ignores_a_thread_absent_from_the_mark() {
         .recv_timeout(Duration::from_secs(5))
         .expect("the second thread exits");
 }
+
+#[test]
+fn a_thread_parking_after_the_advance_is_absent_from_the_mark() {
+    let clock = FakeClock::new();
+    let (parked_a_tx, parked_a_rx) = mpsc::channel();
+    let (release_a_tx, release_a_rx) = mpsc::channel::<()>();
+    let (exit_a_tx, exit_a_rx) = mpsc::channel();
+    let clock_a = Arc::clone(&clock);
+    thread::spawn(move || {
+        clock_a.wait_until(None, &mut |_bound| {
+            match parked_a_tx.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+            release_a_rx.recv().expect("waited for release of thread A");
+        });
+        if let Ok(()) = exit_a_tx.send(()) {}
+    });
+    parked_a_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for thread A to park");
+    assert!(
+        clock.await_parked_unbounded(Duration::from_secs(5)),
+        "thread A is parked unbounded"
+    );
+    let mark = clock.advance_marked(Duration::from_millis(1));
+    let (parked_b_tx, parked_b_rx) = mpsc::channel();
+    let (release_b_tx, release_b_rx) = mpsc::channel::<()>();
+    let (exit_b_tx, exit_b_rx) = mpsc::channel();
+    let clock_b = Arc::clone(&clock);
+    let b = thread::spawn(move || {
+        clock_b.wait_until(None, &mut |_bound| {
+            match parked_b_tx.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+            release_b_rx.recv().expect("waited for release of thread B");
+        });
+        if let Ok(()) = exit_b_tx.send(()) {}
+    });
+    let b_id = b.thread().id();
+    parked_b_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for thread B to park");
+    assert!(
+        clock.await_thread_parked(b_id, None, Duration::from_secs(5)),
+        "thread B is parked unbounded: {:?}, thread {b_id:?}",
+        clock.parked(),
+    );
+    assert!(
+        !clock.await_parked_since(&mark, None, Duration::ZERO),
+        "thread B parked after the advance, so it is absent from the mark"
+    );
+    release_a_tx.send(()).unwrap();
+    release_b_tx.send(()).unwrap();
+    exit_a_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("thread A exits");
+    exit_b_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("thread B exits");
+}
+
+#[test]
+fn await_thread_parked_is_false_for_a_thread_that_never_parked() {
+    let clock = FakeClock::new();
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (exit_tx, exit_rx) = mpsc::channel();
+    let clock_t = Arc::clone(&clock);
+    thread::spawn(move || {
+        clock_t.wait_until(None, &mut |_bound| {
+            match parked_tx.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+            release_rx.recv().expect("waited for release");
+        });
+        if let Ok(()) = exit_tx.send(()) {}
+    });
+    parked_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park");
+    let idle = thread::current().id();
+    assert!(
+        !clock.await_thread_parked(idle, None, Duration::ZERO),
+        "a thread that never parked is not parked: {:?}, thread {idle:?}",
+        clock.parked(),
+    );
+    release_tx.send(()).unwrap();
+    exit_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn await_thread_parked_is_false_for_the_wrong_until() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let wrong = clock.origin() + Duration::from_secs(60);
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (exit_tx, exit_rx) = mpsc::channel();
+    let clock_t = Arc::clone(&clock);
+    let parked = thread::spawn(move || {
+        clock_t.wait_until(Some(until), &mut |_bound| {
+            match parked_tx.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+            release_rx.recv().expect("waited for release");
+        });
+        if let Ok(()) = exit_tx.send(()) {}
+    });
+    let id = parked.thread().id();
+    parked_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park");
+    assert!(
+        !clock.await_thread_parked(id, Some(wrong), Duration::ZERO),
+        "the thread parked at another deadline: {:?}, thread {id:?}",
+        clock.parked(),
+    );
+    release_tx.send(()).unwrap();
+    exit_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn await_thread_parked_is_true_for_the_matching_until() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (exit_tx, exit_rx) = mpsc::channel();
+    let clock_t = Arc::clone(&clock);
+    let parked = thread::spawn(move || {
+        clock_t.wait_until(Some(until), &mut |_bound| {
+            match parked_tx.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+            release_rx.recv().expect("waited for release");
+        });
+        if let Ok(()) = exit_tx.send(()) {}
+    });
+    let id = parked.thread().id();
+    parked_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park");
+    assert!(
+        clock.await_thread_parked(id, Some(until), Duration::from_secs(5)),
+        "the thread parked at its deadline: {:?}, thread {id:?}",
+        clock.parked(),
+    );
+    release_tx.send(()).unwrap();
+    exit_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the parked thread exits");
+}
+
+#[test]
+fn await_thread_parked_is_false_after_the_thread_leaves_its_park() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (exit_tx, exit_rx) = mpsc::channel();
+    let clock_t = Arc::clone(&clock);
+    let parked = thread::spawn(move || {
+        clock_t.wait_until(Some(until), &mut |_bound| {
+            match parked_tx.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+            release_rx.recv().expect("waited for release");
+        });
+        if let Ok(()) = exit_tx.send(()) {}
+    });
+    let id = parked.thread().id();
+    parked_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for the thread to park");
+    release_tx.send(()).unwrap();
+    exit_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the parked thread exits");
+    assert!(
+        !clock.await_thread_parked(id, Some(until), Duration::ZERO),
+        "the thread left its park: {:?}, thread {id:?}",
+        clock.parked(),
+    );
+}
