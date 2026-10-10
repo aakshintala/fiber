@@ -349,6 +349,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `cancel` | none |
 | `reply` | `request_id` (string) and the answer ("Replying") |
 | `job_stop` | `job_id` (string) |
+| `job_input` | `job_id` (string), `text` (string) |
 | `background` | none |
 | `reload` | none |
 | `tools` | none |
@@ -376,6 +377,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"), and stops a running `shell` command. Rejected `stale_request` if no turn is running and no `shell` command is. |
 | `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). |
 | `job_stop` | Stops a running job by `job_id`, at once, even while a model response streams (`docs/architecture.md`, "One inbox"). Rejected `stale_request` if the job is not running. |
+| `job_input` | Writes `text` to a running job started with `tty`, as the `jobs` action `write` does for the model (`docs/tools.md`, "Background jobs"), and is accepted once written. The job's output reaches the client on its stream as usual. Rejected `stale_request` if the job is not running, and `invalid_arguments` if it was not started with `tty`. |
 | `background` | Moves every shell call running in the current turn to the background (`docs/tools.md`, "Shell"). Rejected `stale_request` if none is running. |
 | `reload` | Re-reads configuration, restarts changed MCP servers and extensions, and declares the tool set again (`docs/mcp.md`, "Reload"). Rejected `busy` if a turn is running. |
 | `history` | Answers, in its `command_accepted`, with the session's durable lines from `from_seq` to `to_seq` inclusive, or to the latest when `to_seq` is absent, at most 256 lines; a client pages for more. This is how every client pages history, the local terminal included: no client reads a session's log from disk (`docs/tui.md`, "History and paging"). Rejected `invalid_arguments` when `from_seq` is past the latest line. |
@@ -425,6 +427,11 @@ and `reply` there like any session. No session forwards a command to another
 **`job_stop` names a running `job_id`.** It is rejected `stale_request` if the
 job is not running. The terminal lists jobs with `/jobs` and can stop one from
 there. The list is a fold of the log, so there is no driver list command.
+
+**`job_input` types `text` into a running job started with `tty`.** It is
+rejected `stale_request` if the job is not running, and `invalid_arguments`
+if the job was not started with `tty`. A write the terminal refuses is
+rejected `io_failed`.
 
 **`background` frees the turn without a message.** It moves every running
 shell call to the background, as a person's Ctrl+B does, with nothing sent

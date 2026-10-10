@@ -7,6 +7,13 @@ use ratatui::style::Modifier;
 
 use super::{new_york, time_of_day, utc_minute};
 
+/// A text prompt starting a turn.
+fn prompt(text: &str) -> crate::turn::images::Prompt {
+    crate::turn::images::prompt_of(&[contract::shapes::ContentPart::Text {
+        text: text.to_owned(),
+    }])
+}
+
 #[test]
 fn spring_forward_skips_the_second_hour() {
     let zone = new_york();
@@ -68,9 +75,15 @@ fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
     use crate::turn::Turn;
 
     let zone = TimeZone::UTC;
-    let turn = Turn::new(vec!["go".to_owned()], 1791468900000);
+    let turn = Turn::new(vec![prompt("go")], 1791468900000);
     let mut out = Rows::default();
-    turn.rows(80, &zone, crate::surface::Edges::BOTH, &mut out);
+    turn.rows(
+        80,
+        &zone,
+        crate::surface::Edges::BOTH,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
     let (rows, _) = out.into_parts();
     assert_eq!(rows.len(), 4);
     let (line, target) = &rows[3];
@@ -80,9 +93,15 @@ fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
     assert!(target.is_none());
     // Past the latest instant jiff holds, the bubble draws with no time
     // under it.
-    let turn = Turn::new(vec!["go".to_owned()], u64::MAX);
+    let turn = Turn::new(vec![prompt("go")], u64::MAX);
     let mut out = Rows::default();
-    turn.rows(80, &zone, crate::surface::Edges::BOTH, &mut out);
+    turn.rows(
+        80,
+        &zone,
+        crate::surface::Edges::BOTH,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
     let (rows, _) = out.into_parts();
     assert_eq!(rows.len(), 3);
 }

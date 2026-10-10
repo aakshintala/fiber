@@ -35,6 +35,9 @@ impl App {
             TargetId::Line(copy @ Target::Copy { .. }) => self.copy(copy),
             // A failed login offers the login view (`docs/tui.md`, "Turns").
             TargetId::Line(Target::Login) => self.open_config_view(super::ConfigView::Login),
+            // An image's line opens in the system viewer
+            // (`docs/tui.md`, "Images").
+            TargetId::Line(Target::Image(id)) => self.view_image(id),
             TargetId::Line(line) => {
                 self.open(line);
                 Effect::None

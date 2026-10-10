@@ -850,12 +850,15 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
         Arc::clone(&clock),
         Arc::new(tools::PathLocks::new()),
     );
+    // The viewer's copies live under Fiber home: cloned before the
+    // connect closure moves it.
+    let launch_home = home.clone();
     let connect: tui::Connect = Box::new(move || {
         let mut start = || start_hub(fiber.clone());
         doors::hub::connect(&home, &mut start, hub_clock.as_ref())
     });
     let identity = doors::project(&workspace);
-    let mut launch = launch::launch(workspace, &identity, &config, theme);
+    let mut launch = launch::launch(workspace, &identity, &config, theme, &launch_home);
     launch.models = Some(models);
     launch.configure = Some(seam);
     launch.open_at = open_at;

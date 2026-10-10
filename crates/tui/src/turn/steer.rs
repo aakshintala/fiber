@@ -16,19 +16,39 @@ use crate::theme::Role;
 #[derive(Debug, Clone)]
 pub(crate) struct Steered {
     text: String,
+    images: Vec<crate::image::Part>,
     ts: u64,
 }
 
 impl Steered {
     pub(super) fn new(text: String, ts: u64) -> Self {
-        Self { text, ts }
+        Self {
+            text,
+            images: Vec::new(),
+            ts,
+        }
+    }
+
+    /// A steering message with its image parts: each draws as its one
+    /// clickable line under the text (`docs/tui.md`, "Images").
+    pub(super) fn with_images(text: String, images: Vec<crate::image::Part>, ts: u64) -> Self {
+        let mut steered = Self::new(text, ts);
+        steered.images = images;
+        steered
     }
 
     /// A labelled rule (`steer · HH:MM`) over the message's bold text: the
     /// rule fills the width with dashes past one space, and the text wraps
     /// with its joins. A blank message draws the rule alone
-    /// (`docs/tui.md`, "Turns").
-    pub(super) fn rows(&self, width: u16, zone: &TimeZone, out: &mut Rows) {
+    /// (`docs/tui.md`, "Turns"). Each image draws as its one clickable
+    /// line under the text (`docs/tui.md`, "Images").
+    pub(super) fn rows(
+        &self,
+        width: u16,
+        zone: &TimeZone,
+        layout: &crate::image::Layout,
+        out: &mut Rows,
+    ) {
         let label = match time_of_day(self.ts, zone) {
             Some(time) => format!("steer · {time}"),
             None => "steer".to_owned(),
@@ -58,24 +78,24 @@ impl Steered {
                 ..RowText::plain()
             },
         );
-        if self.text.trim().is_empty() {
-            return;
+        if !self.text.trim().is_empty() {
+            for (row, join) in wrap_joined(&self.text, columns) {
+                out.push_text(
+                    (
+                        Line::from(Span::styled(
+                            row,
+                            Style::default().add_modifier(Modifier::BOLD),
+                        )),
+                        None,
+                    ),
+                    RowText {
+                        join,
+                        ..RowText::plain()
+                    },
+                );
+            }
         }
-        for (row, join) in wrap_joined(&self.text, columns) {
-            out.push_text(
-                (
-                    Line::from(Span::styled(
-                        row,
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )),
-                    None,
-                ),
-                RowText {
-                    join,
-                    ..RowText::plain()
-                },
-            );
-        }
+        super::images::steer_rows(&self.images, width, layout, out);
     }
 }
 

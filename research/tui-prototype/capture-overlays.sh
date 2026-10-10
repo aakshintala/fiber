@@ -24,6 +24,8 @@ capture() {
   sleep 0.3
 }
 capture keymap 160 48
+capture keymap-tab 160 48
+capture keymap-search 160 48
 capture keymap-narrow 100 40
 capture quit 160 48
 capture delete 160 48

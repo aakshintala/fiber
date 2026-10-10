@@ -439,7 +439,7 @@ fn stop(hub: &Hub) {
 /// call queued behind it never starts.
 #[test]
 fn the_thread_quits_once_stopped_with_a_callback_parked() {
-    let (url, accepted_rx) = hold_server();
+    let (url, accepted_rx, _release) = hold_server();
     let dir = extension(
         "parked",
         &format!(
@@ -471,7 +471,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
 /// thread judged the queue with the command in front of it.
 #[test]
 fn a_command_queued_behind_a_parked_command_does_not_start() {
-    let (url, accepted_rx) = hold_server();
+    let (url, accepted_rx, _release) = hold_server();
     let dir = extension(
         "parked-second",
         &format!(
@@ -592,25 +592,26 @@ fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
 }
 
 /// Accepts one connection, reads its head, signals, and then holds the
-/// socket so the call stays parked.
-fn hold_server() -> (String, mpsc::Receiver<()>) {
+/// socket until the test sends on the returned sender or drops it, so the
+/// call stays parked. The caller keeps the sender alive until the test is
+/// done.
+fn hold_server() -> (String, mpsc::Receiver<()>, mpsc::Sender<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut sock = listener.accept().unwrap().0;
         read_head(&mut sock);
         match accepted_tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
-        let (_block_tx, block_rx) = mpsc::channel::<()>();
-        match block_rx.recv_timeout(Duration::from_secs(5)) {
-            Ok(())
-            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        match release_rx.recv() {
+            Ok(()) | Err(mpsc::RecvError) => {}
         }
         drop(sock);
     });
-    (url, accepted_rx)
+    (url, accepted_rx, release_tx)
 }
 
 /// When a running callback abandons the VM, every other waiter, queued or
@@ -618,15 +619,15 @@ fn hold_server() -> (String, mpsc::Receiver<()>) {
 /// its own deadline.
 #[test]
 fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
-    let (park_url, park_accepted) = hold_server();
-    let (models_url, models_accepted) = hold_server();
+    let (park_url, park_accepted, _park_release) = hold_server();
+    let (models_url, models_accepted, _models_release) = hold_server();
     let dir = extension(
         "abandon",
         &format!(
-            "fiber.command(\"park\", {{ timeout = 8000, run = function() return host.http({{ url = \"{park_url}\" }}).body end }})\n\
+            "fiber.command(\"park\", {{ timeout = 30000, run = function() return host.http({{ url = \"{park_url}\" }}).body end }})\n\
              fiber.command(\"queued\", {{ timeout = 8000, run = function() return \"ran\" end }})\n\
              fiber.provider(\"p\", {{\n\
-               models = {{ timeout = 8000, run = function() return host.http({{ url = \"{models_url}\" }}).body end }},\n\
+               models = {{ timeout = 30000, run = function() return host.http({{ url = \"{models_url}\" }}).body end }},\n\
                sign = {{ timeout = 50, run = function() require(\"go_sign\") setmetatable({{}}, {{ __gc = function() while true do end end }}); collectgarbage() end }},\n\
              }})\n"
         ),
@@ -840,7 +841,7 @@ fn timer_end_reschedules_an_uncancelled_every_and_removes_the_rest() {
 /// stream, in the order they happened.
 #[test]
 fn a_hook_queued_behind_a_parked_command_does_not_start() {
-    let (url, accepted_rx) = hold_server();
+    let (url, accepted_rx, _release) = hold_server();
     let dir = extension(
         "hook-behind-parked-command",
         &format!(
@@ -903,7 +904,7 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
 /// A command queued while a hook is parked likewise waits for the hook.
 #[test]
 fn a_command_queued_behind_a_parked_hook_does_not_start() {
-    let (url, accepted_rx) = hold_server();
+    let (url, accepted_rx, _release) = hold_server();
     let dir = extension(
         "command-behind-parked-hook",
         &format!(

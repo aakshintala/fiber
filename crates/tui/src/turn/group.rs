@@ -58,6 +58,9 @@ pub(crate) struct Call {
     pub(crate) changes: Vec<FileChange>,
     /// What opening the call shows.
     pub(crate) detail: String,
+    /// The image parts of its result: each draws as its one line under
+    /// its ledger row (`docs/tui.md`, "Images").
+    pub(crate) images: Vec<crate::image::Part>,
     pub(crate) open: bool,
     /// A `permission_requested` for it is open.
     pub(crate) asking: bool,
@@ -147,7 +150,11 @@ impl Group {
                 .flat_map(|section| section.calls.iter_mut())
                 .find(|call| call.id == *id)
                 .map(|call| &mut call.open),
-            Target::Login | Target::Note(_) | Target::Orphans(_) | Target::Copy { .. } => None,
+            Target::Login
+            | Target::Image(_)
+            | Target::Note(_)
+            | Target::Orphans(_)
+            | Target::Copy { .. } => None,
         };
         flag.map(|flag| *flag = open).is_some()
     }
