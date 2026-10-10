@@ -422,6 +422,11 @@ the credential deny, a human, a standing rule, a session grant or the
 reviewer. A reviewer decision also carries the reviewer's model and which
 stage decided.
 
+The reviewer's own calls carry the same attribution as `usage_recorded`:
+`reviewer.purpose` is `stage_1`, `stage_2` or `handoff`, and
+`reviewer.action_id` is the call under review, absent on a handoff
+(`docs/events.md`, "`usage_recorded`").
+
 A blocked call ends as `tool_call_completed` with `status: denied` and a
 `reason`, both already in the contract. The proof that nothing ran is also
 already there: `docs/events.md` guarantees that `tool_call_requested` with no
