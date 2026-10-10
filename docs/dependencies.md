@@ -366,7 +366,8 @@ dependency.
 | cargo-about | tool | the release's third-party notices file |
 | zsh, fish | tool | the completion tests load `fiber completion`'s scripts in each shell (`docs/testing.md`, "Running tests"); bash is on every runner already, and macOS ships zsh. CI installs zsh and fish on Linux and fish on macOS |
 | dash, shellcheck | tool | the install-script test runs `install.sh` under `/bin/dash` (macOS ships it; it is Ubuntu's `/bin/sh`); `scripts/check` runs shellcheck on Linux, and GitHub's `ubuntu-24.04` image ships it |
-| xtask | tool | the workspace's own CI helper, `cargo xtask`: selection, the `CI` verdict and the gate's checks (`docs/ci.md`). It uses serde_json, proc-macro2, pulldown-cmark, skrifa and tiny-skia, `fakes` in its tests, and no Fiber crate depends on it |
+| xtask | tool | the workspace's own CI helper, `cargo xtask`: selection, the `CI` verdict and the gate's checks (`docs/ci.md`), and `cargo xtask models-dev`, which regenerates the first-party model lists (`docs/model-routing.md`). It uses serde_json, proc-macro2, pulldown-cmark, skrifa and tiny-skia, `fakes` in its tests, and no Fiber crate depends on it |
+| curl | tool | `cargo xtask models-dev` fetches models.dev with it; its test reads a `file://` URL. macOS and GitHub's runners ship it |
 | proc-macro2 | xtask dependency | tokenising Rust source for the `unsafe` table check (`docs/code-quality.md`, "`unsafe`") |
 | pulldown-cmark | xtask dependency | reading Markdown for the docs check (`docs/ci.md`, "The docs check"); the terminal's use is in the runtime table |
 | skrifa | xtask dependency | reading JetBrains Mono's outlines for the logo's mask (`cargo xtask logo-mask`) |

@@ -10,7 +10,13 @@ use contract::{ActionId, Envelope, JobId, SessionId};
 
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::home::Level;
+use crate::keys::{Edit, Key};
 use crate::tty_screen::Output;
+
+pub(crate) mod keys;
+
+#[cfg(test)]
+pub(crate) mod testkit;
 
 pub(crate) mod output;
 pub(crate) mod retry;
@@ -461,6 +467,60 @@ impl App {
         self.pending
             .insert(id, (Kind::Command, crate::input::Draft::default()));
         Effect::Send(vec![line])
+    }
+
+    /// One key in a running `tty` job's view: every key but Esc and Ctrl+C
+    /// is sent as `job_input` to the attached session, which owns the job.
+    /// `None` for a finished job, a non-`tty` job, a delegate, a link that
+    /// is down, or a key with no bytes, so each falls through as today.
+    pub(super) fn item_job_key(&mut self, key: &Key) -> Option<Effect> {
+        let text = keys::encode(key)?;
+        self.item_job_send(text)
+    }
+
+    /// One draft edit in a running `tty` job's view: every edit is sent as
+    /// `job_input` to the attached session, which owns the job. The same
+    /// fall-throughs as [`App::item_job_key`].
+    pub(super) fn item_job_edit(&mut self, edit: &Edit) -> Option<Effect> {
+        self.item_job_send(keys::encode_edit(edit))
+    }
+
+    /// The job input goes to while its view owns it: the attached session,
+    /// which owns the job, and the open job's id. `None` unless the job is
+    /// open, running, typed live and not a delegate, on a live link, with
+    /// no approval or question open. Both key paths consult it before the
+    /// draft does, so the rail and the input box never steal the job's
+    /// keys; the guards exist once, here.
+    pub(super) fn item_job_target(&self) -> Option<(SessionId, JobId)> {
+        if self.queue.open() || self.link != Link::Up {
+            return None;
+        }
+        let open = self.items.open.as_ref()?;
+        let record = self.items.jobs.get(&open.job_id)?;
+        if record.delegate.is_some() || record.outcome.is_some() || !keys::is_tty(record) {
+            return None;
+        }
+        let Phase::Attached { session, .. } = &self.phase else {
+            return None;
+        };
+        Some((session.clone(), open.job_id.clone()))
+    }
+
+    /// Sends `text` as `job_input` for the open job, or `None` when its
+    /// view does not own input.
+    fn item_job_send(&mut self, text: String) -> Option<Effect> {
+        let (session, job_id) = self.item_job_target()?;
+        let id = mint();
+        let line = session_command(
+            &id,
+            "job_input",
+            &session,
+            Some(serde_json::json!({"job_id": job_id.0, "text": text})),
+        )
+        .to_string();
+        self.pending
+            .insert(id, (Kind::Command, crate::input::Draft::default()));
+        Some(Effect::Send(vec![line]))
     }
 
     /// Enter in an item view: a `/` built-in runs on the attached session

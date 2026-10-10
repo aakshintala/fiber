@@ -69,7 +69,7 @@ jobs:
             base=$(git rev-parse HEAD^1)
           else
             # The backstop compares against the last main commit whose
-            # backstop passed. This is the only Actions API call CI makes.
+            # backstop passed. This is the only Actions API call CI makes to find a run.
             base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
               -q '.workflow_runs[0].head_sha // empty')
             if [ -z "$base" ] || ! git merge-base --is-ancestor "$base" HEAD; then
@@ -217,9 +217,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: ci
-          # The cache saves once the build succeeded, even if a later step
-          # fails (cache-on-failure lets the save step run after a failure).
-          cache-on-failure: true
           save-if: ${{ github.event_name == 'push' }}
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
@@ -229,9 +226,7 @@ jobs:
       - name: Install zsh and fish
         if: runner.os == 'Linux'
         timeout-minutes: 5
-        run: |
-          # shellcheck disable=SC2086 # APT_OPTS is a list of options
-          sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
+        run: scripts/install-shells
       - name: Install fish
         if: runner.os == 'macOS'
         run: brew install fish
@@ -239,6 +234,13 @@ jobs:
         id: build
         if: github.event_name == 'push'
         run: cargo build --workspace --all-targets
+      # The save step runs after a failure only when CACHE_ON_FAILURE is
+      # 'true' (rust-cache's post-if), and `with:` cannot read this step's
+      # outcome: set it here, once the build succeeded, so a later failed
+      # check still saves the cache and a failed build saves nothing.
+      - name: Save the cache even if a later step fails
+        if: steps.build.outcome == 'success'
+        run: echo CACHE_ON_FAILURE=true >> "$GITHUB_ENV"
       - name: scripts/check, the per-platform checks
         run: scripts/check --base "$BASE" --platform-only
       # The hub's login service against systemd's user instance
@@ -295,9 +297,7 @@ jobs:
       # and fish (crates/main/tests/completion.rs).
       - name: Install zsh and fish
         timeout-minutes: 5
-        run: |
-          # shellcheck disable=SC2086 # APT_OPTS is a list of options
-          sudo apt-get $APT_OPTS update && sudo apt-get $APT_OPTS install -y zsh fish
+        run: scripts/install-shells
       - name: cargo mutants --in-diff
         run: |
           git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
@@ -500,6 +500,27 @@ jobs:
           else
             gh issue create --title "$TITLE" --body "$body"
           fi
+
+  # Deletes the cache entries the backstop's save replaced and the release
+  # binaries no pull request's base can reach (scripts/cache-prune). It holds
+  # the only `actions: write` token and runs only the script. Not in `ci`'s
+  # needs: a failed prune leaves the cache larger, and the next backstop retries.
+  cache_prune:
+    name: Prune the build cache
+    needs: [test, release]
+    if: always() && github.event_name == 'push' && needs.test.result == 'success' && needs.release.result == 'success'
+    runs-on: ubuntu-24.04
+    # No build: it makes only git and gh calls.
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - *checkout-full
+      - run: scripts/cache-prune
 
   # Posts the release job's benchmark comment. It holds a write token, so it
   # checks nothing out and runs no repository code: the comment comes from

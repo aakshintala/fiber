@@ -152,6 +152,8 @@ fn opened() -> (
         var: Box::new(|_| None),
         copy_command: None,
         open_command: None,
+        viewer: Vec::new(),
+        images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
         retry: None,
@@ -346,7 +348,8 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             | Input::Tick
             | Input::Files { .. }
             | Input::Models(_)
-            | Input::Image { .. } => "other".to_owned(),
+            | Input::Image { .. }
+            | Input::Viewed { .. } => "other".to_owned(),
             Input::Resize => "resize".to_owned(),
         })
         .collect();
@@ -802,6 +805,8 @@ fn counting() -> (
         var: Box::new(|_| None),
         copy_command: None,
         open_command: None,
+        viewer: Vec::new(),
+        images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
         retry: None,
@@ -1197,6 +1202,8 @@ fn resume_open_replays_the_log_to_the_tail() {
         var: Box::new(|_| None),
         copy_command: None,
         open_command: None,
+        viewer: Vec::new(),
+        images_dir: PathBuf::new(),
         title: crate::osc::Title::default(),
         shape: crate::osc::Shape::default(),
         retry: None,

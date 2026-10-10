@@ -241,7 +241,7 @@ fn session_rows(app: &App, text: usize) -> Vec<Row> {
         if let Some(thinking) = panel.thinking() {
             row.push_str(&format!(" · thinking {thinking}"));
         }
-        out.push(plain(format::cut(&row, text)));
+        out.push(targeted(format::cut(&row, text), Spot::Model));
     }
     let window = panel.window().filter(|window| *window > 0);
     let context = window.and_then(|window| {

@@ -28,6 +28,7 @@ mod card;
 pub(crate) mod crash;
 mod group;
 mod handoff;
+pub(crate) mod images;
 mod live;
 mod steer;
 
@@ -95,7 +96,7 @@ pub(crate) enum Entry {
 /// One turn's card.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Turn {
-    prompts: Vec<String>,
+    prompts: Vec<images::Prompt>,
     pub(crate) entries: Vec<Entry>,
     groups: Vec<Group>,
     /// The group new non-text items join, until the next reply.
@@ -131,7 +132,7 @@ enum Ending {
 
 impl Turn {
     /// A turn started at `ts` by `prompts`.
-    pub(crate) fn new(prompts: Vec<String>, ts: u64) -> Self {
+    pub(crate) fn new(prompts: Vec<images::Prompt>, ts: u64) -> Self {
         Self {
             prompts,
             started: ts,
@@ -181,9 +182,9 @@ impl Turn {
     }
 
     /// A steering message, in place; it does not end a group.
-    pub(crate) fn steer(&mut self, text: String, ts: u64) {
+    pub(crate) fn steer(&mut self, text: String, images: Vec<crate::image::Part>, ts: u64) {
         self.entries
-            .push(Entry::Steer(steer::Steered::new(text, ts)));
+            .push(Entry::Steer(steer::Steered::with_images(text, images, ts)));
     }
 
     /// `step_started`.
@@ -420,6 +421,7 @@ impl Turn {
                 call.status = Some(done.status);
                 call.changes = done.changes.clone().unwrap_or_default();
                 call.detail = format::detail(done);
+                call.images = crate::image::parts(&done.content);
                 true
             }) && group.touched(ts)
         })
@@ -518,7 +520,7 @@ impl Turn {
                 | Entry::Band(_)
                 | Entry::Answers(_) => None,
             }),
-            Target::Login | Target::Copy { .. } => None,
+            Target::Login | Target::Image(_) | Target::Copy { .. } => None,
         }
     }
 
@@ -590,7 +592,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
                 .iter()
                 .filter_map(|input| {
                     if let InputItem::Message { content, .. } = input {
-                        Some(text_of(content))
+                        Some(images::prompt_of(content))
                     } else {
                         None
                     }
@@ -624,7 +626,11 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
         }),
         "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
             open(turns).is_some_and(|turn| {
-                turn.steer(text_of(&applied.content), ts);
+                turn.steer(
+                    text_of(&applied.content),
+                    crate::image::parts(&applied.content),
+                    ts,
+                );
                 true
             })
         }),

@@ -27,7 +27,7 @@ Sessions:
 
 Fiber itself:
   approve [--yes]                           Show what this repository ships and approve it
-  login [<name>] [--as <label>]             Store a provider's key or an extension's secret
+  login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
   logout <provider> [--as <label> | --all]  Delete a provider's stored key
   completion <shell>                        Print a completion script for bash, zsh or fish
   help [<command>]                          Print this menu, or a command's help
@@ -388,6 +388,10 @@ pub(crate) struct LoginArgs {
     /// `default`.
     #[arg(long = "as", value_name = "label")]
     pub(crate) label: Option<String>,
+    /// Log in with a device code instead of the browser, for a provider
+    /// that logs in by browser.
+    #[arg(long)]
+    pub(crate) device: bool,
 }
 
 #[derive(Debug, clap::Args)]

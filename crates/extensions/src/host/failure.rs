@@ -70,6 +70,9 @@ impl FailureState {
             "unattended:poll" => Boundary::Unattended {
                 call: "poll".into(),
             },
+            "unattended:show" => Boundary::Unattended {
+                call: "show".into(),
+            },
             "refresh:reached" => Boundary::Refresh { reached: true },
             "refresh:unreached" => Boundary::Refresh { reached: false },
             other => {

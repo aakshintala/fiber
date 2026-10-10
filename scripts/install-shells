@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Installs zsh and fish on a Linux CI runner (docs/ci.md, "The backstop").
+# The network part, `apt-get update` and `apt-get install --download-only`,
+# runs under a 90-second bound and is retried once after 5 seconds; the install
+# from the downloaded archives has no bound, because killing dpkg mid-unpack
+# leaves the dpkg lock held and a package half configured.
+#
+# Usage: scripts/install-shells
+# APT_OPTS holds apt-get's options; it is split on whitespace on purpose.
+set -euo pipefail
+
+apt_opts="${APT_OPTS:-}"
+
+download() {
+  # shellcheck disable=SC2016 # $1 expands in the inner shell
+  sudo timeout 90 sh -c \
+    'apt-get $1 update && apt-get $1 install --download-only -y zsh fish' \
+    sh "$apt_opts"
+}
+
+if ! download; then
+  echo "install-shells: download failed or passed 90 s; retrying once in 5 s" >&2
+  sleep 5
+  echo "install-shells: second download attempt starting" >&2
+  download
+fi
+
+# shellcheck disable=SC2086 # apt_opts is a list of options
+sudo apt-get $apt_opts install -y zsh fish

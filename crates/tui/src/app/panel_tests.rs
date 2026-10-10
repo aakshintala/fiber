@@ -1372,3 +1372,17 @@ fn clicking_the_running_counts_lists_them() {
     assert_eq!(app.on_click(TargetId::Panel(Spot::JobList)), Effect::None);
     assert!(app.session_view_open());
 }
+
+#[test]
+fn the_model_line_opens_the_picker() {
+    use crate::app::panel::Spot;
+    use crate::mouse::TargetId;
+    let mut app = attached();
+    app.on_line(preamble_line("test/model", "high", 1000, 800));
+    assert_eq!(app.on_click(TargetId::Panel(Spot::Model)), Effect::None);
+    assert!(app.model_picker_open());
+    assert_eq!(
+        app.model_picker.open.as_ref().map(|open| open.mode),
+        Some(crate::model_picker::Mode::Choose)
+    );
+}

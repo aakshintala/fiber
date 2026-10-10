@@ -132,6 +132,21 @@ pub struct ProviderData {
     /// extension declares").
     #[serde(default)]
     pub reviewer_model: Option<String>,
+    /// How `fiber login` signs in for this provider: `browser` runs the
+    /// provider's `credential()` login instead of reading a key
+    /// (`docs/configuration.md`, "A provider's data"). Absent means a key.
+    #[serde(default)]
+    pub login: Option<Login>,
+}
+
+/// How `fiber login` signs in for a provider
+/// (`docs/configuration.md`, "A provider's data").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Login {
+    /// Runs the provider's `credential()` login in a browser (or by device
+    /// code with `--device`).
+    Browser,
 }
 
 /// One model in a provider's data (`docs/model-routing.md`, "What a provider
@@ -245,16 +260,15 @@ pub enum Protocol {
 
 impl Protocol {
     /// Whether the protocol reads back this hosted-search tool type:
-    /// `anthropic-messages` reads `web_search_20250305` and
-    /// `openai-responses` reads `web_search`; every other pair is unread.
+    /// `anthropic-messages` reads `web_search_20250305`,
+    /// `openai-responses` reads `web_search` and `google-generative-ai`
+    /// reads `google_search`; every other pair is unread.
     pub fn reads_web_search(self, kind: &str) -> bool {
         match self {
             Self::AnthropicMessages => kind == "web_search_20250305",
             Self::OpenaiResponses => kind == "web_search",
-            Self::OpenaiCompletions
-            | Self::GoogleGenerativeAi
-            | Self::BedrockConverse
-            | Self::Scripted => false,
+            Self::GoogleGenerativeAi => kind == "google_search",
+            Self::OpenaiCompletions | Self::BedrockConverse | Self::Scripted => false,
         }
     }
 

@@ -142,6 +142,11 @@ impl App {
         if self.panel().is_none() && (self.search_edit(&edit) || self.focus.is_some()) {
             return Effect::None;
         }
+        // A running `tty` job's view types into the job ahead of the
+        // input box, behind every overlay above.
+        if let Some(effect) = self.item_job_edit(&edit) {
+            return effect;
+        }
         crate::input::route(edit, &mut self.draft, &mut self.queue);
         self.overlays.selected = 0;
         let effect = self.query_changed();
@@ -437,6 +442,7 @@ impl App {
                 self.open_model_picker(crate::model_picker::Mode::Choose)
             }
             "thinking" => self.thinking_command(&rest),
+            "scoped-models" => self.scoped_models_command(),
             "panel" => {
                 self.draft.clear();
                 self.toggle_panel()
@@ -494,6 +500,9 @@ impl App {
         self.phase = Phase::Starting;
         self.clear_selection();
         self.attached_screen_mut().clear();
+        // Home keeps no session's images: a late answer or viewer
+        // completion from it is dropped.
+        self.forget_images();
         self.panel_state.reset();
         self.session_views_reset();
         self.offer = crate::offer::Offer::default();

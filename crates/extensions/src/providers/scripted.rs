@@ -61,6 +61,7 @@ impl Providers {
                 placeholders: BTreeMap::new(),
                 models: Vec::new(),
                 reviewer_model: None,
+                login: None,
             });
         if data.models.iter().any(|model| model.id == id) {
             return;

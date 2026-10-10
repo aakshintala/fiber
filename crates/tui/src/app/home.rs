@@ -223,10 +223,18 @@ impl App {
             // every frame.
             Some(Prompt::Quit) | None => (None, 0),
         };
+        // The foot names the key map's bound key, leaving it out
+        // when the action is unbound; Ctrl+C cannot be rebound, so its
+        // hint stays fixed.
         let foot = if self.hint() {
             self.hint_text()
         } else {
-            "↓ the session list · F1 the key map · Ctrl+C twice to quit".to_owned()
+            match self.keys().first_label("key_map") {
+                Some(label) => {
+                    format!("↓ the session list · {label} the key map · Ctrl+C twice to quit")
+                }
+                None => "↓ the session list · Ctrl+C twice to quit".to_owned(),
+            }
         };
         Some(HomeScreen {
             version: home.launch.version.clone(),

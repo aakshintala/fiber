@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Stands in for gh in the cache-prune tests. Driven by env vars the test
+# sets: FAKE_PRS (a file of PR numbers, one per line; a missing file fails
+# `gh pr list`), FAKE_CACHES (a file holding one JSON array of cache objects;
+# printed for the paginated caches list, a missing file fails it), FAKE_USAGE
+# (the bytes printed for the cache usage read; "fail" fails it),
+# FAKE_DELETE_LOG (a file each DELETE appends its id to) and FAKE_DELETE_FAIL
+# (the one id whose DELETE fails). Anything else exits 1.
+set -euo pipefail
+
+if [ "${1:-}" = pr ]; then
+  if [ -z "${FAKE_PRS:-}" ] || [ ! -f "$FAKE_PRS" ]; then
+    exit 1
+  fi
+  cat "$FAKE_PRS"
+  exit 0
+fi
+
+if [ "${1:-}" = api ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      *actions/cache/usage*)
+        if [ "${FAKE_USAGE:-}" = fail ]; then
+          exit 1
+        fi
+        printf '%s\n' "${FAKE_USAGE:?}"
+        exit 0
+        ;;
+    esac
+  done
+  is_delete=false
+  for arg in "$@"; do
+    if [ "$arg" = DELETE ]; then
+      is_delete=true
+    fi
+  done
+  if [ "$is_delete" = true ]; then
+    id=""
+    for arg in "$@"; do
+      case "$arg" in
+        *actions/caches/*) id="${arg##*/}" ;;
+      esac
+    done
+    if [ -z "$id" ]; then
+      exit 1
+    fi
+    if [ "${FAKE_DELETE_FAIL:-}" = "$id" ]; then
+      exit 1
+    fi
+    if [ -n "${FAKE_DELETE_LOG:-}" ]; then
+      printf '%s\n' "$id" >>"$FAKE_DELETE_LOG"
+    fi
+    exit 0
+  fi
+  for arg in "$@"; do
+    case "$arg" in
+      *actions/caches\?*)
+        if [ -z "${FAKE_CACHES:-}" ] || [ ! -f "$FAKE_CACHES" ]; then
+          exit 1
+        fi
+        cat "$FAKE_CACHES"
+        exit 0
+        ;;
+    esac
+  done
+fi
+
+exit 1
