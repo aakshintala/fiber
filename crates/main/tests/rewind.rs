@@ -656,6 +656,7 @@ fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
         .args(args)
         .current_dir(dir)
         .env_clear()
+        .envs(fakes::check_run())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

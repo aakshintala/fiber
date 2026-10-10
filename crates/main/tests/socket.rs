@@ -240,6 +240,7 @@ fn start(setup: &Setup) -> Running {
         .args(["ask", "hi"])
         .current_dir(setup.workspace())
         .env_clear()
+        .envs(fakes::check_run())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", setup.root.path())
         .env("FIBER_HOME", setup.home())

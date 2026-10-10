@@ -84,6 +84,7 @@ fn ask_command(setup: &Setup, cwd: &Path, extra_env: &[(&str, &str)], args: &[&s
         .args(args)
         .current_dir(cwd)
         .env_clear()
+        .envs(fakes::check_run())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", setup.root.path())
         .env("FIBER_HOME", setup.home())

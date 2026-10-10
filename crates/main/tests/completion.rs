@@ -326,6 +326,7 @@ fn shell(setup: &Setup, interpreter: &str) -> Command {
     command
         .current_dir(cwd_with_a_file(setup))
         .env_clear()
+        .envs(fakes::check_run())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", setup.root.path())
         .stdout(Stdio::piped())

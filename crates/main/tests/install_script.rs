@@ -133,6 +133,7 @@ impl Setup {
             .args(["--base-url", &self.base()])
             .current_dir(self.root.path())
             .env_clear()
+            .envs(fakes::check_run())
             .env("PATH", path)
             .env("HOME", self.path("home"))
             .env("TMPDIR", self.path("tmp"))
