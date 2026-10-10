@@ -16,7 +16,10 @@ set -euo pipefail
 # output (`| tail`) cannot mistake a failure for a pass.
 log=
 rc=0
-trap 'rc=$?; rm -f "$log"; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else echo "scripts/check: FAIL (exit $rc)"; fi' EXIT
+# Set to 1 once the test run's nonce is exported: the EXIT trap then scans
+# for leaked processes, failing a passing run that leaked any.
+scan_leaks=0
+trap 'rc=$?; rm -f "$log"; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else echo "scripts/check: FAIL (exit $rc)"; fi; exit $rc' EXIT
 cd "$(git rev-parse --show-toplevel)"
 
 base=origin/main
@@ -97,6 +100,7 @@ if [ "$scope" != platform ]; then
         crates/main/tests/install_fixture/fiber \
         crates/main/tests/install_fixture/bin/uname \
         crates/main/tests/install_fixture/bin/sysctl
+      shellcheck --shell=bash scripts/leak-scan scripts/test-leak-scan
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
     fi
@@ -104,8 +108,20 @@ if [ "$scope" != platform ]; then
 fi
 
 if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
+  echo "== leak-scan self-test"
+  scripts/test-leak-scan
   echo "== cargo clippy --all-targets -- -D warnings"
   cargo clippy --all-targets "${package_spec_args[@]}" -- -D warnings
+  # A per-run nonce in the environment: every descendant inherits it, so
+  # the EXIT trap's scan names only this run's leaked processes. uuidgen
+  # ships on Linux CI and macOS; the fallback needs only bash and date.
+  if [ -z "${FIBER_CHECK_RUN-}" ]; then
+    if ! FIBER_CHECK_RUN=$(uuidgen 2>/dev/null); then
+      FIBER_CHECK_RUN="$$-$(date +%s)-$RANDOM"
+    fi
+  fi
+  export FIBER_CHECK_RUN
+  scan_leaks=1
   echo "== cargo nextest run"
   # One timing flake must not hide the other tests' results: a failed run
   # reports every failure, so a rerun is not needed to see them.
