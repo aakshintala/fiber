@@ -181,6 +181,10 @@ pub struct State {
     /// the `scoped_models` set, as flat indices; empty means unscoped
     pub scoped: Vec<usize>,
     pub show_all: bool,
+    /// checklist mode (`/scoped-models`): every model on screen, each with a mark
+    pub checklist: bool,
+    /// the marked models, as flat indices
+    pub marked: Vec<usize>,
     /// providers refreshing in the background, by provider index
     pub refreshing: Vec<usize>,
     /// the frame's tick, for the spinner
@@ -261,6 +265,39 @@ pub(crate) const CASES: &[Case<State>] = &[
         help: "a query nothing matches",
         check: "the query `zzz` in bold after `›` with a block cursor, one muted `No models match` line and no provider sections, a `0 of 12 models` chip; same panel and legend.",
         build: || State {
+            query: "zzz".into(),
+            ..base()
+        },
+    },
+    Case {
+        name: "checklist",
+        help: "a checklist over every model, five marked",
+        check: "all twelve models, each with a `[x]` or `[ ]` mark before its id, five marked, a ` 5 of 12 marked ` count row and no show-all toggle; same panel, bar and legend.",
+        build: || State {
+            checklist: true,
+            marked: SCOPED.to_vec(),
+            ..base()
+        },
+    },
+    Case {
+        name: "checklist-filtered",
+        help: "a checklist query narrowing the list",
+        check: "the query `mini` in bold after `›` with a block cursor, four models each with its mark, a ` 4 of 12 models · 5 marked ` count row; same panel, bar and legend.",
+        build: || State {
+            checklist: true,
+            marked: SCOPED.to_vec(),
+            focus: 5,
+            query: "mini".into(),
+            ..base()
+        },
+    },
+    Case {
+        name: "checklist-empty",
+        help: "a checklist query nothing matches",
+        check: "the query `zzz` in bold after `›` with a block cursor, one muted `No models match` line and no provider sections; same panel and legend.",
+        build: || State {
+            checklist: true,
+            marked: SCOPED.to_vec(),
             query: "zzz".into(),
             ..base()
         },
@@ -390,7 +427,8 @@ fn id_hits(query: &str, id: &str) -> Vec<usize> {
         .collect()
 }
 
-/// The flat indices on screen: the scoped set, or everything.
+/// The flat indices on screen: the scoped set, or everything. The
+/// checklist shows every model whatever the scope says; the query still filters.
 pub fn visible(s: &State) -> Vec<usize> {
     let all = fixture();
     let mut flat: Vec<(&str, &Model)> = vec![];
@@ -400,7 +438,7 @@ pub fn visible(s: &State) -> Vec<usize> {
         }
     }
     let n = flat.len();
-    let base: Vec<usize> = if s.scoped.is_empty() || s.show_all {
+    let base: Vec<usize> = if s.checklist || s.scoped.is_empty() || s.show_all {
         (0..n).collect()
     } else {
         s.scoped.iter().copied().filter(|&i| i < n).collect()
@@ -474,6 +512,22 @@ impl State {
     }
     pub fn mark_session_only(&mut self) {
         self.session_only = Some(self.focus);
+    }
+    /// Flips the focused row's mark; with no row on screen there is nothing to flip.
+    pub fn toggle(&mut self) {
+        if visible(self).is_empty() {
+            return;
+        }
+        if let Some(i) = self.marked.iter().position(|&m| m == self.focus) {
+            self.marked.remove(i);
+        } else {
+            self.marked.push(self.focus);
+            self.marked.sort_unstable();
+        }
+    }
+    /// Saves the marks as the scope.
+    pub fn save(&mut self) {
+        self.scoped = self.marked.clone();
     }
     pub fn toggle_show_all(&mut self) {
         if self.scoped.is_empty() {
@@ -1038,6 +1092,69 @@ mod tests {
         // Nothing matches: the screen is empty.
         all.query = "zzz".into();
         assert!(visible(&all).is_empty());
+    }
+
+    #[test]
+    fn checklist_visible_lists_every_model_despite_the_scope() {
+        let mut s = for_case("checklist");
+        assert_eq!(s.marked, SCOPED.to_vec());
+        assert_eq!(visible(&s).len(), 12);
+        // A set scope and a closed show-all change nothing in checklist mode.
+        s.scoped = SCOPED.to_vec();
+        s.show_all = false;
+        assert_eq!(visible(&s), (0..12).collect::<Vec<_>>());
+        // The query still narrows.
+        s.query = "mini".into();
+        assert_eq!(visible(&s).len(), 4);
+    }
+
+    #[test]
+    fn toggle_flips_the_focused_mark_and_back() {
+        let mut s = for_case("checklist");
+        s.toggle();
+        assert_eq!(s.marked, vec![1, 3, 8, 9]);
+        s.toggle();
+        assert_eq!(s.marked, SCOPED.to_vec());
+        // An unmarked row gains its mark in fixture order.
+        s.focus = 2;
+        s.toggle();
+        assert_eq!(s.marked, vec![0, 1, 2, 3, 8, 9]);
+    }
+
+    #[test]
+    fn toggle_with_no_visible_row_changes_nothing() {
+        let mut s = for_case("checklist-empty");
+        assert!(visible(&s).is_empty());
+        s.toggle();
+        assert_eq!(s.marked, SCOPED.to_vec());
+    }
+
+    #[test]
+    fn checklist_marks_survive_a_query_change() {
+        let mut ui = Ui {
+            picker: Some(for_case("checklist")),
+            ..Ui::default()
+        };
+        ui.picker.as_mut().unwrap().toggle();
+        for c in ['m', 'i', 'n', 'i'] {
+            on_key(&mut ui, Key::Char(c), Mods::default());
+        }
+        assert_eq!(ui.picker.as_ref().unwrap().marked, vec![1, 3, 8, 9]);
+        for _ in 0..4 {
+            on_key(&mut ui, Key::Backspace, Mods::default());
+        }
+        let p = ui.picker.as_ref().unwrap();
+        assert_eq!(p.query, "");
+        assert_eq!(p.marked, vec![1, 3, 8, 9]);
+    }
+
+    #[test]
+    fn save_copies_the_marks_into_the_scope() {
+        let mut s = for_case("checklist");
+        s.toggle();
+        s.save();
+        assert_eq!(s.scoped, vec![1, 3, 8, 9]);
+        assert_eq!(s.marked, vec![1, 3, 8, 9]);
     }
 
     #[test]
