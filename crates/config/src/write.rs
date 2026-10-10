@@ -41,7 +41,7 @@ pub enum Layer {
 }
 
 /// Sets one key in a layer's file (`fiber config set`). The value's type is
-/// checked against "Keys", as [`set_global`] checks it, and a key the
+/// checked against "Keys", and a key the
 /// layer may not hold is refused before anything is written: on any `Err`
 /// no file is created or changed.
 pub fn set(
@@ -333,7 +333,7 @@ fn refused_why(segments: &[String], source: &Source) -> &'static str {
 
 /// Parses `key` and checks one key's value against "Keys" for `source`,
 /// returning the segments and the notices the check pushed. Shared by
-/// [`set_global`], [`set_global_if_unset`], [`replace_global`] and [`set`]:
+/// [`set_global_if_unset`], [`replace_global`] and [`set`]:
 /// only `set` turns a notice into a refusal, so an unknown key is still
 /// written elsewhere.
 fn checked(
@@ -351,16 +351,7 @@ fn checked(
     Ok((segments, notices))
 }
 
-/// Sets one key in the global `config.json` (`fiber config set`, the model
-/// picker). The value's type, and the type of every known key it holds, is
-/// checked against "Keys"; nothing else is.
-pub fn set_global(home: &Path, key: &str, value: Value) -> Result<(), ConfigError> {
-    let file = home.join("config.json");
-    let (segments, _) = checked(key, value.clone(), &Source::Global(file.clone()))?;
-    update(&file, &segments, value, false).map(|_| ())
-}
-
-/// [`set_global`] when the global `config.json` holds no value at `key`,
+/// Sets one key when the global `config.json` holds no value at `key`,
 /// checked and written under one lock (`fiber login` writing
 /// `providers."<name>".credential` with a provider's first label). `true`
 /// when it wrote. A project layer's value does not count: only the global
@@ -374,7 +365,7 @@ pub fn set_global_if_unset(home: &Path, key: &str, value: Value) -> Result<bool,
 /// Sets one key in the global `config.json` to `value`, or removes it for
 /// `None`, under one lock and one atomic write, returning the value it
 /// replaced (`fiber hub install` writing `hub.port`). A value is type-checked
-/// as [`set_global`] checks it. Removing a key the file does not hold
+/// as [`set_global_if_unset`] checks it. Removing a key the file does not hold
 /// writes nothing. A failure before the rename leaves the file unchanged; a
 /// failure after it, syncing the directory, returns `Err` with the new
 /// content already in place.

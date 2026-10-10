@@ -10,7 +10,7 @@ use std::thread;
 
 use common::{PROJECT, Setup, key};
 use config::{
-    Layer, Scope, get_global, remove_extension_settings, replace_global, set, set_global,
+    Layer, Scope, get_global, remove_extension_settings, replace_global, set,
     set_global_if_unset,
 };
 use contract::ErrorCode;
@@ -21,8 +21,8 @@ const ACME: &str = "github.com/acme/fiber-acme";
 #[test]
 fn a_write_creates_the_global_file_sorted_with_a_two_space_indent() {
     let setup = Setup::new();
-    set_global(&setup.home(), "model", json!("openai/gpt-5.6")).unwrap();
-    set_global(&setup.home(), "handoff.tokens", json!(200000)).unwrap();
+    set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "model", json!("openai/gpt-5.6")).unwrap();
+    set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "handoff.tokens", json!(200000)).unwrap();
     assert_eq!(
         fs::read_to_string(setup.global()).unwrap(),
         "{\n  \"handoff\": {\n    \"tokens\": 200000\n  },\n  \"model\": \"openai/gpt-5.6\"\n}\n"
@@ -36,7 +36,7 @@ fn a_write_keeps_every_key_it_does_not_touch() {
         &setup.global(),
         r#"{"zeta": [3, 1], "handoff": {"nudge": false}, "alpha": {"keep": "me"}}"#,
     );
-    set_global(&setup.home(), "handoff.tokens", json!(5)).unwrap();
+    set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "handoff.tokens", json!(5)).unwrap();
     assert_eq!(
         fs::read_to_string(setup.global()).unwrap(),
         concat!(
@@ -52,8 +52,11 @@ fn a_write_keeps_every_key_it_does_not_touch() {
 #[test]
 fn a_written_value_is_what_the_next_read_sees() {
     let setup = Setup::new();
-    set_global(
+    set(
         &setup.home(),
+        &setup.workspace(),
+        &key(),
+        Layer::Global,
         "models.\"openai/gpt-5.6\".cache.lifetime",
         json!("5m"),
     )
@@ -72,7 +75,7 @@ fn a_written_value_is_what_the_next_read_sees() {
 fn a_write_of_the_wrong_type_is_refused_and_changes_nothing() {
     let setup = Setup::new();
     setup.write(&setup.global(), r#"{"model": "a/b"}"#);
-    let e = set_global(&setup.home(), "handoff.tokens", json!("many")).unwrap_err();
+    let e = set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "handoff.tokens", json!("many")).unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert_eq!(
         e.to_string(),
@@ -88,20 +91,10 @@ fn a_write_of_the_wrong_type_is_refused_and_changes_nothing() {
 }
 
 #[test]
-fn a_write_checks_only_the_type_so_an_unknown_key_is_written() {
-    let setup = Setup::new();
-    set_global(&setup.home(), "future.key", json!(1)).unwrap();
-    assert_eq!(
-        fs::read_to_string(setup.global()).unwrap(),
-        "{\n  \"future\": {\n    \"key\": 1\n  }\n}\n"
-    );
-}
-
-#[test]
 fn a_write_to_a_file_that_is_not_json_is_refused_and_leaves_it() {
     let setup = Setup::new();
     setup.write(&setup.global(), "{\"model\": \"a/b\",}");
-    let e = set_global(&setup.home(), "model", json!("c/d")).unwrap_err();
+    let e = set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "model", json!("c/d")).unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert_eq!(
         fs::read_to_string(setup.global()).unwrap(),
@@ -113,7 +106,7 @@ fn a_write_to_a_file_that_is_not_json_is_refused_and_leaves_it() {
 fn a_write_to_a_key_that_is_not_dotted_is_a_usage_error() {
     let setup = Setup::new();
     assert_eq!(
-        set_global(&setup.home(), "a..b", json!(1))
+        set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "a..b", json!(1))
             .unwrap_err()
             .code(),
         ErrorCode::Usage
@@ -269,11 +262,11 @@ fn a_write_of_an_object_key_checks_the_object_and_what_it_holds() {
             json!({"credentials": {"work": {"command": []}}}),
         ),
     ] {
-        let e = set_global(&setup.home(), key, value).unwrap_err();
+        let e = set(&setup.home(), &setup.workspace(), &common::key(), Layer::Global, key, value).unwrap_err();
         assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{key}");
         assert!(!setup.global().exists(), "{key}");
     }
-    set_global(&setup.home(), "handoff", json!({"tokens": 5})).unwrap();
+    set(&setup.home(), &setup.workspace(), &key(), Layer::Global, "handoff", json!({"tokens": 5})).unwrap();
     assert_eq!(
         setup
             .load(&[])

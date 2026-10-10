@@ -18,7 +18,7 @@ use super::{checked, locked, write_root};
 /// absent file reads as an empty object, and an absent object starts
 /// empty. Removing the last entry removes `key` itself. Other keys, and
 /// the object's other entries, are kept as they are. A `key` that holds
-/// no object is refused, and the result is type-checked as [`set_global`]
+/// no object is refused, and the result is type-checked as [`set_global_if_unset`]
 /// checks it, so on any `Err` the file is unchanged. A call that changes
 /// nothing writes nothing.
 pub fn update_global_entries(
