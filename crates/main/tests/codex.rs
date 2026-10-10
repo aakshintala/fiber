@@ -24,7 +24,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Request, Response, fingerprint};
 use serde_json::{Value, json};
-use support::{Deadline, group_alive};
+use support::{Deadline, group_alive, hello_inline_completed as hello};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
@@ -159,26 +159,6 @@ impl Drop for KillGroup {
     fn drop(&mut self) {
         support::kill_group_detached(self.0, "KILL");
     }
-}
-
-/// An `openai-responses` stream answering `Hello.` with usage.
-fn hello() -> Response {
-    let events = [
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-        json!({"type": "response.completed", "response": {
-            "id": "resp_1", "status": "completed",
-            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-        }}),
-    ];
-    let body: String = events
-        .iter()
-        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
-        .collect();
-    Response::stream(body)
 }
 
 /// A stored codex token carrying `account`, expiring in 2100.

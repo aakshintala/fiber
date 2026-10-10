@@ -18,7 +18,7 @@ use std::os::unix::fs::symlink;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{Setup, hello, run_to_exit, stream};
+use support::{Setup, function_call, hello, holds_marker, kinds, run_to_exit, stream, tool_names};
 
 /// A finished `function_call` for `skill` with `arguments`.
 fn skill_call(call_id: &str, arguments: &Value) -> Value {
@@ -27,17 +27,6 @@ fn skill_call(call_id: &str, arguments: &Value) -> Value {
         "id": format!("fc_{call_id}"),
         "call_id": call_id,
         "name": "skill",
-        "arguments": arguments.to_string()
-    }})
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
         "arguments": arguments.to_string()
     }})
 }
@@ -64,16 +53,6 @@ fn ask(setup: &Setup, prompt: &str, replies: Vec<Response>) -> (Vec<Value>, Prov
         .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
         .collect();
     (lines, server)
-}
-
-/// The event kinds of every durable line `fiber ask` writes, in order.
-/// `session_status` lines are ephemeral, so they are filtered out.
-fn kinds(lines: &[Value]) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status")
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
 }
 
 /// The event kinds of a turn whose first reply calls one reads-only tool
@@ -367,16 +346,6 @@ fn an_edit_between_two_loads_is_seen_by_the_second() {
     assert!(second.ends_with("\n\nRed, green, refactor."), "{second}");
 }
 
-fn tool_names(body: &[u8]) -> Vec<String> {
-    let body: Value = serde_json::from_slice(body).unwrap();
-    body["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|tool| tool["name"].as_str().unwrap().to_owned())
-        .collect()
-}
-
 #[test]
 fn adding_a_skill_leaves_the_tool_set_unchanged() {
     let plain = Setup::new();
@@ -394,12 +363,6 @@ fn adding_a_skill_leaves_the_tool_set_unchanged() {
     let tools = tool_names(&server.requests()[0].body);
 
     assert_eq!(tools, plain_tools);
-}
-
-/// Whether `bytes` holds `marker`.
-fn holds_marker(bytes: &[u8], marker: &str) -> bool {
-    let marker = marker.as_bytes();
-    bytes.windows(marker.len()).any(|window| window == marker)
 }
 
 #[test]

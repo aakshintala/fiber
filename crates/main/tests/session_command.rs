@@ -24,7 +24,10 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, group_alive};
+use support::{
+    Deadline, PIXEL, PIXEL_BASE64, function_call, git, group_alive, hello, kinds, stream,
+    text_reply, write_json,
+};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -290,11 +293,6 @@ impl Setup {
     }
 }
 
-fn write_json(file: &Path, value: &Value) {
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, value.to_string()).unwrap();
-}
-
 /// Kills process group `group` on drop. After the child is reaped and the
 /// group is empty, [`std::mem::forget`] skips that kill.
 struct KillGroup(u32);
@@ -421,56 +419,6 @@ impl Running {
     }
 }
 
-/// An `openai-responses` stream of `events`, then a completed reply.
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
-
-/// An `openai-responses` stream answering `text`: what a scripted
-/// reviewer verdict reads as.
-fn text_reply(text: &str) -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "message", "content": [{"type": "output_text", "text": text}]
-    }})])
-}
-
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
 /// A client on the session's socket that tells a read deadline from the
 /// session closing the socket. Every read and write takes what remains of
 /// the test's [`Deadline`]: expiry panics naming what was awaited, while the session closing the socket
@@ -550,17 +498,6 @@ fn until_close(client: &Socket) -> Vec<Value> {
         lines.push(line);
     }
     lines
-}
-
-/// The event kinds of `lines`, in order, without `session_status`: an
-/// observer thread writes it, so where it falls among the loop's own
-/// lines is not what these tests pin (as `tests/ask.rs` filters it).
-fn kinds(lines: &[Value]) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status")
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
 }
 
 /// The ordered event kinds, omitting `clients`, which can race with loop writes.
@@ -1854,20 +1791,6 @@ fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
     );
 }
 
-/// A 1x1 PNG, 69 bytes: within every cap, so the image child stores it byte
-/// for byte (as in `tests/tools.rs`).
-const PIXEL: [u8; 69] = [
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
-    0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
-    0x44, 0xae, 0x42, 0x60, 0x82,
-];
-
-/// [`PIXEL`] as base64.
-const PIXEL_BASE64: &str =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
-
 /// The acknowledgement or rejection naming `id`.
 fn answer(client: &Socket, id: &str) -> Value {
     until(client, "the answer", |line| {
@@ -2805,25 +2728,6 @@ fn close_on_a_pending_review_escalation_denies_it_by_cancel() {
     let exited = assert_exited_0(status, &out, &stderr);
     // The denied request resolved in the turn: nothing stays pending.
     assert_eq!(exited["payload"].get("suspended_on"), None);
-}
-
-/// Runs the system `git` in `dir`, in its own process group, to its exit
-/// under the test's [`Deadline`].
-fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    command
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(["-c", "init.defaultBranch=main"])
-        .args(args)
-        .current_dir(dir)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let out = support::run_to_exit(deadline, &format!("git {args:?}"), command);
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
 #[test]

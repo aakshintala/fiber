@@ -23,9 +23,6 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::*;
 
-/// The result of an `ask_user` call whose questions went to the driver.
-const SENT: &str = "The questions went to the driver. The answers arrive as the next prompt.";
-
 /// `Base`, a multi-select with two options, and `Name`, free text.
 fn base_and_name() -> Value {
     json!([

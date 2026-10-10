@@ -20,6 +20,7 @@ use std::fs;
 use extension_harness::*;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
+use support::function_call;
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
 
@@ -407,17 +408,6 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
         ]
     );
     assert!(status.success(), "stderr: {stderr}");
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
 }
 
 #[test]

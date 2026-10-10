@@ -94,11 +94,6 @@ fn install_models(setup: &Setup, models: &Value, configured: &str) {
     );
 }
 
-/// The session's directory, from its id.
-fn session_dir(setup: &Setup, id: &str) -> PathBuf {
-    log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(id)
-}
-
 /// Starts `fiber session --id <id> --workspace <workspace>` with `extra`
 /// appended, in its own process group, its stdout drained on a thread and
 /// its stderr kept for a failure.
@@ -249,17 +244,6 @@ impl Running {
         self.watchdog.stand_down(self.deadline.cleanup());
         (status, stderr)
     }
-}
-
-/// The event kinds of `lines`, in order, without `session_status`: an
-/// observer thread writes it, so where it falls among the loop's own
-/// lines is not what these tests pin.
-fn kinds(lines: &[Value]) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status")
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
 }
 
 /// An `openai-responses` stream thinking `thought`, then answering

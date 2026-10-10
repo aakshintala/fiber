@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use fakes::{Client, ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{Deadline, group_alive};
+use support::{Deadline, answered, first_line, group_alive, write_json};
 
 struct Setup {
     root: fakes::TempDir,
@@ -75,11 +75,6 @@ impl Setup {
             &json!({"model": "fake/m"}),
         );
     }
-}
-
-fn write_json(file: &Path, value: &Value) {
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, value.to_string()).unwrap();
 }
 
 /// An `openai-responses` stream answering `Hello.` in two fragments.
@@ -281,22 +276,6 @@ fn start(setup: &Setup) -> Running {
         stderr: stderr_text,
         deadline: setup.deadline,
     }
-}
-
-fn first_line(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
-    serde_json::from_str(
-        &stdout
-            .recv_timeout(deadline.left())
-            .expect("waited until the deadline for fiber_started"),
-    )
-    .unwrap()
-}
-
-fn answered<'a>(lines: &'a [Value], id: &str) -> &'a Value {
-    lines
-        .iter()
-        .find(|line| line["payload"]["command_id"] == id)
-        .unwrap_or_else(|| panic!("no answer for {id}"))
 }
 
 fn finish(running: Running) {

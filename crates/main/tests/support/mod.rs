@@ -820,3 +820,271 @@ pub(crate) fn assert_one_continued_log(lines: &[Value], started: usize) {
         "{seqs:?}"
     );
 }
+
+/// A finished `function_call` for `name` with `arguments`.
+pub(crate) fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
+    json!({"type": "response.output_item.done", "item": {
+        "type": "function_call",
+        "id": format!("fc_{call_id}"),
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments.to_string()
+    }})
+}
+
+/// A `session_status` line: ephemeral, and written by an observer thread, so
+/// where it falls among the loop's own lines is not what these tests pin.
+/// `tests/socket.rs` reads it.
+pub(crate) fn is_status(line: &str) -> bool {
+    line.contains(r#""kind":"session_status""#)
+}
+
+/// An `openai-responses` stream answering `text`: what a scripted
+/// reviewer verdict reads as.
+pub(crate) fn text_reply(text: &str) -> Response {
+    stream(&[json!({"type": "response.output_item.done", "item": {
+        "type": "message", "content": [{"type": "output_text", "text": text}]
+    }})])
+}
+
+pub(crate) fn tool_names(body: &[u8]) -> Vec<String> {
+    let body: Value = serde_json::from_slice(body).unwrap();
+    body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// The first stdout line, waited for under the test's [`Deadline`].
+pub(crate) fn first_line(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
+    serde_json::from_str(
+        &stdout
+            .recv_timeout(deadline.left())
+            .expect("waited until the deadline for fiber_started"),
+    )
+    .unwrap()
+}
+
+/// The event kinds of a turn answered by [`hello`].
+pub(crate) const HELLO_KINDS: [&str; 15] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// A 1x1 PNG, 69 bytes: within every cap, so the image child stores it byte
+/// for byte (as in `tests/tools.rs`).
+pub(crate) const PIXEL: [u8; 69] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// [`PIXEL`] as base64.
+pub(crate) const PIXEL_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+
+/// The prompt a started session runs, and the marker the log must never hold.
+pub(crate) const PROMPT: &str = "the-volume-of-the-meeting-room";
+
+/// The query every test searches for.
+pub(crate) const QUERY: &str = "retry budget";
+
+pub(crate) const ROOT: &str = "s_00000000000000d1";
+
+/// The result of an `ask_user` call whose questions went to the driver.
+pub(crate) const SENT: &str =
+    "The questions went to the driver. The answers arrive as the next prompt.";
+
+pub(crate) const SESSION_KINDS: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// Truecolour env for the layout runs.
+pub(crate) const TRUECOLOUR: [(&str, &str); 3] = [
+    ("TERM", "xterm-256color"),
+    ("COLORTERM", "truecolor"),
+    ("TERM_PROGRAM", "ghostty"),
+];
+
+pub(crate) fn answered<'a>(lines: &'a [Value], id: &str) -> &'a Value {
+    lines
+        .iter()
+        .find(|line| line["payload"]["command_id"] == id)
+        .unwrap_or_else(|| panic!("no answer for {id}"))
+}
+
+/// The tool outputs the second request carries, in order.
+pub(crate) fn outputs_sent(server: &ProviderServer) -> Vec<String> {
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    second["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["type"] == "function_call_output")
+        .map(|item| item["output"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// Every file's bytes under `dir`, as text, joined.
+pub(crate) fn on_disk(dir: &Path) -> String {
+    let mut all = String::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.is_file() {
+                all.push_str(&String::from_utf8_lossy(&fs::read(&path).unwrap()));
+            }
+        }
+    }
+    all
+}
+
+/// Whether `bytes` holds `marker`.
+pub(crate) fn holds_marker(bytes: &[u8], marker: &str) -> bool {
+    let marker = marker.as_bytes();
+    bytes.windows(marker.len()).any(|window| window == marker)
+}
+
+/// The session's directory, from its id.
+pub(crate) fn session_dir(setup: &Setup, id: &str) -> PathBuf {
+    log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(id)
+}
+
+/// Runs the system `git` in `dir`, in its own process group, to its exit
+/// under the test's [`Deadline`].
+pub(crate) fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
+    let mut command = Command::new("git");
+    command
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
+        .args(["-c", "init.defaultBranch=main"])
+        .args(args)
+        .current_dir(dir)
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let out = run_to_exit(deadline, &format!("git {args:?}"), command);
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+/// The event kinds of `lines`, in order, without `session_status`: an
+/// observer thread writes it, so where it falls among the loop's own
+/// lines is not what this test pins (as `tests/session_command.rs`
+/// filters it).
+pub(crate) fn kinds(lines: &[Value]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter(|line| line["kind"] != "session_status")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
+/// The event kinds of `lines`, in order, without `session_status` or
+/// `attention`: an observer thread writes `session_status`, so where it
+/// falls among the loop's own lines is not what this test pins (as
+/// `tests/session_command.rs` filters it), and the hub's `attention` line
+/// derives from that status, so whether it comes and where is not pinned
+/// either.
+pub(crate) fn kinds_without_attention(lines: &[Value]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect()
+}
+
+/// An `openai-responses` stream answering `Hello.` in two fragments.
+pub(crate) fn hello_inline_completed() -> Response {
+    let events = [
+        json!({"type": "response.output_text.delta", "delta": "Hel"}),
+        json!({"type": "response.output_text.delta", "delta": "lo."}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
+        }}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
+        }}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+/// An `openai-responses` stream answering `Hello.`.
+pub(crate) fn hello_single_delta() -> Response {
+    stream(&[
+        json!({"type": "response.output_text.delta", "delta": "Hello."}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
+        }}),
+    ])
+}
+
+/// An `openai-responses` stream answering `Hello.`.
+pub(crate) fn hello_item_done() -> Response {
+    stream(&[json!({"type": "response.output_item.done", "item": {
+        "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
+    }})])
+}
+
+pub(crate) fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
+    let child = command.process_group(0).spawn().unwrap();
+    let group = child.id();
+    let guard = KillGroup(group);
+    let watchdog = Watchdog::group(group);
+    std::mem::forget(guard);
+    (child, watchdog)
+}
+
+/// Kills process group `group` on drop. After the child is reaped and the
+/// group is empty, [`std::mem::forget`] skips that kill.
+pub(crate) struct KillGroup(u32);
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        kill_group_detached(self.0, "KILL");
+    }
+}
+
+pub(crate) fn expected(kinds: &[&str]) -> Vec<Value> {
+    kinds.iter().map(|kind| json!({"kind": kind})).collect()
+}

@@ -24,6 +24,7 @@ use std::thread;
 use extension_harness::Setup;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
+use support::{function_call, hello_single_delta as hello, outputs_sent, stream};
 
 /// One finished `fiber ask`: its exit code, its stdout lines parsed (less
 /// `session_status`, which an observer thread writes), its raw stdout and
@@ -142,47 +143,6 @@ fn ask(setup: &Setup, prompt: &str) -> Run {
     run
 }
 
-/// An `openai-responses` stream of `events`, then a completed reply.
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
-
-/// An `openai-responses` stream answering `Hello.`.
-fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hello."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
 /// A server whose model makes `calls` in one step, then answers `Hello.`.
 fn calling(calls: &[Value]) -> ProviderServer {
     ProviderServer::start([stream(calls), hello()]).unwrap()
@@ -192,20 +152,6 @@ fn calling(calls: &[Value]) -> ProviderServer {
 fn sent_tools(server: &ProviderServer, index: usize) -> Vec<Value> {
     let request: Value = serde_json::from_slice(&server.requests()[index].body).unwrap();
     request["tools"].as_array().unwrap().clone()
-}
-
-/// The tool outputs the second request carries, in order.
-fn outputs_sent(server: &ProviderServer) -> Vec<String> {
-    let requests = server.requests();
-    assert_eq!(requests.len(), 2);
-    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
-    second["input"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|item| item["type"] == "function_call_output")
-        .map(|item| item["output"].as_str().unwrap().to_owned())
-        .collect()
 }
 
 /// A search backend fixture: `fiber.test/<short>` registers `backend`,

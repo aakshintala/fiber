@@ -23,7 +23,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::Deadline;
+use support::{Deadline, KillGroup, is_status, spawn_watched};
 
 /// The fixture extension's name.
 const FIXTURE: &str = "fiber.test/notes";
@@ -201,39 +201,11 @@ fn write(file: &Path, text: &str) {
 // the six other binary test files in this crate each do; move all seven
 // copies into `fakes` together when a change to one has to be made in all.
 
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group, which kills the group if this process dies first.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
-}
-
 /// One finished run: its exit code, stdout's lines parsed, and stderr.
 struct Run {
     code: Option<i32>,
     lines: Vec<Value>,
     stderr: String,
-}
-
-/// A `session_status` line: ephemeral, and written by an observer thread, so
-/// where it falls among the loop's own lines is not what these tests pin.
-/// `tests/socket.rs` reads it.
-fn is_status(line: &str) -> bool {
-    line.contains(r#""kind":"session_status""#)
 }
 
 impl From<Output> for Run {

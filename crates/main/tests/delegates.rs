@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, SessionGuard};
+use support::{Deadline, SessionGuard, function_call};
 
 /// Installs provider `name` with model `m` on `protocol` at `url`.
 fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str) {
@@ -115,17 +115,6 @@ fn ask_sessions(setup: &support::Setup) -> PathBuf {
 /// any fallible step.
 fn arm(setup: &support::Setup) -> SessionGuard {
     SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy())
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
 }
 
 /// An `openai-responses` stream answering `text`: what a reviewer verdict

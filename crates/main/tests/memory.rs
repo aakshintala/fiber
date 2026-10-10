@@ -23,7 +23,10 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::Deadline;
+use support::{
+    Deadline, HELLO_KINDS, KillGroup, function_call, hello, is_status, spawn_watched, stream,
+    write_json,
+};
 
 /// The shipped extension's full name.
 const MEMORY: &str = "github.com/aakshintala/fiber/extensions/memory";
@@ -31,26 +34,6 @@ const MEMORY: &str = "github.com/aakshintala/fiber/extensions/memory";
 /// Its directory name in Fiber home: its short name (`docs/state.md`,
 /// "What each part holds").
 const SLUG: &str = "memory";
-
-/// The event kinds of a turn answered by [`hello`]: one text fragment in
-/// two deltas.
-const HELLO_KINDS: [&str; 15] = [
-    "session_started",
-    "fiber_started",
-    "extensions_loaded",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "assistant_message_delta",
-    "assistant_message_delta",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
-    "fiber_exited",
-];
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -205,11 +188,6 @@ impl Setup {
     }
 }
 
-fn write_json(file: &Path, value: &Value) {
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, value.to_string()).unwrap();
-}
-
 fn write_text(file: &Path, text: &str) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, text).unwrap();
@@ -219,27 +197,6 @@ fn write_text(file: &Path, text: &str) {
 // the six other binary test files in this crate each do; move all seven
 // copies into `fakes` together when a change to one has to be made in all.
 
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group, which kills the group if this process dies first.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
-}
-
 /// One finished run: its exit code, stdout as text and parsed lines, and
 /// stderr.
 struct Run {
@@ -247,13 +204,6 @@ struct Run {
     stdout: String,
     lines: Vec<Value>,
     stderr: String,
-}
-
-/// A `session_status` line: ephemeral, and written by an observer thread, so
-/// where it falls among the loop's own lines is not what these tests pin.
-/// `tests/socket.rs` reads it.
-fn is_status(line: &str) -> bool {
-    line.contains(r#""kind":"session_status""#)
 }
 
 impl From<Output> for Run {
@@ -287,48 +237,6 @@ impl Run {
             .find(|line| line["kind"] == kind)
             .unwrap_or_else(|| panic!("no {kind} line"))
     }
-}
-
-/// An `openai-responses` stream of `events`, then a completed reply.
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
-
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
 }
 
 /// Whether `extensions_loaded` lists the memory extension.

@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
+use support::hello_item_done as hello;
 use support::*;
 
 /// A command for `session` on the hub socket, with its own id.
@@ -103,32 +104,6 @@ fn turn_starts(lines: &[Value]) -> Vec<u64> {
         .filter(|line| line["kind"] == "turn_started")
         .map(|line| line["seq"].as_u64().unwrap())
         .collect()
-}
-
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-fn hello() -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-    }})])
-}
-
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
 }
 
 /// Starts the hub, the session guard and one client: the caller runs the

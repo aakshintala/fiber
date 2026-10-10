@@ -24,7 +24,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::json;
 use support::*;
 
-const ROOT: &str = "s_00000000000000d1";
 const FORK: &str = "s_00000000000000d2";
 const YOUNG: &str = "s_00000000000000d3";
 

@@ -21,7 +21,6 @@ use std::thread;
 use serde_json::json;
 use support::*;
 
-const ROOT: &str = "s_00000000000000d1";
 const FORK: &str = "s_00000000000000d2";
 
 /// The hub idles out soon after the run's connection closes, so none

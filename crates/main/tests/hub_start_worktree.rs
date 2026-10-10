@@ -20,26 +20,9 @@ use std::sync::{Arc, Mutex};
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Deadline, HubProc, SessionGuard, Setup, connect_hub, recv_reply, subscribe, until};
-
-/// Runs the system `git` in `dir`, in its own process group, to its exit
-/// under the test's [`Deadline`].
-fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
-    let mut command = Command::new("git");
-    command
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(["-c", "init.defaultBranch=main"])
-        .args(args)
-        .current_dir(dir)
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let out = support::run_to_exit(deadline, &format!("git {args:?}"), command);
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
-}
+use support::{
+    Deadline, HubProc, SessionGuard, Setup, connect_hub, git, kinds, recv_reply, subscribe, until,
+};
 
 /// A repository with one commit on `main` at `dir`.
 fn init_repo(deadline: Deadline, dir: &Path) {
@@ -51,18 +34,6 @@ fn init_repo(deadline: Deadline, dir: &Path) {
 
 fn workspace_text(setup: &Setup) -> String {
     setup.workspace().to_string_lossy().into_owned()
-}
-
-/// The event kinds of `lines`, in order, without `session_status`: an
-/// observer thread writes it, so where it falls among the loop's own
-/// lines is not what this test pins (as `tests/session_command.rs`
-/// filters it).
-fn kinds(lines: &[Value]) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status")
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
 }
 
 #[test]

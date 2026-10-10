@@ -13,17 +13,7 @@ mod support;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
+use support::function_call;
 
 /// An `openai-responses` stream answering `text`: what a scripted
 /// reviewer verdict reads as.

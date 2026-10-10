@@ -17,8 +17,8 @@ use std::thread;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::Deadline;
 use support::pty::{KITTY_PUSH, TITLE};
+use support::{Deadline, hello_inline_completed as hello};
 
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
 /// fake server, makes `fake/m` the configured model, and idles the hub
@@ -84,26 +84,6 @@ fn until_socket(deadline: Deadline, socket: &std::path::Path, present: bool, wha
         reached.recv_timeout(deadline.left()).is_ok(),
         "waited until the deadline for {what}"
     );
-}
-
-/// "Hello." in two deltas.
-fn hello() -> Response {
-    let events = [
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-        json!({"type": "response.completed", "response": {
-            "id": "resp_1", "status": "completed",
-            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-        }}),
-    ];
-    let body: String = events
-        .iter()
-        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
-        .collect();
-    Response::stream(body)
 }
 
 fn write(file: &std::path::Path, value: &Value) {

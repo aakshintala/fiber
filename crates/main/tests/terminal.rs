@@ -25,7 +25,7 @@ use std::thread;
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::pty::{KITTY_PUSH, TITLE, WAITING_TITLE};
-use support::{Deadline, hello, write_json};
+use support::{Deadline, PIXEL, hello, write_json};
 
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
 /// fake server, makes `fake/m` the configured model, and idles the hub
@@ -741,17 +741,6 @@ fn assert_names_ask(deadline: Deadline, stdin: Stdio, missing: &str, args: &[&st
         "fiber: The terminal needs a tty; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage.\n"
     );
 }
-
-/// A 1x1 PNG, 69 bytes: within every cap, as `session_command.rs` holds
-/// it. The fake clipboard program prints these bytes; the session stores
-/// them byte for byte.
-const PIXEL: [u8; 69] = [
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
-    0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
-    0x44, 0xae, 0x42, 0x60, 0x82,
-];
 
 /// Waits under the setup's deadline for exactly one `artifacts/i_*.png`
 /// under the session directory, equal byte for byte to [`PIXEL`].

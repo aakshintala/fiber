@@ -27,10 +27,7 @@ use contract::session_search::{LIMIT, Query, Scan};
 use contract::{Envelope, SessionId};
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
-use support::{Deadline, Setup, run_to_exit};
-
-/// The query every fixture matches.
-const QUERY: &str = "retry budget";
+use support::{Deadline, QUERY, Setup, run_to_exit};
 
 /// An event from its kind and JSON payload.
 fn event(kind: &str, payload: Value) -> Event {

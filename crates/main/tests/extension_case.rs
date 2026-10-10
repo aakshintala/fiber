@@ -16,7 +16,7 @@ use std::process::{Output, Stdio};
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::Setup;
+use support::{SESSION_KINDS, Setup, expected};
 
 const CREDENTIAL_PROVIDER: &str = r#"
 fiber.provider("casefixture", {
@@ -235,26 +235,6 @@ fn ordered_calls_require_a_provider_and_reject_mixed_providers() {
         {"call": {"provider": "other", "function": "models", "arg": {}}, "returns": []}
     ]});
     assert_malformed(&run_case(&setup, "mixed-providers", &value), "one provider");
-}
-
-const SESSION_KINDS: &[&str] = &[
-    "session_started",
-    "fiber_started",
-    "extensions_loaded",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
-    "fiber_exited",
-];
-
-fn expected(kinds: &[&str]) -> Vec<Value> {
-    kinds.iter().map(|kind| json!({"kind": kind})).collect()
 }
 
 fn session(script: Value, prompt: &str, expect: Vec<Value>) -> Value {

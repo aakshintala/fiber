@@ -16,23 +16,7 @@ use std::process::Output;
 
 use doors::mint;
 use serde_json::{Value, json};
-use support::Setup;
-
-const SESSION_KINDS: &[&str] = &[
-    "session_started",
-    "fiber_started",
-    "extensions_loaded",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
-    "fiber_exited",
-];
+use support::{SESSION_KINDS, Setup, expected};
 
 // Rooted at `/tmp` on purpose: case sockets bind under this root and must stay under 104 bytes on macOS, while `fakes::TempDir` follows a long `TMPDIR`.
 struct TempRoot(PathBuf);
@@ -84,10 +68,6 @@ impl Drop for LongRoot {
     fn drop(&mut self) {
         let _removed = fs::remove_dir_all(&self.0);
     }
-}
-
-fn expected(kinds: &[&str]) -> Vec<Value> {
-    kinds.iter().map(|kind| json!({"kind": kind})).collect()
 }
 
 fn case(kinds: &[&str]) -> Value {

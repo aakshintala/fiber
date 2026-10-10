@@ -28,7 +28,10 @@ use contract::events::{Event, Parent, SessionStarted, Variables, VariablesSource
 use contract::{JobId, SessionId};
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, SystemClock, assert_one_continued_log, group_alive};
+use support::{
+    Deadline, SystemClock, assert_one_continued_log, group_alive, hello_item_done as hello, stream,
+    write_json,
+};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -193,11 +196,6 @@ impl Setup {
         let key = workspace.to_string_lossy().replace('/', "-");
         self.home().join("projects").join(key).join("sessions")
     }
-}
-
-fn write_json(file: &Path, value: &Value) {
-    fs::create_dir_all(file.parent().unwrap()).unwrap();
-    fs::write(file, value.to_string()).unwrap();
 }
 
 /// A hub the test started, and every session process it starts: each
@@ -393,33 +391,6 @@ fn allow(id: &str, session: &str, request: &str) -> Value {
 /// Whether `line` acknowledges command `id`.
 fn acknowledges(line: &Value, id: &str) -> bool {
     line["kind"] == "command_accepted" && line["payload"]["command_id"] == id
-}
-
-/// An `openai-responses` stream of `events`, then a completed reply.
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// An `openai-responses` stream answering `Hello.`.
-fn hello() -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-    }})])
 }
 
 /// A stream asking for `shell` with `echo hi`.
