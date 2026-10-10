@@ -1572,14 +1572,21 @@ fn journey_prompt_answer_approval_resize_quit() {
     run.wait_screen("the answer after the call", |grid| {
         grid.alternate_screen && grid.contents.contains("Done.")
     });
-    // A resize mid-session: the grid follows to the new size with the
-    // conversation still on it.
-    run.resize(100, 30);
+    // A resize mid-session: 116 columns keep the panel (its 30-column
+    // floor beside the 84-column conversation minimum), so the grid
+    // follows to the new size with the conversation still on it.
+    run.resize(116, 30);
     // The panel's Session card ends in its `turns` row at the new
     // right edge: retained bytes cut to 100 columns end mid-card, so
     // only a redraw at the new size puts `turns  2` last.
+    // The card's handoff row ends mid-card only when cut: retained
+    // bytes truncated to 116 columns lose its tail, so the whole phrase
+    // plus the cursor parked on the input row only co-occur after a
+    // redraw at the new size.
     run.wait_screen("the redrawn grid at the new size", |grid| {
-        grid.rows.len() == 30 && grid.rows.iter().any(|row| row.ends_with("turns  2"))
+        grid.rows.len() == 30
+            && grid.rows.iter().any(|row| row.contains("0% of window"))
+            && grid.cursor == (28, 2)
     });
     // Quit: the terminal is restored, with one resume line per live
     // session on the primary screen ("On exit").
