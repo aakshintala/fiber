@@ -12,7 +12,7 @@ use serde_json::json;
 use super::{App, Effect, Kind, Link, Phase, mint, session_command};
 use crate::editor::Target;
 use crate::input::Draft;
-use crate::keymap;
+use crate::keymap::KeyMap;
 use crate::keys::{Edit, Key};
 use crate::shell;
 use crate::slash::{self, SHOWN};
@@ -47,8 +47,8 @@ pub(super) struct Overlays {
     /// Bumped when the `@` panel opens and on every query change, never
     /// reset; a search result tagged with another is stale.
     generation: u64,
-    /// The key map overlay's top row, while it is open.
-    keymap: Option<usize>,
+    /// The key map overlay's state, while it is open.
+    keymap: Option<KeyMap>,
 }
 
 impl Default for Overlays {
@@ -124,7 +124,23 @@ impl App {
         if let Some(effect) = self.home_edit(&edit) {
             return effect;
         }
-        if self.overlays.keymap.is_some() {
+        if let Some(map) = self.overlays.keymap.as_mut() {
+            match edit {
+                // Left and Right move between the key map's tabs.
+                Edit::Left => map.move_tab(-1),
+                Edit::Right => map.move_tab(1),
+                // Every other edit does nothing behind the key map; a
+                // paste never reaches the draft.
+                Edit::ShiftEnter
+                | Edit::CtrlJ
+                | Edit::WordLeft
+                | Edit::WordRight
+                | Edit::DeleteWord
+                | Edit::LineStart
+                | Edit::LineEnd
+                | Edit::Delete
+                | Edit::Paste(_) => {}
+            }
             return Effect::None;
         }
         // The `/keys` screen takes every stroke in `on_press`, so only
@@ -476,7 +492,7 @@ impl App {
             // `?` and `help`.
             _ => {
                 self.draft.clear();
-                self.overlays.keymap = Some(0);
+                self.overlays.keymap = Some(KeyMap::default());
                 Effect::None
             }
         };
@@ -550,9 +566,14 @@ impl App {
         Effect::Send(lines)
     }
 
+    /// The key map overlay's state, while it is open.
+    pub(crate) fn keymap(&self) -> Option<&KeyMap> {
+        self.overlays.keymap.as_ref()
+    }
+
     /// The key map overlay's top row, while it is open.
     pub(crate) fn keymap_top(&self) -> Option<usize> {
-        self.overlays.keymap
+        self.overlays.keymap.as_ref().map(KeyMap::top)
     }
 
     /// Closes the key map before a swapped view takes the conversation.
@@ -562,53 +583,26 @@ impl App {
 
     /// Opens the key map overlay at its top.
     pub(super) fn open_keymap(&mut self) -> Effect {
-        self.overlays.keymap = Some(0);
+        self.overlays.keymap = Some(KeyMap::default());
         Effect::None
     }
 
-    /// A key while the key map is open: ↑ ↓ PageUp PageDown scroll it, Esc
-    /// closes it, other keys do nothing. `None` while it is closed, and
-    /// for Ctrl+C, ⌥R and ⌥1–9, which arm quit and switch sessions past
-    /// the key map.
+    /// A key while the key map is open: it takes every key but Ctrl+C,
+    /// ⌥R and ⌥1–9, which arm quit and switch sessions past it. `None`
+    /// while it is closed.
     pub(super) fn keymap_key(&mut self, key: &Key) -> Option<Effect> {
-        let top = self.overlays.keymap?;
+        use crate::keymap::KeyPress;
+        let width = self.column_width();
         let height = self.conversation_height();
-        let page = height.saturating_sub(1).max(1);
-        let total: usize = keymap::lines(self.keys())
-            .iter()
-            .map(|line| {
-                crate::view::rows(ratatui::text::Line::raw(line.as_str()), self.column_width())
-            })
-            .sum();
-        let last = total.saturating_sub(height);
-        self.overlays.keymap = match key {
-            Key::Esc => None,
-            // Quitting and rail switching keep their keys above every
-            // overlay: they reach past the key map to their handlers.
-            Key::CtrlC | Key::AltR | Key::AltDigit(_) => return None,
-            Key::Up => Some(top.saturating_sub(1)),
-            Key::Down => Some(top.saturating_add(1).min(last)),
-            Key::PageUp => Some(top.saturating_sub(page)),
-            Key::PageDown => Some(top.saturating_add(page).min(last)),
-            Key::Char(_)
-            | Key::Backspace
-            | Key::Enter
-            | Key::End
-            | Key::AltA
-            | Key::AltUp
-            | Key::AltDown
-            | Key::AltX
-            | Key::AltP
-            | Key::Tab
-            | Key::BackTab
-            | Key::F1
-            | Key::CtrlO
-            | Key::CtrlG
-            | Key::CtrlR
-            | Key::CtrlV
-            | Key::CtrlL
-            | Key::CtrlF => Some(top),
-        };
+        let keyset = self.keys().clone();
+        let map = self.overlays.keymap.as_mut()?;
+        // The frame docks full width, so the inner columns are the
+        // conversation's less the frame's four blank ones.
+        match map.press(key, &keyset, width.saturating_sub(4), height) {
+            KeyPress::Close => self.overlays.keymap = None,
+            KeyPress::Through => return None,
+            KeyPress::Handled => {}
+        }
         Some(Effect::None)
     }
 

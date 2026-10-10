@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use super::super::{App, Effect, Link, Phase, mint, session_command};
 use super::Prompt;
-use crate::home::{Level, quit_line};
+use crate::home::Level;
 use contract::SessionId;
 
 impl App {
@@ -24,16 +24,22 @@ impl App {
         Effect::None
     }
 
-    /// The quit hint, or the quit question naming the sessions working
-    /// now: it recomputes from the current rows on every frame, so a
-    /// session ending or starting updates the question as it shows.
-    /// Home's foot and the conversation screen's hint line draw it.
-    pub(crate) fn hint_text(&self) -> String {
+    /// The quit question, while open: how many sessions work and of them
+    /// how many are also open elsewhere. It recomputes from the current
+    /// rows on every frame, so a session ending or starting updates the
+    /// question as it shows.
+    pub(crate) fn quit_question(&self) -> Option<(usize, usize)> {
         if !self.quit_open() {
-            return super::super::QUIT_HINT.to_owned();
+            return None;
         }
         let working = self.working();
-        quit_line(working.len(), self.elsewhere(&working))
+        Some((working.len(), self.elsewhere(&working)))
+    }
+
+    /// The quit hint: shown while a first Ctrl+C waits for its second.
+    /// The quit question draws as an overlay, not through the hint.
+    pub(crate) fn hint_text(&self) -> String {
+        super::super::QUIT_HINT.to_owned()
     }
 
     /// `c` in the quit question, for the sessions working at the key

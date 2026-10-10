@@ -3,7 +3,7 @@
 
 use super::{
     Left, Level, Row, Sessions, State, Subs, delete_line, dependents, from_status, glyph, line,
-    line_with, opening, quit_line, recent_rows,
+    line_with, opening, quit_count, recent_rows,
 };
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
@@ -800,22 +800,13 @@ fn dependents_reads_each_backticked_id_once_in_order() {
 }
 
 #[test]
-fn quit_line_names_working_and_elsewhere() {
+fn quit_count_names_working_and_elsewhere() {
+    assert_eq!(quit_count(2, 0), "2 sessions working");
+    assert_eq!(quit_count(1, 0), "1 session working");
+    assert_eq!(quit_count(1, 1), "1 session working, 1 also open elsewhere");
     assert_eq!(
-        quit_line(2, 0),
-        "2 sessions working · enter leave them running · c close all · esc stay"
-    );
-    assert_eq!(
-        quit_line(1, 0),
-        "1 session working · enter leave them running · c close all · esc stay"
-    );
-    assert_eq!(
-        quit_line(1, 1),
-        "1 session working, 1 also open elsewhere · enter leave them running · c close all · esc stay"
-    );
-    assert_eq!(
-        quit_line(3, 2),
-        "3 sessions working, 2 also open elsewhere · enter leave them running · c close all · esc stay"
+        quit_count(3, 2),
+        "3 sessions working, 2 also open elsewhere"
     );
 }
 

@@ -9,6 +9,14 @@ use ratatui::style::{Color, Modifier};
 
 use crate::theme::{ROLES, Rgb, Role, Shade, Theme};
 
+/// Black text on a light bar: the overlay selection bar's text and the
+/// key map's chosen tab (`docs/tui.md`, "Look", "Overlays"). The paint
+/// pass resolves it by depth, like every literal colour.
+pub(crate) const BAR_TEXT: Color = Color::Rgb(0, 0, 0);
+/// The key map's chosen tab background: white behind black text
+/// (`docs/tui.md`, "Bindings").
+pub(crate) const TAB_BAR: Color = Color::Rgb(255, 255, 255);
+
 /// The theme `tui.theme` names (`docs/configuration.md`, "Keys").
 #[derive(Debug, Default)]
 pub enum ThemeSetting {
@@ -274,8 +282,18 @@ impl Look {
         }
     }
 
-    /// `colour` with a role marker resolved.
+    /// `colour` with a role marker resolved, and a literal `Rgb`
+    /// resolved by depth: unchanged in truecolour, the nearest text
+    /// entry at 256 colours, and the default with no colour (docs/tui.md,
+    /// "Look").
     fn resolved(&self, colour: Color) -> Color {
+        if let Color::Rgb(red, green, blue) = colour {
+            return match self.depth {
+                Depth::True => colour,
+                Depth::Ansi256 => Color::Indexed(ansi256((red, green, blue), among(Role::Text))),
+                Depth::NoColour => Color::Reset,
+            };
+        }
         role_of(colour).map_or(colour, |role| self.colour(role))
     }
 }

@@ -533,45 +533,56 @@ fn slash_question_mark_slash_help_and_f1_open_the_key_map() {
 }
 
 #[test]
-fn the_key_map_scrolls_and_takes_every_key_but_ctrl_c() {
+fn the_key_map_scrolls_by_binding_and_searches() {
     let mut app = attached();
-    app.set_size(80, 10);
+    app.set_size(80, 24);
     turn_starts(&mut app);
     app.on_key(Key::F1, now());
-    // A conversation of 7 rows: a page is 6.
-    assert_eq!(app.conversation_height(), 7);
+    // The focus moves by binding; the scroll follows whole bindings.
+    assert_eq!(app.keymap_top(), Some(0));
     app.on_key(Key::Up, now());
     assert_eq!(app.keymap_top(), Some(0));
     app.on_key(Key::Down, now());
-    assert_eq!(app.keymap_top(), Some(1));
+    assert_eq!(app.keymap_top(), Some(0));
+    // A page moves by the bindings that fit less one.
     app.on_key(Key::PageDown, now());
-    assert_eq!(app.keymap_top(), Some(7));
+    let map = app.keymap().expect("open");
+    assert_eq!((map.focus(), map.top()), (2, 1));
     app.on_key(Key::PageUp, now());
-    assert_eq!(app.keymap_top(), Some(1));
+    let map = app.keymap().expect("open");
+    assert_eq!((map.focus(), map.top()), (1, 1));
     app.on_key(Key::PageUp, now());
     assert_eq!(app.keymap_top(), Some(0));
-    // Down and PageDown stop at the last screenful.
-    for _ in 0..20 {
-        app.on_key(Key::PageDown, now());
+    // Down past the end holds on the last binding.
+    for _ in 0..80 {
+        app.on_key(Key::Down, now());
     }
+    let map = app.keymap().expect("open");
+    let total = map.visible(app.keys()).len();
+    assert_eq!(map.focus(), total - 1);
     let last = app.keymap_top();
-    let rows: usize = crate::keymap::lines(app.keys())
-        .iter()
-        .map(|line| crate::view::rows(ratatui::text::Line::raw(line.as_str()), 80))
-        .sum();
-    assert_eq!(last, Some(rows - 7));
     app.on_key(Key::Down, now());
     assert_eq!(app.keymap_top(), last);
-    // Other keys do nothing: no typing, no interrupt, no send.
-    for key in [Key::Char('x'), Key::Enter, Key::Tab, Key::End, Key::F1] {
+    // Typing narrows the rows to the query; the draft keeps nothing.
+    app.on_key(Key::Esc, now());
+    app.on_key(Key::F1, now());
+    app.on_key(Key::Char('x'), now());
+    let map = app.keymap().expect("open");
+    assert_eq!(map.query(), "x");
+    assert!(map.visible(app.keys()).len() < total);
+    assert_eq!(app.draft(), "");
+    app.on_key(Key::Backspace, now());
+    assert_eq!(app.keymap().expect("open").query(), "");
+    // Enter, Tab, End and F1 do nothing behind the map.
+    for key in [Key::Enter, Key::Tab, Key::End, Key::F1] {
         assert_eq!(app.on_key(key, now()), Effect::None);
     }
     assert_eq!(app.draft(), "");
-    assert_eq!(app.keymap_top(), last);
-    // Ctrl+C still arms the quit.
+    assert!(app.keymap_top().is_some());
+    // Ctrl+C still arms the quit past the map.
     app.on_key(Key::CtrlC, now());
     assert!(app.hint());
-    assert_eq!(app.keymap_top(), last);
+    assert!(app.keymap_top().is_some());
 }
 
 /// Types `text`, whatever each key does.

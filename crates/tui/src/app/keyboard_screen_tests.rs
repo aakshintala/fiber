@@ -272,12 +272,12 @@ fn delete_unbinds_and_the_key_goes_dead() {
     assert_eq!(tap(&mut app, "esc"), Effect::None);
     assert_eq!(tap(&mut app, "ctrl+o"), Effect::None);
     assert_eq!(app.on_key(Key::F1, now()), Effect::None);
+    let map = app.keymap().expect("open");
     assert!(
-        crate::keymap::lines(app.keys())
+        map.visible(app.keys())
             .iter()
-            .any(|line| line.contains("unbound")),
-        "{:?}",
-        crate::keymap::lines(app.keys())
+            .any(|binding| app.keys().shown(binding).contains("unbound")),
+        "{map:?}"
     );
 }
 

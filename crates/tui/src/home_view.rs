@@ -505,6 +505,9 @@ pub(super) fn render(
         buf,
         &mut targets,
     );
+    if app.quit_open() {
+        super::quit::draw(app, area, buf, &mut targets);
+    }
     if let Some(id) = pointer.and_then(|(col, row)| mouse::hit(&targets, col, row)) {
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, HOVER_TINT);
