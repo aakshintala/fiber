@@ -18,7 +18,7 @@ use std::sync::{
     mpsc,
 };
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::delegate::group::listed;
 use contract::Envelope;
@@ -33,8 +33,10 @@ use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
 
 use super::{
-    Launch, Launched, Runner, Watch, Watched, kill_due, mint_session_id, note_seq, park_due,
+    Fold, Launch, Launched, POLL, Parker, Runner, Shared, Stat, Watch, Watched, Watcher, cap_due,
+    kill_due, mint_session_id, note_seq, over_len, park_due,
 };
+use crate::delegate::outcome::Termination;
 use crate::registry::Registry;
 use crate::support::{exited, usage};
 
@@ -1444,4 +1446,112 @@ fn kill_due_matches_the_exact_boundaries() {
     ] {
         assert_eq!(kill_due(kill_at, now), expected, "{case}");
     }
+}
+
+#[test]
+fn cap_due_checks_once_per_poll_interval() {
+    // Border table for the interval comparison: just below the interval
+    // no check is due, exactly at it and just above one is. The below
+    // row kills a `<=` or inverted mutant that would stat every
+    // envelope; the at row kills a `>` mutant that would skip the due
+    // check; the above row kills an `==` mutant that would check only at
+    // the exact instant.
+    let clock = FakeClock::new();
+    let last = clock.now();
+    assert!(cap_due(last, None, POLL), "the first envelope always stats");
+    let tick = Duration::from_nanos(1);
+    for (case, now, expected) in [
+        ("just below the interval", last + (POLL - tick), false),
+        ("at the interval", last + POLL, true),
+        ("just above the interval", last + POLL + tick, true),
+    ] {
+        assert_eq!(cap_due(now, Some(last), POLL), expected, "{case}");
+    }
+}
+
+#[test]
+fn over_len_trips_only_past_the_cap() {
+    for (case, len, expected) in [
+        ("below the cap", 7, false),
+        ("at the cap", 8, false),
+        ("past the cap", 9, true),
+    ] {
+        assert_eq!(over_len(len, 8), expected, "{case}");
+    }
+}
+
+/// Runs one watch call delivering one envelope per `seq`, against `stat`.
+fn run_watch(
+    clock: &Arc<FakeClock>,
+    shared: &Arc<Shared>,
+    last_check: &Arc<Mutex<Option<Instant>>>,
+    stat: Stat,
+    cap: u64,
+    seqs: std::ops::Range<u64>,
+) {
+    let lines: Vec<Envelope> = seqs.map(|seq| fiber_exited_line(seq, "Line.")).collect();
+    let watch: Watch = Arc::new(move |_: &SessionId, on_line: &mut dyn FnMut(&Envelope)| {
+        for line in &lines {
+            on_line(line);
+        }
+        Ok(Watched::Closed)
+    });
+    let waker: Arc<dyn contract::clock::Wake> = Arc::new(Parker {
+        seq: Mutex::new(0),
+        cv: Condvar::new(),
+    });
+    Watcher {
+        watch,
+        session_id: SessionId("s_child".into()),
+        fold: Arc::new(Mutex::new(Fold::default())),
+        shared: Arc::clone(shared),
+        cap,
+        clock: Arc::clone(clock) as Arc<dyn contract::clock::Clock>,
+        last_check: Arc::clone(last_check),
+        stat,
+        wake: waker,
+    }
+    .run();
+}
+
+#[test]
+fn the_watch_stats_the_log_once_per_poll_interval() {
+    // Five envelopes inside one interval cost one stat; with the log
+    // past the cap but the clock unmoved, no second stat sees it; past
+    // the interval the next envelope stats again and the crossing halts
+    // the job. The watch returns at once, so nothing parks on the clock
+    // and no wait or deadline is needed.
+    let clock = FakeClock::new();
+    let stats = Arc::new(Mutex::new(0usize));
+    let size = Arc::new(Mutex::new(0u64));
+    let stat: Stat = {
+        let stats = Arc::clone(&stats);
+        let size = Arc::clone(&size);
+        Arc::new(move || {
+            *stats.lock().unwrap() += 1;
+            *size.lock().unwrap()
+        })
+    };
+    let as_clock: Arc<dyn contract::clock::Clock> = Arc::clone(&clock) as Arc<_>;
+    let shared = Shared::new(as_clock, BOUND);
+    let last_check: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
+    let cap = 8u64;
+
+    run_watch(&clock, &shared, &last_check, Arc::clone(&stat), cap, 1..6);
+    assert_eq!(*stats.lock().unwrap(), 1, "one interval costs one stat");
+    assert_eq!(shared.reason(), None);
+
+    *size.lock().unwrap() = cap + 1;
+    run_watch(&clock, &shared, &last_check, Arc::clone(&stat), cap, 6..7);
+    assert_eq!(
+        *stats.lock().unwrap(),
+        1,
+        "inside the interval nothing stats again"
+    );
+    assert_eq!(shared.reason(), None, "an unseen crossing halts nothing");
+
+    clock.advance(POLL);
+    run_watch(&clock, &shared, &last_check, Arc::clone(&stat), cap, 7..8);
+    assert_eq!(*stats.lock().unwrap(), 2, "past the interval it stats");
+    assert_eq!(shared.reason(), Some(Termination::OutputCap));
 }

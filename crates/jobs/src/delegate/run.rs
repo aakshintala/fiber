@@ -243,6 +243,10 @@ pub(crate) struct Runner {
     watch: Watch,
     shared: Arc<Shared>,
     park: Arc<Parker>,
+    /// When the watch callback last stat'ed the log for the cap, shared
+    /// across watches: each watch runs on its own thread, but the poll
+    /// interval spans them.
+    last_cap_check: Arc<Mutex<Option<Instant>>>,
 }
 
 impl Runner {
@@ -277,6 +281,7 @@ impl Runner {
                 watch,
                 shared,
                 park,
+                last_cap_check: Arc::new(Mutex::new(None)),
             },
             stop,
         )
@@ -427,13 +432,16 @@ impl Runner {
                 }
             };
             if launch {
+                let output_path = self.output_path.clone();
                 let watcher = Watcher {
                     watch: Arc::clone(&self.watch),
                     session_id: self.session_id.clone(),
                     fold: Arc::clone(&fold),
                     shared: Arc::clone(&self.shared),
-                    output_path: self.output_path.clone(),
                     cap: self.cap,
+                    clock: Arc::clone(&self.clock),
+                    last_check: Arc::clone(&self.last_cap_check),
+                    stat: Arc::new(move || log_len(&output_path)),
                     wake: Arc::clone(&wake),
                 };
                 thread::spawn(|| watcher.run());
@@ -496,6 +504,10 @@ impl Runner {
     }
 }
 
+/// Reads the delegate log's length for the cap check: the real file's
+/// length, or zero before it exists.
+type Stat = Arc<dyn Fn() -> u64 + Send + Sync>;
+
 /// One watch call on its own thread: the blocking socket read lives
 /// here, so the runner thread always reaches the reap, the cap checks
 /// and the stop timer. Left to finish on its own once the child is
@@ -505,8 +517,15 @@ struct Watcher {
     session_id: SessionId,
     fold: Arc<Mutex<Fold>>,
     shared: Arc<Shared>,
-    output_path: PathBuf,
     cap: u64,
+    clock: Arc<dyn Clock>,
+    /// When the log was last stat'ed for the cap: envelopes inside one
+    /// poll interval share the first stat, so a burst of lines costs one
+    /// metadata read.
+    last_check: Arc<Mutex<Option<Instant>>>,
+    /// Reads the log's length. The runner wires the real file; tests
+    /// count calls through here.
+    stat: Stat,
     wake: Arc<dyn Wake>,
 }
 
@@ -524,9 +543,22 @@ impl Watcher {
                     None
                 }
             };
-            // Checked per delivered line, as the runner checks it per
-            // wake: no lock is held across the halt.
-            if over_cap(&self.output_path, self.cap) {
+            // The cap is stat'ed at most once per poll interval, read
+            // from the session clock: envelopes inside one interval share
+            // the first stat, so a burst of lines costs one metadata
+            // read. A stat that sees the log past the cap still halts the
+            // job at once, and no lock is held across the halt.
+            let check = {
+                let mut last = lock(&self.last_check);
+                let now = self.clock.now();
+                if cap_due(now, *last, POLL) {
+                    *last = Some(now);
+                    true
+                } else {
+                    false
+                }
+            };
+            if check && over_len((self.stat)(), self.cap) {
                 self.shared.halt(Termination::OutputCap);
             }
             if let Some(exited) = exited {
@@ -577,13 +609,35 @@ pub(crate) fn mint_session_id() -> SessionId {
     SessionId(format!("s_{:016x}", RandomState::new().hash_one(())))
 }
 
+/// Whether the watch callback stats the log now: the first envelope
+/// after the watch starts, or one a full poll interval past the last
+/// stat. The edge belongs to the new interval: an envelope exactly
+/// `interval` past the last stat stats again.
+pub(crate) fn cap_due(now: Instant, last: Option<Instant>, interval: Duration) -> bool {
+    match last {
+        None => true,
+        Some(last) => now.saturating_duration_since(last) >= interval,
+    }
+}
+
 /// Whether the delegate's log has passed the cap. A log that does not
 /// exist yet is empty.
 fn over_cap(output_path: &PathBuf, cap: u64) -> bool {
+    over_len(log_len(output_path), cap)
+}
+
+/// The log's length in bytes. A missing log, or one whose metadata
+/// cannot be read, counts as zero size.
+fn log_len(output_path: &PathBuf) -> u64 {
     std::fs::metadata(output_path)
         .map(|meta| meta.len())
         .unwrap_or(0)
-        > cap
+}
+
+/// Whether `len` bytes have passed the cap: strictly past it, so a log
+/// exactly at the cap still runs.
+fn over_len(len: u64, cap: u64) -> bool {
+    len > cap
 }
 
 /// The drain: reads stdout to EOF and keeps only the last `fiber_exited`
