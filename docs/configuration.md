@@ -8,7 +8,10 @@ its files are written safely, is [Fiber home](state.md).
 ## Files and format
 
 Every file Fiber reads as configuration is JSON: configuration, an extension's
-settings, an extension's manifest and a provider's data. The parser is
+settings, an extension's manifest and a provider's data. The one exception is
+the system prompt files, `SYSTEM.md` and `APPEND_SYSTEM.md`
+(`docs/system-prompt.md`): they are configuration files in Markdown. Only
+`config` reads any of them. The parser is
 serde_json, which Fiber already uses for everything else
 (`docs/dependencies.md`), so configuration adds no crate. A TOML parser would have added 6
 crates and 167 KiB of stripped binary on macOS arm64 (`toml` 1.1 against
