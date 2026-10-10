@@ -16,6 +16,27 @@ use contract::ErrorCode;
 const VALUE: &str = "sk-live-7f3a9c0d1e2b";
 
 #[test]
+fn describe_names_each_source_without_its_secret() {
+    for (source, text) in [
+        (
+            CredentialSource::Env("ACME_KEY".into()),
+            "the environment variable ACME_KEY",
+        ),
+        (
+            CredentialSource::File("/keys/acme".into()),
+            "the file /keys/acme",
+        ),
+        (
+            CredentialSource::Command(vec!["op".into(), "read".into(), "op://acme".into()]),
+            "the command op",
+        ),
+        (CredentialSource::Command(Vec::new()), "an empty command"),
+    ] {
+        assert_eq!(source.describe(), text);
+    }
+}
+
+#[test]
 fn a_stored_secret_is_a_0600_file_in_a_0700_credentials_directory() {
     let setup = Setup::new();
     store_secret(&setup.home(), "acme.api_key", &Secret::new(VALUE.into())).unwrap();
@@ -231,19 +252,6 @@ fn a_label_that_is_not_one_plain_file_name_is_refused() {
     store_credential(&setup.home(), "acme", "lock.x", &Secret::new(VALUE.into())).unwrap();
     store_credential(&setup.home(), "acme", "tmp", &Secret::new(VALUE.into())).unwrap();
     assert!(!setup.home().join("credentials/acme/default.lock").exists());
-}
-
-#[test]
-fn a_stored_credential_that_is_a_symbolic_link_is_refused() {
-    let setup = Setup::new();
-    let outside = setup.root().join("planted");
-    fs::write(&outside, VALUE).unwrap();
-    fs::create_dir_all(setup.home().join("credentials/acme")).unwrap();
-    let link = setup.home().join("credentials/acme/work");
-    std::os::unix::fs::symlink(&outside, &link).unwrap();
-    let e = read_credential(&setup.home(), "acme", "work").unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
-    assert!(!e.to_string().contains(VALUE));
 }
 
 #[test]

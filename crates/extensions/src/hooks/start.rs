@@ -31,7 +31,7 @@ pub(super) fn start_vm(
     locks: Arc<dyn PathLock>,
 ) -> Result<(LuaExtension, Vec<Notice>), Error> {
     let repo: Vec<&str> = manifest.repo_settings.iter().map(String::as_str).collect();
-    let (_, ignored) = config.extension_settings(name, &repo)?;
+    let (_, ignored) = config.extensions().merged(name, &repo)?;
     let mut extension = LuaExtension::new(name, dir, home, clock)
         .with_session(Session {
             config: config.clone(),

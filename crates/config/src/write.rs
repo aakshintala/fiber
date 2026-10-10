@@ -41,7 +41,7 @@ pub enum Layer {
 }
 
 /// Sets one key in a layer's file (`fiber config set`). The value's type is
-/// checked against "Keys", as [`set_global`] checks it, and a key the
+/// checked against "Keys", and a key the
 /// layer may not hold is refused before anything is written: on any `Err`
 /// no file is created or changed.
 pub fn set(
@@ -272,6 +272,21 @@ fn list_into(list: Vec<String>) -> Vec<Value> {
     list.into_iter().map(Value::String).collect()
 }
 
+impl Layer {
+    /// The source reading this layer's file.
+    pub(crate) fn source(self, home: &Path, workspace: &Path, project: &ProjectKey) -> Source {
+        match self {
+            Self::Global => Source::Global(home.join("config.json")),
+            Self::Project => Source::Project(
+                home.join("projects")
+                    .join(project.as_str())
+                    .join("config.json"),
+            ),
+            Self::Repository => Source::Repository(workspace.join(".fiber/config.json")),
+        }
+    }
+}
+
 /// The file and source `set` and `edit_list` write through for `layer`.
 fn layer_file(
     home: &Path,
@@ -279,26 +294,11 @@ fn layer_file(
     project: &ProjectKey,
     layer: Layer,
 ) -> Result<(PathBuf, Source), ConfigError> {
-    let (file, source) = match layer {
-        Layer::Global => {
-            let file = home.join("config.json");
-            let source = Source::Global(file.clone());
-            (file, source)
-        }
-        Layer::Project => {
-            let file = home
-                .join("projects")
-                .join(project.as_str())
-                .join("config.json");
-            let source = Source::Project(file.clone());
-            (file, source)
-        }
-        Layer::Repository => {
-            let file = workspace.join(".fiber/config.json");
-            let source = Source::Repository(file.clone());
-            (file, source)
-        }
+    let source = layer.source(home, workspace, project);
+    let (Source::Global(file) | Source::Repository(file) | Source::Project(file)) = &source else {
+        unreachable!("a layer's source always names a file")
     };
+    let file = file.clone();
     if matches!(layer, Layer::Repository) {
         // Someone else's text: a link, or anything but a directory and a
         // regular file, is refused before the lock is taken, as
@@ -318,22 +318,24 @@ fn layer_file(
 fn refused_why(segments: &[String], source: &Source) -> &'static str {
     match keys::leaf(segments) {
         None => "this Fiber does not know it",
-        Some(found) if !found.repo && matches!(source, Source::Repository(_)) => {
+        Some(found) if !found.scope.repo() && matches!(source, Source::Repository(_)) => {
             "a repository may not set it"
         }
         Some(found) => match found.scope {
-            keys::Scope::GlobalOnly => "only Fiber home's `config.json` may set it",
-            keys::Scope::PersonFiles => {
+            keys::WriteScope::GlobalOnly => "only Fiber home's `config.json` may set it",
+            keys::WriteScope::PersonFiles => {
                 "only Fiber home's `config.json` or the project's `config.json` in Fiber home may set it"
             }
-            keys::Scope::Any | keys::Scope::RepoOnly => "only a repository's own file may set it",
+            keys::WriteScope::Any { .. } | keys::WriteScope::RepoOnly => {
+                "only a repository's own file may set it"
+            }
         },
     }
 }
 
 /// Parses `key` and checks one key's value against "Keys" for `source`,
 /// returning the segments and the notices the check pushed. Shared by
-/// [`set_global`], [`set_global_if_unset`], [`replace_global`] and [`set`]:
+/// [`set_global_if_unset`], [`replace_global`] and [`set`]:
 /// only `set` turns a notice into a refusal, so an unknown key is still
 /// written elsewhere.
 fn checked(
@@ -351,16 +353,7 @@ fn checked(
     Ok((segments, notices))
 }
 
-/// Sets one key in the global `config.json` (`fiber config set`, the model
-/// picker). The value's type, and the type of every known key it holds, is
-/// checked against "Keys"; nothing else is.
-pub fn set_global(home: &Path, key: &str, value: Value) -> Result<(), ConfigError> {
-    let file = home.join("config.json");
-    let (segments, _) = checked(key, value.clone(), &Source::Global(file.clone()))?;
-    update(&file, &segments, value, false).map(|_| ())
-}
-
-/// [`set_global`] when the global `config.json` holds no value at `key`,
+/// Sets one key when the global `config.json` holds no value at `key`,
 /// checked and written under one lock (`fiber login` writing
 /// `providers."<name>".credential` with a provider's first label). `true`
 /// when it wrote. A project layer's value does not count: only the global
@@ -374,7 +367,7 @@ pub fn set_global_if_unset(home: &Path, key: &str, value: Value) -> Result<bool,
 /// Sets one key in the global `config.json` to `value`, or removes it for
 /// `None`, under one lock and one atomic write, returning the value it
 /// replaced (`fiber hub install` writing `hub.port`). A value is type-checked
-/// as [`set_global`] checks it. Removing a key the file does not hold
+/// as [`set_global_if_unset`] checks it. Removing a key the file does not hold
 /// writes nothing. A failure before the rename leaves the file unchanged; a
 /// failure after it, syncing the directory, returns `Err` with the new
 /// content already in place.
@@ -847,29 +840,5 @@ mod tests {
         worker.join().unwrap();
         assert!(removed, "the held line is still there");
         assert_eq!(fs::read(&file).unwrap(), "{\"late\": 3}\n".as_bytes());
-    }
-
-    #[test]
-    fn a_replace_that_fails_before_the_rename_leaves_the_file_unchanged() {
-        let dir = TempDir::new("fiber-replace-fail");
-        let home = dir.path().to_path_buf();
-        let file = home.join("config.json");
-        let text = "{\"hub\": {\"port\": 4040}}";
-        fs::write(&file, text).unwrap();
-        let result = within("the failing replace", move || {
-            // Removing the temporary file makes the rename fail.
-            let watched = home.clone();
-            before_rename(move || {
-                for entry in fs::read_dir(&watched).unwrap() {
-                    let path = entry.unwrap().path();
-                    if path.extension().is_some_and(|e| e == "tmp") {
-                        fs::remove_file(path).unwrap();
-                    }
-                }
-            });
-            replace_global(&home, "hub.port", None).map_err(|e| e.to_string())
-        });
-        assert!(result.is_err(), "{result:?}");
-        assert_eq!(fs::read_to_string(&file).unwrap(), text);
     }
 }

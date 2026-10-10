@@ -137,11 +137,11 @@ fn a_run_flag_setting_under_a_short_name_reaches_the_full_name() {
     let setup = Setup::new();
     let config = setup.load(&["extensions.memory.settings.k=v"]).unwrap();
     assert_eq!(
-        config.extension_setting(MEMORY, &[], "k").unwrap(),
+        config.extensions().get(MEMORY, &[], "k").unwrap(),
         Some(json!("v"))
     );
     assert_eq!(
-        config.extension_setting("memory", &[], "k").unwrap(),
+        config.extensions().get("memory", &[], "k").unwrap(),
         Some(json!("v"))
     );
 }

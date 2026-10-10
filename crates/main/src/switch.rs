@@ -200,7 +200,7 @@ impl Switching {
             .get(name)
             .cloned()
             .unwrap_or_else(|| match data {
-                Some(data) => self.config.credential_label(data),
+                Some(data) => self.config.credentials().credential_label(data),
                 None => String::new(),
             })
     }
@@ -256,7 +256,7 @@ impl Switching {
                         &want.name,
                         Some(data),
                     );
-                    let labels = self.config.labels(data);
+                    let labels = self.config.credentials().labels(data);
                     if want.label != current && !labels.contains(&want.label) {
                         return Err(crate::credential::no_label(
                             &want.name,

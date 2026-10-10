@@ -14,9 +14,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use config::{
-    Config, ConfigError, CredentialFile, CredentialSource, Login, ProviderData, Secret, Sources,
-    credential_labels, delete_credential, delete_credential_held, read_credential, read_secret,
-    set_global_if_unset, store_credential, store_secret,
+    Config, ConfigError, CredentialFile, Login, ProviderData, Secret, Sources, credential_labels,
+    delete_credential, delete_credential_held, read_credential, read_secret, set_global_if_unset,
+    store_credential, store_secret,
 };
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -554,31 +554,16 @@ pub(crate) fn login(
 
 /// Where a provider's key comes from when nothing is stored: the first
 /// source configured for one of its labels, in label order, then the one its
-/// own data declares. A command is named by its program alone: its arguments
-/// may hold a key.
+/// own data declares, described without its secret.
 fn declared_source(config: &Config, provider: &ProviderData) -> Option<String> {
-    let merged = config.merged(None);
-    let configured = merged
-        .get("providers")
-        .and_then(|p| p.get(&provider.name))
-        .and_then(|p| p.get("credentials"))
-        .and_then(serde_json::Value::as_object);
-    // `serde_json::Map` iterates in key order (no `preserve_order`), which is
-    // label order; `a_configured_source_comes_before_the_providers_own_in_label_order` pins it.
-    let from_config = configured.and_then(|labels| {
-        labels
-            .values()
-            .find_map(|v| serde_json::from_value::<CredentialSource>(v.clone()).ok())
-    });
-    let source = from_config.or_else(|| provider.credential.clone())?;
-    Some(match source {
-        CredentialSource::Env(var) => format!("the environment variable {var}"),
-        CredentialSource::File(file) => format!("the file {}", file.display()),
-        CredentialSource::Command(argv) => match argv.first() {
-            Some(program) => format!("the command {program}"),
-            None => "an empty command".to_owned(),
-        },
-    })
+    let source = config
+        .credentials()
+        .credential_sources(&provider.name)
+        .into_iter()
+        .next()
+        .map(|(_, declared)| declared)
+        .or_else(|| provider.credential.clone())?;
+    Some(source.describe())
 }
 
 /// Deletes a provider's stored key, one label or every label. A key that

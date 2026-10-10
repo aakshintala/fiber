@@ -118,29 +118,56 @@ impl Kind {
 
 /// Which layers may set a key ("What a repository may set"). One value,
 /// so a key can never be both repository-only and global-only.
-#[derive(Clone, Copy)]
-pub(crate) enum Scope {
-    /// Any layer may set it.
-    Any,
-    /// Only a repository's own file may set it: any other layer's value is
-    /// ignored with a notice.
-    RepoOnly,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteScope {
+    /// Any layer may set it, and a repository's own file when `repo`.
+    Any {
+        /// Whether a repository may set it.
+        repo: bool,
+    },
     /// Only Fiber home's `config.json` may set it: any other layer's value
     /// is ignored with a notice.
     GlobalOnly,
+    /// Only a repository's own file may set it: any other layer's value is
+    /// ignored with a notice.
+    RepoOnly,
     /// Only the person's own files in Fiber home may set it: the global
     /// `config.json` or the project's `config.json` in Fiber home. Any
     /// other layer's value is ignored with a notice.
     PersonFiles,
 }
 
+impl WriteScope {
+    /// Whether a repository's own file may set a key of this scope.
+    pub(crate) fn repo(self) -> bool {
+        match self {
+            Self::Any { repo } => repo,
+            Self::RepoOnly => true,
+            Self::GlobalOnly | Self::PersonFiles => false,
+        }
+    }
+}
+
+/// How a key's layers combine (`docs/configuration.md`, "Layers"). One
+/// value, so a key has exactly one rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Merge {
+    /// Any other value replaces the one below it; two objects merge key
+    /// by key.
+    Replace,
+    /// Every layer's names apply, lowest first, each once.
+    Union,
+    /// Each entry replaces the one below it as a whole: it does not merge
+    /// key by key.
+    EntryReplace,
+}
+
 /// One row of "Keys". `*` in a path stands for one name, such as a role's.
 pub(crate) struct Key {
     path: &'static str,
     pub(crate) kind: Kind,
-    /// Whether a repository may set it ("What a repository may set").
-    pub(crate) repo: bool,
-    pub(crate) scope: Scope,
+    pub(crate) scope: WriteScope,
+    pub(crate) merge: Merge,
     /// The built-in default, as JSON text.
     pub(crate) default: Option<&'static str>,
 }
@@ -149,8 +176,8 @@ const fn key(path: &'static str, kind: Kind, repo: bool, default: Option<&'stati
     Key {
         path,
         kind,
-        repo,
-        scope: Scope::Any,
+        scope: WriteScope::Any { repo },
+        merge: Merge::Replace,
         default,
     }
 }
@@ -160,8 +187,8 @@ const fn repo_only(path: &'static str, kind: Kind) -> Key {
     Key {
         path,
         kind,
-        repo: true,
-        scope: Scope::RepoOnly,
+        scope: WriteScope::RepoOnly,
+        merge: Merge::Replace,
         default: None,
     }
 }
@@ -171,8 +198,8 @@ const fn global_only(path: &'static str, kind: Kind, default: Option<&'static st
     Key {
         path,
         kind,
-        repo: false,
-        scope: Scope::GlobalOnly,
+        scope: WriteScope::GlobalOnly,
+        merge: Merge::Replace,
         default,
     }
 }
@@ -183,8 +210,32 @@ const fn person_files(path: &'static str, kind: Kind) -> Key {
     Key {
         path,
         kind,
-        repo: false,
-        scope: Scope::PersonFiles,
+        scope: WriteScope::PersonFiles,
+        merge: Merge::Replace,
+        default: None,
+    }
+}
+
+/// A key whose layers all apply: every layer's names, lowest first, each
+/// once (`docs/configuration.md`, "Layers").
+const fn unioned(path: &'static str, kind: Kind, default: Option<&'static str>) -> Key {
+    Key {
+        path,
+        kind,
+        scope: WriteScope::Any { repo: false },
+        merge: Merge::Union,
+        default,
+    }
+}
+
+/// A key whose entries each replace the one below as a whole: a
+/// provider's `credentials` (`docs/configuration.md`, "Layers").
+const fn entry_replaced(path: &'static str, kind: Kind) -> Key {
+    Key {
+        path,
+        kind,
+        scope: WriteScope::Any { repo: false },
+        merge: Merge::EntryReplace,
         default: None,
     }
 }
@@ -239,7 +290,7 @@ pub(crate) const KEYS: &[Key] = &[
     key("shell.read_only.*.flags", StrList, NO, None),
     key("budget.usd", Number, NO, None),
     key("quota.notice_at", Number, YES, Some("80")),
-    key("skills.disabled", StrList, NO, Some("[]")),
+    unioned("skills.disabled", StrList, Some("[]")),
     key("mcp.servers.*.command", Str, YES, None),
     key("mcp.servers.*.args", StrList, YES, None),
     key("mcp.servers.*.env", StrMap, YES, None),
@@ -260,7 +311,7 @@ pub(crate) const KEYS: &[Key] = &[
     key("extensions.*.hook_timeout_ms", Count, NO, None),
     key("hooks.order.*", StrList, NO, None),
     key("providers.*.credential", Str, NO, None),
-    key("providers.*.credentials.*", Credential, NO, None),
+    entry_replaced("providers.*.credentials.*", Credential),
     key(
         "tui.panel.cards",
         StrList,
@@ -286,6 +337,13 @@ pub(crate) const KEYS: &[Key] = &[
     ),
     person_files("reviewer.context", Str),
 ];
+
+/// Every row whose layers all apply, as dotted segments, in table order.
+pub(crate) fn union_rows() -> impl Iterator<Item = Vec<String>> {
+    KEYS.iter()
+        .filter(|key| key.merge == Merge::Union)
+        .map(|key| key.path.split('.').map(str::to_owned).collect())
+}
 
 /// Every key's path that names no `*`, in table order.
 pub(crate) fn plain_paths() -> impl Iterator<Item = &'static str> {
@@ -363,17 +421,17 @@ fn walk(
     for (name, value) in map {
         path.push(name.clone());
         if let Some(key) = leaf(path) {
-            if matches!(source, Source::Repository(_)) && !key.repo {
+            if matches!(source, Source::Repository(_)) && !key.scope.repo() {
                 notices.push(ignored(path, "a repository may not set"));
             } else {
                 match key.scope {
-                    Scope::RepoOnly if !matches!(source, Source::Repository(_)) => {
+                    WriteScope::RepoOnly if !matches!(source, Source::Repository(_)) => {
                         notices.push(ignored(path, "only a repository's own file may set"));
                     }
-                    Scope::GlobalOnly if !matches!(source, Source::Global(_)) => {
+                    WriteScope::GlobalOnly if !matches!(source, Source::Global(_)) => {
                         notices.push(ignored(path, "only Fiber home's `config.json` may set"));
                     }
-                    Scope::PersonFiles
+                    WriteScope::PersonFiles
                         if !matches!(source, Source::Global(_) | Source::Project(_)) =>
                     {
                         notices.push(ignored(
@@ -382,7 +440,10 @@ fn walk(
                              in Fiber home may set",
                         ));
                     }
-                    Scope::Any | Scope::RepoOnly | Scope::GlobalOnly | Scope::PersonFiles => {
+                    WriteScope::Any { .. }
+                    | WriteScope::RepoOnly
+                    | WriteScope::GlobalOnly
+                    | WriteScope::PersonFiles => {
                         if key.kind.accepts(&value) {
                             kept.insert(name, value);
                         } else {

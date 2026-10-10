@@ -13,8 +13,10 @@ use contract::ErrorCode;
 const DATABRICKS: &str = r#"{
   "name": "databricks",
   "credential": { "env": "DATABRICKS_TOKEN" },
+  "reviewer_model": "databricks-fast",
+  "login": "browser",
   "headers": { "x-databricks-client": "fiber" },
-  "placeholders": { "workspace": { "env": "DATABRICKS_HOST" } },
+  "placeholders": { "workspace": { "env": "DATABRICKS_HOST" }, "region": {} },
   "models": [
     {
       "id": "databricks-claude-opus-5",
@@ -26,29 +28,13 @@ const DATABRICKS: &str = r#"{
       "context_window": 1000000,
       "max_output_tokens": 128000,
       "input": ["text", "image"],
+      "web_search": "web_search_20250305",
+      "prompt_addendum": "prompts/opus.md",
       "cost": { "input": 5.0, "output": 25.0, "cache_read": 0.5, "cache_write": 6.25 }
     },
     { "id": "gpt", "protocol": "openai-responses", "base_url": "https://x/v1", "context_window": 1000, "subscription": true }
   ]
 }"#;
-
-#[test]
-fn prompt_addendum_reads_and_defaults_to_none() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    setup.write(
-        &dir.join("providers/p.json"),
-        r#"{"name":"p","models":[
-            {"id":"with","protocol":"anthropic-messages","base_url":"u", "context_window": 1000,"prompt_addendum":"prompts/with.md"},
-            {"id":"without","protocol":"anthropic-messages","base_url":"u", "context_window": 1000}]}"#,
-    );
-    let models = &read_providers(&dir).unwrap()[0].models;
-    assert_eq!(
-        models[0].prompt_addendum.as_deref(),
-        Some("prompts/with.md")
-    );
-    assert_eq!(models[1].prompt_addendum, None);
-}
 
 #[test]
 fn read_package_text_returns_the_files_text() {
@@ -153,22 +139,6 @@ fn read_package_text_rejects_non_utf8_bytes() {
 }
 
 #[test]
-fn reviewer_model_reads_from_provider_data_and_is_none_when_absent() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    setup.write(
-        &dir.join("providers/p.json"),
-        r#"{"name":"p","reviewer_model":"fast","models":[]}"#,
-    );
-    assert_eq!(
-        read_providers(&dir).unwrap()[0].reviewer_model,
-        Some("fast".into())
-    );
-    setup.write(&dir.join("providers/p.json"), r#"{"name":"p","models":[]}"#);
-    assert_eq!(read_providers(&dir).unwrap()[0].reviewer_model, None);
-}
-
-#[test]
 fn the_documented_provider_data_reads() {
     let setup = Setup::new();
     let dir = setup.root().join("ext");
@@ -183,6 +153,8 @@ fn the_documented_provider_data_reads() {
         data.credential,
         Some(CredentialSource::Env("DATABRICKS_TOKEN".into()))
     );
+    assert_eq!(data.reviewer_model.as_deref(), Some("databricks-fast"));
+    assert_eq!(data.login, Some(Login::Browser));
     assert_eq!(data.headers["x-databricks-client"], "fiber");
     let [opus, gpt] = data.models.as_slice() else {
         panic!("{:?}", data.models);
@@ -202,21 +174,12 @@ fn the_documented_provider_data_reads() {
         data.placeholders["workspace"].env.as_deref(),
         Some("DATABRICKS_HOST")
     );
-    assert_eq!(opus.base_url, "https://{workspace}/ai-gateway/anthropic");
-}
-
-#[test]
-fn placeholders_default_to_none_and_env_is_optional() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    setup.write(&dir.join("providers/p.json"), r#"{"name":"p","models":[]}"#);
-    assert!(read_providers(&dir).unwrap()[0].placeholders.is_empty());
-    setup.write(
-        &dir.join("providers/p.json"),
-        r#"{"name":"p","placeholders":{"region":{}},"models":[]}"#,
-    );
-    let data = &read_providers(&dir).unwrap()[0];
     assert_eq!(data.placeholders["region"].env, None);
+    assert_eq!(opus.base_url, "https://{workspace}/ai-gateway/anthropic");
+    assert_eq!(opus.web_search.as_deref(), Some("web_search_20250305"));
+    assert_eq!(opus.prompt_addendum.as_deref(), Some("prompts/opus.md"));
+    assert_eq!(gpt.web_search, None);
+    assert_eq!(gpt.prompt_addendum, None);
 }
 
 #[test]
@@ -397,6 +360,8 @@ fn the_documented_manifest_reads() {
         r#"{"name": "github.com/acme/fiber-acme", "version": "v1.4.0", "fiber": "0.3.0",
             "api": 1, "depends": {"github.com/acme/oauth-helper": "v1.2.0"},
             "repo_settings": ["workspace_url"], "prompt": "prompt.md", "memory_mib": 8,
+            "replaces": ["web_search", "shell"],
+            "secrets": ["acme.api_key", "mcp.server.KEY", "acme.api_key"],
             "opening": {"machine": ["index.md"], "project": ["notes.md"], "budget_bytes": 25000}}"#,
     );
     let manifest = read_manifest(&dir).unwrap();
@@ -405,47 +370,18 @@ fn the_documented_manifest_reads() {
     assert_eq!(manifest.fiber, "0.3.0");
     assert_eq!(manifest.api, 1);
     assert_eq!(manifest.depends["github.com/acme/oauth-helper"], "v1.2.0");
+    assert_eq!(manifest.repo_settings, ["workspace_url"]);
+    assert_eq!(manifest.prompt.as_deref(), Some("prompt.md"));
     assert_eq!(manifest.memory_mib, Some(8));
+    assert_eq!(manifest.replaces, ["web_search", "shell"]);
+    assert_eq!(
+        manifest.secrets,
+        ["acme.api_key", "mcp.server.KEY", "acme.api_key"]
+    );
     let opening = manifest.opening.unwrap();
     assert_eq!(opening.machine, ["index.md"]);
     assert_eq!(opening.project, ["notes.md"]);
     assert_eq!(opening.budget_bytes, Some(25_000));
-}
-
-#[test]
-fn memory_mib_absent_or_null_is_none_and_a_positive_value_reads() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    let base = r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1}"#;
-    setup.write(&dir.join("extension.json"), base);
-    assert_eq!(read_manifest(&dir).unwrap().memory_mib, None);
-    setup.write(
-        &dir.join("extension.json"),
-        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1, "memory_mib": null}"#,
-    );
-    assert_eq!(read_manifest(&dir).unwrap().memory_mib, None);
-    setup.write(
-        &dir.join("extension.json"),
-        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1, "memory_mib": 8}"#,
-    );
-    assert_eq!(read_manifest(&dir).unwrap().memory_mib, Some(8));
-}
-
-#[test]
-fn replaces_lists_the_built_ins_and_defaults_to_none() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    let base = r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1"#;
-    setup.write(&dir.join("extension.json"), &format!("{base}}}"));
-    assert!(read_manifest(&dir).unwrap().replaces.is_empty());
-    setup.write(
-        &dir.join("extension.json"),
-        &format!(r#"{base}, "replaces": ["web_search", "shell"]}}"#),
-    );
-    assert_eq!(
-        read_manifest(&dir).unwrap().replaces,
-        ["web_search", "shell"]
-    );
 }
 
 #[test]
@@ -468,17 +404,6 @@ fn memory_mib_zero_or_overflowing_bytes_is_invalid() {
 }
 
 #[test]
-fn a_manifest_without_depends_has_none() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    setup.write(
-        &dir.join("extension.json"),
-        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1}"#,
-    );
-    assert!(read_manifest(&dir).unwrap().depends.is_empty());
-}
-
-#[test]
 fn a_manifest_that_is_not_json_or_lacks_a_field_is_invalid() {
     let setup = Setup::new();
     let dir = setup.root().join("ext");
@@ -496,21 +421,6 @@ fn a_manifest_that_is_not_json_or_lacks_a_field_is_invalid() {
     }
     let err = read_manifest(&setup.root().join("nowhere")).unwrap_err();
     assert_eq!(err.code(), ErrorCode::IoFailed);
-}
-
-#[test]
-fn web_search_reads_and_defaults_to_none() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    setup.write(
-        &dir.join("providers/p.json"),
-        r#"{"name":"p","models":[
-            {"id":"s","protocol":"anthropic-messages","base_url":"u", "context_window": 1000,"web_search":"web_search_20250305"},
-            {"id":"plain","protocol":"anthropic-messages","base_url":"u", "context_window": 1000}]}"#,
-    );
-    let models = &read_providers(&dir).unwrap()[0].models;
-    assert_eq!(models[0].web_search.as_deref(), Some("web_search_20250305"));
-    assert_eq!(models[1].web_search, None);
 }
 
 #[test]
@@ -587,26 +497,6 @@ fn reads_web_search_reads_one_type_per_protocol() {
 }
 
 #[test]
-fn opening_absent_is_none_and_present_reads_all_three_fields() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    setup.write(
-        &dir.join("extension.json"),
-        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1}"#,
-    );
-    assert!(read_manifest(&dir).unwrap().opening.is_none());
-    setup.write(
-        &dir.join("extension.json"),
-        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
-            "opening": {"machine": ["a/b.md"], "project": ["n.md"], "budget_bytes": 10}}"#,
-    );
-    let opening = read_manifest(&dir).unwrap().opening.unwrap();
-    assert_eq!(opening.machine, ["a/b.md"]);
-    assert_eq!(opening.project, ["n.md"]);
-    assert_eq!(opening.budget_bytes, Some(10));
-}
-
-#[test]
 fn opening_rejects_paths_outside_the_data_directory() {
     let setup = Setup::new();
     let dir = setup.root().join("ext");
@@ -657,52 +547,65 @@ fn thinking_declaration_parses_and_an_unknown_level_fails_the_parse() {
 const BASE: &str = r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1"#;
 
 #[test]
-fn secrets_default_to_none() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    setup.write(&dir.join("extension.json"), &format!("{BASE}}}"));
-    assert!(read_manifest(&dir).unwrap().secrets.is_empty());
-}
-
-#[test]
-fn secrets_read_in_order_and_a_repeated_name_is_kept() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    setup.write(
-        &dir.join("extension.json"),
-        &format!(r#"{BASE}, "secrets": ["acme.api_key", "acme.url", "acme.api_key"]}}"#),
-    );
-    assert_eq!(
-        read_manifest(&dir).unwrap().secrets,
-        ["acme.api_key", "acme.url", "acme.api_key"]
-    );
-}
-
-#[test]
-fn a_secret_name_with_dots_reads() {
-    let setup = Setup::new();
-    let dir = setup.root().join("ext");
-    setup.write(
-        &dir.join("extension.json"),
-        &format!(r#"{BASE}, "secrets": [".hidden", "mcp.server.KEY"]}}"#),
-    );
-    assert_eq!(
-        read_manifest(&dir).unwrap().secrets,
-        [".hidden", "mcp.server.KEY"]
-    );
-}
-
-#[test]
-fn login_reads_browser_and_defaults_to_none() {
+fn required_fields_only_read_every_default() {
     let setup = Setup::new();
     let dir = setup.root().join("ext");
     setup.write(
         &dir.join("providers/p.json"),
-        r#"{"name":"p","login":"browser","models":[]}"#,
+        r#"{"name":"p","models":[
+            {"id":"bare","protocol":"openai-responses","base_url":"u"},
+            {"id":"flat","protocol":"openai-responses","base_url":"u",
+             "cost": {"input": 1.0, "output": 2.0}}]}"#,
     );
-    assert_eq!(read_providers(&dir).unwrap()[0].login, Some(Login::Browser));
-    setup.write(&dir.join("providers/p.json"), r#"{"name":"p","models":[]}"#);
-    assert_eq!(read_providers(&dir).unwrap()[0].login, None);
+    let data = &read_providers(&dir).unwrap()[0];
+    assert_eq!(data.credential, None);
+    assert_eq!(data.credential_name, None);
+    assert!(data.headers.is_empty());
+    assert!(data.placeholders.is_empty());
+    assert_eq!(data.reviewer_model, None);
+    assert_eq!(data.login, None);
+    let [bare, flat] = data.models.as_slice() else {
+        panic!("{:?}", data.models);
+    };
+    assert!(bare.compat.is_empty());
+    assert!(!bare.deferred_tools);
+    assert!(bare.extra_body.is_empty());
+    assert_eq!(bare.context_window, None);
+    assert_eq!(bare.max_output_tokens, None);
+    assert!(bare.input.is_empty());
+    assert_eq!(bare.cost, None);
+    assert!(!bare.subscription);
+    assert_eq!(bare.web_search, None);
+    assert!(bare.thinking_levels.is_empty());
+    assert_eq!(bare.thinking_default, None);
+    assert_eq!(bare.prompt_addendum, None);
+    let cost = flat.cost.as_ref().unwrap();
+    assert_eq!(cost.cache_read, None);
+    assert_eq!(cost.cache_write, None);
+    assert!(cost.tiers.is_empty());
+    setup.write(&dir.join("extension.json"), &format!("{BASE}}}"));
+    let manifest = read_manifest(&dir).unwrap();
+    assert!(manifest.depends.is_empty());
+    assert!(manifest.binaries.is_empty());
+    assert_eq!(manifest.process, None);
+    assert_eq!(manifest.install, None);
+    assert_eq!(manifest.prompt, None);
+    assert_eq!(manifest.memory_mib, None);
+    assert!(manifest.replaces.is_empty());
+    assert_eq!(manifest.opening, None);
+    assert!(manifest.repo_settings.is_empty());
+    assert!(manifest.secrets.is_empty());
+    setup.write(
+        &dir.join("extension.json"),
+        &format!(r#"{BASE}, "memory_mib": null, "opening": {{}}, "process": {{"program": "x"}}}}"#),
+    );
+    let manifest = read_manifest(&dir).unwrap();
+    assert_eq!(manifest.memory_mib, None);
+    let opening = manifest.opening.unwrap();
+    assert!(opening.machine.is_empty());
+    assert!(opening.project.is_empty());
+    assert_eq!(opening.budget_bytes, None);
+    assert!(manifest.process.unwrap().args.is_empty());
 }
 
 #[test]

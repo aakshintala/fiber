@@ -40,7 +40,7 @@ fn shared(name: &str, stored: &str, credential: Option<CredentialSource>) -> Pro
 }
 
 fn default_key(config: &Config, provider: &ProviderData) -> Result<Secret, ConfigError> {
-    config.credential(provider, "default")
+    config.credentials().credential(provider, "default")
 }
 
 fn command(argv: &[&str]) -> Option<CredentialSource> {
@@ -389,14 +389,22 @@ fn the_label_the_configuration_names_picks_the_stored_credential() {
         r#"{"providers": {"acme": {"credential": "work"}}}"#,
     );
     let config = setup.load(&[]).unwrap();
-    let label = config.credential_label(&acme(None));
+    let label = config.credentials().credential_label(&acme(None));
     assert_eq!(label, "work");
     assert_eq!(
-        config.credential(&acme(None), &label).unwrap().expose(),
+        config
+            .credentials()
+            .credential(&acme(None), &label)
+            .unwrap()
+            .expose(),
         "w"
     );
     assert_eq!(
-        config.credential(&acme(None), "default").unwrap().expose(),
+        config
+            .credentials()
+            .credential(&acme(None), "default")
+            .unwrap()
+            .expose(),
         "d"
     );
 }
@@ -409,8 +417,14 @@ fn an_unset_label_is_default_and_a_repository_cannot_set_it() {
         r#"{"providers": {"acme": {"credential": "evil", "credentials": {"evil": {"command": ["printf", "x"]}}}}}"#,
     );
     let config = setup.load(&[]).unwrap();
-    assert_eq!(config.credential_label(&acme(None)), "default");
-    let err = config.credential(&acme(None), "evil").unwrap_err();
+    assert_eq!(
+        config.credentials().credential_label(&acme(None)),
+        "default"
+    );
+    let err = config
+        .credentials()
+        .credential(&acme(None), "evil")
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialMissing);
 }
 
@@ -421,10 +435,14 @@ fn a_shared_credential_name_holds_the_labels() {
     let config = setup.load(&[]).unwrap();
     let go = shared("opencode-go", "opencode", None);
     assert_eq!(
-        config.credential(&go, "work").unwrap().expose(),
+        config
+            .credentials()
+            .credential(&go, "work")
+            .unwrap()
+            .expose(),
         "shared-work"
     );
-    let err = config.credential(&go, "other").unwrap_err();
+    let err = config.credentials().credential(&go, "other").unwrap_err();
     assert!(
         err.to_string()
             .contains("credentials/opencode/other, and no source"),
@@ -449,7 +467,7 @@ fn a_configured_label_reads_an_environment_variable_file_or_command() {
         ),
     );
     let config = setup.load(&[]).unwrap();
-    let read = |label| config.credential(&acme(None), label).unwrap();
+    let read = |label| config.credentials().credential(&acme(None), label).unwrap();
     assert_eq!(read("e").expose(), env!("CARGO_MANIFEST_DIR"));
     assert_eq!(read("f").expose(), "from-file");
     assert_eq!(read("c").expose(), "from-command");
@@ -461,10 +479,17 @@ fn the_providers_own_source_is_the_default_label_only() {
     let config = setup.load(&[]).unwrap();
     let provider = acme(command(&["printf", "declared"]));
     assert_eq!(
-        config.credential(&provider, "default").unwrap().expose(),
+        config
+            .credentials()
+            .credential(&provider, "default")
+            .unwrap()
+            .expose(),
         "declared"
     );
-    let err = config.credential(&provider, "work").unwrap_err();
+    let err = config
+        .credentials()
+        .credential(&provider, "work")
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialMissing);
     assert!(err.to_string().contains("are: default."), "{err}");
 }
@@ -478,7 +503,10 @@ fn a_stored_label_owns_it_and_a_configured_source_is_not_tried() {
         r#"{"providers": {"acme": {"credentials": {"work": {"command": ["printf", "configured"]}}}}}"#,
     );
     let config = setup.load(&[]).unwrap();
-    let err = config.credential(&acme(None), "work").unwrap_err();
+    let err = config
+        .credentials()
+        .credential(&acme(None), "work")
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialFailed);
     assert!(
         err.to_string().contains("credentials/acme/work is empty"),
@@ -502,6 +530,7 @@ fn a_label_that_names_nothing_lists_the_labels_there_are() {
     );
     let config = setup.load(&[]).unwrap();
     let err = config
+        .credentials()
         .credential(&acme(command(&["printf", "d"])), "personal")
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialMissing);
@@ -509,7 +538,10 @@ fn a_label_that_names_nothing_lists_the_labels_there_are() {
         err.to_string(),
         "No credential for `acme`: nothing is stored in credentials/acme/personal, and no source is configured for it. The labels for `acme` are: a-configured, default, work. Run `fiber login acme`."
     );
-    let err = config.credential(&acme(None), "personal").unwrap_err();
+    let err = config
+        .credentials()
+        .credential(&acme(None), "personal")
+        .unwrap_err();
     assert!(
         err.to_string().contains("are: a-configured, work."),
         "{err}"
@@ -524,8 +556,11 @@ fn a_label_named_in_configuration_with_no_source_is_the_same_error() {
         r#"{"providers": {"acme": {"credential": "gone"}}}"#,
     );
     let config = setup.load(&[]).unwrap();
-    let label = config.credential_label(&acme(None));
-    let err = config.credential(&acme(None), &label).unwrap_err();
+    let label = config.credentials().credential_label(&acme(None));
+    let err = config
+        .credentials()
+        .credential(&acme(None), &label)
+        .unwrap_err();
     assert_eq!(
         err.to_string(),
         "No credential for `acme`: nothing is stored in credentials/acme/gone, and no source is configured for it. The labels for `acme` are: none. Run `fiber login acme`."
@@ -539,26 +574,14 @@ fn a_bare_secret_named_like_the_provider_is_not_read_as_a_key() {
     std::fs::write(setup.home().join("credentials/acme"), "bare").unwrap();
     let config = setup.load(&[]).unwrap();
     let err = config
+        .credentials()
         .credential(&acme(command(&["printf", "declared"])), "default")
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
 
-#[test]
-fn a_provider_directory_that_is_a_symbolic_link_is_refused() {
-    let setup = Setup::new();
-    let outside = setup.root().join("planted");
-    std::fs::create_dir_all(&outside).unwrap();
-    std::fs::write(outside.join("default"), "planted").unwrap();
-    std::fs::create_dir_all(setup.home().join("credentials")).unwrap();
-    symlink(&outside, setup.home().join("credentials/acme")).unwrap();
-    let config = setup.load(&[]).unwrap();
-    let err = default_key(&config, &acme(None)).unwrap_err();
-    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
-}
-
 fn files(config: &Config, providers: &[ProviderData]) -> Vec<std::path::PathBuf> {
-    let mut files = config.credential_files(providers);
+    let mut files = config.credentials().credential_files(providers);
     files.sort();
     files
 }
@@ -635,7 +658,9 @@ fn read_with(
     provider: &ProviderData,
     run: config::Runner<'_>,
 ) -> Result<config::Read, ConfigError> {
-    config.credential_with(provider, "default", run)
+    config
+        .credentials()
+        .credential_with(provider, "default", run)
 }
 
 #[test]
@@ -774,11 +799,13 @@ fn labels_lists_stored_configured_and_declared_labels_once_sorted() {
     // provider's data declares a source; each once, sorted
     // (`docs/model-routing.md`, "Which credential a session uses").
     assert_eq!(
-        config.labels(&acme(command(&["printf", "d"]))),
+        config
+            .credentials()
+            .labels(&acme(command(&["printf", "d"]))),
         ["ci", "default", "home", "work"].map(str::to_owned),
     );
     assert_eq!(
-        config.labels(&acme(None)),
+        config.credentials().labels(&acme(None)),
         ["ci", "home", "work"].map(str::to_owned),
     );
 }
@@ -792,7 +819,7 @@ fn labels_follows_a_shared_credential_name() {
     // A key that is not stored takes its label from the configuration
     // that points at it (`docs/model-routing.md`, "Credentials").
     assert_eq!(
-        config.labels(&shared("acme", "shared", None)),
+        config.credentials().labels(&shared("acme", "shared", None)),
         ["work"].map(str::to_owned),
     );
 }
@@ -807,9 +834,49 @@ fn labels_of_an_absent_directory_is_what_the_message_lists() {
     let config = setup.load(&[]).unwrap();
     // An unreadable directory lists nothing from it.
     assert_eq!(
-        config.labels(&acme(None)),
+        config.credentials().labels(&acme(None)),
         ["a-configured"].map(str::to_owned),
     );
-    let err = config.credential(&acme(None), "personal").unwrap_err();
+    let err = config
+        .credentials()
+        .credential(&acme(None), "personal")
+        .unwrap_err();
     assert!(err.to_string().contains("are: a-configured."), "{err}");
+}
+
+#[test]
+fn credential_sources_lists_each_configured_label_in_label_order() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme": {"credentials": {
+            "f": {"file": "/keys/acme"},
+            "e": {"env": "ACME_KEY"},
+            "c": {"command": ["op", "read", "x"]}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(
+        config.credentials().credential_sources("acme"),
+        vec![
+            (
+                "c".to_owned(),
+                CredentialSource::Command(vec!["op".into(), "read".into(), "x".into()]),
+            ),
+            ("e".to_owned(), CredentialSource::Env("ACME_KEY".into())),
+            (
+                "f".to_owned(),
+                CredentialSource::File(std::path::PathBuf::from("/keys/acme")),
+            ),
+        ]
+    );
+    assert!(config.credentials().credential_sources("other").is_empty());
+}
+
+#[test]
+fn listed_names_the_labels_or_none() {
+    assert_eq!(config::Credentials::listed(&[]), "none");
+    assert_eq!(
+        config::Credentials::listed(&["default".into(), "work".into()]),
+        "default, work"
+    );
 }

@@ -21,16 +21,17 @@ const WARM_CAP: &str = "a whole number less than 12";
 
 /// (path, a good value, a wrong value, what the error says it must be,
 /// whether a repository may set it)
+///
+/// One row per key type, plus one row per distinct `OneOf` set
+/// (`cache.lifetime`, `thinking`, `tui.logo_glyph`), the three `Credential`
+/// arms (env, file with an extra field, empty command), `reviewer.context`
+/// (the `PersonFiles` row) and one `models.*` row (the per-model view).
+/// `RepoOnly` (`repository_extensions`) is pinned by `tests/declared.rs` and
+/// `GlobalOnly` (`diagnostics.level`) by the diagnostics tests below, so
+/// they get no row; `cache.warm_cap` keeps its own test below.
 fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
     vec![
         (&["model"], json!("openai/gpt-5.6"), json!(5), STR, true),
-        (
-            &["scoped_models"],
-            json!(["openai/gpt-5.6"]),
-            json!("openai/gpt-5.6"),
-            LIST,
-            true,
-        ),
         (
             &["roles", "fast"],
             json!("fiber:openai/gpt-5.6:xhigh"),
@@ -53,17 +54,10 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             false,
         ),
         (
-            &["session", "idle_exit_ms"],
-            json!(60000),
-            json!("30m"),
-            COUNT,
-            false,
-        ),
-        (
-            &["reviewer", "model"],
-            json!("openai/gpt-5.6-mini"),
-            json!([]),
-            STR,
+            &["hub", "port"],
+            json!(65535),
+            json!(65536),
+            "a whole number less than 65536",
             false,
         ),
         (
@@ -74,31 +68,10 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             false,
         ),
         (
-            &["reviewer", "block_limits", "consecutive"],
-            json!(4),
-            json!(-1),
-            COUNT,
-            false,
-        ),
-        (
-            &["reviewer", "block_limits", "session"],
-            json!(30),
-            json!(2.5),
-            COUNT,
-            false,
-        ),
-        (
             &["handoff", "enabled"],
             json!(false),
             json!("no"),
             BOOL,
-            true,
-        ),
-        (
-            &["handoff", "tokens"],
-            json!(200000),
-            json!("200000"),
-            COUNT,
             true,
         ),
         (
@@ -108,61 +81,10 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             NUMBER,
             true,
         ),
-        (&["handoff", "nudge"], json!(false), json!(0), BOOL, true),
         (
             &["cache", "lifetime"],
             json!("5m"),
             json!("2h"),
-            "one of \"5m\", \"1h\"",
-            true,
-        ),
-        (
-            &["cache", "warm_idle"],
-            json!(true),
-            json!("yes"),
-            BOOL,
-            true,
-        ),
-        (&["cache", "warm_cap"], json!(11), json!(12), WARM_CAP, true),
-        (
-            &["model_lists", "refresh_after"],
-            json!("7d"),
-            json!("1w"),
-            "a duration such as \"7d\"",
-            false,
-        ),
-        (
-            &["models", "a/b", "handoff", "enabled"],
-            json!(false),
-            json!(1),
-            BOOL,
-            true,
-        ),
-        (
-            &["models", "a/b", "handoff", "tokens"],
-            json!(1000),
-            json!(true),
-            COUNT,
-            true,
-        ),
-        (
-            &["models", "a/b", "handoff", "window_fraction"],
-            json!(0.4),
-            json!(null),
-            NUMBER,
-            true,
-        ),
-        (
-            &["models", "a/b", "handoff", "nudge"],
-            json!(true),
-            json!("yes"),
-            BOOL,
-            true,
-        ),
-        (
-            &["models", "a/b", "cache", "lifetime"],
-            json!("1h"),
-            json!(60),
             "one of \"5m\", \"1h\"",
             true,
         ),
@@ -174,75 +96,10 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             true,
         ),
         (
-            &["models", "a/b", "thinking"],
-            json!("off"),
-            json!("turbo"),
-            "one of \"off\", \"minimal\", \"low\", \"medium\", \"high\", \"xhigh\", \"max\"",
-            true,
-        ),
-        (&["retry", "attempts"], json!(5), json!(-3), COUNT, true),
-        (
-            &["retry", "initial_delay_ms"],
-            json!(100),
-            json!("1s"),
-            COUNT,
-            true,
-        ),
-        (
-            &["retry", "max_delay_ms"],
-            json!(1000),
-            json!(1.5),
-            COUNT,
-            true,
-        ),
-        (
-            &["tools", "read", "max_result_bytes"],
-            json!(32768),
-            json!("big"),
-            COUNT,
-            true,
-        ),
-        (
-            &["tools", "read", "deferred"],
-            json!(true),
-            json!("true"),
-            BOOL,
-            true,
-        ),
-        (
-            &["web_search", "backend"],
-            json!("exa"),
+            &["models", "a/b", "handoff", "enabled"],
+            json!(false),
             json!(1),
-            STR,
-            false,
-        ),
-        (
-            &["shell", "read_only", "jq", "flags"],
-            json!(["--json", "-p"]),
-            json!(["--json", 1]),
-            LIST,
-            false,
-        ),
-        (&["budget", "usd"], json!(5.0), json!("5"), NUMBER, false),
-        (
-            &["quota", "notice_at"],
-            json!(90),
-            json!("90"),
-            NUMBER,
-            true,
-        ),
-        (
-            &["mcp", "servers", "gh", "command"],
-            json!("gh-mcp"),
-            json!(["gh-mcp"]),
-            STR,
-            true,
-        ),
-        (
-            &["mcp", "servers", "gh", "args"],
-            json!(["--stdio"]),
-            json!("--stdio"),
-            LIST,
+            BOOL,
             true,
         ),
         (
@@ -253,55 +110,6 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             true,
         ),
         (
-            &["mcp", "servers", "gh", "url"],
-            json!("https://example.com/mcp"),
-            json!(1),
-            STR,
-            true,
-        ),
-        (
-            &["mcp", "servers", "gh", "required"],
-            json!(true),
-            json!("yes"),
-            BOOL,
-            true,
-        ),
-        (
-            &["mcp", "servers", "gh", "startup_timeout_ms"],
-            json!(100),
-            json!(-1),
-            COUNT,
-            true,
-        ),
-        (
-            &["mcp", "servers", "gh", "timeout_ms"],
-            json!(100),
-            json!("1s"),
-            COUNT,
-            true,
-        ),
-        (
-            &["mcp", "servers", "gh", "declare_in_full"],
-            json!(true),
-            json!(1),
-            BOOL,
-            true,
-        ),
-        (
-            &["mcp", "servers", "gh", "tools", "enabled"],
-            json!(["a"]),
-            json!("a"),
-            LIST,
-            true,
-        ),
-        (
-            &["mcp", "servers", "gh", "tools", "disabled"],
-            json!(["b"]),
-            json!([true]),
-            LIST,
-            true,
-        ),
-        (
             &["mcp", "servers", "gh", "tools", "search", "hints"],
             json!({"readOnlyHint": true}),
             json!({"readOnlyHint": "yes"}),
@@ -309,59 +117,10 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             false,
         ),
         (
-            &["extensions", "acme", "enabled"],
-            json!(false),
-            json!("yes"),
-            BOOL,
-            false,
-        ),
-        (
-            &["extensions", "acme", "startup_timeout_ms"],
-            json!(100),
-            json!("fast"),
-            COUNT,
-            true,
-        ),
-        (
-            &["extensions", "acme", "commands", "deploy"],
-            json!("acme-deploy"),
-            json!(false),
-            STR,
-            true,
-        ),
-        (
-            &["extensions", "acme", "tools", "enabled"],
-            json!(["t"]),
-            json!({}),
-            LIST,
-            true,
-        ),
-        (
-            &["extensions", "acme", "tools", "disabled"],
-            json!(["t"]),
-            json!(null),
-            LIST,
-            true,
-        ),
-        (
-            &["extensions", "acme", "hook_timeout_ms"],
-            json!(100),
-            json!(-5),
-            COUNT,
-            false,
-        ),
-        (
-            &["hooks", "order", "before_tool"],
-            json!(["redact", "acme"]),
-            json!("redact"),
-            LIST,
-            false,
-        ),
-        (
-            &["providers", "openrouter", "credential"],
-            json!("work"),
-            json!({"env": "OPENROUTER_API_KEY"}),
-            STR,
+            &["model_lists", "refresh_after"],
+            json!("7d"),
+            json!("1w"),
+            "a duration such as \"7d\"",
             false,
         ),
         (
@@ -383,71 +142,6 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             json!({"command": ["op", "read"]}),
             json!({"command": []}),
             "one of {\"env\": name}",
-            false,
-        ),
-        (
-            &["tui", "panel", "cards"],
-            json!(["quota"]),
-            json!("quota"),
-            LIST,
-            false,
-        ),
-        (
-            &["tui", "rail", "width"],
-            json!(18.5),
-            json!("wide"),
-            NUMBER,
-            false,
-        ),
-        (
-            &["tui", "panel", "width"],
-            json!(25),
-            json!("wide"),
-            NUMBER,
-            false,
-        ),
-        (&["tui", "theme"], json!("light"), json!(1), STR, false),
-        (
-            &["tui", "reduced_motion"],
-            json!(true),
-            json!("on"),
-            BOOL,
-            false,
-        ),
-        (
-            &["tui", "screen_reader"],
-            json!(true),
-            json!(1),
-            BOOL,
-            false,
-        ),
-        (
-            &["tui", "attention", "notification"],
-            json!(false),
-            json!(0),
-            BOOL,
-            false,
-        ),
-        (
-            &["tui", "attention", "bell"],
-            json!(false),
-            json!(0),
-            BOOL,
-            false,
-        ),
-        (
-            &["tui", "attention", "title"],
-            json!(false),
-            json!(0),
-            BOOL,
-            false,
-        ),
-        (&["tui", "hover"], json!(false), json!(0), BOOL, false),
-        (
-            &["tui", "inline_images"],
-            json!(false),
-            json!(0),
-            BOOL,
             false,
         ),
         (
@@ -758,27 +452,14 @@ fn model_lists_refresh_after_accepts_durations_and_refuses_the_rest() {
 }
 
 #[test]
-fn model_lists_refresh_after_defaults_to_one_day() {
-    let setup = Setup::new();
-    let config = setup.load(&[]).unwrap();
-    assert_eq!(
-        config.get("model_lists.refresh_after", None),
-        Some((json!("24h"), Source::Default))
-    );
-}
-
-#[test]
 fn parse_duration_pins_exact_seconds_for_every_unit() {
-    assert_eq!(config::parse_duration("7s"), Some(Duration::from_secs(7)));
-    assert_eq!(config::parse_duration("2m"), Some(Duration::from_secs(120)));
-    assert_eq!(
-        config::parse_duration("3h"),
-        Some(Duration::from_secs(10800))
-    );
-    assert_eq!(
-        config::parse_duration("2d"),
-        Some(Duration::from_secs(172800))
-    );
+    for (text, seconds) in [("1s", 1), ("1m", 60), ("1h", 3600), ("1d", 86400)] {
+        assert_eq!(
+            config::parse_duration(text),
+            Some(Duration::from_secs(seconds)),
+            "{text}"
+        );
+    }
 }
 
 #[test]

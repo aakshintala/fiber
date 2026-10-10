@@ -32,7 +32,8 @@ fn settings_merge_across_the_layers_in_order() {
         ])
         .unwrap();
     let (settings, notices) = config
-        .extension_settings(ACME, &["workspace_url", "c"])
+        .extensions()
+        .merged(ACME, &["workspace_url", "c"])
         .unwrap();
     assert_eq!(
         settings,
@@ -54,7 +55,8 @@ fn a_repository_key_not_in_repo_settings_is_a_notice_and_ignored() {
     let (settings, notices) = setup
         .load(&[])
         .unwrap()
-        .extension_settings(ACME, &["workspace_url"])
+        .extensions()
+        .merged(ACME, &["workspace_url"])
         .unwrap();
     assert_eq!(settings, json!({"workspace_url": "https://repo"}));
     let [notice] = notices.as_slice() else {
@@ -78,7 +80,8 @@ fn the_person_s_own_files_set_any_key() {
     let (settings, notices) = setup
         .load(&[])
         .unwrap()
-        .extension_settings(ACME, &[])
+        .extensions()
+        .merged(ACME, &[])
         .unwrap();
     assert_eq!(settings, json!({"token_command": "op read"}));
     assert!(notices.is_empty());
@@ -97,7 +100,10 @@ fn settings_in_config_json_are_unknown_keys() {
             .message
             .contains("`extensions.acme.settings`")
     );
-    assert_eq!(config.extension_settings("acme", &[]).unwrap().0, json!({}));
+    assert_eq!(
+        config.extensions().merged("acme", &[]).unwrap().0,
+        json!({})
+    );
 }
 
 #[test]
@@ -109,7 +115,8 @@ fn a_settings_file_that_is_not_an_object_or_not_json_is_config_invalid() {
         let e = setup
             .load(&[])
             .unwrap()
-            .extension_settings(ACME, &[])
+            .extensions()
+            .merged(ACME, &[])
             .unwrap_err();
         assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{text}");
         assert!(
@@ -123,9 +130,9 @@ fn a_settings_file_that_is_not_an_object_or_not_json_is_config_invalid() {
 fn another_extension_s_run_settings_are_not_this_one_s() {
     let setup = Setup::new();
     let config = setup.load(&["extensions.other.settings.a=1"]).unwrap();
-    assert_eq!(config.extension_settings(ACME, &[]).unwrap().0, json!({}));
+    assert_eq!(config.extensions().merged(ACME, &[]).unwrap().0, json!({}));
     assert_eq!(
-        config.extension_settings("other", &[]).unwrap().0,
+        config.extensions().merged("other", &[]).unwrap().0,
         json!({"a": 1})
     );
 }
@@ -138,7 +145,10 @@ fn a_run_flag_for_an_extension_s_own_key_is_configuration_not_a_setting() {
         config.get("extensions.acme.enabled", None),
         Some((json!(false), config::Source::Run))
     );
-    assert_eq!(config.extension_settings("acme", &[]).unwrap().0, json!({}));
+    assert_eq!(
+        config.extensions().merged("acme", &[]).unwrap().0,
+        json!({})
+    );
 }
 
 #[test]

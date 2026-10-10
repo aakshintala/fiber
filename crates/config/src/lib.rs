@@ -11,6 +11,7 @@ mod credential;
 mod credential_file;
 mod error;
 mod extension;
+mod extension_settings;
 mod home;
 mod keys;
 mod names;
@@ -25,7 +26,6 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::{Map, Value};
 
@@ -33,13 +33,14 @@ pub use cache::{
     cached_model_lists, model_cache_age, model_cache_lock_file, read_model_cache, write_model_cache,
 };
 pub use contract::Secret;
-pub use credential::{Read, Runner};
+pub use credential::{Credentials, Read, Runner};
 pub use credential_file::{CredentialFile, CredentialLock};
 pub use error::ConfigError;
 pub use extension::{
     Binary, Cost, Login, Manifest, ModelData, Opening, Placeholder, Process, Protocol,
     ProviderData, Tier, read_manifest, read_package_text, read_providers,
 };
+pub use extension_settings::ExtensionSettings;
 pub use home::{
     ProjectKey, create_fiber_home, fiber_home, fiber_home_from_env, fiber_home_path,
     fiber_home_path_from_env,
@@ -50,13 +51,13 @@ pub use secret::{
     CredentialSource, credential_labels, delete_credential, delete_credential_held,
     read_credential, read_secret, store_credential, store_secret,
 };
-pub use settings::{SettingInfo, SettingValue, WriteScope};
+pub use settings::{SettingInfo, SettingValue};
 pub use write::{
     Layer, ListChange, ListEdit, Scope, edit_list, get_global, remove_extension_settings,
-    replace_global, set, set_global, set_global_if_unset, update_global_entries, write_atomic,
+    replace_global, set, set_global_if_unset, update_global_entries, write_atomic,
 };
 
-pub use keys::{diagnostics_debug, parse_duration, refresh_after};
+pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};
 
 use home::{parse, plain, read, read_bytes};
 
@@ -87,6 +88,19 @@ pub enum Source {
     Run,
 }
 
+impl Source {
+    /// The write layer this source's file is, if any: the built-in
+    /// defaults and `-c` flags name no file.
+    pub fn layer(&self) -> Option<Layer> {
+        match self {
+            Self::Global(_) => Some(Layer::Global),
+            Self::Project(_) => Some(Layer::Project),
+            Self::Repository(_) => Some(Layer::Repository),
+            Self::Default | Self::Run => None,
+        }
+    }
+}
+
 impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -100,33 +114,27 @@ impl fmt::Display for Source {
 }
 
 /// A session's configuration, read once: every layer that was present,
-/// checked against "Keys", lowest first, and every extension settings file.
-/// Nothing here is read again until the next load (`docs/configuration.md`,
-/// "When Fiber reads configuration").
+/// checked against "Keys", lowest first, one extension's settings, and
+/// one provider subtree's credentials. Nothing here is read again until
+/// the next load (`docs/configuration.md`, "When Fiber reads
+/// configuration").
 #[derive(Clone)]
 pub struct Config {
-    home: PathBuf,
-    workspace: PathBuf,
-    project: ProjectKey,
     layers: Vec<(Source, Value)>,
-    /// `-c extensions."<name>".settings.<key>=value`, by extension.
-    run_settings: Map<String, Value>,
-    /// The bytes of every `config/<extension>.json` in each layer, by path.
-    settings_files: BTreeMap<PathBuf, Vec<u8>>,
     notices: Vec<Notice>,
-    /// What each `command` credential source printed or why it failed, by
-    /// stored credential name and label; shared by every clone.
-    commands: credential::CommandRuns,
+    extensions: ExtensionSettings,
+    credentials: Credentials,
 }
 
-/// Shows where the configuration came from, never a value: a `-c` value or an
-/// extension's setting may be something the person would not print.
+/// Shows where the configuration came from, never a value: a `-c` value, a
+/// credential source's arguments or an extension's setting may be something
+/// the person would not print.
 impl fmt::Debug for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let sources: Vec<&Source> = self.layers.iter().map(|(source, _)| source).collect();
         f.debug_struct("Config")
             .field("layers", &sources)
-            .field("settings_files", &self.settings_files.keys())
+            .field("extensions", &self.extensions)
             .field("notices", &self.notices)
             .finish_non_exhaustive()
     }
@@ -170,13 +178,7 @@ impl Config {
         let project_dir = home.join("projects").join(sources.project.as_str());
         let mut notices = Vec::new();
         let mut layers = vec![(Source::Default, keys::defaults())];
-        let repository_file = fiber.join("config.json");
-        plain(&fiber, true)?;
-        let repository = if plain(&repository_file, false)? {
-            read(&repository_file)?
-        } else {
-            None
-        };
+        let (repository_file, repository) = read_repository(&sources.workspace)?;
         let files = [
             (
                 Source::Global(home.join("config.json")),
@@ -203,15 +205,22 @@ impl Config {
         for (dir, repo) in [(&home, false), (&fiber, true), (&project_dir, false)] {
             snapshot_settings(dir, repo, &mut settings_files)?;
         }
-        Ok(Self {
-            home,
-            workspace: sources.workspace,
-            project: sources.project,
-            layers,
+        let extensions = ExtensionSettings::new(
+            home.clone(),
+            sources.workspace.clone(),
+            sources.project.clone(),
             run_settings,
             settings_files,
+        );
+        let providers = merge_layers(&layers, None)
+            .get("providers")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        Ok(Self {
+            layers,
             notices,
-            commands: credential::CommandRuns::default(),
+            extensions,
+            credentials: Credentials::new(home, providers, credential::CommandRuns::default()),
         })
     }
 
@@ -221,65 +230,36 @@ impl Config {
         &self.notices
     }
 
-    /// The workspace whose `.fiber/` is the repository layer.
-    pub fn workspace(&self) -> &Path {
-        &self.workspace
+    /// One extension's settings files.
+    pub fn extensions(&self) -> &ExtensionSettings {
+        &self.extensions
     }
 
-    /// The project, naming `projects/<key>/` in Fiber home.
-    pub fn project(&self) -> &ProjectKey {
-        &self.project
+    /// One extension's settings files, to write through.
+    pub fn extensions_mut(&mut self) -> &mut ExtensionSettings {
+        &mut self.extensions
     }
 
-    /// The merged value of `key` in `extension`'s settings, `None` when no
-    /// layer sets it. `key` is a dotted key in the `path::parse` syntax
-    /// `fiber config get` uses; the repository's file contributes only the
-    /// keys `repo_settings` lists. Notices about ignored repository keys
-    /// are dropped here; the session collects them once at load.
-    pub fn extension_setting(
-        &self,
-        extension: &str,
-        repo_settings: &[&str],
-        key: &str,
-    ) -> Result<Option<Value>, ConfigError> {
-        let key = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
-        // `extension_settings` reads its name as either spelling.
-        let (merged, _) = self.extension_settings(extension, repo_settings)?;
-        Ok(path::get(&merged, &key).cloned())
+    /// One provider subtree's credentials.
+    pub fn credentials(&self) -> &Credentials {
+        &self.credentials
     }
 
     /// Every layer merged, lowest first. With a model, each layer's
     /// `models."<model>"` wins over the same keys at that layer's top level
-    /// ("Per model").
+    /// ("Per model"). Each key combines as its row says
+    /// (`docs/configuration.md`, "Layers"): a union key holds every
+    /// layer's names, a credential entry is replaced whole, and any other
+    /// value replaces the one below it, an object key by key.
     pub fn merged(&self, model: Option<&str>) -> Value {
-        let mut merged = Value::Object(Map::new());
-        for (_, layer) in &self.layers {
-            let upper = view(layer, model);
-            // Each entry under a provider's `credentials` replaces the one
-            // below it as a whole (docs/configuration.md, "Layers").
-            for (name, provider) in upper
-                .get("providers")
-                .and_then(Value::as_object)
+        let mut merged = merge_layers(&self.layers, model);
+        for key in keys::union_rows() {
+            let names: Vec<Value> = self
+                .unioned(&key, model)
                 .into_iter()
-                .flatten()
-            {
-                for label in provider
-                    .get("credentials")
-                    .and_then(Value::as_object)
-                    .into_iter()
-                    .flat_map(Map::keys)
-                {
-                    if let Some(below) = merged
-                        .get_mut("providers")
-                        .and_then(|p| p.get_mut(name))
-                        .and_then(|p| p.get_mut("credentials"))
-                        .and_then(Value::as_object_mut)
-                    {
-                        below.remove(label);
-                    }
-                }
-            }
-            path::merge(&mut merged, &upper);
+                .map(|(name, _)| Value::String(name))
+                .collect();
+            path::set(&mut merged, &key, Value::Array(names));
         }
         merged
     }
@@ -319,12 +299,41 @@ impl Config {
         let Some(key) = path::parse(key) else {
             return Vec::new();
         };
-        let mut names: Vec<String> = Vec::new();
-        for (_, layer) in &self.layers {
-            let items = path::get(layer, &key).and_then(Value::as_array);
+        self.unioned(&key, None)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// The names at `key` with their source. A union carries each name's
+    /// lowest layer; any other merge kind carries the effective list's
+    /// highest layer. The key's `Merge` row selects which behavior applies.
+    /// Reads each layer through its per-model view, as `merged` does, so a
+    /// model view and the raw layer never disagree.
+    pub(crate) fn unioned(&self, key: &[String], model: Option<&str>) -> Vec<(String, Source)> {
+        let Some(row) = keys::leaf(key) else {
+            return Vec::new();
+        };
+        if row.merge != keys::Merge::Union {
+            let Some((value, source)) = self.get(&path::display(key), model) else {
+                return Vec::new();
+            };
+            return value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|name| (name.to_owned(), source.clone()))
+                .collect();
+        }
+
+        let mut names: Vec<(String, Source)> = Vec::new();
+        for (source, layer) in &self.layers {
+            let seen = view(layer, model);
+            let items = path::get(&seen, key).and_then(Value::as_array);
             for name in items.into_iter().flatten().filter_map(Value::as_str) {
-                if !names.iter().any(|seen| seen == name) {
-                    names.push(name.to_owned());
+                if !names.iter().any(|(seen, _)| seen == name) {
+                    names.push((name.to_owned(), source.clone()));
                 }
             }
         }
@@ -360,98 +369,6 @@ impl Config {
             })
             .collect::<Vec<_>>()
             .join("\n\n")
-    }
-
-    /// An extension's settings, merged across its layers as they were when
-    /// this configuration was loaded, plus its own writes since
-    /// (`docs/configuration.md`, "Extension settings"). The repository's file
-    /// may set only the keys the extension's manifest lists under
-    /// `repo_settings`; any other key there is a notice and is ignored.
-    pub fn extension_settings(
-        &self,
-        extension: &str,
-        repo_settings: &[&str],
-    ) -> Result<(Value, Vec<Notice>), ConfigError> {
-        let extension = &full_name(extension);
-        let files = [
-            (write::settings_file(&self.home, extension), false),
-            (
-                write::settings_file(&self.workspace.join(".fiber"), extension),
-                true,
-            ),
-            (
-                write::settings_file(
-                    &self.home.join("projects").join(self.project.as_str()),
-                    extension,
-                ),
-                false,
-            ),
-        ];
-        let mut merged = Value::Object(Map::new());
-        let mut notices = Vec::new();
-        for (file, repo) in files {
-            let Some(bytes) = self.settings_files.get(&file) else {
-                continue;
-            };
-            let Value::Object(mut map) = parse(&file, bytes)? else {
-                return Err(top_level(&file.display().to_string()));
-            };
-            if repo {
-                map.retain(|key, _| {
-                    let allowed = repo_settings.contains(&key.as_str());
-                    if !allowed {
-                        notices.push(Notice {
-                            code: ErrorCode::ConfigKeyIgnored,
-                            message: format!(
-                                "{}: ignored `{key}`, which the extension does not list under repo_settings.",
-                                file.display()
-                            ),
-                            extension: Some(extension.into()),
-                        });
-                    }
-                    allowed
-                });
-            }
-            path::merge(&mut merged, &Value::Object(map));
-        }
-        if let Some(run) = self.run_settings.get(extension) {
-            path::merge(&mut merged, run);
-        }
-        Ok((merged, notices))
-    }
-
-    /// Sets one key in an extension's settings file (`host.config.set`). The
-    /// value is visible to this configuration at once, and to other sessions
-    /// at their next load ("When Fiber reads configuration").
-    pub fn set_extension_setting(
-        &mut self,
-        extension: &str,
-        scope: Scope,
-        key: &str,
-        value: Value,
-    ) -> Result<(), ConfigError> {
-        let extension = &full_name(extension);
-        let dir = match scope {
-            Scope::Machine => self.home.clone(),
-            Scope::Project => self.home.join("projects").join(self.project.as_str()),
-        };
-        let file = write::settings_file(&dir, extension);
-        let key = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
-        // The session's copy is built first. A copy this session read as
-        // invalid JSON fails the write before the disk is touched: "Invalid
-        // JSON, or a value of the wrong type, is a startup error", and the
-        // session sees a repaired file at its next reload.
-        let mut cached = match self.settings_files.get(&file) {
-            Some(bytes) => parse(&file, bytes)?,
-            None => Value::Object(Map::new()),
-        };
-        path::set(&mut cached, &key, value.clone());
-        // The file on disk may hold other sessions' writes too; this session
-        // sees only its own until its next load.
-        write::update(&file, &key, value, false)?;
-        self.settings_files
-            .insert(file, cached.to_string().into_bytes());
-        Ok(())
     }
 }
 
@@ -491,13 +408,9 @@ const HOOKS_EXTENSION: &str = "github.com/aakshintala/fiber/extensions/hooks";
 /// checks as [`Config::load`]. A repository with none gets an empty
 /// [`Declared`].
 pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
-    let fiber = workspace.join(".fiber");
-    plain(&fiber, true)?;
     let mut declared = Declared::default();
-    let file = fiber.join("config.json");
-    if plain(&file, false)?
-        && let Some(value) = read(&file)?
-    {
+    let (file, repository) = read_repository(workspace)?;
+    if let Some(value) = repository {
         let Value::Object(layer) = value else {
             return Err(top_level(&file.display().to_string()));
         };
@@ -522,12 +435,11 @@ pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
             declared.mcp_servers = servers.clone();
         }
     }
-    plain(&fiber.join("config"), true)?;
-    let hooks_file = write::settings_file(&fiber, HOOKS_EXTENSION);
-    if plain(&hooks_file, false)?
-        && let Some(bytes) = read_bytes(&hooks_file)?
-    {
-        let Value::Object(map) = parse(&hooks_file, &bytes)? else {
+    let mut settings_files = BTreeMap::new();
+    snapshot_settings(&workspace.join(".fiber"), true, &mut settings_files)?;
+    let hooks_file = write::settings_file(&workspace.join(".fiber"), HOOKS_EXTENSION);
+    if let Some(bytes) = settings_files.get(&hooks_file) {
+        let Value::Object(map) = parse(&hooks_file, bytes)? else {
             return Err(top_level(&hooks_file.display().to_string()));
         };
         match map.get("hooks") {
@@ -543,6 +455,21 @@ pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
         }
     }
     Ok(declared)
+}
+
+/// The workspace's `.fiber/config.json`: plain-file checks, then the
+/// parsed value, shared by [`Config::load`] and [`declared`]. `None` when
+/// there is no such file.
+fn read_repository(workspace: &Path) -> Result<(PathBuf, Option<Value>), ConfigError> {
+    let fiber = workspace.join(".fiber");
+    plain(&fiber, true)?;
+    let file = fiber.join("config.json");
+    let value = if plain(&file, false)? {
+        read(&file)?
+    } else {
+        None
+    };
+    Ok((file, value))
 }
 
 /// Reads every `*.json` in a layer directory's `config/` into `into`. In a
@@ -579,6 +506,49 @@ fn snapshot_settings(
     Ok(())
 }
 
+/// Every layer in `layers` merged, lowest first, each with its
+/// `models."<model>"` laid over its top level.
+fn merge_layers(layers: &[(Source, Value)], model: Option<&str>) -> Value {
+    let mut merged = Value::Object(Map::new());
+    for (_, layer) in layers {
+        lay(&mut merged, &view(layer, model), &mut Vec::new());
+    }
+    merged
+}
+
+/// Lays `upper` over `merged` as one row's merge kind says: a credential
+/// entry replaces the one below as a whole, and any other value replaces
+/// the one below it, an object key by key. Union keys are skipped: after
+/// the walk `merged` fills them from `unioned`, so every reader shares one
+/// table-selected union.
+fn lay(merged: &mut Value, upper: &Value, path: &mut Vec<String>) {
+    if let Some(row) = keys::leaf(path)
+        && row.merge == keys::Merge::EntryReplace
+    {
+        path::set(merged, path, upper.clone());
+        return;
+    }
+    match upper {
+        Value::Object(map) if map.is_empty() => {
+            // An emptied object still names its path: the layers below
+            // kept nothing under it, but it is set, not dropped.
+            if path::get(merged, path).is_none() {
+                path::set(merged, path, Value::Object(Map::new()));
+            }
+        }
+        Value::Object(map) => {
+            for (name, value) in map {
+                path.push(name.clone());
+                lay(merged, value, path);
+                path.pop();
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            path::set(merged, path, upper.clone())
+        }
+    }
+}
+
 /// A layer with its `models."<model>"` laid over its top level.
 fn view(layer: &Value, model: Option<&str>) -> Value {
     let mut view = layer.clone();
@@ -590,7 +560,7 @@ fn view(layer: &Value, model: Option<&str>) -> Value {
     view
 }
 
-fn top_level(source_name: &str) -> ConfigError {
+pub(crate) fn top_level(source_name: &str) -> ConfigError {
     ConfigError::WrongType {
         source_name: source_name.into(),
         key: "(the whole file)".into(),

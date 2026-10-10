@@ -9,18 +9,53 @@ fn thinking_key_values_match_the_contract_levels() {
 }
 
 #[test]
-fn hub_port_is_a_port_number_a_repository_may_not_set() {
-    let port = leaf(&["hub".to_owned(), "port".to_owned()]).expect("hub.port is a key");
-    assert!(!port.repo);
-    assert!(port.default.is_none());
-    for good in [serde_json::json!(4040), serde_json::json!(65535)] {
-        assert!(port.kind.accepts(&good), "{good}");
-    }
-    for bad in [
-        serde_json::json!("x"),
-        serde_json::json!(65536),
-        serde_json::json!(-1),
+fn each_write_scope_answers_whether_a_repository_sets_it() {
+    let source = crate::Source::Repository("repo/config.json".into());
+    let checked = |text: &str| {
+        let layer: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(text).expect("the test layer parses");
+        let mut notices = Vec::new();
+        let kept = check(layer, &source, &mut notices).expect("the test layer checks");
+        (kept, notices)
+    };
+    // `Any { repo: true }` stays.
+    let (kept, notices) = checked(r#"{"model": "a/b"}"#);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(kept.get("model"), Some(&serde_json::json!("a/b")));
+    // `Any { repo: false }` is ignored.
+    let (kept, notices) = checked(r#"{"hub": {"port": 4040}}"#);
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(
+        notices[0]
+            .message
+            .ends_with("`hub.port`, which a repository may not set."),
+        "{}",
+        notices[0].message
+    );
+    assert!(kept.get("hub").unwrap().as_object().unwrap().is_empty());
+    // `RepoOnly` stays.
+    let (kept, notices) = checked(r#"{"repository_extensions": [{"path": "pkg"}]}"#);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        kept.get("repository_extensions"),
+        Some(&serde_json::json!([{"path": "pkg"}]))
+    );
+    // `GlobalOnly` and `PersonFiles` are ignored: a repository may not set them either.
+    for (text, key) in [
+        (
+            r#"{"diagnostics": {"level": "debug"}}"#,
+            "diagnostics.level",
+        ),
+        (r#"{"reviewer": {"context": "x"}}"#, "reviewer.context"),
     ] {
-        assert!(!port.kind.accepts(&bad), "{bad}");
+        let (_, notices) = checked(text);
+        assert_eq!(notices.len(), 1, "{key}: {notices:?}");
+        assert!(
+            notices[0]
+                .message
+                .ends_with(&format!("`{key}`, which a repository may not set.")),
+            "{}",
+            notices[0].message
+        );
     }
 }

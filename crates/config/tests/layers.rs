@@ -429,6 +429,10 @@ fn the_person_s_own_file_may_be_a_symbolic_link() {
 #[test]
 fn config_debug_shows_no_run_flag_value() {
     let setup = Setup::new();
+    setup.write(
+        &setup.home().join("config/github.com-acme-fiber-acme.json"),
+        r#"{"token": "SECRET-7e8f"}"#,
+    );
     let config = setup
         .load(&[
             "api_key=SECRET-1a2b",
@@ -439,6 +443,7 @@ fn config_debug_shows_no_run_flag_value() {
     let debug = format!("{config:?}");
     assert!(!debug.contains("SECRET"), "{debug}");
     assert!(debug.contains("Run"), "{debug}");
+    assert!(debug.contains("github.com-acme-fiber-acme.json"), "{debug}");
 }
 
 #[test]
@@ -457,6 +462,49 @@ fn a_session_exits_after_thirty_idle_minutes_unless_configured() {
             .unwrap()
             .0,
         json!(60000)
+    );
+}
+
+#[test]
+fn get_of_a_union_key_is_every_layers_names() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"skills": {"disabled": ["a"]}}"#);
+    setup.write(&setup.project(), r#"{"skills": {"disabled": ["b", "a"]}}"#);
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(
+        config.get("skills.disabled", None),
+        Some((json!(["a", "b"]), Source::Project(setup.project())))
+    );
+    assert_eq!(config.merged(None)["skills"]["disabled"], json!(["a", "b"]));
+    assert_eq!(config.union_list("skills.disabled"), ["a", "b"]);
+}
+
+#[test]
+fn an_object_value_merges_key_by_key_but_a_credential_entry_replaces_whole() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"mcp": {"servers": {"x": {"env": {"A": "1"}}, "y": {"env": {"K": "v"}}}},
+            "providers": {"p": {"credentials": {"work": {"file": "/k"}}}}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"mcp": {"servers": {"x": {"env": {"B": "2"}}, "y": {"env": {}}}},
+            "providers": {"p": {"credentials": {"work": {"env": "KEY"}}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    let merged = config.merged(None);
+    assert_eq!(
+        merged["mcp"]["servers"]["x"]["env"],
+        json!({"A": "1", "B": "2"})
+    );
+    // An emptied object keeps the layers below it.
+    assert_eq!(merged["mcp"]["servers"]["y"]["env"], json!({"K": "v"}));
+    assert_eq!(
+        merged["providers"]["p"]["credentials"]["work"],
+        json!({"env": "KEY"})
     );
 }
 
@@ -557,6 +605,21 @@ fn a_list_key_unions_the_layers_that_set_it() {
     setup.write(&setup.project(), r#"{"skills": {"disabled": ["c", "a"]}}"#);
     let config = setup.load(&["skills.disabled=[\"d\", \"b\"]"]).unwrap();
     assert_eq!(config.union_list("skills.disabled"), ["a", "b", "c", "d"]);
+}
+
+#[test]
+fn a_replaced_list_returns_only_the_highest_layer_through_union_list() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"mcp": {"servers": {"x": {"args": ["global"]}}}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"mcp": {"servers": {"x": {"args": ["project"]}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config.union_list("mcp.servers.x.args"), ["project"]);
 }
 
 #[test]

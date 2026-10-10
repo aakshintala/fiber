@@ -22,11 +22,11 @@ fn the_highest_layer_wins_and_a_nested_key_reads_through() {
     );
     let config = setup.load(&[]).unwrap();
     assert_eq!(
-        config.extension_setting(ACME, &[], "picker.model").unwrap(),
+        config.extensions().get(ACME, &[], "picker.model").unwrap(),
         Some(json!("project/m"))
     );
     assert_eq!(
-        config.extension_setting(ACME, &[], "picker.other").unwrap(),
+        config.extensions().get(ACME, &[], "picker.other").unwrap(),
         Some(json!(1))
     );
 }
@@ -36,17 +36,19 @@ fn an_unset_key_is_none_and_a_bad_key_is_a_usage_error() {
     let setup = Setup::new();
     let config = setup.load(&[]).unwrap();
     assert_eq!(
-        config.extension_setting(ACME, &[], "picker.model").unwrap(),
+        config.extensions().get(ACME, &[], "picker.model").unwrap(),
         None
     );
     assert_eq!(
         config
-            .extension_setting("other", &[], "anything.at.all")
+            .extensions()
+            .get("other", &[], "anything.at.all")
             .unwrap(),
         None
     );
     let e = config
-        .extension_setting(ACME, &[], "unclosed.\"quote")
+        .extensions()
+        .get(ACME, &[], "unclosed.\"quote")
         .unwrap_err();
     assert_eq!(e.code(), contract::ErrorCode::Usage);
 }
@@ -59,7 +61,7 @@ fn a_run_flag_wins_over_the_files() {
         .load(&["extensions.\"github.com/acme/fiber-acme\".settings.a=\"run\""])
         .unwrap();
     assert_eq!(
-        config.extension_setting(ACME, &[], "a").unwrap(),
+        config.extensions().get(ACME, &[], "a").unwrap(),
         Some(json!("run"))
     );
 }
@@ -74,13 +76,15 @@ fn a_repository_key_outside_repo_settings_is_ignored() {
     let config = setup.load(&[]).unwrap();
     assert_eq!(
         config
-            .extension_setting(ACME, &["workspace_url"], "workspace_url")
+            .extensions()
+            .get(ACME, &["workspace_url"], "workspace_url")
             .unwrap(),
         Some(json!("https://repo"))
     );
     assert_eq!(
         config
-            .extension_setting(ACME, &["workspace_url"], "token_command")
+            .extensions()
+            .get(ACME, &["workspace_url"], "token_command")
             .unwrap(),
         None
     );
@@ -90,8 +94,11 @@ fn a_repository_key_outside_repo_settings_is_ignored() {
 fn workspace_and_project_name_the_session_s_layers() {
     let setup = Setup::new();
     let config = setup.load(&[]).unwrap();
-    assert_eq!(config.workspace().to_path_buf(), setup.workspace());
-    assert_eq!(config.project(), &common::key());
+    assert_eq!(
+        config.extensions().workspace().to_path_buf(),
+        setup.workspace()
+    );
+    assert_eq!(config.extensions().project(), &common::key());
 }
 
 #[test]
@@ -130,9 +137,9 @@ fn a_first_party_extensions_settings_file_is_named_by_its_short_name() {
     let config = setup.load(&[]).unwrap();
     let memory = "github.com/aakshintala/fiber/extensions/memory";
     assert_eq!(
-        config.extension_setting(memory, &[], "a").unwrap(),
+        config.extensions().get(memory, &[], "a").unwrap(),
         Some(json!("short"))
     );
     // Nothing reads a file under the old long slug.
-    assert_eq!(config.extension_setting(memory, &[], "b").unwrap(), None);
+    assert_eq!(config.extensions().get(memory, &[], "b").unwrap(), None);
 }

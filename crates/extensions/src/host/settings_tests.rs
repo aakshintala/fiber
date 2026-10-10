@@ -308,12 +308,14 @@ fn two_sequential_sets_both_land() {
     );
     let merged = setup
         .load(&[])
-        .extension_setting(EXTENSION, &[], "slot1")
+        .extensions()
+        .get(EXTENSION, &[], "slot1")
         .unwrap();
     assert_eq!(merged, Some(serde_json::json!(1)));
     let merged = setup
         .load(&[])
-        .extension_setting(EXTENSION, &[], "slot2")
+        .extensions()
+        .get(EXTENSION, &[], "slot2")
         .unwrap();
     assert_eq!(merged, Some(serde_json::json!(2)));
 }

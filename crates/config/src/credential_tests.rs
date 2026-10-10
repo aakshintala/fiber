@@ -6,7 +6,7 @@ use contract::ErrorCode;
 use fakes::TempDir;
 
 use super::*;
-use crate::{ProjectKey, Sources};
+use crate::{Config, ProjectKey, Sources};
 
 #[test]
 fn a_path_that_cannot_be_canonicalised_is_never_read() {
@@ -43,6 +43,7 @@ fn a_path_that_cannot_be_canonicalised_is_never_read() {
     };
     let run = |_: &mut Command| -> io::Result<Output> { unreachable!("a file source") };
     let err = config
+        .credentials()
         .credential_through(&provider, "default", &run, &canonical)
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialMissing);

@@ -575,6 +575,7 @@ fn parts_in(
     // path joins the workspace the reader reads it from, an absolute one
     // stands (`docs/permissions.md`, "Credentials").
     let credential_files: Vec<PathBuf> = config
+        .credentials()
         .credential_files(providers.names().filter_map(|name| providers.get(name)))
         .into_iter()
         .map(|file| workspace.join(file))
@@ -615,7 +616,7 @@ fn parts_in(
                     if let Some((_, read)) = credentials.get(&provider.name) {
                         return Ok(lua_providers::Access::new(lua, read.clone()));
                     }
-                    let label = config.credential_label(provider);
+                    let label = config.credentials().credential_label(provider);
                     let read = lua_providers::session_credential(lua, provider, &label, || {
                         crate::credential::session_credential(&config, provider, None)
                             .map(|(_, key)| key)
