@@ -223,9 +223,6 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
         match pdf_magic(path) {
             Ok(true) => return Ok(Inspected::PdfOverCap { size }),
             Ok(false) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Err(InspectError::NotFound);
-            }
             Err(error) => {
                 return Err(InspectError::Tool(format!(
                     "`{}` could not be read: {error}.",
@@ -264,12 +261,18 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
 }
 
 /// Whether `path` starts with PDF magic, reading at most its first four
-/// bytes. A shorter file is not a PDF. Errors are the caller's to report,
+/// bytes. A shorter file, or one that has vanished, is not a PDF: the caller's
+/// own read reports a vanished file. Other errors are the caller's to report,
 /// so `inspect` and `write` keep their own sentences.
 pub(crate) fn pdf_magic(path: &Path) -> io::Result<bool> {
     use std::io::Read as _;
     let mut head = [0u8; 4];
-    match fs::File::open(path)?.read_exact(&mut head) {
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    match file.read_exact(&mut head) {
         Ok(()) => Ok(head == *b"%PDF"),
         Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
         Err(error) => Err(error),

@@ -480,6 +480,17 @@ fn pdf_magic_reads_only_the_first_four_bytes() {
 }
 
 #[test]
+fn pdf_magic_treats_a_vanished_file_as_not_a_pdf_and_reports_other_errors() {
+    let dir = TempDir::new("fiber-pdf-magic-errors");
+    assert!(!pdf_magic(&dir.path().join("gone.pdf")).unwrap());
+    // Opening a directory succeeds on Unix and reading it fails with a kind
+    // that is neither NotFound nor UnexpectedEof.
+    let error = pdf_magic(dir.path()).unwrap_err();
+    assert_ne!(error.kind(), std::io::ErrorKind::NotFound);
+    assert_ne!(error.kind(), std::io::ErrorKind::UnexpectedEof);
+}
+
+#[test]
 fn a_pdf_over_the_cap_is_classified_from_its_metadata() {
     let dir = TempDir::new("fiber-class-pdf-cap");
     let path = dir.path().join("big.pdf");

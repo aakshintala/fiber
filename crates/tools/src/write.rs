@@ -175,7 +175,6 @@ fn existing(path: &Path) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
                 ));
             }
             Ok(false) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
                 return Err((
                     ErrorCode::ToolError,
