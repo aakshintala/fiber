@@ -19,6 +19,7 @@ use config::{CredentialFile, Secret, store_secret};
 use contract::ErrorCode;
 use contract::signing::SignRequest;
 use extensions::{CredentialPair, LuaExtension, LuaProvider, REFRESH_BEFORE};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{OauthReply, OauthServer};
 use serde_json::json;
@@ -68,10 +69,12 @@ fiber.provider("timed", {
 
 /// Runs `f` on its own thread under `WAIT`, so a call that never returns
 /// fails the test instead of hanging it.
+#[track_caller]
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    rx.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
 }
 
@@ -94,6 +97,7 @@ fn provider(extension: &Arc<LuaExtension>, name: &str) -> Arc<LuaProvider> {
 }
 
 /// `provider.token()` for the pair, on its own thread under `WAIT`.
+#[track_caller]
 fn token(provider: &Arc<LuaProvider>, credential: &str, label: &str) -> String {
     let provider = Arc::clone(provider);
     let owned = pair(credential, label);
@@ -318,8 +322,8 @@ fn a_background_refresh_of_one_pair_leaves_another_pair_alone() {
             }
         }
     });
-    refreshed
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&refreshed)
         .expect("waited for the refreshed token");
     assert_eq!(token(&timed, "timed", "late"), "late/1");
     assert_eq!(server.request_count(), 2);

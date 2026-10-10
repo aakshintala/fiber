@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use contract::Secret;
 use contract::signing::{SignRequest, Signer};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -93,10 +94,12 @@ fn credential_header_parser_distinguishes_empty_and_non_empty_arrays() {
     }
 }
 
+#[track_caller]
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    rx.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
 }
 
@@ -331,16 +334,21 @@ fn credential_idle_distinguishes_idle_fetching_and_completed() {
     let waiter = std::thread::spawn(move || {
         let _sent = sent.send(idle_provider.await_idle(&idle_pair, WAIT));
     });
-    parked_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&parked_rx)
         .expect("idle waiter reaches its condition wait");
     tokens.release();
     assert_eq!(
-        received.recv_timeout(WAIT).unwrap().unwrap().expose(),
+        Deadline::after(WAIT)
+            .recv(&received)
+            .unwrap()
+            .unwrap()
+            .expose(),
         "tok-idle"
     );
     assert!(
-        idle.recv_timeout(Duration::from_secs(1))
+        Deadline::after(Duration::from_secs(1))
+            .recv(&idle)
             .expect("fetch completion wakes the idle waiter")
     );
     fetch.join().unwrap();
@@ -409,16 +417,16 @@ fn a_second_token_waits_for_the_fetch_in_flight() {
         let _sent = second_tx.send(second_provider.token(&second_pair));
     });
     // The second caller reached its wait before the first fetch lands.
-    wait_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&wait_rx)
         .unwrap_or_else(|_| panic!("the second caller waits within {WAIT:?}"));
     tokens.release();
-    let first = first_rx
-        .recv_timeout(WAIT)
+    let first = Deadline::after(WAIT)
+        .recv(&first_rx)
         .unwrap_or_else(|_| panic!("the first token returns within {WAIT:?}"))
         .unwrap();
-    let second = second_rx
-        .recv_timeout(WAIT)
+    let second = Deadline::after(WAIT)
+        .recv(&second_rx)
         .unwrap_or_else(|_| panic!("the second token returns within {WAIT:?}"))
         .unwrap();
     assert_eq!(first.expose(), "tok-1");
@@ -460,19 +468,19 @@ fn a_waiter_woken_by_a_failure_fetches_for_itself() {
         let _sent = second_tx.send(second_provider.token(&second_pair));
     });
     // The second caller reached its wait before the first fetch lands.
-    wait_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&wait_rx)
         .unwrap_or_else(|_| panic!("the second caller waits within {WAIT:?}"));
     tokens.release();
     assert!(
-        first_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&first_rx)
             .unwrap_or_else(|_| panic!("the first token returns within {WAIT:?}"))
             .is_err(),
         "the held fetch fails"
     );
-    let second = second_rx
-        .recv_timeout(WAIT)
+    let second = Deadline::after(WAIT)
+        .recv(&second_rx)
         .unwrap_or_else(|_| panic!("the second token returns within {WAIT:?}"))
         .unwrap();
     assert_eq!(second.expose(), "tok-2");
@@ -523,13 +531,13 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
     std::thread::spawn(move || {
         let _sent = second_tx.send(second_provider.token(&second_pair));
     });
-    wait_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&wait_rx)
         .unwrap_or_else(|_| panic!("the second caller waits within {WAIT:?}"));
     // The first fetch fails; caller 2 wakes and is held before it looks.
     tokens.release_one();
-    arrived_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&arrived_rx)
         .unwrap_or_else(|_| panic!("the woken caller parks within {WAIT:?}"));
     // Caller 3 starts its own fetch while caller 2 is held.
     let (third_tx, third_rx) = mpsc::channel();
@@ -551,18 +559,18 @@ fn a_woken_waiter_never_waits_on_a_later_fetch() {
     );
     tokens.release();
     assert!(
-        first_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&first_rx)
             .unwrap_or_else(|_| panic!("the first token returns within {WAIT:?}"))
             .is_err(),
         "the held fetch fails"
     );
-    let second = second_rx
-        .recv_timeout(WAIT)
+    let second = Deadline::after(WAIT)
+        .recv(&second_rx)
         .unwrap_or_else(|_| panic!("the second token returns within {WAIT:?}"))
         .unwrap();
-    let third = third_rx
-        .recv_timeout(WAIT)
+    let third = Deadline::after(WAIT)
+        .recv(&third_rx)
         .unwrap_or_else(|_| panic!("the third token returns within {WAIT:?}"))
         .unwrap();
     assert_eq!(second.expose(), "tok-2");

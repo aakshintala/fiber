@@ -16,6 +16,7 @@ use contract::provider::ToolDefinition;
 use contract::provider::{
     CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
 };
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Map, Value, json};
 
@@ -28,10 +29,12 @@ const WAIT: Duration = Duration::from_secs(5);
 /// callback's thread.
 const GRACE: Duration = Duration::from_secs(1);
 
+#[track_caller]
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    rx.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
 }
 
@@ -59,6 +62,7 @@ fn cost_provider(root: &fakes::TempDir, body: &str) -> Arc<LuaProvider> {
     provider_on(root, &script, FakeClock::new()).0
 }
 
+#[track_caller]
 fn cost(provider: &Arc<LuaProvider>, key: Option<&str>) -> Result<Option<f64>, Error> {
     let provider = Arc::clone(provider);
     let key = key.map(|k| Secret::new(k.to_owned()));
@@ -149,15 +153,16 @@ fn a_run_that_spins_past_its_timeout_is_a_timeout() {
     std::thread::spawn(move || {
         tx.send(provider.cost(&GenerationId("gen-1".into()), "http://h/v1", None))
     });
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the callback to pass its clock check");
     assert!(
         clock.await_parked(asked + Duration::from_millis(50) + GRACE, WAIT),
         "waited for the caller to park at the grace"
     );
     clock.advance(Duration::from_millis(50));
-    let err = result
-        .recv_timeout(WAIT)
+    let err = Deadline::after(WAIT)
+        .recv(&result)
         .expect("waited for the spinning callback")
         .unwrap_err();
     let Error::Timeout {

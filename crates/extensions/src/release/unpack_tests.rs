@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use fakes::Deadline;
 use fakes::ustar::{archive, checksum, gzip, header};
 
 use super::{LIMITS, Limits, unpack};
@@ -62,6 +63,7 @@ fn link(name: &str, target: &str) -> [u8; 512] {
 
 /// `unpack` on its own thread, failing the test after ten seconds: a loop
 /// that stops making progress fails the test rather than hanging it.
+#[track_caller]
 fn timed(gz: &[u8], into: &Path, name: &str, limits: &Limits) -> Result<(), Error> {
     let (gz, into, name) = (gz.to_vec(), into.to_path_buf(), name.to_owned());
     let limits = Limits {
@@ -72,17 +74,19 @@ fn timed(gz: &[u8], into: &Path, name: &str, limits: &Limits) -> Result<(), Erro
     std::thread::spawn(move || {
         send.send(unpack(&gz, &into, &name, &limits)).unwrap_or(());
     });
-    receive
-        .recv_timeout(Duration::from_secs(10))
+    Deadline::after(Duration::from_secs(10))
+        .recv(&receive)
         .expect("unpack returns within ten seconds")
 }
 
+#[track_caller]
 fn run(tar: &[u8], limits: &Limits) -> (Out, Result<(), Error>) {
     let out = Out::new();
     let result = timed(&gzip(tar), &out.target(), "fixture.tar.gz", limits);
     (out, result)
 }
 
+#[track_caller]
 fn ok(members: &[([u8; 512], &[u8])]) -> Out {
     let (out, result) = run(&archive(members), &LIMITS);
     result.unwrap();
@@ -92,6 +96,7 @@ fn ok(members: &[([u8; 512], &[u8])]) -> Out {
 
 /// Unpacking `tar` is refused with a message holding `why`, and nothing
 /// outside `into` changed.
+#[track_caller]
 fn refused_tar(tar: &[u8], limits: &Limits, why: &str) -> Out {
     let (out, result) = run(tar, limits);
     let err = result.unwrap_err();
@@ -103,6 +108,7 @@ fn refused_tar(tar: &[u8], limits: &Limits, why: &str) -> Out {
     out
 }
 
+#[track_caller]
 fn refused(members: &[([u8; 512], &[u8])], why: &str) -> Out {
     refused_tar(&archive(members), &LIMITS, why)
 }

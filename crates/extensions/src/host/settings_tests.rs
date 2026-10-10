@@ -8,6 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
+use fakes::Deadline;
 use mlua::{Lua, Value as LuaValue};
 use serde_json::Value;
 
@@ -294,7 +295,7 @@ fn two_sequential_sets_both_land() {
     };
     writer(1, done_a);
     assert!(
-        done_rx_a.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx_a).is_ok(),
         "the first session's set did not finish within {DEADLINE:?}"
     );
     // The second session starts only after the first finished: two
@@ -303,7 +304,7 @@ fn two_sequential_sets_both_land() {
     // in `crates/config/src/write.rs`.
     writer(2, done_b);
     assert!(
-        done_rx_b.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&done_rx_b).is_ok(),
         "the second session's set did not finish within {DEADLINE:?}"
     );
     let merged = setup

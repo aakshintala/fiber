@@ -15,6 +15,7 @@ use std::sync::mpsc;
 
 use contract::emit::Emit;
 use contract::events::{Event, ExtensionExec, ExtensionUi, Ui};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::*;
@@ -94,8 +95,8 @@ fn a_run_ending_after_dispose_is_dropped() {
     });
     hub.dispose("ext");
     let _proceed = proceed_tx.send(());
-    done_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&done_rx)
         .expect("waited for the late run to be routed");
     assert!(received(&rx).is_none(), "nothing arrives after the drop");
     assert!(
@@ -127,8 +128,8 @@ fn a_sender_after_dispose_flushes_nothing() {
     });
     hub.dispose("ext");
     let _proceed = proceed_tx.send(());
-    done_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&done_rx)
         .expect("waited for the late sender to be routed");
     assert!(received(&rx).is_none(), "nothing flushes after the drop");
     assert_eq!(
@@ -171,13 +172,13 @@ fn deliver_to_at_a_runs_buffer_choice_flushes_the_run() {
     }));
     hub.send(Delivery::ExtensionExec(exec("run")));
     assert!(
-        held_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&held_rx)
             .expect("waited for the pause at the buffer choice"),
         "the buffer choice holds the hub lock"
     );
-    done_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&done_rx)
         .expect("waited for the racing deliver_to to return");
     assert_eq!(received(&rx).as_deref(), Some("run"), "the run was flushed");
     assert!(hub.lock().buffer.is_empty(), "nothing is stranded");
@@ -208,13 +209,13 @@ fn a_run_ending_at_a_flush_follows_the_buffered_runs() {
     }));
     hub.set_inbox(tx);
     assert!(
-        held_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&held_rx)
             .expect("waited for the pause at the flush"),
         "the flush holds the hub lock"
     );
-    done_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&done_rx)
         .expect("waited for the racing run to be sent");
     assert_eq!(received(&rx).as_deref(), Some("first"));
     assert_eq!(received(&rx).as_deref(), Some("second"));
@@ -341,19 +342,21 @@ fn an_emission_holds_the_lock_past_seal() {
         worker.emit(event);
         let _done = done_tx.send(());
     });
-    entered_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&entered_rx)
         .expect("waited for the emission to reach the emitter");
     assert!(
-        sealed_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&sealed_rx)
+            .is_err(),
         "seal waited for the in-flight emission"
     );
     let _released = release_tx.send(());
-    done_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&done_rx)
         .expect("waited for the emission to finish");
-    sealed_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&sealed_rx)
         .expect("waited for the seal to return after the emission");
     assert_eq!(emit.recorded.lock().unwrap().len(), 1);
     hub.emit(status("late"));
@@ -399,19 +402,21 @@ fn a_buffered_flush_holds_the_lock_past_seal() {
         worker.set_emit(emit_for_worker as Arc<dyn Emit>);
         let _done = done_tx.send(());
     });
-    entered_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&entered_rx)
         .expect("waited for the flush to reach the emitter");
     assert!(
-        sealed_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&sealed_rx)
+            .is_err(),
         "seal waited for the in-flight flush"
     );
     let _released = release_tx.send(());
-    done_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&done_rx)
         .expect("waited for the flush to finish");
-    sealed_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&sealed_rx)
         .expect("waited for the seal to return after the flush");
     assert_eq!(
         emit.recorded.lock().unwrap().len(),
@@ -659,7 +664,7 @@ fn an_evicted_delivery_drops_after_the_hub_lock_is_released() {
         hub.send(Delivery::ExtensionExec(exec(&format!("n-{n}"))));
     }
     assert_eq!(
-        dropped_rx.recv_timeout(WAIT),
+        Deadline::after(WAIT).recv(&dropped_rx),
         Ok(false),
         "the evicted delivery drops with the hub lock released"
     );

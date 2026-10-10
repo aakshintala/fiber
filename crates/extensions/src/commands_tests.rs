@@ -18,6 +18,7 @@ use std::time::Duration;
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::extension::ExtensionDoor;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
@@ -418,6 +419,7 @@ impl Home {
         .unwrap();
     }
 
+    #[track_caller]
     fn load(&self, overrides: &[&str]) -> Arc<super::super::SessionExtensions> {
         let config = Config::load(Sources {
             home: self.home(),
@@ -438,7 +440,11 @@ impl Home {
                 None,
             ));
         });
-        Arc::new(rx.recv_timeout(WAIT).expect("waited for the extensions"))
+        Arc::new(
+            Deadline::after(WAIT)
+                .recv(&rx)
+                .expect("waited for the extensions"),
+        )
     }
 }
 
@@ -464,16 +470,23 @@ fn admission_returns_before_run_starts_and_two_run_in_order() {
     let (tx, rx) = mpsc::channel();
     lua.deliver_to(tx);
     assert!(
-        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&rx)
+            .is_err(),
         "nothing runs while held"
     );
     first.release();
     first.wait().unwrap();
-    let first_done = rx.recv_timeout(WAIT).expect("first runs after release");
+    let first_done = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("first runs after release");
     drop(first_done);
     second.release();
     second.wait().unwrap();
-    assert!(rx.recv_timeout(WAIT).is_ok(), "second runs after release");
+    assert!(
+        Deadline::after(WAIT).recv(&rx).is_ok(),
+        "second runs after release"
+    );
 }
 
 #[derive(Default)]
@@ -515,7 +528,7 @@ fn a_failing_run_gives_one_extension_failed_notice_naming_the_extension() {
             if found.is_some() {
                 break;
             }
-            let _ = rx.recv_timeout(Duration::from_millis(10)).ok();
+            let _ = Deadline::after(Duration::from_millis(10)).recv(&rx).ok();
         }
         let _ = tx.send(()).ok();
         found.expect("waited for the run-failure notice")
@@ -569,7 +582,9 @@ fn run_return_values_are_ignored() {
         thread::spawn(move || {
             let _sent = tx.send(queued.wait());
         });
-        let result = rx.recv_timeout(WAIT).expect("waited for the run to end");
+        let result = Deadline::after(WAIT)
+            .recv(&rx)
+            .expect("waited for the run to end");
         assert_eq!(
             result.unwrap(),
             serde_json::Value::String(String::new()),

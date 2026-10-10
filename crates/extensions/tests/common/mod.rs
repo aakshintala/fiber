@@ -17,6 +17,7 @@ use std::time::Duration;
 use config::{Config, ProjectKey, Sources};
 use contract::signing::{SignRequest, Signer};
 use extensions::{CredentialPair, Error, LuaExtension, LuaProvider, Origin, Request, plan};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -61,6 +62,7 @@ const STUCK_ROUNDS: u32 = 8;
 /// early answer at once. A test moves fake time only once the run is waiting
 /// on it, past its own clock check; a run that answers without ever waiting
 /// fails on its own answer, not on a jump past bounds it never computed.
+#[track_caller]
 fn wait_parked<T: Send>(
     clock: &fakes::clock::FakeClock,
     done: &std::sync::mpsc::Receiver<T>,
@@ -69,7 +71,7 @@ fn wait_parked<T: Send>(
         if !clock.parked().is_empty() {
             return None;
         }
-        match done.recv_timeout(ROUND) {
+        match Deadline::after(ROUND).recv(done) {
             Ok(done) => return Some(done),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -85,12 +87,13 @@ fn wait_parked<T: Send>(
 /// across the wait is stuck, not starting: stopping a starter reports a
 /// timeout the stall never caused, so the clock moves only after the second
 /// sighting. A stall that answers instead fails on its own answer.
+#[track_caller]
 fn await_stuck<T: Send>(done: &std::sync::mpsc::Receiver<T>, stall: &str) -> Option<T> {
     for _ in 0..STUCK_ROUNDS {
         if !fakes::matching(stall).unwrap().is_empty() {
             // Up: still up after a bounded wait means stuck, not starting;
             // an answer meanwhile ends this at once.
-            match done.recv_timeout(ROUND) {
+            match Deadline::after(ROUND).recv(done) {
                 Ok(done) => return Some(done),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -101,7 +104,7 @@ fn await_stuck<T: Send>(done: &std::sync::mpsc::Receiver<T>, stall: &str) -> Opt
                 return None;
             }
         }
-        match done.recv_timeout(ROUND) {
+        match Deadline::after(ROUND).recv(done) {
             Ok(done) => return Some(done),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -114,6 +117,7 @@ fn await_stuck<T: Send>(done: &std::sync::mpsc::Receiver<T>, stall: &str) -> Opt
 
 /// Waits for the run's next park after a clock advance, or returns an early
 /// answer. A later clock advance cannot collapse the park's boundary.
+#[track_caller]
 fn wait_parked_since<T: Send>(
     clock: &fakes::clock::FakeClock,
     mark: &fakes::clock::Mark,
@@ -141,6 +145,7 @@ fn wait_parked_since<T: Send>(
 /// acknowledgement, so the deadline, grace and drain cannot collapse into
 /// one instant. An early answer ends the rounds; a run that never answers
 /// fails, naming the stall.
+#[track_caller]
 pub(crate) fn drive<T: Send>(
     clock: &fakes::clock::FakeClock,
     done: std::sync::mpsc::Receiver<T>,
@@ -361,6 +366,7 @@ const SIGN_WITHIN: Duration = Duration::from_secs(5);
 /// Signs one request with `headers` already on it, on its own thread under
 /// [`SIGN_WITHIN`], so a call that never returns fails the test instead of
 /// hanging it.
+#[track_caller]
 pub(crate) fn sign_with(
     signer: &Arc<dyn Signer>,
     headers: &[(String, String)],
@@ -378,7 +384,8 @@ pub(crate) fn sign_with(
             body: &body,
         }))
     });
-    rx.recv_timeout(SIGN_WITHIN)
+    Deadline::after(SIGN_WITHIN)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the sign did not return within {SIGN_WITHIN:?}"))
 }
 

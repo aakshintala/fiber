@@ -27,6 +27,7 @@ const ROUNDS: u32 = 8;
 /// parked for the grace. The caller advances past the grace only on `None`
 /// and reads the final answer either way, asserting the same deadline
 /// error. Panics when the run neither parks nor answers.
+#[track_caller]
 pub(crate) fn await_grace_or_answer<T>(
     clock: &fakes::clock::FakeClock,
     done: &mpsc::Receiver<T>,
@@ -67,20 +68,22 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use contract::clock::Clock as _;
+    use fakes::Deadline;
     use fakes::clock::FakeClock;
 
     use super::await_grace_or_answer;
 
     const TEST_GUARD: Duration = Duration::from_secs(4);
 
+    #[track_caller]
     fn park(clock: &Arc<FakeClock>, until: Instant) -> (mpsc::Sender<()>, mpsc::Receiver<()>) {
         let (release_tx, release_rx) = mpsc::channel();
         let (exited_tx, exited_rx) = mpsc::channel();
         let parked_clock = Arc::clone(clock);
         thread::spawn(move || {
             parked_clock.wait_until(Some(until), &mut |_bound| {
-                release_rx
-                    .recv_timeout(TEST_GUARD)
+                Deadline::after(TEST_GUARD)
+                    .recv(&release_rx)
                     .expect("waited for the test to release the parked thread");
             });
             let _sent = exited_tx.send(());
@@ -92,12 +95,12 @@ mod tests {
         (release_tx, exited_rx)
     }
 
-    fn release(release_tx: mpsc::Sender<()>, exited_rx: mpsc::Receiver<()>) {
+    #[track_caller]
+    fn release(release_tx: mpsc::Sender<()>, exited_rx: mpsc::Receiver<()>, wait: &Deadline) {
         release_tx
             .send(())
             .expect("the parked thread is waiting for release");
-        exited_rx
-            .recv_timeout(TEST_GUARD)
+        wait.recv(&exited_rx)
             .expect("waited for the parked thread to exit");
     }
 
@@ -122,7 +125,7 @@ mod tests {
         let (_answer_tx, answer_rx) = mpsc::channel::<()>();
 
         let outcome = await_grace_or_answer(&clock, &answer_rx, until);
-        release(release_tx, exited_rx);
+        release(release_tx, exited_rx, &Deadline::after(TEST_GUARD));
 
         assert_eq!(outcome, None);
     }
@@ -136,7 +139,7 @@ mod tests {
         answer_tx.send("answer").expect("the answer is queued");
 
         let outcome = await_grace_or_answer(&clock, &answer_rx, until);
-        release(release_tx, exited_rx);
+        release(release_tx, exited_rx, &Deadline::after(TEST_GUARD));
 
         assert_eq!(outcome, Some("answer"));
     }

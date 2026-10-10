@@ -13,6 +13,7 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use contract::clock::Clock as _;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::{INSTALL_STEP_DEADLINE, binary_name, download, download_with, platform};
@@ -217,8 +218,8 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
     }
     let answer = match answered {
         Some(answer) => answer,
-        None => done_rx
-            .recv_timeout(WITHIN)
+        None => Deadline::after(WITHIN)
+            .recv(&done_rx)
             .unwrap_or_else(|_| panic!("waited {WITHIN:?} for the stalled step")),
     };
     let err = answer.expect_err("a stalled step fails");

@@ -24,6 +24,7 @@ use common::{Setup, header, pair, script_provider, sign_with, write};
 use contract::ErrorCode;
 use contract::signing::{SignRequest, Signer};
 use extensions::{LuaExtension, LuaProvider, REFRESH_BEFORE};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{ProviderServer, Response};
 use serde_json::json;
@@ -39,10 +40,12 @@ const WALL: u64 = 1_700_000_000;
 
 /// Runs `f` on its own thread under `WAIT`, so a call that never returns
 /// fails the test instead of hanging it.
+#[track_caller]
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    rx.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
 }
 
@@ -55,6 +58,7 @@ fn provider_on(setup: &Setup, credential_run: &str, sign_run: &str) -> Arc<LuaPr
     )
 }
 
+#[track_caller]
 fn signer_of(provider: &Arc<LuaProvider>) -> Arc<dyn Signer> {
     within({
         let provider = Arc::clone(provider);
@@ -216,8 +220,8 @@ fn a_refresh_replaces_the_token_and_its_headers_together() {
             std::thread::yield_now();
         }
     });
-    refreshed
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&refreshed)
         .unwrap_or_else(|_| panic!("the refresh did not land within {WAIT:?}"));
 }
 
@@ -466,8 +470,8 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
         Some("Bearer tok-current".to_owned())
     );
     blocking.release();
-    first
-        .recv_timeout(CALL_DEADLINE)
+    Deadline::after(CALL_DEADLINE)
+        .recv(&first)
         .unwrap_or_else(|_| panic!("the held call returns within {CALL_DEADLINE:?}"))
         .unwrap();
 
@@ -569,8 +573,8 @@ fn a_running_call_values_are_reported_until_it_finishes() {
         "the oldest idle values are still dropped past sixteen: {values:?}"
     );
     blocking.release();
-    let headers = first
-        .recv_timeout(WAIT)
+    let headers = Deadline::after(WAIT)
+        .recv(&first)
         .unwrap_or_else(|_| panic!("the held sign did not return within {WAIT:?}"))
         .unwrap();
     assert_eq!(
@@ -675,8 +679,8 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
     assert_eq!(in_flight, expected, "all running calls keep their token");
 
     first_call.release();
-    let (call, result) = results
-        .recv_timeout(CALL_DEADLINE)
+    let (call, result) = Deadline::after(CALL_DEADLINE)
+        .recv(&results)
         .unwrap_or_else(|_| panic!("call 1 returns within {CALL_DEADLINE:?}"));
     assert_eq!(call, 1);
     let Err(contract::signing::Error::Failed(message)) = result else {
@@ -685,9 +689,11 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
 
     // Hold call 1's already-returned error while the other calls complete.
     later_calls.release();
+    // One deadline for the whole wait: the loop drains one stream.
+    let wait = Deadline::after(CALL_DEADLINE);
     for _ in 2..=17 {
-        let (_, result) = results
-            .recv_timeout(CALL_DEADLINE)
+        let (_, result) = wait
+            .recv(&results)
             .unwrap_or_else(|_| panic!("the remaining calls return within {CALL_DEADLINE:?}"));
         result.unwrap();
     }
@@ -805,12 +811,12 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
             }
         }
     });
-    landed
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&landed)
         .unwrap_or_else(|_| panic!("the refreshed token did not land within {WAIT:?}"));
     blocking.release();
-    let Err(contract::signing::Error::Failed(message)) = first
-        .recv_timeout(WAIT)
+    let Err(contract::signing::Error::Failed(message)) = Deadline::after(WAIT)
+        .recv(&first)
         .unwrap_or_else(|_| panic!("the held sign did not return within {WAIT:?}"))
     else {
         panic!("the first sign fails naming the token it used");
@@ -940,17 +946,21 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
         // Finish calls using older cached tokens first. The latest cached
         // token completes last and stays among the sixteen retained calls.
         blocking.release();
+        // One deadline for the whole wait: the loop drains one stream.
+        let wait = Deadline::after(CALL_DEADLINE);
         for _ in 1..calls {
-            let (round, result) = finished.recv_timeout(CALL_DEADLINE).unwrap_or_else(|_| {
+            let (round, result) = wait.recv(&finished).unwrap_or_else(|_| {
                 panic!("calls {calls}: earlier signs return within {CALL_DEADLINE:?}")
             });
             assert_ne!(round, calls, "the latest cached token stays in flight");
             result.unwrap();
         }
         last.release();
-        let (round, result) = finished.recv_timeout(CALL_DEADLINE).unwrap_or_else(|_| {
-            panic!("calls {calls}: the latest sign returns within {CALL_DEADLINE:?}")
-        });
+        let (round, result) = Deadline::after(CALL_DEADLINE)
+            .recv(&finished)
+            .unwrap_or_else(|_| {
+                panic!("calls {calls}: the latest sign returns within {CALL_DEADLINE:?}")
+            });
         assert_eq!(round, calls, "the latest cached token finishes last");
         result.unwrap();
         for (index, thread) in threads.into_iter().enumerate() {
@@ -1026,8 +1036,8 @@ fn a_held_fetch_never_holds_the_token_lock() {
         move || signer.credentials()
     });
     tokens.release();
-    let token = done_rx
-        .recv_timeout(WAIT)
+    let token = Deadline::after(WAIT)
+        .recv(&done_rx)
         .unwrap_or_else(|_| panic!("the held fetch did not return within {WAIT:?}"))
         .unwrap();
     assert_eq!(token.expose(), "tok-value");

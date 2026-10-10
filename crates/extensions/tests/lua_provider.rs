@@ -22,6 +22,7 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::signing::{SignRequest, Signer};
 use extensions::{Error, LuaExtension, LuaProvider, REFRESH_BEFORE};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::json;
@@ -31,10 +32,12 @@ const WAIT: Duration = Duration::from_secs(5);
 
 /// Runs `f` on its own thread under `WAIT`, so a call that never returns
 /// fails the test instead of hanging it.
+#[track_caller]
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    rx.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
 }
 
@@ -232,7 +235,8 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
             }
         }
     });
-    rx.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&rx)
         .expect("waited for the refreshed token");
     assert_eq!(server.requests().len(), 2);
 }
@@ -546,7 +550,10 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
         "waited for get to park at its grace"
     );
     clock.advance(Duration::from_millis(30000));
-    let err = rx.recv_timeout(WAIT).expect("waited for get").unwrap_err();
+    let err = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("waited for get")
+        .unwrap_err();
     let Error::Timeout { timeout_ms, .. } = &err else {
         panic!("{err:?}")
     };
@@ -556,6 +563,7 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     assert_eq!(within(move || again.command("ok", "")).unwrap(), "ok");
 }
 
+#[track_caller]
 fn signed(signer: &Arc<dyn Signer>, headers: &[(String, String)]) -> Vec<(String, String)> {
     let url = "http://127.0.0.1:1/v1/responses".to_owned();
     let body = br#"{"model":"m"}"#.to_vec();
@@ -825,6 +833,7 @@ fn refresh_provider(setup: &Setup, url: &str) -> Arc<LuaProvider> {
     LuaProvider::new(extension, "p")
 }
 
+#[track_caller]
 fn sign_error(provider: &Arc<LuaProvider>) -> contract::signing::Error {
     let signer = within({
         let provider = Arc::clone(provider);

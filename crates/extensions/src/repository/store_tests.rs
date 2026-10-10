@@ -10,6 +10,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use config::ProjectKey;
 use contract::clock::Clock as _;
 use contract::events::OfferedKind;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -674,8 +675,8 @@ fn a_stalled_install_step_approves_nothing_and_leaves_no_copy() {
     }
     let answer = match answered {
         Some(answer) => answer,
-        None => done_rx
-            .recv_timeout(WITHIN)
+        None => Deadline::after(WITHIN)
+            .recv(&done_rx)
             .unwrap_or_else(|_| panic!("waited {WITHIN:?} for the stalled approval")),
     };
     let err = answer.expect_err("a stalled step approves nothing");

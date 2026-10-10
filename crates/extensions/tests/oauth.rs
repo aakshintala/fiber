@@ -28,6 +28,7 @@ use config::{CredentialFile, Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use extensions::{Browser, CredentialPair, Error, LuaExtension, LuaProvider};
+use fakes::Deadline;
 use fakes::OauthReply;
 use fakes::OauthServer;
 use fakes::clock::FakeClock;
@@ -363,13 +364,19 @@ fn start(
     rx
 }
 
-fn finish<T>(rx: &mpsc::Receiver<T>) -> T {
-    rx.recv_timeout(WAIT)
-        .unwrap_or_else(|_| panic!("the call did not return within {WAIT:?}"))
+#[track_caller]
+fn finish<T>(rx: &mpsc::Receiver<T>, wait: &Deadline) -> T {
+    wait.recv_or_fail(rx, "the call to return")
 }
 
-fn run(ext: &Arc<LuaExtension>, command: &'static str, text: &str) -> Result<String, Error> {
-    finish(&start(ext, command, text))
+#[track_caller]
+fn run(
+    ext: &Arc<LuaExtension>,
+    command: &'static str,
+    text: &str,
+    wait: &Deadline,
+) -> Result<String, Error> {
+    finish(&start(ext, command, text), wait)
 }
 
 /// Starts `provider.token()` for the default label; the token's text arrives
@@ -402,6 +409,7 @@ fn lua_message(error: &Error) -> String {
 
 /// Sends `request` to `port` and reads the reply to its end, under one
 /// [`WAIT`].
+#[track_caller]
 fn get(port: u16, request: &str) -> String {
     let request = request.to_owned();
     fakes::within("the oauth reply", WAIT, move || {
@@ -509,7 +517,13 @@ fn open_reaches_the_browser_with_the_url() {
     let browser = Arc::new(Recording::always());
     let ext = Arc::new(env.bare(INIT, "fixture").with_browser(browser.clone()));
     assert_eq!(
-        run(&ext, "open", "https://auth.example/authorize?x=1").unwrap(),
+        run(
+            &ext,
+            "open",
+            "https://auth.example/authorize?x=1",
+            &Deadline::after(WAIT)
+        )
+        .unwrap(),
         "opened"
     );
     assert_eq!(browser.opened(), ["https://auth.example/authorize?x=1"]);
@@ -519,7 +533,8 @@ fn open_reaches_the_browser_with_the_url() {
 fn pkce_returns_a_verifier_and_its_challenge() {
     let env = Env::new();
     let ext = env.extension();
-    let pair: Value = serde_json::from_str(&run(&ext, "pkce", "").unwrap()).unwrap();
+    let pair: Value =
+        serde_json::from_str(&run(&ext, "pkce", "", &Deadline::after(WAIT)).unwrap()).unwrap();
     let verifier = pair["verifier"].as_str().unwrap();
     let challenge = pair["challenge"].as_str().unwrap();
     assert_eq!(verifier.len(), 43);
@@ -532,7 +547,8 @@ fn pkce_returns_a_verifier_and_its_challenge() {
     let digest = ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes());
     assert_eq!(challenge, URL_SAFE_NO_PAD.encode(digest));
     // A second call draws a fresh verifier.
-    let again: Value = serde_json::from_str(&run(&ext, "pkce", "").unwrap()).unwrap();
+    let again: Value =
+        serde_json::from_str(&run(&ext, "pkce", "", &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_ne!(again["verifier"].as_str().unwrap(), verifier);
 }
 
@@ -550,7 +566,7 @@ fn callback_serves_one_request_and_returns_its_query() {
     );
     assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
     assert!(reply.contains("<p>You can close this tab"), "{reply}");
-    let query: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    let query: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(query, json!({ "code": "a b", "state": "s" }));
 }
 
@@ -561,7 +577,7 @@ fn callback_with_no_query_returns_an_empty_table() {
     let port = free_port();
     let rx = listening(&env, &ext, port);
     get(port, "GET /cb? HTTP/1.1\r\n\r\n");
-    assert_eq!(finish(&rx).unwrap(), "{}");
+    assert_eq!(finish(&rx, &Deadline::after(WAIT)).unwrap(), "{}");
 }
 
 #[test]
@@ -571,7 +587,7 @@ fn callback_with_a_repeated_key_keeps_the_last_value() {
     let port = free_port();
     let rx = listening(&env, &ext, port);
     get(port, "GET /?a=1&a=2 HTTP/1.1\r\n\r\n");
-    let query: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    let query: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(query, json!({ "a": "2" }));
 }
 
@@ -583,7 +599,7 @@ fn callback_with_an_invalid_escape_is_a_lua_error_and_the_client_gets_a_400() {
     let rx = listening(&env, &ext, port);
     let reply = get(port, "GET /?code=SECRETCODE%zz HTTP/1.1\r\n\r\n");
     assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
-    let message = lua_message(&finish(&rx).unwrap_err());
+    let message = lua_message(&finish(&rx, &Deadline::after(WAIT)).unwrap_err());
     assert!(
         message.contains("the `code` parameter's value"),
         "{message}"
@@ -619,7 +635,7 @@ fn callback_skips_a_connection_that_is_not_a_request_and_a_head_that_is_too_larg
         "{reply}"
     );
     get(port, "GET /?code=ok HTTP/1.1\r\n\r\n");
-    let query: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    let query: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(query, json!({ "code": "ok" }));
 }
 
@@ -635,7 +651,7 @@ fn callback_serves_the_next_connection_after_dropping_a_silent_one() {
     let reply = get(port, "GET /?code=ok HTTP/1.1\r\n\r\n");
     assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
     drop(silent);
-    let query: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    let query: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(query, json!({ "code": "ok" }));
 }
 
@@ -648,7 +664,7 @@ fn callback_serves_a_2000_byte_head() {
     let request = format!("GET /?code=ok HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(2000));
     let reply = get(port, &request);
     assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
-    let query: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    let query: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(query, json!({ "code": "ok" }));
 }
 
@@ -658,10 +674,17 @@ fn callback_on_a_taken_port_is_an_error_naming_it() {
     let ext = env.extension();
     let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = held.local_addr().unwrap().port();
-    let message = lua_message(&run(&ext, "callback", &port.to_string()).unwrap_err());
+    let message =
+        lua_message(&run(&ext, "callback", &port.to_string(), &Deadline::after(WAIT)).unwrap_err());
     assert!(message.contains(&format!("port {port}")), "{message}");
     assert_eq!(
-        run(&ext, "callback_code", &port.to_string()).unwrap(),
+        run(
+            &ext,
+            "callback_code",
+            &port.to_string(),
+            &Deadline::after(WAIT)
+        )
+        .unwrap(),
         "io_failed"
     );
 }
@@ -673,13 +696,18 @@ fn callback_dropped_at_its_timeout_frees_the_port() {
     let port = free_port();
     let rx = listening(&env, &ext, port);
     env.clock.advance(TIMEOUT);
-    assert!(matches!(finish(&rx), Err(Error::Timeout { .. })));
+    assert!(matches!(
+        finish(&rx, &Deadline::after(WAIT)),
+        Err(Error::Timeout { .. })
+    ));
     // The listener sees its cancel receiver disconnect within one poll.
     let (_keep, idle) = mpsc::channel::<()>();
     let attempts = PORT_FREE_WITHIN.as_millis() / 10;
     let freed = (0..attempts).any(|_| {
         TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
-            || idle.recv_timeout(Duration::from_millis(10)).is_ok()
+            || Deadline::after(Duration::from_millis(10))
+                .recv(&idle)
+                .is_ok()
     });
     assert!(freed, "the port was still held after {PORT_FREE_WITHIN:?}");
 }
@@ -706,7 +734,7 @@ fn callback_dropped_at_its_timeout_frees_the_port_from_a_client_that_keeps_sendi
             if client.write_all(b"a").is_err() {
                 return;
             }
-            match pause.recv_timeout(Duration::from_millis(5)) {
+            match Deadline::after(Duration::from_millis(5)).recv(&pause) {
                 Ok(()) | Err(_) => {}
             }
         }
@@ -719,12 +747,17 @@ fn callback_dropped_at_its_timeout_frees_the_port_from_a_client_that_keeps_sendi
     });
     assert!(junk.starts_with("HTTP/1.1 400"), "{junk}");
     env.clock.advance(TIMEOUT);
-    assert!(matches!(finish(&rx), Err(Error::Timeout { .. })));
+    assert!(matches!(
+        finish(&rx, &Deadline::after(WAIT)),
+        Err(Error::Timeout { .. })
+    ));
     let (_keep, idle) = mpsc::channel::<()>();
     let attempts = PORT_FREE_WITHIN.as_millis() / 10;
     let freed = (0..attempts).any(|_| {
         TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
-            || idle.recv_timeout(Duration::from_millis(10)).is_ok()
+            || Deadline::after(Duration::from_millis(10))
+                .recv(&idle)
+                .is_ok()
     });
     assert!(freed, "the port was still held after {PORT_FREE_WITHIN:?}");
     sender.join().unwrap();
@@ -742,7 +775,8 @@ fn callback_port_must_be_a_whole_number_from_1_to_65535() {
         "{ port = 1.5 }",
         "5",
     ] {
-        let message = lua_message(&run(&ext, "callback_opts", opts).unwrap_err());
+        let message =
+            lua_message(&run(&ext, "callback_opts", opts, &Deadline::after(WAIT)).unwrap_err());
         assert!(message.contains("`port` must be"), "{opts}: {message}");
     }
 }
@@ -776,7 +810,7 @@ fn poll_repeats_at_the_interval_until_the_token() {
         );
         env.clock.advance(Duration::from_secs(5));
     }
-    let token: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    let token: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(token["access_token"], "at");
     // Two wakes, so three requests, each to the device endpoint.
     let requests = server.requests();
@@ -810,7 +844,7 @@ fn poll_slow_down_adds_five_seconds() {
     );
     assert_eq!(server.request_count(), 1);
     env.clock.advance(Duration::from_secs(5));
-    let token: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    let token: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(token["access_token"], "at");
     assert_eq!(server.request_count(), 2);
 }
@@ -827,7 +861,8 @@ fn poll_raises_a_terminal_error_or_an_unusable_reply() {
         (OauthReply::raw(500, "{}"), "status 500"),
     ] {
         let server = device_server(vec![reply]);
-        let message = lua_message(&run(&ext, "poll", &server.url()).unwrap_err());
+        let message =
+            lua_message(&run(&ext, "poll", &server.url(), &Deadline::after(WAIT)).unwrap_err());
         assert!(message.starts_with("host.oauth.poll: "), "{message}");
         assert!(message.contains(wanted), "{wanted}: {message}");
         assert_eq!(server.request_count(), 1);
@@ -845,7 +880,10 @@ fn poll_that_times_out_while_sleeping_is_a_timeout() {
         "the poll never parked for its 5-second sleep within {WAIT:?}"
     );
     env.clock.advance(TIMEOUT);
-    assert!(matches!(finish(&rx), Err(Error::Timeout { .. })));
+    assert!(matches!(
+        finish(&rx, &Deadline::after(WAIT)),
+        Err(Error::Timeout { .. })
+    ));
     assert_eq!(server.request_count(), 1);
 }
 
@@ -876,7 +914,10 @@ fn refresh_of_a_fresh_token_skips_the_function() {
     let server = OauthServer::start(vec![]);
     let provider = env.provider(&ext, &server, "ok");
     env.store(&json!({ "token": "fresh", "expires_at": WALL + 3600 }));
-    assert_eq!(finish(&start_token(&provider)).unwrap(), "fresh");
+    assert_eq!(
+        finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap(),
+        "fresh"
+    );
     assert_eq!(server.request_count(), 0);
 }
 
@@ -887,7 +928,10 @@ fn refresh_inside_the_window_calls_the_function_once_and_stores_its_result() {
     let server = OauthServer::start(vec![OauthReply::token("new", "rt", 3600)]);
     let provider = env.provider(&ext, &server, "wantold");
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
-    assert_eq!(finish(&start_token(&provider)).unwrap(), "new");
+    assert_eq!(
+        finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap(),
+        "new"
+    );
     assert_eq!(server.request_count(), 1);
     let stored: Value = serde_json::from_slice(&env.stored().unwrap()).unwrap();
     assert_eq!(
@@ -908,7 +952,10 @@ fn refresh_of_an_absent_file_calls_the_function_with_nil() {
     let ext = env.extension();
     let server = OauthServer::start(vec![OauthReply::token("first", "rt", 3600)]);
     let provider = env.provider(&ext, &server, "wantnil");
-    assert_eq!(finish(&start_token(&provider)).unwrap(), "first");
+    assert_eq!(
+        finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap(),
+        "first"
+    );
     let stored: Value = serde_json::from_slice(&env.stored().unwrap()).unwrap();
     assert_eq!(stored["token"], "first");
     assert_eq!(mode(&env.credential()), 0o600);
@@ -922,13 +969,16 @@ fn a_function_that_raises_leaves_the_file_and_releases_the_lock() {
     let provider = env.provider(&ext, &server, "raise");
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let before = env.stored().unwrap();
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed);
     assert!(error.to_string().contains("boom"), "{error}");
     assert_eq!(env.stored().unwrap(), before);
     // The lock is free: the next refresh runs.
     env.secret("mode", "wantold");
-    assert_eq!(finish(&start_token(&provider)).unwrap(), "later");
+    assert_eq!(
+        finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap(),
+        "later"
+    );
 }
 
 #[test]
@@ -942,12 +992,15 @@ fn a_refresh_the_token_endpoint_rejects_is_authentication_failed() {
     let provider = env.provider(&ext, &server, "wantold");
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let before = env.stored().unwrap();
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("refresh failed: 400"), "{error}");
     assert_eq!(env.stored().unwrap(), before);
     // The lock is free: the next refresh runs.
-    assert_eq!(finish(&start_token(&provider)).unwrap(), "later");
+    assert_eq!(
+        finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap(),
+        "later"
+    );
 }
 
 #[test]
@@ -959,7 +1012,7 @@ fn a_refresh_that_never_reached_the_token_endpoint_is_connection_failed() {
     env.secret("url", &fakes::refused::url());
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let before = env.stored().unwrap();
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConnectionFailed, "{error}");
     assert_eq!(env.stored().unwrap(), before);
 }
@@ -972,7 +1025,7 @@ fn a_function_that_catches_the_transport_error_and_raises_its_own_is_connection_
     let provider = env.provider(&ext, &server, "pcall_dead");
     env.secret("dead", &fakes::refused::url());
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::ConnectionFailed, "{error}");
     assert!(error.to_string().contains("my own failure"), "{error}");
 }
@@ -985,7 +1038,7 @@ fn a_later_reply_clears_the_transport_failure() {
     let provider = env.provider(&ext, &server, "dead_then_live");
     env.secret("dead", &fakes::refused::url());
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
 }
 
@@ -995,7 +1048,7 @@ fn a_lua_error_in_credential_outside_the_refresh_is_credential_failed() {
     let ext = env.extension();
     let server = OauthServer::start(vec![]);
     let provider = env.provider(&ext, &server, "outside");
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::CredentialFailed, "{error}");
     assert!(error.to_string().contains("outside"), "{error}");
 }
@@ -1016,17 +1069,20 @@ fn a_function_the_hook_stops_leaves_the_file_and_frees_the_lock() {
     let provider = LuaProvider::new(ext, "acme");
     let asked = env.clock.now();
     let rx = start_token(&provider);
-    finish(&went);
+    finish(&went, &Deadline::after(WAIT));
     assert!(
         env.clock.await_parked(asked + TIMEOUT + GRACE, WAIT),
         "the token call never waited past its deadline while the spin held the lock within {WAIT:?}"
     );
     env.clock.advance(TIMEOUT);
-    let error = finish(&rx).unwrap_err();
+    let error = finish(&rx, &Deadline::after(WAIT)).unwrap_err();
     assert!(matches!(&error, Error::Credential(inner) if matches!(**inner, Error::Timeout { .. })));
     assert_eq!(env.stored().unwrap(), before);
     env.secret("mode", "ok");
-    assert_eq!(finish(&start_token(&provider)).unwrap(), "after");
+    assert_eq!(
+        finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap(),
+        "after"
+    );
 }
 
 #[test]
@@ -1039,7 +1095,7 @@ fn a_function_that_returns_no_usable_credential_leaves_the_file() {
     let before = env.stored().unwrap();
     for bad in ["notoken", "numbertoken", "floatexpiry"] {
         env.secret("mode", bad);
-        let error = finish(&start_token(&provider)).unwrap_err();
+        let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
         assert!(
             lua_message(&error).contains("`token` string"),
             "{bad}: {error}"
@@ -1063,6 +1119,7 @@ fn held_endpoint() -> OauthServer {
 /// first has arrived, and is suspended on the lock once both callers wait
 /// past the deadline and the threads are parked at it. Only then is the
 /// first released: the second must find the first's credential.
+#[track_caller]
 fn refresh_race(
     env: &Env,
     first: &Arc<LuaProvider>,
@@ -1080,8 +1137,8 @@ fn refresh_race(
     await_callbacks_parked(env, deadline, 2, threads);
     assert_eq!(held.request_count(), 1);
     held.release();
-    assert_eq!(finish(&a).unwrap(), "shared");
-    assert_eq!(finish(&b).unwrap(), "shared");
+    assert_eq!(finish(&a, &Deadline::after(WAIT)).unwrap(), "shared");
+    assert_eq!(finish(&b, &Deadline::after(WAIT)).unwrap(), "shared");
     assert_eq!(held.request_count(), 1);
 }
 
@@ -1134,13 +1191,16 @@ fn a_refresh_that_times_out_in_its_function_leaves_the_file_and_frees_the_lock()
         "the refresh never parked on its timeout while on the wire within {WAIT:?}"
     );
     env.clock.advance(TIMEOUT);
-    let error = finish(&rx).unwrap_err();
+    let error = finish(&rx, &Deadline::after(WAIT)).unwrap_err();
     assert!(matches!(&error, Error::Credential(inner) if matches!(**inner, Error::Timeout { .. })));
     assert_eq!(env.stored().unwrap(), before);
     // The next refresh takes the lock.
     let server = OauthServer::start(vec![OauthReply::token("again", "rt", 3600)]);
     env.secret("url", &server.url());
-    assert_eq!(finish(&start_token(&provider)).unwrap(), "again");
+    assert_eq!(
+        finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap(),
+        "again"
+    );
     assert_eq!(server.request_count(), 1);
 }
 
@@ -1148,7 +1208,7 @@ fn a_refresh_that_times_out_in_its_function_leaves_the_file_and_frees_the_lock()
 fn refresh_from_a_command_is_a_lua_error() {
     let env = Env::new();
     let ext = env.extension();
-    let message = lua_message(&run(&ext, "refresh", "").unwrap_err());
+    let message = lua_message(&run(&ext, "refresh", "", &Deadline::after(WAIT)).unwrap_err());
     assert!(message.contains("host.oauth.refresh"), "{message}");
     assert!(env.stored().is_none());
 }
@@ -1165,7 +1225,7 @@ fn a_symbolic_link_credentials_directory_is_refused() {
     let credentials = env.home().join("credentials");
     fs::remove_dir_all(&credentials).unwrap();
     std::os::unix::fs::symlink(&elsewhere, &credentials).unwrap();
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert!(matches!(error, Error::Credential(_)), "{error}");
     assert_eq!(server.request_count(), 0);
     assert!(fs::read_dir(&elsewhere).unwrap().next().is_none());
@@ -1177,7 +1237,7 @@ fn a_poll_with_nobody_attached_is_authentication_failed_and_sends_nothing() {
     let ext = login(&env);
     let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
     let provider = env.provider(&ext, &server, "poll");
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.poll"), "{error}");
     assert!(server.requests().is_empty());
@@ -1190,7 +1250,7 @@ fn open_with_nobody_attached_is_authentication_failed_and_opens_nothing() {
     let ext = login_with(&env, browser.clone());
     let server = OauthServer::start(vec![]);
     let provider = env.provider(&ext, &server, "open");
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.open"), "{error}");
     assert!(browser.opened().is_empty());
@@ -1205,7 +1265,7 @@ fn callback_with_nobody_attached_is_authentication_failed_and_listens_on_nothing
     let provider = env.provider(&ext, &server, "callback");
     let port = free_port();
     env.secret("port", &port.to_string());
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.callback"), "{error}");
     TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
@@ -1227,7 +1287,7 @@ fn a_person_who_detaches_between_polls_stops_the_next_poll() {
         "the poll never parked for its 5-second sleep within {WAIT:?}"
     );
     env.clock.advance(Duration::from_secs(5));
-    let error = finish(&rx).unwrap_err();
+    let error = finish(&rx, &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.poll"), "{error}");
     assert_eq!(server.request_count(), 1);
@@ -1240,7 +1300,10 @@ fn an_attended_device_login_opens_polls_and_returns_the_token() {
     let ext = login_with(&env, browser.clone());
     let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
     let provider = env.provider(&ext, &server, "device");
-    assert_eq!(finish(&start_token(&provider)).unwrap(), "at");
+    assert_eq!(
+        finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap(),
+        "at"
+    );
     assert_eq!(browser.opened(), [format!("{}/verify", server.url())]);
     assert_eq!(server.request_count(), 1);
 }
@@ -1256,7 +1319,7 @@ fn an_entry_script_that_opens_with_nobody_attached_is_authentication_failed() {
             .with_browser(browser.clone()),
     );
     let provider = LuaProvider::new(ext, "acme");
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.open"), "{error}");
     assert!(browser.opened().is_empty());
@@ -1271,7 +1334,7 @@ fn a_refresh_function_refused_after_a_failed_request_is_authentication_failed() 
     env.secret("dead", &fakes::refused::url());
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let before = env.stored().unwrap();
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.poll"), "{error}");
     assert_eq!(env.stored().unwrap(), before);
@@ -1340,9 +1403,10 @@ fn caught(env: &Env, browser: Arc<dyn Browser>) -> Arc<LuaExtension> {
     )
 }
 
+#[track_caller]
 fn caught_token(env: &Env, ext: &Arc<LuaExtension>, server: &OauthServer, mode: &str) -> String {
     let provider = env.provider(ext, server, mode);
-    finish(&start_token(&provider)).unwrap()
+    finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap()
 }
 
 #[test]
@@ -1377,7 +1441,7 @@ fn a_poll_failure_carries_its_code_for_pcall() {
             "{{ url = \"{}/device/token\", method = \"POST\", headers = {{ [\"content-type\"] = \"application/x-www-form-urlencoded\" }}, body = \"grant_type=d\" }}",
             server.url()
         );
-        let caught = run(&ext, "poll_caught", &opts).unwrap();
+        let caught = run(&ext, "poll_caught", &opts, &Deadline::after(WAIT)).unwrap();
         let (name, message) = caught.split_once('\n').unwrap();
         assert_eq!(name, code, "{message}");
         assert!(message.starts_with("host.oauth.poll: "), "{message}");
@@ -1394,7 +1458,7 @@ fn a_poll_slowed_down_past_3600_seconds_is_rate_limited() {
         "{{ url = \"{}/device/token\", method = \"POST\", interval = 3600, body = \"grant_type=d\" }}",
         server.url()
     );
-    let caught = run(&ext, "poll_caught", &opts).unwrap();
+    let caught = run(&ext, "poll_caught", &opts, &Deadline::after(WAIT)).unwrap();
     let (code, message) = caught.split_once('\n').unwrap();
     assert_eq!(code, "rate_limited");
     assert!(message.starts_with("host.oauth.poll: "), "{message}");
@@ -1405,7 +1469,7 @@ fn a_poll_slowed_down_past_3600_seconds_is_rate_limited() {
 fn a_refresh_from_a_command_is_a_string() {
     let env = Env::new();
     let ext = env.extension();
-    let caught = run(&ext, "refresh_command", "").unwrap();
+    let caught = run(&ext, "refresh_command", "", &Deadline::after(WAIT)).unwrap();
     let (kind, message) = caught.split_once('\n').unwrap();
     assert_eq!(kind, "string", "{caught}");
     assert!(
@@ -1462,7 +1526,7 @@ fn an_uncaught_failure_table_keeps_todays_reached_code_and_its_message() {
     let server = OauthServer::start(vec![]);
     let provider = env.provider(&ext, &server, "literal");
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("offline"), "{error}");
     assert!(!error.to_string().contains("table:"), "{error}");
@@ -1496,7 +1560,7 @@ fn a_caught_unattended_failure_rethrown_after_another_keeps_authentication_faile
     let server = OauthServer::start(vec![]);
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let provider = env.provider(&ext, &server, "rethrow");
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.open"), "{error}");
     assert!(!error.to_string().contains("host.oauth.poll"), "{error}");
@@ -1557,12 +1621,15 @@ end } })
     });
     let provider = LuaProvider::new(Arc::clone(&ext), "acme");
     let rx = start_token(&provider);
-    accepted_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&accepted_rx)
         .expect("the credential never reached the held endpoint");
-    assert_eq!(run(&ext, "ping", "").unwrap(), "pong");
+    assert_eq!(
+        run(&ext, "ping", "", &Deadline::after(WAIT)).unwrap(),
+        "pong"
+    );
     release_tx.send(()).unwrap();
-    let error = finish(&rx).unwrap_err();
+    let error = finish(&rx, &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.open"), "{error}");
 }
@@ -1575,7 +1642,10 @@ fn show_reaches_the_browser_with_the_url_and_the_code_and_opens_nothing() {
     let browser = Arc::new(Recording::always());
     let ext = Arc::new(env.bare(INIT, "fixture").with_browser(browser.clone()));
     let text = "{ url = \"https://auth.example/device\", code = \"ABCD-1234\" }";
-    assert_eq!(run(&ext, "show", text).unwrap(), "shown");
+    assert_eq!(
+        run(&ext, "show", text, &Deadline::after(WAIT)).unwrap(),
+        "shown"
+    );
     assert_eq!(
         browser.shown(),
         [(
@@ -1596,7 +1666,7 @@ fn show_names_non_string_arguments_before_anything_is_shown() {
         "{ url = \"https://auth.example/device\" }",
         "{ url = \"https://auth.example/device\", code = 5 }",
     ] {
-        let message = lua_message(&run(&ext, "show", text).unwrap_err());
+        let message = lua_message(&run(&ext, "show", text, &Deadline::after(WAIT)).unwrap_err());
         assert!(
             message.contains("`url` and `code` must be strings"),
             "{text}: {message}"
@@ -1612,7 +1682,7 @@ fn show_with_nobody_attached_is_authentication_failed_and_shows_nothing() {
     let ext = login_with(&env, browser.clone());
     let server = OauthServer::start(vec![]);
     let provider = env.provider(&ext, &server, "show");
-    let error = finish(&start_token(&provider)).unwrap_err();
+    let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.show"), "{error}");
     assert!(browser.shown().is_empty());
@@ -1625,7 +1695,10 @@ fn an_attended_show_returns_without_a_token_request() {
     let ext = login_with(&env, browser.clone());
     let server = OauthServer::start(vec![]);
     let provider = env.provider(&ext, &server, "show");
-    assert_eq!(finish(&start_token(&provider)).unwrap(), "unreached");
+    assert_eq!(
+        finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap(),
+        "unreached"
+    );
     assert_eq!(
         browser.shown(),
         [(format!("{}/device", server.url()), "ABCD-1234".to_owned())]
@@ -1655,7 +1728,7 @@ fn poll_with_pending_waits_through_the_listed_statuses() {
         );
         env.clock.advance(Duration::from_secs(5));
     }
-    let token: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    let token: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(token["access_token"], "at");
     assert_eq!(server.request_count(), 3);
 }
@@ -1678,7 +1751,7 @@ fn poll_pending_that_is_not_a_status_list_is_a_calling_code_error() {
             "{{ url = \"{}/device/token\", pending = {pending} }}",
             server.url()
         );
-        let caught = run(&ext, "poll_pending_caught", &opts).unwrap();
+        let caught = run(&ext, "poll_pending_caught", &opts, &Deadline::after(WAIT)).unwrap();
         let (kind, message) = caught.split_once('\n').unwrap();
         assert_eq!(kind, "string", "{pending}: {caught}");
         assert!(message.contains(wanted), "{pending}: {message}");
@@ -1693,7 +1766,7 @@ fn poll_pending_at_the_status_boundaries_passes_validation() {
     let env = Env::new();
     let ext = env.extension();
     let opts = "{ url = \"http://127.0.0.1:1/device/token\", pending = { 100, 599 } }";
-    let caught = run(&ext, "poll_pending_caught", opts).unwrap();
+    let caught = run(&ext, "poll_pending_caught", opts, &Deadline::after(WAIT)).unwrap();
     let (kind, message) = caught.split_once('\n').unwrap();
     assert_eq!(kind, "table", "{caught}");
     assert!(message.contains("host.http"), "{message}");
@@ -1723,7 +1796,7 @@ fn callback_with_a_path_ignores_other_paths_and_serves_its_own() {
         port,
         "GET /auth/callback?code=c&state=s HTTP/1.1\r\nHost: x\r\n\r\n",
     );
-    let query: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    let query: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
     assert_eq!(query["code"], "c");
     assert_eq!(query["state"], "s");
 }
@@ -1734,7 +1807,8 @@ fn callback_path_must_be_a_string_starting_with_a_slash() {
     let ext = env.extension();
     for path in ["\"auth/callback\"", "\"\"", "5"] {
         let opts = format!("{{ port = {}, path = {path} }}", free_port());
-        let message = lua_message(&run(&ext, "callback_opts", &opts).unwrap_err());
+        let message =
+            lua_message(&run(&ext, "callback_opts", &opts, &Deadline::after(WAIT)).unwrap_err());
         assert!(message.contains("`path` must be"), "{path}: {message}");
     }
 }
@@ -1752,7 +1826,7 @@ fn a_refresh_returning_an_expired_value_is_authentication_failed_and_stores_noth
         env.store(&json!({ "token": "old", "expires_at": WALL + 60 }));
         let before = fs::read(env.credential()).unwrap();
         let provider = env.provider(&ext, &server, mode);
-        let error = finish(&start_token(&provider)).unwrap_err();
+        let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
         assert_eq!(
             error.code(),
             ErrorCode::AuthenticationFailed,

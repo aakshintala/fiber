@@ -552,10 +552,17 @@ fn serve(
             // Nothing waiting, or an accept that failed: either way the
             // listener waits a poll and tries again, and the callback's own
             // timeout bounds one that keeps failing.
-            Err(_) => match stop.recv_timeout(POLL) {
-                Err(RecvTimeoutError::Timeout) => {}
-                Ok(()) | Err(RecvTimeoutError::Disconnected) => return None,
-            },
+            Err(_) => {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "a poll pause between accepts on the callback listener; the callback's own timeout bounds the wait"
+                )]
+                let stopped = stop.recv_timeout(POLL);
+                match stopped {
+                    Err(RecvTimeoutError::Timeout) => {}
+                    Ok(()) | Err(RecvTimeoutError::Disconnected) => return None,
+                }
+            }
         }
     }
 }
@@ -760,7 +767,12 @@ pub(crate) fn lock(
                         )))));
                     }
                 }
-                match stop.recv_timeout(POLL) {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "a poll pause between tries of the credential file lock; a send on the stop channel ends it"
+                )]
+                let stopped = stop.recv_timeout(POLL);
+                match stopped {
                     Err(RecvTimeoutError::Timeout) => {}
                     Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
                 }

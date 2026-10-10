@@ -11,6 +11,7 @@
 use std::sync::mpsc;
 
 use contract::shapes::{DeclaredEffects, Effect};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
@@ -35,6 +36,7 @@ fn extension(init: &str) -> (fakes::TempDir, Arc<LuaExtension>) {
 }
 
 /// Runs `read` on the extension's registrations on a thread, under `WAIT`.
+#[track_caller]
 fn registered<T: Send + 'static>(
     ext: &Arc<LuaExtension>,
     read: impl Fn(&super::super::CallbackTimeouts) -> T + Send + 'static,
@@ -42,15 +44,18 @@ fn registered<T: Send + 'static>(
     let (tx, rx) = mpsc::channel();
     let ext = Arc::clone(ext);
     std::thread::spawn(move || tx.send(ext.registered(read)));
-    rx.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&rx)
         .expect("waited for the entry script")
         .expect("the entry script ran")
 }
 
+#[track_caller]
 fn tools(ext: &Arc<LuaExtension>) -> BTreeMap<String, DeclaredTool> {
     registered(ext, |timeouts| timeouts.tools.clone())
 }
 
+#[track_caller]
 fn problems(ext: &Arc<LuaExtension>) -> Vec<String> {
     registered(ext, |timeouts| timeouts.hooks.problems.clone())
 }
@@ -281,8 +286,8 @@ fn fiber_tool_after_the_entry_script_raises_and_registers_nothing() {
     let (tx, rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
     std::thread::spawn(move || tx.send(caller.command("late", "")));
-    let said = rx
-        .recv_timeout(WAIT)
+    let said = Deadline::after(WAIT)
+        .recv(&rx)
         .expect("waited for the command")
         .unwrap();
     assert_eq!(
@@ -396,6 +401,7 @@ fn go_module(dir: &std::path::Path, name: &str) -> mpsc::Receiver<()> {
 
 /// A server that accepts one connection, signals, and holds it unanswered
 /// until `WAIT` passes, so a `host.http` call stays parked.
+#[track_caller]
 fn hold_server() -> (String, mpsc::Receiver<()>) {
     use std::io::Read;
 
@@ -416,7 +422,7 @@ fn hold_server() -> (String, mpsc::Receiver<()>) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
         let (_keep, wait) = mpsc::channel::<()>();
-        match wait.recv_timeout(WAIT) {
+        match Deadline::after(WAIT).recv(&wait) {
             Ok(()) | Err(_) => {}
         }
         drop(sock);
@@ -452,7 +458,8 @@ fn a_tool_call_completes_while_a_command_is_parked_on_an_ask() {
     let quick = Arc::clone(&ext);
     let ran = on_thread(move || quick.tool_run("quick", json!({}), &fakes::CancelToken::new()));
     assert_eq!(
-        ran.recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&ran)
             .expect("the tool call ran while the command waited")
             .unwrap(),
         Some(json!("quick"))
@@ -472,15 +479,15 @@ fn a_hook_runs_to_completion_while_a_tool_call_is_parked() {
     ));
     let holding = Arc::clone(&ext);
     let _held = on_thread(move || holding.tool_run("hold", json!({}), &fakes::CancelToken::new()));
-    accepted
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&accepted)
         .expect("waited for the tool call to reach the server");
     assert!(until(&ext, parked), "waited for the tool call to park");
     let hooked = Arc::clone(&ext);
     let answer = on_thread(move || hooked.hook("after_tool", 0, json!({"content": "x"})));
     assert_eq!(
-        answer
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&answer)
             .expect("the hook ran while the tool call was parked")
             .unwrap(),
         json!({"content": "hooked"})
@@ -510,7 +517,8 @@ fn a_spinning_tool_holds_the_extensions_hook_until_its_timeout() {
     ));
     let spinning = Arc::clone(&ext);
     let spun = on_thread(move || spinning.tool_run("spin", json!({}), &fakes::CancelToken::new()));
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the tool to spin");
     let hooked = Arc::clone(&ext);
     let answer = on_thread(move || hooked.hook("after_tool", 0, json!({"content": "x"})));
@@ -522,18 +530,22 @@ fn a_spinning_tool_holds_the_extensions_hook_until_its_timeout() {
         "waited for the hook to queue"
     );
     assert!(
-        answer.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&answer)
+            .is_err(),
         "the hook started while the tool held the thread"
     );
     clock.advance(Duration::from_millis(100));
-    let Err(Error::Timeout { callback, .. }) = spun.recv_timeout(WAIT).expect("the tool returned")
+    let Err(Error::Timeout { callback, .. }) = Deadline::after(WAIT)
+        .recv(&spun)
+        .expect("the tool returned")
     else {
         panic!("the spinning tool did not time out");
     };
     assert_eq!(callback, "spin");
     assert_eq!(
-        answer
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&answer)
             .expect("the hook ran once the tool stopped")
             .unwrap(),
         json!({"content": "hooked"})
@@ -604,8 +616,8 @@ fn a_cancel_before_exec_admission_ends_the_call_and_keeps_the_extension() {
         on_thread(move || ext.tool_run("admit", json!({}), &cancel))
     };
     assert!(
-        cancelled
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&cancelled)
             .expect("the cancelled call returned without the clock moving")
             .unwrap()
             .is_none(),
@@ -615,7 +627,8 @@ fn a_cancel_before_exec_admission_ends_the_call_and_keeps_the_extension() {
     let again = Arc::clone(&ext);
     let ran = on_thread(move || again.tool_run("admit", json!({}), &fakes::CancelToken::new()));
     assert_eq!(
-        ran.recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&ran)
             .expect("the next call ran: the extension stayed ready")
             .unwrap(),
         Some(json!("ran"))

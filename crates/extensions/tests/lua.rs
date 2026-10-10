@@ -15,6 +15,7 @@ use common::{Setup, go_module, write};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use extensions::{Error, LuaExtension};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 /// How long a test waits for one call before failing. A callback that is
@@ -51,11 +52,12 @@ fn extension(
 /// Runs one command on its own thread under `WAIT`, so a callback the runtime
 /// fails to stop fails the test instead of hanging it.
 #[allow(clippy::panic, reason = "a test helper; a hang is the test's failure")]
+#[track_caller]
 fn call(ext: &Arc<LuaExtension>, command: &str, text: &str) -> Result<String, Error> {
     let (tx, rx) = mpsc::channel();
     let (ext, name, text) = (Arc::clone(ext), command.to_owned(), text.to_owned());
     std::thread::spawn(move || tx.send(ext.command(&name, &text)));
-    match rx.recv_timeout(WAIT) {
+    match Deadline::after(WAIT).recv(&rx) {
         Ok(result) => result,
         Err(_) => panic!("`{command}` did not return within {WAIT:?}"),
     }
@@ -238,7 +240,8 @@ fn spinning_callback_stops_at_its_timeout(command: &'static str, body: &str) {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let asked = clock.now();
     let result = start(&ext, command);
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the callback to pass its clock check");
     let parked_at = asked + Duration::from_millis(50) + GRACE;
     assert!(
@@ -248,8 +251,8 @@ fn spinning_callback_stops_at_its_timeout(command: &'static str, body: &str) {
     // The hook stops the loop at the deadline. The grace is the caller's
     // wait, and it has not run out.
     clock.advance(Duration::from_millis(50));
-    let err = result
-        .recv_timeout(WAIT)
+    let err = Deadline::after(WAIT)
+        .recv(&result)
         .expect("waited for the spinning callback")
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::ExtensionFailed);
@@ -357,7 +360,8 @@ fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
         let ext = extension("ext", dir, setup.home(), clock.clone());
         let asked = clock.now();
         let result = start(&ext, command);
-        went.recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&went)
             .expect("waited for the callback to pass its clock check");
         let parked_at = asked + Duration::from_millis(50) + GRACE;
         assert!(
@@ -365,8 +369,8 @@ fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
             "waited for {command} to park at its grace"
         );
         clock.advance(Duration::from_millis(50) + GRACE);
-        let err = result
-            .recv_timeout(WAIT)
+        let err = Deadline::after(WAIT)
+            .recv(&result)
             .expect("waited for the callback the hook cannot stop")
             .unwrap_err();
         assert_eq!(err.code(), ErrorCode::ExtensionFailed);
@@ -391,7 +395,8 @@ fn a_lua_error_releases_the_extensions_lock() {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(other.is_running()));
     assert!(
-        rx.recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&rx)
             .expect("waited for the lock to be taken")
     );
     assert_eq!(call(&ext, "echo", "free").unwrap(), "free");
@@ -511,27 +516,27 @@ fn a_command_queued_behind_a_parked_command_runs_once_it_finishes() {
     );
     let ext = extension("ext", dir, setup.home(), FakeClock::new());
     let first = start(&ext, "first");
-    accepted_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&accepted_rx)
         .expect("waited for the first command to reach the server");
     let (listed_tx, listed_rx) = mpsc::channel();
     let listed = Arc::clone(&ext);
     std::thread::spawn(move || listed_tx.send(listed.provider_functions("p")));
     assert_eq!(
-        listed_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&listed_rx)
             .expect("waited for the provider's functions")
             .unwrap(),
         ["sign"]
     );
     let second = start(&ext, "second");
     release_tx.send(()).unwrap();
-    let first = first
-        .recv_timeout(WAIT)
+    let first = Deadline::after(WAIT)
+        .recv(&first)
         .expect("waited for the first command")
         .unwrap();
-    let second = second
-        .recv_timeout(WAIT)
+    let second = Deadline::after(WAIT)
+        .recv(&second)
         .expect("waited for the second command")
         .unwrap();
     assert_eq!((first.as_str(), second.as_str()), ("ok", "second"));
@@ -559,8 +564,8 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let slow = start(&ext, "slow");
-    accepted_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&accepted_rx)
         .expect("waited for the slow command to reach the server");
     let asked = clock.now();
     let quick = start(&ext, "quick");
@@ -569,8 +574,8 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
         "waited for quick to park at its timeout"
     );
     clock.advance(Duration::from_millis(300));
-    let err = quick
-        .recv_timeout(WAIT)
+    let err = Deadline::after(WAIT)
+        .recv(&quick)
         .expect("waited for quick")
         .unwrap_err();
     let Error::Timeout {
@@ -585,7 +590,8 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     assert!(ext.is_running(), "the queued timeout stopped the extension");
     release_tx.send(()).unwrap();
     assert!(
-        slow.recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&slow)
             .expect("waited for the slow command")
             .is_ok()
     );
@@ -619,7 +625,8 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let asked = clock.now();
     let first = start(&ext, "work");
-    held.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&held)
         .expect("waited for the entry script to block past its clock checks");
     let second = start(&ext, "work");
     // Both wait on the entry script's grace, which is later than the
@@ -631,8 +638,8 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     clock.advance(Duration::from_millis(1000));
     release.send(()).unwrap();
     for waiter in [first, second] {
-        let err = waiter
-            .recv_timeout(WAIT)
+        let err = Deadline::after(WAIT)
+            .recv(&waiter)
             .expect("waited for work")
             .unwrap_err();
         let Error::Timeout { timeout_ms, .. } = &err else {
@@ -665,8 +672,8 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let asked = clock.now();
     let held = start(&ext, "hold");
-    opened
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&opened)
         .expect("waited for the entry script to block past its clock checks");
     let quick = start(&ext, "quick");
     assert!(
@@ -675,8 +682,8 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
     );
     clock.advance(Duration::from_millis(400));
     release.send(()).unwrap();
-    let err = quick
-        .recv_timeout(WAIT)
+    let err = Deadline::after(WAIT)
+        .recv(&quick)
         .expect("waited for quick")
         .unwrap_err();
     let Error::Timeout { timeout_ms, .. } = &err else {
@@ -684,11 +691,16 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
     };
     assert_eq!(*timeout_ms, 400);
     assert!(ext.is_running());
-    hold_ok_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&hold_ok_rx)
         .expect("waited for hold to reach the server");
     hold_release_tx.send(()).unwrap();
-    assert!(held.recv_timeout(WAIT).expect("waited for hold").is_ok());
+    assert!(
+        Deadline::after(WAIT)
+            .recv(&held)
+            .expect("waited for hold")
+            .is_ok()
+    );
 }
 
 #[test]
@@ -711,8 +723,8 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let asked = clock.now();
     let ran = start(&ext, "p.sign");
-    ok_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&ok_rx)
         .expect("waited for p.sign to reach the server");
     let grace = asked + Duration::from_millis(30000) + GRACE;
     assert!(
@@ -732,7 +744,10 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     );
     release_tx.send(()).unwrap();
     assert_eq!(
-        ran.recv_timeout(WAIT).expect("waited for p.sign").unwrap(),
+        Deadline::after(WAIT)
+            .recv(&ran)
+            .expect("waited for p.sign")
+            .unwrap(),
         "ok"
     );
 }
@@ -799,7 +814,8 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let abandon = clock.now() + LOAD + GRACE;
     let waiters = [start(&ext, "a"), start(&ext, "b")];
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the entry script to pass its clock check");
     assert!(
         parked_at(&clock, abandon, 2),
@@ -807,8 +823,8 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
     );
     clock.advance(LOAD + GRACE);
     for waiter in waiters {
-        let err = waiter
-            .recv_timeout(WAIT)
+        let err = Deadline::after(WAIT)
+            .recv(&waiter)
             .expect("waited for a caller of the entry script")
             .unwrap_err();
         let Error::Abandoned { callback, .. } = &err else {
@@ -832,7 +848,8 @@ fn every_call_waiting_on_an_entry_script_that_errors_gets_its_error() {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let abandon = clock.now() + LOAD + GRACE;
     let first = start(&ext, "a");
-    held.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&held)
         .expect("waited for the entry script to block past its clock checks");
     let second = start(&ext, "b");
     assert!(
@@ -841,8 +858,8 @@ fn every_call_waiting_on_an_entry_script_that_errors_gets_its_error() {
     );
     release.send(()).unwrap();
     for waiter in [first, second] {
-        let err = waiter
-            .recv_timeout(WAIT)
+        let err = Deadline::after(WAIT)
+            .recv(&waiter)
             .expect("waited for a caller of the entry script")
             .unwrap_err();
         let Error::Lua { message, .. } = &err else {
@@ -869,7 +886,8 @@ fn an_entry_script_past_its_deadline_stops_the_extension_with_its_timeout() {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let abandon = clock.now() + LOAD + GRACE;
     let first = start(&ext, "a");
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for the entry script to pass its clock check");
     assert!(
         clock.await_parked(abandon, WAIT),
@@ -877,8 +895,8 @@ fn an_entry_script_past_its_deadline_stops_the_extension_with_its_timeout() {
     );
     // The hook's deadline is the 2 second load bound, before the grace.
     clock.advance(LOAD);
-    let err = first
-        .recv_timeout(WAIT)
+    let err = Deadline::after(WAIT)
+        .recv(&first)
         .expect("waited for the entry script")
         .unwrap_err();
     let Error::Timeout {

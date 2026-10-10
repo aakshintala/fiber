@@ -5,6 +5,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
 use std::thread;
 
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::hub::Progress;
@@ -327,21 +328,21 @@ fn provider_functions_abandoning_registration_wakes_every_waiter() {
         }
         woke_tx.send(()).unwrap();
     });
-    waiting_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&waiting_rx)
         .expect("waited for the other waiter to take the lock");
     // Its own thread, so a call that never returns fails the test.
     let (done_tx, done_rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
     thread::spawn(move || done_tx.send(caller.provider_functions("p")));
-    let err = done_rx
-        .recv_timeout(WAIT)
+    let err = Deadline::after(WAIT)
+        .recv(&done_rx)
         .expect("provider_functions never returned")
         .unwrap_err();
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
     // A hang guard only: without the wake the waiter never returns.
-    woke_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&woke_rx)
         .expect("the other waiter was never woken");
 }
 
@@ -364,8 +365,8 @@ fn dropping_the_extension_stops_it() {
         }
     });
     assert_eq!(
-        done_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&done_rx)
             .expect("waited for echo")
             .unwrap(),
         "hi"
@@ -448,8 +449,8 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     );
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
-    accepted_rx
-        .recv_timeout(WAIT_UNTIL)
+    Deadline::after(WAIT_UNTIL)
+        .recv(&accepted_rx)
         .expect("waited for hold to reach the server");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
@@ -457,7 +458,8 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     )));
     let later = hub.lock().push(command("later"), Value::Null, clock.now());
     stop(&hub);
-    done.recv_timeout(WAIT_UNTIL)
+    Deadline::after(WAIT_UNTIL)
+        .recv(&done)
         .expect("waited for the extension thread to quit");
     assert!(matches!(
         hub.lock().calls.get(&later),
@@ -481,8 +483,8 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
     );
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
-    accepted_rx
-        .recv_timeout(WAIT_UNTIL)
+    Deadline::after(WAIT_UNTIL)
+        .recv(&accepted_rx)
         .expect("waited for hold to reach the server");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
@@ -517,7 +519,8 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
         assert!(shared.queue.iter().any(|job| job.id == second));
     }
     stop(&hub);
-    done.recv_timeout(WAIT_UNTIL)
+    Deadline::after(WAIT_UNTIL)
+        .recv(&done)
         .expect("waited for the extension thread to quit");
 }
 
@@ -534,7 +537,8 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
     let clock = FakeClock::new();
     let (hub, spin, done) = serve_after(dir.path(), "spin", &clock);
     let later = hub.lock().push(command("later"), Value::Null, clock.now());
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for spin to pass its clock check");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&spin),
@@ -546,7 +550,8 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
         s.calls.get(&spin),
         Some(Progress::Done(_))
     )));
-    done.recv_timeout(WAIT_UNTIL)
+    Deadline::after(WAIT_UNTIL)
+        .recv(&done)
         .expect("waited for the extension thread to quit");
     assert!(matches!(
         hub.lock().calls.get(&later),
@@ -648,16 +653,17 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     };
     let asked = clock.now();
     run("park", |e| e.command("park", "").map(Value::String));
-    park_accepted
-        .recv_timeout(WAIT_SERVER)
+    Deadline::after(WAIT_SERVER)
+        .recv(&park_accepted)
         .expect("waited for park to reach the server");
     run("models", |e| e.provider_call("p", "models", Value::Null));
-    models_accepted
-        .recv_timeout(WAIT_SERVER)
+    Deadline::after(WAIT_SERVER)
+        .recv(&models_accepted)
         .expect("waited for models to reach the server");
     run("queued", |e| e.command("queued", "").map(Value::String));
     run("sign", |e| e.provider_call("p", "sign", Value::Null));
-    went.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&went)
         .expect("waited for sign to pass its clock check");
     let abandon = asked + Duration::from_millis(50) + GRACE;
     assert!(
@@ -666,10 +672,10 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     );
     clock.advance(Duration::from_millis(50) + GRACE);
     let mut seen = BTreeMap::new();
+    // One deadline for the whole wait: the loop drains one stream.
+    let wait = Deadline::after(WAIT);
     for _ in 0..4 {
-        let (what, result) = rx
-            .recv_timeout(WAIT)
-            .expect("waited for a waiter to return");
+        let (what, result) = wait.recv(&rx).expect("waited for a waiter to return");
         seen.insert(what, result.unwrap_err());
     }
     assert!(
@@ -851,8 +857,8 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
     );
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
-    accepted_rx
-        .recv_timeout(WAIT_UNTIL)
+    Deadline::after(WAIT_UNTIL)
+        .recv(&accepted_rx)
         .expect("waited for hold to reach the server");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
@@ -896,7 +902,8 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
         assert!(shared.queue.iter().any(|job| job.id == hook));
     }
     stop(&hub);
-    done.recv_timeout(WAIT_UNTIL)
+    Deadline::after(WAIT_UNTIL)
+        .recv(&done)
         .expect("waited for the extension thread to quit");
 }
 
@@ -948,8 +955,8 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
     });
-    accepted_rx
-        .recv_timeout(WAIT_UNTIL)
+    Deadline::after(WAIT_UNTIL)
+        .recv(&accepted_rx)
         .expect("waited for the hook to reach the server");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hook),
@@ -984,8 +991,8 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
         assert!(shared.queue.iter().any(|job| job.id == later));
     }
     stop(&hub);
-    done_rx
-        .recv_timeout(WAIT_UNTIL)
+    Deadline::after(WAIT_UNTIL)
+        .recv(&done_rx)
         .expect("waited for the extension thread to quit");
 }
 
@@ -1076,8 +1083,8 @@ fn a_held_command_blocks_the_stream_until_released() {
         Some(Progress::Queued)
     )));
     stop(&hub);
-    done_rx
-        .recv_timeout(WAIT_UNTIL)
+    Deadline::after(WAIT_UNTIL)
+        .recv(&done_rx)
         .expect("waited for the extension thread to quit");
 }
 

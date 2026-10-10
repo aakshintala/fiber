@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 use contract::clock::Clock;
 
 use super::*;
+use fakes::Deadline;
 
 /// How long a test waits for a spawned program to report.
 const WAIT: Duration = Duration::from_secs(15);
@@ -125,7 +126,7 @@ fn the_system_browser_starts_its_program_with_the_url() {
         tx.send(read.map(|_| seen))
     });
     SystemBrowser::with_program(&script).open("https://auth.example/authorize?x=1");
-    let seen = rx.recv_timeout(WAIT).unwrap().unwrap();
+    let seen = Deadline::after(WAIT).recv(&rx).unwrap().unwrap();
     assert_eq!(seen, "https://auth.example/authorize?x=1");
 }
 
@@ -312,13 +313,15 @@ fn a_malformed_parameter_is_named_only_when_recognised_and_its_value_never_shown
 }
 
 /// The reply `work` delivers: every failure carries its code and message.
+#[track_caller]
 fn delivered(work: impl FnOnce(&Deliver)) -> Reply {
     let (tx, rx) = mpsc::channel();
     let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
         Ok(()) | Err(_) => {}
     });
     work(&deliver);
-    rx.recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&rx)
         .expect("waited {WAIT:?} for the reply")
 }
 
@@ -357,7 +360,7 @@ fn a_request_whose_query_cannot_be_read_is_unreadable_reply() {
         b"GET /cb?code=SECRET%zz HTTP/1.1\r\nHost: x\r\n\r\n",
     )
     .unwrap();
-    let (code, message) = failed(rx.recv_timeout(WAIT).expect("the reply arrives"));
+    let (code, message) = failed(Deadline::after(WAIT).recv(&rx).expect("the reply arrives"));
     assert_eq!(code, contract::ErrorCode::UnreadableReply);
     assert!(message.starts_with("host.oauth.callback: "), "{message}");
     assert!(!message.contains("SECRET"), "{message}");

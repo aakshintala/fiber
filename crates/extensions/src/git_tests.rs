@@ -9,6 +9,7 @@
 
 use super::{Origin, is_path, split};
 use crate::Error;
+use fakes::Deadline;
 
 #[test]
 fn a_path_is_told_from_a_name() {
@@ -139,12 +140,13 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     /// starter reports a timeout the stall never caused, so the clock moves
     /// only after the second sighting. A stall that answers instead fails on
     /// its own answer.
+    #[track_caller]
     fn await_stuck<T: Send>(done: &mpsc::Receiver<T>, stall: &str) -> Option<T> {
         for _ in 0..STUCK_ROUNDS {
             if !fakes::matching(stall).unwrap().is_empty() {
                 // Up: still up after a bounded wait means stuck, not
                 // starting; an answer meanwhile ends this at once.
-                match done.recv_timeout(SIGHT) {
+                match Deadline::after(SIGHT).recv(done) {
                     Ok(done) => return Some(done),
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -155,7 +157,7 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
                     return None;
                 }
             }
-            match done.recv_timeout(SIGHT) {
+            match Deadline::after(SIGHT).recv(done) {
                 Ok(done) => return Some(done),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -208,7 +210,7 @@ fn a_stalled_diff_fails_at_the_git_deadline() {
     }
     let answer = match answered {
         Some(answer) => answer,
-        None => done_rx.recv_timeout(WITHIN).unwrap(),
+        None => Deadline::after(WITHIN).recv(&done_rx).unwrap(),
     };
     let err = answer.unwrap_err();
     assert!(

@@ -14,6 +14,7 @@ use config::{ModelData, write_model_cache};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use extensions::{Error, Providers, leave_out_invalid};
+use fakes::Deadline;
 use serde_json::json;
 
 fn installed(setup: &Setup, extensions: &[(&str, serde_json::Value)]) -> Providers {
@@ -899,10 +900,12 @@ const REFRESH_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Runs `f` on its own thread under [`REFRESH_WAIT`], so a refresh that
 /// never returns fails the test instead of hanging it.
+#[track_caller]
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    rx.recv_timeout(REFRESH_WAIT)
+    Deadline::after(REFRESH_WAIT)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the refresh did not return within {REFRESH_WAIT:?}"))
 }
 
