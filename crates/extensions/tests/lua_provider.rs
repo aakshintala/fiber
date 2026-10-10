@@ -530,7 +530,7 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     write(
         &dir.join("init.lua"),
         &format!(
-            "fiber.command(\"get\", {{ timeout = 200, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+            "fiber.command(\"get\", {{ timeout = 30000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
              fiber.command(\"ok\", {{ timeout = 1000, run = function() return \"ok\" end }})\n"
         ),
     );
@@ -545,20 +545,20 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
         "waited for get to reach the server"
     );
     // The caller waits out the grace. The extension thread fails a parked
-    // callback at the deadline, which is only the 200 ms.
+    // callback at the deadline, which is only the 30000 ms.
     assert!(
         clock.await_parked(
-            asked + Duration::from_millis(200) + Duration::from_secs(1),
+            asked + Duration::from_millis(30000) + Duration::from_secs(1),
             WAIT
         ),
         "waited for get to park at its grace"
     );
-    clock.advance(Duration::from_millis(200));
+    clock.advance(Duration::from_millis(30000));
     let err = rx.recv_timeout(WAIT).expect("waited for get").unwrap_err();
     let Error::Timeout { timeout_ms, .. } = &err else {
         panic!("{err:?}")
     };
-    assert_eq!(*timeout_ms, 200);
+    assert_eq!(*timeout_ms, 30000);
     // A timeout of one parked callback leaves the extension's thread running.
     let again = Arc::clone(&extension);
     assert_eq!(within(move || again.command("ok", "")).unwrap(), "ok");

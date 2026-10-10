@@ -11,7 +11,7 @@ use crate::rows::{Join, Rows};
 /// The rows `text` steered at `ts` draws at `width` in `zone`.
 fn drawn(text: &str, ts: u64, width: u16, zone: &TimeZone) -> Vec<String> {
     let mut out = Rows::default();
-    Steered::new(text.to_owned(), ts).rows(width, zone, &mut out);
+    Steered::new(text.to_owned(), ts).rows(width, zone, &crate::image::Layout::default(), &mut out);
     let (lines, _) = out.into_parts();
     lines.iter().map(|(line, _)| line.to_string()).collect()
 }
@@ -41,7 +41,12 @@ fn the_rule_fills_the_width_after_one_space() {
     );
     for width in [14, 15, 17, 20, 40] {
         let mut out = Rows::default();
-        Steered::new("use x".to_owned(), 0).rows(width, &TimeZone::UTC, &mut out);
+        Steered::new("use x".to_owned(), 0).rows(
+            width,
+            &TimeZone::UTC,
+            &crate::image::Layout::default(),
+            &mut out,
+        );
         let (lines, _) = out.into_parts();
         for (line, _) in &lines {
             assert!(line.width() <= usize::from(width), "width {width}: {line}");
@@ -53,7 +58,12 @@ fn the_rule_fills_the_width_after_one_space() {
 fn the_rule_is_dim_and_its_dashes_muted() {
     // The label is dim, the dashes muted (`docs/tui.md`, "Turns").
     let mut out = Rows::default();
-    Steered::new("use x".to_owned(), 0).rows(20, &TimeZone::UTC, &mut out);
+    Steered::new("use x".to_owned(), 0).rows(
+        20,
+        &TimeZone::UTC,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
     let (lines, _) = out.into_parts();
     let (rule, _) = &lines[0];
     assert_eq!(rule.spans.len(), 2);
@@ -79,7 +89,12 @@ fn the_text_is_bold_and_wraps_with_its_joins() {
     // The message's text is bold, wrapped with its joins
     // (`docs/tui.md`, "Turns").
     let mut out = Rows::default();
-    Steered::new("aaaaaa bbbbbbbbbb".to_owned(), 0).rows(10, &TimeZone::UTC, &mut out);
+    Steered::new("aaaaaa bbbbbbbbbb".to_owned(), 0).rows(
+        10,
+        &TimeZone::UTC,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
     let (lines, texts) = out.into_parts();
     assert_eq!(lines.len(), 3);
     for (line, _) in lines.iter().skip(1) {
@@ -95,7 +110,12 @@ fn the_text_is_bold_and_wraps_with_its_joins() {
     assert_eq!(texts[2].join, Join::WrapSpace);
     // A two-line message starts its second row as its own line.
     let mut out = Rows::default();
-    Steered::new("one\ntwo".to_owned(), 0).rows(40, &TimeZone::UTC, &mut out);
+    Steered::new("one\ntwo".to_owned(), 0).rows(
+        40,
+        &TimeZone::UTC,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
     let (lines, texts) = out.into_parts();
     assert_eq!(lines.len(), 3);
     assert_eq!(texts[2].join, Join::Break);
@@ -106,7 +126,12 @@ fn a_blank_message_draws_the_rule_alone() {
     // Nothing to say: the rule alone (`docs/tui.md`, "Turns").
     for text in ["", "  "] {
         let mut out = Rows::default();
-        Steered::new(text.to_owned(), 0).rows(20, &TimeZone::UTC, &mut out);
+        Steered::new(text.to_owned(), 0).rows(
+            20,
+            &TimeZone::UTC,
+            &crate::image::Layout::default(),
+            &mut out,
+        );
         let (lines, _) = out.into_parts();
         assert_eq!(lines.len(), 1, "text {text:?}");
     }
@@ -117,7 +142,12 @@ fn the_rule_copies_without_its_dashes() {
     // The rule's dashes are tail cells, so a copy reads the label alone
     // (`docs/tui.md`, "Selection and copy").
     let mut out = Rows::default();
-    Steered::new("use x".to_owned(), 0).rows(20, &TimeZone::UTC, &mut out);
+    Steered::new("use x".to_owned(), 0).rows(
+        20,
+        &TimeZone::UTC,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
     let (lines, texts) = out.into_parts();
     let logical: Vec<String> = crate::logical::logical(&lines, &texts)
         .iter()
@@ -130,7 +160,12 @@ fn the_rule_copies_without_its_dashes() {
 fn nothing_is_indented_and_nothing_is_striped() {
     // No stripe, no indent (`docs/tui.md`, "Turns").
     let mut out = Rows::default();
-    Steered::new("use x".to_owned(), 0).rows(20, &TimeZone::UTC, &mut out);
+    Steered::new("use x".to_owned(), 0).rows(
+        20,
+        &TimeZone::UTC,
+        &crate::image::Layout::default(),
+        &mut out,
+    );
     let (lines, _) = out.into_parts();
     for (line, _) in &lines {
         let shown = line.to_string();
@@ -145,7 +180,12 @@ fn a_rule_with_no_dashes_has_no_tail() {
     // is the space and the dashes (`docs/tui.md`, "Selection and copy").
     for (width, tail) in [(13, 0), (14, 0), (15, 2), (20, 7)] {
         let mut out = Rows::default();
-        Steered::new("use x".to_owned(), 0).rows(width, &TimeZone::UTC, &mut out);
+        Steered::new("use x".to_owned(), 0).rows(
+            width,
+            &TimeZone::UTC,
+            &crate::image::Layout::default(),
+            &mut out,
+        );
         let (_, texts) = out.into_parts();
         assert_eq!(texts[0].tail, tail, "width {width}");
     }

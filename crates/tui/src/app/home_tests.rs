@@ -2510,6 +2510,27 @@ fn x_on_a_subscribed_row_sends_close_now_only() {
 }
 
 #[test]
+fn the_foot_names_the_key_maps_bound_key() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("key_map".to_owned(), json!("f2"));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(
+        foot(&app),
+        "↓ the session list · F2 the key map · Ctrl+C twice to quit"
+    );
+}
+
+#[test]
+fn the_foot_leaves_the_key_map_out_when_unbound() {
+    let mut app = home();
+    let mut user = serde_json::Map::new();
+    user.insert("key_map".to_owned(), json!([]));
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(foot(&app), "↓ the session list · Ctrl+C twice to quit");
+}
+
+#[test]
 fn x_with_the_link_down_sends_nothing() {
     let mut app = home();
     app.connect_failed("gone".to_owned());

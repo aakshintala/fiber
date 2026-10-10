@@ -2233,3 +2233,310 @@ fn thinking_with_no_catalogue_entry_opens_as_choose() {
     let open = app.model_picker.open.as_ref().expect("open");
     assert_eq!(open.mode, crate::model_picker::Mode::Choose);
 }
+
+/// An app attached to [`SESSION`] with the hub up, the seam recording
+/// writes, scoped to `scoped`, and the three-model catalogue read.
+fn scope_app(scoped: &[&str]) -> (App, Arc<crate::configure_fake::Fake>) {
+    let mut app = attached();
+    app.on_line(hello());
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.model_picker.scoped = scoped.iter().map(|name| (*name).to_owned()).collect();
+    app.on_models(Ok(three()));
+    (app, seam)
+}
+
+/// The checklist marks, if a picker is open.
+fn marks(app: &App) -> Option<Vec<bool>> {
+    app.model_picker
+        .open
+        .as_ref()
+        .map(|open| open.marks.clone())
+}
+
+#[test]
+fn scoped_models_opens_marking_over_every_model() {
+    let (mut app, _) = scope_app(&["acme/m1"]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(app.input().expand().is_empty());
+    let open = app.model_picker.open.as_ref().expect("open");
+    assert_eq!(open.mode, crate::model_picker::Mode::Scope);
+    // Every installed model shows whatever the scope, with no scope
+    // line and no level chips: arrows walk all three rows.
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(
+        app.model_picker_frame(24).map(|frame| frame.footer),
+        Some("Space mark · Enter save · Esc back".to_owned())
+    );
+}
+
+#[test]
+fn rows_start_marked_from_the_list() {
+    let (mut app, _) = scope_app(&["acme/m1", "zeta/z1", "gone/x"]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![true, false, true]));
+    // With nothing saved, every row starts unmarked.
+    let (mut app, _) = scope_app(&[]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+}
+
+#[test]
+fn space_and_a_click_toggle_a_mark() {
+    let (mut app, _) = scope_app(&[]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    // Frame rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1`,
+    // 4 the `zeta` heading, 5 `zeta/z1`.
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    // A click on the mark toggles its row.
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
+            2, 0
+        ))),
+        Effect::None
+    );
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+    // A click on the name selects without toggling.
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
+            5, 1
+        ))),
+        Effect::None
+    );
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+    assert!(app.model_picker_open());
+}
+
+#[test]
+fn enter_saves_marked_in_order_then_unlisted_old_entries() {
+    let (mut app, seam) = scope_app(&["gone/x", "zeta/z1"]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, true]));
+    // Mark `acme/m1`: the save lists marked references in catalogue
+    // order, then the old list's uninstalled entries in their order.
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert_eq!(
+        seam.writes(),
+        vec![(
+            PathBuf::from("/w"),
+            crate::configure::Layer::Global,
+            "scoped_models".to_owned(),
+            "[\"acme/m1\",\"zeta/z1\",\"gone/x\"]".to_owned()
+        )]
+    );
+    assert_eq!(
+        app.model_picker.scoped,
+        vec![
+            "acme/m1".to_owned(),
+            "zeta/z1".to_owned(),
+            "gone/x".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn marking_none_clears_even_with_an_unavailable_old_entry() {
+    // The old list holds `gone/x`, which is not installed, and
+    // `acme/m1`, which is: with neither marked the save writes `[]`,
+    // dropping every old entry.
+    let (mut app, seam) = scope_app(&["gone/x", "acme/m1"]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert_eq!(
+        seam.writes(),
+        vec![(
+            PathBuf::from("/w"),
+            crate::configure::Layer::Global,
+            "scoped_models".to_owned(),
+            "[]".to_owned()
+        )]
+    );
+    assert!(app.model_picker.scoped.is_empty());
+}
+
+#[test]
+fn esc_saves_nothing() {
+    let (mut app, seam) = scope_app(&["acme/m1"]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert!(seam.writes().is_empty());
+    assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
+}
+
+#[test]
+fn text_after_the_command_is_ignored() {
+    let (mut app, _) = scope_app(&[]);
+    assert_eq!(
+        run_draft(&mut app, "/scoped-models extra words"),
+        Effect::None
+    );
+    assert!(app.model_picker_open());
+    assert_eq!(
+        app.model_picker.open.as_ref().map(|open| open.mode),
+        Some(crate::model_picker::Mode::Scope)
+    );
+    assert!(app.input().expand().is_empty());
+}
+
+#[test]
+fn the_saved_list_scopes_the_next_open() {
+    let (mut app, _) = scope_app(&[]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
+    // Choosing next lists only the saved entry until "show all".
+    assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m1"));
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    // The checklist next starts marked from the saved list.
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+}
+
+#[test]
+fn saving_on_home_writes_at_once_and_sets_the_saved_list() {
+    let mut app = scoped_home(&[]);
+    app.set_configure(Some(
+        Arc::new(crate::configure_fake::Fake::new(vec![])) as Arc<dyn crate::Configure>
+    ));
+    app.on_models(Ok(three()));
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
+    assert_eq!(
+        app.home
+            .as_ref()
+            .map(|home| home.launch.scoped_models.clone()),
+        Some(vec!["acme/m1".to_owned()])
+    );
+}
+
+#[test]
+fn space_does_nothing_outside_the_checklist() {
+    let (mut app, seam) = choosing_app();
+    open(&mut app);
+    let before = selected(&app);
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert!(app.model_picker_open());
+    assert_eq!(selected(&app), before);
+    assert_eq!(marks(&app), Some(Vec::new()));
+    assert!(seam.writes().is_empty());
+    assert!(app.model_picker.awaiting.is_empty());
+}
+
+#[test]
+fn tab_chips_and_s_do_nothing_in_the_checklist() {
+    let (mut app, seam) = scope_app(&["acme/m1"]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
+    assert!(
+        app.model_picker
+            .open
+            .as_ref()
+            .is_some_and(|open| !open.show_all)
+    );
+    // The rows have no chips to move.
+    app.on_edit(Edit::Left);
+    app.on_edit(Edit::Right);
+    assert!(
+        app.model_picker
+            .open
+            .as_ref()
+            .is_some_and(|open| open.touched.iter().all(|touched| !touched))
+    );
+    // `s` never chooses from the checklist: it stays open, sending and
+    // writing nothing.
+    assert_eq!(app.on_key(Key::Char('s'), now()), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(seam.writes().is_empty());
+    assert!(app.model_picker.awaiting.is_empty());
+}
+
+#[test]
+fn a_failed_scope_write_is_a_notice_and_keeps_the_list() {
+    let (mut app, seam) = scope_app(&["acme/m1"]);
+    *seam.refuse.lock().expect("the refusal") = Some("locked".to_owned());
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(app.notice(), Some("Saving scoped_models failed: locked"));
+    assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
+    assert!(!app.model_picker_open());
+}
+
+#[test]
+fn saving_without_a_seam_says_nothing_changed() {
+    let mut app = attached();
+    app.on_line(hello());
+    app.on_models(Ok(three()));
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Saving is not available; nothing changed.")
+    );
+    assert!(app.model_picker.scoped.is_empty());
+    assert!(!app.model_picker_open());
+}
+
+#[test]
+fn opening_before_the_first_read_marks_toggles_and_saves() {
+    let mut app = attached();
+    app.on_line(hello());
+    let seam = Arc::new(crate::configure_fake::Fake::new(vec![]));
+    app.set_configure(Some(seam.clone() as Arc<dyn crate::Configure>));
+    app.model_picker.scoped = vec!["acme/m1".to_owned(), "gone/x".to_owned()];
+    // Opening before any catalogue arrives shows no rows yet, and the
+    // draft is cleared.
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(app.input().expand().is_empty());
+    assert_eq!(marks(&app), Some(Vec::new()));
+    // The first read marks the rows from the saved list.
+    app.on_models(Ok(three()));
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+    // Space toggles the selected row; Enter saves the marked list,
+    // keeping the old list's uninstalled entries.
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert_eq!(
+        seam.writes(),
+        vec![(
+            PathBuf::from("/w"),
+            crate::configure::Layer::Global,
+            "scoped_models".to_owned(),
+            "[\"acme/m1\",\"gone/x\"]".to_owned()
+        )]
+    );
+    assert_eq!(
+        app.model_picker.scoped,
+        vec!["acme/m1".to_owned(), "gone/x".to_owned()]
+    );
+}

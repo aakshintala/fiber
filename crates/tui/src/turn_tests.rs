@@ -13,6 +13,13 @@ use crate::link::Line;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
+/// A text prompt starting a turn.
+fn prompt(text: &str) -> super::images::Prompt {
+    super::images::prompt_of(&[contract::shapes::ContentPart::Text {
+        text: text.to_owned(),
+    }])
+}
+
 /// An app attached to [`SESSION`], 60 columns wide.
 fn app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
@@ -1965,7 +1972,7 @@ fn a_thoughts_toggle_target_is_its_actions_id() {
     let id = super::target_id("a_t");
     assert_ne!(id, 0);
     let mut fold = super::Fold::default();
-    let mut turn = super::Turn::new(vec!["hi".to_owned()], 0);
+    let mut turn = super::Turn::new(vec![prompt("hi")], 0);
     assert!(turn.reasoning_started("a_t", 1, &mut fold));
     assert_eq!(
         turn.groups()

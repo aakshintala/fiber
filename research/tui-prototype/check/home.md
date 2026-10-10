@@ -10,5 +10,5 @@ One run per case: `--home CASE`.
 - hover-thinking: the one chip should sit lighter than its neighbours while keeping its own text colour.
 - worktree-on: the switch should read `[● new worktree]` in blue.
 - worktree-off: the switch should read `[○ new worktree]` dim.
-- picker-recent: the picker should float over home with even ▄ ▀ edges, four recent workspaces, the first row marked with ▌ on the lighter tint.
-- picker-typed: the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first marked; the recents below dimmed.
+- picker-recent: the picker should float centred over home with ▄ ▀ edges and the ▌ stripe; `Workspaces` bold accent; four recent workspaces, the first `›` on a full-width accent bar; a bold-key legend foot.
+- picker-typed: the typed row should read `› ~/work/fi█` with `fiber` and `fiber-worktrees` under it, the first `›` on the accent bar; the recents below dimmed; same frame and legend foot.

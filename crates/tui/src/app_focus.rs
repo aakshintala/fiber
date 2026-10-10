@@ -258,6 +258,10 @@ impl App {
     /// for its `copy` cells, else each row's text with trailing spaces
     /// trimmed, joined by `\n`; None when no row carries it.
     fn line_text(&self, target: super::Target) -> Option<String> {
+        // An image line copies whole, never cut to its drawn width.
+        if let super::Target::Image(id) = target {
+            return self.image_label(id);
+        }
         if matches!(target, super::Target::Copy { .. }) {
             return self
                 .screen
