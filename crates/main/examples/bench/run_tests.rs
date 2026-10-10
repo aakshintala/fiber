@@ -149,7 +149,7 @@ fn a_command_past_its_deadline_errs_and_leaves_nothing_in_its_group() {
         run_to_end(
             &mut command,
             &*clock,
-            Duration::from_secs(120),
+            Duration::from_millis(200),
             "the sleeper",
         )
     })
@@ -232,7 +232,7 @@ fn a_deadline_error_wins_over_a_group_cleanup_error() {
         run_to_end(
             &mut command,
             &clock,
-            Duration::from_secs(120),
+            Duration::from_millis(200),
             "the sleeper",
         )
     })
@@ -459,4 +459,92 @@ fn a_timed_run_past_its_deadline_errs_and_leaves_nothing_behind() {
     assert_eq!(err, "timed out waiting for the sleeper");
     assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
     watchdog.stand_down(READY);
+}
+
+/// A fake clock that removes `hold` on the sleep after the old exit bound
+/// of fake time has passed: the child is released only once a wait on the
+/// fake clock would have given up.
+struct ReleaseAfterBound {
+    hold: std::path::PathBuf,
+    sleeps: std::sync::atomic::AtomicU64,
+    inner: std::sync::Arc<fakes::clock::FakeClock>,
+}
+
+impl Clock for ReleaseAfterBound {
+    fn now(&self) -> std::time::Instant {
+        self.inner.now()
+    }
+    fn wall(&self) -> std::time::SystemTime {
+        self.inner.wall()
+    }
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+        let slept = self
+            .sleeps
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        let bound = WALL.as_millis() / super::PROBE.as_millis();
+        if u128::from(slept) == bound + 1 {
+            std::fs::remove_file(&self.hold).unwrap();
+        }
+    }
+    fn wait_until(
+        &self,
+        until: Option<std::time::Instant>,
+        wait: &mut dyn FnMut(Option<Duration>),
+    ) {
+        self.inner.wait_until(until, wait);
+    }
+    fn subscribe(&self, waker: std::sync::Weak<dyn contract::clock::Wake>) {
+        self.inner.subscribe(waker);
+    }
+}
+
+/// A clock for a child that writes its ready file, then holds until the
+/// clock's sleeps have passed [`WALL`] of fake time.
+fn held_child(dir: &Path) -> (Command, ReleaseAfterBound, Ready) {
+    let hold = dir.join("hold");
+    std::fs::write(&hold, "").unwrap();
+    let ready = Ready::new(dir);
+    let mut command = Command::new("/bin/sh");
+    command.args([
+        "-c",
+        &format!(
+            "echo $$ > '{}'; while [ -e '{}' ]; do :; done",
+            ready.path().display(),
+            hold.display()
+        ),
+    ]);
+    let clock = ReleaseAfterBound {
+        hold,
+        sleeps: std::sync::atomic::AtomicU64::new(0),
+        inner: fakes::clock::FakeClock::new(),
+    };
+    (command, clock, ready)
+}
+
+#[test]
+fn waiting_for_a_process_to_exit_outlasts_fake_time_that_runs_ahead_of_it() {
+    let dir = TempDir::new("fiber-bench-hold-exit");
+    let (mut command, clock, ready) = held_child(dir.path());
+    command.stdin(Stdio::null()).stdout(Stdio::null());
+    let exited = fakes::within("the exit wait", WALL, move || {
+        let mut proc = Proc::spawn(&mut command, &clock).unwrap();
+        ready.wait(READY);
+        let exited = proc.exits(&clock, WALL).unwrap();
+        proc.stop(&System).unwrap();
+        exited
+    });
+    assert!(exited, "the wait gave up while the child was held");
+}
+
+#[test]
+fn a_run_to_its_end_outlasts_fake_time_that_runs_ahead_of_the_child() {
+    let dir = TempDir::new("fiber-bench-hold-run");
+    let (mut command, clock, _ready) = held_child(dir.path());
+    let finished = fakes::within("the held run", WALL, move || {
+        run_to_end(&mut command, &clock, WALL, "the holder")
+    })
+    .unwrap();
+    assert_eq!(finished.status.code(), Some(0));
 }

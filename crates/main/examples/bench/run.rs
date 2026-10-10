@@ -142,15 +142,27 @@ impl Proc {
             .map_err(|err| format!("checking the process: {err}"))
     }
 
-    /// Waits up to `within` for the process to exit, and reaps it.
+    /// Waits up to `within` of real time for the process to exit, and
+    /// reaps it. A real process exits in real time, so the bound is the
+    /// system clock's however fast `clock` advances; each probe still waits
+    /// on `clock`, which is where a test's clock hears that the wait is
+    /// under way.
     pub(crate) fn exits(&mut self, clock: &dyn Clock, within: Duration) -> Result<bool, String> {
-        let exited = poll(clock, within, "the process to exit", || {
-            self.child
+        let until = System.now() + within;
+        loop {
+            let exited = self
+                .child
                 .try_wait()
                 .map(|status| status.is_some())
-                .map_err(|err| format!("waiting for the process: {err}"))
-        });
-        Ok(exited.is_ok())
+                .map_err(|err| format!("waiting for the process: {err}"))?;
+            if exited {
+                return Ok(true);
+            }
+            if left(&System, until, "the process to exit").is_err() {
+                return Ok(false);
+            }
+            clock.sleep(PROBE);
+        }
     }
 
     /// Ends the process: SIGTERM, then SIGKILL after [`STOP`], then waits
