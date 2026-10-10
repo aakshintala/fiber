@@ -112,10 +112,8 @@ impl Segment {
                 reason: format!("session {} ends before seq {}", self.session_id.0, to.0),
             });
         }
-        offsets.range(
-            from,
-            usize::try_from((end - from).saturating_add(1)).unwrap_or(usize::MAX),
-        )
+        // The scan stopped at `to`, so the table holds nothing past it.
+        offsets.range(from, usize::MAX)
     }
 }
 
