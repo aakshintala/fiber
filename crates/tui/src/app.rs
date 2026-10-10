@@ -648,10 +648,10 @@ impl App {
         self.screen.top()
     }
 
-    /// The conversation's rows: the screen less the header, the input box
-    /// or the panel in its place, the steering queue, the banner, the badge
-    /// and the hint, and the narrow layout's rows under the conversation.
-    /// None on a screen too short for them.
+    /// The conversation's rows: the screen less the input box or the panel
+    /// in its place, the steering queue, the banner, the badge and the
+    /// hint, and the narrow layout's rows under the conversation. None on
+    /// a screen too short for them.
     pub(crate) fn conversation_height(&self) -> usize {
         let below = self.below_rows();
         let height =
@@ -665,19 +665,18 @@ impl App {
     }
 
     /// The rows below the conversation before the narrow layout's rows:
-    /// the header, the input box or the panel in its place, the steering
-    /// queue, the banner, the badge and the hint.
+    /// the input box or the panel in its place, the steering queue, the
+    /// banner, the badge and the hint.
     pub(crate) fn below_rows(&self) -> usize {
         // The same room the view draws the box and the panel in: the body
         // height, so the rows counted are the rows drawn
         // (`docs/tui.md`, "Layout").
-        let room = usize::from(self.screen.height()).saturating_sub(self.chrome.header_rows());
+        let room = usize::from(self.screen.height());
         let input = self.panel().map_or_else(
             || crate::surface::edged(self.input_height(), room),
             |panel| crate::view::request::height(&panel, self.column_width(), room),
         );
-        self.chrome.header_rows()
-            + input
+        input
             + self.completion_rows()
             + self.steering().len()
             + usize::from(self.working_row_shown())

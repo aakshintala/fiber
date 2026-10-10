@@ -587,7 +587,7 @@ fn a_drag_selection_starts_at_the_transcript_first_row() {
     let body_y = app
         .chrome()
         .layout()
-        .map(|layout| crate::view::chrome::body(&layout).y)
+        .map(|layout| layout.column.y)
         .unwrap_or(0);
     assert_eq!(app.conversation_area().y, body_y.saturating_add(2));
     assert!(!app.conversation_covered());
@@ -627,6 +627,53 @@ fn a_drag_selection_starts_at_the_transcript_first_row() {
         | crate::app::Effect::OpenFile(_)
         | crate::app::Effect::ReadImage(_) => panic!("a release copies"),
     }
+}
+
+#[test]
+fn the_transcript_keeps_the_gutter() {
+    use ratatui::style::Color;
+    let mut app = home(80, 24);
+    opened(&mut app);
+    start_delegate(&mut app, 0);
+    open_item(&mut app);
+    app.on_line(delegate_line(
+        "turn_started",
+        0,
+        json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "review it"}]}]}),
+    ));
+    app.on_line(delegate_line(
+        "text_completed",
+        0,
+        json!({"text": "looks good"}),
+    ));
+    let layout = app.chrome().layout().expect("a layout");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let y = (0..24)
+        .find(|y| {
+            let row: String = (0..80)
+                .filter_map(|x| buf.cell((x, *y)).map(|cell| cell.symbol().to_owned()))
+                .collect();
+            row.contains("looks good")
+        })
+        .expect("the transcript reply row");
+    let tint = buf
+        .cell((layout.column.x.saturating_add(1), y))
+        .map(|cell| cell.bg)
+        .unwrap_or(Color::Reset);
+    assert_ne!(tint, Color::Reset);
+    assert_eq!(
+        buf.cell((layout.column.x, y)).map(|cell| cell.bg),
+        Some(Color::Reset)
+    );
+    assert_eq!(
+        buf.cell((layout.column.x.saturating_add(1), y))
+            .map(|cell| cell.bg),
+        Some(tint)
+    );
 }
 
 #[test]

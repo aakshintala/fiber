@@ -1,13 +1,11 @@
-//! Drawing the session screen's chrome: the floor line, the header row
-//! at the top of the conversation column, and the rail's and the panel's
-//! regions with the grip on each draggable edge (`docs/tui.md`, "Layout",
-//! "Shedding"). The cards inside the rail and the panel draw on top.
+//! Drawing the session screen's chrome: the floor line and the rail's and
+//! the panel's regions with the grip on each draggable edge (`docs/tui.md`,
+//! "Layout", "Shedding"). The cards inside the rail and the panel draw on
+//! top.
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 
-use crate::app::App;
 use crate::layout::Layout;
 use crate::markdown::{Role, style};
 
@@ -22,48 +20,59 @@ pub(super) fn floor(text: &str, area: Rect, buf: &mut Buffer) {
     buf.set_stringn(x, y, text, usize::from(area.width), Style::default());
 }
 
-/// Draws the chrome of `layout`: the regions' tints and grips and the
-/// header. Returns the rect the conversation draws in: the column below
-/// its header row.
-pub(super) fn draw(app: &App, layout: &Layout, buf: &mut Buffer) -> Rect {
+use ratatui::style::Style;
+
+/// Draws the chrome of `layout`: the rail's and the panel's regions in
+/// the `panel` tint, then the regions' grips. The conversation draws in
+/// the column's full rect; its rows inset past the gutter where they
+/// draw.
+pub(super) fn draw(layout: &Layout, buf: &mut Buffer) {
     if let Some(rail) = layout.rail {
-        grip(buf, rail.right().saturating_sub(1), rail);
+        crate::surface::draw_slab(
+            buf,
+            rail,
+            Role::Panel,
+            None,
+            crate::surface::Edges {
+                top: false,
+                bottom: false,
+            },
+        );
+        grip(buf, rail.right().saturating_sub(1), rail, false);
     }
     if let Some(at) = layout.grip {
-        grip(buf, at.x, at);
+        grip(buf, at.x, at, false);
     }
     if let Some(panel) = layout.panel {
-        grip(buf, panel.x, panel);
-    }
-    let column = layout.column;
-    if column.height > 0 {
-        buf.set_stringn(
-            column.x,
-            column.y,
-            app.header(),
-            usize::from(column.width),
-            Style::default(),
+        crate::surface::draw_slab(
+            buf,
+            panel,
+            Role::Panel,
+            None,
+            crate::surface::Edges {
+                top: false,
+                bottom: false,
+            },
         );
-    }
-    body(layout)
-}
-
-/// The rect the conversation draws in: the column below its header row.
-pub(crate) fn body(layout: &Layout) -> Rect {
-    let column = layout.column;
-    Rect {
-        y: column.y.saturating_add(1),
-        height: column.height.saturating_sub(1),
-        ..column
+        grip(buf, panel.x, panel, false);
     }
 }
 
-/// `⋮` dim in column `x` on the three rows at `region`'s mid-height.
-fn grip(buf: &mut Buffer, x: u16, region: Rect) {
+/// `⋮` on the three rows at `region`'s mid-height in column `x`: dim
+/// while idle, bold in the accent colour while active (`docs/tui.md`,
+/// "Layout").
+pub(super) fn grip(buf: &mut Buffer, x: u16, region: Rect, active: bool) {
+    let ink = if active {
+        Style::new()
+            .fg(Role::Accent.color())
+            .add_modifier(ratatui::style::Modifier::BOLD)
+    } else {
+        style(Role::Muted)
+    };
     let mid = region.y.saturating_add(region.height / 2);
     for y in mid.saturating_sub(1)..=mid.saturating_add(1) {
         if y >= region.y && y < region.bottom() {
-            buf.set_string(x, y, GRIP, style(Role::Muted));
+            buf.set_string(x, y, GRIP, ink);
         }
     }
 }

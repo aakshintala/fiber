@@ -2,7 +2,6 @@
 source: crates/tui/src/rebind_view_tests.rs
 expression: "screen(&app, 80, 24)"
 ---
-
 Keys                                                                           ✕
 Enter                       send Send a prompt, or a steering message during a t
 Shift+Enter, Ctrl+J         line_break Insert a line break
@@ -21,6 +20,7 @@ Ctrl+G                      open_in_editor Open the draft, or a pasted token, in
 Ctrl+V                      paste_image Paste an image
 Ctrl+O                      toggle_ledgers Open or close the ledgers
 Shift+Tab                   navigate Move focus from the input box into the conv
+↓ ↑, j k                    focus_next_prev Move focus to the next or previous i
 Ctrl+O is bound to Open or close the ledgers
 Enter swap · Esc cancel
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

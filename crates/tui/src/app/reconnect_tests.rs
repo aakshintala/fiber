@@ -227,7 +227,7 @@ fn drawn(app: &App) -> (usize, usize) {
         .chrome()
         .layout()
         .unwrap_or_else(|| panic!("the session screen's layout"));
-    (row, usize::from(crate::view::chrome::body(&layout).y))
+    (row, usize::from(layout.column.y))
 }
 
 #[test]

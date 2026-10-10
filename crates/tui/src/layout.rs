@@ -18,6 +18,19 @@ pub(crate) const PANEL_CEILING: u16 = 60;
 /// Below this many columns or rows the screen is one line saying so
 /// (`docs/tui.md`, "Shedding").
 pub(crate) const FLOOR: (u16, u16) = (40, 10);
+/// The blank column the conversation's rows keep on their left while the
+/// layout applies (`docs/tui.md`, "Layout").
+pub(crate) const GUTTER: u16 = 1;
+/// `area` with its first `gutter` columns dropped. The gutter is clamped
+/// to `area.width`; the result's `right()` equals `area.right()`.
+pub(crate) fn past_gutter(area: Rect, gutter: u16) -> Rect {
+    let gutter = gutter.min(area.width);
+    Rect {
+        x: area.x.saturating_add(gutter),
+        width: area.width.saturating_sub(gutter),
+        ..area
+    }
+}
 
 /// The rail's and the panel's shares of the screen's width, in percent
 /// (`tui.rail.width`, `tui.panel.width`).

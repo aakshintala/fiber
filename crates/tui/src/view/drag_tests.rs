@@ -82,22 +82,32 @@ fn bg(buf: &Buffer, x: u16, y: u16) -> ratatui::style::Color {
 
 #[test]
 fn the_edge_under_the_pointer_tints() {
+    use ratatui::style::Modifier;
     let app = two(200, 40);
     // The rail's edge is column 29, the panel's 158.
     let buf = draw(&app, Some((29, 10)));
-    assert_eq!(bg(&buf, 29, 10), Role::Hover.color());
-    assert_eq!(bg(&buf, 29, 0), Role::Hover.color());
-    assert_eq!(bg(&buf, 29, 39), Role::Hover.color());
-    assert_ne!(bg(&buf, 28, 10), Role::Hover.color());
-    assert_ne!(bg(&buf, 30, 10), Role::Hover.color());
+    for y in [0, 10, 39] {
+        assert_eq!(bg(&buf, 29, y), Role::Rule.color(), "rail edge row {y}");
+    }
+    assert_ne!(bg(&buf, 28, 10), Role::Rule.color());
+    assert_ne!(bg(&buf, 30, 10), Role::Rule.color());
+    for y in 19..=21 {
+        let cell = buf.cell((29, y)).expect("a grip cell");
+        assert_eq!(cell.symbol(), "⋮");
+        assert_eq!(cell.fg, Role::Accent.color());
+        assert!(cell.modifier.contains(Modifier::BOLD));
+    }
     let buf = draw(&app, Some((158, 10)));
-    assert_eq!(bg(&buf, 158, 10), Role::Hover.color());
-    assert_ne!(bg(&buf, 157, 10), Role::Hover.color());
-    assert_ne!(bg(&buf, 159, 10), Role::Hover.color());
+    for y in [0, 10, 39] {
+        assert_eq!(bg(&buf, 158, y), Role::Rule.color(), "panel edge row {y}");
+    }
+    assert_ne!(bg(&buf, 157, 10), Role::Rule.color());
+    assert_ne!(bg(&buf, 159, 10), Role::Rule.color());
 }
 
 #[test]
 fn the_grip_under_the_pointer_tints() {
+    use ratatui::style::Modifier;
     let mut app = two(200, 40);
     app.on_key(crate::keys::Key::AltR, fakes::clock::FakeClock::new().now());
     assert!(
@@ -107,16 +117,37 @@ fn the_grip_under_the_pointer_tints() {
             .is_some()
     );
     let buf = draw(&app, Some((0, 10)));
-    assert_eq!(bg(&buf, 0, 10), Role::Hover.color());
-    assert_ne!(bg(&buf, 1, 10), Role::Hover.color());
+    for y in [0, 10, 39] {
+        assert_eq!(bg(&buf, 0, y), Role::Rule.color(), "grip row {y}");
+    }
+    assert_ne!(bg(&buf, 1, 10), Role::Rule.color());
+    for y in 19..=21 {
+        let cell = buf.cell((0, y)).expect("a grip cell");
+        assert_eq!(cell.symbol(), "⋮");
+        assert_eq!(cell.fg, Role::Accent.color());
+        assert!(cell.modifier.contains(Modifier::BOLD));
+    }
 }
 
 #[test]
 fn no_tint_without_a_pointer() {
+    use ratatui::style::Modifier;
     let app = two(200, 40);
     let buf = draw(&app, None);
     for (x, row) in [(29, 10), (158, 10)] {
-        assert_ne!(bg(&buf, x, row), Role::Hover.color(), "column {x}");
+        assert_ne!(bg(&buf, x, row), Role::Rule.color(), "column {x}");
+    }
+    for (x, y) in [
+        (29, 19),
+        (29, 20),
+        (29, 21),
+        (158, 19),
+        (158, 20),
+        (158, 21),
+    ] {
+        let cell = buf.cell((x, y)).expect("a grip cell");
+        assert_eq!(cell.fg, Role::Muted.color(), "grip ({x}, {y})");
+        assert!(!cell.modifier.contains(Modifier::BOLD), "grip ({x}, {y})");
     }
 }
 
@@ -135,8 +166,10 @@ fn the_dragged_edge_stays_tinted_off_the_pointer() {
     });
     // The rail is 31 wide now, so its edge moved to column 30.
     let buf = draw(&app, None);
-    assert_eq!(bg(&buf, 30, 10), Role::Hover.color());
-    assert_ne!(bg(&buf, 31, 10), Role::Hover.color());
+    for y in [0, 10, 39] {
+        assert_eq!(bg(&buf, 30, y), Role::Rule.color(), "edge row {y}");
+    }
+    assert_ne!(bg(&buf, 31, 10), Role::Rule.color());
 }
 
 #[test]

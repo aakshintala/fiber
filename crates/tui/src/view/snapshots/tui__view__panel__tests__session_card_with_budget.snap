@@ -2,7 +2,7 @@
 source: crates/tui/src/view/panel_tests.rs
 expression: "screen(&app, 160, 40)"
 ---
-work
+
                                                                                                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                                                                                                                 directory  …sers/you/work/fiber
                                                                                                                                 model  test/model · thinking h…

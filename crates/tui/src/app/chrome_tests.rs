@@ -1,5 +1,5 @@
 //! Tests for the session screen's chrome on the app: the column's width,
-//! rewrapping, the header and the panel's hide.
+//! rewrapping, the gutter and the panel's hide.
 
 use super::super::{App, Target};
 use super::header;
@@ -164,8 +164,8 @@ fn attached_at_160_the_column_is_the_screen_less_the_panel() {
     assert_eq!(app.column_width(), 126);
     assert_eq!(app.chrome().regions().panel, layout.panel);
     assert_eq!(app.regions.panel, layout.panel);
-    // The header's row and the input box's row with its edges.
-    assert_eq!(app.conversation_height(), 36);
+    // The input box's row with its edges.
+    assert_eq!(app.conversation_height(), 37);
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn the_pages_rewrap_at_the_column_width() {
     let long: String = std::iter::repeat_n('w', 400).collect();
     let mut app = attached(160, 40);
     app.on_line(turn_started(&long));
-    let mut narrow = plain(126, 40);
+    let mut narrow = plain(125, 40);
     narrow.on_line(turn_started(&long));
     let mut wide = plain(160, 40);
     wide.on_line(turn_started(&long));
@@ -256,33 +256,44 @@ fn started_with_reply(app: &mut App, prompt: &str, reply: &str) {
 }
 
 #[test]
+fn the_gutter_applies_only_with_the_layout() {
+    assert_eq!(plain(160, 40).chrome().gutter(), 0);
+    let mut home = App::new(PathBuf::from("/w"));
+    home.set_home(launch());
+    home.set_size(160, 40);
+    assert_eq!(home.chrome().gutter(), 0);
+    assert_eq!(attached(160, 40).chrome().gutter(), 1);
+    let mut below = attached(160, 40);
+    below.set_size(160, 9);
+    // Below the floor with home there is no layout, so no gutter.
+    assert_eq!(below.chrome().layout(), None);
+    assert_eq!(below.chrome().gutter(), 0);
+}
+
+#[test]
 fn conversation_height_equals_the_drawn_rows() {
     let long: String = std::iter::repeat_n('w', 20_000).collect();
     for (width, height) in [(160, 40), (100, 30), (114, 12), (300, 20), (60, 10)] {
         let mut app = attached(width, height);
         started_with_reply(&mut app, "prompt", &long);
         let (screen, _) = draw(&app, width, height);
-        // The header holds row 0; the conversation is the rows after
-        // it, so the input box's own edges never count.
+        // The conversation is the rows from the top, so the input box's
+        // own edges never count.
         let drawn = screen
             .lines()
-            .skip(1)
             .take(app.conversation_height())
             .filter(|row| row.contains("ww") || row.contains("00:00") || prompt_edge(row))
             .count();
         assert_eq!(drawn, app.conversation_height(), "{width}x{height}");
-        // The header holds row 0 and the input box the last row.
-        assert!(!screen.lines().next().unwrap_or_default().contains('w'));
     }
 }
 
 /// Counts the conversation's content rows on screen: the long turn's rows
-/// and its time row. The header holds row 0; only the conversation's
-/// rows count, so the panel's own edges never do.
+/// and its time row. Only the conversation's rows count, so the panel's
+/// own edges never do.
 fn content_rows(screen: &str, height: usize) -> usize {
     screen
         .lines()
-        .skip(1)
         .take(height)
         .filter(|row| row.contains("ww") || row.contains("00:00") || prompt_edge(row))
         .count()
@@ -291,8 +302,7 @@ fn content_rows(screen: &str, height: usize) -> usize {
 #[test]
 fn conversation_height_counts_the_box_edges_where_they_fit() {
     // One input row: the count side at rooms of rows + 1 (no edges),
-    // rows + 2 and rows + 4 (edges). Below the floor there is no header,
-    // so the rooms are the heights; the drawn side at these rooms is
+    // rows + 2 and rows + 4 (edges). The rooms are the heights; the drawn side at these rooms is
     // pinned by the input box's own short-screen test, and full screens
     // agree above.
     for (height, want) in [(2, 1), (3, 0), (5, 2)] {
@@ -365,8 +375,8 @@ fn a_copy_target_sits_inside_the_column_with_the_panel_shown() {
         .collect();
     assert!(!copy.is_empty());
     for rect in copy {
-        assert!(rect.right() <= 126, "{rect:?}");
-        assert!(rect.right() >= 120, "{rect:?}: at the column's right edge");
+        assert!(rect.right() <= 125, "{rect:?}");
+        assert!(rect.right() >= 119, "{rect:?}: at the column's right edge");
     }
 }
 

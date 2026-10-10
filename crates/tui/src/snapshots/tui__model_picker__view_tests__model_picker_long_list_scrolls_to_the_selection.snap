@@ -2,8 +2,8 @@
 source: crates/tui/src/model_picker_view_tests.rs
 expression: text
 ---
-
 Models                                                                         ✕
+m16   low [high]
 apex
 m17   low [high]
 acme

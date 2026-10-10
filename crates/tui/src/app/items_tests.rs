@@ -117,7 +117,7 @@ fn a_resize_while_open_applies_to_both_screens() {
     open(&mut app, "j_1");
     app.set_size(100, 30);
     app.close_item();
-    assert_eq!(app.conversation_area().width, 100);
+    assert_eq!(app.conversation_area().width, 99);
 }
 
 #[test]

@@ -2,9 +2,9 @@
 source: crates/tui/src/view/item_tests.rs
 expression: "rows.join(\"\\n\")"
 ---
-fix the parser
 fix the parser › ◆ review the parser                                           ✕
 ⠋ WORKING · harness fiber · model test/model · 0 calls · 1m 01s · sessi · ■ stop
+
 
 
 

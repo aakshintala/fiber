@@ -366,6 +366,185 @@ fn no_color_sends_no_colour_and_blank_edges_keep_their_rows() {
     }
 }
 
+/// Truecolour env for the layout runs.
+const TRUECOLOUR: [(&str, &str); 3] = [
+    ("TERM", "xterm-256color"),
+    ("COLORTERM", "truecolor"),
+    ("TERM_PROGRAM", "ghostty"),
+];
+
+const PANEL_RGB: Colour = Colour::Rgb(12, 12, 17);
+const RULE_RGB: Colour = Colour::Rgb(58, 58, 74);
+
+#[derive(Clone, Copy, Debug)]
+enum SettledScreen {
+    Conversation,
+    ActivePanelEdge,
+    IdlePanelEdge,
+    Home,
+    Rail,
+    Grip,
+}
+
+/// Whether the screen has every property its layout assertion uses.
+fn settled(screen: &Screen, layout: SettledScreen) -> bool {
+    let reply = (0..48).find_map(|y| {
+        (0..157).find_map(|x| {
+            let word: String = (0..3)
+                .map(|dx| screen.cell(x + dx, y).symbol.as_str())
+                .collect();
+            (word == "Hel").then_some((x, y))
+        })
+    });
+    let reply_card = |left, right, left_gutter, right_gutter| {
+        let Some((reply_x, y)) = reply else {
+            return false;
+        };
+        let tint = screen.cell(left, y).bg;
+        tint != Colour::Default
+            && (left..=right).all(|x| screen.cell(x, y).bg == tint)
+            && [left_gutter, right_gutter].into_iter().all(|x| {
+                let gutter = screen.cell(x, y);
+                gutter.symbol == " " && gutter.bg == Colour::Default
+            })
+            && (0..3).all(|dx| {
+                let cell = screen.cell(reply_x + dx, y);
+                cell.fg == Colour::Default && !cell.dim && cell.bg == tint
+            })
+    };
+    let panel = |left| {
+        (0..48).all(|y| {
+            (left..160).all(|x| screen.cell(x, y).bg != Colour::Default)
+                && screen.cell(left, y).bg == PANEL_RGB
+        }) && (left..160).all(|x| screen.cell(x, 0).bg == PANEL_RGB)
+    };
+    match layout {
+        SettledScreen::Conversation => {
+            (0..126).all(|x| screen.cell(x, 0).symbol == " ")
+                && reply_card(1, 124, 0, 125)
+                && panel(126)
+                && (23..=25).all(|y| {
+                    let grip = screen.cell(126, y);
+                    grip.symbol == "⋮" && grip.dim
+                })
+        }
+        SettledScreen::ActivePanelEdge => {
+            (0..48).all(|y| screen.cell(126, y).bg == RULE_RGB)
+                && (23..=25).all(|y| {
+                    let grip = screen.cell(126, y);
+                    grip.symbol == "⋮" && grip.fg == ACCENT_RGB && grip.bold && !grip.dim
+                })
+        }
+        SettledScreen::IdlePanelEdge => {
+            (0..48).all(|y| screen.cell(126, y).bg == PANEL_RGB)
+                && (23..=25).all(|y| {
+                    let grip = screen.cell(126, y);
+                    grip.symbol == "⋮" && grip.dim && !grip.bold
+                })
+        }
+        SettledScreen::Home => screen.cell(150, 20).bg == Colour::Default,
+        SettledScreen::Rail => {
+            (0..48).all(|y| (0..24).all(|x| screen.cell(x, y).bg != Colour::Default))
+                && screen.cell(23, 0).bg == PANEL_RGB
+                && panel(126)
+                && (23..=25).all(|y| screen.cell(23, y).symbol == "⋮")
+                && reply_card(25, 124, 24, 125)
+        }
+        SettledScreen::Grip => {
+            (23..=25).all(|y| screen.cell(0, y).symbol == "⋮") && reply_card(2, 124, 1, 125)
+        }
+    }
+}
+
+/// Spawns 160x48 with the scripted provider, runs one turn to `finished`
+/// and returns the run.
+fn started_run() -> (Setup, Run) {
+    let setup = Setup::new();
+    support::write_json(
+        &setup.workspace().join("s.json"),
+        &serde_json::json!({"steps": [{"text": ["Hel", "lo."]}]}),
+    );
+    support::write_json(
+        &setup.home().join("config.json"),
+        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+    );
+    let mut run = Run::spawn(&setup, 160, 48, &TRUECOLOUR);
+    run.read_until(">");
+    run.write(b"say hi\r");
+    run.read_until("Hel");
+    run.read_until("completed");
+    run.read_until("finished");
+    (setup, run)
+}
+
+fn quit(mut run: Run) {
+    run.write(b"\x03\x03\r");
+    run.read_until("\x1b[?25h");
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+#[test]
+fn one_session_has_no_header_row_and_a_blank_column_each_side() {
+    let (_setup, mut run) = started_run();
+    let screen = run.screen_until(160, 48, "the conversation", |s| {
+        settled(s, SettledScreen::Conversation)
+    });
+    assert!(
+        settled(&screen, SettledScreen::Conversation),
+        "incomplete conversation screen"
+    );
+    quit(run);
+}
+
+#[test]
+fn hovering_the_panel_edge_tints_its_column_and_brightens_the_grip() {
+    let (_setup, mut run) = started_run();
+    run.write(b"\x1b[<35;127;21M");
+    let screen = run.screen_until(160, 48, "the active panel edge", |s| {
+        settled(s, SettledScreen::ActivePanelEdge)
+    });
+    assert!(
+        settled(&screen, SettledScreen::ActivePanelEdge),
+        "incomplete active panel edge"
+    );
+    run.write(b"\x1b[<35;61;21M");
+    let screen = run.screen_until(160, 48, "the idle panel edge", |s| {
+        settled(s, SettledScreen::IdlePanelEdge)
+    });
+    assert!(
+        settled(&screen, SettledScreen::IdlePanelEdge),
+        "incomplete idle panel edge"
+    );
+    quit(run);
+}
+
+#[test]
+fn two_sessions_show_the_rail_on_panel_and_hiding_it_leaves_the_grip() {
+    let (_setup, mut run) = started_run();
+    run.write(b"\x0e");
+    let screen = run.screen_until(160, 48, "home", |s| settled(s, SettledScreen::Home));
+    assert!(
+        settled(&screen, SettledScreen::Home),
+        "incomplete home screen"
+    );
+    run.write(b"again\r");
+    run.read_until("Hel");
+    run.read_until("finished");
+    let screen = run.screen_until(160, 48, "the rail", |s| settled(s, SettledScreen::Rail));
+    assert!(
+        settled(&screen, SettledScreen::Rail),
+        "incomplete rail screen"
+    );
+    run.write(b"\x1br");
+    let screen = run.screen_until(160, 48, "the grip", |s| settled(s, SettledScreen::Grip));
+    assert!(
+        settled(&screen, SettledScreen::Grip),
+        "incomplete grip screen"
+    );
+    quit(run);
+}
+
 #[test]
 fn inside_tmux_no_stripe_draws_and_its_cell_keeps_the_tint() {
     let (screen, output) = one_turn(&[

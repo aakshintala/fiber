@@ -147,7 +147,7 @@ pub(crate) fn rows_and_delegates(app: &App, width: u16) -> (Vec<Row>, Option<Ran
 /// Draws every card's rows into the panel rect: each card on its surface
 /// tint from the column's second column, its text at `area.x + 2`,
 /// `area.width - 3` columns wide, the first card on `area.y + 1`. The
-/// blank row between cards stays untinted.
+/// blank row between cards shows the region's `panel` tint.
 pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
     let text = text_width(area.width);
     let width = u16::try_from(text).unwrap_or(u16::MAX);
