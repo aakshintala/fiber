@@ -527,6 +527,7 @@ provider extension declares") lists:
   "models": [
     {
       "id": "databricks-claude-opus-5",
+      "name": "Claude Opus 5 (Databricks)",
       "protocol": "anthropic-messages",
       "base_url": "https://{workspace}/ai-gateway/anthropic",
       "compat": { "store": false },
@@ -579,6 +580,9 @@ provider extension declares") lists:
   the model hosts no search. A type its protocol does not read back leaves
   the model out with `model_invalid` (`docs/model-routing.md`, "Hosted web
   search").
+- `name` is the model's display name, which the model picker's filter
+  matches beside the provider and id (`docs/tui.md`, "Swapped views").
+  Absent, the model is matched on provider and id only.
 - `context_window` is required. A model without it is left out with the
   notice `model_invalid` (`docs/model-routing.md`, "What a provider extension
   declares").
