@@ -119,6 +119,10 @@ fn is_package_file(path: &str) -> bool {
     path.starts_with("providers/") || path.starts_with("extensions/")
 }
 
+/// The prototype crate that `lint` checks with its own fmt and clippy step
+/// (`docs/ci.md`, "Selection"). It is not a workspace member.
+const PROTOTYPE_ROOT: &str = "research/tui-prototype/";
+
 fn is_docs_file(path: &str) -> bool {
     path.ends_with(".md") || path.starts_with("docs/") || path.starts_with("research/")
 }
@@ -695,7 +699,10 @@ fn classify_with(
     // package is not a docs-only diff (`docs/ci.md`, "Selection").
     let has_package = files.iter().any(|f| is_package_file(f));
     let is_listed = |path: &str| listed.iter().any(|(p, _)| *p == path);
-    if !has_package && files.iter().all(|f| is_docs_file(f) && !is_listed(f)) {
+    // A prototype file selects no crate but still runs `lint`, so the diff is
+    // `Crates` with no packages, never `Docs`.
+    let has_prototype = files.iter().any(|f| f.starts_with(PROTOTYPE_ROOT));
+    if !has_package && !has_prototype && files.iter().all(|f| is_docs_file(f) && !is_listed(f)) {
         return Selection::Docs;
     }
     let compiled: BTreeSet<String> = files

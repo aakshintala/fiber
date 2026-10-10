@@ -70,8 +70,10 @@ A pull request runs only what its diff can affect.
 
 - A diff in which every file is Markdown, or is under `docs/` or
   `research/`, runs no job after the selection, whose docs check is the
-  whole run. A file a crate compiles in is the exception, below. A file
-  under `providers/` or `extensions/` is the other exception: it runs the
+  whole run. A file under `research/tui-prototype/` is an exception: it
+  selects `lint`, which checks the prototype, and no tests. A file a crate
+  compiles in is another exception, below. A file
+  under `providers/` or `extensions/` is the last exception: it runs the
   package readers, below, even when it is Markdown.
 - A diff that changes `Cargo.lock`, any `Cargo.toml`, `rust-toolchain.toml`,
   anything under `.github/` or `scripts/`, `clippy.toml`, `deny.toml`,
@@ -149,8 +151,9 @@ On Linux x86_64 alone:
   `research/tui-prototype`, when the diff touches it. The prototype is not a
   workspace member, so the checks above never reach it; it has its own
   `clippy.toml`, which drops the clock bans because the prototype reads the
-  wall clock. A diff that touches only `research/` selects the docs job
-  alone, so the `lint` job runs these when the diff also touches code
+  wall clock. A diff that touches `research/tui-prototype/` selects `lint`,
+  whether or not it touches anything else; any other `research/` path alone
+  selects the docs job alone
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
 - actionlint over every file in `.github/workflows/`, when the diff changes
   one. A workflow change runs the whole selection ("Selection"), so the job is

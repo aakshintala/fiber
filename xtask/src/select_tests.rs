@@ -173,10 +173,7 @@ fn a_compiled_in_crate_prompt_runs_that_crate() {
 
 #[test]
 fn a_manifest_under_research_runs_the_docs_job_alone() {
-    for path in [
-        "research/tui-prototype/Cargo.toml",
-        "research/tui-prototype/Cargo.lock",
-    ] {
+    for path in ["research/other/Cargo.toml", "research/other/Cargo.lock"] {
         let selection = classify(&strings(&[path]), &members());
         assert_eq!(selection, Selection::Docs, "{path}");
         assert_eq!(selection.mode(), "docs");
@@ -189,6 +186,43 @@ fn a_manifest_under_research_runs_the_docs_job_alone() {
         ),
         Selection::All(everything)
     );
+}
+
+#[test]
+fn a_prototype_diff_selects_lint_and_no_tests() {
+    for files in [
+        &["research/tui-prototype/src/main.rs"][..],
+        &["research/tui-prototype/src/main.rs", "docs/ci.md"][..],
+        &["research/tui-prototype/Cargo.toml"][..],
+    ] {
+        let selection = classify(&strings(files), &members());
+        assert_eq!(selection, Selection::Crates(vec![]), "{files:?}");
+        let plan = plan(
+            selection.mode(),
+            selection.packages(),
+            "pull_request",
+            false,
+            false,
+            0,
+        );
+        assert!(plan.jobs["lint"], "{files:?}");
+        assert!(!plan.jobs["test"], "{files:?}");
+    }
+}
+
+#[test]
+fn another_research_path_stays_docs_only_and_skips_lint() {
+    let selection = classify(&strings(&["research/session-search/run.sh"]), &members());
+    assert_eq!(selection, Selection::Docs);
+    let plan = plan(
+        selection.mode(),
+        selection.packages(),
+        "pull_request",
+        false,
+        false,
+        0,
+    );
+    assert!(!plan.jobs["lint"]);
 }
 
 #[test]
