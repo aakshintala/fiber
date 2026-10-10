@@ -3,10 +3,8 @@
 //! filters as it types, and Ctrl+S chooses for this session only, saving
 //! nothing to the global config (`docs/testing.md`, "Levels").
 //!
-//! The waits read the shared harness's screen rows, and every assertion
-//! reads a `vt100` grid rebuilt from the whole output after its wait
-//! returns: the grid's text and rows. `vt100` is already a dev-dependency
-//! of `main`.
+//! The waits read the shared driver's grid, and every assertion reads the
+//! run's grid after its wait returns: the grid's text and rows.
 
 #![allow(
     clippy::unwrap_used,
@@ -23,7 +21,7 @@ use std::fs;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::Setup;
-use support::pty::{Run, Screen};
+use support::pty::{Grid, Run};
 
 /// Installs a provider `fake` with the models `alpha`, `beta` and `gamma`
 /// on `openai-responses` at the fake server, reading its key from
@@ -66,34 +64,9 @@ fn install_picker_provider(setup: &Setup, server: &ProviderServer) {
     );
 }
 
-/// The shared screen's rows as text.
-fn rows(screen: &Screen) -> Vec<String> {
-    (0..32)
-        .map(|y| {
-            (0..120)
-                .map(|x| screen.cell(x, y).symbol.clone())
-                .collect::<String>()
-        })
-        .collect()
-}
-
-/// Whether any row holds `needle`.
-fn shows(screen: &Screen, needle: &str) -> bool {
-    rows(screen).iter().any(|row| row.contains(needle))
-}
-
-/// A `vt100` grid rebuilt from the run's whole output so far.
-fn grid(run: &Run) -> vt100::Parser {
-    let mut parser = vt100::Parser::new(32, 120, 0);
-    parser.process(&run.output());
-    parser
-}
-
-/// The grid's rows as text.
-fn grid_rows(run: &Run) -> Vec<String> {
-    let screen = grid(run);
-    let (_, cols) = screen.screen().size();
-    screen.screen().rows(0, cols).collect()
+/// Whether any grid row holds `needle`.
+fn shows(screen: &Grid, needle: &str) -> bool {
+    screen.rows.iter().any(|row| row.contains(needle))
 }
 
 #[test]
@@ -105,34 +78,41 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
         &setup,
         120,
         32,
+        &[],
         &[
             ("TERM", "xterm-256color"),
             ("FIBER_TEST_FAKE_KEY", "sk-test"),
         ],
     );
-    run.read_until(">");
+    // The end of the first frame proves the input reader runs before
+    // the prompt goes out; the reply stays drawn, so the grid check
+    // before the finished title is order-free.
+    run.ready();
+    let from = run.output().len();
     run.write(b"say hi\r");
-    run.read_until("Hel");
-    run.read_until("completed");
-    run.read_until("finished");
+    run.wait_screen("the reply", |screen| shows(screen, "Hel"));
+    run.turn_finished(from);
     let saved = fs::read(setup.home().join("config.json")).unwrap();
     // Ctrl+L opens the picker: the wait names the open, drawn catalogue.
+    // The open picker draws from the terminal's own view once the turn
+    // closed, so the finished turn above proves the key is taken.
     run.write(b"\x0c");
-    run.screen_until(120, 32, "the open picker with its catalogue", |screen| {
+    run.wait_screen("the open picker with its catalogue", |screen| {
         shows(screen, "Type to search") && shows(screen, "gamma")
     });
-    let opened = grid_rows(&run);
+    let opened = run.screen().rows.clone();
     assert!(
         opened.iter().any(|row| row.contains("Type to search")),
         "the picker shows its filter: {opened:?}"
     );
     // Typing narrows the list to `beta`: the count names one row of the
-    // three installed models, and `gamma` drops out.
+    // three installed models, and `gamma` drops out. The open picker's
+    // catalogue above proves the filter is taken.
     run.write(b"bet");
-    run.screen_until(120, 32, "the filtered list", |screen| {
+    run.wait_screen("the filtered list", |screen| {
         shows(screen, "1 of 3 models") && !shows(screen, "gamma")
     });
-    let filtered = grid_rows(&run);
+    let filtered = run.screen().rows.clone();
     assert!(
         filtered.iter().any(|row| row.contains("1 of 3 models")),
         "the count names one of three: {filtered:?}"
@@ -142,12 +122,13 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
         "gamma dropped out: {filtered:?}"
     );
     // Ctrl+S chooses at once for this session only: the picker closes and
-    // the panel names the session's new model.
+    // the panel names the session's new model. The filtered list above
+    // proves the choice is taken.
     run.write(b"\x13");
-    run.screen_until(120, 32, "the session on fake/beta", |screen| {
+    run.wait_screen("the session on fake/beta", |screen| {
         shows(screen, "fake/beta") && !shows(screen, "Type to search")
     });
-    let switched = grid_rows(&run);
+    let switched = run.screen().rows.clone();
     assert!(
         switched.iter().any(|row| row.contains("model  fake/beta")),
         "the panel names the session model: {switched:?}"
@@ -173,8 +154,12 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     let config: Value =
         serde_json::from_slice(&fs::read(setup.home().join("config.json")).unwrap()).unwrap();
     assert!(config.get("models").is_none(), "no level saved: {config}");
+    // Quitting is taken in any state; the session-on-beta grid above
+    // proves the terminal drew before the quit goes out.
     run.write(b"\x03\x03\r");
-    run.read_until("\x1b[?25h");
+    run.wait_screen("the restored terminal", |screen| {
+        !screen.alternate_screen && !screen.hide_cursor
+    });
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
 }
