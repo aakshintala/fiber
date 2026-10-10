@@ -862,6 +862,8 @@ backend.
 - A download larger than 10 MiB fails with `too_large`.
 - Each request times out after 60 seconds, and the whole fetch, redirects
   included, after 5 minutes. Both fail with `timeout`.
+- An address that does not accept a connection within 15 seconds is skipped
+  for the next; when none connects, the fetch fails with `connection_failed`.
 - A status other than 2xx fails with `http_error`, giving the status and the
   start of the body.
 - Redirects are followed, to any host, for at most 10 hops. Fiber judges only
