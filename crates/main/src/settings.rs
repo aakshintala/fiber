@@ -1,9 +1,11 @@
 //! Session settings read from configuration with their documented
 //! defaults (`docs/configuration.md`).
 
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
-use config::{Config, ModelData};
+use config::{Config, ModelData, ProjectKey, Sources};
 use contract::events::{CacheLifetime, Notice};
 use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
@@ -245,3 +247,37 @@ pub(crate) fn result_caps(config: &Config) -> r#loop::ResultCaps {
 #[cfg(test)]
 #[path = "result_caps_tests.rs"]
 mod result_caps_tests;
+
+/// Re-reads `skills.disabled` at each turn start, with the check for
+/// added and removed skills (`docs/configuration.md`, "When Fiber reads
+/// configuration"): loads the configuration as at session start, `-c`
+/// overrides included, and unions the layers. A failure keeps the
+/// last-known list and raises its notice once, with the error's own code.
+pub(crate) fn skills_disabled_reader(
+    home: PathBuf,
+    workspace: PathBuf,
+    project: ProjectKey,
+    overrides: Vec<String>,
+) -> r#loop::DisabledReader {
+    Arc::new(move || {
+        match Config::load(Sources {
+            home: home.clone(),
+            workspace: workspace.clone(),
+            project: project.clone(),
+            overrides: overrides.clone(),
+        }) {
+            Ok(config) => Ok(config.union_list("skills.disabled")),
+            Err(error) => Err(Notice {
+                code: error.code(),
+                message: format!(
+                    "Fiber could not re-read skills.disabled: {error}. The last list read stays in force."
+                ),
+                extension: None,
+            }),
+        }
+    })
+}
+
+#[cfg(test)]
+#[path = "skills_disabled_tests.rs"]
+mod skills_disabled_tests;

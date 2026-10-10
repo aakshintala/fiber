@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use contract::events::{Event, KeptMessage, Notice, ReviewerKept};
+use contract::events::{Event, KeptMessage, Notice, ReviewerKept, ReviewerUse};
 use contract::provider::{CallError, Input};
 use contract::shapes::True;
 use contract::{ErrorCode, TurnId};
@@ -172,6 +172,7 @@ impl Loop {
             match self.send_review(
                 turn,
                 &endpoint,
+                ReviewerUse::Handoff,
                 &prompt.shared,
                 conversation,
                 self.reviewer_sent,

@@ -5,6 +5,14 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// Re-reads `skills.disabled` at each turn start, with the check for
+/// added and removed skills (`docs/configuration.md`, "When Fiber
+/// reads configuration"): `main` injects a reader loading the
+/// configuration as at session start, `-c` overrides included. Absent
+/// in tests and delegates, where the static list stays in force.
+pub type DisabledReader =
+    Arc<dyn Fn() -> Result<Vec<String>, contract::events::Notice> + Send + Sync>;
+
 /// What a preamble build reads, once (`docs/system-prompt.md`, "The
 /// system prompt" and `docs/prompt-cache.md`, "The preamble").
 /// [`PromptInputs::new`] returns every optional input absent, and the
@@ -34,6 +42,9 @@ pub struct PromptInputs {
     pub extension_sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
     /// `skills.disabled`, every layer unioned.
     pub skills_disabled: Vec<String>,
+    /// Re-reads `skills.disabled` at each turn start; `None` keeps the
+    /// static list.
+    pub skills_disabled_now: Option<DisabledReader>,
     /// The shell, or `unknown` when `SHELL` is unset.
     pub shell: String,
     /// The session log's path.
@@ -74,6 +85,7 @@ impl PromptInputs {
             extension_dirs: Vec::new(),
             extension_sections: Vec::new(),
             skills_disabled: Vec::new(),
+            skills_disabled_now: None,
             shell,
             session_log,
             clock,

@@ -257,18 +257,10 @@ fn a_cancelled_call_spawns_no_child() {
 }
 
 #[test]
-fn a_pdf_and_a_binary_file_never_reach_the_child() {
+fn a_binary_file_never_reaches_the_child() {
     let dir = workspace();
     let fiber = stub(dir.path(), r#"touch "$(dirname "$0")/ran""#);
-    fs::write(dir.path().join("a.pdf"), b"%PDF-1.4").unwrap();
     fs::write(dir.path().join("a.bin"), b"hello\0world").unwrap();
-    let pdf = run_with(dir.path(), &fiber, "a.pdf");
-    assert_eq!(code(&pdf), Some(ErrorCode::UnsupportedFile));
-    assert!(
-        message(&pdf).contains("PDFs are not read yet"),
-        "{}",
-        message(&pdf)
-    );
     let binary = run_with(dir.path(), &fiber, "a.bin");
     assert_eq!(code(&binary), Some(ErrorCode::UnsupportedFile));
     assert!(

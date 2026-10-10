@@ -546,7 +546,7 @@ fn parts_in(
         home: home.clone(),
         workspace: workspace.clone(),
         project: project.clone(),
-        overrides,
+        overrides: overrides.clone(),
     })
     .map_err(|e| failed(e.code(), e))?;
     let budget = config
@@ -696,6 +696,12 @@ fn parts_in(
     prompt.extension_dirs = extensions.dirs();
     prompt.extension_sections = extensions.sections(&project);
     prompt.skills_disabled = config.union_list("skills.disabled");
+    prompt.skills_disabled_now = Some(settings::skills_disabled_reader(
+        home.clone(),
+        workspace.clone(),
+        project.clone(),
+        overrides,
+    ));
     prompt.credential = crate::scripted::credential(model.provider, label);
     prompt.cache_lifetime = settings::cache_lifetime(&config, &model.reference());
     prompt.thinking = thinking;

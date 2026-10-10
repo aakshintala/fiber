@@ -1,7 +1,11 @@
 //! The event loop (`docs/tui.md`, "History and paging"): `run` sets the
 //! terminal up, draws the first frame and starts the input threads; the loop
-//! handles one input at a time, fetches the history pages a frame needs
+//! handles one batch of ready inputs at a time, fetches the history pages a frame needs
 //! before drawing it, and hands the terminal to the editor.
+
+mod batch;
+
+use batch::{batch, batchable};
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -263,27 +267,56 @@ const LOST: &str = "connection lost";
 
 impl<B: Backend> Loop<B> {
     /// Handles inputs until one quits, or every sender is gone: those a
-    /// frame held while it waited first, then the channel's. The only wait
-    /// is `recv` with no timeout.
+    /// frame held while it waited first, then the channel's. Ready hub
+    /// lines and ticks share one frame; anything else ends the batch
+    /// for its own. The only wait is `recv` with no timeout.
     fn run(&mut self, rx: &Receiver<Input>) -> i32 {
         loop {
-            let input = match self.stash.pop_front() {
+            let first = match self.stash.pop_front() {
                 Some(input) => input,
                 None => match rx.recv() {
                     Ok(input) => input,
                     Err(_) => return 0,
                 },
             };
-            self.wakeups = self.wakeups.saturating_add(1);
-            if let Some(code) = self.step(input, rx) {
+            // Only a batch starting with a hub line or tick holds: a
+            // key, click or resize folds nothing into a held page, and
+            // opening a delegate swaps the shown screen, which must
+            // never happen mid-hold. A hub batch folds before it counts:
+            // the open page is counted once for the batch, not once per
+            // changed line, and the batch settles once at its end, when
+            // the counts are exact.
+            let held = batchable(&first);
+            let inputs = batch(first, &mut self.stash, rx);
+            if held {
+                self.app.begin_batch();
+            }
+            let mut code = None;
+            for input in inputs {
+                self.wakeups = self.wakeups.saturating_add(1);
+                if let Some(quit) = self.handle(input) {
+                    code = Some(quit);
+                    break;
+                }
+            }
+            // The batch's end runs on every path out, so a quit never
+            // leaves the hold set.
+            if held {
+                self.app.end_batch();
+            }
+            if let Some(code) = code {
+                return code;
+            }
+            if let Some(code) = self.frame(rx) {
                 return code;
             }
         }
     }
 
-    /// Handles one input, loads the pages the frame needs, and draws what
-    /// changed. Returns the exit code when the terminal quits.
-    fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
+    /// Handles one input: the time, what it does to the app, and what it
+    /// sends. Returns the exit code when the terminal quits, before any
+    /// frame, as handling every input in `step` did.
+    fn handle(&mut self, input: Input) -> Option<i32> {
         self.app.set_now(
             self.clock.now(),
             contract::clock::wall_ms(self.clock.wall()),
@@ -335,13 +368,7 @@ impl<B: Backend> Loop<B> {
                         Effect::Copy(text) => {
                             clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
                         }
-                        Effect::OpenLink(url) => {
-                            if let Some(argv) = self.open_command.clone() {
-                                let mut argv = argv;
-                                argv.push(url);
-                                drop(clipboard::pipe(argv, String::new()));
-                            }
-                        }
+                        Effect::OpenLink(url) => self.open_link(url),
                         Effect::Send(lines) => self.send(&lines),
                         Effect::Quit => return Some(0),
                         Effect::Exit(lines) => {
@@ -439,6 +466,13 @@ impl<B: Backend> Loop<B> {
             // Its frame already drew: the next moving frame arms the
             // tick again below.
             Input::Tick => self.tick.ack(),
+            Input::Login { ticket, step } => {
+                // Only the waiting ticket's `Open` opens anything: any
+                // other ticket changes nothing and opens nothing.
+                if let Some(url) = self.app.on_login(ticket, step) {
+                    self.open_link(url);
+                }
+            }
             Input::Resize => {
                 if let Some(Ok((width, height))) = self.tty.as_ref().map(term::size) {
                     self.app.set_size(width, height);
@@ -463,7 +497,22 @@ impl<B: Backend> Loop<B> {
         if let (Some(refresh), Some(out)) = (self.app.take_reads(), &self.files_out) {
             self.model_reader.ask(refresh, &out.clone());
         }
+        // The browser login the input asked for, if one waits: its
+        // progress and its end arrive as `Input::Login`.
+        if let Some(out) = self.files_out.clone()
+            && let Some(start) = self.app.take_login_start()
+        {
+            let worker = crate::login_worker::start(start, Arc::clone(&self.clock), out);
+            self.app.login_started(worker);
+        }
         self.save_shares();
+        None
+    }
+
+    /// Loads the pages the frame needs, and draws what changed: once per
+    /// batch, after every input in it is handled. Returns the exit code
+    /// when the terminal cannot be drawn.
+    fn frame(&mut self, rx: &Receiver<Input>) -> Option<i32> {
         // The reconciler's subscribes go out before the frame pages: an
         // acknowledgement arriving late is reconciled on the step that
         // brings it.
@@ -488,6 +537,16 @@ impl<B: Backend> Loop<B> {
         self.write_shape();
         self.write_alerts();
         None
+    }
+
+    /// Handles one input and draws the frame. Tests only: production
+    /// code draws once per batch through `run`.
+    #[cfg(test)]
+    fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
+        if let Some(code) = self.handle(input) {
+            return Some(code);
+        }
+        self.frame(rx)
     }
 
     /// Opens the queued viewer copies: one worker per view, each
@@ -657,6 +716,7 @@ impl<B: Backend> Loop<B> {
                 | Input::Image { .. }
                 | Input::Viewed { .. }
                 | Input::Models(_)
+                | Input::Login { .. }
                 | Input::Files { .. }) => self.stash.push_back(other),
             }
         }
@@ -699,6 +759,18 @@ impl<B: Backend> Loop<B> {
                 return;
             }
             self.app.wrote(line);
+        }
+    }
+
+    /// Opens `url` with the terminal's opener: `open` or `xdg-open` on the
+    /// terminal's machine. Over SSH or with no opener nothing launches;
+    /// the URL is drawn either way and the flow completes when it is
+    /// visited (`docs/tui.md`, "Links").
+    fn open_link(&self, url: String) {
+        if let Some(argv) = self.open_command.clone() {
+            let mut argv = argv;
+            argv.push(url);
+            drop(clipboard::pipe(argv, String::new()));
         }
     }
 
@@ -806,6 +878,10 @@ impl<B: Backend> Drop for Loop<B> {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "lib_login_tests.rs"]
+mod login_tests;
 
 #[cfg(test)]
 #[path = "lib_image_tests.rs"]

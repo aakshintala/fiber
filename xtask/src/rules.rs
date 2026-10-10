@@ -51,7 +51,7 @@ pub(crate) struct Isolation {
 /// The crates only the image child links (`docs/dependencies.md`, "Crates
 /// used only by the image child").
 pub(crate) const IMAGE: Isolation = Isolation {
-    crates: &["image", "fast_image_resize"],
+    crates: &["image", "fast_image_resize", "lopdf"],
     members: &["picture", "main"],
     why: "only the image child links image code",
 };

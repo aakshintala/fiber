@@ -16,7 +16,10 @@ use contract::events::{CommandInfo, SkillListed, SkillSource};
 use contract::shapes::ContentPart;
 use fakes::clock::FakeClock;
 
-use super::{Found, commands, discover, entry, expand, listing, size_notice, split_command};
+use super::{
+    Cache, Found, commands, discover, discover_cached, entry, expand, listing, size_notice,
+    split_command,
+};
 use crate::prompt::PromptInputs;
 
 /// A temporary tree: `top` is the repository's top level, `home` is
@@ -1037,4 +1040,183 @@ fn the_session_commands_are_read_from_the_repository_top_level() {
         crate::commands(&inputs, &workspace, &[]).rows,
         [row("top", "d", None, "skill")]
     );
+}
+
+/// `discover_cached` over `tree` with `cache`.
+fn cached(tree: &Tree, cache: &mut Cache) -> super::Discovered {
+    discover_cached(&tree.inputs(), &tree.top(), cache)
+}
+
+/// The description discovery read for `name`.
+fn description_of<'a>(found: &'a super::Discovered, name: &str) -> &'a str {
+    &found
+        .skills
+        .iter()
+        .find(|found| found.listed.name == name)
+        .unwrap()
+        .listed
+        .description
+}
+
+#[cfg(unix)]
+fn deny(path: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+}
+
+#[cfg(unix)]
+fn allow(path: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    // `0o755`, not `0o644`: a directory without its execute bit cannot
+    // be traversed again.
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn mtime_of(path: &Path) -> std::time::SystemTime {
+    std::fs::metadata(path).unwrap().modified().unwrap()
+}
+
+fn restore_mtime(path: &Path, mtime: std::time::SystemTime) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
+#[test]
+fn an_unchanged_skill_md_is_not_read_again() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    let path = skill(&place, "a", "same", "aaa");
+    let mut cache = Cache::default();
+    assert_eq!(description_of(&cached(&tree, &mut cache), "same"), "aaa");
+    // Rewritten with the same byte length and the mtime restored: the
+    // cached header wins, though the disk holds the new text.
+    let mtime = mtime_of(&path);
+    std::fs::write(&path, "---\nname: same\ndescription: bbb\n---\nBody.\n").unwrap();
+    restore_mtime(&path, mtime);
+    assert!(
+        std::fs::read_to_string(&path).unwrap().contains("bbb"),
+        "the rewrite changed the file"
+    );
+    assert_eq!(description_of(&cached(&tree, &mut cache), "same"), "aaa");
+}
+
+#[test]
+fn a_size_change_re_reads_the_skill() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    let path = skill(&place, "a", "same", "aaa");
+    let mut cache = Cache::default();
+    assert_eq!(description_of(&cached(&tree, &mut cache), "same"), "aaa");
+    // Longer, with the mtime restored: the size alone re-reads it.
+    let mtime = mtime_of(&path);
+    std::fs::write(
+        &path,
+        "---\nname: same\ndescription: a much longer description\n---\nBody.\n",
+    )
+    .unwrap();
+    restore_mtime(&path, mtime);
+    assert_eq!(
+        description_of(&cached(&tree, &mut cache), "same"),
+        "a much longer description"
+    );
+}
+
+#[test]
+fn an_mtime_change_alone_re_reads_the_skill() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    let path = skill(&place, "a", "same", "aaa");
+    let mut cache = Cache::default();
+    assert_eq!(description_of(&cached(&tree, &mut cache), "same"), "aaa");
+    // Same byte length, only the mtime moved: re-read all the same.
+    let mtime = mtime_of(&path);
+    std::fs::write(&path, "---\nname: same\ndescription: bbb\n---\nBody.\n").unwrap();
+    restore_mtime(&path, mtime + std::time::Duration::from_secs(60));
+    assert_eq!(description_of(&cached(&tree, &mut cache), "same"), "bbb");
+}
+
+#[test]
+fn a_deleted_skill_leaves_the_cache() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    let path = skill(&place, "a", "same", "aaa");
+    let mtime = mtime_of(&path);
+    let mut cache = Cache::default();
+    assert_eq!(names(&cached(&tree, &mut cache)), ["same"]);
+    std::fs::remove_dir_all(place.join("a")).unwrap();
+    assert!(names(&cached(&tree, &mut cache)).is_empty());
+    // Re-added with the same byte length and the old mtime: read fresh,
+    // not from the deleted skill's entry.
+    skill(&place, "a", "same", "bbb");
+    restore_mtime(&path, mtime);
+    assert_eq!(description_of(&cached(&tree, &mut cache), "same"), "bbb");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_place_is_unread_and_a_missing_place_is_not() {
+    let tree = Tree::new();
+    skill(&tree.home().join("skills"), "a", "fine", "d");
+    let place = tree.top().join(".agents/skills");
+    std::fs::create_dir_all(&place).unwrap();
+    deny(&place);
+    let found = tree.discover();
+    allow(&place);
+    assert_eq!(names(&found), ["fine"]);
+    assert_eq!(found.unread.len(), 1);
+    assert_eq!(
+        found.unread[0],
+        crate::opening::canonical(&place),
+        "only the denied place, never a missing one"
+    );
+    assert_eq!(found.notices.len(), 1);
+    assert_eq!(found.notices[0].code, ErrorCode::IoFailed);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_skill_md_is_unread() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    skill(&place, "a", "fine", "d");
+    let victim = skill(&place, "b", "dark", "d");
+    deny(&victim);
+    let found = tree.discover();
+    allow(&victim);
+    assert_eq!(names(&found), ["fine"]);
+    let [unread] = found.unread.as_slice() else {
+        panic!("one unread path, got {:?}", found.unread);
+    };
+    assert_eq!(unread, &victim);
+    let [notice] = found.notices.as_slice() else {
+        panic!("{:?}", messages(&found));
+    };
+    assert_eq!(notice.code, ErrorCode::IoFailed);
+    assert!(
+        notice.message.contains(&victim.display().to_string()),
+        "{}",
+        notice.message
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreachable_entry_is_unread_without_a_notice_and_a_dangling_link_is_skipped() {
+    let tree = Tree::new();
+    let place = tree.top().join(".agents/skills");
+    std::fs::create_dir_all(&place).unwrap();
+    let target = tree.root.join("secret");
+    skill(&target, "real", "kept", "d");
+    deny(&target);
+    std::os::unix::fs::symlink(target.join("real"), place.join("link")).unwrap();
+    std::os::unix::fs::symlink(tree.root.join("gone"), place.join("broken")).unwrap();
+    let found = tree.discover();
+    allow(&target);
+    assert!(names(&found).is_empty());
+    assert_eq!(found.unread, [place.join("link")]);
+    assert!(found.notices.is_empty(), "{:?}", messages(&found));
 }

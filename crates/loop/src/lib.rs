@@ -82,7 +82,7 @@ pub use handoff::HandoffSettings;
 pub use history::forked;
 pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
-pub use prompt::PromptInputs;
+pub use prompt::{DisabledReader, PromptInputs};
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};

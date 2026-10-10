@@ -17,6 +17,7 @@ fn call(generation: &str, tokens: Tokens, cost: Option<f64>, subscription: bool)
         subscription: subscription.then_some(true),
         extension: None,
         origin_session_id: None,
+        reviewer: None,
     }
 }
 

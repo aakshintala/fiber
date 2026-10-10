@@ -673,14 +673,20 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
     let x0 = cols.saturating_sub(w) / 2;
     let mut y = LOGO_Y;
     if rows >= tall_min() {
+        // The logo's cells centre in the column; the version hangs past
+        // them on the last row.
+        let lx = logo_x(x0, w);
         for l in crate::logo::rows(VERSION, image) {
-            put(&mut screen, y, x0, w, l, None);
+            put(&mut screen, y, lx, w - (lx - x0), l, None);
             y += 1;
         }
     } else {
-        // Too short for four rows: the one-row logo, and everything below
-        // moves up three rows with it.
-        put(&mut screen, y, x0, w, crate::logo::one_row(VERSION), None);
+        // Too short for four rows: the one-row logo, centred, and
+        // everything below moves up three rows with it.
+        let l = crate::logo::one_row(VERSION);
+        let lw: usize = l.iter().map(|s| s.content.width()).sum();
+        let lx = x0 + w.saturating_sub(lw) / 2;
+        put(&mut screen, y, lx, w - (lx - x0), l, None);
         y += 1;
     }
     y += 1;
@@ -810,6 +816,12 @@ fn recent_at(text: &str) -> Option<usize> {
     RECENTS.iter().position(|&r| r == t)
 }
 
+/// The four-row logo's first column: its `CELLS_W` cells centred in the
+/// home column at `x0`, `w` wide.
+fn logo_x(x0: usize, w: usize) -> usize {
+    x0 + w.saturating_sub(crate::logo::CELLS_W as usize) / 2
+}
+
 /// Whether the kitty image covers the logo on this draw: supported, past
 /// the first draw (the pixel logo draws first and the image replaces it,
 /// so the first frame never waits), no overlay open (an image at z=0
@@ -878,7 +890,8 @@ fn draw(term: &mut Term, c: &Look, img: &mut Image, supported: bool, first: bool
         cols as usize,
         rows as usize,
     );
-    let esc = img.escapes(shown, (cols.saturating_sub(w as u16)) / 2, LOGO_Y as u16);
+    let x0 = (cols as usize).saturating_sub(w) / 2;
+    let esc = img.escapes(shown, logo_x(x0, w) as u16, LOGO_Y as u16);
     term.backend_mut().write_all(b"\x1b[?2026h")?;
     term.draw(|fr| {
         let buf = fr.buffer_mut();
@@ -953,13 +966,21 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
         }
         return Step::Stay;
     }
-    // The model picker records its choice on Enter, then closes.
+    // The model picker records its choice on Enter, then closes. With no
+    // matching row Enter keeps the picker open and records nothing.
     if c.ui.picker.is_some() {
         if k == Key::Enter && !m.ctrl && !m.alt && !m.sup {
-            let (model, level) =
-                crate::model_picker::chosen(c.ui.picker.as_ref().unwrap());
-            c.model = model;
-            c.level = level;
+            let empty = c
+                .ui
+                .picker
+                .as_ref()
+                .is_some_and(|p| crate::model_picker::visible(p).is_empty());
+            if !empty {
+                let (model, level) =
+                    crate::model_picker::chosen(c.ui.picker.as_ref().unwrap());
+                c.model = model;
+                c.level = level;
+            }
         }
         crate::model_picker::on_key(&mut c.ui, k, m);
         return Step::Stay;
@@ -1177,6 +1198,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn enter_with_no_matches_records_nothing() {
+        let mut c = base();
+        let (model, level) = (c.model, c.level);
+        c.ui.input = "draft".into();
+        let mut p = crate::model_picker::for_case("list");
+        p.query = "zzz".into();
+        c.ui.picker = Some(p);
+        on_key(&mut c, Key::Enter, Mods::default());
+        assert!(c.ui.picker.is_some(), "empty Enter closed the picker");
+        assert_eq!(c.ui.input, "draft");
+        assert_eq!((c.model, c.level), (model, level));
+    }
+
+    #[test]
     fn every_case_parses_and_unknown_does_not() {
         assert!(CASES.iter().all(|c| crate::cases::lookup(CASES, c.name).is_some()));
         assert_eq!(CASES.len(), 14);
@@ -1209,13 +1244,13 @@ mod tests {
 
     #[test]
     fn home_draws_the_pixel_logo_at_its_place() {
-        // At 160 columns `w = 84` and `x0 = 38`.
+        // At 160 columns `w = 84` and `x0 = 38`; the 32 logo cells centre at 64.
         let c = crate::cases::lookup(CASES, "empty").unwrap();
         let buf = buffer(&c, 160, 48);
-        assert_eq!(buf[(38, 2)].symbol(), "▀");
-        assert_eq!(buf[(38, 2)].fg, BLUE);
+        assert_eq!(buf[(64, 2)].symbol(), "▀");
+        assert_eq!(buf[(64, 2)].fg, BLUE);
         let mut text = String::new();
-        for x in 71..76 {
+        for x in 97..102 {
             text.push_str(buf[(x, 5)].symbol());
             assert!(
                 buf[(x, 5)].modifier.contains(Modifier::DIM),
@@ -1288,12 +1323,12 @@ mod tests {
         let c = crate::cases::lookup(CASES, "empty").unwrap();
         let buf = buffer_image(&c, 160, 48);
         for y in 2..6 {
-            for x in 38..70 {
+            for x in 64..96 {
                 assert_eq!(buf[(x, y)].symbol(), " ", "cell ({x}, {y})");
             }
         }
         let mut text = String::new();
-        for x in 71..76 {
+        for x in 97..102 {
             text.push_str(buf[(x, 5)].symbol());
         }
         assert_eq!(text, "0.0.1");
@@ -1304,11 +1339,12 @@ mod tests {
         let tall = tall_min();
         let empty = || crate::cases::lookup(CASES, "empty").unwrap();
         let buf = buffer(&empty(), 160, tall as u16);
-        assert_eq!(buf[(38, 2)].symbol(), "▀");
-        assert_eq!(buf[(38, 2)].fg, BLUE);
+        assert_eq!(buf[(64, 2)].symbol(), "▀");
+        assert_eq!(buf[(64, 2)].fg, BLUE);
         let buf = buffer(&empty(), 160, tall as u16 - 1);
         let mut got = String::new();
-        for x in 38..51 {
+        // The 13-cell one-row logo centres at 73.
+        for x in 73..86 {
             got.push_str(buf[(x, 2)].symbol());
         }
         assert_eq!(got, "⌇ fiber 0.0.1");

@@ -262,6 +262,11 @@ pub(crate) struct Pages {
     /// The rows of the open page's lines too wide for one row, by text, so
     /// counting it again after each line wraps only what changed.
     wrapped: HashMap<String, usize>,
+    /// Whether the open page's recount waits for the batch's end, and
+    /// whether one waits: a batch folds many lines, and its end counts
+    /// the page once, not once per changed line.
+    held: bool,
+    dirty: bool,
     /// How many pages were counted again (tests only: whether a line
     /// re-counted its page).
     #[cfg(test)]
@@ -290,6 +295,8 @@ impl Pages {
             width,
             zone: TimeZone::UTC,
             wrapped: HashMap::new(),
+            held: false,
+            dirty: false,
             #[cfg(test)]
             recounts: 0,
         }
@@ -353,10 +360,38 @@ impl Pages {
         let busy = Some(self.open.turns.last().is_some_and(Turn::is_open));
         // A usage line counts the page holding its turn's ▣ line itself.
         if (changed && kind != "usage_recorded") || cut != Cut::None {
-            self.count(self.closed.len());
+            if self.held {
+                // A batch folds many lines before it counts: the page is
+                // marked, and the batch's end counts it once.
+                self.dirty = true;
+            } else {
+                self.count(self.closed.len());
+            }
         }
         self.rejoin();
         Applied { changed, busy }
+    }
+
+    /// Holds the open page's recount while a batch of hub lines folds.
+    /// Closed pages still count at once: only the open page is
+    /// recounted per line.
+    pub(crate) fn hold(&mut self) {
+        self.held = true;
+    }
+
+    /// Counts the open page once for the batch that folded, if one of
+    /// its lines marked it, and releases the hold.
+    pub(crate) fn flush(&mut self) {
+        self.held = false;
+        if self.dirty {
+            self.dirty = false;
+            self.count(self.closed.len());
+        }
+    }
+
+    /// Whether the open page's recount waits for the batch's end.
+    pub(crate) fn holding(&self) -> bool {
+        self.held
     }
 
     /// The running turn's summary, if a turn runs: the last one while it

@@ -1288,6 +1288,30 @@ fn ctrl_v_pastes_an_image_that_the_session_stores() {
     assert_eq!(output.status.code(), Some(0));
 }
 
+#[test]
+fn resume_draws_the_reply_then_its_closed_turn() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([reply("marker reply")]).unwrap();
+    setup.provider(&server);
+    let asked = setup.fiber(&["ask", "say hi"]);
+    assert_eq!(asked.status.code(), Some(0));
+    let id = setup.only_session();
+    let mut run = Run::terminal_args(&setup, &["resume", &id[..4]]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains(">"));
+    // The turn ended before the attach: the reply draws, then the turn's
+    // close, which folds only once `turn_completed` arrives.
+    run.wait_screen("the reply", |grid| grid.contents.contains("marker reply"));
+    run.wait_screen("the closed turn", |grid| {
+        grid.contents.contains("▣ completed")
+    });
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored primary screen", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
 /// The conversation screen: one cell per column and row.
 struct Screen {
     cells: Vec<Vec<char>>,

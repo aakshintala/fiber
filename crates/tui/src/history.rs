@@ -210,14 +210,14 @@ impl App {
         let browsing = self.history.browsing(&self.draft.expand());
         let effect = match key {
             Key::Up => {
-                if self.draft.is_empty() || (!self.draft.up(self.column_width()) && browsing) {
+                if self.draft.is_empty() || (!self.draft.up(self.draft_width()) && browsing) {
                     self.older()
                 } else {
                     Effect::None
                 }
             }
             Key::Down => {
-                if !self.draft.down(self.column_width()) && browsing {
+                if !self.draft.down(self.draft_width()) && browsing {
                     self.newer()
                 } else {
                     Effect::None
@@ -460,7 +460,12 @@ impl App {
     pub(super) fn settle(&mut self) {
         self.relayout();
         let height = self.conversation_height();
-        self.screen.settle(height);
+        // A batch settles once at its end: trimming mid-batch would drop
+        // pages the batch's uncounted rows still hold in the window, and
+        // the batch's end fetches them back.
+        if !self.screen.pages().holding() {
+            self.screen.settle(height);
+        }
         // Lines folded into the attached screen while a transcript is
         // swapped in settle it too, so its top never sits past the
         // bottom when the view closes.
@@ -480,6 +485,19 @@ impl App {
             Some(cover) if cover != now => self.history.cancel(),
             Some(_) => {}
         }
+    }
+
+    /// Holds the open page's recount while a batch of hub lines folds:
+    /// the batch's lines mark it, and `end_batch` counts it once.
+    pub(crate) fn begin_batch(&mut self) {
+        self.screen.pages_mut().hold();
+    }
+
+    /// Counts the batch's open page once and settles: the pages the
+    /// batch changed are exact before the frame pages anything in.
+    pub(crate) fn end_batch(&mut self) {
+        self.screen.pages_mut().flush();
+        self.settle();
     }
 
     /// A `command_rejected` for `id`: when it rejects `prompt_history`, its

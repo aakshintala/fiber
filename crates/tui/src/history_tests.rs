@@ -814,3 +814,26 @@ fn the_steering_keys_do_nothing_while_the_search_panel_is_open() {
     assert_eq!(app.draft(), "");
     assert!(app.completions().is_some());
 }
+
+#[test]
+fn up_moves_within_a_recalled_entry_wrapped_at_the_inset() {
+    // Attached at 60 the draft wraps at the inset width of 58, past the
+    // box's stripe and gap: 56 characters take two rows, 55 one
+    // (`docs/tui.md`, "Look", "The input box").
+    for (len, stays) in [(56, true), (55, false)] {
+        let mut app = app();
+        let long: String = std::iter::repeat_n('d', len).collect();
+        with_own(&mut app, &["old", &long]);
+        press(&mut app, Key::Up);
+        assert_eq!(app.draft(), long, "len {len}");
+        let width = app.draft_width();
+        assert_eq!(width, 58, "len {len}");
+        press(&mut app, Key::Up);
+        if stays {
+            assert_eq!(app.draft(), long, "len {len}");
+            assert_eq!(app.input().cursor(width).0, 0, "len {len}");
+        } else {
+            assert_eq!(app.draft(), "old", "len {len}");
+        }
+    }
+}

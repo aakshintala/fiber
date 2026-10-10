@@ -1,0 +1,11 @@
+[package]
+name = "gen"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone: never part of Fiber's workspace.
+[workspace]
+
+[dependencies]
+lopdf = { version = "0.45", default-features = false }

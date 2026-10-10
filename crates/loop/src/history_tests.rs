@@ -83,6 +83,7 @@ fn usage(model: &str, generation: &str, input: u64) -> Event {
         subscription: None,
         extension: None,
         origin_session_id: None,
+        reviewer: None,
     })
 }
 
