@@ -1,8 +1,9 @@
 //! Running a Fiber delegate: spawning the child session, draining its
 //! stdout, watching its socket to its end, and folding how it ended
-//! (`docs/delegates.md`, "Lifetime"). The runner owns no model call: it
-//! returns nothing to the tool, which answers as soon as the spawn and the
-//! record are done.
+//! (`docs/delegates.md`, "Lifetime"). The runner makes no model call:
+//! it supervises the child process while the tool answers as soon as the
+//! spawn and the record are done. The runner's only answer is the end it
+//! reports to the registry once the child is reaped.
 
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
@@ -34,8 +35,9 @@ pub type Resolve = Arc<dyn Fn(&str) -> Result<String, Vec<String>> + Send + Sync
 pub type Launch = Arc<dyn Fn(&Launched) -> Command + Send + Sync>;
 
 /// Watches the delegate's socket, calling `on_line` for each envelope
-/// until `fiber_exited` or EOF: the jobs-local mirror of `doors::watch`,
-/// which `main` wires up in part 4.
+/// until `fiber_exited` or EOF: the jobs-local mirror of `doors::watch`.
+/// `main` supplies the watch over the child's socket
+/// (`docs/delegates.md`, "Lifetime").
 pub type Watch =
     Arc<dyn Fn(&SessionId, &mut dyn FnMut(&Envelope)) -> io::Result<Watched> + Send + Sync>;
 
