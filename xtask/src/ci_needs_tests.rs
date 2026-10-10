@@ -85,6 +85,22 @@ fn without_ci_need(workflow: &str, removed: &str) -> String {
     workflow.replacen(raw, &replacement, 1)
 }
 
+/// A hand-written fixture with the report jobs spliced in: `{reports}` for
+/// the doc's declaration, `{report_jobs}` for the workflow's job blocks.
+fn fixture(template: &str) -> String {
+    template
+        .replace("{reports}", &report_names())
+        .replace("{report_jobs}", &report_job_blocks(&REPORT_JOBS))
+}
+
+fn report_names() -> String {
+    REPORT_JOBS
+        .iter()
+        .map(|job| format!("`{job}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn scalar(extra: &[&str], needs: &str) -> String {
     workflow(
         extra,
@@ -220,16 +236,16 @@ fn a_missing_report_job_in_the_doc_fails() {
 
 #[test]
 fn a_fragment_split_over_lines_passes() {
-    let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing:\n  `backstop_report`, `bench_comment`, `cache_prune`.\n",
+    let doc = fixture(
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing:\n  {reports}.\n",
     );
     assert_eq!(check(&scalar(&[], "select"), &doc), Ok(vec![]));
 }
 
 #[test]
 fn a_correct_copy_elsewhere_cannot_hide_a_wrong_declaration() {
-    let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `extra`. Done.\n\n## Toolchain\n\nexcept the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n",
+    let doc = fixture(
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `extra`. Done.\n\n## Toolchain\n\nexcept the jobs that report and gate nothing: {reports}.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -242,8 +258,8 @@ fn a_correct_copy_elsewhere_cannot_hide_a_wrong_declaration() {
 
 #[test]
 fn two_identical_declarations_in_the_section_fail() {
-    let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`. Again: except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n",
+    let doc = fixture(
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: {reports}. Again: except the jobs that report and gate nothing: {reports}.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -256,8 +272,8 @@ fn two_identical_declarations_in_the_section_fail() {
 
 #[test]
 fn two_different_declarations_in_the_section_fail() {
-    let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`. Or: except the jobs that report and gate nothing: `backstop_report`, `extra`.\n",
+    let doc = fixture(
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: {reports}. Or: except the jobs that report and gate nothing: `backstop_report`, `extra`.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -270,8 +286,8 @@ fn two_different_declarations_in_the_section_fail() {
 
 #[test]
 fn a_fragment_only_outside_the_section_fails() {
-    let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run and gate the merge.\n\n## Toolchain\n\nexcept the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n",
+    let doc = fixture(
+        "# CI\n\n## The merge gate\n\nJobs run and gate the merge.\n\n## Toolchain\n\nexcept the jobs that report and gate nothing: {reports}.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -296,16 +312,16 @@ fn a_section_running_to_the_end_of_the_file_passes() {
 
 #[test]
 fn a_subheading_does_not_end_the_section() {
-    let doc = String::from(
-        "# CI\n\n## The merge gate\n\n### Detail\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`. Done.\n",
+    let doc = fixture(
+        "# CI\n\n## The merge gate\n\n### Detail\n\nJobs run, except the jobs that report and gate nothing: {reports}. Done.\n",
     );
     assert_eq!(check(&scalar(&[], "select"), &doc), Ok(vec![]));
 }
 
 #[test]
 fn a_second_declaration_after_a_subheading_counts() {
-    let doc = String::from(
-        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n\n### Detail\n\nAgain: except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n",
+    let doc = fixture(
+        "# CI\n\n## The merge gate\n\nJobs run, except the jobs that report and gate nothing: {reports}.\n\n### Detail\n\nAgain: except the jobs that report and gate nothing: {reports}.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
@@ -319,11 +335,11 @@ fn a_second_declaration_after_a_subheading_counts() {
 #[test]
 fn a_stale_report_job_fails() {
     let workflow = workflow(&[], "    needs: select\n    runs-on: ubuntu-24.04\n")
-        .replace("  backstop_report:\n    runs-on: ubuntu-24.04\n", "");
+        .replace(&report_job_blocks(&REPORT_JOBS[..1]), "");
     let failures = check(&workflow, &small_doc()).unwrap();
     assert_eq!(failures.len(), 1);
     assert!(
-        failures[0].contains("report job backstop_report is not a job here"),
+        failures[0].contains(&format!("report job {} is not a job here", REPORT_JOBS[0])),
         "{}",
         failures[0]
     );
@@ -354,8 +370,8 @@ fn comments_and_blank_lines_pass() {
     let workflow = workflow(&["lint"], body)
         .replace("  lint:\n", "  lint: # polling\n")
         .replace(
-            "  backstop_report:",
-            "\n  # report jobs\n  backstop_report:",
+            &format!("  {}:", REPORT_JOBS[0]),
+            &format!("\n  # report jobs\n  {}:", REPORT_JOBS[0]),
         );
     assert_eq!(check(&workflow, &small_doc()), Ok(vec![]));
 }
@@ -371,8 +387,8 @@ fn a_hyphenated_job_name_passes() {
 
 #[test]
 fn matrix_legs_count_as_one_job() {
-    let workflow = String::from(
-        "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  test:\n    strategy:\n      matrix:\n        runner: [a, b]\n    runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
+    let workflow = fixture(
+        "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n  test:\n    strategy:\n      matrix:\n        runner: [a, b]\n    runs-on: ubuntu-24.04\n{report_jobs}  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
     );
     let failures = check(&workflow, &small_doc()).unwrap();
     assert_eq!(failures.len(), 1);
@@ -479,7 +495,9 @@ fn a_needs_list_continued_on_the_next_line_is_an_error() {
 #[test]
 fn a_quoted_needs_name_is_an_error_naming_the_line() {
     let err = check(&scalar(&[], "['select']"), &small_doc()).unwrap_err();
-    assert!(err.contains(":13:"), "{err}");
+    // select (1) + report jobs + ci + needs, below the 5 header lines.
+    let line = 7 + 2 * REPORT_JOBS.len();
+    assert!(err.contains(&format!(":{line}:")), "{err}");
 }
 
 #[test]
@@ -557,8 +575,8 @@ fn a_workflow_whose_only_job_is_ci_is_read() {
 
 #[test]
 fn a_nested_ci_key_is_not_the_ci_job() {
-    let workflow = String::from(
-        "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n    ci:\n      runs-on: ubuntu-24.04\n  backstop_report:\n    runs-on: ubuntu-24.04\n  bench_comment:\n    runs-on: ubuntu-24.04\n  cache_prune:\n    runs-on: ubuntu-24.04\n  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
+    let workflow = fixture(
+        "name: CI\non: push\njobs:\n  select:\n    runs-on: ubuntu-24.04\n    ci:\n      runs-on: ubuntu-24.04\n{report_jobs}  ci:\n    needs: select\n    runs-on: ubuntu-24.04\n",
     );
     assert_eq!(check(&workflow, &small_doc()), Ok(vec![]));
 }
@@ -588,8 +606,8 @@ fn a_hash_after_a_word_is_not_a_comment() {
 
 #[test]
 fn a_heading_with_extra_text_is_not_the_section() {
-    let doc = String::from(
-        "# CI\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n\n## The merge gate!\n\nJobs run and gate the merge.\n",
+    let doc = fixture(
+        "# CI\n\nJobs run, except the jobs that report and gate nothing: {reports}.\n\n## The merge gate!\n\nJobs run and gate the merge.\n",
     );
     let err = check(&scalar(&[], "select"), &doc).unwrap_err();
     assert!(err.contains("no `## The merge gate` heading"), "{err}");
@@ -597,8 +615,8 @@ fn a_heading_with_extra_text_is_not_the_section() {
 
 #[test]
 fn a_declaration_above_the_heading_is_not_in_the_section() {
-    let doc = String::from(
-        "# CI\n\nJobs run, except the jobs that report and gate nothing: `backstop_report`, `bench_comment`, `cache_prune`.\n\n## The merge gate\n\nJobs run and gate the merge.\n",
+    let doc = fixture(
+        "# CI\n\nJobs run, except the jobs that report and gate nothing: {reports}.\n\n## The merge gate\n\nJobs run and gate the merge.\n",
     );
     let failures = check(&scalar(&[], "select"), &doc).unwrap();
     assert_eq!(failures.len(), 1);
