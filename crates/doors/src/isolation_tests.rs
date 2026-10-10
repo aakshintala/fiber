@@ -665,10 +665,11 @@ fn a_session_started_after_the_first_scan_keeps_it() {
             let release_rx = Mutex::new(release_rx);
             let isolation = isolation.with_pause(Arc::new(move || {
                 parked_tx.send(()).unwrap();
-                release_rx.lock().unwrap().recv().unwrap();
+                fakes::Deadline::start()
+                    .recv_or_fail(&release_rx.lock().unwrap(), "the test releases the end");
             }));
             let ending = std::thread::spawn(move || isolation.end());
-            parked_rx.recv().unwrap();
+            fakes::Deadline::start().recv_or_fail(&parked_rx, "the end parks");
             // While `end` is parked, a new session starts in the worktree.
             let sessions = home.path().join("projects").join(&key).join("sessions");
             let _late = held(&sessions, "s_0123456789abcde0", path.to_str().unwrap());
@@ -697,7 +698,8 @@ fn end_holds_every_users_lock_while_it_removes() {
             let release_rx = Mutex::new(release_rx);
             let isolation = isolation.with_pause(Arc::new(move || {
                 parked_tx.send(()).unwrap();
-                release_rx.lock().unwrap().recv().unwrap();
+                fakes::Deadline::start()
+                    .recv_or_fail(&release_rx.lock().unwrap(), "the test releases the end");
             }));
             let sessions = home.path().join("projects").join(&key).join("sessions");
             let dir = sessions.join(id);
@@ -706,7 +708,7 @@ fn end_holds_every_users_lock_while_it_removes() {
             // log may stay while `end` parks.
             drop(held(&sessions, id, isolation.path().to_str().unwrap()));
             let ending = std::thread::spawn(move || isolation.end());
-            parked_rx.recv().unwrap();
+            fakes::Deadline::start().recv_or_fail(&parked_rx, "the end parks");
             assert!(
                 matches!(log::try_hold(&dir).unwrap(), log::Hold::Busy),
                 "the creator's lock is held while parked"

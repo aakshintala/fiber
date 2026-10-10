@@ -103,7 +103,7 @@ fn add_if_listed_decides_under_the_lock() {
             // so the adder below blocks on the lock.
             before_rename(move || {
                 held.send(()).unwrap();
-                go_rx.recv().unwrap();
+                Deadline::start().recv_or_fail(&go_rx, "the test releases the remover");
             });
             let wrote = edit_list(
                 &home,

@@ -424,9 +424,7 @@ fn with_locks_shares_one_lock_set_with_outside_holders() {
     let holder = std::thread::spawn(move || {
         let guard = first.lock(&holder_path);
         holding.send(()).unwrap();
-        release_rx
-            .recv()
-            .expect("the test releases the outside holder");
+        Deadline::start().recv_or_fail(&release_rx, "the test releases the outside holder");
         drop(guard);
     });
     assert!(

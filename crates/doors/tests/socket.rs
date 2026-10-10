@@ -3664,11 +3664,7 @@ fn close_now_starts_the_shutdown_and_sends_the_loop_nothing() {
     let release_rx = Mutex::new(release_rx);
     opened.session.close_now(Arc::new(move || {
         hook_tx.send(()).unwrap();
-        release_rx
-            .lock()
-            .unwrap()
-            .recv()
-            .expect("the test releases the hook");
+        Deadline::start().recv_or_fail(&release_rx.lock().unwrap(), "the test releases the hook");
     }));
     opened
         .session

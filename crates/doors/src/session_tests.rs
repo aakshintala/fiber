@@ -2123,9 +2123,7 @@ fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
             return;
         }
         if let Ok(()) = parked_tx.send(()) {}
-        lock(&release_rx)
-            .recv()
-            .expect("the test releases the subscribe");
+        Deadline::start().recv_or_fail(&lock(&release_rx), "the test releases the subscribe");
     }));
     let socket = opened.socket.clone();
     let log = Arc::clone(&opened.log);
