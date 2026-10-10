@@ -22,12 +22,16 @@ fn the_rss_split_is_anon_and_file_in_kib() {
 fn a_status_without_the_split_errors_naming_the_missing_field() {
     let without_anon = STATUS.replace("RssAnon:\t    4100 kB\n", "");
     assert!(
-        rss_split_kib(&without_anon).unwrap_err().contains("RssAnon"),
+        rss_split_kib(&without_anon)
+            .unwrap_err()
+            .contains("RssAnon"),
         "{without_anon:?}"
     );
     let without_file = STATUS.replace("RssFile:\t    4800 kB\n", "");
     assert!(
-        rss_split_kib(&without_file).unwrap_err().contains("RssFile"),
+        rss_split_kib(&without_file)
+            .unwrap_err()
+            .contains("RssFile"),
         "{without_file:?}"
     );
 }
