@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 use contract::tool::Tool;
+use fakes::Deadline;
 use fakes::TempDir;
 use fakes::clock::FakeClock;
 use serde_json::Value;
@@ -119,6 +120,7 @@ impl Setup {
     }
 
     /// Starts `specs` through the public `start`, with a deadline naming the wait.
+    #[track_caller]
     pub(crate) fn start(&self, specs: Vec<ServerSpec>) -> Started {
         let workspace = self.workspace();
         let cache = self.cache();
@@ -129,6 +131,7 @@ impl Setup {
     }
 
     /// Starts the fixture directly, expecting success, with a deadline naming the wait.
+    #[track_caller]
     pub(crate) fn start_expect(&self, timeout: Duration) -> OpenServer {
         let script = fakes::mcp_fixture().display().to_string();
         let workspace = self.workspace();
@@ -138,6 +141,7 @@ impl Setup {
     }
 
     /// Starts `command` with an explicit workspace and clock, with a deadline naming the wait.
+    #[track_caller]
     pub(crate) fn start_result(
         command: &str,
         args: &[String],
@@ -174,6 +178,7 @@ impl Setup {
     }
 
     /// Runs `tool` with no arguments, with a deadline naming the wait.
+    #[track_caller]
     pub(crate) fn run(&self, tool: &Arc<dyn Tool>) -> contract::tool::Output {
         let tool = Arc::clone(tool);
         fakes::within("the call", WITHIN, move || {
@@ -186,6 +191,7 @@ impl Setup {
     }
 
     /// Runs `prompts.get`, with a deadline naming the wait.
+    #[track_caller]
     pub(crate) fn get(
         &self,
         prompts: &Prompts,
@@ -205,12 +211,14 @@ impl Setup {
     }
 
     /// Serves `slot`, with a deadline naming the wait.
+    #[track_caller]
     pub(crate) fn serve(&self, slot: &Arc<Slot>) -> Served {
         let slot = Arc::clone(slot);
         fakes::within("the serve", WITHIN, move || slot.serve())
     }
 
     /// Stops `servers`, with a deadline naming the wait.
+    #[track_caller]
     pub(crate) fn stop(&self, servers: Servers) {
         fakes::within("the stop", WITHIN, move || {
             servers.stop();
@@ -242,6 +250,7 @@ impl Setup {
     }
 
     /// Waits until the log holds `count` lines naming `method`.
+    #[track_caller]
     pub(crate) fn await_requests(&self, method: &str, count: usize) {
         let path = self.dir.path().join("requests.log");
         let method = method.to_owned();
@@ -255,6 +264,7 @@ impl Setup {
     }
 
     /// Waits until `kill -0` fails for `pid`: the child was reaped.
+    #[track_caller]
     pub(crate) fn await_reaped(&self, pid: u32) {
         await_until(&format!("pid {pid} to be reaped"), move || {
             !fakes::kill_pid(pid, "0").expect("probe")
@@ -265,6 +275,7 @@ impl Setup {
 /// Waits until `probe` holds, polling inside one `within`: the crate's one
 /// poll loop. `probe` runs on the watcher's thread; the deadline names the
 /// wait and the failure names what was waited for.
+#[track_caller]
 pub(crate) fn await_until(what: &str, mut probe: impl FnMut() -> bool + Send + 'static) {
     fakes::within(what, WITHIN, move || {
         loop {
@@ -272,7 +283,7 @@ pub(crate) fn await_until(what: &str, mut probe: impl FnMut() -> bool + Send + '
                 return;
             }
             let (_held, probe) = std::sync::mpsc::channel::<()>();
-            match probe.recv_timeout(POLL) {
+            match Deadline::after(POLL).recv(&probe) {
                 Ok(()) | Err(_) => {}
             }
         }
