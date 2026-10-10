@@ -1061,84 +1061,60 @@ fn await_thread_parked_is_false_after_the_thread_leaves_its_park() {
     );
 }
 
-/// Parks one thread twice with no deadline: reports each park from inside
-/// the wait, leaves the first on release, reports left, waits for the
-/// gate, parks again, exits. Returns the parked thread's id with the
-/// reports, the release and the gate. The test's own waits bound the run
-/// at 5 s wall-clock.
-#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
-type TwiceUnbounded = (
-    mpsc::Receiver<()>,
-    mpsc::Receiver<()>,
-    mpsc::Receiver<()>,
-    mpsc::Receiver<()>,
-    mpsc::Sender<()>,
-    mpsc::Sender<()>,
-    std::thread::ThreadId,
-);
-#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
-fn park_twice_unbounded(clock: &Arc<FakeClock>) -> TwiceUnbounded {
-    let (first_tx, first_rx) = mpsc::channel();
-    let (left_tx, left_rx) = mpsc::channel();
-    let (second_tx, second_rx) = mpsc::channel();
-    let (exit_tx, exit_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel::<()>();
-    let (gate_tx, gate_rx) = mpsc::channel::<()>();
-    let clock = Arc::clone(clock);
-    let handle = thread::spawn(move || {
-        clock.wait_until(None, &mut |_bound| {
-            match first_tx.send(()) {
-                Ok(()) | Err(mpsc::SendError(())) => {}
-            }
-            release_rx
-                .recv()
-                .expect("waited for release of the first park");
-        });
-        match left_tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        gate_rx
-            .recv()
-            .expect("waited for the test to open the gate");
-        clock.wait_until(None, &mut |_bound| {
-            match second_tx.send(()) {
-                Ok(()) | Err(mpsc::SendError(())) => {}
-            }
-            release_rx
-                .recv()
-                .expect("waited for release of the second park");
-        });
-        if let Ok(()) = exit_tx.send(()) {}
-    });
-    (
-        first_rx,
-        left_rx,
-        second_rx,
-        exit_rx,
-        release_tx,
-        gate_tx,
-        handle.thread().id(),
-    )
-}
-
 #[test]
 fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
     let clock = FakeClock::new();
-    let (first, left, second, exit, release, gate, b_id) = park_twice_unbounded(&clock);
-    first
+    // Thread A parks unbounded first.
+    let (parked_a, release_a, exit_a, _) = park_once(&clock, None);
+    parked_a
         .recv_timeout(Duration::from_secs(5))
-        .expect("waited for thread B to park");
+        .expect("waited for thread A to park");
+    // Thread B blocks on the start channel before parking twice unbounded.
+    let (start_tx, start_rx) = mpsc::channel::<()>();
+    let (report_tx, report_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let (exit_tx, exit_rx) = mpsc::channel();
+    let clock_b = Arc::clone(&clock);
+    let b = thread::spawn(move || {
+        start_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("waited for the test to start thread B");
+        for _ in 0..2 {
+            clock_b.wait_until(None, &mut |_bound| {
+                match report_tx.send(()) {
+                    Ok(()) | Err(mpsc::SendError(())) => {}
+                }
+                release_rx.recv().expect("waited for release of a park");
+            });
+        }
+        if let Ok(()) = exit_tx.send(()) {}
+    });
+    let b_id = b.thread().id();
+    // Step 3 is the discriminator: the generic wait already sees A, so it
+    // would let the step advance before B parks; only the thread wait holds
+    // the advance until B is parked.
+    assert!(
+        clock.await_parked_unbounded(Duration::ZERO),
+        "thread A is parked unbounded: {:?}",
+        clock.parked(),
+    );
+    assert!(
+        !clock.await_thread_parked(b_id, None, Duration::ZERO),
+        "thread B has not parked yet: {:?}, thread {b_id:?}",
+        clock.parked(),
+    );
+    start_tx.send(()).unwrap();
     assert!(
         clock.await_thread_parked(b_id, None, Duration::from_secs(5)),
-        "thread B is parked unbounded: {:?}, thread {b_id:?}",
+        "thread B parked unbounded: {:?}, thread {b_id:?}",
         clock.parked(),
     );
     let mark = clock.advance_marked(Duration::from_millis(1));
-    release.send(()).unwrap();
-    left.recv_timeout(Duration::from_secs(5))
-        .expect("waited for thread B to leave its park");
-    gate.send(()).unwrap();
-    second
+    release_tx.send(()).unwrap();
+    report_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("waited for thread B to park the first time");
+    report_rx
         .recv_timeout(Duration::from_secs(5))
         .expect("waited for thread B to park again");
     assert!(
@@ -1146,7 +1122,12 @@ fn a_thread_waited_on_by_id_is_in_the_mark_for_its_next_park() {
         "thread B is in the mark, so its next park matches: {:?}, thread {b_id:?}",
         clock.parked(),
     );
-    release.send(()).unwrap();
-    exit.recv_timeout(Duration::from_secs(5))
+    release_tx.send(()).unwrap();
+    exit_rx
+        .recv_timeout(Duration::from_secs(5))
         .expect("thread B exits");
+    release_a.send(()).unwrap();
+    exit_a
+        .recv_timeout(Duration::from_secs(5))
+        .expect("thread A exits");
 }
