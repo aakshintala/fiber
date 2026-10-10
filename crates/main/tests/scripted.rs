@@ -866,7 +866,10 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
         assert!(line.get("action_id").is_none(), "{line}");
     }
     let handoff = stage("handoff");
-    assert_eq!(handoff["payload"]["reviewer"], json!({"purpose": "handoff"}));
+    assert_eq!(
+        handoff["payload"]["reviewer"],
+        json!({"purpose": "handoff"})
+    );
     assert!(handoff.get("action_id").is_none(), "{handoff}");
     // Nothing else does: neither the session's own calls nor any other
     // line in the log.
