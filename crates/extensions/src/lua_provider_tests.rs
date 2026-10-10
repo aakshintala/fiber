@@ -303,6 +303,40 @@ fn http_token_provider(root: &fakes::TempDir, url: &str) -> Arc<LuaProvider> {
     LuaProvider::new(extension, "p")
 }
 
+#[test]
+fn credential_idle_distinguishes_idle_fetching_and_completed() {
+    let root = fakes::TempDir::new("fiber-credential-idle");
+    let tokens = fakes::ProviderServer::start([token_response("tok-idle")]).unwrap();
+    tokens.hold();
+    let provider = http_token_provider(&root, &format!("{}/token", tokens.url()));
+    let pair = token_pair();
+    assert!(!provider.fetching(&pair));
+    assert!(provider.await_idle(&pair, Duration::ZERO));
+    let other = Arc::clone(&provider);
+    let other_pair = pair.clone();
+    let (sent, received) = mpsc::channel();
+    let fetch = std::thread::spawn(move || {
+        drop(sent.send(other.token(&other_pair)));
+    });
+    assert!(tokens.await_requests(1, WAIT), "fetch reaches the held server");
+    assert!(provider.fetching(&pair));
+    assert!(!provider.await_idle(&pair, Duration::ZERO));
+    assert!(!provider.await_idle(&pair, Duration::from_millis(10)));
+    let idle_provider = Arc::clone(&provider);
+    let idle_pair = pair.clone();
+    let (sent, idle) = mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        let _sent = sent.send(idle_provider.await_idle(&idle_pair, WAIT));
+    });
+    tokens.release();
+    assert_eq!(received.recv_timeout(WAIT).unwrap().unwrap().expose(), "tok-idle");
+    assert!(idle.recv_timeout(WAIT).unwrap());
+    fetch.join().unwrap();
+    waiter.join().unwrap();
+    assert!(!provider.fetching(&pair));
+    assert!(provider.await_idle(&pair, Duration::ZERO));
+}
+
 fn token_pair() -> CredentialPair {
     CredentialPair {
         credential: "p".to_owned(),

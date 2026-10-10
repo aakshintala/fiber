@@ -212,6 +212,20 @@ impl LuaProvider {
         })
     }
 
+    /// Whether a credential fetch for this pair is running.
+    pub fn fetching(&self, pair: &CredentialPair) -> bool {
+        lock(&self.token).get(pair).is_some_and(|state| state.refreshing)
+    }
+
+    /// Waits for this pair's credential fetch to finish, bounded on the wall
+    /// clock. Returns false if the pair is still fetching at the bound.
+    pub fn await_idle(&self, pair: &CredentialPair, within: Duration) -> bool {
+        let (state, _) = self.fetched.wait_timeout_while(lock(&self.token), within, |state| {
+            state.get(pair).is_some_and(|state| state.refreshing)
+        }).unwrap_or_else(PoisonError::into_inner);
+        !state.get(pair).is_some_and(|state| state.refreshing)
+    }
+
     /// The provider's name, as `fiber.provider` registered it.
     pub fn name(&self) -> &str {
         &self.name
