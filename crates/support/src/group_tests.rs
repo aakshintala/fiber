@@ -12,7 +12,7 @@
 )]
 
 use std::os::unix::process::{CommandExt as _, ExitStatusExt as _};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
@@ -22,8 +22,8 @@ use fakes::{Deadline, TempDir, Watchdog, kill_group};
 use rustix::process::Signal;
 
 use super::{
-    Error, GROUP_POLL, alive, kill_every_group, live, refused, signal, signal_name, signal_process,
-    spawn,
+    Error, GROUP_POLL, alive, detach, kill_every_group, live, refused, signal, signal_name,
+    signal_process, spawn,
 };
 
 /// How long a test waits on a child before it fails.
@@ -308,6 +308,89 @@ fn kill_every_group_holds_the_lock_while_it_signals() {
     assert_eq!(reap(child).signal(), Some(9));
     live().unlist(listing);
     watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn detach_without_a_terminal_makes_the_child_a_session_leader() {
+    let mut cmd = Command::new("sleep");
+    cmd.arg("60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    detach(&mut cmd, false);
+    let child = cmd.spawn().expect("sleep spawned");
+    let pid = child.id();
+    let watchdog = Watchdog::group(pid);
+    let raw = i32::try_from(pid).expect("a test pid fits in an i32");
+    let leader = rustix::process::Pid::from_raw(raw).expect("a live pid converts");
+    let sid = rustix::process::getsid(Some(leader)).expect("the session id reads");
+    assert_eq!(sid, leader, "the child leads its own session");
+    assert!(signal(pid, Signal::KILL).is_ok(), "the kill landed");
+    assert_eq!(reap(child).signal(), Some(9));
+    watchdog.stand_down(DEADLINE);
+}
+
+/// Runs `sh -c script` detached with `controlling_tty`, and returns its
+/// piped standard output and status. With `terminal_stdin` the child's
+/// stdin is a pty secondary; without it, null. On macOS a session leader
+/// holding the secondary already has it as its controlling terminal, so
+/// the control for no terminal uses a non-terminal stdin, where `/dev/tty`
+/// has nothing to resolve to.
+fn run_on_pty(
+    script: &str,
+    controlling_tty: bool,
+    terminal_stdin: bool,
+) -> (String, std::process::ExitStatus) {
+    let (_master, slave) = fakes::pty::open().expect("a pty opened");
+    let stdin = if terminal_stdin {
+        let secondary = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&slave)
+            .expect("the secondary opened");
+        Stdio::from(secondary)
+    } else {
+        Stdio::null()
+    };
+    let (mut read, write) = std::io::pipe().expect("a pipe for the child's output");
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(script)
+        .stdin(stdin)
+        .stdout(Stdio::from(write))
+        .stderr(Stdio::null());
+    detach(&mut cmd, controlling_tty);
+    let mut child = cmd.spawn().expect("sh spawned");
+    // The parent drops every write end, so EOF arrives when the last
+    // holder exits; until then the watchdog would inherit it and the
+    // read below would never end.
+    drop(cmd);
+    let watchdog = Watchdog::group(child.id());
+    let status = child.wait().expect("sh reaped");
+    let mut output = String::new();
+    std::io::Read::read_to_string(&mut read, &mut output).expect("the output read");
+    watchdog.stand_down(DEADLINE);
+    (output, status)
+}
+
+#[test]
+fn detach_with_a_terminal_gives_the_child_a_controlling_terminal() {
+    let (output, status) = run_on_pty("exec 3</dev/tty && echo ok", true, true);
+    assert!(status.success(), "the open of /dev/tty worked");
+    assert!(
+        output.contains("ok"),
+        "the child read its controlling terminal: {output:?}"
+    );
+}
+
+#[test]
+fn detach_without_a_terminal_leaves_the_child_without_one() {
+    let (output, status) = run_on_pty("exec 3</dev/tty && echo ok", false, false);
+    assert!(!status.success(), "the open of /dev/tty failed");
+    assert!(
+        !output.contains("ok"),
+        "nothing printed without a terminal: {output:?}"
+    );
 }
 
 #[test]
