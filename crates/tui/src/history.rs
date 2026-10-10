@@ -204,6 +204,12 @@ impl App {
         self.history.set_project(project);
     }
 
+    /// Whether the draft is still the entry recall put there: a
+    /// recalled prompt being browsed keeps ↓.
+    pub(super) fn recall_browsing(&self) -> bool {
+        self.history.browsing(&self.draft.expand())
+    }
+
     /// ↑ and ↓ for the input box: by wrapped row within the draft, then
     /// through earlier prompts. `None` for any other key.
     pub(super) fn recall_key(&mut self, key: &Key) -> Option<Effect> {

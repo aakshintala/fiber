@@ -1,8 +1,9 @@
 //! Navigate mode: keyboard focus among the frame's click targets
 //! (`docs/tui.md`, "Moving through the conversation"). The input box holds
 //! the keyboard until Shift+Tab moves focus into the conversation; while a
-//! target has focus, the input box's keys do nothing and global keys work
-//! as from the input box.
+//! target has focus, the input box's keys do nothing, except on home,
+//! where a focused chip keeps them and typing returns to the entry bar.
+//! Global keys work as from the input box.
 
 use super::{App, Effect};
 use crate::focus::{Area, Regions, area_of, order};
@@ -19,13 +20,21 @@ impl App {
     /// Takes a frame's click targets. `/resume` focuses the list first;
     /// then, when the focused target is not among them, focus returns to
     /// the input box and this returns true: the frame showed a stale
-    /// focus and is drawn again.
+    /// focus and is drawn again. A chip stays focused behind the model
+    /// picker, whose swapped view carries no home targets.
     pub(crate) fn drawn(&mut self, targets: &[Target]) -> bool {
         self.stops = targets.to_vec();
         let resumed = self.home_drawn(targets);
-        if self
-            .focus
-            .is_some_and(|id| !targets.iter().any(|target| target.id == id))
+        let chip_held = self.on_home()
+            && self.model_picker_open()
+            && matches!(
+                self.focus,
+                Some(TargetId::Home(spot)) if spot.is_chip()
+            );
+        if !chip_held
+            && self
+                .focus
+                .is_some_and(|id| !targets.iter().any(|target| target.id == id))
         {
             self.focus = None;
             self.cancel_pending_turn();

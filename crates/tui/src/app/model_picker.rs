@@ -295,7 +295,7 @@ impl App {
     /// touched: Enter saves the level, Ctrl+S applies it to this session
     /// only. With no current model, or no catalogue entry for it, the
     /// picker opens as an ordinary choose.
-    fn open_thinking(&mut self) -> super::Effect {
+    pub(in crate::app) fn open_thinking(&mut self) -> super::Effect {
         let current = self.thinking_model();
         let listed = current.as_ref().is_some_and(|(model, _)| {
             self.model_picker

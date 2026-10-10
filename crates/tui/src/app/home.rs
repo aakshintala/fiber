@@ -20,6 +20,7 @@ use crate::mouse::{Target, TargetId};
 use crate::view::max_question_scroll;
 use contract::SessionId;
 
+mod chips;
 mod exit;
 mod open_at;
 mod reset;
@@ -31,6 +32,10 @@ pub(super) struct Home {
     pub(super) launch: Launch,
     /// A `start` went out in this run.
     prompted: bool,
+    /// The chip focused last: ↓ from the entry bar and ↑ from the
+    /// first row land here while drawn, else on the workspace chip.
+    /// Always a chip; starts `Spot::Workspace`.
+    pub(super) last_chip: Spot,
     /// The session list: live rows from the feed, exited rows from `recent`.
     pub(super) sessions: Sessions,
     /// `feed` and the first `recent` page went out.
@@ -144,6 +149,7 @@ impl App {
             opening: None,
             outbox: Vec::new(),
             focus_list: false,
+            last_chip: Spot::Workspace,
             blockers: Vec::new(),
             chosen: None,
             chosen_git: false,
@@ -231,9 +237,9 @@ impl App {
         } else {
             match self.keys().first_label("key_map") {
                 Some(label) => {
-                    format!("↓ the session list · {label} the key map · Ctrl+C twice to quit")
+                    format!("↓ chips and sessions · {label} the key map · Ctrl+C twice to quit")
                 }
-                None => "↓ the session list · Ctrl+C twice to quit".to_owned(),
+                None => "↓ chips and sessions · Ctrl+C twice to quit".to_owned(),
             }
         };
         Some(HomeScreen {
@@ -257,11 +263,11 @@ impl App {
                 }
                 chips.extend([
                     (
-                        None,
+                        Some(Spot::Model),
                         format!("[{}]", home.launch.model.as_deref().unwrap_or("no model")),
                     ),
                     (
-                        None,
+                        Some(Spot::Thinking),
                         format!(
                             "[thinking: {}]",
                             home.launch.thinking.as_deref().unwrap_or("default")
@@ -613,12 +619,12 @@ impl App {
     }
 
     /// A key for home, ahead of the key map and focus: the picker's keys
-    /// while it is open, then down in an empty box focusing the first
-    /// row, and down or j on the last drawn row focusing the next one
-    /// below the fold. `None` for anything else, so the focused stops
-    /// keep moving as they do on the conversation. Only ↓ enters the
-    /// list: j and k move only while it already has focus, and the draft
-    /// keeps every printable key typed into it.
+    /// while it is open, then the chip row's and the list's arrows, and
+    /// j on the last drawn row paging below the fold. `None` for
+    /// anything else, so the focused stops keep moving as they do on the
+    /// conversation. Only ↓ enters the list from the entry bar, landing
+    /// on the chip row first: j moves only while the list has focus, and
+    /// the draft keeps every printable key typed into it.
     pub(super) fn home_key(&mut self, key: &Key) -> Option<Effect> {
         // The quit question takes every key first, on home or not:
         // Enter leaves working sessions running, `c` closes them all
@@ -738,12 +744,34 @@ impl App {
             }
             return Some(Effect::None);
         }
+        // A focused chip takes its keys ahead of focus: arrows move,
+        // Enter clicks, typing returns to the entry bar. `None` passes
+        // the key on.
+        if self.focused_chip().is_some() {
+            return self.chip_key(key);
+        }
         // Only ↓ enters the list: with the box focused the draft keeps
         // j, and focus moves it once the list has focus.
         if matches!(key, Key::Char('j')) && self.focus.is_none() {
             return None;
         }
-        if !matches!(key, Key::Down | Key::Char('j')) {
+        if matches!(key, Key::Up | Key::Down) {
+            // ↑ ↓ on a row or the toggle walk the rows, row to row.
+            if self.focus.is_some() {
+                if let Some(effect) = self.list_key(key) {
+                    return Some(effect);
+                }
+                return None;
+            }
+            // ↑ in the box stays with recall; ↓ leaves for the chip
+            // row, while the completion panel and a recalled prompt
+            // keep it and a multi-line draft moves its cursor first.
+            if matches!(key, Key::Up) {
+                return None;
+            }
+            return self.entry_down();
+        }
+        if !matches!(key, Key::Char('j')) {
             // Backspace on a focused row asks to delete it when it
             // exited; anything else on a focused row is swallowed.
             if matches!(key, Key::Backspace) {
@@ -751,20 +779,8 @@ impl App {
             }
             return None;
         }
-        if self.focus.is_none() {
-            if !self.draft.is_empty() || self.completions().is_some() {
-                return None;
-            }
-            // The toggle heads the list while it shows.
-            let first = order(&self.stops, &self.regions, Area::Conversation)
-                .into_iter()
-                .find(|id| matches!(id, TargetId::Home(Spot::Entry(_) | Spot::Toggle)));
-            if let Some(id) = first {
-                self.focus = Some(id);
-                return Some(Effect::None);
-            }
-            return None;
-        }
+        // j on the last drawn row pages below the fold; shorter of it
+        // steps through the stops as on the conversation.
         let Some(TargetId::Home(Spot::Entry(focused) | Spot::Stop(focused))) = self.focus else {
             return None;
         };
@@ -796,9 +812,11 @@ impl App {
 
     /// Clicks `spot` on home: a row opens its session, its ✕ stops a
     /// live session or asks to delete an exited one, the toggle flips
-    /// the scope, the workspace chip opens the picker, a picker row
-    /// chooses its workspace, and a quit choice does what its key does
-    /// while the quit question is open, on home or over a session.
+    /// the scope, the workspace chip opens the picker, the worktree
+    /// switch toggles it, the model chip opens the model picker, the
+    /// thinking chip opens it at the model's thinking chips, a picker
+    /// row chooses its workspace, and a quit choice does what its key
+    /// does while the quit question is open, on home or over a session.
     pub(super) fn home_click(&mut self, spot: Spot) -> Effect {
         if let Spot::Quit(choice) = spot {
             if !self.quit_open() {
@@ -819,6 +837,8 @@ impl App {
             Spot::Toggle => self.toggle_scope(),
             Spot::Workspace => self.open_picker(),
             Spot::Worktree => self.toggle_worktree(),
+            Spot::Model => self.open_model_picker(crate::model_picker::Mode::Choose),
+            Spot::Thinking => self.open_thinking(),
             Spot::Pick(at) => self.pick(at),
             Spot::Quit(_) => Effect::None,
         }
@@ -944,13 +964,23 @@ impl App {
 
     /// Delete on a focused row, ahead of the focus early return in
     /// `on_edit`: the delete question when it exited, swallowed
-    /// otherwise. With the box focused the draft keeps the key.
+    /// otherwise. A focused chip takes its edits first: ← → move
+    /// between chips, every other edit returns to the entry bar. With
+    /// the box focused the draft keeps the key.
     pub(super) fn home_edit(&mut self, edit: &Edit) -> Option<Effect> {
         if !self.on_home() {
             return None;
         }
         if self.home.as_ref().is_some_and(|home| home.prompt.is_some()) {
             return Some(Effect::None);
+        }
+        // A focused chip takes its edits ahead of the row's Delete:
+        // ← → move between chips, every other edit returns to the
+        // entry bar and applies there.
+        if self.focused_chip().is_some()
+            && let Some(effect) = self.chip_edit(edit)
+        {
+            return Some(effect);
         }
         match edit {
             Edit::Delete => self.delete_key(),
@@ -1124,7 +1154,7 @@ impl App {
     /// its id, naming the launch project while scoped. `None` unless the
     /// focused row ends the list and is its last recent row, the last
     /// answer was not empty, and no `recent` is in flight.
-    fn page_recent(&mut self, focused: u64) -> Option<Effect> {
+    pub(super) fn page_recent(&mut self, focused: u64) -> Option<Effect> {
         let home = self.home.as_mut()?;
         let project = home.launch.project.clone();
         let scoped = home.launch.git && !home.sessions.show_all();
@@ -1238,6 +1268,8 @@ impl App {
             | Spot::Toggle
             | Spot::Workspace
             | Spot::Worktree
+            | Spot::Model
+            | Spot::Thinking
             | Spot::Pick(_)
             | Spot::Quit(_) => None,
         }
