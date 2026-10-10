@@ -1,13 +1,21 @@
-//! The TLS configuration every HTTPS call uses, and the error its socket
-//! reports (`docs/architecture.md`, "The modules", "Cancellation";
+//! The TLS configuration every HTTPS call uses, the connector that keeps
+//! each request's socket so another thread can close it, and the error its
+//! socket reports (`docs/architecture.md`, "The modules", "Cancellation";
 //! `docs/dependencies.md`, "Root certificates", "Proxies"). [`config`]
 //! carries the platform verifier and nothing else; each caller sets its own
 //! proxy and request policy on top.
 
 use std::io;
 use std::net::TcpStream;
+use std::sync::Arc;
 
 use ureq::tls::{RootCerts, TlsConfig};
+use ureq::unversioned::resolver::Resolver;
+use ureq::unversioned::transport::{ConnectProxyConnector, Connector, RustlsConnector};
+
+use crate::socket::KeepSocket;
+
+mod socket;
 
 /// The TLS configuration every HTTPS call uses: the platform verifier.
 pub fn tls_config() -> TlsConfig {
@@ -21,6 +29,23 @@ pub fn tls_config() -> TlsConfig {
 /// default stays ureq's, read from the environment.
 pub fn config() -> ureq::config::ConfigBuilder<ureq::typestate::AgentScope> {
     ureq::config::Config::builder().tls_config(tls_config())
+}
+
+/// Builds one agent per call over the shared connector, which keeps the
+/// call's socket so another thread can close it. The proxy step runs before
+/// the socket step: it opens the proxy connection by re-running the chain,
+/// so the socket the connector keeps is the proxy's, and a stop still
+/// closes the tunnel.
+// debt: builds the TLS config per call; share one agent with a per-call
+// socket slot if the handshake setup shows in a profile.
+pub fn agent<K: Keep>(
+    config: ureq::config::Config,
+    keep: Arc<K>,
+    resolver: impl Resolver,
+) -> ureq::Agent {
+    let connector = ConnectProxyConnector::default().chain(KeepSocket::new(keep));
+    let connector = connector.chain(RustlsConnector::default());
+    ureq::Agent::with_parts(config, connector, resolver)
 }
 
 /// One call's handle on its socket: keeping the handle lets another thread
