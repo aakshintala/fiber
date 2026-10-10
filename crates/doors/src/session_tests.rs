@@ -2825,7 +2825,10 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
         Ok(_) => panic!("a reader published after the stop is rejected"),
         Err(handle) => handle,
     };
-    assert!(shut.load(Ordering::SeqCst), "the rejection shuts the stream");
+    assert!(
+        shut.load(Ordering::SeqCst),
+        "the rejection shuts the stream"
+    );
     assert!(
         super::lock(&gate.conns).live.is_empty(),
         "the rejected reader is never published"
