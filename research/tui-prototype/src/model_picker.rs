@@ -24,6 +24,8 @@ pub struct Provider {
 
 pub struct Model {
     pub id: &'static str,
+    /// the display name the filter matches alongside provider and id
+    pub name: &'static str,
     pub roles: Vec<&'static str>,
     pub current: bool,
     pub levels: Vec<&'static str>,
@@ -40,6 +42,7 @@ pub fn fixture() -> Vec<Provider> {
             models: vec![
                 Model {
                     id: "claude-opus-5-5",
+                    name: "Claude Opus 5.5",
                     roles: vec!["main"],
                     current: true,
                     levels: vec!["low", "medium", "high", "xhigh"],
@@ -48,6 +51,7 @@ pub fn fixture() -> Vec<Provider> {
                 },
                 Model {
                     id: "claude-sonnet-5-5",
+                    name: "Claude Sonnet 5.5",
                     roles: vec!["reviewer"],
                     current: false,
                     levels: vec!["low", "medium", "high"],
@@ -56,6 +60,7 @@ pub fn fixture() -> Vec<Provider> {
                 },
                 Model {
                     id: "claude-haiku-5-5",
+                    name: "Claude Haiku 5.5",
                     roles: vec!["explorer", "small"],
                     current: false,
                     levels: vec!["low", "medium"],
@@ -70,6 +75,7 @@ pub fn fixture() -> Vec<Provider> {
             models: vec![
                 Model {
                     id: "gpt-6.1-sol",
+                    name: "GPT 6.1 Sol",
                     roles: vec!["reviewer"],
                     current: false,
                     levels: vec!["low", "medium", "high", "xhigh"],
@@ -78,6 +84,7 @@ pub fn fixture() -> Vec<Provider> {
                 },
                 Model {
                     id: "gpt-6-luna",
+                    name: "GPT 6 Luna",
                     roles: vec!["explorer"],
                     current: false,
                     levels: vec!["low", "medium", "high"],
@@ -86,6 +93,7 @@ pub fn fixture() -> Vec<Provider> {
                 },
                 Model {
                     id: "gpt-6-sol-mini",
+                    name: "GPT 6 Sol Mini",
                     roles: vec!["small"],
                     current: false,
                     levels: vec!["low", "medium"],
@@ -94,6 +102,7 @@ pub fn fixture() -> Vec<Provider> {
                 },
                 Model {
                     id: "gpt-6-nano",
+                    name: "GPT 6 Nano",
                     roles: vec!["small"],
                     current: false,
                     levels: vec![],
@@ -102,6 +111,7 @@ pub fn fixture() -> Vec<Provider> {
                 },
                 Model {
                     id: "gpt-6-sol",
+                    name: "GPT 6 Sol",
                     roles: vec!["main"],
                     current: false,
                     levels: vec!["low", "medium", "high", "xhigh"],
@@ -116,6 +126,7 @@ pub fn fixture() -> Vec<Provider> {
             models: vec![
                 Model {
                     id: "gemini-3-pro",
+                    name: "Gemini 3 Pro",
                     roles: vec!["explorer"],
                     current: false,
                     levels: vec!["low", "medium", "high"],
@@ -124,6 +135,7 @@ pub fn fixture() -> Vec<Provider> {
                 },
                 Model {
                     id: "gemini-3-flash",
+                    name: "Gemini 3 Flash",
                     roles: vec!["small"],
                     current: false,
                     levels: vec!["low", "medium"],
@@ -132,6 +144,7 @@ pub fn fixture() -> Vec<Provider> {
                 },
                 Model {
                     id: "gemini-3-lite",
+                    name: "Gemini 3 Lite",
                     roles: vec!["small"],
                     current: false,
                     levels: vec![],
@@ -140,6 +153,7 @@ pub fn fixture() -> Vec<Provider> {
                 },
                 Model {
                     id: "gemma-3-27b",
+                    name: "Gemma 3 27B",
                     roles: vec!["explorer"],
                     current: false,
                     levels: vec!["low"],
@@ -162,6 +176,8 @@ pub struct State {
     pub chip: Option<usize>,
     /// the model marked "this session only", by flat index
     pub session_only: Option<usize>,
+    /// the filter query typed over the picker; empty means unfiltered
+    pub query: String,
     /// the `scoped_models` set, as flat indices; empty means unscoped
     pub scoped: Vec<usize>,
     pub show_all: bool,
@@ -238,14 +254,78 @@ fn count() -> usize {
     fixture().iter().map(|p| p.models.len()).sum()
 }
 
+/// The text one query token must subsequence-match: provider, id and
+/// display name, so a token can name any of the three.
+fn haystack(provider: &str, m: &Model) -> String {
+    format!("{provider} {provider}/{} {provider} {} {}", m.id, m.id, m.name)
+}
+
+/// Whether every whitespace-separated token of the query is a
+/// case-insensitive subsequence of the haystack; an empty query matches all.
+fn matches(query: &str, haystack: &str) -> bool {
+    let hay: Vec<char> = haystack.to_lowercase().chars().collect();
+    query.split_whitespace().all(|tok| {
+        let mut i = 0;
+        tok.to_lowercase().chars().all(|c| match hay[i..].iter().position(|&h| h == c) {
+            Some(j) => {
+                i += j + 1;
+                true
+            }
+            None => false,
+        })
+    })
+}
+
+/// The char positions in the model id to underline: each token's greedy
+/// subsequence match, unioned. A token the id alone cannot match (it named
+/// the provider or display name instead) contributes no positions.
+fn id_hits(query: &str, id: &str) -> Vec<usize> {
+    let low: Vec<char> = id.to_lowercase().chars().collect();
+    let mut hits = vec![false; low.len()];
+    for tok in query.split_whitespace() {
+        let mut i = 0;
+        let mut local = vec![];
+        let mut ok = true;
+        for c in tok.to_lowercase().chars() {
+            match low[i..].iter().position(|&h| h == c) {
+                Some(j) => {
+                    local.push(i + j);
+                    i += j + 1;
+                }
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            for p in local {
+                hits[p] = true;
+            }
+        }
+    }
+    hits.iter().enumerate().filter_map(|(i, &h)| h.then_some(i)).collect()
+}
+
 /// The flat indices on screen: the scoped set, or everything.
 pub fn visible(s: &State) -> Vec<usize> {
-    let n = count();
-    if s.scoped.is_empty() || s.show_all {
+    let all = fixture();
+    let mut flat: Vec<(&str, &Model)> = vec![];
+    for p in &all {
+        for m in &p.models {
+            flat.push((p.name, m));
+        }
+    }
+    let n = flat.len();
+    let base: Vec<usize> = if s.scoped.is_empty() || s.show_all {
         (0..n).collect()
     } else {
         s.scoped.iter().copied().filter(|&i| i < n).collect()
-    }
+    };
+    // The filter keeps fixture order: it only drops rows.
+    base.into_iter()
+        .filter(|&i| matches(&s.query, &haystack(flat[i].0, flat[i].1)))
+        .collect()
 }
 
 /// The focused model's level count and its current level's index.
@@ -656,6 +736,74 @@ mod tests {
             !(0..100).any(|x| buf[(x, y2)].modifier.contains(Modifier::BOLD) && buf[(x, y2)].symbol() == "["),
             "unfocused role went bold"
         );
+    }
+
+    #[test]
+    fn filter_tokens_match_provider_id_or_name_as_subsequences() {
+        let all = fixture();
+        let hay = |pi: usize, mi: usize| haystack(all[pi].name, &all[pi].models[mi]);
+        // One row per branch: empty, blank, one token, two tokens, provider-only,
+        // name-only, id-only, non-subsequence, case mix, token order irrelevant.
+        // Each row is negate-checked: flipping the want breaks it.
+        let table = [
+            ("", hay(0, 0), true),
+            ("   ", hay(1, 2), true),
+            ("opus", hay(0, 0), true),
+            ("opus", hay(0, 2), false),
+            ("claude opus", hay(0, 0), true),
+            ("opus xyz", hay(0, 0), false),
+            ("anthropic", hay(0, 2), true),
+            ("anthropic", hay(2, 0), false),
+            ("sol mini", hay(1, 2), true),
+            ("sol mini", hay(1, 4), false),
+            ("haiku-5", hay(0, 2), true),
+            ("haiku-5", hay(0, 0), false),
+            ("zzz", hay(0, 0), false),
+            ("opusz", hay(0, 0), false),
+            ("oPuS", hay(0, 0), true),
+            ("opus claude", hay(0, 0), true),
+        ];
+        for (q, h, want) in table {
+            assert_eq!(matches(q, &h), want, "query {q:?} over {h:?}");
+        }
+    }
+
+    #[test]
+    fn highlight_hits_are_the_id_chars_each_token_consumes() {
+        // Greedy per token, unioned; a token the id cannot match alone adds nothing.
+        assert_eq!(id_hits("", "claude-opus-5-5"), Vec::<usize>::new());
+        assert_eq!(id_hits("opus", "claude-opus-5-5"), vec![7, 8, 9, 10]);
+        assert_eq!(id_hits("OPUS", "claude-opus-5-5"), vec![7, 8, 9, 10]);
+        assert_eq!(id_hits("anthropic", "claude-opus-5-5"), Vec::<usize>::new());
+        assert_eq!(id_hits("opus anthropic", "claude-opus-5-5"), vec![7, 8, 9, 10]);
+        assert_eq!(id_hits("so", "gpt-6-sol"), vec![6, 7]);
+    }
+
+    #[test]
+    fn visible_filters_after_the_scope_rule_in_fixture_order() {
+        let mut s = for_case("scoped");
+        s.query = "claude".into();
+        assert_eq!(visible(&s), vec![0, 1]);
+        // Show-all widens before the query narrows: all three Claudes.
+        s.show_all = true;
+        assert_eq!(visible(&s), vec![0, 1, 2]);
+        // A query over the full list keeps fixture order.
+        let mut all = for_case("list");
+        all.query = "sol".into();
+        let ids: Vec<&str> = {
+            let f = fixture();
+            let mut flat = vec![];
+            for p in &f {
+                for m in &p.models {
+                    flat.push(m.id);
+                }
+            }
+            visible(&all).iter().map(|&i| flat[i]).collect()
+        };
+        assert_eq!(ids, vec!["claude-opus-5-5", "claude-sonnet-5-5", "gpt-6.1-sol", "gpt-6-sol-mini", "gpt-6-sol", "gemini-3-flash"]);
+        // Nothing matches: the screen is empty.
+        all.query = "zzz".into();
+        assert!(visible(&all).is_empty());
     }
 
     #[test]
