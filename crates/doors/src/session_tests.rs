@@ -11,7 +11,7 @@
 use std::fs;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -2709,4 +2709,67 @@ fn ask_whose_first_prompt_is_accepted_returns_what_run_returned() {
         .expect_err("run's own failure wins");
     assert_eq!(failure.code, ErrorCode::Busy);
     close_within(opened.session, opened.log);
+}
+
+/// Appends one prompted turn, so `close` keeps the session directory and the
+/// test can check `session.lock` afterwards.
+fn keep_dir(log: &Arc<Log>) {
+    use contract::events::{InputItem, TurnStarted};
+    use contract::shapes::{Origin, Sender};
+    log.append(
+        &Event::TurnStarted(TurnStarted {
+            input: vec![InputItem::Message {
+                content: vec![ContentPart::Text { text: "one".into() }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: Some(CommandId("c_1".into())),
+                },
+                changed_by: None,
+            }],
+        }),
+        Some(contract::TurnId("t_1".into())),
+        None,
+    )
+    .unwrap();
+}
+
+#[track_caller]
+fn assert_lock_released(dir: &std::path::Path) {
+    assert!(
+        matches!(log::try_hold(dir), Ok(log::Hold::Held(_))),
+        "close released session.lock"
+    );
+}
+
+#[test]
+fn close_returns_after_the_socket_path_was_removed() {
+    reset();
+    let opened = open();
+    keep_dir(&opened.log);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_inbox| Ok(()))
+        .unwrap();
+    fs::remove_file(&opened.socket).unwrap();
+    let dir = opened.session.dir.clone();
+    close_within(opened.session, opened.log);
+    assert_lock_released(&dir);
+}
+
+#[test]
+fn close_returns_when_the_socket_path_was_rebound() {
+    reset();
+    let opened = open();
+    keep_dir(&opened.log);
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_inbox| Ok(()))
+        .unwrap();
+    fs::remove_file(&opened.socket).unwrap();
+    // Another listener answers at the path now: the wake connect reaches it,
+    // not this session's accept.
+    let _other = UnixListener::bind(&opened.socket).unwrap();
+    let dir = opened.session.dir.clone();
+    close_within(opened.session, opened.log);
+    assert_lock_released(&dir);
 }

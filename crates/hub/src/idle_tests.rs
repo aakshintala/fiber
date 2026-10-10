@@ -737,3 +737,93 @@ fn each_exit_has_its_code() {
     assert_eq!(Exit::Failed.code(), 1);
     assert_eq!(Exit::Signal(signal_hook::consts::SIGTERM).code(), 143);
 }
+
+/// Serves hub B in `temp` after `run/` was removed and recreated, on its
+/// own clock so only A's expiry is driven. Returns B's hub, its signal flag
+/// and its exit-code receiver.
+fn serve_second_hub(
+    temp: &Temp,
+) -> (
+    Arc<Hub>,
+    Arc<AtomicI32>,
+    mpsc::Receiver<i32>,
+    Arc<fakes::clock::FakeClock>,
+) {
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, got, done) = serve_with_hub(temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "the second hub serves");
+    (hub, got, done, clock)
+}
+
+/// Stops hub B the way the service manager does and takes its exit code.
+fn stop_second_hub(hub: &Arc<Hub>, got: &Arc<AtomicI32>, done: mpsc::Receiver<i32>) {
+    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub.waker().wake();
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the second hub stops"),
+        143
+    );
+}
+
+#[test]
+fn a_signal_exits_when_run_was_replaced_by_a_second_hub() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub_a, got_a, done_a) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "the first hub serves");
+    // While the first hub lives, `run/` is removed and recreated: a second
+    // hub takes the new directory's lock and binds the same `run/hub`.
+    fs::remove_dir_all(temp.dir.join("run")).unwrap();
+    let (hub_b, got_b, done_b, _clock_b) = serve_second_hub(&temp);
+    got_a.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub_a.waker().wake();
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done_a)
+            .expect("the first hub exits on its signal"),
+        143
+    );
+    // The first hub's exit must not unlink the second hub's socket.
+    drop(connect(&temp));
+    stop_second_hub(&hub_b, &got_b, done_b);
+}
+
+#[test]
+fn an_idle_exit_lands_when_run_was_replaced_by_a_second_hub() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (_hub_a, _got_a, done_a) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "the first hub serves");
+    // While the first hub lives, `run/` is removed and recreated: a second
+    // hub takes the new directory's lock and binds the same `run/hub`.
+    fs::remove_dir_all(temp.dir.join("run")).unwrap();
+    let (hub_b, got_b, done_b, _clock_b) = serve_second_hub(&temp);
+    clock.advance(IDLE);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done_a)
+            .expect("the first hub exits idle"),
+        0
+    );
+    // The first hub's exit must not unlink the second hub's socket.
+    drop(connect(&temp));
+    stop_second_hub(&hub_b, &got_b, done_b);
+}
+
+#[test]
+fn an_idle_exit_lands_when_run_is_gone_entirely() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    fs::remove_dir_all(temp.dir.join("run")).unwrap();
+    clock.advance(IDLE);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
+}
