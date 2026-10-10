@@ -10,3 +10,6 @@ One run per case: `--picker CASE`.
 - session-only: claude-sonnet-5-5 `›` on the accent bar with `ⓢ this session only · nothing saved` under it and its rebuild cost on its row; same panel and legend.
 - filtered: the query `mini` in bold after `›` with a block cursor, four models across openai-codex and google, the matched id chars underlined and bold on and off the accent bar, a `4 of 12 models` chip; same panel and legend.
 - filtered-empty: the query `zzz` in bold after `›` with a block cursor, one muted `No models match` line and no provider sections, a `0 of 12 models` chip; same panel and legend.
+- checklist: all twelve models, each with a `[x]` or `[ ]` mark before its id, five marked, a ` 5 of 12 marked ` count row and no show-all toggle; same panel, bar and legend.
+- checklist-filtered: the query `mini` in bold after `›` with a block cursor, four models each with its mark, a ` 4 of 12 models · 5 marked ` count row; same panel, bar and legend.
+- checklist-empty: the query `zzz` in bold after `›` with a block cursor, one muted `No models match` line and no provider sections; same panel and legend.

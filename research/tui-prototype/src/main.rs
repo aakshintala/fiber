@@ -104,6 +104,8 @@ enum Act {
     Back,
     /// the model picker's row for one model, by its flat index: focuses it
     Pick(usize),
+    /// the checklist's mark for one model, by its flat index: flips it
+    Toggle(usize),
     /// one thinking chip of one model: focuses that chip
     PickChip(usize, usize),
     /// the picker's show-all toggle
@@ -5668,6 +5670,10 @@ fn run(
                             (rail_w + 1, cw as u16)
                         };
                         paint(buf, x, k as u16, w, r);
+                        // a row's own targets come first: hits are matched first-found
+                        for &(x0, x1, act) in &r.hot {
+                            hits.push((k as u16, x + x0, x + x1, act));
+                        }
                         if let Some(act) = r.act {
                             hits.push((k as u16, rail_w, rail_w + conv_w, act));
                         }
@@ -6681,7 +6687,11 @@ fn run(
             let Some(act) = click else { continue };
             changed = true;
             match act {
-                Act::Pick(_) | Act::PickChip(_, _) | Act::PickAll | Act::PickRefresh => {
+                Act::Pick(_)
+                | Act::PickChip(_, _)
+                | Act::PickAll
+                | Act::PickRefresh
+                | Act::Toggle(_) => {
                     model_picker::click(&mut ui, act);
                 }
                 Act::Group(p, bi) if pager.is_some() => pager.as_mut().unwrap().toggle(p, bi, &v),
@@ -7023,7 +7033,7 @@ mod tests {
             [
                 "--home empty, sessions, live-only, past-only, selected, live, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed, focus-entry, focus-chip-workspace, focus-chip-model, focus-chip-picker, focus-chip-typing, focus-session",
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
-                "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty",
+                "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
             ]
