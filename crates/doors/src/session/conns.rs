@@ -66,13 +66,22 @@ impl Gate {
 
     /// Records `handle` and `shutdown` together, and returns the id `serve`
     /// finishes the connection with. `close` joins the reader; the shutdown
-    /// is what unblocks it. A published connection never lacks one.
+    /// is what unblocks it. A published connection never lacks one. The
+    /// stopped check and the publication share the connection lock with
+    /// [`Gate::mark_stopped`] and [`Gate::join_clients`], so a reader
+    /// admitted after the stop is rejected: its stream is shut down and
+    /// its handle is returned for the caller to end, never published.
     pub(crate) fn push_reader(
         &self,
         handle: JoinHandle<()>,
         shutdown: Box<dyn Fn() + Send + Sync>,
-    ) -> u64 {
+    ) -> Result<u64, JoinHandle<()>> {
         let mut conns = lock(&self.conns);
+        if self.stop.load(Ordering::Relaxed) {
+            drop(conns);
+            shutdown();
+            return Err(handle);
+        }
         let id = conns.next;
         conns.next = conns.next.wrapping_add(1);
         conns.live.push((
@@ -83,7 +92,7 @@ impl Gate {
                 shutdown: Some(shutdown),
             },
         ));
-        id
+        Ok(id)
     }
 
     pub(crate) fn push_writer(&self, id: u64, handle: JoinHandle<()>) {
@@ -128,6 +137,9 @@ impl Gate {
     }
 
     pub(super) fn mark_stopped(&self) {
+        // Held while storing, so a `push_reader` either publishes before
+        // the stop and is reaped by `join_clients`, or sees the stop and
+        // is rejected: the check and the publication are atomic.
         let _conns = lock(&self.conns);
         self.stop.store(true, Ordering::Relaxed);
         self.writers.notify_all();

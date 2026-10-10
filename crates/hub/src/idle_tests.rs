@@ -11,7 +11,7 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -539,67 +539,6 @@ fn zero_idle_exit_stops_at_the_first_empty_wait() {
     );
 }
 
-/// An acceptor thread that returns after one `accept`, with a flag set as it
-/// ends, on a listener at `socket`.
-fn one_accept_thread(socket: &std::path::Path) -> (thread::JoinHandle<()>, Arc<AtomicBool>) {
-    let listener = std::os::unix::net::UnixListener::bind(socket).unwrap();
-    let ended = Arc::new(AtomicBool::new(false));
-    let handle = thread::Builder::new()
-        .name("hub-test-acceptor".to_owned())
-        .spawn({
-            let ended = Arc::clone(&ended);
-            move || {
-                listener.accept().map(drop).unwrap_or(());
-                ended.store(true, Ordering::SeqCst);
-            }
-        })
-        .unwrap();
-    (handle, ended)
-}
-
-#[test]
-fn join_after_wake_unblocks_and_joins_a_blocked_acceptor() {
-    let temp = Temp::new();
-    let socket = temp.dir.join("wake");
-    let (acceptor, ended) = one_accept_thread(&socket);
-    let (done_tx, done_rx) = mpsc::channel();
-    let wake_socket = socket.clone();
-    thread::Builder::new()
-        .name("hub-test-wake".to_owned())
-        .spawn(move || {
-            join_after_wake(&wake_socket, acceptor);
-            done_tx.send(()).unwrap_or(());
-        })
-        .unwrap();
-    Deadline::after(DEADLINE)
-        .recv(&done_rx)
-        .expect("the wake joins the acceptor");
-    assert!(
-        ended.load(Ordering::SeqCst),
-        "the acceptor ended before the join returned"
-    );
-}
-
-#[test]
-fn join_after_wake_returns_when_the_socket_path_is_gone() {
-    let temp = Temp::new();
-    let socket = temp.dir.join("wake");
-    let (acceptor, ended) = one_accept_thread(&socket);
-    fs::remove_file(&socket).unwrap();
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::Builder::new()
-        .name("hub-test-wake".to_owned())
-        .spawn(move || {
-            join_after_wake(&socket, acceptor);
-            done_tx.send(()).unwrap_or(());
-        })
-        .unwrap();
-    Deadline::after(DEADLINE)
-        .recv(&done_rx)
-        .expect("the wake returns without a join");
-    assert!(!ended.load(Ordering::SeqCst), "nothing woke the acceptor");
-}
-
 #[test]
 fn a_signal_stop_keeps_peak_memory_next_to_hub_stopped_during_disconnects() {
     let temp = Temp::new();
@@ -736,4 +675,124 @@ fn each_exit_has_its_code() {
     assert_eq!(Exit::Idle.code(), 0);
     assert_eq!(Exit::Failed.code(), 1);
     assert_eq!(Exit::Signal(signal_hook::consts::SIGTERM).code(), 143);
+}
+
+/// Serves hub B in `temp` after `run/` was removed and recreated, on its
+/// own clock so only A's expiry is driven. Returns B's hub, its signal flag
+/// and its exit-code receiver.
+fn serve_second_hub(
+    temp: &Temp,
+) -> (
+    Arc<Hub>,
+    Arc<AtomicI32>,
+    mpsc::Receiver<i32>,
+    Arc<fakes::clock::FakeClock>,
+) {
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, got, done) = serve_with_hub(temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "the second hub serves");
+    (hub, got, done, clock)
+}
+
+/// Stops hub B the way the service manager does and takes its exit code.
+fn stop_second_hub(hub: &Arc<Hub>, got: &Arc<AtomicI32>, done: mpsc::Receiver<i32>) {
+    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub.waker().wake();
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the second hub stops"),
+        143
+    );
+}
+
+#[test]
+fn a_signal_exits_when_run_was_replaced_by_a_second_hub() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub_a, got_a, done_a) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "the first hub serves");
+    // While the first hub lives, `run/` is removed and recreated: a second
+    // hub takes the new directory's lock and binds the same `run/hub`.
+    fs::remove_dir_all(temp.dir.join("run")).unwrap();
+    let (hub_b, got_b, done_b, _clock_b) = serve_second_hub(&temp);
+    got_a.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub_a.waker().wake();
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done_a)
+            .expect("the first hub exits on its signal"),
+        143
+    );
+    // The first hub's exit must not unlink the second hub's socket.
+    drop(connect(&temp));
+    stop_second_hub(&hub_b, &got_b, done_b);
+}
+
+#[test]
+fn an_idle_exit_lands_when_run_was_replaced_by_a_second_hub() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (_hub_a, _got_a, done_a) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "the first hub serves");
+    // While the first hub lives, `run/` is removed and recreated: a second
+    // hub takes the new directory's lock and binds the same `run/hub`.
+    fs::remove_dir_all(temp.dir.join("run")).unwrap();
+    let (hub_b, got_b, done_b, _clock_b) = serve_second_hub(&temp);
+    clock.advance(IDLE);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done_a)
+            .expect("the first hub exits idle"),
+        0
+    );
+    // The first hub's exit must not unlink the second hub's socket.
+    drop(connect(&temp));
+    stop_second_hub(&hub_b, &got_b, done_b);
+}
+
+#[test]
+fn an_idle_exit_lands_when_run_is_gone_entirely() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    fs::remove_dir_all(temp.dir.join("run")).unwrap();
+    clock.advance(IDLE);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
+}
+
+#[test]
+fn an_idle_exit_connects_nowhere_through_the_socket_path() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    fs::remove_file(temp.socket()).unwrap();
+    let rebound = UnixListener::bind(temp.socket()).unwrap();
+    rebound.set_nonblocking(true).unwrap();
+    clock.advance(IDLE);
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub exits idle"),
+        0
+    );
+    assert!(
+        fs::symlink_metadata(temp.socket()).is_ok(),
+        "the exit leaves the rebound socket in place"
+    );
+    match rebound.accept() {
+        Ok(_) => panic!("the idle exit connected through the rebound socket path"),
+        Err(error) => assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the rebound listener stays quiet"
+        ),
+    }
 }
