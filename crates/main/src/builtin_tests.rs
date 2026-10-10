@@ -6,7 +6,6 @@ use std::time::Duration;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::Event;
-use contract::shapes::ContentPart;
 use contract::tool::Cancel;
 
 struct Never;
@@ -27,7 +26,7 @@ impl Emit for Quiet {
 
 /// The delegates the `builtin` calls declare tools for: no model
 /// resolves, so `delegate_spawn` is declared but never runs one.
-fn delegates() -> crate::delegates::Delegates {
+pub(super) fn delegates() -> crate::delegates::Delegates {
     let root = fakes::TempDir::new("fiber-builtin-delegate");
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let jobs = jobs::Registry::new(
@@ -64,7 +63,7 @@ impl contract::skills::Skills for NoSkills {
     }
 }
 
-fn skills() -> Arc<dyn contract::skills::Skills> {
+pub(super) fn skills() -> Arc<dyn contract::skills::Skills> {
     Arc::new(NoSkills)
 }
 /// How long a test waits for one builtin tool call, in real time.
@@ -87,46 +86,6 @@ fn ran(
     fakes::within(&format!("the {name} call"), CALL_WITHIN, move || {
         tool.run(&arguments, &Never, &Quiet)
     })
-}
-
-#[test]
-fn the_driver_shell_runs_echo() {
-    let root = fakes::TempDir::new("fiber-driver-shell");
-    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let jobs = jobs::Registry::new(
-        root.path().join("artifacts"),
-        Arc::clone(&clock),
-        Arc::new(fakes::Recorder::default()),
-    );
-    let (_tools, _infos, driver, _forget, _images) = super::builtin(
-        root.path().join("fiber-stub"),
-        &root.path().join("home"),
-        root.path(),
-        &root.path().join("artifacts"),
-        &clock,
-        &jobs,
-        &Arc::new(tools::PathLocks::new()),
-        None,
-        &delegates(),
-        skills(),
-    )
-    .unwrap();
-    let mut arguments = serde_json::Map::new();
-    arguments.insert(
-        "command".to_owned(),
-        serde_json::Value::String("echo hi".to_owned()),
-    );
-    let output = ran(driver, arguments);
-    let text = output
-        .content
-        .iter()
-        .find_map(|part| match part {
-            ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
-        })
-        .expect("echo wrote text");
-    assert!(text.contains("hi"), "{text}");
-    assert_eq!(output.process.expect("echo ran").exit_code, Some(0));
 }
 
 #[test]

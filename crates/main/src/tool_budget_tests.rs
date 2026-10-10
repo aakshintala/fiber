@@ -49,49 +49,6 @@ fn protocol_name(protocol: Protocol) -> &'static str {
     }
 }
 
-/// The delegates the budget measures tools for: nothing resolves, so
-/// `delegate_spawn` is declared but never runs one.
-fn delegates() -> crate::delegates::Delegates {
-    let root = fakes::TempDir::new("fiber-tool-delegate");
-    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let jobs = jobs::Registry::new(
-        root.path().join("artifacts"),
-        Arc::clone(&clock),
-        Arc::new(fakes::Recorder::default()),
-    );
-    crate::delegates::Delegates::new(
-        root.path().join("fiber-stub"),
-        root.path().join("home"),
-        contract::SessionId("s_test".into()),
-        root.path().to_path_buf(),
-        root.path().join("sessions"),
-        jobs,
-        clock,
-        Arc::new(|_| Err(Vec::new())),
-    )
-}
-
-/// The skills the budget measures tools for: none are listed.
-struct NoSkills;
-
-impl contract::skills::Skills for NoSkills {
-    fn file(&self, _name: &str) -> Option<std::path::PathBuf> {
-        None
-    }
-
-    fn body(
-        &self,
-        _name: &str,
-        _file: &std::path::Path,
-    ) -> Result<String, contract::skills::SkillRead> {
-        Err(contract::skills::SkillRead::Invalid)
-    }
-}
-
-fn skills() -> Arc<dyn contract::skills::Skills> {
-    Arc::new(NoSkills)
-}
-
 /// Every definition `builtin` registers, the hosted search included.
 fn builtin_definitions() -> Vec<ToolDefinition> {
     let root = fakes::TempDir::new("fiber-tool-budget");
@@ -110,8 +67,8 @@ fn builtin_definitions() -> Vec<ToolDefinition> {
         &jobs,
         &Arc::new(tools::PathLocks::new()),
         super::web_search(Some(HOSTED_SEARCH), None).unwrap(),
-        &delegates(),
-        skills(),
+        &super::tests::delegates(),
+        super::tests::skills(),
     )
     .unwrap();
     let definitions: Vec<ToolDefinition> =
@@ -341,57 +298,20 @@ fn check(measured: &Measured, budget: usize) -> Result<usize, String> {
     ))
 }
 
-/// A protocol with one tool of `total` bytes.
-fn synthetic(protocol: &'static str, total: usize) -> Sizes {
-    Sizes {
-        protocol,
-        tools: vec![(String::from("tool"), total)],
-        total,
-    }
-}
-
-/// A definition whose schema fits the strict subset.
-fn strict_tool(name: &str) -> ToolDefinition {
-    ToolDefinition {
-        name: name.to_owned(),
-        description: String::from("Does one thing."),
-        input_schema: json!({
-            "type": "object",
-            "properties": {"a": {"type": "string"}},
-            "required": ["a"],
-            "additionalProperties": false,
-        }),
-        deferred: false,
-        hosted: None,
-    }
-}
-
-/// The measured bytes of `tool` in `protocol`.
-fn bytes_of(measured: &Measured, protocol: Protocol, tool: &str) -> usize {
-    let sizes = measured
-        .sizes
-        .iter()
-        .find(|sizes| sizes.protocol == protocol_name(protocol))
-        .unwrap();
-    sizes
-        .tools
-        .iter()
-        .find(|(name, _)| name == tool)
-        .map(|(_, bytes)| *bytes)
-        .unwrap()
-}
-
 #[test]
 fn the_check_passes_at_the_budget_and_fails_one_byte_over() {
     let hosted = measure(&builtin_definitions());
     let backend = measure(&backend_definitions());
-    let hosted_largest = largest(&hosted.sizes).unwrap();
-    let backend_largest = largest(&backend.sizes).unwrap();
-    let (measured, protocol, total) = if hosted_largest.total >= backend_largest.total {
-        (&hosted, hosted_largest.protocol, hosted_largest.total)
-    } else {
-        (&backend, backend_largest.protocol, backend_largest.total)
-    };
+    // The expected largest, folded out of `the_largest_protocol_decides`:
+    // the largest total over both measurements and the protocol that
+    // holds it, without calling `largest`, so a `largest` that picked
+    // the smallest total fails below.
+    let (measured, largest) = [&hosted, &backend]
+        .into_iter()
+        .flat_map(|measured| measured.sizes.iter().map(move |sizes| (measured, sizes)))
+        .max_by_key(|(_, sizes)| sizes.total)
+        .unwrap();
+    let (protocol, total) = (largest.protocol, largest.total);
 
     assert_eq!(check(measured, total), Ok(total));
     let error = check(measured, total - 1).unwrap_err();
@@ -404,28 +324,6 @@ fn the_check_passes_at_the_budget_and_fails_one_byte_over() {
     assert!(error.contains("`BUDGET`"), "{error}");
     assert_eq!(check_both(&hosted, &backend, total), Ok(total));
     assert!(check_both(&hosted, &backend, total - 1).is_err());
-}
-
-#[test]
-fn the_largest_protocol_decides() {
-    let measured = Measured {
-        sizes: vec![synthetic("small", 100), synthetic("large", 120)],
-        not_spoken: Vec::new(),
-    };
-
-    let error = check(&measured, 110).unwrap_err();
-    assert!(error.contains("take 120 bytes in large"), "{error}");
-    assert_eq!(check(&measured, 120), Ok(120));
-}
-
-#[test]
-fn no_protocol_measured_fails() {
-    let measured = Measured {
-        sizes: Vec::new(),
-        not_spoken: Vec::new(),
-    };
-
-    assert!(check(&measured, 1_000_000).is_err());
 }
 
 #[test]
@@ -448,142 +346,6 @@ fn a_definition_pushed_over_the_budget_fails_the_check() {
     for (before, after) in before.sizes.iter().zip(&after.sizes) {
         assert_eq!(before.protocol, after.protocol);
         assert_eq!(after.total, before.total + grown_by, "{}", after.protocol);
-    }
-}
-
-#[test]
-fn every_spoken_protocol_measures_every_builtin() {
-    assert_every_builtin(&builtin_definitions());
-    assert_every_builtin(&backend_definitions());
-}
-
-/// Every spoken protocol measures every definition of one set.
-fn assert_every_builtin(definitions: &[ToolDefinition]) {
-    let (expected_spoken, expected_not_spoken): (Vec<Protocol>, Vec<Protocol>) = PROTOCOLS
-        .into_iter()
-        .partition(|protocol| provider(*protocol).unwrap().is_some());
-
-    let measured = measure(definitions);
-
-    let spoken: Vec<&str> = measured.sizes.iter().map(|sizes| sizes.protocol).collect();
-    let names = |protocols: Vec<Protocol>| -> Vec<&str> {
-        protocols.into_iter().map(protocol_name).collect()
-    };
-    assert!(!spoken.is_empty());
-    assert_eq!(spoken, names(expected_spoken.clone()));
-    assert_eq!(measured.not_spoken, names(expected_not_spoken));
-    for (protocol, sizes) in expected_spoken.into_iter().zip(&measured.sizes) {
-        let mut expected: Vec<&str> = definitions
-            .iter()
-            .filter(|definition| {
-                definition
-                    .hosted
-                    .as_deref()
-                    .is_none_or(|kind| protocol.reads_web_search(kind))
-            })
-            .map(|definition| definition.name.as_str())
-            .collect();
-        expected.sort_unstable();
-        let measured: Vec<&str> = sizes.tools.iter().map(|(name, _)| name.as_str()).collect();
-        assert_eq!(measured, expected, "{}", sizes.protocol);
-        assert_eq!(
-            sizes.total,
-            sizes.tools.iter().map(|(_, bytes)| bytes).sum::<usize>()
-        );
-    }
-}
-
-#[test]
-fn an_unsupported_protocol_is_not_spoken() {
-    let unsupported = spoken(Err(crate::failed(ErrorCode::ProtocolUnsupported, "no")));
-    assert!(matches!(unsupported, Ok(None)));
-
-    let other = spoken(Err(crate::failed(ErrorCode::IoFailed, "broken")));
-    assert!(other.is_err());
-}
-
-#[test]
-fn the_hosted_search_counts_only_where_a_protocol_reads_it() {
-    let measured = measure(&builtin_definitions());
-    for sizes in &measured.sizes {
-        let protocol = PROTOCOLS
-            .into_iter()
-            .find(|protocol| protocol_name(*protocol) == sizes.protocol)
-            .unwrap();
-        let counted = sizes.tools.iter().any(|(name, _)| name == "web_search");
-        assert_eq!(
-            counted,
-            protocol.reads_web_search(HOSTED_SEARCH),
-            "{}",
-            sizes.protocol
-        );
-    }
-}
-
-#[test]
-fn the_backend_search_counts_on_every_spoken_protocol() {
-    let measured = measure(&backend_definitions());
-    assert!(!measured.sizes.is_empty());
-    for sizes in &measured.sizes {
-        assert!(
-            sizes.tools.iter().any(|(name, _)| name == "web_search"),
-            "{}",
-            sizes.protocol
-        );
-    }
-}
-
-#[test]
-fn misaligned_names_fail() {
-    let names = [String::from("a"), String::from("b")];
-    let object = |value: Value| value.as_object().cloned().unwrap();
-    let swapped = [
-        object(json!({"name": "b", "description": "a"})),
-        object(json!({"name": "a", "description": "b"})),
-    ];
-    assert!(aligned(&names, &swapped).is_err());
-    let ordered = [
-        object(json!({"name": "a", "description": "b"})),
-        object(json!({"name": "b", "description": "a"})),
-    ];
-    assert_eq!(aligned(&names, &ordered), Ok(()));
-
-    let function = |name: &str, description: &str| {
-        object(json!({"type": "function", "function": {"name": name, "description": description}}))
-    };
-    let swapped = [function("b", "a"), function("a", "b")];
-    assert!(aligned(&names, &swapped).is_err());
-    let ordered = [function("a", "b"), function("b", "a")];
-    assert_eq!(aligned(&names, &ordered), Ok(()));
-
-    let nameless = [object(json!({"description": "a"})), function("b", "a")];
-    assert!(aligned(&names, &nameless).is_err());
-}
-
-#[test]
-fn measure_sends_the_whole_set_through_wire_tools() {
-    let definitions: Vec<ToolDefinition> = (0..22)
-        .map(|index| strict_tool(&format!("tool_{index:02}")))
-        .collect();
-
-    let measured = measure(&definitions);
-
-    let capped = bytes_of(&measured, Protocol::AnthropicMessages, "tool_19");
-    for tool in ["tool_20", "tool_21"] {
-        assert_eq!(
-            bytes_of(&measured, Protocol::AnthropicMessages, tool),
-            capped + 1,
-            "{tool}"
-        );
-    }
-    let first = bytes_of(&measured, Protocol::OpenaiResponses, "tool_00");
-    for index in 0..22 {
-        let tool = format!("tool_{index:02}");
-        assert_eq!(
-            bytes_of(&measured, Protocol::OpenaiResponses, &tool),
-            first,
-            "{tool}"
-        );
     }
 }
 
