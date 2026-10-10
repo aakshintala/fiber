@@ -17,7 +17,7 @@ mod support;
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
@@ -190,15 +190,17 @@ impl Setup {
 struct Terminal {
     main: OwnedFd,
     terminal: fs::File,
+    cols: u16,
+    rows: u16,
 }
 
 impl Terminal {
-    /// A 60x12 terminal.
+    /// A 120x32 terminal.
     fn open() -> Self {
-        Self::sized(60, 12)
+        Self::sized(120, 32)
     }
 
-    /// A `cols` by `rows` terminal, as `open` is 60 by 12.
+    /// A `cols` by `rows` terminal, as `open` is 120 by 32.
     fn sized(cols: u16, rows: u16) -> Self {
         let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
         // Not inherited: a hub `fiber` starts would hold the master open.
@@ -222,7 +224,12 @@ impl Terminal {
             },
         )
         .unwrap();
-        Self { main, terminal }
+        Self {
+            main,
+            terminal,
+            cols,
+            rows,
+        }
     }
 
     fn stdin(&self) -> Stdio {
@@ -267,6 +274,12 @@ struct Run {
     /// One wake per chunk appended; held by one waiter at a time.
     wakes: Arc<Mutex<mpsc::Receiver<()>>>,
     output: Arc<Mutex<Vec<u8>>>,
+    /// The screen grid rebuilt from the output so far, and whether the
+    /// reader reached end of file.
+    screen: Arc<Mutex<Shared>>,
+    /// A resize the reader has not applied to its parser yet, as
+    /// (columns, rows).
+    pending_size: Arc<Mutex<Option<(u16, u16)>>>,
     /// Where the last `read_until` match ended.
     seen: usize,
     deadline: Deadline,
@@ -293,7 +306,7 @@ impl Run {
     /// Spawns `fiber` as `terminal` does, with `env` added to the
     /// child's environment and `args` after the binary.
     fn terminal_full(setup: &Setup, env: &[(&str, &str)], args: &[&str]) -> Self {
-        Self::terminal_full_sized(setup, env, args, 60, 12)
+        Self::terminal_full_sized(setup, env, args, 120, 32)
     }
 
     /// Spawns `fiber` as `terminal_full` does, on a `cols` by `rows`
@@ -314,7 +327,10 @@ impl Run {
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", setup.root.path())
             .env("FIBER_HOME", setup.home())
-            .env("FIBER_TEST_FAKE_KEY", "sk-test");
+            .env("FIBER_TEST_FAKE_KEY", "sk-test")
+            // The grid the harness rebuilds is a fixed dark xterm: the
+            // binary must not read the ambient terminal's kind or theme.
+            .env("TERM", "xterm-256color");
         for (key, value) in env {
             command.env(key, value);
         }
@@ -327,12 +343,51 @@ impl Run {
         let main = fs::File::from(terminal.main);
         let (tx, rx) = mpsc::channel();
         let output = Arc::new(Mutex::new(Vec::new()));
-        let appended = Arc::clone(&output);
-        let dup = main.try_clone().unwrap();
-        fakes::pty::read_to_eof(dup, move |bytes| {
-            appended.lock().unwrap().extend_from_slice(bytes);
-            tx.send(()).unwrap_or(());
-        });
+        let screen = Arc::new(Mutex::new(Shared::default()));
+        let pending_size = Arc::new(Mutex::new(None));
+        {
+            let appended = Arc::clone(&output);
+            let screen = Arc::clone(&screen);
+            let pending_size = Arc::clone(&pending_size);
+            let mut reader = main.try_clone().unwrap();
+            let mut writer = main.try_clone().unwrap();
+            thread::Builder::new()
+                .name("terminal-read".to_owned())
+                .spawn(move || {
+                    // One parser for the whole run: styles, the cursor and
+                    // the alternate screen carry across reads, so a query
+                    // split across two chunks is still answered.
+                    let mut parser = vt100::Parser::new(rows, cols, 0);
+                    let mut pending: Vec<u8> = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    loop {
+                        if let Some((cols, rows)) = pending_size.lock().unwrap().take() {
+                            parser.screen_mut().set_size(rows, cols);
+                        }
+                        match reader.read(&mut buf) {
+                            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => {
+                                let Some(bytes) = buf.get(..n) else { break };
+                                pending.extend_from_slice(bytes);
+                                let replies = query_replies(&mut pending);
+                                // A write that fails means the terminal is
+                                // gone: end quietly, as at end of file.
+                                if !replies.is_empty() && writer.write_all(&replies).is_err() {
+                                    break;
+                                }
+                                parser.process(bytes);
+                                appended.lock().unwrap().extend_from_slice(bytes);
+                                screen.lock().unwrap().grid = snapshot(&parser);
+                                tx.send(()).unwrap_or(());
+                            }
+                        }
+                    }
+                    screen.lock().unwrap().ended = true;
+                    tx.send(()).unwrap_or(());
+                })
+                .unwrap();
+        }
         Self {
             child,
             hub_socket: setup.home().join("run").join("hub"),
@@ -341,9 +396,161 @@ impl Run {
             main,
             wakes: Arc::new(Mutex::new(rx)),
             output,
+            screen,
+            pending_size,
             seen: 0,
             deadline: setup.deadline,
         }
+    }
+}
+
+/// The rebuilt screen the grid waits read: text without styling, the
+/// cursor, and the flags the restore assertions need.
+#[derive(Clone, Debug, Default)]
+struct Grid {
+    contents: String,
+    rows: Vec<String>,
+    cursor: (u16, u16),
+    #[allow(dead_code, reason = "the restore assertions read it from a later task on")]
+    alternate_screen: bool,
+    #[allow(dead_code, reason = "the restore assertions read it from a later task on")]
+    hide_cursor: bool,
+}
+
+/// What the reader shares with the test: the latest grid, and whether
+/// the reader reached end of file.
+#[derive(Clone, Debug, Default)]
+struct Shared {
+    grid: Grid,
+    ended: bool,
+}
+
+/// One snapshot of the parser's screen.
+fn snapshot(parser: &vt100::Parser) -> Grid {
+    let screen = parser.screen();
+    let (_, cols) = screen.size();
+    Grid {
+        contents: screen.contents(),
+        rows: screen.rows(0, cols).collect(),
+        cursor: screen.cursor_position(),
+        alternate_screen: screen.alternate_screen(),
+        hide_cursor: screen.hide_cursor(),
+    }
+}
+
+/// A capability query Fiber emits (`crates/tui/src/term.rs`,
+/// `crates/tui/src/appearance.rs`) and the harness's reply: kitty's
+/// disambiguate flags, a bare device-attributes answer, and a black
+/// background with a dark theme report, so the grid is a fixed dark
+/// xterm whose Esc key arrives as `CSI 27 u`.
+const CAPABILITIES: [(&[u8], &[u8]); 4] = [
+    (b"\x1b[?u", b"\x1b[?1u"),
+    (b"\x1b[c", b"\x1b[?0c"),
+    (b"\x1b]11;?\x1b\\", b"\x1b]11;rgb:0000/0000/0000\x1b\\"),
+    (b"\x1b[?996n", b"\x1b[?997;1n"),
+];
+
+/// How many trailing bytes `pending` keeps for a query split across two
+/// reads: longer than the longest query above.
+const PENDING_KEEP: usize = 16;
+
+/// The replies for every whole query in `pending`, in stream order,
+/// dropping the bytes through each answered query and keeping the tail
+/// for a query still arriving.
+fn query_replies(pending: &mut Vec<u8>) -> Vec<u8> {
+    fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        if needle.is_empty() || haystack.len() < needle.len() {
+            return None;
+        }
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+    let mut replies = Vec::new();
+    loop {
+        let mut first: Option<(usize, usize)> = None;
+        for (at, (query, _)) in CAPABILITIES.iter().enumerate() {
+            if let Some(pos) = find(pending, query)
+                && first.map_or(true, |(best, _)| pos < best)
+            {
+                first = Some((pos, at));
+            }
+        }
+        let Some((pos, at)) = first else { break };
+        replies.extend_from_slice(CAPABILITIES[at].1);
+        pending.drain(..pos + CAPABILITIES[at].0.len());
+    }
+    let drop = pending.len().saturating_sub(PENDING_KEEP);
+    pending.drain(..drop);
+    replies
+}
+
+impl Run {
+    /// The grid rebuilt from the output so far.
+    #[allow(dead_code, reason = "the grid waits use it from the next task on")]
+    fn screen(&self) -> Grid {
+        self.screen.lock().unwrap().grid.clone()
+    }
+
+    /// The grid's text.
+    #[allow(dead_code, reason = "the grid waits use it from the next task on")]
+    fn screen_contents(&self) -> String {
+        self.screen().contents
+    }
+
+    /// The grid's rows, top to bottom, without newlines.
+    #[allow(dead_code, reason = "the grid waits use it from the next task on")]
+    fn screen_rows(&self) -> Vec<String> {
+        self.screen().rows
+    }
+
+    /// The grid's cursor position, as (row, column).
+    #[allow(dead_code, reason = "the grid waits use it from the next task on")]
+    fn cursor_position(&self) -> (u16, u16) {
+        self.screen().cursor
+    }
+
+    /// Waits under one named deadline for the whole wait until the grid
+    /// matches, however many frames arrive. When the terminal ends first
+    /// the panic shows the last grid, so a stall says how far the journey
+    /// got.
+    #[allow(dead_code, reason = "the grid waits use it from the next task on")]
+    fn wait_screen(&self, what: &str, mut matches: impl FnMut(&Grid) -> bool) {
+        let wakes = self.wakes.lock().unwrap();
+        loop {
+            let shared = self.screen.lock().unwrap().clone();
+            if matches(&shared.grid) {
+                return;
+            }
+            if shared.ended {
+                panic!(
+                    "waited until the deadline for {what}; the terminal ended; screen:\n{}",
+                    shared.grid.contents
+                );
+            }
+            if wakes.recv_timeout(self.deadline.left()).is_err() {
+                let contents = self.screen.lock().unwrap().grid.contents.clone();
+                panic!("waited until the deadline for {what}; screen:\n{contents}");
+            }
+        }
+    }
+
+    /// Resizes the terminal to `cols` by `rows`: the parser follows, so
+    /// the grid the waits read draws at the new size.
+    #[allow(dead_code, reason = "the resize journey uses it from a later task on")]
+    fn resize(&mut self, cols: u16, rows: u16) {
+        rustix::termios::tcsetwinsize(
+            &self.main,
+            rustix::termios::Winsize {
+                ws_col: cols,
+                ws_row: rows,
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            },
+        )
+        .unwrap();
+        *self.pending_size.lock().unwrap() = Some((cols, rows));
+        support::kill_pid(self.deadline, self.child.id(), "WINCH").unwrap();
     }
 
     /// Types bytes into the terminal, on a thread bounded by the test's
@@ -679,7 +886,9 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     // width changes rewrites its cells whole, while unchanged cells are
     // never rewritten, so no other word of the line arrives whole.
     run.read_until("10s");
-    run.write(b"\x1b");
+    // With kitty's flags pushed Esc arrives as `CSI 27 u`, never as a
+    // lone byte.
+    run.write(b"\x1b[27u");
     run.read_until("interrupted");
     run.write(b"\x03\x03\r");
     // The turn just ended, so its idle status may still be on its way: the
@@ -926,8 +1135,9 @@ fn a_streaming_ask_shows_its_raw_arguments_until_requested() {
     // the raw text; the scripted test above shows it gone once requested.
     run.read_until("{\"questions\"");
     // The turn stalls mid-arguments: Esc interrupts it, as the stalled
-    // turn test interrupts its stalled reply.
-    run.write(b"\x1b");
+    // turn test interrupts its stalled reply. With kitty's flags pushed
+    // Esc arrives as `CSI 27 u`, never as a lone byte.
+    run.write(b"\x1b[27u");
     run.read_until("interrupted");
     // As above: quitting either exits at once or asks first.
     run.write(b"\x03\x03\r");
