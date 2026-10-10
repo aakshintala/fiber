@@ -1586,6 +1586,41 @@ pub(crate) fn kinds(lines: &[Envelope]) -> Vec<&str> {
     lines.iter().map(|l| l.kind.as_str()).collect()
 }
 
+/// The start of every turn's event kinds: the session opens and the turn
+/// begins. Tests compose it with [`STEP`], a reply segment such as
+/// [`REPLY`], and scenario-specific tails.
+pub(crate) const OPENING: &[&str] = &[
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+];
+
+/// The event kinds opening one model step.
+pub(crate) const STEP: &[&str] = &["step_started"];
+
+/// The event kinds of a reply of one text part, streamed as two
+/// fragments.
+pub(crate) const REPLY: &[&str] = &[
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+];
+
+/// The event kinds closing a turn.
+pub(crate) const ENDED: &[&str] = &["turn_completed"];
+
+/// Asserts the complete, ordered event kinds of `lines`, streamed
+/// fragments included: `parts`, concatenated (`docs/testing.md`, "Event
+/// streams"). Every segment together must name every line; never a
+/// subset.
+pub(crate) fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
+    assert_eq!(kinds(lines), parts.concat());
+}
+
 /// One attempt number per `assistant_message_started`, in order. A start
 /// that follows a failed `assistant_message_completed` in the same step
 /// with no handoff line between is the next attempt at the same request;

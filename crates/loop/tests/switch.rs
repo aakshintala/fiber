@@ -24,7 +24,9 @@ use contract::{Envelope, ErrorCode, ThinkingLevel};
 use fakes::{Scripted, ScriptedProvider};
 use r#loop::{HandoffSettings, Hosted, Model, NO_SWITCH, Prepare, Prepared, Reviewer, Switchable};
 
-use support::{DEADLINE, MODEL, Session, delivery, kinds, model};
+use support::{
+    DEADLINE, ENDED, MODEL, OPENING, REPLY, STEP, Session, assert_kinds, delivery, kinds, model,
+};
 
 const NEW_MODEL: &str = "fake/model-2";
 
@@ -114,25 +116,6 @@ fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
     lines.iter().filter(|line| line.kind == kind).collect()
 }
 
-fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
-    assert_eq!(kinds(lines), parts.concat());
-}
-
-const OPENING: &[&str] = &[
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-];
-const STEP: &[&str] = &["step_started"];
-const REPLY: &[&str] = &[
-    "assistant_message_started",
-    "assistant_message_delta",
-    "assistant_message_delta",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-];
 const REASONING_REPLY: &[&str] = &[
     "assistant_message_started",
     "reasoning_started",
@@ -143,7 +126,6 @@ const REASONING_REPLY: &[&str] = &[
     "usage_recorded",
     "assistant_message_completed",
 ];
-const ENDED: &[&str] = &["turn_completed"];
 const SWITCHED_OPENING: &[&str] = &["model_changed", "preamble_built", "turn_started"];
 
 #[test]

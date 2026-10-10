@@ -38,7 +38,8 @@ use r#loop::{Error, HandoffSettings, Loop, Model, Prepared, Switchable};
 use serde_json::{Map, Value, json};
 
 use support::{
-    DEADLINE, Gate, Script, Session, Tap, TestTool, calls_reply, delivery, kinds, message, steer,
+    DEADLINE, Gate, OPENING, STEP, Script, Session, Tap, TestTool, assert_kinds, calls_reply,
+    delivery, kinds, message, steer,
 };
 
 /// Builds one ask, given the asking call's own id.
@@ -245,12 +246,9 @@ fn declined_by_fiber(line: &Envelope) {
     assert_eq!(line.action_id, None);
 }
 
-const OPENING: &[&str] = &[
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
+/// The first reply's one tool call: the tail after [`support::OPENING`]
+/// and [`support::STEP`] open the turn.
+const FIRST_CALL: &[&str] = &[
     "assistant_message_started",
     "assistant_message_delta",
     "tool_call_arguments_delta",
@@ -259,13 +257,9 @@ const OPENING: &[&str] = &[
     "assistant_message_completed",
 ];
 
-/// Two calls in the first reply.
-const OPENING_TWO: &[&str] = &[
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
+/// The first reply's two tool calls: the tail after [`support::OPENING`]
+/// and [`support::STEP`] open the turn.
+const TWO_CALLS: &[&str] = &[
     "assistant_message_started",
     "assistant_message_delta",
     "tool_call_arguments_delta",
@@ -286,10 +280,6 @@ const DONE: &[&str] = &[
     "assistant_message_completed",
     "turn_completed",
 ];
-
-fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
-    assert_eq!(kinds(lines), parts.concat());
-}
 
 #[test]
 fn a_confirm_is_answered_and_the_ack_follows_its_line() {
@@ -330,6 +320,8 @@ fn a_confirm_is_answered_and_the_ack_follows_its_line() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -395,6 +387,8 @@ fn an_unfit_reply_is_rejected_and_the_interaction_stays_pending() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -450,6 +444,8 @@ fn the_askers_check_rejects_a_reply_and_never_sees_a_decline() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -488,6 +484,8 @@ fn a_reply_naming_another_request_or_a_resolved_one_is_stale() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -510,6 +508,8 @@ fn nobody_answers(mut session: Session, answers: &mpsc::Receiver<Answered>) {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_resolved",
@@ -594,7 +594,13 @@ fn answerable_in(mut session: Session) -> Value {
     let lines = session.lines();
     assert_kinds(
         &lines,
-        &[OPENING, &["tool_call_started", "tool_call_completed"], DONE],
+        &[
+            OPENING,
+            STEP,
+            FIRST_CALL,
+            &["tool_call_started", "tool_call_completed"],
+            DONE,
+        ],
     );
     of_kind(&lines, "tool_call_completed")[0].payload["content"][0]["text"].clone()
 }
@@ -646,6 +652,8 @@ fn close_while_pending_declines_it_and_every_later_ask() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -689,6 +697,8 @@ fn a_cancel_while_pending_declines_it_before_the_call_completes() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -712,6 +722,8 @@ fn a_shutdown_while_pending_declines_it_before_the_call_completes() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -750,6 +762,8 @@ fn the_inbox_closing_while_pending_declines_it() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -794,6 +808,8 @@ fn until_passes(mut session: Session, answers: &mpsc::Receiver<Answered>, at: In
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -916,6 +932,8 @@ fn action_ids_are_written_as_given_or_as_the_call_alone() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -965,11 +983,14 @@ fn two_calls_ask_at_once_and_each_gets_its_own_answer() {
     // Either interleaving is correct, so the one kinds assertion sorts
     // that window before comparing.
     let mut ordered = kinds(&lines);
-    ordered[OPENING_TWO.len() + 4..OPENING_TWO.len() + 8].sort_unstable();
+    let prefix = OPENING.len() + STEP.len() + TWO_CALLS.len();
+    ordered[prefix + 4..prefix + 8].sort_unstable();
     assert_eq!(
         ordered,
         [
-            OPENING_TWO,
+            OPENING,
+            STEP,
+            TWO_CALLS,
             &[
                 "tool_call_started",
                 "tool_call_started",
@@ -1081,7 +1102,9 @@ fn another_calls_deltas_keep_flowing_while_one_is_pending() {
     assert_kinds(
         &lines,
         &[
-            OPENING_TWO,
+            OPENING,
+            STEP,
+            TWO_CALLS,
             &[
                 "tool_call_started",
                 "tool_call_started",
@@ -1194,6 +1217,8 @@ fn other_deliveries_are_admitted_while_a_call_waits() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -1243,6 +1268,8 @@ fn an_ask_after_the_cancel_is_declined_at_once() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_resolved",

@@ -37,7 +37,10 @@ use fakes::clock::FakeClock;
 use r#loop::{Error, Loop};
 use serde_json::{Map, Value, json};
 
-use support::{DEADLINE, Gate, Session, Tap, TestTool, calls_reply, delivery, kinds};
+use support::{
+    DEADLINE, Gate, OPENING, STEP, Session, Tap, TestTool, assert_kinds, calls_reply, delivery,
+    kinds,
+};
 
 /// The idle delay every test but the no-timeout one sets.
 const IDLE: Duration = Duration::from_secs(60);
@@ -355,13 +358,9 @@ fn exit(session: &mut Session, signal: Option<i32>) -> Vec<Envelope> {
     session.events_until("fiber_exited", |line| line.kind == "fiber_exited")
 }
 
-/// One call in the first reply.
-const OPENING: &[&str] = &[
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
+/// The first reply's one tool call: the tail after [`support::OPENING`]
+/// and [`support::STEP`] open the turn.
+const FIRST_CALL: &[&str] = &[
     "assistant_message_started",
     "assistant_message_delta",
     "tool_call_arguments_delta",
@@ -370,13 +369,9 @@ const OPENING: &[&str] = &[
     "assistant_message_completed",
 ];
 
-/// Two calls in the first reply.
-const OPENING_TWO: &[&str] = &[
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
+/// The first reply's two tool calls: the tail after [`support::OPENING`]
+/// and [`support::STEP`] open the turn.
+const TWO_CALLS: &[&str] = &[
     "assistant_message_started",
     "assistant_message_delta",
     "tool_call_arguments_delta",
@@ -398,10 +393,6 @@ const DONE: &[&str] = &[
     "assistant_message_completed",
     "turn_completed",
 ];
-
-fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
-    assert_eq!(kinds(lines), parts.concat());
-}
 
 /// Waits until the step parks at `at`, then advances the clock to 1 ms
 /// before it and checks the step waits again with the form pending, then
@@ -451,6 +442,8 @@ fn the_idle_delay_exits_on_a_form_that_is_the_steps_only_call() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &["tool_call_started", "interaction_requested", "fiber_exited"],
         ],
     );
@@ -486,6 +479,8 @@ fn a_rejected_reply_does_not_move_the_idle_deadline() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &["tool_call_started", "interaction_requested", "fiber_exited"],
         ],
     );
@@ -537,7 +532,7 @@ fn waits_past_the_idle_delay(later: &'static str) {
         "tool_call_completed",
         "tool_call_completed",
     ]);
-    assert_kinds(&lines, &[OPENING_TWO, &middle, DONE]);
+    assert_kinds(&lines, &[OPENING, STEP, TWO_CALLS, &middle, DONE]);
     let requested = of_kind(&lines, "tool_call_requested");
     let completed: Vec<_> = of_kind(&lines, "tool_call_completed")
         .iter()
@@ -589,7 +584,9 @@ fn the_idle_delay_counts_from_when_the_earlier_call_completes() {
     assert_kinds(
         &lines,
         &[
-            OPENING_TWO,
+            OPENING,
+            STEP,
+            TWO_CALLS,
             &[
                 "tool_call_started",
                 "tool_call_started",
@@ -636,6 +633,8 @@ fn a_running_job_keeps_a_pending_form_from_going_idle() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &["tool_call_started", "interaction_requested", "fiber_exited"],
         ],
     );
@@ -666,7 +665,9 @@ fn a_shutdown_leaves_a_form_pending_when_it_is_the_last_call_without_a_result() 
     assert_kinds(
         &lines,
         &[
-            OPENING_TWO,
+            OPENING,
+            STEP,
+            TWO_CALLS,
             &[
                 "tool_call_started",
                 "tool_call_started",
@@ -709,7 +710,9 @@ fn a_shutdown_resolves_a_form_with_a_later_call_without_a_result() {
     assert_kinds(
         &lines,
         &[
-            OPENING_TWO,
+            OPENING,
+            STEP,
+            TWO_CALLS,
             &[
                 "tool_call_started",
                 "tool_call_started",
@@ -749,7 +752,9 @@ fn a_cancel_resolves_a_form_that_is_the_last_call_without_a_result() {
     assert_kinds(
         &lines,
         &[
-            OPENING_TWO,
+            OPENING,
+            STEP,
+            TWO_CALLS,
             &[
                 "tool_call_started",
                 "tool_call_started",
@@ -786,6 +791,8 @@ fn a_cancel_resolves_a_form_that_is_the_steps_only_call() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -827,6 +834,8 @@ fn without_an_idle_delay_a_form_waits_a_day_for_its_answer() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -871,6 +880,8 @@ fn an_ask_that_does_not_suspend_keeps_the_session_past_the_idle_delay() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &[
                 "tool_call_started",
                 "interaction_requested",
@@ -916,6 +927,8 @@ fn a_shutdown_leaves_a_form_that_is_the_steps_only_call_pending() {
         &lines,
         &[
             OPENING,
+            STEP,
+            FIRST_CALL,
             &["tool_call_started", "interaction_requested", "fiber_exited"],
         ],
     );

@@ -33,7 +33,7 @@ use contract::{Envelope, ErrorCode, JobId, RequestId};
 use fakes::clock::FakeClock;
 use fakes::{Scripted, ScriptedProvider, call_usage};
 
-use support::{DEADLINE, Session, Tap, delivery};
+use support::{DEADLINE, ENDED, OPENING, REPLY, STEP, Session, Tap, assert_kinds, delivery};
 
 const MINUTE: Duration = Duration::from_secs(60);
 
@@ -143,15 +143,9 @@ fn assert_refreshes(session: &Session, count: usize) {
     }
 }
 
-fn assert_kinds(lines: &[Envelope], expected: &[&str]) {
-    assert_eq!(
-        lines
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
-        expected
-    );
-}
+/// The switched turn's opening: the model changed, so the preamble is
+/// rebuilt before the turn starts.
+const SWITCHED_OPENING: &[&str] = &["model_changed", "preamble_built", "turn_started"];
 
 /// Each refresh's durable `usage_recorded`, in no turn and no action, and
 /// nothing else after the turn.
@@ -858,24 +852,7 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
     });
     let mut stream = turn_lines;
     stream.extend(switch_lines);
-    assert_kinds(
-        &stream,
-        &[
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "model_changed",
-        ],
-    );
+    assert_kinds(&stream, &[OPENING, STEP, REPLY, ENDED, &["model_changed"]]);
 }
 
 #[test]
@@ -1031,31 +1008,15 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
     assert_kinds(
         &stream,
         &[
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "model_changed",
-            "preamble_built",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "usage_recorded",
-            "usage_recorded",
+            OPENING,
+            STEP,
+            REPLY,
+            ENDED,
+            SWITCHED_OPENING,
+            STEP,
+            REPLY,
+            ENDED,
+            &["usage_recorded", "usage_recorded"],
         ],
     );
 }
