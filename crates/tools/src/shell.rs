@@ -14,7 +14,6 @@ use contract::jobs::Jobs;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Process};
 use contract::tool::{Bound, Cancel, Effects, Output, Tool};
-use rustix::process::Signal;
 use serde_json::{Map, Value, json};
 
 #[path = "shell/background.rs"]
@@ -25,9 +24,6 @@ mod drive;
 mod moved;
 mod process_group;
 mod spawn;
-
-#[path = "shell/groups.rs"]
-mod groups;
 
 #[path = "shell/monitor.rs"]
 mod monitor;
@@ -51,7 +47,6 @@ mod sed;
 
 use classify::classify;
 use command::{Finished, StopKind};
-pub use groups::kill_every_group;
 
 /// The default when the model gives no `timeout_ms`: 10 minutes.
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;
@@ -559,7 +554,7 @@ fn assemble(limit: Limit, finished: Finished) -> Output {
 
 fn observed(status: ExitStatus) -> (Option<i32>, Option<String>, String) {
     if let Some(number) = status.signal() {
-        let name = signal_name(number);
+        let name = support::group::signal_name(number);
         let line = format!("Killed by {name}.");
         return (None, Some(name), line);
     }
@@ -600,47 +595,6 @@ pub(crate) fn deadline_line(deadline_ms: u64) -> String {
         "The monitor's deadline of {deadline_ms} ms passed; start it again if you still need it."
     )
 }
-
-/// The signal's name, such as `SIGKILL`.
-pub(crate) fn signal_name(number: i32) -> String {
-    for (signal, name) in KNOWN {
-        if signal.as_raw() == number {
-            return (*name).to_owned();
-        }
-    }
-    format!("SIG{number}")
-}
-
-const KNOWN: &[(Signal, &str)] = &[
-    (Signal::HUP, "SIGHUP"),
-    (Signal::INT, "SIGINT"),
-    (Signal::QUIT, "SIGQUIT"),
-    (Signal::ILL, "SIGILL"),
-    (Signal::TRAP, "SIGTRAP"),
-    (Signal::ABORT, "SIGABRT"),
-    (Signal::BUS, "SIGBUS"),
-    (Signal::FPE, "SIGFPE"),
-    (Signal::KILL, "SIGKILL"),
-    (Signal::USR1, "SIGUSR1"),
-    (Signal::SEGV, "SIGSEGV"),
-    (Signal::USR2, "SIGUSR2"),
-    (Signal::PIPE, "SIGPIPE"),
-    (Signal::ALARM, "SIGALRM"),
-    (Signal::TERM, "SIGTERM"),
-    (Signal::CHILD, "SIGCHLD"),
-    (Signal::CONT, "SIGCONT"),
-    (Signal::STOP, "SIGSTOP"),
-    (Signal::TSTP, "SIGTSTP"),
-    (Signal::TTIN, "SIGTTIN"),
-    (Signal::TTOU, "SIGTTOU"),
-    (Signal::URG, "SIGURG"),
-    (Signal::XCPU, "SIGXCPU"),
-    (Signal::XFSZ, "SIGXFSZ"),
-    (Signal::VTALARM, "SIGVTALRM"),
-    (Signal::PROF, "SIGPROF"),
-    (Signal::WINCH, "SIGWINCH"),
-    (Signal::SYS, "SIGSYS"),
-];
 
 fn text_of(output: &[u8], line: &str) -> String {
     let mut text = String::from_utf8_lossy(output).into_owned();

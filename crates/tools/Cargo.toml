@@ -6,10 +6,12 @@ license.workspace = true
 publish.workspace = true
 
 # Of Fiber's crates, `tools` depends on `contract` and `net`
-# (docs/architecture.md, "The call rules").
+# (docs/architecture.md, "The call rules"); `support` holds no domain
+# knowledge, so every crate may depend on it.
 [dependencies]
 contract = { path = "../contract" }
 net = { path = "../net" }
+support = { path = "../support" }
 encoding_rs.workspace = true
 grep-regex.workspace = true
 grep-matcher.workspace = true

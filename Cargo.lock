@@ -3223,6 +3223,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "similar",
+ "support",
  "ureq",
 ]
 
