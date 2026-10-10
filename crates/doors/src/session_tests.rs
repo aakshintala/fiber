@@ -1492,8 +1492,22 @@ struct Running {
     release: mpsc::Sender<()>,
 }
 
+/// Stops the session, then expects the loop's inbox to wake with
+/// [`Delivery::Cancelled`]: what the stopper test checks mid-run.
 #[track_caller]
-fn running_shell(check: impl FnOnce(&mpsc::Receiver<Delivery>, &Session) + Send) -> Running {
+fn stop_and_expect_cancel(inbox: &mpsc::Receiver<Delivery>, session: &Session) {
+    (session.stopper())();
+    let delivery = Deadline::after(DEADLINE)
+        .recv(inbox)
+        .expect("the stopper wakes the inbox");
+    assert!(matches!(delivery, Delivery::Cancelled));
+}
+
+/// No mid-run check: the shell runs until the test releases it.
+fn no_check(_: &mpsc::Receiver<Delivery>, _: &Session) {}
+
+#[track_caller]
+fn running_shell(check: fn(&mpsc::Receiver<Delivery>, &Session)) -> Running {
     let opened = open();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (cancelled_tx, cancelled) = mpsc::channel();
@@ -1532,14 +1546,7 @@ fn running_shell(check: impl FnOnce(&mpsc::Receiver<Delivery>, &Session) + Send)
 
 #[test]
 fn the_stopper_cancels_a_running_driver_shell_and_wakes_the_loop() {
-    let running = running_shell(|inbox, session| {
-        // `inbox` is already a `&Receiver`: passed straight through.
-        (session.stopper())();
-        let delivery = Deadline::after(DEADLINE)
-            .recv(inbox)
-            .expect("the stopper wakes the inbox");
-        assert!(matches!(delivery, Delivery::Cancelled));
-    });
+    let running = running_shell(stop_and_expect_cancel);
     Deadline::after(DEADLINE)
         .recv(&running.cancelled)
         .expect("the driver shell saw its cancel");
@@ -1583,7 +1590,7 @@ fn abandon_unregisters_a_driver_shell_that_never_ran() {
 
 #[test]
 fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
-    let running = running_shell(|_, _| {});
+    let running = running_shell(no_check);
     let session = running.opened.session;
     let (done_tx, done) = mpsc::channel();
     let gate = Arc::clone(&session.gate);
@@ -1613,7 +1620,7 @@ fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
 
 #[test]
 fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
-    let running = running_shell(|_, _| {});
+    let running = running_shell(no_check);
     let session = running.opened.session;
     let log = running.opened.log;
     let (done_tx, done) = mpsc::channel();

@@ -783,9 +783,10 @@ fn a_command_runs_once_however_often_the_credential_is_read() {
 fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || tx.send(f()));
-    Deadline::after(std::time::Duration::from_secs(10))
-        .recv(&rx)
-        .unwrap_or_else(|_| panic!("the credential reads did not return in time"))
+    match Deadline::after(std::time::Duration::from_secs(10)).recv(&rx) {
+        Ok(value) => value,
+        Err(_) => panic!("the credential reads did not return in time"),
+    }
 }
 
 #[test]

@@ -159,11 +159,10 @@ fn attached<T>(
     finished: Receiver<(Result<i32, Failure>, T)>,
     operation: &str,
 ) -> (Result<i32, Failure>, T) {
-    Deadline::after(DEADLINE)
-        .recv(&finished)
-        .unwrap_or_else(|_| {
-            panic!("waited {DEADLINE:?} for {operation}");
-        })
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(value) => value,
+        Err(_) => panic!("waited {DEADLINE:?} for {operation}"),
+    }
 }
 
 /// The refusal `attach` returns when nothing accepts: the holder names it,
@@ -580,11 +579,10 @@ fn stand_in(
 #[track_caller]
 fn stood_in(server: (JoinHandle<()>, Receiver<Vec<String>>), operation: &str) -> Vec<String> {
     let (_handle, finished) = server;
-    Deadline::after(DEADLINE)
-        .recv(&finished)
-        .unwrap_or_else(|_| {
-            panic!("waited {DEADLINE:?} for {operation}");
-        })
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(value) => value,
+        Err(_) => panic!("waited {DEADLINE:?} for {operation}"),
+    }
 }
 
 fn accepted(command: &Value, schema_version: u32, session: &SessionId) -> String {

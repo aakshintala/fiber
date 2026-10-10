@@ -171,7 +171,7 @@ fn next(client: &Client) -> Value {
 #[track_caller]
 fn until(client: &Client, mut done: impl FnMut(&Value) -> bool + Send) -> Vec<Value> {
     let stop = AtomicBool::new(false);
-    thread::scope(|scope| {
+    let got = thread::scope(|scope| {
         let (tx, rx) = mpsc::channel();
         let stop = &stop;
         scope.spawn(move || {
@@ -195,10 +195,11 @@ fn until(client: &Client, mut done: impl FnMut(&Value) -> bool + Send) -> Vec<Va
                 }
             }
         });
-        let got = Deadline::after(UNTIL).recv(&rx);
+        let waited = Deadline::after(UNTIL).recv(&rx);
         stop.store(true, Ordering::SeqCst);
-        got.expect("the awaited line arrived within one deadline for the whole wait")
-    })
+        waited
+    });
+    got.expect("the awaited line arrived within one deadline for the whole wait")
 }
 
 fn kind(line: &Value) -> &str {
