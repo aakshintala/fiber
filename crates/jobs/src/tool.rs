@@ -169,7 +169,7 @@ impl JobsTool {
             Err(WriteError::Io(err)) => {
                 let message = format!("Writing to job {id} failed: {err}.");
                 registry::failed(ErrorCode::ToolError, format!("{message}\n"), message)
-            },
+            }
         }
     }
 
@@ -266,11 +266,7 @@ fn answered(text: String, records: Vec<JobRecord>) -> Output {
 }
 
 fn failed(message: String) -> Output {
-    registry::failed(
-        ErrorCode::InvalidArguments,
-        format!("{message}\n"),
-        message,
-    )
+    registry::failed(ErrorCode::InvalidArguments, format!("{message}\n"), message)
 }
 
 #[cfg(test)]

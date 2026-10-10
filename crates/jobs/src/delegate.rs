@@ -225,11 +225,7 @@ impl Tool for DelegateSpawn {
             Ok(child) => child,
             Err(source) => {
                 let message = format!("Starting the delegate failed: {source}.");
-                return crate::registry::failed(
-                    ErrorCode::IoFailed,
-                    message.clone(),
-                    message,
-                );
+                return crate::registry::failed(ErrorCode::IoFailed, message.clone(), message);
             }
         };
         let (started, finish) = self.registry.open_started(

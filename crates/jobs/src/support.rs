@@ -6,11 +6,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use contract::ActionId;
 use contract::clock::Clock;
 use contract::events::{FiberExited, FinalMessage};
 use contract::jobs::{Opening, Stop};
 use contract::shapes::{Tokens, Usage};
-use contract::ActionId;
 use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir};
 

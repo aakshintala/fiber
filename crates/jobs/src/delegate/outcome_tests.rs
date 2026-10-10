@@ -49,8 +49,20 @@ fn termination_beats_the_exit() {
     // the_cap_beats_a_clean_exit_zero. The termination reason wins over
     // whatever the exit carried.
     for (termination, clean, status, expected, code) in [
-        (Termination::Stopped, false, exit(1), Outcome::Cancelled, None),
-        (Termination::Stopped, true, exit(0), Outcome::Cancelled, None),
+        (
+            Termination::Stopped,
+            false,
+            exit(1),
+            Outcome::Cancelled,
+            None,
+        ),
+        (
+            Termination::Stopped,
+            true,
+            exit(0),
+            Outcome::Cancelled,
+            None,
+        ),
         (
             Termination::OutputCap,
             false,

@@ -890,7 +890,9 @@ fn the_watch_is_not_called_again_after_fiber_exited() {
     let dir = TempDir::new("fiber-delegate-rests");
     let fifo = fifo(dir.path(), "release");
     let shell = format!("read _ < '{}'; exit 0", fifo.display());
-    let rig = rig(vec![WatchReply::Exited(vec![fiber_exited_line(1, "Once.")])]);
+    let rig = rig(vec![WatchReply::Exited(vec![fiber_exited_line(
+        1, "Once.",
+    )])]);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&fifo.to_string_lossy());
     let done = rig.start(&shell, BOUND, 1024);
