@@ -7,6 +7,7 @@
 //! `fiber resume <id>` to the session's last reply on screen.
 
 use std::fs;
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 
@@ -26,6 +27,11 @@ pub(crate) const SAMPLED: [Workload; 1] = [Workload {
 /// The last reply's text, which no other screen shows: the attach ends when
 /// the terminal holds it.
 pub(crate) const ATTACH_TAIL: &str = "quokkas";
+
+/// The in-process replay draws at the pty's size: 60 columns by 12 rows
+/// (`pty.rs` sizes its terminal the same).
+const OPEN_WIDTH: u16 = 60;
+const OPEN_HEIGHT: u16 = 12;
 
 /// The reply bytes of one probe or growth turn: about one screenful, a
 /// typical reply. Small replies keep redrawing each reply's markdown fast
@@ -138,14 +144,26 @@ fn wait_listed(ctx: &Ctx<'_>, home: &Home, id: &str, proc: &mut Proc) -> Result<
     }
 }
 
+/// The session's `events.jsonl` path.
+fn log_path(home: &Home, id: &str) -> std::path::PathBuf {
+    log::sessions_dir(&home.home(), &doors::project(&home.workspace()))
+        .join(id)
+        .join("events.jsonl")
+}
+
 /// The session's `events.jsonl` size, read just before its attach.
 fn read_log_bytes(home: &Home, id: &str) -> Result<u64, String> {
-    let path = log::sessions_dir(&home.home(), &doors::project(&home.workspace()))
-        .join(id)
-        .join("events.jsonl");
+    let path = log_path(home, id);
     fs::metadata(&path)
         .map(|found| found.len())
         .map_err(|err| format!("reading {}: {err}", path.display()))
+}
+
+/// The session's `events.jsonl` text, read just after its attach: the log
+/// the in-process stages replay.
+fn read_log_text(home: &Home, id: &str) -> Result<String, String> {
+    let path = log_path(home, id);
+    fs::read_to_string(&path).map_err(|err| format!("reading {}: {err}", path.display()))
 }
 
 /// One attach, untimed: warming whatever the timed ones share. The wait's
@@ -183,10 +201,113 @@ fn sample(
     if let Some(note) = size_note(label, log_bytes) {
         notes.push(note);
     }
-    Ok(vec![(
+    let terminal_ms = took
+        .as_f64()
+        .ok_or("the attach timing is not a number")?;
+    let mut samples = vec![(
         fixture.metric,
         json!({"fixture": label, "log_bytes": log_bytes, "ms": took}),
-    )])
+    )];
+    let (hub_ms, _, _) = hub_replay(ctx, home, id)?;
+    let text = read_log_text(home, id)?;
+    // The bench measures real time on the harness's own clock, as the
+    // live stages do through `ctx.clock`.
+    let clock: Arc<dyn contract::clock::Clock> = Arc::new(crate::run::System);
+    let one = tui::measure_open(&text, OPEN_WIDTH, OPEN_HEIGHT, usize::MAX, Arc::clone(&clock))?;
+    // 4,096 is the loop's HUB_BATCH (`crates/tui/src/event_loop/batch.rs`),
+    // the lines each frame folds while the log streams in.
+    let batched = tui::measure_open(&text, OPEN_WIDTH, OPEN_HEIGHT, 4096, Arc::clone(&clock))?;
+    let dense = tui::measure_open(&text, OPEN_WIDTH, OPEN_HEIGHT, 64, Arc::clone(&clock))?;
+    let ms_of = |took: std::time::Duration| took.as_secs_f64() * 1000.0;
+    // Parsing and folding cost the same at any frame count, so the
+    // single-frame run's hold for every frame stage.
+    samples.extend(stage_rows(
+        label,
+        log_bytes,
+        terminal_ms,
+        hub_ms,
+        ms_of(one.parse),
+        ms_of(one.fold),
+        &[
+            ("frames_1", one.frames, ms_of(one.frame_time)),
+            ("frames_4096", batched.frames, ms_of(batched.frame_time)),
+            ("frames_64", dense.frames, ms_of(dense.frame_time)),
+        ],
+    ));
+    Ok(samples)
+}
+
+/// One `attach_stage_ms` sample per stage: the terminal's spawn-to-tail
+/// time, the hub replay, the replay's parse and fold, and each frame
+/// count's total frame time with its frame count.
+pub(crate) fn stage_rows(
+    label: &str,
+    log_bytes: u64,
+    terminal_ms: f64,
+    hub_ms: f64,
+    parse_ms: f64,
+    fold_ms: f64,
+    frames: &[(&'static str, usize, f64)],
+) -> Samples {
+    let mut rows = vec![
+        (
+            "attach_stage_ms",
+            json!({"fixture": label, "log_bytes": log_bytes, "stage": "terminal", "ms": terminal_ms}),
+        ),
+        (
+            "attach_stage_ms",
+            json!({"fixture": label, "log_bytes": log_bytes, "stage": "hub_replay", "ms": hub_ms}),
+        ),
+        (
+            "attach_stage_ms",
+            json!({"fixture": label, "log_bytes": log_bytes, "stage": "parse", "ms": parse_ms}),
+        ),
+        (
+            "attach_stage_ms",
+            json!({"fixture": label, "log_bytes": log_bytes, "stage": "fold", "ms": fold_ms}),
+        ),
+    ];
+    for (stage, count, ms) in frames {
+        rows.push((
+            "attach_stage_ms",
+            json!({"fixture": label, "log_bytes": log_bytes, "stage": stage, "ms": ms, "frames": count}),
+        ));
+    }
+    rows
+}
+
+/// One `subscribe` at `full` over a raw hub-socket client, from the send
+/// to its acknowledgement: the hub and session read, serialise and socket
+/// half of an attach, with no terminal. Returns the milliseconds and the
+/// lines and bytes read on the way. The line carries the session id, as
+/// the terminal's own subscribe does. The client is dropped, so the
+/// session is idle with no client for the next sample.
+fn hub_replay(ctx: &Ctx<'_>, home: &Home, id: &str) -> Result<(f64, usize, usize), String> {
+    let command = doors::mint("c_");
+    let line = json!({"id": command, "command": "subscribe", "session_id": id, "args": {"level": "full"}})
+        .to_string();
+    let mut client = Client::connect(&home.hub_socket())?;
+    let started = ctx.clock.now();
+    client.send(&line)?;
+    let until = started + READY;
+    let what = "the hub replay subscribe acknowledgement";
+    let (mut lines, mut bytes) = (0usize, 0usize);
+    loop {
+        let got = client.line(ctx.clock, until, what)?;
+        lines = lines.saturating_add(1);
+        // The socket reader parses each line, so the bytes are the
+        // re-serialized line's length.
+        bytes = bytes.saturating_add(serde_json::to_string(&got).map(|s| s.len()).unwrap_or(0));
+        if got.pointer("/payload/command_id") == Some(&json!(command)) {
+            if got.get("kind") != Some(&json!("command_accepted")) {
+                return Err(format!("the hub replay subscribe was not accepted: {got}"));
+            }
+            break;
+        }
+    }
+    let took = ctx.clock.now().saturating_duration_since(started).as_secs_f64() * 1000.0;
+    drop(client);
+    Ok((took, lines, bytes))
 }
 
 /// Samples one fixture: its log generated by the binary under test, then the
