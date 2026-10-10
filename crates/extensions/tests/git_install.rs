@@ -655,7 +655,8 @@ fn a_remove_deletes_the_extension_and_the_dependencies_nothing_else_uses() {
             .is_empty()
     );
     let err = uninstall(&setup.home(), b).unwrap_err();
-    assert!(matches!(err, Error::NotInstalled { .. }));
+    assert!(matches!(err, Error::NothingToRemove { .. }));
+    assert_eq!(err.code(), ErrorCode::ExtensionNotInstalled);
 }
 
 #[test]

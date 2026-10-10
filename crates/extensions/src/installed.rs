@@ -330,10 +330,21 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
             damaged_dir = Some(hit.dir.clone());
             orphan(&left)
         }
-        None => match left.iter().position(|i| i.name == name) {
-            Some(i) => Some(i),
-            None => return Err(Error::NotInstalled { name }),
-        },
+        None => {
+            // Removal deletes `extensions/<slug>/`. A record that names
+            // the extension from a directory left under another layout
+            // does not make that directory exist.
+            let path = home.join("extensions").join(slug(&name)?);
+            match left.iter().position(|i| i.name == name) {
+                Some(i) if present(&path)? => Some(i),
+                _ => {
+                    return Err(Error::NothingToRemove {
+                        name,
+                        dir: path.display().to_string(),
+                    });
+                }
+            }
+        }
     };
     // One orphan cascade over the healthy extensions, whether the one
     // asked for was damaged or healthy.

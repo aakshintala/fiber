@@ -1,6 +1,6 @@
 //! Binary-level test of `fiber extension remove` on a name nothing is
 //! installed under (`docs/extensions.md`, "Installing"): it fails with
-//! `extension_not_installed`, names the extension and the directory it
+//! exit 1, names the extension and the directory it
 //! looked for, and deletes nothing.
 
 #![allow(
@@ -101,8 +101,8 @@ fn removing_a_name_nothing_is_installed_under_fails() {
     let run = setup.extension(&["remove", "muse"]);
     assert_eq!(run.code, Some(1), "{}", run.stderr);
     assert!(!run.stderr.contains("removed"), "{}", run.stderr);
-    assert!(run.stderr.contains("extension_not_installed"), "{}", run.stderr);
-    assert!(run.stderr.contains("`muse`"), "{}", run.stderr);
+    assert!(run.stderr.contains("is not installed"), "{}", run.stderr);
+    assert!(run.stderr.contains("providers/muse"), "{}", run.stderr);
     assert!(run.stderr.contains("extensions/muse"), "{}", run.stderr);
 }
 

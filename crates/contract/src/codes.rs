@@ -69,6 +69,8 @@ codes! {
     ExtensionMissing,
     /// An install names a repository or tag that does not exist.
     ExtensionNotFound,
+    /// `fiber extension remove` names an extension nothing is installed under.
+    ExtensionNotInstalled,
     /// A required extension failed to start.
     ExtensionRequiredFailed,
     /// A repository's approved copy of an extension replaced the personal
