@@ -614,11 +614,22 @@ impl App {
         self.name.as_deref()
     }
 
+    /// The width the draft wraps at: past the input box's stripe and
+    /// gap, except on home, where the home box draws at its own width
+    /// (`docs/tui.md`, "Look", "The input box").
+    pub(crate) fn draft_width(&self) -> u16 {
+        if self.on_home() {
+            self.column_width()
+        } else {
+            crate::surface::inset(self.column_width())
+        }
+    }
+
     /// The input box's rows: the draft's wrapped rows, at most a third of
     /// the screen and at least one.
     pub(crate) fn input_height(&self) -> usize {
         let cap = usize::from(self.screen.height() / 3).max(1);
-        self.draft.rows(self.column_width()).len().min(cap)
+        self.draft.rows(self.draft_width()).len().min(cap)
     }
 
     /// Whether the quit hint shows: armed by a first Ctrl+C, or asking

@@ -376,11 +376,11 @@ fn up_and_down_move_through_a_draft_wrapped_at_the_column_width() {
     let mut app = attached(160, 40);
     let draft: String = std::iter::repeat_n('d', 140).collect();
     type_draft(&mut app, &draft);
-    assert_eq!(app.input().cursor(126).0, 1);
+    assert_eq!(app.input().cursor(app.draft_width()).0, 1);
     app.on_key(Key::Up, now);
-    assert_eq!(app.input().cursor(126).0, 0);
+    assert_eq!(app.input().cursor(app.draft_width()).0, 0);
     app.on_key(Key::Down, now);
-    assert_eq!(app.input().cursor(126).0, 1);
+    assert_eq!(app.input().cursor(app.draft_width()).0, 1);
     assert_eq!(app.input_height(), 2);
 }
 
@@ -470,4 +470,33 @@ fn title_parts_are_left_out_when_empty() {
     assert_eq!(title(true, None, ""), "fiber");
     assert_eq!(title(true, Some("!"), ""), "! · fiber");
     assert_eq!(title(true, Some("!"), "n"), "! n · fiber");
+}
+
+#[test]
+fn the_draft_wraps_at_the_inset_width() {
+    // Attached at 60: the box insets past its stripe and gap, so 55
+    // characters stay on one row and 56 wrap (`docs/tui.md`, "Look",
+    // "The input box").
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = plain(60, 12);
+    for _ in 0..55 {
+        app.on_key(Key::Char('d'), now);
+    }
+    assert_eq!(app.input_height(), 1);
+    app.on_key(Key::Char('d'), now);
+    assert_eq!(app.input_height(), 2);
+}
+
+#[test]
+fn draft_width_is_the_inset_except_on_home() {
+    // The session box wraps past its stripe and gap; the home box draws
+    // at its own width (`docs/tui.md`, "Look", "The input box").
+    assert_eq!(plain(60, 12).draft_width(), 58);
+    assert_eq!(plain(3, 12).draft_width(), 1);
+    assert_eq!(plain(2, 12).draft_width(), 2);
+    let mut home = App::new(PathBuf::from("/w"));
+    home.set_home(launch());
+    home.set_size(60, 12);
+    assert!(home.on_home());
+    assert_eq!(home.draft_width(), 60);
 }

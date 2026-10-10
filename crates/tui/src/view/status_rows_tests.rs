@@ -272,7 +272,7 @@ fn an_empty_row_two_takes_no_row() {
     let rows: Vec<&str> = screen.lines().collect();
     let bottom = rows.len() - 1;
     assert!(rows[bottom].contains("$1.50"), "{}", screen);
-    assert_eq!(rows[bottom - 2], ">", "{}", screen);
+    assert_eq!(rows[bottom - 2], "▌ >", "{}", screen);
 }
 
 /// A `session_status` with billed `cost` and `subscription` spend.
@@ -445,10 +445,10 @@ fn no_narrow_rows_drawn_outside_the_narrow_layout() {
     let screen = crate::view::text(&buf);
     assert!(!screen.contains('▸'), "{screen}");
     assert!(!screen.contains('▾'), "{screen}");
-    assert_eq!(screen.lines().rev().nth(1), Some(">"));
+    assert_eq!(screen.lines().rev().nth(1), Some("▌ >"));
     // The row above the input box is blank inside the column.
     assert_eq!(
-        buf.cell((2, 38))
+        buf.cell((4, 38))
             .map(|cell| cell.symbol().to_owned())
             .as_deref(),
         Some(" ")

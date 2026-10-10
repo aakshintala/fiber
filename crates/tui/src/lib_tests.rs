@@ -489,7 +489,7 @@ fn resize_redraws_at_the_new_size() {
     // resize.
     let shown = crate::view::text(lp.screen.backend().buffer());
     let rows: Vec<&str> = shown.lines().collect();
-    assert_eq!(rows.get(8).copied(), Some("> hi"));
+    assert_eq!(rows.get(8).copied(), Some("▌ > hi"));
     assert!(
         rows.get(9)
             .is_some_and(|row| row.chars().all(|ch| ch == '▀')),
@@ -1037,7 +1037,7 @@ fn the_screen_shows_the_cursor_at_the_draft() {
     feed(&mut lp, vec![Input::Bytes(b"ab\x1b[D".to_vec())]);
     let backend = lp.screen.backend_mut();
     assert!(backend.cursor_visible());
-    backend.assert_cursor_position((3, 10));
+    backend.assert_cursor_position((5, 10));
 }
 
 #[test]
