@@ -155,8 +155,7 @@ fn a_character_split_across_feeds_completes() {
 }
 
 /// `vt100` gives a wide char two cells: the char and a blank
-/// continuation, so `x` lands at column 2. (This assertion changed
-/// with the grid: the old model gave every char one cell.)
+/// continuation, so `x` lands at column 2.
 #[test]
 fn a_wide_char_takes_two_cells() {
     let (mut run, mut terminal) = grid_run(10, 4);

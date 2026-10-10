@@ -522,7 +522,7 @@ pub(crate) struct Run {
     /// The hub's socket, removed when the hub exits.
     hub_socket: PathBuf,
     watchdog: Option<Watchdog>,
-    sessions: Watchdog,
+    sessions: Option<Watchdog>,
     shared: Arc<Mutex<Shared>>,
     writer: Writer,
     reader: Option<Reader>,
@@ -586,7 +586,7 @@ impl Run {
             child: Some(child),
             hub_socket: setup.home().join("run").join("hub"),
             watchdog: Some(watchdog),
-            sessions,
+            sessions: Some(sessions),
             shared,
             writer,
             reader: Some(reader),
@@ -609,7 +609,7 @@ impl Run {
             child: None,
             hub_socket: PathBuf::new(),
             watchdog: None,
-            sessions: Watchdog::matching("no-sessions"),
+            sessions: None,
             shared,
             writer,
             reader: Some(reader),
@@ -805,7 +805,7 @@ impl Run {
         until_gone(self.deadline, &self.hub_socket, "the hub to idle out");
         Exited {
             status: output.status,
-            terminal: self.shared.lock().unwrap().output.clone(),
+            terminal: self.shared.lock().unwrap().output(),
         }
     }
 }
