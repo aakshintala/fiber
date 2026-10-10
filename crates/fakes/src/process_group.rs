@@ -10,6 +10,7 @@
 //! `pgrep`, is waited for under a deadline on the wall clock.
 
 use std::io::{self, Read};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
@@ -397,13 +398,16 @@ const GONE_ARGS: &str = "<gone>";
 const PS_TIMEOUT: &str = "<ps timed out>";
 
 /// Spawns a command line lookup: `program` with `args`, stdio closed but
-/// stdout piped for [`bounded`].
+/// stdout piped for [`bounded`]. Its own process group, so a watchdog or a
+/// group kill for the lookup never reaches the test, and the test's own
+/// group kills never reach the lookup.
 fn spawn_lookup(program: &str, args: &[&str]) -> io::Result<Child> {
     Command::new(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
 }
 

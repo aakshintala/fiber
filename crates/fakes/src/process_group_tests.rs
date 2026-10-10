@@ -696,8 +696,12 @@ fn listed_exit_names_a_second_listing_failure() {
 #[test]
 fn a_stalled_lookup_times_out_and_reaps_the_lookup() {
     // A lookup that never prints: `sleep` ignores stdin, so a null one
-    // still stalls it past the lookup's own deadline.
+    // still stalls it past the lookup's own deadline. Its own process
+    // group, watched: a hung helper still leaves nothing behind, on pass,
+    // on panic, and when the test process dies.
     let child = spawn_lookup("sh", &["-c", "exec sleep 30"]).unwrap();
+    let group = child.id();
+    let watchdog = crate::Watchdog::group(group);
     let pid = child.id();
     let (answered, answer) = mpsc::channel();
     thread::spawn(move || {
@@ -718,6 +722,7 @@ fn a_stalled_lookup_times_out_and_reaps_the_lookup() {
         pids_exit(&[pid], DEADLINE),
         "waited {DEADLINE:?} for the timed-out lookup to be reaped"
     );
+    watchdog.stand_down(DEADLINE);
 }
 
 #[test]
