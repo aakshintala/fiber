@@ -96,6 +96,13 @@ impl LuaProvider {
         })();
         inner.map_err(Self::refresh_error)
     }
+
+    /// Stops this provider's extension: a call waiting in it returns an
+    /// error, a later call fails without running, and a parked
+    /// `host.oauth.callback` closes its listener. Idempotent.
+    pub fn stop(&self) {
+        self.extension.dispose();
+    }
 }
 
 #[cfg(test)]

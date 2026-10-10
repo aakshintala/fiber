@@ -449,8 +449,6 @@ impl LuaExtension {
     }
 
     /// Records the extension's drop: anything routed after this is dropped.
-    /// Test tooling: production drops the extension instead.
-    #[cfg(test)]
     pub(crate) fn dispose(&self) {
         self.hub.dispose(&self.name);
     }

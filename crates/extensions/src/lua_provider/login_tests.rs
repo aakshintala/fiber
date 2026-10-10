@@ -271,3 +271,126 @@ fn a_stored_login_prints_redacted() {
     assert_eq!(format!("{:?}", logged.stored), "StoredLogin(..)");
     assert!(!format!("{:?}", logged).contains("rt"), "{:?}", logged);
 }
+
+/// An attended browser that opens nothing.
+struct AttendedBrowser;
+
+impl crate::oauth::Browser for AttendedBrowser {
+    fn open(&self, _url: &str) {}
+    fn show(&self, _url: &str, _code: &str) {}
+    fn attended(&self) -> bool {
+        true
+    }
+}
+
+/// A free localhost port, bound and released at once.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// An extension whose `credential()` parks in `host.oauth.callback` on `port`.
+fn waiting_provider(
+    name: &str,
+    port: u16,
+    browser: std::sync::Arc<dyn crate::oauth::Browser>,
+) -> (fakes::TempDir, std::sync::Arc<LuaProvider>) {
+    let root = fakes::TempDir::new(name);
+    let home = root.path().join("home");
+    let dir = root.path().join("ext");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("init.lua"),
+        format!(
+            r#"fiber.provider("p", {{
+              credential = {{ timeout = 60000, run = function()
+                local query = host.oauth.callback({{ port = {port} }})
+                return {{ token = "tok", expires_at = 4102444800 }}
+              end }}
+            }})"#
+        ),
+    )
+    .unwrap();
+    let extension = std::sync::Arc::new(
+        LuaExtension::new("ext", dir, home, FakeClock::new()).with_browser(browser),
+    );
+    (root, LuaProvider::new(extension, "p"))
+}
+
+/// Waits until `port` accepts a connection, within the wall deadline: the
+/// callback listener bound, so the login parks there.
+fn await_listening(port: u16) {
+    let deadline = std::time::Duration::from_secs(10);
+    fakes::within("the callback to listen", deadline, move || {
+        loop {
+            if std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).is_ok() {
+                return;
+            }
+            std::thread::yield_now();
+        }
+    });
+}
+
+#[test]
+fn stop_while_a_login_waits_on_its_callback_ends_it_and_frees_the_port() {
+    let port = free_port();
+    let (_root, provider) = waiting_provider(
+        "fiber-provider-login-stop",
+        port,
+        std::sync::Arc::new(AttendedBrowser),
+    );
+    let (done, finished) = std::sync::mpsc::channel();
+    let waiting = std::sync::Arc::clone(&provider);
+    std::thread::spawn(move || {
+        let result = waiting.login("p", None, LoginMethod::Browser);
+        match done.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    await_listening(port);
+    provider.stop();
+    let result = finished
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap_or_else(|_| panic!("the waiting login did not return within 10s"));
+    assert!(result.is_err(), "{result:?}");
+    // The parked callback closed its listener: the port binds again within
+    // the wall deadline.
+    fakes::within(
+        "the callback port to bind again",
+        std::time::Duration::from_secs(10),
+        move || loop {
+            if std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok() {
+                return;
+            }
+            std::thread::yield_now();
+        },
+    );
+}
+
+#[test]
+fn a_login_started_after_stop_runs_no_credential() {
+    let port = free_port();
+    let (_root, provider) = waiting_provider(
+        "fiber-provider-login-after-stop",
+        port,
+        std::sync::Arc::new(AttendedBrowser),
+    );
+    provider.stop();
+    // A second stop is idempotent: no panic, still stopped.
+    provider.stop();
+    // The parked-callback fixture never opens, so a login that ran would
+    // bind `port`: it must stay free.
+    let error = provider.login("p", None, LoginMethod::Browser).unwrap_err();
+    assert!(
+        std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok(),
+        "credential() ran after stop and bound the port"
+    );
+    assert!(
+        !format!("{error:?}").contains("tok"),
+        "the login ran: {error:?}"
+    );
+}
