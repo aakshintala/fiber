@@ -186,7 +186,7 @@ fn keys_spans(b: &Binding) -> Vec<Span<'static>> {
     }
 }
 
-/// Splits styled spans into word tokens, as `wrap` does.
+/// Splits styled spans into word tokens, as `wrap` does. Kept beside `wrap`: one binding row flows two independent columns, which a single `wrap` call cannot express.
 fn toks(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
     let mut out = vec![];
     for s in spans {
@@ -461,7 +461,7 @@ fn small_content(kind: Kind, inner: usize) -> (&'static str, Vec<super::Row>, su
 
 /// A centred panel with a bold accent title, a ✕ at its right end, and its
 /// foot line aligned left with the body.
-fn overlay(title: &str, body: Vec<super::Row>, foot: super::Row, w: usize, inner: usize, hover_x: bool) -> Vec<super::Row> {
+fn overlay(title: &str, body: Vec<super::Row>, foot: super::Row, w: usize, hover_x: bool) -> Vec<super::Row> {
     // The ✕ reads dim, and lighter under the pointer, as `--hover` tints it.
     let x = if hover_x { sp("✕", dim().bg(lift(BI))) } else { sp("✕", dim()) };
     panel::frame(Some(panel::title_row(title, Some(x))), body, Some(foot), w)
@@ -560,7 +560,7 @@ fn frame(c: &Look, cols: usize, rows: usize) -> Vec<Vec<Placed>> {
     let ow = small_w(natural, cols);
     let inner = panel::inner_w(ow);
     let (title, body, foot) = small_content(c.kind, inner);
-    let ov = overlay(title, body, foot, ow, inner, close);
+    let ov = overlay(title, body, foot, ow, close);
     let oh = ov.len();
     let side = if close { 2 } else { 0 };
     let x0 = panel::x_for(ow, cols);
