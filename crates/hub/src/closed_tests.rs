@@ -800,12 +800,13 @@ fn a_relay_ending_while_the_connection_closes_never_waits_on_the_relays_lock() {
         .push((SID.to_owned(), subscribe("c_sub", "full")));
     let mut held = lock(&rig.relays);
     held.close_all();
+    let gone = held.rejoin.closed_flag();
     let (hub, client, relays) = (
         Arc::clone(&rig.hub),
         Arc::clone(&rig.client),
         Arc::clone(&rig.relays),
     );
-    let ending = thread::spawn(move || on_end(SID, true, &hub, &client, &relays));
+    let ending = thread::spawn(move || on_end(SID, true, &hub, &client, &relays, &gone));
     // The lock stays held across the wait: an `on_end` that needs it
     // cannot finish, and the deadline fails the test.
     join(ending, "on_end to skip the check without the relays lock");

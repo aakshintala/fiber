@@ -340,7 +340,10 @@ fn start_relay_thread(
     relays: std::sync::Arc<std::sync::Mutex<Relays>>,
     kept: Kept,
 ) -> std::thread::JoinHandle<()> {
-    let order = crate::connection::lock(&relays).order.clone();
+    let (order, gone) = {
+        let held = crate::connection::lock(&relays);
+        (held.order.clone(), held.rejoin.closed_flag())
+    };
     std::thread::Builder::new()
         .name("hub-relay-test".to_owned())
         .spawn(move || {
@@ -350,6 +353,7 @@ fn start_relay_thread(
                     replayed: Replayed::default(),
                     kept,
                     order,
+                    gone,
                 },
                 session,
                 reader,
@@ -1184,7 +1188,10 @@ fn a_transfer_registers_before_the_session_can_answer() {
             let relays = std::sync::Arc::clone(&relays);
             let replayed = std::sync::Arc::clone(&replayed);
             let kept = std::sync::Arc::clone(&kept);
-            let order = crate::connection::lock(&relays).order.clone();
+            let (order, gone) = {
+                let held = crate::connection::lock(&relays);
+                (held.order.clone(), held.rejoin.closed_flag())
+            };
             move || {
                 relay(
                     RelayThread {
@@ -1192,6 +1199,7 @@ fn a_transfer_registers_before_the_session_can_answer() {
                         replayed,
                         kept,
                         order,
+                        gone,
                     },
                     SID,
                     relay_end,
