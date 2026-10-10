@@ -335,13 +335,7 @@ impl<B: Backend> Loop<B> {
                         Effect::Copy(text) => {
                             clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
                         }
-                        Effect::OpenLink(url) => {
-                            if let Some(argv) = self.open_command.clone() {
-                                let mut argv = argv;
-                                argv.push(url);
-                                drop(clipboard::pipe(argv, String::new()));
-                            }
-                        }
+                        Effect::OpenLink(url) => self.open_link(url),
                         Effect::Send(lines) => self.send(&lines),
                         Effect::Quit => return Some(0),
                         Effect::Exit(lines) => {
@@ -439,6 +433,13 @@ impl<B: Backend> Loop<B> {
             // Its frame already drew: the next moving frame arms the
             // tick again below.
             Input::Tick => self.tick.ack(),
+            Input::Login { ticket, step } => {
+                // Only the waiting ticket's `Open` opens anything: any
+                // other ticket changes nothing and opens nothing.
+                if let Some(url) = self.app.on_login(ticket, step) {
+                    self.open_link(url);
+                }
+            }
             Input::Resize => {
                 if let Some(Ok((width, height))) = self.tty.as_ref().map(term::size) {
                     self.app.set_size(width, height);
@@ -462,6 +463,14 @@ impl<B: Backend> Loop<B> {
         // The model-list read the picker owes, if one is owed.
         if let (Some(refresh), Some(out)) = (self.app.take_reads(), &self.files_out) {
             self.model_reader.ask(refresh, &out.clone());
+        }
+        // The browser login the input asked for, if one waits: its
+        // progress and its end arrive as `Input::Login`.
+        if let Some(out) = self.files_out.clone()
+            && let Some(start) = self.app.take_login_start()
+        {
+            let worker = crate::login_worker::start(start, Arc::clone(&self.clock), out);
+            self.app.login_started(worker);
         }
         self.save_shares();
         // The reconciler's subscribes go out before the frame pages: an
@@ -657,6 +666,7 @@ impl<B: Backend> Loop<B> {
                 | Input::Image { .. }
                 | Input::Viewed { .. }
                 | Input::Models(_)
+                | Input::Login { .. }
                 | Input::Files { .. }) => self.stash.push_back(other),
             }
         }
@@ -699,6 +709,18 @@ impl<B: Backend> Loop<B> {
                 return;
             }
             self.app.wrote(line);
+        }
+    }
+
+    /// Opens `url` with the terminal's opener: `open` or `xdg-open` on the
+    /// terminal's machine. Over SSH or with no opener nothing launches;
+    /// the URL is drawn either way and the flow completes when it is
+    /// visited (`docs/tui.md`, "Links").
+    fn open_link(&self, url: String) {
+        if let Some(argv) = self.open_command.clone() {
+            let mut argv = argv;
+            argv.push(url);
+            drop(clipboard::pipe(argv, String::new()));
         }
     }
 
@@ -806,6 +828,10 @@ impl<B: Backend> Drop for Loop<B> {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "lib_login_tests.rs"]
+mod login_tests;
 
 #[cfg(test)]
 #[path = "lib_image_tests.rs"]

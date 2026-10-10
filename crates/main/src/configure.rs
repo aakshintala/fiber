@@ -240,6 +240,15 @@ impl tui::Configure for Seam {
         login::store(&self.home, name, label, key)
     }
 
+    fn browser_login(
+        &self,
+        name: &str,
+        shown: std::sync::Arc<dyn tui::LoginShow>,
+        clock: std::sync::Arc<dyn contract::clock::Clock>,
+    ) -> std::sync::Arc<dyn tui::BrowserLogin> {
+        login::browser_login(&self.home, name, shown, clock)
+    }
+
     fn themes(&self, workspace: &Path) -> Vec<String> {
         match self.load(workspace) {
             Ok(config) => crate::theme_setting::names(&self.home, &|name| {
