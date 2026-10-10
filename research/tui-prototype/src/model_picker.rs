@@ -389,7 +389,7 @@ fn footer_pairs() -> Vec<(&'static str, &'static str)> {
 
 /// The foot legend: keys bold, labels muted.
 fn footer(inner: usize) -> Row {
-    panel::footer_legend(&footer_pairs(), inner)
+    panel::footer_legend(&footer_pairs())
 }
 
 /// The panel's body at an inner width: controls, dim provider sections with

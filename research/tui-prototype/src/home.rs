@@ -296,9 +296,9 @@ fn picker(p: Picker, cols: usize) -> Vec<super::Row> {
     let w = super::panel::fit_width(natural, 55, cols);
     let inner = super::panel::inner_w(w);
     super::panel::frame(
-        Some(super::panel::title_row(TITLE, None, inner)),
+        Some(super::panel::title_row(TITLE, None)),
         picker_body(p),
-        Some(super::panel::footer_legend(&[("↑↓", "move"), ("enter", "open"), ("esc", "closes")], inner)),
+        Some(super::panel::footer_legend(&[("↑↓", "move"), ("enter", "open"), ("esc", "closes")])),
         w,
     )
 }

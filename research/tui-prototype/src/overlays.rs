@@ -313,7 +313,7 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
     let vis = visible(c.tab, c.query);
     let others = BINDINGS.iter().filter(|b| !b.other.is_empty()).count();
     let mut chrome = vec![
-        panel::title_row("Key map", Some(sp("✕", dim())), inner),
+        panel::title_row("Key map", Some(sp("✕", dim()))),
         row(fit(&[sp("Every binding by area, with its other paths.", dim())], inner)),
         row(fit(
             &[sp(format!("{} actions, {} with other paths", BINDINGS.len(), others), dim())],
@@ -340,7 +340,7 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
         chrome.push(row(fit(&[sp(format!("↑ {off} more · ↓ {rest} more"), dim())], inner)));
     }
     chrome.push(row(vec![]));
-    chrome.push(panel::footer_legend(&[("↑↓", "move"), ("←→", "tabs"), ("esc", "closes")], inner));
+    chrome.push(panel::footer_legend(&[("↑↓", "move"), ("←→", "tabs"), ("esc", "closes")]));
     panel::slab_rows(chrome, cols)
 }
 
@@ -348,7 +348,7 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
 /// a full-width selection bar instead of `· default`.
 fn quit_body(inner: usize) -> Vec<super::Row> {
     let key_w = panel::key_width(&["enter", "c", "esc"]);
-    let mut out = vec![row(fit(&[sp("2 sessions working", dim())], inner)), row(vec![])];
+    let mut out = vec![row(vec![sp("2 sessions working", dim())]), row(vec![])];
     out.extend(panel::bar(panel::choice_row(true, "enter", "leave them running", key_w, inner)));
     out.extend(panel::choice_row(false, "c", "close all", key_w, inner));
     out.extend(panel::choice_row(false, "esc", "stay", key_w, inner));
@@ -412,8 +412,8 @@ fn hl(text: &str, q: &str, base: Style, mark: Style) -> Vec<Span<'static>> {
 /// matches with every hit marked, the first one focused like a choice.
 fn history_body(inner: usize) -> Vec<super::Row> {
     let mut out = vec![
-        row(fit(&[sp("› ", fg(CYAN)), sp(QUERY, bold()), sp("█", dim())], inner)),
-        row(fit(&[sp(format!("{} matches · newest first", PROMPTS.len()), dim())], inner)),
+        row(vec![sp("› ", fg(CYAN)), sp(QUERY, bold()), sp("█", dim())]),
+        row(vec![sp(format!("{} matches · newest first", PROMPTS.len()), dim())]),
     ];
     for (i, (prompt, from)) in PROMPTS.iter().enumerate() {
         let mut spans = hl(prompt, QUERY, Style::new(), bold());
@@ -450,10 +450,10 @@ fn close_mouse_body(inner: usize) -> Vec<super::Row> {
 /// except the quit question, whose body already lists every key.
 fn small_content(kind: Kind, inner: usize) -> (&'static str, Vec<super::Row>, super::Row) {
     match kind {
-        Kind::Quit => ("Quit", quit_body(inner), panel::footer_row("click a choice · they keep running meanwhile", inner)),
-        Kind::Delete => ("Delete session", delete_body(inner), panel::footer_legend(&[("enter", "deletes"), ("esc", "keeps it")], inner)),
-        Kind::History => ("Prompt history", history_body(inner), panel::footer_legend(&[("enter", "recalls"), ("esc", "closes")], inner)),
-        Kind::Notice => ("Notice · key_clash", notice_body(inner), panel::footer_legend(&[("esc", "closes")], inner)),
+        Kind::Quit => ("Quit", quit_body(inner), panel::footer_row("click a choice · they keep running meanwhile")),
+        Kind::Delete => ("Delete session", delete_body(inner), panel::footer_legend(&[("enter", "deletes"), ("esc", "keeps it")])),
+        Kind::History => ("Prompt history", history_body(inner), panel::footer_legend(&[("enter", "recalls"), ("esc", "closes")])),
+        Kind::Notice => ("Notice · key_clash", notice_body(inner), panel::footer_legend(&[("esc", "closes")])),
         Kind::CloseMouse => ("Key map", close_mouse_body(inner), row(fit(&[sp("click ✕ or outside", bold()), sp(" to close", dim())], inner))),
         Kind::Keymap => unreachable!("the key map docks"),
     }
@@ -464,7 +464,7 @@ fn small_content(kind: Kind, inner: usize) -> (&'static str, Vec<super::Row>, su
 fn overlay(title: &str, body: Vec<super::Row>, foot: super::Row, w: usize, inner: usize, hover_x: bool) -> Vec<super::Row> {
     // The ✕ reads dim, and lighter under the pointer, as `--hover` tints it.
     let x = if hover_x { sp("✕", dim().bg(lift(BI))) } else { sp("✕", dim()) };
-    panel::frame(Some(panel::title_row(title, Some(x), inner)), body, Some(foot), w)
+    panel::frame(Some(panel::title_row(title, Some(x))), body, Some(foot), w)
 }
 
 /// A small panel's width: what its unwrapped content needs, wrapped at a
@@ -850,6 +850,59 @@ mod tests {
         assert_eq!(clamp_scroll(1, 11, 10), 1);
         assert_eq!(clamp_scroll(10, 42, 29), 10);
         assert_eq!(clamp_scroll(30, 42, 29), 13);
+    }
+
+    /// The panel's (margin, width) from its ▄ edge row: a run shorter than
+    /// the screen, so the backdrop's full-width edges never match.
+    fn panel_span(c: &Look, cols: usize, rows: usize) -> (usize, usize) {
+        let t = text(c, cols, rows);
+        for l in t.split('\n') {
+            let cells: Vec<char> = l.chars().collect();
+            let mut i = 0;
+            while i < cells.len() {
+                if cells[i] == '\u{2584}' {
+                    let mut w = 0;
+                    while i + w < cells.len() && cells[i + w] == '\u{2584}' {
+                        w += 1;
+                    }
+                    if w >= 20 {
+                        return (i, w);
+                    }
+                    i += w;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        panic!("no panel edge run");
+    }
+
+    #[test]
+    fn short_overlays_shrink_to_content_and_sit_centred() {
+        for name in ["quit", "delete", "history"] {
+            let (x0, w) = panel_span(&parse(name).unwrap(), 160, 48);
+            assert!(x0 > 0, "{name} flush left");
+            assert!(w < 76, "{name} did not shrink to its content");
+            let rest = 160 - (x0 + w);
+            assert!(rest == x0 || rest == x0 + 1, "{name} off-centre");
+        }
+        // Long text fills to the cap instead.
+        for name in ["notice", "close-mouse"] {
+            let (x0, w) = panel_span(&parse(name).unwrap(), 160, 48);
+            assert_eq!(w, 76, "{name} should fill to the cap");
+            assert!(x0 > 0, "{name} flush left");
+        }
+    }
+
+    #[test]
+    fn panel_widths_hit_min_and_dock_past_max() {
+        // Content sizes the panel between the clamps: quit needs 49.
+        assert_eq!(panel_span(&parse("quit").unwrap(), 200, 48).1, 49);
+        // A tiny screen wins over every clamp, even MIN.
+        assert_eq!(panel_span(&parse("quit").unwrap(), 30, 20).1, 30);
+        // The docked key map spans its area uncapped; MAX binds only
+        // content-sized panels (see panel's width table).
+        assert_eq!(panel_span(&parse("keymap").unwrap(), 200, 48), (0, 200));
     }
 
     #[test]

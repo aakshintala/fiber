@@ -5,7 +5,7 @@
 //! edge below, a raised surface, every content row opened by a ▌ stripe.
 //! No new frame style lives here; surfaces that need one say so in the PR.
 
-use super::{BI, BLUE, Row, bold, dim, fg, fit, row, slab, sp, t, width};
+use super::{BI, BLUE, Row, bold, dim, fg, fit, row, slab, sp, t, width, wrap_rows};
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
@@ -55,7 +55,10 @@ pub(crate) fn key_width(keys: &[&str]) -> usize {
 
 /// A panel's title row: the title bold in the accent, an optional right end
 /// (a ✕, a count) dim. Content coordinates: the frame adds the stripe.
-pub(crate) fn title_row(title: &str, right: Option<Span<'static>>, inner: usize) -> Row {
+/// A panel's title row: the title bold in the accent, an optional right end
+/// (a cross, a count) dim. Content coordinates: the frame fits and stripes.
+/// Callers measuring content width read true widths, never padding.
+pub(crate) fn title_row(title: &str, right: Option<Span<'static>>) -> Row {
     let mut spans = vec![sp(title, bold().patch(fg(BLUE)))];
     match right {
         Some(r) => {
@@ -64,65 +67,13 @@ pub(crate) fn title_row(title: &str, right: Option<Span<'static>>, inner: usize)
         }
         None => spans.push(sp("", Style::new())),
     }
-    row(fit(&spans, inner))
+    row(spans)
 }
 
 /// A hint line: dim, aligned left with the body, never centred, and never
 /// repeating a choice the body lists.
-pub(crate) fn footer_row(hint: &str, inner: usize) -> Row {
-    row(fit(&[sp(hint, dim())], inner))
-}
-
-/// Flows description tokens after an unbreakable prefix, hanging further
-/// lines on the indent. Unlike `wrap`, the prefix (a key) never splits.
-fn flow(
-    prefix: Vec<Span<'static>>,
-    desc: Vec<Span<'static>>,
-    indent: Vec<Span<'static>>,
-    inner: usize,
-) -> Vec<Row> {
-    let mut toks: Vec<Span<'static>> = vec![];
-    for s in desc {
-        let mut cur = String::new();
-        for ch in s.content.chars() {
-            if ch == ' ' && !cur.is_empty() && !cur.ends_with(' ') {
-                toks.push(Span::styled(std::mem::take(&mut cur), s.style));
-            }
-            cur.push(ch);
-        }
-        if !cur.is_empty() {
-            toks.push(Span::styled(cur, s.style));
-        }
-    }
-    let mut out = vec![];
-    let mut line = prefix;
-    let mut n = width(&line);
-    let mut any = false;
-    for t in toks {
-        let tw = t.content.width();
-        if any && n + tw > inner {
-            out.push(row(line));
-            n = width(&indent);
-            line = indent.clone();
-            let tt = t.content.trim_start().to_string();
-            n += tt.width();
-            line.push(Span::styled(tt, t.style));
-        } else {
-            n += tw;
-            line.push(t);
-        }
-        any = true;
-    }
-    out.push(row(line));
-    let pre = width(&indent) as u16;
-    out.into_iter()
-        .enumerate()
-        .map(|(i, r)| Row {
-            cont: i > 0,
-            pre: if i > 0 { pre } else { 0 },
-            ..r
-        })
-        .collect()
+pub(crate) fn footer_row(hint: &str) -> Row {
+    row(vec![sp(hint, dim())])
 }
 
 /// One choice: the focused one carries the gutter marker and a bold key.
@@ -147,7 +98,7 @@ pub(crate) fn choice_row(
     let hang = 2 + key_w + 2;
     let first = vec![marker, key, sp("  ", Style::new())];
     let rest = vec![sp(" ".repeat(hang), Style::new())];
-    flow(first, vec![sp(desc, dim())], rest, inner)
+    wrap_rows(vec![sp(desc, dim())], inner, first, rest)
 }
 
 /// A full-width selection bar over rows: the accent behind, dark ink over
@@ -167,7 +118,7 @@ pub(crate) fn bar(rows: Vec<Row>) -> Vec<Row> {
 }
 
 /// A footer legend: keys bold, labels muted, `·` between items.
-pub(crate) fn footer_legend(items: &[(&str, &str)], inner: usize) -> Row {
+pub(crate) fn footer_legend(items: &[(&str, &str)]) -> Row {
     let mut spans = vec![];
     for (i, (key, label)) in items.iter().enumerate() {
         if i > 0 {
@@ -179,7 +130,7 @@ pub(crate) fn footer_legend(items: &[(&str, &str)], inner: usize) -> Row {
         }
         spans.push(sp(*label, dim()));
     }
-    row(fit(&spans, inner))
+    row(spans)
 }
 
 /// Opens a content row with the stripe and its padding. Blank rows stay
@@ -279,14 +230,14 @@ mod tests {
         frame(
             title,
             vec![row(vec![sp("body line", Style::new())])],
-            Some(footer_row("a hint", inner_w(48))),
+            Some(footer_row("a hint")),
             48,
         )
     }
 
     #[test]
     fn the_frame_is_the_input_box_idiom() {
-        let rows = demo(Some(title_row("Title", None, inner_w(48))));
+        let rows = demo(Some(title_row("Title", None)));
         let buf = buffer(&rows, 48);
         // A ▄ edge above, a ▀ edge below, in the surface colour.
         for x in 0..48 {
@@ -306,7 +257,7 @@ mod tests {
 
     #[test]
     fn padding_keeps_text_off_every_edge() {
-        let rows = demo(Some(title_row("Title", None, inner_w(48))));
+        let rows = demo(Some(title_row("Title", None)));
         let t = text(&rows);
         let lines: Vec<&str> = t.split('\n').collect();
         // A blank row after the title and before the footer.
@@ -359,7 +310,7 @@ mod tests {
     #[test]
     fn titles_are_bold_accent_subtitles_are_not() {
         let inner = inner_w(48);
-        let title = title_row("Key map", Some(sp("✕", dim())), inner);
+        let title = title_row("Key map", Some(sp("✕", dim())));
         assert!(title.spans[0].style.add_modifier.contains(Modifier::BOLD));
         assert_eq!(title.spans[0].style.fg, Some(BLUE));
         // Section headers dim too; the pickers assert their own dim sections.
@@ -386,6 +337,19 @@ mod tests {
     }
 
     #[test]
+    fn long_choices_wrap_onto_the_hanging_indent() {
+        let rows = choice_row(false, "enter", "leave them running while the turn winds down", 5, 30);
+        assert!(rows.len() > 1, "nothing wrapped");
+        assert!(!rows[0].cont);
+        for r in &rows[1..] {
+            assert!(r.cont, "continuation not marked for copy");
+            assert_eq!(r.pre, (2 + 5 + 2) as u16, "hanging indent drifted");
+        }
+        let t = text(&rows);
+        assert!(t.contains("leave them running"), "first line lost the start");
+    }
+
+    #[test]
     fn the_bar_is_full_width_accent_with_dark_ink() {
         let rows = bar(choice_row(true, "enter", "leave them running", 5, 40));
         for r in &rows {
@@ -401,7 +365,7 @@ mod tests {
 
     #[test]
     fn the_legend_pairs_bold_keys_with_muted_labels() {
-        let f = footer_legend(&[("↑↓", "move"), ("esc", "closes")], 40);
+        let f = footer_legend(&[("↑↓", "move"), ("esc", "closes")]);
         let keys: Vec<&Span> = f
             .spans
             .iter()
@@ -421,7 +385,7 @@ mod tests {
 
     #[test]
     fn the_footer_aligns_left_with_the_body() {
-        let rows = demo(Some(title_row("Title", None, inner_w(48))));
+        let rows = demo(Some(title_row("Title", None)));
         let foot = rows.iter().find(|r| plain(r).contains("a hint")).unwrap();
         let t = plain(foot);
         assert!(t.starts_with("▌  a hint"), "centred or flush: {t:?}");
@@ -451,7 +415,7 @@ mod tests {
     #[test]
     fn tiny_terminals_clamp_without_panicking() {
         let rows = frame(
-            Some(title_row("Key map", None, inner_w(MIN_W))),
+            Some(title_row("Key map", None)),
             choice_row(false, "esc", "stay", 5, inner_w(MIN_W)),
             None,
             width_for(200, 30),
