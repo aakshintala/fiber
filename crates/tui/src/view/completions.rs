@@ -31,11 +31,11 @@ fn dim_row(text: String) -> Row {
     }
 }
 
-/// The range line for a list longer than the window: where the rows shown
-/// sit, with what hides above in front once it has scrolled. `None` when
-/// the whole list shows.
+/// The range line for the entries actually drawn: where the rows shown
+/// sit, with what hides above in front once it has scrolled. `None`
+/// when every match shows.
 fn range_text(start: usize, shown: usize, total: usize) -> Option<String> {
-    if total <= slash::SHOWN {
+    if shown >= total {
         return None;
     }
     let end = start.saturating_add(shown).min(total);
@@ -180,6 +180,24 @@ fn slash_row(row: &slash::Row, query: &str, name_w: usize, room: usize, focused:
     }
 }
 
+/// The slice of `len` entries around `selected` that fits `fit` body
+/// rows: the window's start and its length. At least one row while
+/// entries show, so the selection stays visible and exactly one row
+/// bars. Callers keep a row for a trailing range line out of `fit`
+/// first, where one rides along.
+pub(super) fn window(selected: usize, len: usize, fit: usize) -> (usize, usize) {
+    if len == 0 {
+        return (0, 0);
+    }
+    let take = fit.min(len).max(1);
+    let start = selected
+        .min(len.saturating_sub(1))
+        .saturating_add(1)
+        .saturating_sub(take)
+        .min(len.saturating_sub(take));
+    (start, take)
+}
+
 /// One `@` row: the gutter and the path in `accent`, cut from the left
 /// when long, with the match still shown bold. The focused row sits on
 /// the bar.
@@ -208,50 +226,70 @@ fn file_row(path: &str, query: &str, room: usize, focused: bool) -> Row {
     }
 }
 
-/// The overlay body for `completions` at `room` content columns: the
-/// windowed entries with the focused one barred, then the range line
-/// while the list does not fit. A message kind is its one dim row with
-/// no bar.
-fn body(completions: &Completions, room: usize) -> Vec<Row> {
-    let mut rows = match &completions.rows {
+/// The overlay body for `completions` at `room` content columns and
+/// `fit` body rows: the entries that fit around the focused one, with
+/// exactly one barred while entries show, then the range line over the
+/// entries actually drawn. A message kind is its one dim row with no
+/// bar.
+fn body(completions: &Completions, room: usize, fit: usize) -> Vec<Row> {
+    let selected = completions.selected.unwrap_or(0);
+    let rows = match &completions.rows {
         Rows::Slash(entries) => {
             let name_w = entries
                 .iter()
                 .map(|row| cells(&row.name))
                 .max()
                 .unwrap_or(0);
-            entries
+            // While matches hide, one body row stays for the range.
+            let cap = entries.len().min(fit);
+            let fit = fit.saturating_sub(usize::from(completions.total > cap));
+            let (at, take) = window(selected, entries.len(), fit);
+            let mut rows: Vec<Row> = entries
                 .iter()
+                .skip(at)
+                .take(take)
                 .enumerate()
-                .map(|(at, row)| {
+                .map(|(n, row)| {
                     slash_row(
                         row,
                         &completions.query,
                         name_w,
                         room,
-                        completions.selected == Some(at),
+                        Some(at + n) == completions.selected,
                     )
                 })
-                .collect()
+                .collect();
+            if let Some(range) = range_text(completions.start + at, rows.len(), completions.total) {
+                rows.push(dim_row(range));
+            }
+            rows
         }
-        Rows::Files(paths) => paths
-            .iter()
-            .enumerate()
-            .map(|(at, path)| {
-                file_row(
-                    path,
-                    &completions.query,
-                    room,
-                    completions.selected == Some(at),
-                )
-            })
-            .collect(),
+        Rows::Files(paths) => {
+            let cap = paths.len().min(fit);
+            let fit = fit.saturating_sub(usize::from(completions.total > cap));
+            let (at, take) = window(selected, paths.len(), fit);
+            let mut rows: Vec<Row> = paths
+                .iter()
+                .skip(at)
+                .take(take)
+                .enumerate()
+                .map(|(n, path)| {
+                    file_row(
+                        path,
+                        &completions.query,
+                        room,
+                        Some(at + n) == completions.selected,
+                    )
+                })
+                .collect();
+            if let Some(range) = range_text(completions.start + at, rows.len(), completions.total) {
+                rows.push(dim_row(range));
+            }
+            rows
+        }
         Rows::Message(text) => vec![dim_row(text.clone())],
         Rows::Search(_) => Vec::new(),
     };
-    if let Some(range) = range_text(completions.start, rows.len(), completions.total) {
-        rows.push(dim_row(range));
-    }
     rows
 }
 
@@ -271,12 +309,15 @@ pub(super) fn draw(
         return Rect::new(area.x, area.y, 0, 0);
     }
     // The content wraps at the preferred width first: rows are built
-    // once at what fits, and the frame shrinks to what they need.
+    // once at what fits, and the frame shrinks to what they need. The
+    // body holds what fits above the chrome: two edges and two pad
+    // rows, with no title and no footer.
     let room = usize::from(PREFER.saturating_sub(4)).min(usize::from(area.width.saturating_sub(4)));
+    let fit = usize::from(area.height.saturating_sub(4));
     let framed = overlay::Overlay {
         title: None,
         close: None,
-        body: body(completions, room),
+        body: body(completions, room, fit),
         footer: None,
         prefer: PREFER,
     };

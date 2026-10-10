@@ -436,6 +436,13 @@ fn range_text_counts_bindings_on_both_sides() {
         range_text(3, 8, 40),
         Some("↑ 3 above · 4–11 of 40 · ↓ 29 more".to_owned())
     );
+    // Fewer drawn than matched, however many fit: the counts follow
+    // the entries actually drawn.
+    assert_eq!(range_text(0, 7, 8), Some("1–7 of 8 · ↓ 1 more".to_owned()));
+    assert_eq!(
+        range_text(3, 3, 23),
+        Some("↑ 3 above · 4–6 of 23 · ↓ 17 more".to_owned())
+    );
 }
 
 #[test]
@@ -486,4 +493,141 @@ fn match_in_prefers_the_file_name_then_the_path() {
     assert_eq!(match_in("src/main.rs", "sr"), Some(0..2));
     assert_eq!(match_in("src/main.rs", "zzz"), None);
     assert_eq!(match_in("src/main.rs", ""), None);
+}
+
+/// Eight windowed `/` rows named `n0` to `n7`.
+fn windowed() -> Vec<crate::slash::Row> {
+    (0..8)
+        .map(|n| crate::slash::Row {
+            name: format!("n{n}"),
+            description: format!("Does n{n}."),
+            hint: None,
+            tag: "skill".to_owned(),
+        })
+        .collect()
+}
+
+/// A `/` panel of `total` matches with the first eight windowed, the
+/// selection on `selected`.
+fn panel(total: usize, selected: usize) -> crate::completion_rows::Completions {
+    crate::completion_rows::Completions {
+        selected: Some(selected),
+        rows: crate::completion_rows::Rows::Slash(windowed()),
+        start: 0,
+        total,
+        query: String::new(),
+    }
+}
+
+/// The body rows as text with whether each sits on the bar.
+fn texts(rows: &[super::Row]) -> Vec<(String, bool)> {
+    rows.iter()
+        .map(|row| {
+            let mut text: String = row.spans.iter().map(|span| span.content.as_ref()).collect();
+            for span in &row.right {
+                text.push_str(span.content.as_ref());
+            }
+            (text, row.barred)
+        })
+        .collect()
+}
+
+/// The fit window keeps the selection visible with exactly one bar,
+/// and the range counts the entries actually drawn.
+#[test]
+fn fit_windows_around_the_selection_with_exactly_one_bar() {
+    let bars = |drawn: &[(String, bool)]| drawn.iter().filter(|(_, barred)| *barred).count();
+    // Nine body rows hold eight entries and the range.
+    let drawn = texts(&super::body(&panel(40, 5), 60, 9));
+    assert_eq!(drawn.len(), 9);
+    assert_eq!(bars(&drawn), 1, "{drawn:?}");
+    assert!(drawn[5].0.contains("n5") && drawn[5].1, "{drawn:?}");
+    assert!(drawn[8].0.contains("1–8 of 40 · ↓ 32 more"), "{drawn:?}");
+    // Eight hold seven entries: the range keeps its row.
+    let drawn = texts(&super::body(&panel(40, 5), 60, 8));
+    assert_eq!(drawn.len(), 8);
+    assert_eq!(bars(&drawn), 1, "{drawn:?}");
+    assert!(drawn[5].0.contains("n5") && drawn[5].1, "{drawn:?}");
+    assert!(drawn[7].0.contains("1–7 of 40 · ↓ 33 more"), "{drawn:?}");
+    // Seven hold six, still around the selection.
+    let drawn = texts(&super::body(&panel(40, 5), 60, 7));
+    assert_eq!(drawn.len(), 7);
+    assert_eq!(bars(&drawn), 1, "{drawn:?}");
+    assert!(drawn[5].0.contains("n5") && drawn[5].1, "{drawn:?}");
+    assert!(drawn[6].0.contains("1–6 of 40 · ↓ 34 more"), "{drawn:?}");
+    // Room for one: the selection alone, counted where it sits.
+    let drawn = texts(&super::body(&panel(40, 5), 60, 1));
+    assert_eq!(drawn.len(), 2);
+    assert!(drawn[0].0.contains("n5") && drawn[0].1, "{drawn:?}");
+    assert!(
+        drawn[1].0.contains("↑ 5 above · 6–6 of 40 · ↓ 34 more"),
+        "{drawn:?}"
+    );
+    // No room: still the selection alone; the frame clips the range.
+    let floored = texts(&super::body(&panel(40, 5), 60, 0));
+    assert_eq!(floored, drawn);
+    // All matches fit: every entry, no range.
+    let drawn = texts(&super::body(&panel(8, 0), 60, 8));
+    assert_eq!(drawn.len(), 8);
+    assert!(drawn[0].1, "{drawn:?}");
+    assert!(
+        drawn.iter().all(|(text, _)| !text.contains(" of ")),
+        "{drawn:?}"
+    );
+    // One match hides: the range shows over seven entries.
+    let drawn = texts(&super::body(&panel(9, 0), 60, 8));
+    assert_eq!(drawn.len(), 8);
+    assert!(drawn[7].0.contains("1–7 of 9 · ↓ 2 more"), "{drawn:?}");
+}
+
+/// A short conversation with a long `/` list: the eleventh match stays
+/// barred, counted of the whole list.
+#[test]
+fn short_conversation_slash_keeps_its_selection_barred() {
+    let mut app = forty();
+    app.set_size(80, 12);
+    type_text(&mut app, "/");
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..10 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    let buf = buffer(&app, 80, 12);
+    let shown = screen(&app, 80, 12);
+    let bars = barred(&buf);
+    assert_eq!(bars.len(), 1, "{shown}");
+    assert!(row_text(&buf, bars[0]).contains("rules"), "{shown}");
+    assert!(shown.contains("of 40"), "{shown}");
+}
+
+/// A short conversation with an `@` list: the third path stays barred,
+/// counted of its list.
+#[test]
+fn short_at_keeps_its_selection_barred() {
+    let mut app = attached(80, 12);
+    type_text(&mut app, "@s");
+    app.on_files(
+        app.generation(),
+        Ok(vec![
+            "sa.rs".to_owned(),
+            "sb.rs".to_owned(),
+            "sc.rs".to_owned(),
+            "sd.rs".to_owned(),
+            "se.rs".to_owned(),
+            "sf.rs".to_owned(),
+            "sg.rs".to_owned(),
+            "sh.rs".to_owned(),
+            "si.rs".to_owned(),
+            "sj.rs".to_owned(),
+        ]),
+    );
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..2 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    let buf = buffer(&app, 80, 12);
+    let shown = screen(&app, 80, 12);
+    let bars = barred(&buf);
+    assert_eq!(bars.len(), 1, "{shown}");
+    assert!(row_text(&buf, bars[0]).contains("sc.rs"), "{shown}");
+    assert!(shown.contains("of 10"), "{shown}");
 }

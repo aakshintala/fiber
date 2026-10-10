@@ -439,8 +439,15 @@ pub(super) fn render(
             .saturating_sub(visible.saturating_sub(1))
             .min(items.len().saturating_sub(visible));
         let end = start.saturating_add(visible).min(items.len());
-        if let Some(window) = items.get(start..end) {
-            draw_picker(window, start, *selected, area, buf, &mut targets);
+        // Fit the window to the body rows, keeping the selection
+        // visible: the chrome is two edges, two pad rows, the title
+        // and its gap, and the footer's gap and row.
+        let room = usize::from(area.height.saturating_sub(8));
+        let len = end.saturating_sub(start);
+        let (off, take) = completions::window(selected.saturating_sub(start), len, room);
+        let at = start.saturating_add(off);
+        if let Some(window) = items.get(at..at.saturating_add(take)) {
+            draw_picker(window, at, *selected, area, buf, &mut targets);
         }
     }
     // The completion panel above the box, in the shared frame centred

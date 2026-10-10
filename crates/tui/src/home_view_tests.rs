@@ -1541,3 +1541,75 @@ fn clicking_a_picker_row_chooses_its_workspace() {
     );
     assert_eq!(app.workspace(), PathBuf::from("/repo0"));
 }
+
+/// A short home screen with the picker on its last entry: the fit
+/// window keeps the selection barred.
+#[test]
+fn short_picker_keeps_its_selection_barred() {
+    let mut app = home(80, 10);
+    app.on_line(hello());
+    for n in 0..9u8 {
+        app.on_line(status_in(
+            &format!("s_{n:016x}"),
+            "fix the parser",
+            &format!("/repo{n}"),
+        ));
+    }
+    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..9 {
+        app.on_key(Key::Down, now);
+    }
+    let buf = buffer(&app, 80, 10);
+    let shown = screen(&app, 80, 10);
+    let accent = crate::theme::Role::Accent.color();
+    let bars: Vec<u16> = (0..10)
+        .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == accent))
+        .collect();
+    assert_eq!(bars.len(), 1, "{shown}");
+    let row: String = (0..80)
+        .map(|x| buf[(x, bars[0])].symbol().to_owned())
+        .collect();
+    assert!(row.contains("/repo8"), "{shown}");
+    // Two body rows fit the chrome: the selection and the one above.
+    // Read inside the bar's columns, past the session list showing
+    // through the side margins.
+    let from = (0..80)
+        .find(|x| buf[(*x, bars[0])].bg == accent)
+        .unwrap_or(0);
+    let to = (0..80)
+        .rev()
+        .find(|x| buf[(*x, bars[0])].bg == accent)
+        .unwrap_or(0);
+    let above: String = (from..=to)
+        .map(|x| buf[(x, bars[0].saturating_sub(1))].symbol().to_owned())
+        .collect();
+    assert!(above.contains("/repo7"), "{shown}");
+    let higher: String = (from..=to)
+        .map(|x| buf[(x, bars[0].saturating_sub(2))].symbol().to_owned())
+        .collect();
+    assert!(!higher.contains("/repo"), "{shown}");
+}
+
+/// Home at 80x24 with `/` open and the sixth match focused: the fit
+/// window keeps the selection barred, counted where it sits.
+#[test]
+fn short_home_slash_keeps_its_selection_barred() {
+    let mut app = home(80, 24);
+    type_draft(&mut app, "/");
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..5 {
+        app.on_key(Key::Down, now);
+    }
+    let buf = buffer(&app, 80, 24);
+    let shown = screen(&app, 80, 24);
+    let accent = crate::theme::Role::Accent.color();
+    let bars: Vec<u16> = (0..24)
+        .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == accent))
+        .collect();
+    assert_eq!(bars.len(), 1, "{shown}");
+    let row = row_text(&buf, bars[0], 80);
+    assert!(row.contains("scoped-models"), "{shown}");
+    assert!(shown.contains("above"), "{shown}");
+    assert!(shown.contains("of 23"), "{shown}");
+}
