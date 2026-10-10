@@ -158,6 +158,8 @@ loads but the login ignores it.
 cargo run --release -- fixtures/session.jsonl --static --login providers
 cargo run --release -- fixtures/session.jsonl --static --login waiting
 cargo run --release -- fixtures/session.jsonl --static --login key
+cargo run --release -- fixtures/session.jsonl --static --login done
+cargo run --release -- fixtures/session.jsonl --static --login failed
 ```
 
 - `providers`: four providers under `Providers`, OAuth rows tagged
@@ -170,6 +172,10 @@ cargo run --release -- fixtures/session.jsonl --static --login key
   `Key for google:` below it, the key masked as eight dots with a block
   cursor. The key panel sits in the centred overlay with the list, not in a
   bottom panel like the built view: the static cases share one frame.
+- `done`: the list stays with a `✓ Logged in to anthropic.` outcome line
+  in the success colour.
+- `failed`: the list stays with a `Login to anthropic failed:` outcome
+  line, the `token expired` reason in the error colour.
 
 `cargo run --bin gen` rewrites the fixtures from `src/bin/gen.rs`. `fixtures/session.jsonl` ends with a turn still running, waiting on an approval from the reviewer delegate and on a question form from the main session. `fixtures/idle.jsonl` is the same session cut after its last finished turn.
 

@@ -8,7 +8,7 @@ use crate::cases::{Case, Surface};
 use super::input::{Ev, Key};
 use super::overlays;
 use super::{Args, Term};
-use super::{BLUE, dim, fg, fit, left_cut, paint, panel, row, sp, width};
+use super::{BLUE, RED, dim, fg, fit, left_cut, paint, panel, row, sp, width};
 use ratatui::style::Style;
 use std::io::{self, Write};
 
@@ -44,6 +44,8 @@ pub enum Kind {
     Providers,
     Waiting,
     Key,
+    Done,
+    Failed,
 }
 
 pub struct State {
@@ -57,6 +59,8 @@ pub(crate) const CASES: &[Case<State>] = &[
     Case { name: "providers", help: "providers and extension credentials, OAuth told from key", check: "four providers under `Providers` with `browser` or `key` tags telling OAuth from key providers, and two extension credentials under `Secrets`; a centred panel with ▄ ▀ edges and the ▌ stripe, `Log in` bold accent with a dim ✕, the focused row `›` on a full-width accent bar, and a bold-key legend foot.", build: || State { kind: Kind::Providers, focus: 0 } },
     Case { name: "waiting", help: "the browser-path wait, URL to copy, waiting state", check: "the provider list stays with `Open this URL to log in to anthropic:` below it and the long URL cut from the left keeping its tail, `y` to copy, and a dim `Waiting for the browser…` line; a bold-key `y copy URL · Esc cancel` legend; same panel.", build: || State { kind: Kind::Waiting, focus: 0 } },
     Case { name: "key", help: "key entry with the key masked", check: "the provider list stays with `Label (--as): default.` and `Key for google:` below it, the key masked as eight dots with a block cursor; a bold-key `Tab key or label · Enter store · Esc cancel` legend; same panel.", build: || State { kind: Kind::Key, focus: 3 } },
+    Case { name: "done", help: "the logged-in outcome", check: "the provider list stays with a `✓ Logged in to anthropic.` outcome line in the success colour; a bold-key `Esc close` legend; same panel.", build: || State { kind: Kind::Done, focus: 0 } },
+    Case { name: "failed", help: "the failed outcome with its reason", check: "the provider list stays with a `Login to anthropic failed: token expired.` outcome line, the reason in the error colour; a bold-key `Esc close` legend; same panel.", build: || State { kind: Kind::Failed, focus: 0 } },
 ];
 
 /// `--login`, for `--help` and `check/login.md`.
@@ -79,6 +83,7 @@ fn footer(s: &State) -> super::Row {
         Kind::Providers => panel::footer_legend(&[("↑↓", "move"), ("Enter", "log in"), ("Esc", "close")]),
         Kind::Waiting => panel::footer_legend(&[("y", "copy URL"), ("Esc", "cancel")]),
         Kind::Key => panel::footer_legend(&[("Tab", "key or label"), ("Enter", "store"), ("Esc", "cancel")]),
+        Kind::Done | Kind::Failed => panel::footer_legend(&[("Esc", "close")]),
     }
 }
 
@@ -97,6 +102,12 @@ fn below(kind: Kind, inner: usize) -> Vec<super::Row> {
             row(vec![sp("Key for google:", Style::new())]),
             row(vec![sp(DOTS, Style::new()), sp("█", dim())]),
         ],
+        Kind::Done => vec![row(vec![sp("✓ Logged in to anthropic.", fg(BLUE))])],
+        Kind::Failed => vec![row(vec![
+            sp("Login to anthropic failed: ", Style::new()),
+            sp("token expired", fg(RED)),
+            sp(".", Style::new()),
+        ])],
     }
 }
 
@@ -265,7 +276,7 @@ mod tests {
     #[test]
     fn every_case_parses_and_unknown_does_not() {
         assert!(CASES.iter().all(|c| crate::cases::lookup(CASES, c.name).is_some()));
-        assert_eq!(CASES.len(), 3);
+        assert_eq!(CASES.len(), 5);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
 
@@ -324,7 +335,7 @@ mod tests {
 
     #[test]
     fn every_case_keeps_one_bar_and_its_legend() {
-        for c in ["providers", "waiting", "key"] {
+        for c in ["providers", "waiting", "key", "done", "failed"] {
             let rows = view(&for_case(c), 100);
             let barred = rows
                 .iter()
@@ -385,6 +396,27 @@ mod tests {
         assert_eq!(barred, 1, "more than the focus is barred");
         // The foot is a bold-key legend.
         assert!(t.contains("\u{2191}\u{2193} move · Enter log in · Esc close"));
+    }
+
+    #[test]
+    fn done_says_logged_in_and_failed_names_its_reason() {
+        let t = text(&for_case("done"), 160, 48);
+        assert!(t.contains("anthropic"), "the list is gone");
+        assert!(t.contains("✓ Logged in to anthropic."), "missing the outcome");
+        assert!(t.contains("Esc close"), "missing the legend");
+        let rows = view(&for_case("done"), 160);
+        let line = rows.iter().find(|r| plain(r).contains("Logged in")).unwrap();
+        let ink = line.spans.iter().find(|s| s.content.contains("✓")).unwrap();
+        assert_eq!(ink.style.fg, Some(crate::BLUE), "the outcome is not the success colour");
+        let t = text(&for_case("failed"), 160, 48);
+        assert!(t.contains("Login to anthropic failed: token expired."), "missing the outcome");
+        assert!(t.contains("Esc close"), "missing the legend");
+        let rows = view(&for_case("failed"), 160);
+        let line = rows.iter().find(|r| plain(r).contains("failed")).unwrap();
+        let ink = line.spans.iter().find(|s| s.content.contains("token expired")).unwrap();
+        assert_eq!(ink.style.fg, Some(crate::RED), "the reason is not the error colour");
+        let head = line.spans.iter().find(|s| s.content.contains("Login to")).unwrap();
+        assert_ne!(head.style.fg, Some(crate::RED), "the whole line went red");
     }
 
     #[test]
