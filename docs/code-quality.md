@@ -212,14 +212,18 @@ An item is private, or `pub(crate)`, unless another crate uses it. rustc's
 
 A source file over 800 lines is a smell: a god file is forming, and its
 logic belongs in deeper modules split at real boundaries. `cargo xtask
-line-cap` lists every such file and never fails. A pull request that adds a
-new file over 800 lines splits it in the same pull request. A file that grows
-past 800 lines waits for the next audit.
+line-cap` lists every non-test source file over 800 lines. CI does not run
+it; it is the audit's counting tool, so every audit counts the same way. A
+pull request that adds a new file over 800 lines splits it in the same pull
+request; the reviewer checks this, and no gate does.
 
-Each scheduled audit of the code posts a verdict for every file `cargo
-xtask line-cap` lists, with its line count: a ticket labelled `split` that
-names the piece to split out, or "stays" with the reason. A file that has
-grown since its last verdict is examined again.
+Each scheduled audit of the code first ranks source files by how often a
+ticket waited because an open pull request was changing that file, and
+examines the files at the top of that ranking. A file that holds work back
+costs more than a long file nobody else touches. The audit then posts a
+verdict for every file `cargo xtask line-cap` lists, with its line count: a
+ticket labelled `split` that names the piece to split out, or "stays" with
+the reason. A file that has grown since its last verdict is examined again.
 
 The split separates what the file owns into modules with their own
 interfaces. Lines moved into another file that still reach the parent's

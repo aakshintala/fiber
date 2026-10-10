@@ -84,8 +84,7 @@ if [ "$scope" != platform ]; then
       echo "== cargo fmt --check"
       cargo fmt --check "${package_args[@]}"
     fi
-    echo "== file size, signal sites, compiled-in list, image and tui isolation"
-    cargo xtask line-cap
+    echo "== signal sites, compiled-in list, image and tui isolation"
     cargo xtask signal-sites
     cargo xtask compiled-in
     cargo xtask image-isolation

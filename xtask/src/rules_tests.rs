@@ -194,7 +194,7 @@ fn the_line_cap_lists_a_source_file_over_800_lines() {
     ];
     assert_eq!(
         over_cap(&files),
-        ["crates/log/src/big.rs: 801 lines, over 800; file a split ticket"]
+        ["crates/log/src/big.rs: 801 lines, over 800"]
     );
 }
 
