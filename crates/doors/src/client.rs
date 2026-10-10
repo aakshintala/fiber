@@ -147,8 +147,14 @@ fn is_line_ending(byte: u8) -> bool {
 }
 
 pub(crate) fn shutdown_both(stream: UnixStream) -> Box<dyn Fn() + Send + Sync> {
-    Box::new(move || match stream.shutdown(Shutdown::Both) {
-        Ok(()) | Err(_) => {}
+    Box::new(move || {
+        #[cfg(test)]
+        if crate::session::shutdown_skipped_for_test() {
+            return;
+        }
+        match stream.shutdown(Shutdown::Both) {
+            Ok(()) | Err(_) => {}
+        }
     })
 }
 

@@ -15,6 +15,7 @@ use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -785,6 +786,33 @@ fn stop_ends_every_thread_and_records_no_crash() {
     assert_eq!(sub.read.read_line(&mut rest).unwrap(), 0, "{rest}");
     let (other, _far) = UnixStream::pair().unwrap();
     assert!(feed.subscribe(Arc::new(Mutex::new(other))).is_none());
+}
+
+#[test]
+fn stop_returns_when_a_silent_session_stays_open() {
+    let temp = Temp::new();
+    let (feed, clock) = new_feed(&temp);
+    let id = temp.session(1, "p", "turn_completed");
+    let (_session, line) = running(&temp, &id, "idle");
+    let mut sub = Sub::new(&feed);
+    start(&feed, &clock);
+    // The status arrived, so the summary reader is tracked and reading.
+    assert_eq!(sub.raw("the status"), line);
+    feed.skip_shutdown.store(true, Ordering::Relaxed);
+    let (tx, rx) = mpsc::channel();
+    let stopping = Arc::clone(&feed);
+    thread::spawn(move || {
+        stopping.stop();
+        drop(stopping);
+        tx.send(()).unwrap_or(());
+    });
+    assert!(
+        Deadline::after(DEADLINE).recv(&rx).is_ok(),
+        "stop returns"
+    );
+    // Joined, not just told to end: the summary thread held the feed.
+    assert_eq!(Arc::strong_count(&feed), 1);
+    assert!(lock(&feed.state).tracked.is_empty());
 }
 
 #[test]

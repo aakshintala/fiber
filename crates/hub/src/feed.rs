@@ -27,6 +27,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -78,6 +80,10 @@ pub(crate) struct Feed {
     /// set once by the hub serving it: the rejoin sweep collects resumed
     /// sessions there. Never under the state lock.
     pub(crate) on_scan: OnceLock<ScanHook>,
+    /// Skips the `shutdown` in [`Feed::stop`]: with the stoppable read
+    /// wired, the stop's pipe ends a silent reader on its own.
+    #[cfg(test)]
+    pub(super) skip_shutdown: AtomicBool,
     #[cfg(test)]
     settle_pause: Mutex<Option<SettlePause>>,
 }
@@ -156,6 +162,8 @@ impl Feed {
             on_rewound: OnceLock::new(),
             on_scan: OnceLock::new(),
             #[cfg(test)]
+            skip_shutdown: AtomicBool::new(false),
+            #[cfg(test)]
             settle_pause: Mutex::new(None),
         }
     }
@@ -202,7 +210,13 @@ impl Feed {
         if let Some(scanner) = lock(&self.scanner).take() {
             join(scanner);
         }
+        #[cfg(test)]
+        let skipped = self.skip_shutdown.load(Ordering::Relaxed);
         for stream in tracked.values() {
+            #[cfg(test)]
+            if skipped {
+                continue;
+            }
             stream.shutdown(Shutdown::Both).unwrap_or(());
         }
         for subscriber in subscribers {

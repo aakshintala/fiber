@@ -642,6 +642,13 @@ pub(crate) fn park_reader_for_test() {
     tests::park_reader();
 }
 
+/// Whether the stored shutdown closures skip their `shutdown`: with the
+/// stoppable read wired, the stop's pipe ends a silent reader on its own.
+#[cfg(test)]
+pub(crate) fn shutdown_skipped_for_test() -> bool {
+    tests::shutdown_skipped()
+}
+
 /// Whether the session's log shows it was ever prompted: a `turn_started`
 /// or a `repository_code_offered`, read one line at a time up to the first:
 /// a session that exits on its first offer is kept, so the offer is raised

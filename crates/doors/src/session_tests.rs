@@ -54,6 +54,7 @@ struct Control {
     accept_waiting: AtomicBool,
     accept_mu: Mutex<()>,
     accept_cv: Condvar,
+    skip_shutdown: AtomicBool,
 }
 
 static CONTROL: Control = Control {
@@ -66,6 +67,7 @@ static CONTROL: Control = Control {
     accept_waiting: AtomicBool::new(false),
     accept_mu: Mutex::new(()),
     accept_cv: Condvar::new(),
+    skip_shutdown: AtomicBool::new(false),
 };
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -108,7 +110,11 @@ pub(super) fn park_reader() {
     );
 }
 
-/// A point a test observes through [`Gate::probe`].
+pub(super) fn shutdown_skipped() -> bool {
+    CONTROL.skip_shutdown.load(Ordering::Relaxed)
+}
+
+/// A point a test observes through [`Gate::probe`]..
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Probe {
     /// `close`'s first wait for the driver shells has returned.
@@ -138,6 +144,7 @@ fn reset() {
     CONTROL.hold_cv.notify_all();
     CONTROL.parked.store(0, Ordering::Relaxed);
     CONTROL.accept_waiting.store(false, Ordering::Relaxed);
+    CONTROL.skip_shutdown.store(false, Ordering::Relaxed);
 }
 
 struct Release;
@@ -360,6 +367,48 @@ fn close_joins_a_reader_that_is_still_connected() {
     Deadline::after(DEADLINE)
         .recv(&done_rx)
         .expect("close returns after the reader finishes");
+    drop(client);
+}
+
+#[test]
+fn close_returns_while_a_silent_client_stays_open() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    let gate = Arc::clone(&opened.session.gate);
+    let (tx, rx) = mpsc::channel();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            tx.send(client).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let client = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the client connected");
+    // The reader is published and blocked: it holds its reader and its
+    // shutdown, and the client sends nothing from here on.
+    {
+        let conns = lock(&gate.conns);
+        let (conns, _) = gate
+            .writers
+            .wait_timeout_while(conns, DEADLINE, |conns| {
+                !conns.live.iter().any(|(_, live)| {
+                    live.reader.is_some() && live.shutdown.is_some()
+                })
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            conns.live.iter().any(|(_, live)| {
+                live.reader.is_some() && live.shutdown.is_some()
+            }),
+            "the silent client's reader is published and blocked"
+        );
+    }
+    CONTROL.skip_shutdown.store(true, Ordering::Relaxed);
+    close_within(opened.session, opened.log);
     drop(client);
 }
 
