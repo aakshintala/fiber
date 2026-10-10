@@ -86,6 +86,13 @@ impl Rejoin {
     pub(crate) fn close(&mut self) {
         self.closed = true;
     }
+
+    /// Whether the connection is gone: its end skips the running-session
+    /// check, since the probe would connect to sessions the gone client
+    /// relayed.
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed
+    }
 }
 
 /// The end of the last complete line in the file at `log`: one past its
