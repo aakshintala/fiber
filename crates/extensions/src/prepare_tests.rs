@@ -191,3 +191,29 @@ fn a_stalled_install_step_is_stopped_at_its_deadline() {
         "the stopped step is gone"
     );
 }
+
+/// A step whose program cannot start fails as its install step failed,
+/// naming the program.
+#[test]
+fn a_missing_install_step_program_is_the_spawn_error() {
+    let dir = fakes::TempDir::new("fiber-prepare-missing");
+    let manifest: config::Manifest = serde_json::from_value(serde_json::json!({
+        "name": "acme",
+        "version": "v1.0.0",
+        "fiber": "0.1.0",
+        "api": 1,
+        "install": ["fiber-definitely-missing-xyz"],
+    }))
+    .unwrap();
+    let clock = FakeClock::new();
+    let err = super::prepare(dir.path(), &manifest, clock.as_ref()).unwrap_err();
+    assert!(
+        matches!(err, crate::Error::InstallStep { .. }),
+        "a missing program fails as its install step failed: {err}"
+    );
+    assert!(
+        err.to_string()
+            .contains("`fiber-definitely-missing-xyz`:"),
+        "the spawn error names the program: {err}"
+    );
+}

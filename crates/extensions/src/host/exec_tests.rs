@@ -1040,3 +1040,61 @@ fn a_pid_mode_term_stop_reports_sigterm() {
         "the stopped program is gone"
     );
 }
+
+/// A startup abort without its own group signals only the pid: the child
+/// shares the test's process group, which survives, and the child is gone
+/// afterwards, never listed.
+#[test]
+fn a_pid_mode_startup_abort_signals_only_the_pid() {
+    let (_dir, cwd) = dir("fiber-exec-abort-pid");
+    let clock = FakeClock::new();
+    let ready = ready_in(&cwd);
+    let script = format!(
+        "echo $$ > '{}'\nwhile :; do :; done\n",
+        ready.path().display()
+    );
+    // A plain spawn, no process group of its own: the child shares the
+    // test's group, so a group signal would reach the test itself.
+    let mut cmd = std::process::Command::new("sh");
+    cmd.args(["-c", &script])
+        .current_dir(&cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let child = cmd.spawn().expect("the pid-mode child spawns");
+    let pid = ready.wait(DEADLINE)[0];
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let req = sh_pid("startup", cwd, CAP);
+        let shared = super::Shared::default();
+        let pgid = pid;
+        let clock_ref: Arc<dyn contract::clock::Clock> = clock;
+        let err = super::abort_startup(
+            &req,
+            pgid,
+            child,
+            &shared,
+            clock_ref.as_ref(),
+            [false, false],
+            std::io::Error::other("no reader thread"),
+        );
+        let _sent = done_tx.send(err);
+    });
+    let outcome = done_rx.recv_timeout(DEADLINE);
+    if outcome.is_err() {
+        kill_pid_now(pid);
+    }
+    let err = outcome.expect("waited {DEADLINE:?} for the aborted pid-mode run");
+    assert_eq!(err.message, "host.exec: sh: no reader thread");
+    assert_eq!(err.code, contract::ErrorCode::IoFailed);
+    let ran = err.ran.expect("a started run is logged");
+    assert_eq!(ran.signal.as_deref(), Some("SIGTERM"));
+    assert!(
+        !super::groups::listed().contains(&pid),
+        "a pid-mode abort never lists"
+    );
+    assert!(
+        !fakes::kill_pid(pid, "0").expect("a pid probe runs"),
+        "the aborted program is gone"
+    );
+}

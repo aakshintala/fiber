@@ -1,7 +1,9 @@
 //! Naming a repository and the directory inside it (`docs/extensions.md`,
 //! "Names").
 
-use super::{is_path, split};
+#![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
+
+use super::{Origin, is_path, split};
 use crate::Error;
 
 #[test]
@@ -66,4 +68,39 @@ fn a_name_splits_into_repository_and_directory() {
     ] {
         assert!(matches!(split(bad), Err(Error::BadName { .. })), "{bad}");
     }
+}
+
+/// A `git` that cannot start fails the call: a missing program is
+/// `GitMissing`, anything else names the spawn error.
+#[test]
+fn a_git_that_cannot_start_fails_the_call() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = fakes::TempDir::new("fiber-git-spawn");
+    let missing = dir.path().join("fiber-definitely-missing-xyz");
+    let clock = fakes::clock::FakeClock::new();
+    let err = Origin::new(missing.to_string_lossy().into_owned(), |repo| repo.to_owned())
+        .tags("github.com/acme/x", clock.as_ref())
+        .unwrap_err();
+    assert!(
+        matches!(err, crate::Error::GitMissing),
+        "a missing git is GitMissing: {err}"
+    );
+
+    let blocked = dir.path().join("not-executable");
+    std::fs::write(&blocked, "x").unwrap();
+    std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let err = Origin::new(blocked.to_string_lossy().into_owned(), |repo| {
+        repo.to_owned()
+    })
+    .tags("github.com/acme/x", clock.as_ref())
+    .unwrap_err();
+    assert!(
+        matches!(&err, crate::Error::Git { command, .. } if command == "ls-remote --tags --refs github.com/acme/x"),
+        "an unstartable git fails the call: {err}"
+    );
+    assert!(
+        err.to_string().contains("denied"),
+        "the failure carries the spawn error: {err}"
+    );
 }
