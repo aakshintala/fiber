@@ -353,10 +353,9 @@ impl State {
     /// and otherwise moves to the first visible row; the chip never survives.
     fn keep_focus(&mut self) {
         let v = visible(self);
+        let first = v.first().copied().unwrap_or(self.focus);
         if !v.contains(&self.focus) {
-            if let Some(&first) = v.first() {
-                self.focus = first;
-            }
+            self.focus = first;
         }
         self.chip = None;
     }
@@ -882,9 +881,7 @@ mod tests {
 
     #[test]
     fn typing_filters_and_never_reaches_the_draft() {
-        let mut ui = Ui::default();
-        ui.input = "hello".into();
-        ui.picker = Some(for_case("list"));
+        let mut ui = Ui { input: "hello".into(), picker: Some(for_case("list")), ..Ui::default() };
         assert!(on_key(&mut ui, Key::Char('s'), Mods::default()));
         assert!(on_key(&mut ui, Key::Char('o'), Mods::default()));
         let p = ui.picker.as_ref().unwrap();
@@ -895,8 +892,7 @@ mod tests {
 
     #[test]
     fn bare_s_a_r_extend_the_query() {
-        let mut ui = Ui::default();
-        ui.picker = Some(for_case("list"));
+        let mut ui = Ui { picker: Some(for_case("list")), ..Ui::default() };
         for c in ['s', 'a', 'r'] {
             assert!(on_key(&mut ui, Key::Char(c), Mods::default()));
         }
@@ -909,8 +905,7 @@ mod tests {
 
     #[test]
     fn backspace_edits_the_query() {
-        let mut ui = Ui::default();
-        ui.picker = Some(for_case("list"));
+        let mut ui = Ui { picker: Some(for_case("list")), ..Ui::default() };
         for c in ['s', 'o'] {
             on_key(&mut ui, Key::Char(c), Mods::default());
         }
@@ -944,8 +939,7 @@ mod tests {
         assert!(on_key(&mut ui, Key::Enter, Mods::default()));
         assert!(ui.picker.is_some());
         // With matches Enter still closes.
-        let mut live = Ui::default();
-        live.picker = Some(for_case("list"));
+        let mut live = Ui { picker: Some(for_case("list")), ..Ui::default() };
         assert!(on_key(&mut live, Key::Enter, Mods::default()));
         assert!(live.picker.is_none());
     }
@@ -979,8 +973,7 @@ mod tests {
         let p = ui.picker.as_ref().unwrap();
         assert_eq!((p.focus, p.chip), (5, None));
         // A hidden focus jumps to the first visible row.
-        let mut hidden = Ui::default();
-        hidden.picker = Some(for_case("list"));
+        let mut hidden = Ui { picker: Some(for_case("list")), ..Ui::default() };
         for c in ['m', 'i', 'n', 'i'] {
             on_key(&mut hidden, Key::Char(c), Mods::default());
         }
