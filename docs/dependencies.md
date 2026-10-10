@@ -233,7 +233,6 @@ Notes:
   | 52.2 MiB | 100 | 108,120 | 108,040 | 122,593 |
   | 62.6 MiB | 120 | 129,684 | 129,680 | 144,897 |
   | 100.0 MiB, the cap | 191 | 206,744 | 206,776 | 222,577 |
-  | 500.7 MiB | 960 | 1,033,580 | 1,033,620 | 1,058,275 |
   | 3.5 MiB, 200 small objects a page in compressed object streams | 100 | 71,668 | 71,700 | 80,513 |
 
   For raw image streams the peak is about 2.1 times the file size: 206,744 KiB

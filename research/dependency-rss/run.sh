@@ -64,7 +64,7 @@ echo "|---|---:|---:|---:|"
 # Built once above; the binary is the same for every fixture row.
 pdfbin="target/lopdf/release/dependency-rss"
 pdfsize=$(( $(wc -c < "$pdfbin") / 1024 ))
-for f in pdf-fixtures/scan-30p.pdf pdf-fixtures/scan-60p.pdf pdf-fixtures/scan-100p.pdf pdf-fixtures/scan-120p.pdf pdf-fixtures/scan-240p.pdf pdf-fixtures/scan-480p.pdf pdf-fixtures/scan-960p.pdf; do
+for f in pdf-fixtures/scan-30p.pdf pdf-fixtures/scan-60p.pdf pdf-fixtures/scan-100p.pdf pdf-fixtures/scan-120p.pdf; do
   pages=$(basename "$f" .pdf | sed 's/scan-//;s/p$//')
   mib=$(awk "BEGIN {printf \"%.1f\", $(wc -c < "$f") / 1048576}")
   export PDF_FIXTURE="$f"

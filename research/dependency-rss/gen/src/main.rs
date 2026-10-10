@@ -40,8 +40,10 @@ fn load(bytes: &[u8]) -> Document {
 /// Page image size: A4 ratio, ~0.52 MiB of gray bytes per page raw.
 const WIDTH: u32 = 640;
 const HEIGHT: u32 = 854;
-/// Pages per fixture, in run.sh order: ~16, 32, 100-page, 64, 128, 256, 512 MiB.
-const FIXTURES: &[u32] = &[30, 60, 100, 120, 240, 480, 960];
+/// Pages per fixture, in run.sh order: ~16, 32, 52 and 64 MiB. Every
+/// fixture stays under the 100 MiB file cap: files past it are refused
+/// before lopdf runs, so they would measure nothing.
+const FIXTURES: &[u32] = &[30, 60, 100, 120];
 
 /// Deterministic incompressible bytes: the high byte of an LCG.
 fn page_bytes(page: u32, len: usize) -> Vec<u8> {
