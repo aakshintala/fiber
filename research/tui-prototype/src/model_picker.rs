@@ -869,6 +869,13 @@ pub fn on_key(ui: &mut Ui, k: Key, m: Mods) -> bool {
             ui.vscroll = 0;
             return true;
         }
+        if k == Key::Enter && ui.qsel.is_none() && ui.input.trim() == "/scoped-models" {
+            ui.input.clear();
+            ui.ctx_view = false;
+            ui.picker = Some(for_case("checklist"));
+            ui.vscroll = 0;
+            return true;
+        }
         return false;
     }
     // Esc clears a typed query first and only closes on the second press.
@@ -888,6 +895,23 @@ pub fn on_key(ui: &mut Ui, k: Key, m: Mods) -> bool {
     {
         return true;
     }
+    // The checklist toggles its marks instead of choosing: Enter flips the
+    // focused row and never closes, Ctrl+S saves the marks and closes.
+    if ui.picker.as_ref().is_some_and(|p| p.checklist) {
+        if k == Key::Enter && !m.ctrl && !m.alt && !m.sup {
+            if let Some(p) = ui.picker.as_mut() {
+                p.toggle();
+            }
+            return true;
+        }
+        if k == Key::Char('s') && m.ctrl && !m.alt && !m.sup {
+            if let Some(p) = ui.picker.as_mut() {
+                p.save();
+            }
+            ui.picker = None;
+            return true;
+        }
+    }
     // closing keys first, so no borrow of the picker is live
     if k == Key::Esc || k == Key::Enter || (k == Key::Char('l') && m.ctrl) {
         ui.picker = None;
@@ -900,6 +924,8 @@ pub fn on_key(ui: &mut Ui, k: Key, m: Mods) -> bool {
     match k {
         Key::Up if !m.alt && !m.ctrl => p.focus_up(),
         Key::Down if !m.alt && !m.ctrl => p.focus_down(),
+        // The checklist has no chips, show-all or refresh: these keys die here.
+        Key::Left | Key::Right if p.checklist => {}
         Key::Left => p.chip_left(),
         Key::Right => p.chip_right(),
         Key::Backspace if plain => {
@@ -909,7 +935,9 @@ pub fn on_key(ui: &mut Ui, k: Key, m: Mods) -> bool {
         // Every bare letter filters; the old bare-letter keys moved to
         // Ctrl+S (session only), Tab (show all) and Ctrl+R (refresh).
         Key::Char('s') if m.ctrl && !m.alt && !m.sup => p.mark_session_only(),
+        Key::Tab if !m.ctrl && !m.alt && !m.sup && p.checklist => {}
         Key::Tab if !m.ctrl && !m.alt && !m.sup => p.toggle_show_all(),
+        Key::Char('r') if m.ctrl && !m.alt && !m.sup && p.checklist => {}
         Key::Char('r') if m.ctrl && !m.alt && !m.sup => p.refresh_all(),
         Key::Char(c) if plain => {
             p.query.push(c);
@@ -936,6 +964,10 @@ pub fn click(ui: &mut Ui, a: Act) -> bool {
         }
         Act::PickAll => p.toggle_show_all(),
         Act::PickRefresh => p.refresh_all(),
+        Act::Toggle(i) => {
+            p.focus = i;
+            p.toggle();
+        }
         _ => return false,
     }
     true
@@ -1758,5 +1790,149 @@ mod tests {
             .find(|r| matches!(r.act, Some(Act::Pick(0))))
             .unwrap();
         assert_eq!(r.hot, vec![(2, 5, Act::Toggle(0))]);
+    }
+
+    /// The loop's matcher over one row: a hot range holding x wins, else the row act.
+    fn at(r: &Row, x: u16) -> Act {
+        r.hot
+            .iter()
+            .find(|&&(a, b, _)| x >= a && x < b)
+            .map(|&(_, _, a)| a)
+            .or(r.act)
+            .unwrap()
+    }
+
+    #[test]
+    fn the_mark_cells_toggle_while_the_rest_focuses() {
+        let b = body(&for_case("checklist"), 90);
+        let r = b
+            .iter()
+            .find(|r| matches!(r.act, Some(Act::Pick(0))))
+            .unwrap();
+        assert_eq!(at(r, 1), Act::Pick(0));
+        assert_eq!(at(r, 2), Act::Toggle(0));
+        assert_eq!(at(r, 4), Act::Toggle(0));
+        assert_eq!(at(r, 5), Act::Pick(0));
+    }
+
+    #[test]
+    fn slash_scoped_models_opens_the_checklist() {
+        let mut ui = Ui {
+            input: "/scoped-models".into(),
+            ..Ui::default()
+        };
+        assert!(on_key(&mut ui, Key::Enter, Mods::default()));
+        let p = ui.picker.as_ref().expect("the checklist did not open");
+        assert!(p.checklist);
+        assert_eq!(p.marked, SCOPED.to_vec());
+        assert_eq!(ui.input, "");
+    }
+
+    #[test]
+    fn space_extends_the_checklist_query() {
+        let mut ui = Ui {
+            picker: Some(for_case("checklist")),
+            ..Ui::default()
+        };
+        for c in ['m', 'i', 'n', 'i', ' '] {
+            assert!(on_key(&mut ui, Key::Char(c), Mods::default()));
+        }
+        assert_eq!(ui.picker.as_ref().unwrap().query, "mini ");
+        assert!(ui.picker.is_some());
+    }
+
+    #[test]
+    fn enter_toggles_and_never_closes_the_checklist() {
+        let mut ui = Ui {
+            picker: Some(for_case("checklist")),
+            ..Ui::default()
+        };
+        assert!(on_key(&mut ui, Key::Enter, Mods::default()));
+        let p = ui.picker.as_ref().expect("Enter closed the checklist");
+        assert_eq!(p.marked, vec![1, 3, 8, 9]);
+        assert!(on_key(&mut ui, Key::Enter, Mods::default()));
+        let p = ui.picker.as_ref().expect("Enter closed the checklist");
+        assert_eq!(p.marked, SCOPED.to_vec());
+    }
+
+    #[test]
+    fn enter_with_no_match_toggles_nothing_and_stays_open() {
+        let mut ui = Ui {
+            picker: Some(for_case("checklist-empty")),
+            ..Ui::default()
+        };
+        assert!(on_key(&mut ui, Key::Enter, Mods::default()));
+        let p = ui.picker.as_ref().expect("Enter closed the checklist");
+        assert_eq!(p.marked, SCOPED.to_vec());
+    }
+
+    #[test]
+    fn ctrl_s_saves_the_marks_and_closes() {
+        // `save()` copying marked into scoped has its own unit; here the
+        // point is Ctrl+S takes that path and then closes the picker.
+        let mut ui = Ui {
+            picker: Some(for_case("checklist")),
+            ..Ui::default()
+        };
+        ui.picker.as_mut().unwrap().toggle();
+        let ctrl = Mods {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert!(on_key(&mut ui, Key::Char('s'), ctrl));
+        assert!(ui.picker.is_none(), "Ctrl+S left the checklist open");
+    }
+
+    #[test]
+    fn esc_clears_before_closing_the_checklist_saving_nothing() {
+        let mut ui = Ui::default();
+        let mut p = for_case("checklist");
+        p.query = "so".into();
+        p.scoped = vec![1];
+        ui.picker = Some(p);
+        assert!(on_key(&mut ui, Key::Esc, Mods::default()));
+        let p = ui.picker.as_ref().expect("first Esc closed the checklist");
+        assert_eq!(p.query, "");
+        assert_eq!(p.scoped, vec![1]);
+        assert!(on_key(&mut ui, Key::Esc, Mods::default()));
+        assert!(ui.picker.is_none());
+    }
+
+    #[test]
+    fn a_mark_click_toggles_while_a_row_click_only_focuses() {
+        let mut ui = Ui {
+            picker: Some(for_case("checklist")),
+            ..Ui::default()
+        };
+        assert!(click(&mut ui, Act::Toggle(2)));
+        let p = ui.picker.as_ref().unwrap();
+        assert_eq!(p.focus, 2);
+        assert_eq!(p.marked, vec![0, 1, 2, 3, 8, 9]);
+        assert!(click(&mut ui, Act::Pick(4)));
+        let p = ui.picker.as_ref().unwrap();
+        assert_eq!(p.focus, 4);
+        assert_eq!(p.marked, vec![0, 1, 2, 3, 8, 9]);
+    }
+
+    #[test]
+    fn level_showall_and_refresh_keys_die_on_the_checklist() {
+        let mut ui = Ui::default();
+        let mut p = for_case("checklist");
+        p.chip = Some(1);
+        p.show_all = true;
+        ui.picker = Some(p);
+        let ctrl = Mods {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert!(on_key(&mut ui, Key::Left, Mods::default()));
+        assert!(on_key(&mut ui, Key::Right, Mods::default()));
+        assert!(on_key(&mut ui, Key::Tab, Mods::default()));
+        assert!(on_key(&mut ui, Key::Char('r'), ctrl));
+        let p = ui.picker.as_ref().unwrap();
+        assert_eq!(p.chip, Some(1));
+        assert!(p.show_all);
+        assert!(p.refreshing.is_empty());
+        assert_eq!(p.marked, SCOPED.to_vec());
     }
 }
