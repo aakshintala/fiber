@@ -312,6 +312,23 @@ pub struct Usage {
     pub subscription_cost: f64,
 }
 
+impl Default for Usage {
+    /// No model call is known, so no tokens and no cost: zero counts and
+    /// a known `0` cost, never `null`, which would mean an unknown one.
+    fn default() -> Self {
+        Self {
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        }
+    }
+}
+
 /// One `ask_user` question as the model called it (`docs/tools.md`, "The
 /// call"). Its keys are the tool's argument names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,3 +439,7 @@ where
 {
     Option::deserialize(deserializer)
 }
+
+#[cfg(test)]
+#[path = "shapes_tests.rs"]
+mod tests;

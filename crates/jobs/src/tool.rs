@@ -7,7 +7,7 @@ use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::jobs::JobRecord;
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
@@ -166,10 +166,10 @@ impl JobsTool {
                 "Job `{id}` has ended: {}.",
                 registry::status_word(status)
             )),
-            Err(WriteError::Io(err)) => failed_with(
-                ErrorCode::ToolError,
-                format!("Writing to job {id} failed: {err}."),
-            ),
+            Err(WriteError::Io(err)) => {
+                let message = format!("Writing to job {id} failed: {err}.");
+                registry::failed(ErrorCode::ToolError, format!("{message}\n"), message)
+            }
         }
     }
 
@@ -266,22 +266,7 @@ fn answered(text: String, records: Vec<JobRecord>) -> Output {
 }
 
 fn failed(message: String) -> Output {
-    failed_with(ErrorCode::InvalidArguments, message)
-}
-
-fn failed_with(code: ErrorCode, message: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text {
-            text: format!("{message}\n"),
-        }],
-        error: Some(Failure {
-            code,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        }),
-        ..Output::default()
-    }
+    registry::failed(ErrorCode::InvalidArguments, format!("{message}\n"), message)
 }
 
 #[cfg(test)]

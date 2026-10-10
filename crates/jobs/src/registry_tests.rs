@@ -19,29 +19,9 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, TempDir};
 
 use super::Registry;
+use crate::support::{opening, world};
 
 const DEADLINE: Duration = Duration::from_secs(5);
-
-fn world() -> (TempDir, Arc<Registry>) {
-    let dir = TempDir::new("fiber-jobs");
-    let artifacts = dir.path().join("artifacts");
-    std::fs::create_dir(&artifacts).unwrap();
-    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
-    (
-        dir,
-        Registry::new(artifacts, clock, Arc::new(Recorder::default())),
-    )
-}
-
-fn opening(description: &str) -> Opening {
-    Opening {
-        tool: "shell".into(),
-        description: description.into(),
-        stop: Stop(Box::new(|| {})),
-        lines: false,
-        input: None,
-    }
-}
 
 fn is_job_id(id: &str) -> bool {
     let Some(hex) = id.strip_prefix("j_") else {

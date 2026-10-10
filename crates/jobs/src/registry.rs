@@ -15,8 +15,8 @@ use contract::emit::Emit;
 use contract::events::{DelegateFinished, JobCompleted, JobLine, JobStarted, Outcome};
 use contract::inbox::{Claim, Delivery, JobNotice};
 use contract::jobs::{End, Foreground, JobRecord, Lines, OpenError, Opened, Opening, Stop};
-use contract::shapes::Failure;
-use contract::tool::Cancel;
+use contract::shapes::{ContentPart, Failure};
+use contract::tool::{Cancel, Output};
 use contract::{ErrorCode, JobId};
 
 #[path = "registry/park.rs"]
@@ -24,12 +24,15 @@ mod park;
 
 use park::{Parked, Parker};
 
-/// A job's end not yet reported, held by the closure in its [`End`] or
-/// [`Finish`]. Reporting consumes it; dropped unreported, it records the
-/// job failed `indeterminate`, since a runner that returned without
-/// reporting would otherwise leave the job running. A panic aborts the
-/// process; this is not a panic handler.
-struct Unreported {
+use crate::delegate::outcome::empty;
+
+/// A job's end not yet reported, held by the closure in its [`End`] or,
+/// for a delegate, by the runner until it reports. Reporting consumes
+/// it; dropped unreported, it records the job failed `indeterminate`,
+/// since a runner that returned without reporting would otherwise leave
+/// the job running. A panic aborts the process; this is not a panic
+/// handler.
+pub(crate) struct Unreported {
     job_id: JobId,
     /// Taken by the one report.
     registry: Option<Arc<Registry>>,
@@ -40,7 +43,9 @@ struct Unreported {
 impl Unreported {
     /// Records `completed` for this job, whatever id the payload names: a
     /// payload that names another id would record the wrong job, or none.
-    fn report(mut self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
+    /// The payload's id is replaced with the recorded one. For a delegate
+    /// the runner passes its finish alongside, when the run produced one.
+    pub(crate) fn report(mut self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
         if let Some(registry) = self.registry.take() {
             registry.finish(
                 JobCompleted {
@@ -56,7 +61,7 @@ impl Unreported {
 impl Drop for Unreported {
     fn drop(&mut self) {
         if let Some(registry) = self.registry.take() {
-            let delegate = self.delegate.then(|| empty_finished(&self.job_id));
+            let delegate = self.delegate.then(|| empty(&self.job_id));
             registry.finish(
                 JobCompleted {
                     job_id: self.job_id.clone(),
@@ -73,41 +78,6 @@ impl Drop for Unreported {
                 delegate,
             );
         }
-    }
-}
-
-/// Reports how a delegate ended, once: its completion and, when the run
-/// produced one, its finish. Dropped unreported, it records the job failed
-/// `indeterminate` with an empty finish, as [`End`] does for other jobs.
-/// The runner (task 3.3) is its only caller.
-pub(crate) struct Finish(Unreported);
-
-impl Finish {
-    /// Records the delegate's end. The payload's id is replaced with the
-    /// recorded one, as [`Unreported::report`] does.
-    pub(crate) fn report(self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
-        self.0.report(completed, delegate);
-    }
-}
-
-/// A delegate that ended without reporting one: empty text, zero usage.
-fn empty_finished(job_id: &JobId) -> DelegateFinished {
-    DelegateFinished {
-        job_id: job_id.clone(),
-        text: String::new(),
-        artifact: None,
-        questions: None,
-        usage: contract::shapes::Usage {
-            tokens: contract::shapes::Tokens {
-                input: 0,
-                cache_read: 0,
-                cache_write: std::collections::BTreeMap::new(),
-                output: 0,
-            },
-            cost: Some(0.0),
-            subscription_cost: 0.0,
-        },
-        worktree: None,
     }
 }
 
@@ -153,6 +123,30 @@ struct Job {
 }
 
 type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
+
+impl Job {
+    /// A job that has started and not yet ended; `open` and `open_started`
+    /// both record one, and only differ in what they pass in.
+    fn running(
+        started: JobStarted,
+        path: PathBuf,
+        stop: Arc<dyn Fn() + Send + Sync>,
+        input: Option<Typer>,
+        delegate: bool,
+    ) -> Self {
+        Self {
+            started,
+            path,
+            phase: Phase::Running,
+            stop,
+            input,
+            stop_sent: false,
+            claimed: false,
+            delegate,
+            finished: None,
+        }
+    }
+}
 
 enum Phase {
     Running,
@@ -253,17 +247,13 @@ impl Registry {
         let end = End(Box::new(move |completed| {
             unreported.report(completed, None)
         }));
-        inner.jobs.push(Job {
-            started: started.clone(),
-            path: path.clone(),
-            phase: Phase::Running,
-            stop: Arc::from(opening.stop.0),
-            input: opening.input.map(|input| Arc::from(input.0)),
-            stop_sent: false,
-            claimed: false,
-            delegate: false,
-            finished: None,
-        });
+        inner.jobs.push(Job::running(
+            started.clone(),
+            path.clone(),
+            Arc::from(opening.stop.0),
+            opening.input.map(|input| Arc::from(input.0)),
+            false,
+        ));
         Ok(Opened {
             started,
             path,
@@ -285,7 +275,7 @@ impl Registry {
         description: String,
         output_path: String,
         stop: Stop,
-    ) -> (JobStarted, Finish) {
+    ) -> (JobStarted, Unreported) {
         let started = JobStarted {
             job_id: job_id.clone(),
             tool: Some(tool),
@@ -293,24 +283,20 @@ impl Registry {
             description,
             output_path: output_path.clone(),
         };
-        let finish = Finish(Unreported {
+        let finish = Unreported {
             job_id: job_id.clone(),
             // The caller holds this `Arc`, so the job it records always
             // has a registry to end in.
             registry: Some(Arc::clone(self)),
             delegate: true,
-        });
-        lock(&self.inner).jobs.push(Job {
-            started: started.clone(),
-            path: PathBuf::from(output_path),
-            phase: Phase::Running,
-            stop: Arc::from(stop.0),
-            input: None,
-            stop_sent: false,
-            claimed: false,
-            delegate: true,
-            finished: None,
-        });
+        };
+        lock(&self.inner).jobs.push(Job::running(
+            started.clone(),
+            PathBuf::from(output_path),
+            Arc::from(stop.0),
+            None,
+            true,
+        ));
         (started, finish)
     }
 
@@ -639,6 +625,24 @@ pub(crate) fn status_word(status: Outcome) -> &'static str {
         Outcome::Completed => "completed",
         Outcome::Failed => "failed",
         Outcome::Cancelled => "cancelled",
+    }
+}
+
+/// A tool call's failure: the model reads `content`, the caller matches
+/// on the error's `message`. The trailing newline differs by caller —
+/// the `jobs` tool ends its content line, `delegate_spawn` does not —
+/// so both are passed in and neither is invented here. The one place a
+/// tool `Output`'s `Failure` is built.
+pub(crate) fn failed(code: ErrorCode, content: String, message: String) -> Output {
+    Output {
+        content: vec![ContentPart::Text { text: content }],
+        error: Some(Failure {
+            code,
+            message,
+            retry_after_ms: None,
+            provider: None,
+        }),
+        ..Output::default()
     }
 }
 

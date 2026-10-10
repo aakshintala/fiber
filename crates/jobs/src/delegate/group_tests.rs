@@ -196,7 +196,7 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
     // kept it alive would otherwise leave it behind.
     let watchdog = Watchdog::group(pid);
     // The leader has exited, and nobody reaps it but the call below.
-    exited(pid);
+    wait_for_exit(pid);
     // The lock is held while the reap runs on another thread: it cannot
     // reap until the lock is released.
     let held = support::group::live();
@@ -205,7 +205,7 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
         reap_locked(&mut child, &mut listing);
         let _sent = done.send(());
     });
-    exited(pid);
+    wait_for_exit(pid);
     assert!(
         Deadline::after(Duration::from_millis(200))
             .recv(&waited)
@@ -223,7 +223,7 @@ fn the_reap_waits_for_the_lock_and_leaves_a_zombie_until_then() {
 /// Whether `pid` has exited without being reaped: `waitid` with `NOWAIT`
 /// sees the exit and leaves the zombie.
 #[track_caller]
-fn exited(pid: u32) {
+fn wait_for_exit(pid: u32) {
     use rustix::process::{Pid, WaitId, WaitIdOptions};
     within("the leader exits", DEADLINE, move || {
         let id = Pid::from_raw(i32::try_from(pid).unwrap()).unwrap();

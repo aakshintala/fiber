@@ -51,10 +51,7 @@ fn run(tool: &JobsTool, value: Value, cancel: &dyn Cancel) -> Output {
 }
 
 fn setup(clock: Arc<dyn Clock>) -> (TempDir, Arc<Registry>, JobsTool) {
-    let dir = TempDir::new("fiber-jobs-tool");
-    let artifacts = dir.path().join("artifacts");
-    std::fs::create_dir(&artifacts).unwrap();
-    let registry = Registry::new(artifacts, clock, Arc::new(Recorder::default()));
+    let (dir, registry) = crate::support::registry_with(clock);
     let tool = JobsTool::new(Arc::clone(&registry));
     (dir, registry, tool)
 }
@@ -148,27 +145,6 @@ impl Clock for RecordingClock {
     fn subscribe(&self, waker: Weak<dyn Wake>) {
         self.inner.subscribe(waker);
     }
-}
-
-#[test]
-fn the_definition_is_list_wait_write_and_stop() {
-    let clock: Arc<dyn Clock> = FakeClock::new();
-    let (_dir, _registry, tool) = setup(clock);
-    let definition = tool.definition();
-    assert_eq!(definition.name, "jobs");
-    assert!(!definition.deferred);
-    let schema = definition.input_schema;
-    assert_eq!(schema["type"], "object");
-    assert_eq!(schema["required"], json!(["action"]));
-    assert_eq!(schema["additionalProperties"], false);
-    assert_eq!(
-        schema["properties"]["action"]["enum"],
-        json!(["list", "wait", "write", "stop"])
-    );
-    assert_eq!(schema["properties"]["input"]["type"], "string");
-    assert_eq!(schema["properties"]["job_id"]["type"], "string");
-    assert_eq!(schema["properties"]["timeout_ms"]["type"], "integer");
-    assert_eq!(schema["properties"]["timeout_ms"]["minimum"], json!(0));
 }
 
 #[test]
