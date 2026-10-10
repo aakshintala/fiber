@@ -1603,12 +1603,16 @@ fn run_home_names_the_key_maps_bound_key() {
         first.starts_with(START),
         "the first chunk starts with the start bytes: {first:?}"
     );
-    assert!(
-        first
-            .windows(b"F2 the key map".len())
-            .any(|window| window == b"F2 the key map"),
-        "home names the rebound key: {first:?}"
-    );
+    // The renderer moves the cursor between words instead of writing the
+    // blank cells, so the foot's words arrive apart, in order.
+    let text = String::from_utf8_lossy(&first);
+    let mut rest = &*text;
+    for word in ["F2", "the", "key", "map", "Ctrl+C"] {
+        let Some(at) = rest.find(word) else {
+            panic!("home names the rebound key: {word:?} missing in {first:?}");
+        };
+        rest = &rest[at + word.len()..];
+    }
     // Nothing works: Ctrl+C twice quits at once.
     pair.main
         .write_all(&[0x03, 0x03])
