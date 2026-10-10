@@ -175,18 +175,23 @@ fn run(
     spawn: &dyn Fn(Vec<String>) -> io::Result<()>,
     clock: &dyn Clock,
 ) -> Result<(), Failure> {
-    // debt: notices from loading are dropped, as `parts_with` drops them;
-    // surfaced when #382 lands.
-    let (mut providers, config, _notices) = providers_and_config(home, workspace)?;
+    // Each notice as one line on stderr: this load's, the session
+    // extensions', then discovery and placeholders', each once per
+    // command run.
+    let (mut providers, config, loading) = providers_and_config(home, workspace)?;
+    let mut notices: Vec<Notice> = config.notices().to_vec();
+    notices.extend(loading);
     let extensions = load(&config);
+    notices.extend(extensions.notices());
     for (extension, provider) in extensions.lua_providers() {
-        let _notices = providers.add_lua(extension, provider, &config);
+        notices.extend(providers.add_lua(extension, provider, &config));
     }
-    // debt: notices from placeholders are dropped, as above; surfaced
-    // when #382 lands.
-    providers
-        .fill_placeholders(&config, &|name| std::env::var(name).ok())
-        .map_err(|e| failed(e.code(), e))?;
+    notices.extend(
+        providers
+            .fill_placeholders(&config, &|name| std::env::var(name).ok())
+            .map_err(|e| failed(e.code(), e))?,
+    );
+    crate::config::print_notices(err, &notices);
     // A stale list refreshes in the background for the next run: the
     // detached child, never waited on. A spawn that fails is ignored:
     // `fiber models` still prints from the cache and exits 0.

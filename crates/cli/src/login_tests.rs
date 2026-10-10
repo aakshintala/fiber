@@ -31,7 +31,7 @@ use fakes::Deadline;
 
 use super::{
     KeyReader, LoginIo, LoginName, LoginStored, LogoutTarget, Plain, credential_key, finish, login,
-    login_store, login_targets, logout, run_login, run_logout, write_prompt,
+    login_store, login_targets, login_with_notices, logout, run_login, run_logout, write_prompt,
 };
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
@@ -222,6 +222,81 @@ fn mode(path: &Path) -> u32 {
 
 fn failed(result: Result<(), Failure>) -> Failure {
     result.unwrap_err()
+}
+
+#[test]
+fn login_with_notices_prints_the_config_notice_as_one_line_first() {
+    let setup = Setup::new();
+    setup.install("acme", None, None);
+    setup.write_config(&json!({"frobnicate": 1}));
+    let mut err = Vec::new();
+    let (providers, loading) = Providers::load(&setup.home()).unwrap();
+    assert!(loading.is_empty(), "{loading:?}");
+    let mut keys = Fake::new(KEY);
+    let result = login_with_notices(
+        Some("acme"),
+        None,
+        &mut LoginIo {
+            home: &setup.home(),
+            providers: &providers,
+            terminal: false,
+            stdin: &mut Cursor::new(""),
+            err: &mut err,
+            keys: &mut keys,
+            device: false,
+            clock: fakes::clock::FakeClock::new(),
+        },
+        loading,
+    );
+    result.unwrap();
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n\
+             fiber: stored credentials/acme/default\n",
+            setup.home().join("config.json").display()
+        )
+    );
+    assert_eq!(setup.stored("acme", "default").as_deref(), Some(KEY));
+}
+
+#[test]
+fn login_with_notices_still_logs_in_when_the_config_does_not_load() {
+    let setup = Setup::new();
+    setup.install("acme", None, None);
+    // The project's file is invalid JSON, so the notices load fails, while
+    // the global file the login writes stays fine.
+    let (_, project) = crate::project_of(&setup.home(), &std::env::current_dir().unwrap()).unwrap();
+    let file = setup
+        .home()
+        .join("projects")
+        .join(project.as_str())
+        .join("config.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "not json").unwrap();
+    let mut err = Vec::new();
+    let (providers, loading) = Providers::load(&setup.home()).unwrap();
+    let mut keys = Fake::new(KEY);
+    let result = login_with_notices(
+        Some("acme"),
+        None,
+        &mut LoginIo {
+            home: &setup.home(),
+            providers: &providers,
+            terminal: false,
+            stdin: &mut Cursor::new(""),
+            err: &mut err,
+            keys: &mut keys,
+            device: false,
+            clock: fakes::clock::FakeClock::new(),
+        },
+        loading,
+    );
+    result.unwrap();
+    assert_eq!(
+        String::from_utf8(err).unwrap(),
+        "fiber: stored credentials/acme/default\n"
+    );
 }
 
 #[test]

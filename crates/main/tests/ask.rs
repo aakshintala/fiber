@@ -3601,6 +3601,133 @@ fn a_configured_level_the_model_does_not_declare_logs_one_notice_and_runs() {
     assert_eq!(built["payload"]["thinking"], "low");
 }
 
+#[test]
+fn an_unknown_config_key_logs_one_notice_and_runs() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "frobnicate": 1}),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notices: Vec<_> = run.lines.iter().filter(|l| l["kind"] == "notice").collect();
+    assert_eq!(notices.len(), 1, "{:?}", run.kinds());
+    assert_eq!(notices[0]["payload"]["code"], "config_key_ignored");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("frobnicate"), "{message}");
+    assert!(
+        message.contains(&setup.home().join("config.json").display().to_string()),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_incompatible_extension_logs_one_notice_and_runs() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let dir = setup.home().join("extensions/old");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({"name": "old", "version": "v0.0.0", "fiber": "0.0.0", "api": 999}).to_string(),
+    )
+    .unwrap();
+    support::write_record(&dir);
+
+    let run = setup.fiber(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notices: Vec<_> = run.lines.iter().filter(|l| l["kind"] == "notice").collect();
+    assert_eq!(notices.len(), 1, "{:?}", run.kinds());
+    assert_eq!(notices[0]["payload"]["code"], "extension_incompatible");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    for part in ["old", "999"] {
+        assert!(message.contains(part), "{message}");
+    }
+}
+
+#[test]
+fn config_get_with_an_unknown_key_prints_its_notice_as_one_line() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "frobnicate": 1}),
+    );
+
+    let run = setup.fiber(&["config", "get", "model"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.stdout,
+        format!(
+            "\"fake/m\" from {}\n",
+            setup.home().join("config.json").display()
+        )
+    );
+    assert_eq!(
+        run.stderr,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+#[test]
+fn models_with_an_unknown_key_prints_its_notice_as_one_line() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "frobnicate": 1}),
+    );
+
+    let run = setup.fiber(&["models"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(run.stdout.contains("fake/m"), "{}", run.stdout);
+    assert_eq!(
+        run.stderr,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+#[test]
+fn login_with_an_unknown_key_prints_its_notice_first() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "frobnicate": 1}),
+    );
+
+    let run = setup.fiber(&["login", "fake"], Some("sk-test-login\n"));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stdout, "");
+    assert_eq!(
+        run.stderr,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n\
+             fiber: stored credentials/fake/default\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
 /// Installs an inline extension `name` with `init_lua`, and makes `name/m1`
 /// the configured model.
 fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {

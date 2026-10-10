@@ -171,6 +171,125 @@ fn get_of_an_unknown_key_is_a_usage_error_naming_the_key() {
 }
 
 #[test]
+fn get_with_an_unknown_key_prints_its_notice_as_one_line() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.home().join("config.json"),
+        &json!({"model": "a/b", "frobnicate": 1}),
+    );
+    let (result, out, err) = setup.get("model");
+    result.unwrap();
+    assert_eq!(
+        out,
+        format!(
+            "\"a/b\" from {}\n",
+            setup.home().join("config.json").display()
+        )
+    );
+    assert_eq!(
+        err,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+#[test]
+fn get_prints_no_provider_notice_when_loading_them_fails() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.home().join("config.json"),
+        &json!({"model": "a/b", "frobnicate": 1}),
+    );
+    install(&setup.home(), "acme", "acme", &models(&["big"]));
+    fs::write(
+        setup.home().join("extensions/acme/providers/acme.json"),
+        "not json",
+    )
+    .unwrap();
+    let (result, out, err) = setup.get("model");
+    result.unwrap();
+    assert_eq!(
+        out,
+        format!(
+            "\"a/b\" from {}\n",
+            setup.home().join("config.json").display()
+        )
+    );
+    assert_eq!(
+        err,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+#[test]
+fn set_of_a_non_model_key_prints_the_config_notice() {
+    let setup = Setup::new();
+    setup.write(&setup.home().join("config.json"), &json!({"frobnicate": 1}));
+    let (result, err) = setup.set_capturing(Layer::Global, "handoff.tokens", "200000");
+    result.unwrap();
+    assert_eq!(
+        err,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+#[test]
+fn set_model_without_a_cached_list_prints_the_config_notice() {
+    let setup = Setup::new();
+    setup.write(&setup.home().join("config.json"), &json!({"frobnicate": 1}));
+    let (result, err) = setup.set_capturing(Layer::Global, "model", "acme/big");
+    result.unwrap();
+    assert_eq!(
+        err,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+#[test]
+fn set_model_without_a_cached_list_ignores_an_unreadable_project_file() {
+    let setup = Setup::new();
+    let (_, project) = crate::project_of(&setup.home(), &setup.workspace()).unwrap();
+    let file = setup
+        .home()
+        .join("projects")
+        .join(project.as_str())
+        .join("config.json");
+    setup.write(&file, &json!({"frobnicate": 1}));
+    fs::write(&file, "not json").unwrap();
+    // The notices load fails, so nothing prints, and the set still succeeds.
+    let (result, err) = setup.set_capturing(Layer::Global, "model", "acme/big");
+    result.unwrap();
+    assert_eq!(err, "");
+}
+
+#[test]
+fn set_model_with_an_unknown_key_prints_its_notice_first() {
+    let setup = Setup::new();
+    install(&setup.home(), "acme", "acme", &models(&["big"]));
+    setup.write(&setup.home().join("config.json"), &json!({"frobnicate": 1}));
+    let (result, err) = setup.set_capturing(Layer::Global, "model", "acme/big");
+    result.unwrap();
+    assert_eq!(
+        err,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+#[test]
 fn get_of_an_unset_key_without_a_default_names_it_on_stderr_and_succeeds() {
     let setup = Setup::new();
     let (result, out, err) = setup.get("reviewer.model");

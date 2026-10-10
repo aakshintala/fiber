@@ -9,11 +9,21 @@ use std::path::Path;
 
 use config::{Config, Layer, ProjectKey, Sources};
 use contract::ErrorCode;
+use contract::events::Notice;
 use contract::shapes::Failure;
 use extensions::Providers;
 use serde_json::Value;
 
 use crate::{fail, failed, project_of};
+
+/// Prints each notice as one line on standard error: exactly the notice's
+/// message, nothing else (`docs/configuration.md`, "When Fiber reads
+/// configuration"). Standard output and the exit status are untouched.
+pub(crate) fn print_notices(err: &mut dyn Write, notices: &[Notice]) {
+    for notice in notices {
+        writeln!(err, "{}", notice.message).unwrap_or(());
+    }
+}
 
 /// The effective value of `key` and the layer it came from, as `get` prints
 /// them: the value as compact JSON, then ` from `, then the layer.
@@ -32,6 +42,13 @@ fn run_get(
         overrides: Vec::new(),
     })
     .map_err(|e| failed(e.code(), e))?;
+    // Each notice as one line on stderr: this load's, then the installed
+    // providers', each once per command run.
+    let mut notices: Vec<Notice> = config.notices().to_vec();
+    if let Ok((_, loading)) = Providers::load(home) {
+        notices.extend(loading);
+    }
+    print_notices(err, &notices);
     // The notes print as the reviewer reads them: each layer's text under
     // its heading, with no layer named (`docs/permissions.md`, "What the
     // person tells it").
@@ -66,7 +83,9 @@ fn run_get(
 }
 
 /// Writes one key in one layer's file, parsing the value as JSON, or a bare
-/// string when it does not parse, as `-c` does. Prints nothing on success.
+/// string when it does not parse, as `-c` does. On success prints each
+/// loading notice as one line on standard error, each load's once per
+/// command run; nothing else.
 fn run_set(
     home: &Path,
     workspace: &Path,
@@ -77,12 +96,27 @@ fn run_set(
 ) -> Result<(), Failure> {
     let (_, project) = project_of(home, workspace)?;
     let parsed = serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.into()));
+    let mut notices = Vec::new();
     if key == "model"
         && let Some(typed) = parsed.as_str()
     {
-        check_model(home, workspace, &project, typed, err)?;
+        notices.extend(check_model(home, workspace, &project, typed, err)?);
+    } else {
+        // No other load happens on this path: one lenient load surfaces
+        // this command's configuration notices. A configuration that
+        // fails to load fails no set.
+        if let Ok(config) = Config::load(Sources {
+            home: home.to_path_buf(),
+            workspace: workspace.to_path_buf(),
+            project: project.clone(),
+            overrides: Vec::new(),
+        }) {
+            notices.extend(config.notices().iter().cloned());
+        }
     }
-    config::set(home, workspace, &project, layer, key, parsed).map_err(|e| failed(e.code(), e))
+    config::set(home, workspace, &project, layer, key, parsed).map_err(|e| failed(e.code(), e))?;
+    print_notices(err, &notices);
+    Ok(())
 }
 
 /// `fiber config set` for another front end, such as the terminal's
@@ -124,17 +158,17 @@ fn with_dirs(run: impl FnOnce(&Path, &Path) -> Result<(), Failure>) -> i32 {
 /// lists, by the rules in `docs/model-routing.md`, "Naming a model"
 /// (`docs/configuration.md`, "When Fiber writes"). With no cached list
 /// the value is accepted, and no network is touched for any key. The typed
-/// text is written as typed, never normalised.
+/// text is written as typed, never normalised. Returns every notice the
+/// check's loads raised, for the caller to print once per command run.
 fn check_model(
     home: &Path,
     workspace: &Path,
     project: &ProjectKey,
     typed: &str,
     err: &mut dyn Write,
-) -> Result<(), Failure> {
-    // debt: notices from loading are dropped, as `parts_with` drops them;
-    // surfaced when #382 lands.
-    let (providers, _notices) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
+) -> Result<Vec<Notice>, Failure> {
+    let (providers, loading) = Providers::load(home).map_err(|e| failed(e.code(), e))?;
+    let mut notices = loading;
     // Without a cached list the reference is accepted unchecked: one
     // naming a provider that is not installed, or one installed with an
     // empty list, and a bare id when every installed list is empty. This
@@ -152,7 +186,19 @@ fn check_model(
         }),
     };
     if uncached {
-        return Ok(());
+        // No cached list to check against, so no strict load happens on
+        // this path: one lenient load still surfaces this command's
+        // configuration notices. A configuration that fails to load fails
+        // no set.
+        if let Ok(config) = Config::load(Sources {
+            home: home.to_path_buf(),
+            workspace: workspace.to_path_buf(),
+            project: project.clone(),
+            overrides: Vec::new(),
+        }) {
+            notices.extend(config.notices().iter().cloned());
+        }
+        return Ok(notices);
     }
     // The fill reads the person's own files with no overrides, and the
     // process environment, touching no network: the person may set the
@@ -165,15 +211,16 @@ fn check_model(
         overrides: Vec::new(),
     })
     .map_err(|e| failed(e.code(), e))?;
+    notices.extend(config.notices().iter().cloned());
     let mut providers = providers;
     let _notices = providers
         .fill_placeholders(&config, &|name| std::env::var(name).ok())
         .map_err(|e| failed(e.code(), e))?;
     match providers.resolve(typed) {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(notices),
         Err(e @ extensions::Error::Unconfigured { .. }) => {
             writeln!(err, "fiber: {e}").unwrap_or(());
-            Ok(())
+            Ok(notices)
         }
         Err(extensions::Error::UnknownModel { .. } | extensions::Error::ModelMissing { .. }) => {
             Err(no_model(&providers, typed))

@@ -20,6 +20,7 @@ use config::{
 };
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::events::Notice;
 use contract::shapes::Failure;
 use doors::failure;
 use extensions::Providers;
@@ -394,11 +395,12 @@ fn targets(providers: &Providers) -> Vec<LoginName> {
 
 /// The installed providers in `home`.
 pub fn providers_in(home: &Path) -> Result<Providers, Failure> {
-    // debt: notices from loading are dropped, as `parts_with` drops them;
-    // surfaced when #382 lands.
-    let (providers, _notices) =
-        Providers::load(home).map_err(|e| failure(e.code(), e.to_string()))?;
-    Ok(providers)
+    Ok(providers_with_notices(home)?.0)
+}
+
+/// The installed providers in `home`, and the notices loading them gave.
+pub(crate) fn providers_with_notices(home: &Path) -> Result<(Providers, Vec<Notice>), Failure> {
+    Providers::load(home).map_err(|e| failure(e.code(), e.to_string()))
 }
 
 /// Stores `key` for provider or secret `name`, under `label` for a
@@ -495,6 +497,34 @@ pub fn login_store(
         StoreFailure::Refused(message) => failure(ErrorCode::Usage, message),
         StoreFailure::Failed(failure) => failure,
     })
+}
+
+/// Logs in as `fiber login` does: prints each notice as one line on
+/// standard error first, then runs [`login`]. `loading` is the notices
+/// the providers load gave; the one configuration this command loads
+/// adds its own. A configuration that fails to load fails no login:
+/// there is nothing to print.
+pub(crate) fn login_with_notices(
+    name: Option<&str>,
+    label: Option<&str>,
+    io: &mut LoginIo<'_>,
+    loading: Vec<Notice>,
+) -> Result<(), Failure> {
+    let mut notices = Vec::new();
+    if let Ok(workspace) = std::env::current_dir()
+        && let Ok((_, project)) = crate::project_of(io.home, &workspace)
+        && let Ok(config) = Config::load(Sources {
+            home: io.home.to_path_buf(),
+            workspace,
+            project,
+            overrides: Vec::new(),
+        })
+    {
+        notices.extend(config.notices().iter().cloned());
+    }
+    notices.extend(loading);
+    crate::config::print_notices(io.err, &notices);
+    login(name, label, io)
 }
 
 /// Logs in to the provider `name`, or stores the secret `name` an installed
@@ -651,9 +681,10 @@ fn finish(result: Result<(), Failure>) -> i32 {
     }
 }
 
-fn home_and_providers() -> Result<(std::path::PathBuf, Providers), Failure> {
+fn home_and_providers() -> Result<(std::path::PathBuf, Providers, Vec<Notice>), Failure> {
     let home = config::fiber_home_from_env().map_err(config_failure)?;
-    Ok((home.clone(), providers_in(&home)?))
+    let (providers, notices) = providers_with_notices(&home)?;
+    Ok((home, providers, notices))
 }
 
 /// `fiber login [<name>] [--as <label>] [--device]`.
@@ -663,7 +694,7 @@ pub fn run_login(
     device: bool,
     clock: Arc<dyn Clock>,
 ) -> i32 {
-    let ran = home_and_providers().and_then(|(home, providers)| {
+    let ran = home_and_providers().and_then(|(home, providers, loading)| {
         let stdin = io::stdin();
         let on_terminal = stdin.is_terminal();
         let mut err = io::stderr();
@@ -673,7 +704,7 @@ pub fn run_login(
         } else {
             Box::new(Plain)
         };
-        login(
+        login_with_notices(
             name,
             label,
             &mut LoginIo {
@@ -686,6 +717,7 @@ pub fn run_login(
                 device,
                 clock,
             },
+            loading,
         )
     });
     finish(ran)
@@ -696,7 +728,7 @@ pub fn run_logout(provider: Option<&str>, target: LogoutTarget<'_>) -> i32 {
     if provider.is_none() {
         return finish(Err(failure(ErrorCode::Usage, LOGOUT_SHAPE)));
     }
-    let ran = home_and_providers().and_then(|(home, providers)| {
+    let ran = home_and_providers().and_then(|(home, providers, _)| {
         let workspace = std::env::current_dir()
             .map_err(|e| failure(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
         let (_, project) = project_of(&home, &workspace)?;

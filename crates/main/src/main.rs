@@ -553,13 +553,15 @@ fn parts_in(
         overrides: overrides.clone(),
     })
     .map_err(|e| failed(e.code(), e))?;
+    // Configuration notices first, then loading, discovery and
+    // placeholders, then the thinking notice below: each load's notices
+    // are emitted once, after `fiber_started` with the MCP notices.
+    let mut startup_notices: Vec<contract::events::Notice> = config.notices().to_vec();
     let budget = config
         .get("budget.usd", None)
         .and_then(|(value, _)| value.as_f64());
-    // debt: weakens docs/configuration.md, "When Fiber reads configuration",
-    // and docs/extensions.md, "The extension API version"; fixed by #382.
-    // Notices from configuration and loading are dropped.
-    let (mut providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
+    let (mut providers, notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
+    startup_notices.extend(notices);
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
     let mut extensions = extensions::SessionExtensions::load(
@@ -569,7 +571,8 @@ fn parts_in(
         session_locks,
         host,
     );
-    let naming = lua_providers::add_lua(&extensions, &mut providers, &config)?;
+    let (naming, notices) = lua_providers::add_lua(&extensions, &mut providers, &config)?;
+    startup_notices.extend(notices);
     scripted::prepare(&mut providers, &config, recorded);
     let owners = (extensions.lua_providers().iter())
         .map(|(extension, lua)| (lua.name().to_owned(), extension.clone()))
@@ -657,7 +660,6 @@ fn parts_in(
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
     let warm = scripted::warm(model.model, settings::warm(&config));
-    let mut startup_notices = Vec::new();
     let thinking = settings::thinking(
         model.thinking,
         recorded_thinking,
@@ -710,7 +712,7 @@ fn parts_in(
     prompt.credential = crate::scripted::credential(model.provider, label);
     prompt.cache_lifetime = settings::cache_lifetime(&config, &model.reference());
     prompt.thinking = thinking;
-    // The thinking notice is written with the MCP notices, after
+    // The startup notices are written with the MCP notices, after
     // `fiber_started`.
     let mut mcp = mcp_servers::specs(&config);
     mcp.notices.splice(0..0, startup_notices);

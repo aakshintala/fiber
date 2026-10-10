@@ -389,7 +389,9 @@ fn an_installed_extension_is_loaded_before_the_first_request_and_its_hook_redact
     let (run, server) = setup.read_note("the password is hunter2\n", &json!({}));
 
     // `extensions_loaded` follows `fiber_started`, before the first step.
-    assert_eq!(run.kinds(), read_kinds(&[], &[]));
+    // The fixture's `models()` fails without its secret, so loading raises
+    // one notice.
+    assert_eq!(run.kinds(), read_kinds(&["notice"], &[]));
     assert_eq!(
         run.first("extensions_loaded")["payload"]["extensions"],
         json!([
@@ -416,7 +418,7 @@ fn a_result_no_hook_changes_names_nobody() {
     let setup = Setup::new();
     setup.install(fakes::lua_fixture());
     let (run, server) = setup.read_note("nothing secret\n", &json!({}));
-    assert_eq!(run.kinds(), read_kinds(&[], &[]));
+    assert_eq!(run.kinds(), read_kinds(&["notice"], &[]));
     let completed = run.completed();
     assert_eq!(completed["content"][0]["text"], "nothing secret\n");
     assert!(completed.get("changed_by").is_none());
