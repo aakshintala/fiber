@@ -369,7 +369,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 
 | Command | What it does |
 |---|---|
-| `subscribe` | The first command on every connection to a session, and on a connection to the hub the first command for each session. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command for that session before it is rejected `not_subscribed`. A later `subscribe` at the other level changes the connection's level: raising it to `full` folds the stream from the log as a first `full` subscribe does; lowering it to `summary` ends the connection's count in `clients`, sends every durable line written before the change, then stops the stream and sends the latest `session_status` and `extensions_loaded`. Its acknowledgement is the first line at the new level. A rejected change leaves the level as it was. A `subscribe` at the level the connection already holds is rejected `invalid_arguments`. Through the hub, a session that resumes is subscribed at the level the connection last held. When the session cannot read its log to serve a connection, a line that does not parse or a failed read, it closes that connection: the client receives every line before the one that failed, then end of file. The session keeps running. |
+| `subscribe` | The first command on every connection to a session, and on a connection to the hub the first command for each session. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command for that session before it is rejected `not_subscribed`. A later `subscribe` at the other level changes the connection's level: raising it to `full` folds the stream from the log as a first `full` subscribe does; lowering it to `summary` ends the connection's count in `clients`, sends every durable line written before the change, then stops the stream and sends the latest `session_status` and `extensions_loaded`. Its acknowledgement is the first line at the new level. A rejected change leaves the level as it was. A `subscribe` at the level the connection already holds is rejected `invalid_arguments`. Through the hub, a session that resumes is subscribed at the level the connection last held. When the session cannot read its log to serve a connection, a line that does not parse or a failed read, it closes that connection: the client receives every line before the one that failed, then end of file. The session keeps running. Through the hub, the client receives `stream_closed` (`docs/events.md`) where a direct client receives end of file, and its next command for that session is rejected `not_subscribed` until it subscribes again. |
 | `prompt` | Starts a turn. Rejected `busy` if a turn is running. Rejected `invalid_arguments` or `mcp_prompt_failed` when its `/name` runs an MCP server's prompt Fiber cannot get (`docs/mcp.md`, "Prompts and resources"). |
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. |
 | `steer_drop` | Removes a queued steering message, so nothing is applied. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
@@ -908,6 +908,12 @@ websocket for everything it does.
   acknowledgements come back in that order. A command the session answers
   when it ends, such as `shell`, is acknowledged then, so the order holds
   for acknowledgements as the session sends them.
+- **A session that closes a relayed connection ends that subscription.** When
+  a running session closes the connection the hub relays for a client, the hub
+  sends that client `stream_closed` (`docs/events.md`) after every line the
+  session sent on it, and keeps no subscription for that session: the client's
+  next command for it is rejected `not_subscribed` until it subscribes again.
+  The connection's other sessions are untouched.
 - **A command without one is for the hub.** These are the hub's commands:
 
 | Hub command | `args` | What it does |
