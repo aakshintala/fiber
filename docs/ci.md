@@ -40,7 +40,7 @@ the pull request is marked ready, which starts the full run.
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report and gate nothing:
-`backstop_report`, `bench_comment`, `cache_prune`. They run outside the verdict, so their
+`backstop_report`, `bench_comment`, `cache_prune`, `flake_report`. They run outside the verdict, so their
 result never decides `CI`. The docs check fails when any other job is
 missing from `needs`, so a new job, such as a new shard, cannot run
 without gating the merge.
@@ -132,7 +132,10 @@ ships. Cargo ignores the setting when it builds the test harness.
 
 A failed binary-level test retries once. A pass on retry does not fail the
 run: CI opens a flake issue naming the test, or comments on the open one
-(`docs/testing.md`, "Flaky tests"). No other test retries.
+(`docs/testing.md`, "Flaky tests"). The retry is nextest's `ci` profile over
+the `crates/main/tests` binaries, and a separate job holding only
+`contents: read` and `issues: write`, which runs no Fiber code, files the
+issue. No other test retries.
 
 On Linux x86_64 alone:
 
