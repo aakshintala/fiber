@@ -36,8 +36,10 @@ pub(super) fn draw(
     }
     let below = *bottom;
     let text = text_area(area);
-    for row in rows.iter().rev() {
-        put_row(buf, area, text, bottom, row);
+    for (at, row) in rows.iter().enumerate().rev() {
+        // The first draft row opens with the prompt in `info`
+        // (`docs/tui.md`, "The input box").
+        put_row(buf, area, text, bottom, row, top == 0 && at == 0);
     }
     let slab = Rect::new(area.x, *bottom, area.width, below.saturating_sub(*bottom));
     let mut top_edge = false;
@@ -68,6 +70,14 @@ pub(super) fn draw(
     if app.steering_selected().is_some() {
         draw_editing_hint(area, below, &rows, (cursor_row, cursor_col), buf);
     }
+    if cursor_shown(app) {
+        let (x, y) = caret_cell(area, below, &rows, cursor_row, cursor_col);
+        // The cursor is a drawn dim `█` (`docs/tui.md`, "The input box").
+        // The terminal's own cursor stays where `super::cursor` puts it.
+        if y >= area.y {
+            buf.set_stringn(x, y, "█", 1, style(Role::Muted));
+        }
+    }
     token_targets(app, area, below, (top, rows.len()), targets);
     if let Some(completions) = app.completions() {
         for (at, line) in completions.lines.iter().enumerate().rev() {
@@ -95,13 +105,51 @@ fn text_area(area: Rect) -> Rect {
 
 /// Puts one draft row on the row above `bottom` at the text columns,
 /// moving `bottom` up to it; nothing once `bottom` reaches the top of
-/// `area`.
-fn put_row(buf: &mut Buffer, area: Rect, text: Rect, bottom: &mut u16, row: &str) {
+/// `area`. The prompt opens the first draft row in `info`, and the rest
+/// of every row is the default foreground (`docs/tui.md`, "The input
+/// box").
+fn put_row(buf: &mut Buffer, area: Rect, text: Rect, bottom: &mut u16, row: &str, prompt: bool) {
     let Some(y) = bottom.checked_sub(1).filter(|y| *y >= area.y) else {
         return;
     };
-    buf.set_stringn(text.x, y, row, usize::from(text.width), Style::default());
+    if prompt {
+        // The prompt is the row's first two cells (`Draft::rows`).
+        let cut: String = row.chars().take(2).collect();
+        let rest: String = row.chars().skip(2).collect();
+        let (end, _) = buf.set_stringn(text.x, y, &cut, usize::from(text.width), style(Role::Info));
+        let room = text.width.saturating_sub(end.saturating_sub(text.x));
+        buf.set_stringn(end, y, &rest, usize::from(room), Style::default());
+    } else {
+        buf.set_stringn(text.x, y, row, usize::from(text.width), Style::default());
+    }
     *bottom = y;
+}
+
+/// Whether the input box draws its cursor: the native cursor shows on
+/// the box exactly then (`super::cursor`).
+fn cursor_shown(app: &App) -> bool {
+    app.chrome().floor_line().is_none()
+        && !app.config_view_open()
+        && !app.model_picker_open()
+        && !app.keys_screen_open()
+        && !app.session_view_open()
+        && app.focused().is_none()
+        && app.panel().is_none()
+        && !app.offer_open()
+        && app.find_bar().is_none()
+}
+
+/// The caret's cell in `area`: the cursor's column past the stripe and
+/// gap, on the cursor's shown row above `below` (`docs/tui.md",
+/// "The input box").
+fn caret_cell(area: Rect, below: u16, rows: &[String], row: usize, col: u16) -> (u16, u16) {
+    let text = text_area(area);
+    (
+        text.x.saturating_add(col),
+        below
+            .saturating_sub(to_u16(rows.len()))
+            .saturating_add(to_u16(row)),
+    )
 }
 
 /// The input box's shown rows, the draft row they start at, and the
@@ -142,12 +190,7 @@ fn draw_editing_hint(
     };
     let text = text_area(area);
     let end = text.x.saturating_add(to_u16(format::width(last)));
-    let caret = (
-        text.x.saturating_add(cursor_col),
-        below
-            .saturating_sub(to_u16(rows.len()))
-            .saturating_add(to_u16(cursor_row)),
-    );
+    let caret = caret_cell(area, below, rows, cursor_row, cursor_col);
     let mut x = area
         .right()
         .saturating_sub(to_u16(format::width(EDITING_HINT)));

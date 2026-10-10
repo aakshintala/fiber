@@ -63,9 +63,86 @@ fn every_cell_of_the_box_rows_is_surface() {
     }
     assert_eq!(buf[(0, 10)].symbol(), "▌");
     assert_eq!(buf[(0, 10)].fg, Role::Accent.color());
-    assert_eq!(buf[(2, 10)].symbol(), ">");
+    assert_eq!(buf[(2, 10)].symbol(), "›");
     assert_eq!(buf[(4, 10)].symbol(), "h");
     assert_eq!(buf[(5, 10)].symbol(), "i");
+}
+
+#[test]
+fn the_prompt_is_info_and_the_cursor_is_a_dim_block() {
+    let app = typed(80, 12, "hi");
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    // The prompt in `info`, the draft after it, and the cursor as a dim
+    // block at the caret (`docs/tui.md`, "The input box").
+    for x in [2, 3] {
+        assert_eq!(
+            buf[(x, 10)].style().fg,
+            Some(Role::Info.color()),
+            "cell {x}"
+        );
+    }
+    assert_eq!(buf[(2, 10)].symbol(), "›");
+    assert_eq!(buf[(6, 10)].symbol(), "█");
+    assert_eq!(buf[(6, 10)].style().fg, Some(Role::Muted.color()));
+    assert_eq!(buf[(6, 10)].bg, Role::Surface.color());
+}
+
+#[test]
+fn the_box_fill_covers_empty_and_wrapped_drafts() {
+    // Every cell from the ▄ row to the ▀ row is the surface tint edge
+    // to edge, past the placeholder or the written text (`docs/tui.md`,
+    // "The input box").
+    for draft in ["", "hi", &"w".repeat(200)] {
+        let app = typed(80, 12, draft);
+        let area = Rect::new(0, 0, 80, 12);
+        let mut buf = Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        let edge = Role::Surface.color();
+        // The box's text rows sit between its edge rows at the bottom.
+        let bottom = 11;
+        let top = (0..=bottom)
+            .rev()
+            .find(|y| (0..80).any(|x| buf[(x, *y)].symbol() == "▄"))
+            .expect("the top edge");
+        assert_eq!(buf[(0, bottom)].symbol(), "▀");
+        for y in top + 1..bottom {
+            for x in 0..80 {
+                assert_eq!(buf[(x, y)].bg, edge, "draft {draft:?} at ({x}, {y})");
+            }
+        }
+        for x in 0..80 {
+            assert_eq!(buf[(x, top)].fg, edge, "top edge at {x}");
+            assert_eq!(buf[(x, bottom)].fg, edge, "bottom edge at {x}");
+        }
+        // The cursor marks the caret on the draft's last row.
+        let inner = crate::surface::inset(80);
+        let shown = app.input().rows(inner);
+        let (cursor_row, cursor_col) = app.input().cursor(inner);
+        assert_eq!(cursor_row, shown.len() - 1);
+        let y = bottom - 1;
+        let x = 2 + cursor_col;
+        assert_eq!(buf[(x, y)].symbol(), "█", "draft {draft:?}");
+    }
+}
+
+#[test]
+fn the_cursor_hides_with_search_open() {
+    let mut app = typed(80, 12, "hi");
+    app.on_key(
+        crate::keys::Key::CtrlF,
+        fakes::clock::FakeClock::new().now(),
+    );
+    assert!(app.find_bar().is_some());
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    // Typing goes to the search box: the draft shows without a cursor
+    // (`docs/tui.md`, "The input box").
+    for cell in buf.content.iter() {
+        assert_ne!(cell.symbol(), "█");
+    }
 }
 
 #[test]
@@ -117,7 +194,7 @@ fn the_cursor_counts_the_bottom_edge_only_where_it_draws() {
 
 #[test]
 fn the_box_rows_start_past_the_stripe_and_gap() {
-    // The draft wraps past the stripe and gap: `▌`, a space, `> `, then
+    // The draft wraps past the stripe and gap: `▌`, a space, `› `, then
     // the draft (`docs/tui.md`, "Look", "The input box").
     let app = typed(60, 12, "hi");
     let area = Rect::new(0, 0, 60, 12);
@@ -128,9 +205,9 @@ fn the_box_rows_start_past_the_stripe_and_gap() {
     assert_eq!(buf[(0, 10)].bg, Role::Surface.color());
     assert_eq!(buf[(1, 10)].symbol(), " ");
     assert_eq!(buf[(1, 10)].bg, Role::Surface.color());
-    assert_eq!(buf[(2, 10)].symbol(), ">");
+    assert_eq!(buf[(2, 10)].symbol(), "›");
     let row: String = (0..6).map(|x| buf[(x, 10)].symbol().to_owned()).collect();
-    assert_eq!(row, "▌ > hi");
+    assert_eq!(row, "▌ › hi");
 }
 
 #[test]
@@ -143,7 +220,7 @@ fn the_box_follows_its_area_x() {
     let mut bottom = 6;
     draw(&app, area, &mut bottom, &mut buf, &mut Vec::new());
     assert_eq!(buf[(5, 4)].symbol(), "▌");
-    assert_eq!(buf[(7, 4)].symbol(), ">");
+    assert_eq!(buf[(7, 4)].symbol(), "›");
     for x in 5..45 {
         assert_eq!(buf[(x, 3)].symbol(), "▄", "top edge at {x}");
         assert_eq!(buf[(x, 5)].symbol(), "▀", "bottom edge at {x}");
@@ -174,7 +251,7 @@ fn a_box_three_columns_wide_has_its_stripe_and_two_has_none() {
         let prompt = buf
             .content
             .iter()
-            .position(|cell| cell.symbol() == ">")
+            .position(|cell| cell.symbol() == "›")
             .map(|index| index % usize::from(width));
         assert_eq!(prompt, Some(prompt_x), "width {width}");
     }

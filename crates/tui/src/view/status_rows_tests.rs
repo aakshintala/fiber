@@ -272,7 +272,7 @@ fn an_empty_row_two_takes_no_row() {
     let rows: Vec<&str> = screen.lines().collect();
     let bottom = rows.len() - 1;
     assert!(rows[bottom].contains("$1.50"), "{}", screen);
-    assert_eq!(rows[bottom - 2], "▌ >", "{}", screen);
+    assert_eq!(rows[bottom - 2], "▌ › █", "{}", screen);
 }
 
 /// A `session_status` with billed `cost` and `subscription` spend.
@@ -445,10 +445,11 @@ fn no_narrow_rows_drawn_outside_the_narrow_layout() {
     let screen = crate::view::text(&buf);
     assert!(!screen.contains('▸'), "{screen}");
     assert!(!screen.contains('▾'), "{screen}");
-    assert_eq!(screen.lines().rev().nth(1), Some("▌ >"));
-    // The row above the input box is blank inside the column.
+    assert_eq!(screen.lines().rev().nth(1), Some("▌ › █"));
+    // The row above the input box is blank inside the column: past the
+    // drawn cursor.
     assert_eq!(
-        buf.cell((4, 38))
+        buf.cell((5, 38))
             .map(|cell| cell.symbol().to_owned())
             .as_deref(),
         Some(" ")
@@ -678,7 +679,7 @@ fn the_draft_cursor_sits_above_one_status_row() {
     let at = cursor.expect("a cursor on the input row");
     // The input row, its lower surface edge, then the one status row.
     assert_eq!(usize::from(at.y), rows.len() - 3);
-    assert!(rows[usize::from(at.y)].contains('>'), "{rows:?}");
+    assert!(rows[usize::from(at.y)].contains('›'), "{rows:?}");
     assert!(rows[rows.len() - 1].contains("$1.50"), "{rows:?}");
 }
 
@@ -690,7 +691,7 @@ fn the_draft_cursor_sits_above_two_status_rows() {
     let at = cursor.expect("a cursor on the input row");
     // The input row, its lower surface edge, then row 1 and row 2.
     assert_eq!(usize::from(at.y), rows.len() - 4);
-    assert!(rows[usize::from(at.y)].contains('>'), "{rows:?}");
+    assert!(rows[usize::from(at.y)].contains('›'), "{rows:?}");
     assert!(rows[rows.len() - 2].contains("$1.50"), "{rows:?}");
     assert!(rows[rows.len() - 1].contains("1 job running"), "{rows:?}");
 }
@@ -715,7 +716,7 @@ fn the_draft_cursor_tracks_the_kept_status_rows_on_short_screens() {
         // The cursor stays on the input row while the lower surface edge
         // and kept status rows move beneath it.
         assert_eq!(usize::from(at.y), usize::from(height) - keep - 2);
-        assert!(rows[usize::from(at.y)].contains('>'), "{height}: {rows:?}");
+        assert!(rows[usize::from(at.y)].contains('›'), "{height}: {rows:?}");
         let below = &rows[usize::from(at.y) + 1..];
         assert_eq!(below.len(), keep + 1, "{height}: {rows:?}");
         assert!(

@@ -403,9 +403,10 @@ fn the_hint_never_covers_the_draft_or_the_caret() {
         let x = text_x + u16::try_from(i).unwrap_or(u16::MAX);
         assert_eq!(buf[(x, y)].symbol(), ch.to_string().as_str(), "cell {x}");
     }
-    // The caret's cell holds no hint character: the hint skips it, and
-    // the draft ends before it. The hint spans the row from the box's
-    // left here, so the skip is what keeps this cell blank.
+    // The caret's cell holds the drawn cursor, no hint character: the
+    // hint skips it, and the draft ends before it. The hint spans the
+    // row from the box's left here, so the skip is what keeps this cell
+    // out of the hint.
     assert_eq!(cursor_row, shown.len() - 1);
-    assert_eq!(buf[(text_x + cursor_col, y)].symbol(), " ");
+    assert_eq!(buf[(text_x + cursor_col, y)].symbol(), "█");
 }

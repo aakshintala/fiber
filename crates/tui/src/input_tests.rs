@@ -200,7 +200,7 @@ fn a_paste_of_eleven_lines_is_one_token() {
     let text = format!("{}\n", lines(11));
     draft.paste(&text);
     draft.insert('!');
-    assert_eq!(draft.rows(80), vec!["> see [Pasted text #1 · 11 lines]!"]);
+    assert_eq!(draft.rows(80), vec!["› see [Pasted text #1 · 11 lines]!"]);
     assert_eq!(draft.expand(), format!("see {text}!"));
 }
 
@@ -212,7 +212,7 @@ fn a_paste_normalises_line_breaks_and_drops_control_characters() {
     // Carriage returns count as line breaks for the threshold.
     let mut draft = Draft::default();
     draft.paste(&lines(11).replace('\n', "\r\n"));
-    assert_eq!(draft.rows(80), vec!["> [Pasted text #1 · 11 lines]"]);
+    assert_eq!(draft.rows(80), vec!["› [Pasted text #1 · 11 lines]"]);
     let mut draft = Draft::default();
     draft.paste("");
     assert!(draft.is_empty());
@@ -225,17 +225,17 @@ fn tokens_number_from_one_never_reuse_and_reset_on_clear() {
     draft.paste(&lines(12));
     assert_eq!(
         draft.rows(200),
-        vec!["> [Pasted text #1 · 11 lines][Pasted text #2 · 12 lines]"]
+        vec!["› [Pasted text #1 · 11 lines][Pasted text #2 · 12 lines]"]
     );
     draft.backspace();
     draft.paste(&lines(13));
     assert_eq!(
         draft.rows(200),
-        vec!["> [Pasted text #1 · 11 lines][Pasted text #3 · 13 lines]"]
+        vec!["› [Pasted text #1 · 11 lines][Pasted text #3 · 13 lines]"]
     );
     draft.clear();
     draft.paste(&lines(11));
-    assert_eq!(draft.rows(200), vec!["> [Pasted text #1 · 11 lines]"]);
+    assert_eq!(draft.rows(200), vec!["› [Pasted text #1 · 11 lines]"]);
 }
 
 #[test]
@@ -271,18 +271,18 @@ fn a_token_is_one_unit_for_the_cursor_and_deletes() {
 fn rows_wrap_at_the_width_with_the_prompt_prefix() {
     // Width 6 leaves 4 columns after `> `.
     let draft = typed("abcdefghij\nk");
-    assert_eq!(draft.rows(6), vec!["> abcd", "  efgh", "  ij", "  k"]);
+    assert_eq!(draft.rows(6), vec!["› abcd", "  efgh", "  ij", "  k"]);
     assert_eq!(draft.cursor(6), (3, 3));
 }
 
 #[test]
 fn a_row_exactly_the_width_puts_the_cursor_on_the_next_row() {
     let mut draft = typed("abcd");
-    assert_eq!(draft.rows(6), vec!["> abcd", "  "]);
+    assert_eq!(draft.rows(6), vec!["› abcd", "  "]);
     assert_eq!(draft.cursor(6), (1, 2));
     // The rows do not depend on the cursor.
     draft.left();
-    assert_eq!(draft.rows(6), vec!["> abcd", "  "]);
+    assert_eq!(draft.rows(6), vec!["› abcd", "  "]);
     assert_eq!(draft.cursor(6), (0, 5));
     // Before a line break, the same.
     let mut draft = typed("abcd\nx");
@@ -290,13 +290,13 @@ fn a_row_exactly_the_width_puts_the_cursor_on_the_next_row() {
     draft.line_end();
     assert_eq!(shown(&draft), "abcd|\nx");
     assert_eq!(draft.cursor(6), (1, 2));
-    assert_eq!(draft.rows(6), vec!["> abcd", "  ", "  x"]);
+    assert_eq!(draft.rows(6), vec!["› abcd", "  ", "  x"]);
 }
 
 #[test]
 fn wide_characters_take_two_columns_and_wrap_whole() {
     let draft = typed("日本語");
-    assert_eq!(draft.rows(7), vec!["> 日本", "  語"]);
+    assert_eq!(draft.rows(7), vec!["› 日本", "  語"]);
     assert_eq!(draft.cursor(7), (1, 4));
     let mut draft = typed("a😀b");
     draft.left();
@@ -310,13 +310,13 @@ fn a_character_wider_than_the_row_starts_no_empty_row() {
     // Width 3 leaves 1 column after `> `: a wide character at a row's
     // start stays on that row rather than wrapping below an empty one.
     let draft = typed("日");
-    assert_eq!(draft.rows(3), vec!["> 日", "  "]);
+    assert_eq!(draft.rows(3), vec!["› 日", "  "]);
 }
 
 #[test]
 fn a_tab_shows_as_one_space() {
     let draft = typed("a\tb");
-    assert_eq!(draft.rows(80), vec!["> a b"]);
+    assert_eq!(draft.rows(80), vec!["› a b"]);
     assert_eq!(draft.cursor(80), (0, 5));
 }
 
@@ -356,7 +356,7 @@ fn an_empty_draft_is_on_its_first_and_last_row() {
     let mut draft = Draft::default();
     assert!(!draft.up(80));
     assert!(!draft.down(80));
-    assert_eq!(draft.rows(80), vec!["> "]);
+    assert_eq!(draft.rows(80), vec!["› "]);
     assert_eq!(draft.cursor(80), (0, 2));
 }
 
@@ -366,7 +366,7 @@ fn a_token_wider_than_the_row_wraps_and_the_cursor_steps_over_it() {
     draft.paste(&lines(11));
     assert_eq!(
         draft.rows(12),
-        vec!["> [Pasted te", "  xt #1 · 11", "   lines]"]
+        vec!["› [Pasted te", "  xt #1 · 11", "   lines]"]
     );
     assert_eq!(draft.cursor(12), (2, 9));
     draft.left();
@@ -452,7 +452,7 @@ fn new_token_text_keeps_its_number_and_counts_its_lines_again() {
     draft.insert('b');
     draft.left();
     draft.set_token(1, &lines(15));
-    assert_eq!(draft.rows(80), vec!["> a[Pasted text #1 · 15 lines]b"]);
+    assert_eq!(draft.rows(80), vec!["› a[Pasted text #1 · 15 lines]b"]);
     assert_eq!(shown(&draft), format!("a{}|b", lines(15)));
     // A token's text with \r line breaks reads as a paste does.
     draft.set_token(1, &lines(12).replace('\n', "\r\n"));
@@ -502,7 +502,7 @@ fn ten_lines_go_inline_and_a_cursor_before_the_token_stays_put() {
     let mut draft = typed("a");
     draft.paste(&lines(12));
     draft.set_token(1, &lines(11));
-    assert_eq!(draft.rows(80), vec!["> a[Pasted text #1 · 11 lines]"]);
+    assert_eq!(draft.rows(80), vec!["› a[Pasted text #1 · 11 lines]"]);
 }
 
 #[test]
@@ -521,7 +521,7 @@ fn two_tokens_on_one_row_are_two_spans() {
         .iter()
         .map(|span| (span.number, span.row, span.start, span.end))
         .collect();
-    // "> [Pasted text #1 · 11 lines][Pasted text #2 · 12 lines]"
+    // "› [Pasted text #1 · 11 lines][Pasted text #2 · 12 lines]"
     assert_eq!(spans, vec![(1, 0, 2, 29), (2, 0, 29, 56)]);
 }
 
@@ -610,20 +610,20 @@ fn labels_count_images_in_order() {
     // token keeps its fixed number beside them.
     let mut draft = with_image("a", "AAA", "b");
     draft.insert_image(Arc::from("BBB"));
-    assert_eq!(draft.rows(80), vec!["> a[Image #1]b[Image #2]"]);
+    assert_eq!(draft.rows(80), vec!["› a[Image #1]b[Image #2]"]);
     // Cursor at the end: two lefts stand between the images, backspace
     // drops the first whole.
     draft.left();
     draft.left();
     draft.backspace();
-    assert_eq!(draft.rows(80), vec!["> ab[Image #1]"]);
+    assert_eq!(draft.rows(80), vec!["› ab[Image #1]"]);
     assert_eq!(draft.expand(), "ab[Image #1]");
     let mut token = Draft::default();
     token.paste(&lines(11));
     token.insert_image(Arc::from("AAA"));
     assert_eq!(
         token.rows(200),
-        vec!["> [Pasted text #1 · 11 lines][Image #1]"]
+        vec!["› [Pasted text #1 · 11 lines][Image #1]"]
     );
 }
 
@@ -685,7 +685,7 @@ fn token_spans_leave_images_out() {
     assert!(spans.iter().all(|span| span.number == 1));
     assert_eq!(
         draft.rows(200),
-        vec!["> [Pasted text #1 · 11 lines][Image #1]"]
+        vec!["› [Pasted text #1 · 11 lines][Image #1]"]
     );
     // An image beside the cursor is no token: Ctrl+G opens the draft.
     assert_eq!(draft.token_at_cursor(), None);

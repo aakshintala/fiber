@@ -22,9 +22,9 @@ const BOX_TINT: Style = Style::new().bg(Role::Surface.color());
 /// The workspace picker's tint.
 const PICKER_TINT: Style = Style::new().bg(Role::SurfaceRaised.color());
 
-/// The input box's placeholder, after `> `, while the draft is empty and
+/// The input box's placeholder, after `› `, while the draft is empty and
 /// no `start` went out in this run.
-const PLACEHOLDER: &str = "> /? for shortcuts";
+const PLACEHOLDER: &str = "› /? for shortcuts";
 
 /// The box's width: at most 100 columns, centred.
 const BOX_WIDTH: u16 = 100;
@@ -122,6 +122,32 @@ fn put(buf: &mut Buffer, area: Rect, x: u16, y: u16, text: &str, max: u16, text_
         cut(text, usize::from(max)),
         usize::from(max),
         text_style,
+    );
+}
+
+/// Writes one draft `row` at `x`, `y`, cut to `width`: the prompt in
+/// `info`, the rest on the box's tint (`docs/tui.md`, "The input box").
+fn put_prompt(buf: &mut Buffer, area: Rect, x: u16, y: u16, row: &str, max: u16) {
+    if y >= area.bottom() {
+        return;
+    }
+    // The prompt is the row's first two cells (`Draft::rows`).
+    let prompt: String = row.chars().take(2).collect();
+    let rest: String = row.chars().skip(2).collect();
+    let (end, _) = buf.set_stringn(
+        x,
+        y,
+        cut(&prompt, usize::from(max)),
+        usize::from(max),
+        BOX_TINT.fg(Role::Info.color()),
+    );
+    let room = max.saturating_sub(end.saturating_sub(x));
+    buf.set_stringn(
+        end,
+        y,
+        cut(&rest, usize::from(room)),
+        usize::from(room),
+        BOX_TINT,
     );
 }
 
@@ -229,6 +255,20 @@ pub(super) fn render(
         ),
         Role::Surface,
     );
+    // The box's rows take the surface tint edge to edge, past the
+    // placeholder or the written text (`docs/tui.md`, "The input box").
+    buf.set_style(
+        ratatui::layout::Rect::new(
+            placed.x,
+            placed.draft_top,
+            placed.width,
+            placed
+                .chip
+                .saturating_sub(placed.draft_top)
+                .saturating_add(1),
+        ),
+        BOX_TINT,
+    );
     for (at, row) in placed.shown.iter().enumerate() {
         let y = placed.draft_top.saturating_add(super::to_u16(at));
         if screen.placeholder && placed.top == 0 && at == 0 {
@@ -244,7 +284,22 @@ pub(super) fn render(
                 BOX_TINT.add_modifier(Modifier::DIM),
             );
         } else {
-            put(buf, area, placed.x, y, row, placed.width, BOX_TINT);
+            put_prompt(buf, area, placed.x, y, row, placed.width);
+        }
+    }
+    // The cursor is a drawn dim `█` at the draft's cursor while nothing
+    // takes the keyboard (`docs/tui.md`, "The input box"). The
+    // terminal's own cursor stays where `cursor` puts it.
+    if app.focused().is_none() {
+        let (row, col) = app.input().cursor(placed.width);
+        let y = placed
+            .draft_top
+            .saturating_add(super::to_u16(row.saturating_sub(placed.top)));
+        let x = placed
+            .x
+            .saturating_add(col.min(placed.width.saturating_sub(1)));
+        if y >= area.y && y < area.bottom() {
+            buf.set_stringn(x, y, "█", 1, style(Role::Muted));
         }
     }
     // The chip row: the workspace, the model, the thinking level, and

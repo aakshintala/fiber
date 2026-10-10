@@ -324,8 +324,8 @@ fn a_long_draft_shows_its_end() {
     let shown = screen(&app);
     let rows: Vec<&str> = shown.lines().collect();
     assert_eq!(rows.get(9).map(|row| row.chars().count()), Some(60));
-    assert!(rows.get(9).is_some_and(|row| row.starts_with("▌ > a")));
-    assert_eq!(rows.get(10).copied(), Some("▌   aaaaaaaaaaaaaaend"));
+    assert!(rows.get(9).is_some_and(|row| row.starts_with("▌ › a")));
+    assert_eq!(rows.get(10).copied(), Some("▌   aaaaaaaaaaaaaaend█"));
 }
 
 #[test]
@@ -345,7 +345,7 @@ fn draw_folds_an_events_file() {
     assert_eq!(
         shown,
         format!(
-            "{}█\n{}\n▌ >\n{}\n",
+            "{}█\n{}\n▌ › █\n{}\n",
             "▀".repeat(19),
             "▄".repeat(20),
             "▀".repeat(20)
@@ -378,15 +378,15 @@ fn a_short_screen_keeps_the_input_line_last() {
     // The input line wins the last row with its edges where they fit,
     // then the hint; a screen too short for them all drops the hint
     // first, and the notice with the conversation.
-    assert_eq!(sized(&mut app, 20, 1), "▌ >\n");
-    assert_eq!(sized(&mut app, 20, 2), "Press Ctrl+C again t\n▌ >\n");
+    assert_eq!(sized(&mut app, 20, 1), "▌ › █\n");
+    assert_eq!(sized(&mut app, 20, 2), "Press Ctrl+C again t\n▌ › █\n");
     assert_eq!(
         sized(&mut app, 20, 3),
-        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ >\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
     );
     assert_eq!(
         sized(&mut app, 20, 4),
-        "Press Ctrl+C again t\n▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ >\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+        "Press Ctrl+C again t\n▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
     );
 }
 
@@ -400,10 +400,10 @@ fn the_overlay_never_covers_the_input_line() {
     app.on_key(Key::PageUp, now);
     app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", "streamed"));
     assert!(app.has_new());
-    assert_eq!(sized(&mut app, 30, 1), "▌ >\n");
+    assert_eq!(sized(&mut app, 30, 1), "▌ › █\n");
     assert_eq!(
         sized(&mut app, 30, 2),
-        "    ↓ New messages below     █\n▌ >\n"
+        "    ↓ New messages below     █\n▌ › █\n"
     );
 }
 
@@ -620,16 +620,16 @@ fn a_short_screen_drops_the_badge_after_the_hint() {
     app.connect_failed("lost".to_owned());
     app.on_key(Key::CtrlC, now);
     let badge = "! 1 waiting · /approvals or ⌥A";
-    assert_eq!(sized(&mut app, 40, 1), "▌ >\n");
-    assert_eq!(sized(&mut app, 40, 2), format!("{badge}\n▌ >\n"));
+    assert_eq!(sized(&mut app, 40, 1), "▌ › █\n");
+    assert_eq!(sized(&mut app, 40, 2), format!("{badge}\n▌ › █\n"));
     // The input box's edges take the rows the hint and the badge lose.
     assert_eq!(
         sized(&mut app, 40, 3),
-        format!("{}\n▌ >\n{}\n", "▄".repeat(40), "▀".repeat(40))
+        format!("{}\n▌ › █\n{}\n", "▄".repeat(40), "▀".repeat(40))
     );
     assert_eq!(
         sized(&mut app, 40, 4),
-        format!("{badge}\n{}\n▌ >\n{}\n", "▄".repeat(40), "▀".repeat(40))
+        format!("{badge}\n{}\n▌ › █\n{}\n", "▄".repeat(40), "▀".repeat(40))
     );
 }
 
@@ -705,11 +705,11 @@ fn a_draft_wider_than_the_screen_wraps() {
     let rows: Vec<&str> = shown.lines().collect();
     assert_eq!(
         rows.get(9).copied(),
-        Some(format!("▌ > {}", "w".repeat(56)).as_str())
+        Some(format!("▌ › {}", "w".repeat(56)).as_str())
     );
     assert_eq!(
         rows.get(10).copied(),
-        Some(format!("▌   {}", "w".repeat(14)).as_str())
+        Some(format!("▌   {}█", "w".repeat(14)).as_str())
     );
     assert_eq!(cursor_at(&app), Some(Position::new(18, 10)));
 }
@@ -1774,7 +1774,7 @@ fn copied_needs_a_conversation_row_to_show_on() {
     click(&mut app, 30, 10, 27, 4);
     assert!(app.copied());
     app.set_size(30, 1);
-    assert_eq!(text(&buffer(&app, 30, 1)), "▌ >\n");
+    assert_eq!(text(&buffer(&app, 30, 1)), "▌ › █\n");
 }
 
 #[test]
