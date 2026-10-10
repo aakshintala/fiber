@@ -79,6 +79,34 @@ fiber.provider("openrouter", {
           if contains(m.supported_parameters, "reasoning") then
             entry.compat.reasoning_object = true
           end
+          -- The thinking levels the model takes: its reported efforts
+          -- kept in Fiber order, or OpenRouter's normalized effort values
+          -- when it reports reasoning but no efforts. A model without
+          -- reasoning takes none.
+          local levels = nil
+          local reasoning = m.reasoning
+          if type(reasoning) == "table" and type(reasoning.supported_efforts) == "table" then
+            levels = {}
+            for _, level in ipairs({ "minimal", "low", "medium", "high", "xhigh", "max" }) do
+              if contains(reasoning.supported_efforts, level) then
+                levels[#levels + 1] = level
+              end
+            end
+            if #levels == 0 then
+              levels = nil
+            end
+          end
+          if levels ~= nil then
+            entry.thinking_levels = levels
+            if contains(levels, reasoning.default_effort) then
+              entry.thinking_default = reasoning.default_effort
+            end
+          elseif contains(m.supported_parameters, "reasoning") then
+            -- debt: reasoning without efforts stays [low,medium,high], replace
+            -- when OpenRouter reports per-model efforts for it (provisional:
+            -- OpenRouter documents low/medium/high as its normalized values).
+            entry.thinking_levels = { "low", "medium", "high" }
+          end
           if type(m.id) == "string" and m.id:sub(1, 10) == "anthropic/" then
             entry.compat.anthropic = true
           end

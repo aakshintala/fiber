@@ -68,6 +68,12 @@
       ],
       "max_output_tokens": 65536,
       "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "web_search": "google_search"
     },
     {
@@ -85,6 +91,12 @@
       ],
       "max_output_tokens": 65536,
       "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "web_search": "google_search"
     },
     {
@@ -100,7 +112,11 @@
         "image"
       ],
       "max_output_tokens": 4096,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "high"
+      ]
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -117,6 +133,12 @@
       ],
       "max_output_tokens": 65536,
       "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "web_search": "google_search"
     },
     {
@@ -132,7 +154,13 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -158,6 +186,11 @@
       ],
       "max_output_tokens": 65536,
       "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
       "web_search": "google_search"
     },
     {
@@ -184,6 +217,11 @@
       ],
       "max_output_tokens": 65536,
       "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
       "web_search": "google_search"
     },
     {
@@ -201,6 +239,12 @@
       ],
       "max_output_tokens": 65536,
       "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "web_search": "google_search"
     },
     {
@@ -218,6 +262,12 @@
       ],
       "max_output_tokens": 65536,
       "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "web_search": "google_search"
     },
     {
@@ -235,6 +285,12 @@
       ],
       "max_output_tokens": 65536,
       "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
       "web_search": "google_search"
     },
     {
@@ -252,6 +308,11 @@
       ],
       "max_output_tokens": 65536,
       "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
       "web_search": "google_search"
     },
     {
@@ -269,6 +330,11 @@
       ],
       "max_output_tokens": 65536,
       "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high"
+      ],
       "web_search": "google_search"
     },
     {
@@ -285,7 +351,13 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -301,7 +373,13 @@
         "image"
       ],
       "max_output_tokens": 65536,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ]
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -312,7 +390,11 @@
         "image"
       ],
       "max_output_tokens": 32768,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "high"
+      ]
     },
     {
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
@@ -323,7 +405,11 @@
         "image"
       ],
       "max_output_tokens": 32768,
-      "protocol": "google-generative-ai"
+      "protocol": "google-generative-ai",
+      "thinking_levels": [
+        "minimal",
+        "high"
+      ]
     }
   ],
   "name": "gemini",

@@ -51,6 +51,7 @@ fn fixed_package(source: &'static str, protocol: &'static str) -> Package {
         every_model: r#"{}"#,
         by_protocol: &[],
         by_model: &[],
+        thinking: &[],
     }
 }
 
@@ -446,6 +447,87 @@ fn a_missing_tier_rate_falls_back_to_base_then_zero() {
 }
 
 #[test]
+fn thinking_entries_name_snapshot_models_and_known_levels() {
+    let snapshot = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/models-dev.json"
+    ))
+    .unwrap();
+    let snapshot: Value = serde_json::from_str(&snapshot).unwrap();
+    const VOCABULARY: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    let mut listed = 0;
+    for package in &PACKAGES {
+        let models = &snapshot[package.source]["models"];
+        for (id, levels, default) in package.thinking {
+            listed += 1;
+            assert!(
+                models.get(*id).is_some(),
+                "{id} is not a models.dev model under `{}`",
+                package.source
+            );
+            assert!(!levels.is_empty(), "{id} lists no thinking level");
+            for level in *levels {
+                assert!(
+                    VOCABULARY.contains(level),
+                    "{id} lists `{level}`, outside the thinking vocabulary"
+                );
+            }
+            if let Some(default) = default {
+                assert!(
+                    levels.contains(default),
+                    "{id} defaults to `{default}`, outside its listed levels"
+                );
+            }
+        }
+    }
+    assert!(listed > 0, "no package lists a thinking entry");
+}
+
+#[test]
+fn the_thinking_layer_merges_levels_and_its_default() {
+    let mut package = fixed_package("s", "openai-responses");
+    package.thinking = &[("m", &["low", "high"], Some("low")), ("n", &["high"], None)];
+    let (output, _) = generate_one(
+        &package,
+        &[("m", tool_model(json!({}))), ("n", tool_model(json!({})))],
+    );
+    let model = generated_model(&output, "m").unwrap();
+    assert_eq!(model["thinking_levels"], json!(["low", "high"]));
+    assert_eq!(model["thinking_default"], "low");
+    let model = generated_model(&output, "n").unwrap();
+    assert_eq!(model["thinking_levels"], json!(["high"]));
+    assert!(model.get("thinking_default").is_none());
+}
+
+#[test]
+fn a_model_without_a_thinking_entry_declares_none() {
+    let mut package = fixed_package("s", "openai-responses");
+    package.thinking = &[("m", &["low"], None)];
+    let (output, _) = generate_one(
+        &package,
+        &[
+            ("m", tool_model(json!({}))),
+            ("plain", tool_model(json!({}))),
+        ],
+    );
+    let plain = generated_model(&output, "plain").unwrap();
+    assert!(plain.get("thinking_levels").is_none());
+    assert!(plain.get("thinking_default").is_none());
+}
+
+#[test]
+fn the_thinking_layer_replaces_a_by_model_one() {
+    let mut package = fixed_package("s", "openai-responses");
+    package.by_model = &[("m", r#"{"thinking_levels":["low"]}"#)];
+    package.thinking = &[("m", &["low", "high"], None)];
+    let (output, _) = generate_one(&package, &[("m", tool_model(json!({})))]);
+    assert_eq!(
+        generated_model(&output, "m").unwrap()["thinking_levels"],
+        json!(["low", "high"])
+    );
+}
+
+#[test]
 fn later_table_layers_replace_earlier_keys() {
     let mut package = fixed_package("s", "p");
     package.every_model = r#"{"keep":1,"mid":1,"top":0}"#;
@@ -478,6 +560,13 @@ fn a_stale_table_entry_is_an_error_naming_both() {
     );
     let mut package = fixed_package("s", "p");
     package.protocol_overrides = &[("ghost", "openai-responses")];
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    assert_eq!(
+        generate_err(&package, &input),
+        "t: table entry for `ghost` matches no generated model"
+    );
+    let mut package = fixed_package("s", "p");
+    package.thinking = &[("ghost", &["low"], None)];
     let input = catalog(package.source, &[("m", tool_model(json!({})))]);
     assert_eq!(
         generate_err(&package, &input),
@@ -741,7 +830,9 @@ fn zen_keeps_its_google_generative_ai_models() {
     let models: Vec<(&str, Value)> = gemini
         .by_model
         .iter()
-        .map(|(id, _)| (*id, tool_model(json!({}))))
+        .map(|(id, _)| *id)
+        .chain(gemini.thinking.iter().map(|(id, _, _)| *id))
+        .map(|id| (id, tool_model(json!({}))))
         .collect();
     let (output, _) = generate_one(gemini, &models);
     assert!(generated_model(&output, "gemini-3.8-flash").is_some());

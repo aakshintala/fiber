@@ -19,6 +19,13 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     },
     {
@@ -37,6 +44,13 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     },
     {
@@ -100,6 +114,13 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     },
     {
@@ -154,6 +175,13 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     },
     {
@@ -172,6 +200,14 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     },
     {
@@ -190,6 +226,14 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     },
     {
@@ -208,6 +252,13 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     },
     {
@@ -226,6 +277,13 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     },
     {
@@ -280,6 +338,13 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     },
     {
@@ -298,6 +363,14 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "off",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     },
     {
@@ -316,6 +389,13 @@
       ],
       "max_output_tokens": 128000,
       "protocol": "anthropic-messages",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
       "web_search": "web_search_20250305"
     }
   ],

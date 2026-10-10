@@ -1385,6 +1385,27 @@ fn thinking_levels_map_to_the_reasoning_effort() {
     );
 }
 
+#[test]
+fn a_codex_base_url_still_sends_the_reasoning_effort() {
+    use contract::ThinkingLevel::Xhigh;
+    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
+    let server = ProviderServer::start([reply()]).unwrap();
+    let mut req = request();
+    req.thinking = Some(Xhigh);
+    let endpoint = Endpoint {
+        base_url: format!("{}/backend-api/codex", server.url()),
+        ..endpoint(&server)
+    };
+    run(Box::new(Responses::new(endpoint).request(&req)))
+        .0
+        .unwrap();
+    assert_eq!(server.requests()[0].path, "/backend-api/codex/responses");
+    assert_eq!(
+        sent_body(&server, 0)["reasoning"],
+        json!({"effort": "xhigh"})
+    );
+}
+
 /// A conversation whose one user message carries `images`.
 fn user_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
     vec![Input::User {

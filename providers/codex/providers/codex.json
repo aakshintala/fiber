@@ -35,7 +35,15 @@
           }
         ]
       },
-      "subscription": true
+      "subscription": true,
+      "thinking_default": "low",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "id": "gpt-6-sol",
@@ -66,7 +74,15 @@
           }
         ]
       },
-      "subscription": true
+      "subscription": true,
+      "thinking_default": "medium",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "id": "gpt-6-astra",
@@ -97,7 +113,15 @@
           }
         ]
       },
-      "subscription": true
+      "subscription": true,
+      "thinking_default": "low",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     },
     {
       "id": "gpt-6-luna",
@@ -128,7 +152,15 @@
           }
         ]
       },
-      "subscription": true
+      "subscription": true,
+      "thinking_default": "medium",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
     }
   ]
 }
