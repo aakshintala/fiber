@@ -97,7 +97,8 @@ fn match_in(path: &str, query: &str) -> Option<Range<usize>> {
     let name = path.rsplit('/').next().unwrap_or(path);
     if name.to_lowercase().contains(&query.to_lowercase()) {
         let at = path.len().saturating_sub(name.len());
-        return slash::matched(name, query).map(|found| at.saturating_add(found.start)..at.saturating_add(found.end));
+        return slash::matched(name, query)
+            .map(|found| at.saturating_add(found.start)..at.saturating_add(found.end));
     }
     slash::matched(path, query)
 }
@@ -105,7 +106,12 @@ fn match_in(path: &str, query: &str) -> Option<Range<usize>> {
 /// The spans for `shown`, a cut remainder of a path starting at byte
 /// `at` and ending at byte `end`: the part of `found` still shown reads
 /// bold in `accent`, the rest in `accent`.
-fn path_spans(shown: &str, at: usize, found: Option<Range<usize>>, end: usize) -> Vec<Span<'static>> {
+fn path_spans(
+    shown: &str,
+    at: usize,
+    found: Option<Range<usize>>,
+    end: usize,
+) -> Vec<Span<'static>> {
     let accent = Style::new().fg(Role::Accent.color());
     let bold = accent.add_modifier(Modifier::BOLD);
     let Some(found) = found else {
@@ -156,12 +162,16 @@ fn slash_row(row: &slash::Row, query: &str, name_w: usize, room: usize, focused:
     )];
     spans.extend(name_spans(&row.name, query, name_w));
     spans.push(Span::raw(" ".to_owned()));
-    let hint = row.hint.as_deref().map_or_else(String::new, |hint| format!(" {hint}"));
+    let hint = row
+        .hint
+        .as_deref()
+        .map_or_else(String::new, |hint| format!(" {hint}"));
     let fixed = 2 + name_w + 1 + cells(&hint) + 1 + cells(&row.tag);
-    spans.push(Span::styled(dot_cut(&row.description, room.saturating_sub(fixed)), dim));
-    if !hint.is_empty() {
-        spans.push(Span::styled(hint, Style::new().fg(Role::Attention.color())));
-    }
+    spans.push(Span::styled(
+        dot_cut(&row.description, room.saturating_sub(fixed)),
+        dim,
+    ));
+    spans.push(Span::styled(hint, Style::new().fg(Role::Attention.color())));
     Row {
         spans,
         right: vec![Span::styled(row.tag.clone(), dim)],
@@ -183,7 +193,10 @@ fn file_row(path: &str, query: &str, room: usize, focused: bool) -> Row {
     let found = match_in(path, query);
     let (shown, at) = cut_left(path, room.saturating_sub(2));
     if at > 0 {
-        spans.push(Span::styled("…".to_owned(), Style::new().fg(Role::Accent.color())));
+        spans.push(Span::styled(
+            "…".to_owned(),
+            Style::new().fg(Role::Accent.color()),
+        ));
     }
     let end = at.saturating_add(shown.len());
     spans.extend(path_spans(&shown, at, found, end));
@@ -202,12 +215,22 @@ fn file_row(path: &str, query: &str, room: usize, focused: bool) -> Row {
 fn body(completions: &Completions, room: usize) -> Vec<Row> {
     let mut rows = match &completions.rows {
         Rows::Slash(entries) => {
-            let name_w = entries.iter().map(|row| cells(&row.name)).max().unwrap_or(0);
+            let name_w = entries
+                .iter()
+                .map(|row| cells(&row.name))
+                .max()
+                .unwrap_or(0);
             entries
                 .iter()
                 .enumerate()
                 .map(|(at, row)| {
-                    slash_row(row, &completions.query, name_w, room, completions.selected == Some(at))
+                    slash_row(
+                        row,
+                        &completions.query,
+                        name_w,
+                        room,
+                        completions.selected == Some(at),
+                    )
                 })
                 .collect()
         }
@@ -215,16 +238,19 @@ fn body(completions: &Completions, room: usize) -> Vec<Row> {
             .iter()
             .enumerate()
             .map(|(at, path)| {
-                file_row(path, &completions.query, room, completions.selected == Some(at))
+                file_row(
+                    path,
+                    &completions.query,
+                    room,
+                    completions.selected == Some(at),
+                )
             })
             .collect(),
         Rows::Message(text) => vec![dim_row(text.clone())],
         Rows::Search(_) => Vec::new(),
     };
-    if matches!(
-        completions.rows,
-        Rows::Slash(_) | Rows::Files(_)
-    ) && let Some(range) = range_text(completions.start, rows.len(), completions.total)
+    if matches!(completions.rows, Rows::Slash(_) | Rows::Files(_))
+        && let Some(range) = range_text(completions.start, rows.len(), completions.total)
     {
         rows.push(dim_row(range));
     }
@@ -248,8 +274,7 @@ pub(super) fn draw(
     }
     // The content wraps at the preferred width first: rows are built
     // once at what fits, and the frame shrinks to what they need.
-    let room = usize::from(PREFER.saturating_sub(4))
-        .min(usize::from(area.width.saturating_sub(4)));
+    let room = usize::from(PREFER.saturating_sub(4)).min(usize::from(area.width.saturating_sub(4)));
     let framed = overlay::Overlay {
         title: None,
         close: None,
