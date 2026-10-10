@@ -37,8 +37,7 @@ impl<K: Keep> Connector<Either<(), Box<dyn Transport>>> for KeepSocket<K> {
         if let Some(Either::B(tunnel)) = chained {
             return Ok(Some(Either::A(tunnel)));
         }
-        let addrs: Vec<SocketAddr> = details.addrs.iter().copied().collect();
-        let stream = open(&addrs, self.0.as_ref())?;
+        let stream = open(&details.addrs, self.0.as_ref())?;
         if details.config.no_delay() {
             stream.set_nodelay(true)?;
         }

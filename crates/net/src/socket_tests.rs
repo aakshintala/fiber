@@ -31,8 +31,16 @@ fn is_stopped(error: &io::Error) -> bool {
 #[test]
 fn a_socket_is_open_until_a_read_finds_the_peer_closed() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (mut peer, _) = listener.accept().unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stream, mut peer) = fakes::within(
+        "the socket to connect and the listener to accept it",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            let stream = TcpStream::connect(addr).unwrap();
+            let (peer, _) = listener.accept().unwrap();
+            (stream, peer)
+        },
+    );
     let mut socket = Socket {
         stream,
         buffers: LazyBuffers::new(1024, 1024),

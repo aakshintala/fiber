@@ -157,8 +157,16 @@ fn a_call_cancelled_before_it_starts_runs_no_work_and_wins_over_a_passed_deadlin
 /// A connected pair: the client end for the hop to keep, and the server end.
 fn pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (server, _) = listener.accept().unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (client, server) = fakes::within(
+        "the client to connect and the listener to accept it",
+        fakes::MUST_SUCCEED_WITHIN,
+        move || {
+            let client = TcpStream::connect(addr).unwrap();
+            let (server, _) = listener.accept().unwrap();
+            (client, server)
+        },
+    );
     server.set_read_timeout(Some(SIGNAL)).unwrap();
     (client, server)
 }
