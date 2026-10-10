@@ -612,6 +612,11 @@ fn slow_script_fragments_need_one_advance_each() {
         "{}",
         String::from_utf8_lossy(&output.stdout)
     );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("diagnostics:"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 
 #[test]
