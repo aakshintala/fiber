@@ -388,14 +388,74 @@ pub fn pids_exit(pids: &[u32], deadline: Duration) -> bool {
     result
 }
 
+/// What a command line lookup prints when the process is already gone:
+/// the pid in the expiry message still names the holder.
+const GONE_ARGS: &str = "<gone>";
+
+/// `pid`'s command line through `ps -o args= -p <pid>`, `None` when `ps`
+/// fails or prints nothing: the process exited between the listing and
+/// the lookup.
+fn command_line(pid: u32) -> Option<String> {
+    let output = Command::new("ps")
+        .args(["-o", "args=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let args = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if args.is_empty() { None } else { Some(args) }
+}
+
+/// Each outstanding pid with its command line, for the expiry message: a
+/// lookup that fails prints `<gone>`, so a reused pid still reads named.
+fn describe_holders(pids: &[u32]) -> String {
+    pids.iter()
+        .map(|pid| {
+            let args = command_line(*pid).unwrap_or_else(|| GONE_ARGS.to_owned());
+            format!("{pid} {args}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The deadline's error: `TimedOut`, naming every pid from the latest
+/// listing still outstanding with its command line, so the failure
+/// diagnoses itself. With no listing yet there is nothing to name.
+fn expiry_error(pids: &[u32]) -> io::Error {
+    if pids.is_empty() {
+        io::Error::new(io::ErrorKind::TimedOut, "deadline expired waiting for exit")
+    } else {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "deadline expired waiting for exit: {}",
+                describe_holders(pids)
+            ),
+        )
+    }
+}
+
+/// Publishes the latest listing for the expiry error: the wait holds no
+/// lock, so the deadline's read never blocks on it.
+fn publish(published: &Mutex<Vec<u32>>, pids: &[u32]) {
+    *published.lock().unwrap_or_else(PoisonError::into_inner) = pids.to_vec();
+}
+
 /// `matching_exits` with the listing injected: `list` runs before the
 /// probes and again after every wait. The test seam for the final check.
 fn listed_exit(
     list: impl FnMut() -> io::Result<Vec<u32>> + Send + 'static,
     deadline: Duration,
-) -> Result<(), String> {
-    let (done, finished) = mpsc::channel::<Result<(), String>>();
+) -> io::Result<()> {
+    let (done, finished) = mpsc::channel::<io::Result<()>>();
     let (stop, stopped) = mpsc::channel::<()>();
+    // The latest listing, published after each one: the deadline's read
+    // names the holders even while the wait still runs.
+    let outstanding = Arc::new(Mutex::new(Vec::<u32>::new()));
+    let published = Arc::clone(&outstanding);
     thread::spawn(move || {
         let mut list = list;
         // The first listing's failure names itself; every later listing
@@ -403,15 +463,16 @@ fn listed_exit(
         let mut pids = match list() {
             Ok(pids) => pids,
             Err(err) => {
-                match done.send(Err(format!("first pgrep failed: {err}"))) {
+                match done.send(Err(io::Error::other(format!("first pgrep failed: {err}")))) {
                     Ok(()) | Err(_) => {}
                 }
                 return;
             }
         };
         loop {
+            publish(&published, &pids);
             if !wait_exits(&pids, &stopped) {
-                match done.send(Err("deadline expired waiting for exit".to_owned())) {
+                match done.send(Err(expiry_error(&pids))) {
                     Ok(()) | Err(_) => {}
                 }
                 return;
@@ -419,7 +480,7 @@ fn listed_exit(
             pids = match list() {
                 Ok(pids) => pids,
                 Err(err) => {
-                    match done.send(Err(format!("second pgrep failed: {err}"))) {
+                    match done.send(Err(io::Error::other(format!("second pgrep failed: {err}")))) {
                         Ok(()) | Err(_) => {}
                     }
                     return;
@@ -437,7 +498,13 @@ fn listed_exit(
     });
     let result = match Deadline::after(deadline).recv(&finished) {
         Ok(result) => result,
-        Err(_) => Err("deadline expired waiting for exit".to_owned()),
+        Err(_) => {
+            let pids = outstanding
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            Err(expiry_error(&pids))
+        }
     };
     drop(stop);
     result
@@ -452,8 +519,8 @@ fn listed_exit(
 /// # Errors
 ///
 /// When a `pgrep` fails or when the deadline expires first. The message
-/// names the path.
-pub fn try_matching_exits(text: &str, deadline: Duration) -> Result<(), String> {
+/// names the path; the expiry names the holders too.
+pub fn try_matching_exits(text: &str, deadline: Duration) -> io::Result<()> {
     let text = text.to_owned();
     listed_exit(move || matching(&text), deadline)
 }

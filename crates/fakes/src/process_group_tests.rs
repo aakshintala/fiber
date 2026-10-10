@@ -661,8 +661,10 @@ fn listed_exit_names_a_first_listing_failure() {
         DEADLINE,
     )
     .unwrap_err();
-    assert!(err.contains("first pgrep failed"), "{err}");
-    assert!(err.contains("pgrep blew up"), "{err}");
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+    let text = err.to_string();
+    assert!(text.contains("first pgrep failed"), "{text}");
+    assert!(text.contains("pgrep blew up"), "{text}");
 }
 
 #[test]
@@ -684,19 +686,46 @@ fn listed_exit_names_a_second_listing_failure() {
         DEADLINE,
     )
     .unwrap_err();
-    assert!(err.contains("second pgrep failed"), "{err}");
-    assert!(err.contains("pgrep fell over"), "{err}");
+    assert_eq!(err.kind(), io::ErrorKind::Other);
+    let text = err.to_string();
+    assert!(text.contains("second pgrep failed"), "{text}");
+    assert!(text.contains("pgrep fell over"), "{text}");
 }
 
 #[test]
-fn listed_exit_reports_expiry_when_a_listed_pid_never_exits() {
+fn listed_exit_names_the_holders_when_the_deadline_expires() {
     let mut child = held();
     let pid = child.id();
     let stdin = child.stdin.take().unwrap();
     let err = listed_exit(move || Ok(vec![pid]), Duration::from_millis(200)).unwrap_err();
-    assert!(err.contains("deadline expired waiting for exit"), "{err}");
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    let text = err.to_string();
+    assert!(text.contains("deadline expired waiting for exit"), "{text}");
+    assert!(text.contains(&pid.to_string()), "{text}");
+    assert!(text.contains("sh"), "{text}");
     drop(stdin);
     reaped(child, "the held child to exit once its stdin closed");
+}
+
+#[test]
+fn listed_exit_reports_expiry_with_no_listing_yet() {
+    // A listing that never answers: the deadline expires with nothing
+    // published, so the error names no holder.
+    let (never, unanswered) = mpsc::channel::<()>();
+    let err = listed_exit(
+        move || match Deadline::after(DEADLINE).recv(&unanswered) {
+            Ok(()) | Err(_) => Err::<Vec<u32>, _>(io::Error::other("the listing never answered")),
+        },
+        Duration::from_millis(200),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert!(
+        err.to_string()
+            .contains("deadline expired waiting for exit"),
+        "{err}"
+    );
+    drop(never);
 }
 
 #[test]
@@ -774,10 +803,13 @@ fn listed_exit_reports_expiry_when_a_late_process_never_exits() {
         Duration::from_millis(200),
     )
     .unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    let text = err.to_string();
     assert!(
-        err.contains("deadline expired waiting for exit"),
-        "a late process that never exits must expire the deadline: {err}"
+        text.contains("deadline expired waiting for exit"),
+        "a late process that never exits must expire the deadline: {text}"
     );
+    assert!(text.contains(&pid.to_string()), "{text}");
     drop(stdin);
     reaped(child, "the held child to exit once its stdin closed");
 }
