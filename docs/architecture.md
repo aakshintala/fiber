@@ -57,6 +57,7 @@ ephemeral event where it is display-only.
 | `net` | The TLS configuration every HTTPS call uses: the platform verifier, or on Linux, when the system store has no certificates, Mozilla's roots compiled in through ureq (`docs/dependencies.md`). |
 | `worktree` | Creates and removes the git worktrees sessions and delegates run in, by running the `git` program (`docs/invocation.md`, "Isolation"). |
 | `extensions` | Loads extension code, hosts the runtime, and wires what extensions register into the three seams. |
+| `routing` | Model routing: picks the model for a session or a switch, looks up its credential, starts its Lua provider, builds its `Provider`, and finds the reviewer. The one module that uses `config`, `extensions` and `provider` together. `main` calls it at startup and when a session switches models. |
 | `tui` | Draws the terminal, in its own process, as a client of the hub. Watches events, sends commands, knows nothing else. |
 | `config` | Reads the configuration files in [Fiber home](state.md) and the repository's `.fiber/` ([Configuration](configuration.md)). Answers questions; never asks any. |
 | `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket, over its local socket and, when installed with a port, a websocket on `127.0.0.1` that authenticates each device by token (`docs/invocation.md`, "The hub"). Holds no session and no push credential; does no TLS. |
@@ -93,7 +94,9 @@ log and opening a file by path stay in `log`), and never on `loop`, `provider`, 
 `extensions`, and never on `loop`. `worktree` depends only on `contract`, and
 `jobs`, `doors` and `cli` may depend on it. `net` depends only on `contract`
 and ureq's TLS stack, and `provider`, `tools` and `extensions` may depend on it,
-so `hub` and `tui` still do no TLS. `main` depends on
+so `hub` and `tui` still do no TLS. `routing` depends on `contract`,
+`config`, `extensions` and `provider`, and is the only crate that depends on
+both `extensions` and `provider`; only `main` depends on it. `main` depends on
 everything, and nothing depends on `main`.
 
 `fakes` holds the shared fakes that tests and jigs run against
