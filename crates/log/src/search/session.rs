@@ -15,10 +15,10 @@ use contract::{Envelope, SessionId};
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use serde_json::Value;
 
-use super::Collect;
 use super::fields;
 use super::read::Cancelling;
 use super::text::{Text, escaped, snippet};
+use super::{Collect, kind_of, unreadable};
 use crate::{ARTIFACTS, EVENTS};
 
 /// File extensions never searched as text, compared ignoring case.
@@ -63,11 +63,11 @@ pub(super) fn search(text: &Text, session: &Session<'_>, cancel: &dyn Cancel, ou
     extra.push(fields::SELF_TOOL.to_owned());
     let raw = match text.raw(&extra) {
         Ok(raw) => raw,
-        Err(error) => return out.problem(format!("Could not read: {}: {error}", path.display())),
+        Err(error) => return out.problem(unreadable(&path, &error)),
     };
     let mut log = session.log;
     if let Err(error) = log.rewind() {
-        return out.problem(format!("Could not read: {}: {error}", path.display()));
+        return out.problem(unreadable(&path, &error));
     }
     let mut lines = Lines {
         text,
@@ -92,7 +92,7 @@ pub(super) fn search(text: &Text, session: &Session<'_>, cancel: &dyn Cancel, ou
     if let Err(error) = searched
         && !cancel.is_cancelled()
     {
-        out.problem(format!("Could not read: {}: {error}", path.display()));
+        out.problem(unreadable(&path, &error));
     }
     out.name(session.id, &name);
 }
@@ -108,23 +108,16 @@ fn artifacts(
 ) -> Option<Vec<Matched>> {
     let path = dir.join(ARTIFACTS);
     let mut matched = Vec::new();
-    match std::fs::symlink_metadata(&path) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Some(matched),
-        Err(error) => {
-            out.problem(format!("Could not read: {}: {error}", path.display()));
-            return Some(matched);
-        }
-        Ok(meta) if meta.is_symlink() => {
-            out.problem(format!("{} is a link", path.display()));
-            return Some(matched);
-        }
-        Ok(meta) if !meta.is_dir() => return Some(matched),
-        Ok(_) => {}
+    let Some(kind) = kind_of(&path, &mut |problem| out.problem(problem)) else {
+        return Some(matched);
+    };
+    if !kind.is_dir() {
+        return Some(matched);
     }
     let entries = match std::fs::read_dir(&path) {
         Ok(entries) => entries,
         Err(error) => {
-            out.problem(format!("Could not read: {}: {error}", path.display()));
+            out.problem(unreadable(&path, &error));
             return Some(matched);
         }
     };
@@ -140,17 +133,11 @@ fn artifacts(
             return None;
         }
         let file = path.join(&name);
-        match std::fs::symlink_metadata(&file) {
-            Err(error) => {
-                out.problem(format!("Could not read: {}: {error}", file.display()));
-                continue;
-            }
-            Ok(meta) if meta.is_symlink() => {
-                out.problem(format!("{} is a link", file.display()));
-                continue;
-            }
-            Ok(meta) if !meta.is_file() => continue,
-            Ok(_) => {}
+        let Some(kind) = kind_of(&file, &mut |problem| out.problem(problem)) else {
+            continue;
+        };
+        if !kind.is_file() {
+            continue;
         }
         if not_text(&name) {
             continue;
@@ -165,7 +152,7 @@ fn artifacts(
             }),
             Ok(None) => {}
             Err(_) if cancel.is_cancelled() => return None,
-            Err(error) => out.problem(format!("Could not read: {}: {error}", file.display())),
+            Err(error) => out.problem(unreadable(&file, &error)),
         }
     }
     Some(matched)

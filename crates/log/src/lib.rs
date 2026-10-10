@@ -10,6 +10,8 @@
 mod dependents;
 pub mod diag;
 mod export;
+#[cfg(test)]
+mod fixtures;
 mod history;
 mod offsets;
 mod rate;

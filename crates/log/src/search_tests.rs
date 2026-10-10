@@ -9,24 +9,26 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::fs::{self, OpenOptions};
-use std::io::Write as _;
+use std::cmp::Ordering;
+use std::fs::{self};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::sync::Weak;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::Duration;
 
+use contract::Seq;
 use contract::clock::Wake;
 use contract::events::Event;
 use contract::session_search::Label;
-use contract::{Envelope, Seq};
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 use proptest::prelude::*;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::*;
 use crate::Log;
+pub(super) use crate::fixtures::append_raw as raw;
+use crate::fixtures::event;
 
 /// A Fiber home whose sessions are written with [`Log`].
 pub(super) struct Home {
@@ -92,20 +94,6 @@ impl Home {
     }
 }
 
-fn event(kind: &str, payload: Value) -> Event {
-    let line = Envelope {
-        kind: kind.into(),
-        session_id: SessionId("x".into()),
-        ts: 0,
-        schema_version: 1,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: payload.as_object().unwrap().clone(),
-    };
-    Event::from_envelope(&line).unwrap().unwrap()
-}
-
 fn started(workspace: &str) -> Event {
     event(
         "session_started",
@@ -132,14 +120,6 @@ fn sessions_of(found: &Found) -> Vec<&str> {
     let mut ids: Vec<&str> = found.hits.iter().map(|h| h.session_id.0.as_str()).collect();
     ids.dedup();
     ids
-}
-
-pub(super) fn raw(dir: &Path, bytes: &[u8]) {
-    let mut log = OpenOptions::new()
-        .append(true)
-        .open(dir.join("events.jsonl"))
-        .unwrap();
-    log.write_all(bytes).unwrap();
 }
 
 fn set_mode(path: &Path, mode: u32) {
@@ -282,24 +262,13 @@ fn hits_rank_by_class_then_newer_then_session_then_seq() {
 }
 
 #[test]
-fn ranked_equality_matches_its_ordering_key() {
-    let equal = Ranked(hit(Label::Message, 5, "s_a", 4));
-    let same_key = Ranked(hit(Label::Message, 5, "s_a", 4));
-    let different_key = Ranked(hit(Label::Message, 5, "s_a", 3));
-    assert!(equal.eq(&same_key));
-    assert!(!equal.eq(&different_key));
-    assert_eq!(equal.cmp(&same_key), Ordering::Equal);
-    assert_ne!(equal.cmp(&different_key), Ordering::Equal);
-}
-
-#[test]
 fn hits_tied_on_rank_order_by_log_then_snippet_then_artifact() {
     let with = |log: &str, snippet: &str, artifact: Option<&str>| {
         let mut hit = hit(Label::ToolOutput, 5, "s_a", 4);
         hit.log = PathBuf::from(log);
         snippet.clone_into(&mut hit.snippet);
         hit.artifact = artifact.map(PathBuf::from);
-        Ranked(hit)
+        hit
     };
     let base = with("/b", "b", Some("/b"));
     for (smaller, larger) in [
@@ -308,8 +277,8 @@ fn hits_tied_on_rank_order_by_log_then_snippet_then_artifact() {
         (with("/b", "b", None), with("/b", "b", Some("/a"))),
         (with("/b", "b", Some("/a")), with("/b", "b", Some("/b"))),
     ] {
-        assert_eq!(smaller.cmp(&larger), Ordering::Less);
-        assert!(!smaller.eq(&larger));
+        assert_eq!(key(&smaller).cmp(&key(&larger)), Ordering::Less);
+        assert_ne!(key(&smaller), key(&larger));
     }
 }
 
@@ -332,9 +301,18 @@ fn a_limit_of_zero_keeps_no_hit_while_scanning() {
     let mut out = Collect::new(0);
     for seq in 0..1000 {
         out.hit(hit(Label::Message, seq, "s", seq));
-        assert!(out.heap.is_empty());
+        assert!(out.hits.is_empty());
     }
     assert_eq!(out.found().total, 1000);
+}
+
+#[test]
+fn hits_are_held_up_to_twice_the_limit_then_cut_to_the_limit() {
+    let mut out = Collect::new(2);
+    for (pushed, want) in [(1_u64, 1_usize), (2, 2), (3, 3), (4, 2), (5, 3)] {
+        out.hit(hit(Label::Message, 100 - pushed, "s", pushed));
+        assert_eq!(out.hits.len(), want, "after {pushed} hits");
+    }
 }
 
 #[test]
@@ -366,9 +344,9 @@ proptest! {
         for hit in all.clone() {
             out.hit(hit);
         }
-        let mut sorted: Vec<Ranked> = all.into_iter().map(Ranked).collect();
-        sorted.sort();
-        let want: Vec<Hit> = sorted.into_iter().take(limit).map(|r| r.0).collect();
+        let mut sorted = all;
+        sorted.sort_by(|a, b| key(a).cmp(&key(b)));
+        let want: Vec<Hit> = sorted.into_iter().take(limit).collect();
         let found = out.found();
         prop_assert_eq!(keys(&found.hits), keys(&want));
         prop_assert_eq!(found.total, rows.len() as u64);

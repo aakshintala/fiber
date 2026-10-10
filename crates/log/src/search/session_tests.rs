@@ -9,8 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::fs::{self, File, OpenOptions};
-use std::io::Write as _;
+use std::fs::{self, File};
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -18,16 +17,16 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use contract::clock::Wake;
-use contract::events::Event;
 use contract::session_search::{Found, Label};
 use contract::tool::Cancel;
-use contract::{ActionId, Envelope, SessionId};
+use contract::{ActionId, SessionId};
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 use serde_json::{Value, json};
 
 use super::*;
 use crate::Log;
+use crate::fixtures::{append_raw as raw, event};
 
 /// The fake clock's wall time at its origin, in milliseconds.
 const ORIGIN_MS: u64 = 1_700_000_000_000;
@@ -83,20 +82,6 @@ impl Fixture {
     }
 }
 
-fn event(kind: &str, payload: Value) -> Event {
-    let line = Envelope {
-        kind: kind.into(),
-        session_id: SessionId("x".into()),
-        ts: 0,
-        schema_version: 1,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: payload.as_object().unwrap().clone(),
-    };
-    Event::from_envelope(&line).unwrap().unwrap()
-}
-
 fn text(t: &str) -> Value {
     json!({"type": "text", "text": t})
 }
@@ -128,15 +113,6 @@ fn shell(command: &str, output: &str, artifact: &str) -> Value {
 
 fn named(name: Option<&str>) -> Value {
     json!({"name": name, "by": "person"})
-}
-
-/// Appends raw bytes to `dir`'s log.
-fn raw(dir: &Path, bytes: &[u8]) {
-    let mut log = OpenOptions::new()
-        .append(true)
-        .open(dir.join("events.jsonl"))
-        .unwrap();
-    log.write_all(bytes).unwrap();
 }
 
 fn artifact(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {

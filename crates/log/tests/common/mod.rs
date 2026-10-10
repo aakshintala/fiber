@@ -10,12 +10,15 @@
 )]
 
 use std::fs;
-use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 
+use contract::SessionId;
 use contract::events::Event;
-use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
+
+#[path = "../../src/fixtures.rs"]
+mod fixtures;
+pub(crate) use fixtures::*;
 
 /// A temporary directory standing in for a project's `sessions/`, removed
 /// when dropped.
@@ -42,24 +45,6 @@ impl TestDir {
 
 pub(crate) fn id(s: &str) -> SessionId {
     SessionId(s.to_owned())
-}
-
-/// An event of `kind` with `payload`, read the way a consumer reads one.
-pub(crate) fn event(kind: &str, payload: Value) -> Event {
-    let Value::Object(payload) = payload else {
-        panic!("a payload is an object");
-    };
-    let line = Envelope {
-        kind: kind.to_owned(),
-        session_id: id("s"),
-        ts: 0,
-        schema_version: 1,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload,
-    };
-    Event::from_envelope(&line).unwrap().unwrap()
 }
 
 pub(crate) fn empty(kind: &str) -> Event {
@@ -114,43 +99,6 @@ pub(crate) fn kinds_and_seqs(dir: &Path) -> Vec<(String, Option<u64>)> {
         .iter()
         .map(|l| (l["kind"].as_str().unwrap().to_owned(), l["seq"].as_u64()))
         .collect()
-}
-
-/// Overwrites line `index` (from 0) of the session's log in place with bytes
-/// that do not parse, keeping its length, so every offset stays true.
-pub(crate) fn corrupt(dir: &Path, index: usize) {
-    let path = dir.join("events.jsonl");
-    let whole = fs::read(&path).unwrap();
-    let mut start = 0;
-    for line in whole.split_inclusive(|b| *b == b'\n').take(index) {
-        start += line.len();
-    }
-    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
-    let file = fs::OpenOptions::new().write(true).open(&path).unwrap();
-    file.write_all_at(&vec![b'x'; len], u64::try_from(start).unwrap())
-        .unwrap();
-}
-
-/// Cuts the session's log inside line `index` (from 0) after `keep` bytes
-/// of that line, and returns the bytes cut off, so the test can write them
-/// back. `keep` is below the line's length, so the cut leaves a partial
-/// line, never a whole one.
-pub(crate) fn truncate(dir: &Path, index: usize, keep: usize) -> Vec<u8> {
-    let path = dir.join("events.jsonl");
-    let whole = fs::read(&path).unwrap();
-    let mut start = 0;
-    for line in whole.split_inclusive(|b| *b == b'\n').take(index) {
-        start += line.len();
-    }
-    let at = start + keep;
-    let cut = whole[at..].to_vec();
-    fs::OpenOptions::new()
-        .write(true)
-        .open(&path)
-        .unwrap()
-        .set_len(u64::try_from(at).unwrap())
-        .unwrap();
-    cut
 }
 
 /// How many lines a watcher's queue holds, and a catch-up page's size: the

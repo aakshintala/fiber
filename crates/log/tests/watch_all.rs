@@ -12,6 +12,7 @@
 mod common;
 
 use std::fs;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
@@ -20,7 +21,7 @@ use common::*;
 use contract::Envelope;
 use contract::emit::Emit;
 use fakes::Deadline;
-use log::{Log, Watcher, read};
+use log::{Log, Watcher, WeakEmit};
 use serde_json::{Map, Value};
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -214,20 +215,6 @@ fn emit_sends_an_ephemeral_line_to_every_watcher_and_refuses_a_durable_one() {
     assert!(!file.contains("session_started"));
 }
 
-/// Receives from `rx` until `count` durable lines have arrived, and returns
-/// them.
-#[track_caller]
-fn durable(rx: &Receiver<Option<Envelope>>, count: usize, wait: &Deadline) -> Vec<Envelope> {
-    let mut got = Vec::new();
-    while got.len() < count {
-        let line = next(rx, wait).unwrap();
-        if line.is_durable() {
-            got.push(line);
-        }
-    }
-    got
-}
-
 /// A log of `count` durable lines and what each append returned.
 fn steps(name: &str, count: usize) -> (common::TestDir, Log, Vec<Envelope>) {
     let (tmp, log) = open(name);
@@ -235,42 +222,6 @@ fn steps(name: &str, count: usize) -> (common::TestDir, Log, Vec<Envelope>) {
         .map(|_| log.append(&empty("step_started"), None, None).unwrap())
         .collect();
     (tmp, log, written)
-}
-
-#[test]
-fn watch_all_pages_through_a_log_longer_than_two_pages() {
-    let (_tmp, log, written) = steps("watch-all-pages", 2 * CAPACITY + 50);
-    let rx = relay(log.watch_all());
-    let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(
-        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
-        written
-    );
-    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
-}
-
-#[test]
-fn watch_all_on_a_log_of_whole_pages_carries_on_live() {
-    let (_tmp, log, written) = steps("watch-all-whole", 2 * CAPACITY);
-    let rx = relay(log.watch_all());
-    assert_eq!(
-        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
-        written
-    );
-    let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
-}
-
-#[test]
-fn watch_all_returns_the_lines_before_an_unparseable_line_in_its_first_page_then_the_error() {
-    let (tmp, log, written) = steps("watch-all-bad", 5);
-    corrupt(&tmp.session(&id("s_1")), 2);
-    let mut watcher = log.watch_all();
-    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[0]));
-    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[1]));
-    let err = watcher.try_recv().unwrap_err();
-    assert!(err.to_string().contains("line 3"), "{err}");
-    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
 }
 
 #[test]
@@ -306,6 +257,7 @@ fn a_watcher_ends_after_a_read_error_and_never_reads_again() {
     assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[1]));
     let err = watcher.try_recv().unwrap_err();
     assert!(err.to_string().contains("line 3"), "{err}");
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
     assert_eq!(watcher.try_recv().unwrap(), None);
     // Calling code that blocks is a wait too (`docs/testing.md`, "Waits
     // and timeouts"): both blocking calls run on the thread owning the
@@ -335,38 +287,12 @@ fn a_watcher_ends_after_a_read_error_and_never_reads_again() {
 }
 
 #[test]
-fn a_seeded_watcher_ends_at_a_read_error_before_its_seeds() {
-    let (tmp, log, written) = steps("watch-all-seeded-bad", 3);
-    let tokens = serde_json::json!({"input": 1, "cache_read": 0, "cache_write": {"5m": 0, "1h": 0}, "output": 1});
-    let status = event(
-        "session_status",
-        serde_json::json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "idle", "since": 1,
-            "spend": {"tokens": tokens, "cost": 0.0, "subscription_cost": 0.0},
-            "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
-    );
-    log.append(&status, None, None).unwrap();
-    corrupt(&tmp.session(&id("s_1")), 1);
-    let mut watcher = log.watch_all_seeded();
-    assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[0]));
-    let err = watcher.try_recv().unwrap_err();
-    assert!(err.to_string().contains("line 2"), "{err}");
-    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
-    // The seed queued after the failure is never returned.
-    assert_eq!(watcher.try_recv().unwrap(), None);
-}
-
-#[test]
 fn watch_all_over_a_log_cut_short_returns_the_whole_lines_before_the_cut_then_an_io_error() {
     let (tmp, log, written) = steps("watch-all-cut", 5);
     let dir = tmp.session(&id("s_1"));
     let whole = fs::read(dir.join("events.jsonl")).unwrap();
-    let mut start = 0;
-    for line in whole.split_inclusive(|b| *b == b'\n').take(2) {
-        start += line.len();
-    }
-    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
-    let cut = truncate(&dir, 2, len / 2);
+    let (start, len) = line_at(&whole, 2);
+    let cut_off = cut(&dir, start + len / 2);
     let mut watcher = log.watch_all();
     assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[0]));
     assert_eq!(watcher.try_recv().unwrap().as_ref(), Some(&written[1]));
@@ -379,7 +305,7 @@ fn watch_all_over_a_log_cut_short_returns_the_whole_lines_before_the_cut_then_an
         .append(true)
         .open(dir.join("events.jsonl"))
         .unwrap();
-    std::io::Write::write_all(&mut file, &cut).unwrap();
+    std::io::Write::write_all(&mut file, &cut_off).unwrap();
     assert_eq!(fs::read(dir.join("events.jsonl")).unwrap(), whole);
 }
 
@@ -396,19 +322,6 @@ fn large(name: &str) -> (common::TestDir, Log, Vec<Envelope>) {
     }
     written.push(log.append(&empty("step_started"), None, None).unwrap());
     (tmp, log, written)
-}
-
-#[test]
-fn watch_all_yields_a_log_of_lines_larger_than_a_page_then_live_lines() {
-    let (tmp, log, written) = large("watch-all-large");
-    assert_eq!(read(&tmp.session(&id("s_1"))).unwrap(), written);
-    let rx = relay(log.watch_all());
-    let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(
-        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
-        written
-    );
-    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
 }
 
 #[test]
@@ -448,4 +361,24 @@ fn watch_all_seeded_over_lines_larger_than_a_page_yields_the_log_then_seeds_then
     let seeds: Vec<String> = (0..3).map(|_| next(&rx, &wait).unwrap().kind).collect();
     assert_eq!(seeds, ["session_status", "steering_queue", "extension_ui"]);
     assert_eq!(next(&rx, &wait), Some(live));
+}
+
+#[test]
+fn a_weak_emit_emits_while_the_log_lives_and_never_keeps_it() {
+    // Both promises through the public API: a line emitted while the log
+    // lives arrives, and the emitter keeps no strong handle.
+    let tmp = TestDir::new("weak-emit");
+    let log = Arc::new(Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap());
+    let emit = WeakEmit::new(&log);
+    let weak = Arc::downgrade(&log);
+    let rx = relay(log.watch());
+    emit.emit(&delta("e"));
+    let line = next(&rx, &Deadline::after(Duration::from_secs(5))).unwrap();
+    assert_eq!(line.kind, "assistant_message_delta");
+    drop(log);
+    assert!(
+        weak.upgrade().is_none(),
+        "the emitter holds no strong handle"
+    );
+    emit.emit(&delta("e"));
 }

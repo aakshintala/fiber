@@ -10,7 +10,7 @@ mod common;
 
 use std::fs;
 
-use common::{event, tool_call_started};
+use common::{event, session_log, tool_call_started};
 use contract::SessionId;
 use contract::events::Event;
 use log::Log;
@@ -255,10 +255,8 @@ fn a_torn_first_line_is_ignored() {
 }
 
 /// Session `id` whose log holds `text` byte for byte.
-fn logged_raw(sessions: &std::path::Path, id: &str, text: &str) {
-    let dir = sessions.join(id);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("events.jsonl"), text).unwrap();
+fn logged_text(sessions: &std::path::Path, id: &str, text: &str) {
+    session_log(&sessions.join(id), text.as_bytes());
 }
 
 /// A `session_started` envelope line for `id` at `ts` in `workspace`.
@@ -275,20 +273,20 @@ fn line(id: &str, kind: &str, ts: Value) -> Value {
 }
 
 /// Session `id` whose log is `lines`, each one complete line.
-fn logged(sessions: &std::path::Path, id: &str, lines: &[Value]) {
+fn logged_lines(sessions: &std::path::Path, id: &str, lines: &[Value]) {
     let mut text = String::new();
     for line in lines {
         text.push_str(&line.to_string());
         text.push('\n');
     }
-    logged_raw(sessions, id, &text);
+    logged_text(sessions, id, &text);
 }
 
 #[test]
 fn the_session_with_the_newest_last_line_wins() {
     let (_root, sessions) = setup();
     // Started later but idle longer loses to the session active latest.
-    logged(
+    logged_lines(
         &sessions,
         "s_old",
         &[
@@ -296,7 +294,7 @@ fn the_session_with_the_newest_last_line_wins() {
             line("s_old", "fiber_exited", json!(200)),
         ],
     );
-    logged(
+    logged_lines(
         &sessions,
         "s_new",
         &[
@@ -311,7 +309,7 @@ fn the_session_with_the_newest_last_line_wins() {
 #[test]
 fn a_tie_goes_to_the_greater_id() {
     let (_root, sessions) = setup();
-    logged(
+    logged_lines(
         &sessions,
         "s_m2",
         &[
@@ -319,7 +317,7 @@ fn a_tie_goes_to_the_greater_id() {
             line("s_m2", "fiber_exited", json!(300)),
         ],
     );
-    logged(
+    logged_lines(
         &sessions,
         "s_m1",
         &[
@@ -337,12 +335,12 @@ fn a_delegate_is_skipped_even_when_latest() {
     let mut started = started_line("s_d", 100, "/w");
     started["payload"]["parent"] =
         json!({"session_id": "s_p", "delegate_id": "j_0123456789abcdef"});
-    logged(
+    logged_lines(
         &sessions,
         "s_d",
         &[started, line("s_d", "fiber_exited", json!(999))],
     );
-    logged(
+    logged_lines(
         &sessions,
         "s_n",
         &[
@@ -358,7 +356,7 @@ fn a_delegate_is_skipped_even_when_latest() {
 fn directories_no_resolve_would_accept_are_skipped() {
     let (_root, sessions) = setup();
     // A first line that is not `session_started`.
-    logged(
+    logged_lines(
         &sessions,
         "s_bad",
         &[line("s_bad", "tool_call_started", json!(999))],
@@ -366,7 +364,7 @@ fn directories_no_resolve_would_accept_are_skipped() {
     // No log at all.
     fs::create_dir_all(sessions.join("s_ghost")).unwrap();
     // Another workspace's session, newest of all.
-    logged(
+    logged_lines(
         &sessions,
         "s_other",
         &[
@@ -374,7 +372,7 @@ fn directories_no_resolve_would_accept_are_skipped() {
             line("s_other", "fiber_exited", json!(999)),
         ],
     );
-    logged(
+    logged_lines(
         &sessions,
         "s_good",
         &[
@@ -400,8 +398,8 @@ fn a_torn_suffix_is_ignored() {
         started_line("s_t", 100, "/w"),
         line("s_t", "assistant_message_completed", json!(400)),
     );
-    logged_raw(&sessions, "s_t", &text);
-    logged(
+    logged_text(&sessions, "s_t", &text);
+    logged_lines(
         &sessions,
         "s_c",
         &[
@@ -419,8 +417,8 @@ fn an_unparseable_last_line_falls_back_to_the_started_ts() {
     // The last complete line does not parse, so the started `ts` counts
     // and still beats the competitor.
     let text = format!("{}\nnot json at all\n", started_line("s_f", 500, "/w"));
-    logged_raw(&sessions, "s_f", &text);
-    logged(
+    logged_text(&sessions, "s_f", &text);
+    logged_lines(
         &sessions,
         "s_c",
         &[
@@ -435,7 +433,7 @@ fn an_unparseable_last_line_falls_back_to_the_started_ts() {
 #[test]
 fn a_last_line_without_a_numeric_ts_falls_back_to_the_started_ts() {
     let (_root, sessions) = setup();
-    logged(
+    logged_lines(
         &sessions,
         "s_f",
         &[
@@ -443,7 +441,7 @@ fn a_last_line_without_a_numeric_ts_falls_back_to_the_started_ts() {
             line("s_f", "fiber_exited", json!("soon")),
         ],
     );
-    logged(
+    logged_lines(
         &sessions,
         "s_c",
         &[
@@ -466,14 +464,14 @@ fn no_candidate_is_none() {
     let mut started = started_line("s_d", 100, "/w");
     started["payload"]["parent"] =
         json!({"session_id": "s_p", "delegate_id": "j_0123456789abcdef"});
-    logged(&sessions, "s_d", &[started]);
+    logged_lines(&sessions, "s_d", &[started]);
     assert!(log::most_recent(&sessions, &|_| true).is_none());
 }
 
 #[test]
 fn a_symlink_to_a_session_directory_is_skipped() {
     let (_root, sessions) = setup();
-    logged(
+    logged_lines(
         &sessions,
         "s_real",
         &[

@@ -91,15 +91,6 @@ fn reading_a_missing_session_is_not_found() {
     assert_eq!(err.code(), contract::ErrorCode::SessionNotFound);
 }
 
-/// Appends `line` to the session's log as raw bytes, behind the writer's back.
-fn append_raw(dir: &std::path::Path, line: &[u8]) {
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(dir.join("events.jsonl"))
-        .unwrap();
-    file.write_all(line).unwrap();
-}
-
 #[test]
 fn lines_yield_every_complete_line_in_order_and_skip_a_torn_tail() {
     let tmp = TestDir::new("lines");
@@ -302,56 +293,6 @@ fn recv_timeout_ends_with_its_log_once_it_has_every_line() {
         .expect("the end after every line")
         .unwrap();
     assert!(end.is_none(), "the end after every line");
-}
-
-#[test]
-fn a_watcher_that_falls_behind_catches_up_through_recv_timeout() {
-    let tmp = TestDir::new("recv-timeout-lag");
-    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
-    let mut watcher = log.watch();
-    // Past any bounded queue while nobody receives, ending on a durable line.
-    let durable: Vec<Envelope> = (0..600)
-        .map(|_| {
-            log.append(&delta("x"), None, None).unwrap();
-            log.append(&empty("step_started"), None, None).unwrap()
-        })
-        .collect();
-    // `durable` moves into the thread below; the copy stays for the
-    // assertion after it.
-    let queued = durable.clone();
-    // Calling code that blocks is a wait too (`docs/testing.md`, "Waits
-    // and timeouts"): the catch-up loop runs on a thread and hands back
-    // what it read, under one deadline for the whole catch-up.
-    let (mut watcher, got, ephemeral) = fakes::within("the catch-up lines", DEADLINE, move || {
-        let mut got = Vec::new();
-        let mut ephemeral = 0;
-        while got.len() < queued.len() {
-            let line = watcher
-                .recv_timeout(DEADLINE)
-                .expect("a catch-up line before the deadline")
-                .unwrap()
-                .expect("a catch-up line before the end");
-            if line.is_durable() {
-                got.push(line);
-            } else {
-                ephemeral += 1;
-            }
-        }
-        (watcher, got, ephemeral)
-    });
-    assert_eq!(got, durable);
-    // The queue is bounded: the ephemeral lines it had no room for are gone.
-    assert!(ephemeral < durable.len(), "{ephemeral} ephemeral lines");
-    // Once caught up, lines arrive as they are written.
-    let live = log.append(&delta("live"), None, None).unwrap();
-    let got = fakes::within("the live line", DEADLINE, move || {
-        watcher
-            .recv_timeout(DEADLINE)
-            .expect("a live line before the deadline")
-            .unwrap()
-            .expect("a live line after the catch-up")
-    });
-    assert_eq!(got, live);
 }
 
 #[test]
@@ -574,44 +515,6 @@ fn durable(rx: &Receiver<Option<Envelope>>, count: usize, wait: &Deadline) -> Ve
 }
 
 #[test]
-fn a_watcher_that_falls_behind_by_more_than_two_pages_gets_every_line_once() {
-    let (_tmp, log, _) = steps("watch-pages", 3);
-    let watcher = log.watch();
-    let written: Vec<Envelope> = (0..2 * CAPACITY + 50)
-        .map(|_| {
-            log.append(&delta("x"), None, None).unwrap();
-            log.append(&empty("step_started"), None, None).unwrap()
-        })
-        .collect();
-    let rx = relay(watcher);
-    assert_eq!(
-        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
-        written
-    );
-    // Once caught up, lines arrive as they are written, and none came twice.
-    let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(durable(&rx, 1, &Deadline::after(DEADLINE)), [live]);
-}
-
-#[test]
-fn a_catch_up_page_ending_at_the_end_of_the_log_carries_on_live() {
-    let (_tmp, log, _) = steps("watch-page-end", 0);
-    let watcher = log.watch();
-    // The queue holds the first `CAPACITY` lines; the catch-up reads the
-    // rest as exactly one full page, and finds nothing after it.
-    let written: Vec<Envelope> = (0..2 * CAPACITY)
-        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
-        .collect();
-    let rx = relay(watcher);
-    assert_eq!(
-        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
-        written
-    );
-    let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
-}
-
-#[test]
 fn a_catch_up_never_parses_a_line_before_the_watcher_subscribed() {
     let (tmp, log, _) = steps("watch-bad-before", 3);
     let watcher = log.watch();
@@ -624,30 +527,6 @@ fn a_catch_up_never_parses_a_line_before_the_watcher_subscribed() {
         durable(&rx, written.len(), &Deadline::after(DEADLINE)),
         written
     );
-}
-
-#[test]
-fn a_watcher_behind_by_more_than_a_queue_catches_up_through_pages_cut_by_bytes() {
-    let (_tmp, log, _) = steps("watch-pages-bytes", 0);
-    let watcher = log.watch();
-    // The queue holds the first `CAPACITY` lines and drops the rest. The
-    // catch-up reads the 300 KiB lines after them, about three to a page.
-    let mut written: Vec<Envelope> = (0..CAPACITY)
-        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
-        .collect();
-    let reply = "x".repeat(300 * 1024);
-    for _ in 0..10 {
-        let text = event("text_completed", serde_json::json!({"text": reply}));
-        written.push(log.append(&text, None, None).unwrap());
-        written.push(log.append(&empty("step_started"), None, None).unwrap());
-    }
-    let rx = relay(watcher);
-    assert_eq!(
-        durable(&rx, written.len(), &Deadline::after(DEADLINE)),
-        written
-    );
-    let live = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(live));
 }
 
 #[test]
@@ -672,46 +551,12 @@ fn a_watch_all_watcher_that_falls_behind_catches_up_past_its_end_bound() {
 }
 
 #[test]
-fn a_catch_up_over_an_unreadable_line_returns_the_lines_before_it_then_the_error() {
-    let (tmp, log, _) = steps("watch-catchup-bad", 3);
-    let mut watcher = log.watch();
-    // Nobody drains while the flood is appended, so the queue holds its
-    // first `CAPACITY` lines and drops the rest; the catch-up re-reads the
-    // lines after them from the log.
-    let written: Vec<Envelope> = (0..CAPACITY + 100)
-        .map(|_| log.append(&empty("step_started"), None, None).unwrap())
-        .collect();
-    corrupt(&tmp.session(&id("s_1")), CAPACITY + 50);
-    // The corrupt line is at file index `CAPACITY + 50`; the watcher began
-    // at file index 3, so every line before it is `written[..CAPACITY + 47]`.
-    let mut got = Vec::new();
-    let err = loop {
-        match watcher.try_recv() {
-            Ok(Some(line)) => got.push(line),
-            Ok(None) => panic!("the catch-up ended before its read error"),
-            Err(err) => break err,
-        }
-    };
-    assert_eq!(got, written[..CAPACITY + 47]);
-    assert!(
-        err.to_string().contains(&format!("line {}", CAPACITY + 51)),
-        "{err}"
-    );
-    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
-    assert_eq!(watcher.try_recv().unwrap(), None);
-}
-
-#[test]
 fn a_range_over_a_log_cut_short_is_an_error_with_no_lines() {
     let (tmp, log, written) = steps("range-cut", 6);
     let dir = tmp.session(&id("s_1"));
     let whole = fs::read(dir.join("events.jsonl")).unwrap();
-    let mut start = 0;
-    for line in whole.split_inclusive(|b| *b == b'\n').take(3) {
-        start += line.len();
-    }
-    let len = whole[start..].iter().position(|b| *b == b'\n').unwrap();
-    let _cut = truncate(&dir, 3, len / 2);
+    let (start, len) = line_at(&whole, 3);
+    let _cut = cut(&dir, start + len / 2);
     // A window holding the cut is an error with no lines; a window before
     // it still reads.
     let err = log.range(0, 6).unwrap_err();

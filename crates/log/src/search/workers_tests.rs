@@ -29,8 +29,9 @@ use fakes::within;
 use proptest::prelude::*;
 
 use super::super::Collect;
-use super::super::tests::{After, Home, hit, query, raw};
+use super::super::tests::{After, Home, hit, query};
 use super::{count, run, spawn};
+use crate::fixtures::{append_raw as raw, line as fixture_line};
 
 /// `available_parallelism` reporting `n` threads.
 fn threads(n: usize) -> io::Result<NonZeroUsize> {
@@ -44,8 +45,7 @@ fn unknown() -> io::Result<NonZeroUsize> {
 
 /// One raw log line of session `id`.
 fn line(kind: &str, id: &str, ts: u64, seq: u64, payload: &serde_json::Value) -> Vec<u8> {
-    let line = serde_json::json!({"kind": kind, "session_id": id, "ts": ts, "schema_version": 1, "seq": seq, "payload": payload});
-    format!("{line}\n").into_bytes()
+    fixture_line(kind, id, ts, seq, payload).into_bytes()
 }
 
 fn text(id: &str, ts: u64, seq: u64, text: &str) -> Vec<u8> {

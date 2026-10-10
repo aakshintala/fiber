@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use super::*;
+use crate::fixtures::session_log;
 
 /// Writes `first` as the first line of session `id`'s log in `project`.
 fn session(home: &Path, project: &str, id: &str, first: &str) {
@@ -10,12 +11,7 @@ fn session(home: &Path, project: &str, id: &str, first: &str) {
         .join(project)
         .join("sessions")
         .join(id);
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(
-        dir.join("events.jsonl"),
-        format!("{first}\n{{\"kind\":\"x\"}}\n"),
-    )
-    .unwrap();
+    session_log(&dir, format!("{first}\n{{\"kind\":\"x\"}}\n").as_bytes());
 }
 
 /// A `session_started` first line, forked from `from` when given.
