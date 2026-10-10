@@ -48,10 +48,13 @@ The key map is under "Stage 2".
 `--home [CASE]` draws the home screen instead of the conversation: the logo,
 the large input box with its chip row, and the session list, or the workspace
 picker over home. With no case, or a `live` case, home runs its event loop:
-typing fills the box and Enter switches to the conversation view; clicking
-the workspace chip opens the workspace picker; the model and thinking chips
-open the model picker; `/` opens slash completions; ↑↓ and Enter work on
-the session list; q quits. The other cases each draw one still frame from
+typing fills the box and Enter switches to the conversation view; focus runs
+top to bottom, entry bar, chip row, session list: ↓ from the entry bar
+focuses the last chip, ↓ from a chip focuses the first row, ↑ returns the
+same way, ← → move between chips, Enter opens the focused chip as a click
+does, and typing clears chip focus into the entry bar; clicking the workspace
+chip opens the workspace picker; the model and thinking chips open the model
+picker; `/` opens slash completions; q quits. The other cases each draw one still frame from
 the fixtures in `src/home.rs` and wait for a key; Esc, q or Ctrl+C quits.
 Combine with `--static`; the fixture still loads but home ignores it.
 
@@ -77,6 +80,12 @@ cargo run --release -- fixtures/session.jsonl --static --home worktree-on
 cargo run --release -- fixtures/session.jsonl --static --home worktree-off
 cargo run --release -- fixtures/session.jsonl --static --home picker-recent
 cargo run --release -- fixtures/session.jsonl --static --home picker-typed
+cargo run --release -- fixtures/session.jsonl --static --home focus-entry
+cargo run --release -- fixtures/session.jsonl --static --home focus-chip-workspace
+cargo run --release -- fixtures/session.jsonl --static --home focus-chip-model
+cargo run --release -- fixtures/session.jsonl --static --home focus-chip-picker
+cargo run --release -- fixtures/session.jsonl --static --home focus-chip-typing
+cargo run --release -- fixtures/session.jsonl --static --home focus-session
 ```
 
 - `live`: the interactive home and its keys (see below); `--home` with no
@@ -97,6 +106,13 @@ cargo run --release -- fixtures/session.jsonl --static --home picker-typed
 - `picker-typed`: the picker over home with the typed-path row
   (`~/work/fi` completing to `fiber` and `fiber-worktrees`, first row
   selected) over the recents, a still frame; this settles #1604 Q7.
+- `focus-entry`: the entry bar focused (today's look), a still frame.
+- `focus-chip-workspace`, `focus-chip-model`: one chip focused (the `lift`
+  tint, as `--hover` does it), still frames.
+- `focus-chip-picker`: the picker over home with the workspace chip still
+  focused behind it, a still frame.
+- `focus-chip-typing`: a draft typed after a chip was focused, a still frame.
+- `focus-session`: the first live row selected from the chip row, a still frame.
 
 `./capture-home.sh` captures every still frame in tmux at 160 by 48, plain
 text and SGR, for the ticket's PR body.

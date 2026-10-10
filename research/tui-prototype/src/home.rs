@@ -138,6 +138,62 @@ const CASES: &[Case<Look>] = &[
             ..base()
         },
     },
+    Case {
+        name: "focus-entry",
+        help: "the entry bar focused, a still frame",
+        check: "the entry bar focused, today's look: no chip in the hover lift tint and no row marked with `▸`.",
+        build: base,
+    },
+    Case {
+        name: "focus-chip-workspace",
+        help: "the workspace chip focused, a still frame",
+        check: "the chip row focused: the workspace chip in the hover look (the lift tint with its own text colour, as hover-workspace) and no row marked.",
+        build: || Look {
+            chip: Some(0),
+            last_chip: 0,
+            ..base()
+        },
+    },
+    Case {
+        name: "focus-chip-model",
+        help: "the model chip focused, a still frame",
+        check: "the chip row focused after → twice: the model chip in the hover look (the lift tint keeping its cyan, as hover-model), the other chips untinted.",
+        build: || Look {
+            chip: Some(2),
+            last_chip: 2,
+            ..base()
+        },
+    },
+    Case {
+        name: "focus-chip-picker",
+        help: "the workspace picker with chip 0 focused behind",
+        check: "workspace chip Enter: the picker-recent frame with chip 0 still in the hover lift tint behind the picker.",
+        build: || Look {
+            chip: Some(0),
+            last_chip: 0,
+            picker: Some(Picker::Recent),
+            ..base()
+        },
+    },
+    Case {
+        name: "focus-chip-typing",
+        help: "a draft typed after a chip was focused, a still frame",
+        check: "typing after a chip was focused: `fix` in the entry bar, the chip row untinted and no row marked; typing cleared chip focus into the entry bar.",
+        build: || {
+            let mut l = base();
+            l.ui.input = "fix".into();
+            l
+        },
+    },
+    Case {
+        name: "focus-session",
+        help: "the first live row selected from the chip row, a still frame",
+        check: "the second ↓: the first live row with the blue `▸` marker as selected, the chips untinted.",
+        build: || Look {
+            sel: Some(0),
+            ..base()
+        },
+    },
 ];
 
 /// `--home`, for `--help` and `check/home.md`.
@@ -442,12 +498,7 @@ fn chips(c: &Look) -> Vec<(Target, String, Style, bool)> {
             wst,
             h(Hover::Worktree, 1),
         ),
-        (
-            Target::Model,
-            c.model.into(),
-            fg(CYAN),
-            h(Hover::Model, 2),
-        ),
+        (Target::Model, c.model.into(), fg(CYAN), h(Hover::Model, 2)),
         (
             Target::Thinking,
             c.level.into(),
@@ -1277,9 +1328,7 @@ fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
             c.ui.input.pop();
             Step::Stay
         }
-        Key::Char('q') if plain && c.ui.input.is_empty() && c.chip.is_none() => {
-            Step::Quit
-        }
+        Key::Char('q') if plain && c.ui.input.is_empty() && c.chip.is_none() => Step::Quit,
         Key::Char(ch) if plain => {
             c.chip = None;
             c.ui.input.push(ch);
@@ -1495,7 +1544,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 14);
+        assert_eq!(CASES.len(), 20);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
 
