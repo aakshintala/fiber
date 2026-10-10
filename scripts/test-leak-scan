@@ -9,6 +9,10 @@ cd "$(git rev-parse --show-toplevel)"
 err=$(mktemp)
 leaker1=
 leaker2=
+# macOS orphans below, Darwin only; empty unless that block started them.
+leaker3=
+leaker4=
+tmp=
 # SIGKILL by explicit pid only: never a group id, never pkill, so a wrong
 # pid can only miss, never signal what this test did not start.
 kill_one() {
@@ -30,6 +34,11 @@ kill_one() {
 cleanup() {
   kill_one "$leaker1"
   kill_one "$leaker2"
+  kill_one "$leaker3"
+  kill_one "$leaker4"
+  if [ -n "$tmp" ]; then
+    rm -rf "$tmp"
+  fi
   rm -f "$err"
 }
 trap cleanup EXIT
@@ -117,4 +126,116 @@ if [ -s "$err" ]; then
   echo "scripts/test-leak-scan: clean scan printed output:" >&2
   cat "$err" >&2
   exit 1
+fi
+
+# macOS orphans: ps withholds the environment of sh, so the nonce scan
+# cannot name them. The orphan scan warns on sh with the PID and stays
+# green, and fails on a binary under target/ naming the PID.
+if [ "$(uname -s)" = Darwin ]; then
+  marker="fiber-orphan-$$-$RANDOM"
+  owner=${USER:-$(id -un)}
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/target"
+  # An sh fixture orphaned by a double fork, as the extensions fixtures
+  # were: reparented to init, ignoring SIGTERM like them.
+  ( sh -c "trap '' TERM; while :; do :; done # $marker" & )
+  tries=0
+  while [ "$tries" -lt 30 ] && [ -z "$leaker3" ]; do
+    # awk exits at the first match, so ps can die of SIGPIPE under
+    # pipefail: not a failure, the match is already printed.
+    leaker3=$(env -u FIBER_CHECK_RUN ps -U "$owner" -o pid=,ppid=,lstart=,command= | awk -v m="$marker" '$2 == 1 && index($0, m) { print $1; exit }' || true)
+    if [ -z "$leaker3" ]; then
+      python3 -c 'import time; time.sleep(0.5)'
+    fi
+    tries=$((tries + 1))
+  done
+  if [ -z "$leaker3" ]; then
+    echo "scripts/test-leak-scan: sh orphan never reached ppid 1" >&2
+    exit 1
+  fi
+  lstart=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker3" | sed 's/^ *//;s/ *$//')
+  started=$(date -j -f "%a %b %e %T %Y" "$lstart" "+%s")
+  # Started after the check: the warning names the PID, exit stays 0.
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started - 1))" 2>"$err"; then
+    :
+  else
+    echo "scripts/test-leak-scan: orphan warning scan failed for $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "$leaker3" "$err"; then
+    echo "scripts/test-leak-scan: warning did not name sh orphan $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "may belong to another run" "$err"; then
+    echo "scripts/test-leak-scan: warning names no other-run caveat for $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  # At the orphan's own start second: silent, the single -gt boundary.
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$started" 2>"$err"; then
+    :
+  else
+    echo "scripts/test-leak-scan: at-boundary scan failed for $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if grep -Fq "$leaker3" "$err"; then
+    echo "scripts/test-leak-scan: orphan at its start second still named $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  # Started before the check: silent too.
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started + 1))" 2>"$err"; then
+    :
+  else
+    echo "scripts/test-leak-scan: before-boundary scan failed for $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if grep -Fq "$leaker3" "$err"; then
+    echo "scripts/test-leak-scan: older orphan still named $leaker3:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  kill_one "$leaker3"
+  leaker3=
+  # A binary under target/ is this run's leak: exit 1 naming the PID. A
+  # copied platform binary is SIGKILLed on exec, so the orphan is a script
+  # whose command still carries the target/ path; LEAK_SCAN_ROOT points the
+  # rule at a temp dir instead of the worktree.
+  printf '#!/bin/sh\ntrap "" TERM\nwhile :; do :; done\n' >"$tmp/target/x"
+  chmod +x "$tmp/target/x"
+  ( "$tmp/target/x" & )
+  tries=0
+  while [ "$tries" -lt 30 ] && [ -z "$leaker4" ]; do
+    leaker4=$(env -u FIBER_CHECK_RUN ps -U "$owner" -o pid=,ppid=,lstart=,command= | awk -v t="$tmp/target/x" '$2 == 1 && index($0, t) { print $1; exit }' || true)
+    if [ -z "$leaker4" ]; then
+      python3 -c 'import time; time.sleep(0.5)'
+    fi
+    tries=$((tries + 1))
+  done
+  if [ -z "$leaker4" ]; then
+    echo "scripts/test-leak-scan: target orphan never reached ppid 1" >&2
+    exit 1
+  fi
+  # The check began a second before the orphan started, so the orphan is
+  # this run's leak: exit 1 naming the PID.
+  lstart4=$(env -u FIBER_CHECK_RUN ps -o lstart= -p "$leaker4" | sed 's/^ *//;s/ *$//')
+  started4=$(date -j -f "%a %b %e %T %Y" "$lstart4" "+%s")
+  if LEAK_SCAN_GRACE=0 LEAK_SCAN_ROOT="$tmp" scripts/leak-scan "$n" "$((started4 - 1))" 2>"$err"; then
+    echo "scripts/test-leak-scan: target orphan $leaker4 did not fail the scan:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  if ! grep -Fq "leaked process $leaker4:" "$err"; then
+    echo "scripts/test-leak-scan: scan did not name target orphan $leaker4:" >&2
+    cat "$err" >&2
+    exit 1
+  fi
+  kill_one "$leaker4"
+  leaker4=
+  rm -rf "$tmp"
+  tmp=
 fi
