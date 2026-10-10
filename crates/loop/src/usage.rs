@@ -108,6 +108,7 @@ pub(crate) fn recorded(
         subscription: subscription.then_some(true),
         extension: None,
         origin_session_id: None,
+        reviewer: None,
     };
     Recorded { line, lookable }
 }
