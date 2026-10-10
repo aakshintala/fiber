@@ -831,6 +831,45 @@ fn a_reviewed_call_then_a_handoff_marks_only_the_reviewer_lines() {
 
     let id = session_id(&run).to_owned();
     let log = log_lines(&setup, &id);
+    // The whole log in order, so a duplicated, missing or reordered
+    // event fails (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        log_kinds(&setup, &id),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "handoff_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "handoff_completed",
+            "opening_message",
+            "usage_recorded",
+            "reviewer_kept",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let usages: Vec<&Value> = log
         .iter()
         .filter(|line| line["kind"] == "usage_recorded")

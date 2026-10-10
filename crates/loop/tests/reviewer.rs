@@ -2344,6 +2344,19 @@ fn the_notes_prefix_every_reviewer_request_and_survive_a_second_call() {
 #[test]
 fn a_stage_1_allow_marks_its_usage_with_the_call() {
     let (_, _, _, lines) = reviewed_turn(vec![Scripted::text("allow")]);
+    // The whole turn in order, so a duplicated, missing or reordered
+    // event fails (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            1,
+        )
+    );
     let requested = line(&lines, "tool_call_requested");
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.action_id, requested.action_id);
@@ -2358,13 +2371,6 @@ fn a_stage_1_allow_marks_its_usage_with_the_call() {
         review[0].payload["reviewer"],
         json!({"purpose": "stage_1", "action_id": id})
     );
-    // The session's own calls carry no reviewer.
-    for own in usages(&lines)
-        .into_iter()
-        .filter(|l| l.payload["model"] != REVIEWER_MODEL)
-    {
-        assert!(own.payload.get("reviewer").is_none());
-    }
 }
 
 /// A check then an allow marks both usages with the call, each under its
@@ -2375,6 +2381,19 @@ fn a_check_then_an_allow_marks_both_usages_with_the_call() {
         Scripted::text("check"),
         Scripted::text("allow looks fine"),
     ]);
+    // The whole turn in order, so a duplicated, missing or reordered
+    // event fails (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            2,
+        )
+    );
     let resolved = line(&lines, "permission_resolved");
     let id = resolved.action_id.as_ref().unwrap().0.clone();
     let review: Vec<_> = usages(&lines)
@@ -2390,12 +2409,6 @@ fn a_check_then_an_allow_marks_both_usages_with_the_call() {
             "review {n}"
         );
     }
-    for own in usages(&lines)
-        .into_iter()
-        .filter(|l| l.payload["model"] != REVIEWER_MODEL)
-    {
-        assert!(own.payload.get("reviewer").is_none());
-    }
 }
 
 /// A re-ask carries its stage's purpose: both requests of a first stage
@@ -2406,6 +2419,19 @@ fn a_re_ask_keeps_its_stage() {
         Scripted::text("maybe ZQX-UNREAD"),
         Scripted::text("allow"),
     ]);
+    // The whole turn in order, so a duplicated, missing or reordered
+    // event fails (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            2,
+        )
+    );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(
         resolved.payload["reviewer"],
