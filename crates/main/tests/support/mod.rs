@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use contract::clock::Clock;
 use fakes::{ProviderServer, Response, Watchdog};
@@ -47,51 +47,15 @@ pub(crate) fn write_record(dir: &Path) {
     .unwrap();
 }
 
-/// nextest kills a test at 120 s (`.config/nextest.toml`): a test's
-/// deadlines sum to half of that.
-pub(crate) const BUDGET: Duration = Duration::from_secs(60);
-/// From the test's start, when its success-path waits must be over.
-pub(crate) const WAITS: Duration = Duration::from_secs(40);
-/// From the test's start, when cleanup waits must be over. `BUDGET -
-/// CLEANUP` holds the fixed bounds inside `fakes` that take no deadline.
-pub(crate) const CLEANUP: Duration = Duration::from_secs(50);
-
-/// The test's one deadline, started at its first operation. Every wait
-/// takes what remains of it, so a second wait gets only what the first
-/// left, and the waits of one test sum to [`BUDGET`].
-#[derive(Clone, Copy)]
-pub(crate) struct Deadline {
-    start: Instant,
-    clock: &'static dyn Clock,
-}
-
-impl Deadline {
-    /// A deadline on the process clock, starting now.
-    pub(crate) fn start() -> Self {
-        Self::on(&SystemClock)
-    }
-
-    /// A deadline on `clock`, starting at its `now()`.
-    pub(crate) fn on(clock: &'static dyn Clock) -> Self {
-        Self {
-            start: clock.now(),
-            clock,
-        }
-    }
-
-    /// What remains for success-path waits: zero from [`WAITS`] after the
-    /// start on, every time. It never panics; a wait handed zero takes only
-    /// an already-arrived result, then runs its own timeout branch.
-    pub(crate) fn left(&self) -> Duration {
-        (self.start + WAITS).saturating_duration_since(self.clock.now())
-    }
-
-    /// What remains for cleanup waits (a reap or group check after a wait
-    /// expired, a watchdog's stand-down): zero from [`CLEANUP`] on.
-    pub(crate) fn cleanup(&self) -> Duration {
-        (self.start + CLEANUP).saturating_duration_since(self.clock.now())
-    }
-}
+/// The test's one deadline and its bounds, shared from `fakes`
+/// (`docs/testing.md`, "Waits and timeouts").
+pub(crate) use fakes::clock::SystemClock;
+pub(crate) use fakes::deadline::Deadline;
+#[allow(
+    unused_imports,
+    reason = "only the deadline test reads the bounds; each test binary compiles its own subset"
+)]
+pub(crate) use fakes::deadline::{BUDGET, CLEANUP, WAITS};
 
 /// A `TimedOut` error naming `what`.
 fn timed_out(what: &str) -> io::Error {
@@ -187,6 +151,7 @@ pub(crate) fn write_line(
 /// and returns its value, waiting `deadline.left()`: on expiry it panics
 /// naming `what`, and a panic in `work` is raised again naming `what`. It
 /// never joins the thread.
+#[track_caller]
 pub(crate) fn bounded<T: Send + 'static>(
     deadline: Deadline,
     what: &str,
@@ -197,6 +162,7 @@ pub(crate) fn bounded<T: Send + 'static>(
 
 /// `fakes::kill_group` bounded by `deadline.cleanup()`: it sends a signal,
 /// it does not wait on the code under test.
+#[track_caller]
 pub(crate) fn kill_group(deadline: Deadline, group: u32, signal: &'static str) -> io::Result<bool> {
     fakes::within(
         &format!("kill -{signal} of process group {group}"),
@@ -206,6 +172,7 @@ pub(crate) fn kill_group(deadline: Deadline, group: u32, signal: &'static str) -
 }
 
 /// `fakes::kill_pid` bounded by `deadline.cleanup()`.
+#[track_caller]
 pub(crate) fn kill_pid(deadline: Deadline, pid: u32, signal: &'static str) -> io::Result<bool> {
     fakes::within(
         &format!("kill -{signal} of pid {pid}"),
@@ -215,6 +182,7 @@ pub(crate) fn kill_pid(deadline: Deadline, pid: u32, signal: &'static str) -> io
 }
 
 /// `fakes::kill_matching` bounded by `deadline.cleanup()`.
+#[track_caller]
 pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
     let text = text.to_owned();
     fakes::within(
@@ -225,6 +193,7 @@ pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
 }
 
 /// Whether any process remains in process group `group`.
+#[track_caller]
 pub(crate) fn group_alive(deadline: Deadline, group: u32) -> bool {
     kill_group(deadline, group, "0").unwrap()
 }
@@ -257,6 +226,7 @@ pub(crate) fn kill_matching_detached(text: &str) {
 /// The timeout branch of a wait for a started process's exit: kills
 /// `group`, reaps through `reap` and checks the group empties, each within
 /// `deadline.cleanup()`, then panics naming `what`.
+#[track_caller]
 pub(crate) fn expired<T>(
     deadline: Deadline,
     group: u32,
@@ -267,7 +237,7 @@ pub(crate) fn expired<T>(
     match kill_group(deadline, group, "KILL") {
         Ok(_) | Err(_) => {}
     }
-    let reaped = reap.recv_timeout(deadline.cleanup()).is_ok();
+    let reaped = deadline.cleanup_phase().recv(reap).is_ok();
     assert!(
         fakes::group_empties(group, deadline.cleanup()),
         "waited until the deadline for {what}, and its group outlived the kill"
@@ -341,6 +311,7 @@ impl Setup {
             .args(args)
             .current_dir(self.root.path())
             .env_clear()
+            .envs(fakes::check_run())
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", self.root.path())
             .env("FIBER_HOME", self.home())
@@ -368,46 +339,6 @@ impl Setup {
 pub(crate) fn write_json(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();
-}
-
-/// The process clock behind `contract::clock::Clock`.
-pub(crate) struct SystemClock;
-
-impl Clock for SystemClock {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::now"
-    )]
-    fn now(&self) -> std::time::Instant {
-        std::time::Instant::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::wall"
-    )]
-    fn wall(&self) -> std::time::SystemTime {
-        std::time::SystemTime::now()
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the process clock behind contract::clock::Clock::sleep"
-    )]
-    fn sleep(&self, d: Duration) {
-        thread::sleep(d);
-    }
-
-    fn wait_until(
-        &self,
-        until: Option<std::time::Instant>,
-        wait: &mut dyn FnMut(Option<Duration>),
-    ) {
-        let bound = until.map(|until| until.saturating_duration_since(self.now()));
-        wait(bound);
-    }
-
-    fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
 }
 
 /// A hub the test started: killed on drop unless forgotten after a clean wait.
@@ -440,12 +371,14 @@ impl HubProc {
         }
     }
 
+    #[track_caller]
     pub(crate) fn kill(&self, signal: &'static str) {
         kill_group(self.deadline, self.group, signal).unwrap();
     }
 
     /// Waits under the test's [`Deadline`] for a hub that exits on its own,
     /// then asserts nothing remains in its group.
+    #[track_caller]
     pub(crate) fn wait(self) -> ExitStatus {
         let Self {
             mut child,
@@ -455,7 +388,7 @@ impl HubProc {
         } = self;
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
-        let status = match finished.recv_timeout(deadline.left()) {
+        let status = match deadline.recv(&finished) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 expired(deadline, group, &finished, "the hub to exit")
@@ -475,6 +408,7 @@ impl HubProc {
     /// Kills the hub's group, then waits under the test's [`Deadline`] for
     /// the hub to exit. For a test-sent SIGKILL: the hub's exit is proved by
     /// reaping it, and other members are not waited on.
+    #[track_caller]
     pub(crate) fn kill_and_wait(self) -> ExitStatus {
         let Self {
             mut child,
@@ -485,7 +419,7 @@ impl HubProc {
         kill_group(deadline, group, "KILL").unwrap();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
-        let status = match finished.recv_timeout(deadline.left()) {
+        let status = match deadline.recv(&finished) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 expired(deadline, group, &finished, "the killed hub to exit")
@@ -511,6 +445,7 @@ pub(crate) struct Socket {
 
 impl Socket {
     /// Connects to `path` on a thread bounded by the deadline.
+    #[track_caller]
     pub(crate) fn connect(deadline: Deadline, path: &Path) -> Self {
         let target = path.to_owned();
         let stream = bounded(
@@ -613,6 +548,7 @@ pub(crate) fn until_close(client: &Socket) -> Vec<Value> {
 /// Connects to the hub through `doors::hub::connect`, starting
 /// `fiber hub serve` when none runs. The starter records the hub for the
 /// caller to kill and wait. Returns the client and the `hub_hello`.
+#[track_caller]
 pub(crate) fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>) -> (Socket, Value) {
     connect_hub_within(setup, hub, setup.deadline.left())
 }
@@ -654,6 +590,7 @@ impl Clock for StretchedClock {
 /// `hub_hello` read included, bounded by `wait` on the wall clock. `connect`
 /// blocks, so it runs on a thread whose result the test receives with the
 /// deadline. A zero `wait` keeps the clock's scale at 1.
+#[track_caller]
 pub(crate) fn connect_hub_within(
     setup: &Setup,
     hub: &Arc<Mutex<Option<HubProc>>>,
@@ -678,7 +615,7 @@ pub(crate) fn connect_hub_within(
         done.send(doors::hub::connect(&home, &mut start, &clock))
             .unwrap();
     });
-    let connected = match connected.recv_timeout(wait) {
+    let connected = match Deadline::after(wait).recv(&connected) {
         Ok(connected) => connected.unwrap(),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             panic!("waited {wait:?} for the hub to start and say hub_hello")
@@ -755,6 +692,7 @@ impl SessionGuard {
     }
 
     /// Stands the watchdog down, leaving the drop's kill as the only one.
+    #[track_caller]
     pub(crate) fn stand_down_watchdog(&mut self) {
         if let Some(watchdog) = self.watchdog.take() {
             watchdog.stand_down(self.deadline.cleanup());
@@ -765,6 +703,7 @@ impl SessionGuard {
     /// (its socket closed, its session_left, or the guard's SIGKILL): waits
     /// under the test's [`Deadline`] for every process holding the workspace
     /// path to exit, then stands the guard down.
+    #[track_caller]
     pub(crate) fn wait_gone(mut self) {
         assert!(
             fakes::matching_exits(&self.workspace, self.deadline.left()),
@@ -787,7 +726,7 @@ impl Drop for SessionGuard {
             }
         });
         if spawned.is_ok() {
-            match finished.recv_timeout(self.deadline.cleanup()) {
+            match self.deadline.cleanup_phase().recv(&finished) {
                 Ok(_) | Err(_) => {}
             }
         }
@@ -829,13 +768,14 @@ pub(crate) fn close_session(socket: &Socket) {
 /// Runs `command`, which runs in its own process group, to its exit under
 /// the test's [`Deadline`], naming `what` on expiry, and checks it left no
 /// process in its group.
+#[track_caller]
 pub(crate) fn run_to_exit(deadline: Deadline, what: &str, mut command: Command) -> Output {
     let child = command.spawn().unwrap();
     let group = child.id();
     let watchdog = Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(deadline.left()) {
+    let output = match deadline.recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             expired(deadline, group, &finished, &format!("{what} to exit"))

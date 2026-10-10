@@ -391,6 +391,10 @@ pub(crate) struct Shared {
     parser: vt100::Parser,
     grid: Grid,
     queries: Vec<u8>,
+    /// Whether a synchronized-output block is open: waits snapshot whole frames only.
+    sync_open: bool,
+    /// The last bytes seen, completing a marker split across two reads.
+    sync_tail: Vec<u8>,
     pending_size: Option<(u16, u16)>,
     ended: bool,
 }
@@ -405,6 +409,8 @@ impl Shared {
             parser,
             grid,
             queries: Vec::new(),
+            sync_open: false,
+            sync_tail: Vec::new(),
             pending_size: None,
             ended: false,
         }
@@ -420,15 +426,44 @@ impl Shared {
 
     /// Publishes the chunk whose replies are already written: a pending
     /// resize lands before the chunk's bytes parse, so the first frame
-    /// after a resize draws at the new size; then the chunk is appended
-    /// and the grid is snapshotted.
+    /// after a resize draws at the new size; then the chunk is appended,
+    /// parsed, and snapshotted unless a synchronized-output block is open.
     pub(crate) fn publish(&mut self, bytes: &[u8]) {
         if let Some((cols, rows)) = self.pending_size.take() {
             self.parser.screen_mut().set_size(rows, cols);
         }
         self.parser.process(bytes);
         self.output.extend_from_slice(bytes);
-        self.grid = Grid::of(&self.parser);
+        self.sync_through(bytes);
+        if !self.sync_open {
+            self.grid = Grid::of(&self.parser);
+        }
+    }
+
+    /// Folds `chunk`'s markers into the block state in stream order, then
+    /// keeps the tail for a marker split across two reads.
+    fn sync_through(&mut self, chunk: &[u8]) {
+        let mut both = std::mem::take(&mut self.sync_tail);
+        let split = both.len();
+        both.extend_from_slice(chunk);
+        let mut at = 0;
+        while at + SYNC_BEGIN.len() <= both.len() {
+            if both[at..].starts_with(SYNC_BEGIN) && at + SYNC_BEGIN.len() > split {
+                self.sync_open = true;
+                at += SYNC_BEGIN.len();
+            } else if both[at..].starts_with(SYNC_END) && at + SYNC_END.len() > split {
+                self.sync_open = false;
+                at += SYNC_END.len();
+            } else {
+                at += 1;
+            }
+        }
+        self.sync_tail = both[both.len().saturating_sub(SYNC_KEEP)..].to_vec();
+    }
+
+    /// The grid rebuilt from the output so far: whole frames only.
+    pub(crate) fn grid(&self) -> Grid {
+        self.grid.clone()
     }
 
     /// Every byte published so far.
@@ -486,6 +521,14 @@ const CAPABILITIES: [(&[u8], &[u8]); 4] = [
 /// two reads: longer than the longest query above.
 const PENDING_KEEP: usize = 16;
 
+/// Synchronized output's markers (DEC mode 2026): the terminal brackets
+/// every frame in them (`docs/tui.md`, "Performance").
+const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
+const SYNC_END: &[u8] = b"\x1b[?2026l";
+/// The sync tail's kept bytes: one fewer than the markers' length, so a
+/// marker split across two reads completes.
+const SYNC_KEEP: usize = 7;
+
 /// The replies for every whole query in `pending`, in stream order,
 /// dropping the bytes through each answered query and keeping the tail
 /// for a query still arriving.
@@ -519,6 +562,10 @@ pub(crate) struct Run {
     child: Option<Child>,
     /// The hub's socket, removed when the hub exits.
     hub_socket: PathBuf,
+    /// The hub's home: its `hub serve` carries `FIBER_HOME=<home>` in
+    /// its environment, which the exit wait lists for. Empty for an
+    /// attached run, which waits on no hub.
+    hub_home: PathBuf,
     watchdog: Option<Watchdog>,
     sessions: Option<Watchdog>,
     shared: Arc<Mutex<Shared>>,
@@ -560,6 +607,7 @@ impl Run {
         command
             .current_dir(setup.workspace())
             .env_clear()
+            .envs(fakes::check_run())
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
             .env("HOME", setup.root.path())
             .env("FIBER_HOME", setup.home())
@@ -583,6 +631,7 @@ impl Run {
         Self {
             child: Some(child),
             hub_socket: setup.home().join("run").join("hub"),
+            hub_home: setup.home().to_path_buf(),
             watchdog: Some(watchdog),
             sessions: Some(sessions),
             shared,
@@ -606,6 +655,7 @@ impl Run {
         Self {
             child: None,
             hub_socket: PathBuf::new(),
+            hub_home: PathBuf::new(),
             watchdog: None,
             sessions: None,
             shared,
@@ -759,9 +809,8 @@ impl Run {
     /// parser, the query tail) and the writer. Then waits for the child
     /// to exit and reaps it, checks its group empties, waits for the
     /// reader to end at end of file so every queued byte is read, stands
-    /// the watchdog down and waits for the hub to idle out and remove
-    /// its socket. Returns the exit and every byte read from the master
-    /// since spawn.
+    /// the watchdog down and waits for the hub process to exit. Returns
+    /// the exit and every byte read from the master since spawn.
     pub(crate) fn wait(mut self) -> Exited {
         if self.reader.is_none() {
             let main = self.writer.lock().unwrap().try_clone().unwrap();
@@ -800,7 +849,12 @@ impl Run {
             .take()
             .unwrap()
             .stand_down(self.deadline.cleanup());
-        until_gone(self.deadline, &self.hub_socket, "the hub to idle out");
+        until_hub_exits(
+            self.deadline,
+            &self.hub_socket,
+            &self.hub_home,
+            "the hub process to exit",
+        );
         Exited {
             status: output.status,
             terminal: self.shared.lock().unwrap().output(),
@@ -829,15 +883,109 @@ impl Drop for Run {
     }
 }
 
-/// Waits under `deadline` for `socket` to go, naming `what` on expiry. The
-/// spin stops when the deadline's remainder is zero.
-fn until_gone(deadline: Deadline, socket: &Path, what: &str) {
-    while socket.exists() {
+/// Waits under `deadline` for the hub's socket to go and then for its
+/// `hub serve` process to exit, naming `what` on expiry: the socket's
+/// absence alone cannot prove the hub is gone, since the hub removes the
+/// socket before it drops its hub and returns. An empty `hub_home` is an
+/// attached run, which waits on no hub. The poll carries what remains of
+/// the deadline into every listing, and stops at zero, so the wait ends
+/// at the deadline however the listing below behaves. The loop lives in
+/// [`until_hub_exits_with`], so tests pin it with a fake lister.
+pub(crate) fn until_hub_exits(deadline: Deadline, socket: &Path, hub_home: &Path, what: &str) {
+    let home = hub_home.to_string_lossy();
+    until_hub_exits_with(deadline, socket, &home, what, &mut || {
+        list_processes(deadline.left())
+    });
+}
+
+/// [`until_hub_exits`] with the process listing injected: polls
+/// [`hub_gone`] with `list` until true, panicking naming `what` once the
+/// deadline's remainder is zero. A socket-only loop would return while a
+/// listed hub lives; the counting-lister test in `look.rs` pins that the
+/// loop returns only after the hub row vanishes.
+pub(crate) fn until_hub_exits_with(
+    deadline: Deadline,
+    socket: &Path,
+    home: &str,
+    what: &str,
+    list: &mut dyn FnMut() -> String,
+) {
+    loop {
         if deadline.left().is_zero() {
             panic!("waited until the deadline for {what}");
         }
+        if hub_gone(socket, home, list) {
+            return;
+        }
         thread::yield_now();
     }
+}
+
+/// Whether the hub is gone: its socket is absent and no listed process
+/// is this run's hub. An empty `home` is an attached run, which lists
+/// nothing and waits on the socket alone. Pure apart from the socket
+/// probe, so the pause-point repro in `look.rs` pins it without threads:
+/// the socket gone while the hub is alive is not gone.
+pub(crate) fn hub_gone(socket: &Path, home: &str, list: &mut dyn FnMut() -> String) -> bool {
+    if socket.exists() {
+        return false;
+    }
+    if home.is_empty() {
+        return true;
+    }
+    hub_pids(&list(), home).is_empty()
+}
+
+/// The pids in the `ps` table `table` that are this run's hub: every row
+/// whose command holds `hub serve` and whose whitespace-split words hold
+/// the exact token `FIBER_HOME=<home>`. Pure, so the boundary table in
+/// `look.rs` pins it: a longer value is a different home, and a row
+/// without the token, such as the lister's own, never matches.
+pub(crate) fn hub_pids(table: &str, home: &str) -> Vec<u32> {
+    let token = format!("FIBER_HOME={home}");
+    table
+        .lines()
+        .filter_map(|line| {
+            let mut words = line.split_whitespace();
+            let pid: u32 = words.next()?.parse().ok()?;
+            if !line.contains("hub serve") {
+                return None;
+            }
+            if !words.any(|word| word == token.as_str()) {
+                return None;
+            }
+            Some(pid)
+        })
+        .collect()
+}
+
+/// Every process's pid with its command line and environment appended:
+/// the table `hub_pids` parses. `ps` appends the environment with `-E`
+/// on macOS and `e` on Linux. It runs with a cleared environment holding
+/// only `PATH`, never the check-run nonce and never `FIBER_HOME`, so its
+/// own row holds no token and it can never match itself.
+pub(crate) fn list_processes(within: Duration) -> String {
+    let user = std::env::var("USER").expect("USER names the test's user");
+    let mut command = Command::new("ps");
+    if cfg!(target_os = "macos") {
+        command.args(["-E", "-ww", "-o", "pid=,command=", "-U", &user]);
+    } else {
+        command.args(["e", "-ww", "-o", "pid=,command=", "-U", &user]);
+    }
+    command
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let output = fakes::within("ps to list every process", within, move || command.output())
+        .expect("ps to list every process");
+    assert!(
+        output.status.success(),
+        "ps to list every process failed: {}",
+        output.status
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 /// Whether `haystack` holds `needle` as bytes.

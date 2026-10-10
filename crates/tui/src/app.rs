@@ -854,6 +854,15 @@ impl App {
                 self.attention_line(&hub.payload);
                 Vec::new()
             }
+            // The hub holds no subscription for the open session any more:
+            // keep what arrived, say so, and leave the retry to a reopen.
+            "stream_closed" => {
+                let closed = hub_string(&hub.payload, "session_id");
+                if closed.as_deref() == self.session().map(|session| session.0.as_str()) {
+                    self.notices.push(STREAM_CLOSED.to_owned());
+                }
+                Vec::new()
+            }
             _ => Vec::new(),
         }
     }
@@ -1109,6 +1118,11 @@ pub(crate) fn text_of(parts: &[ContentPart]) -> String {
         })
         .collect()
 }
+
+/// The notice for a `stream_closed` on the open session (`docs/tui.md`, "Notices").
+const STREAM_CLOSED: &str =
+    "stream_closed · this session's log can't be read past here; reopen the session to try again";
+
 fn hub_string(payload: &Map<String, Value>, key: &str) -> Option<String> {
     payload.get(key).and_then(Value::as_str).map(str::to_owned)
 }

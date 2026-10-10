@@ -8,18 +8,20 @@ use std::time::Duration;
 
 use super::{mcp_fixture, script};
 use crate::TempDir;
+use crate::deadline::Deadline;
 
 /// How long a script child may take. A wait that reaches it fails the test.
 const DEADLINE: Duration = Duration::from_secs(10);
 
 /// Waits for `child` on a thread, so a hang fails at [`DEADLINE`].
+#[track_caller]
 fn waited(child: Child) -> Output {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the script: {err}"))
-        .unwrap()
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(err) => panic!("waited {DEADLINE:?} for the script: {err}"),
+    }
 }
 
 fn spawn(path: &Path, args: &[&str]) -> Child {
@@ -32,6 +34,7 @@ fn spawn(path: &Path, args: &[&str]) -> Child {
         .unwrap()
 }
 
+#[track_caller]
 fn run(path: &Path, args: &[&str]) -> Output {
     waited(spawn(path, args))
 }
@@ -104,6 +107,7 @@ fn the_mcp_fixture_points_at_server_sh() {
 }
 
 /// Runs the MCP fixture over `dir`, feeding it `lines` and closing stdin.
+#[track_caller]
 fn fixture(dir: &Path, lines: &[&str]) -> Output {
     use std::io::Write;
     let mut child = Command::new(mcp_fixture())

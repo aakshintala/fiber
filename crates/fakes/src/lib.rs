@@ -12,6 +12,7 @@ pub mod clock;
 mod connect_proxy;
 #[cfg(target_os = "macos")]
 mod crash_ports;
+pub mod deadline;
 pub mod emit;
 pub mod jobs;
 mod oauth_server;
@@ -32,6 +33,7 @@ pub use blocking::BlockingProvider;
 pub use cancel::CancelToken;
 pub use client::Client;
 pub use connect_proxy::ConnectProxy;
+pub use deadline::Deadline;
 pub use emit::Recorder;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{
@@ -44,6 +46,19 @@ pub use scripted_provider::{Scripted, ScriptedProvider, call_usage, reply, unnam
 pub use temp_dir::TempDir;
 pub use watchdog::Watchdog;
 pub use within::{MUST_SUCCEED_WITHIN, within};
+
+/// The check run's nonce for a child process: `("FIBER_CHECK_RUN", value)`
+/// when the test process carries it, and nothing otherwise, so a test that
+/// clears a child's environment puts the nonce back and a leak of that
+/// child still carries it (`docs/testing.md`, "Running tests"). Use as
+/// `.env_clear()` then `.envs(fakes::check_run())`: it adds at most that
+/// one variable and never clears anything.
+// Mutants run without FIBER_CHECK_RUN, and no test may set it, so a mutant
+// returns what the real function does; scripts/test-leak-probe tests it end to end.
+#[cfg_attr(false, mutants::skip)]
+pub fn check_run() -> Option<(&'static str, std::ffi::OsString)> {
+    std::env::var_os("FIBER_CHECK_RUN").map(|value| ("FIBER_CHECK_RUN", value))
+}
 
 /// The context window every fake model declares, in tokens: the window
 /// fixtures build sessions with, so size notices and the handoff trigger

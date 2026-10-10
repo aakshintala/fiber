@@ -137,6 +137,10 @@ grid, and the test asserts on that grid: its text, its rows, each cell's
 colours and attributes, the cursor position, and the alternate-screen and
 hidden-cursor flags. Each wait is a predicate over the grid with one named
 deadline; a wait the terminal ends before failing shows the last grid.
+The driver takes a grid snapshot for a wait only when no synchronized
+output block (mode 2026) is open, so a wait sees whole frames and never a
+mix of the old frame and the new one; a stream without mode 2026 snapshots
+after each read.
 The terminal is 120 by 32 unless a test picks the size its layout needs
 (the look tests use 160 by 48). The driver pins `TERM` to
 `xterm-256color` and answers the binary's capability queries for a fixed
@@ -430,8 +434,17 @@ tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
 fails the run when a process still carries it after the tests, listing each
 leak's PID and command. The scan only reports: reaping stays the test's job,
 above.
-No fixture clears its environment, so a fixture's leak always carries the
-nonce. On macOS `ps` withholds the environment of some processes, such as
+A test that clears a child's environment puts `FIBER_CHECK_RUN`
+back (`fakes::check_run`), so `fiber` and the processes it starts carry
+the nonce. The exception is the case processes of `fiber extension test`,
+which Fiber starts with a cleared environment. A shell-tool command gets
+the nonce through the session's environment: `fiber ask` passes its
+caller's, and a hub a test starts gets no `SHELL`, so it uses its
+inherited environment (`docs/invocation.md`, "A session's environment").
+When the selection includes `main`, `scripts/test-leak-probe` leaks a
+process through the shell tool under `fiber ask`, with its own nonce, and
+requires the scan to name its PID.
+On macOS `ps` withholds the environment of some processes, such as
 `sh` and `sleep`, so the nonce scan cannot name them. After it the scan
 reads the user's processes reparented to init that started after
 `scripts/check` began: one whose executable is under this worktree's
@@ -491,9 +504,8 @@ A wait that takes several lines has one deadline for the whole wait, never one
 per line, and needs no clock: a scoped thread reads the lines and sends them
 over a channel, and the test takes them with one `recv_timeout`, as `until` in
 `crates/doors/tests/socket.rs` does. A binary-level test that must hand product
-code a `contract::clock::Clock` uses `SystemClock` in
-`crates/main/tests/support/mod.rs`, the process clock, or `StretchedClock`
-there, which runs it slower so a product deadline spans the test's own.
+code a `contract::clock::Clock` uses `fakes::clock::SystemClock`, the process clock, or `StretchedClock`
+in `crates/main/tests/support/mod.rs`, which runs it slower so a product deadline spans the test's own.
 
 A test advances a fake clock only after a signal that the code under test is
 waiting on that clock (past its own clock check); a parked caller alone is not

@@ -519,7 +519,10 @@ fn unattended_oauth_lua() -> Lua {
         &lua,
         &host,
         &tag,
-        Arc::new(SystemBrowser::default()),
+        super::Context {
+            browser: Arc::new(SystemBrowser::default()),
+            script: None,
+        },
         Rc::new(Cell::new(false)),
         failures.failure,
         failures.note_failure,

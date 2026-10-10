@@ -5,6 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::*;
+use crate::deadline::Deadline;
 
 /// POSTs a form to `path` and returns the status and the body. A read that
 /// outlasts its deadline fails the test rather than hanging it.
@@ -258,10 +259,15 @@ fn hold_records_the_request_and_replies_only_after_release() {
         server.requests()[0].form,
         [("a".to_owned(), "b".to_owned())]
     );
-    assert!(rx.recv_timeout(QUIET).is_err(), "no reply while held");
+    assert!(
+        Deadline::after(QUIET).recv(&rx).is_err(),
+        "no reply while held"
+    );
 
     server.release();
-    let (status, body) = rx.recv_timeout(WAIT).expect("release sends the reply");
+    let (status, body) = Deadline::after(WAIT)
+        .recv(&rx)
+        .expect("release sends the reply");
     assert_eq!(status, 200);
     assert!(body.contains(r#""access_token":"at""#), "{body}");
 }
@@ -293,8 +299,8 @@ fn dropping_a_holding_server_releases_its_client() {
     assert!(server.await_requests(1, WAIT));
 
     drop(server);
-    let (status, _) = rx
-        .recv_timeout(WAIT)
+    let (status, _) = Deadline::after(WAIT)
+        .recv(&rx)
         .expect("the drop sends the held reply");
     assert_eq!(status, 400);
 }

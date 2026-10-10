@@ -10,14 +10,16 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, Failure};
+use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Effects, Output, ServerRecord, Tool};
 use serde_json::{Map, Value};
 
 use crate::effects::Hints;
+use crate::fail;
 use crate::name::qualified;
-use crate::server::CallError;
-use crate::slot::{self, Run, Slot};
+use crate::rpc::{Named, TOOLS_CALL};
+use crate::server_json::{CallResult, Content, from_object};
+use crate::slot::{self, Fault, Run, Slot};
 
 /// One server tool declared to the model.
 pub(crate) struct McpTool {
@@ -97,7 +99,7 @@ impl Tool for McpTool {
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         let Some(slot) = self.call.slot.upgrade() else {
-            return failed(
+            return fail::failed(
                 ErrorCode::McpServerUnavailable,
                 slot::unavailable(&self.call.server),
             );
@@ -105,7 +107,7 @@ impl Tool for McpTool {
         match slot.run(&self.call.tool) {
             Run::Removed(servers) => Output {
                 servers,
-                ..failed(
+                ..fail::failed(
                     ErrorCode::McpToolRemoved,
                     slot::removed(&self.call.server, &self.call.tool),
                 )
@@ -115,39 +117,58 @@ impl Tool for McpTool {
                 servers: failed.records,
                 ..Output::default()
             },
-            Run::Call(server, mut servers) => {
-                let mut output = match server.call(
-                    &self.call.tool,
-                    &Value::Object(arguments.clone()),
-                    self.call.timeout,
-                    cancel,
-                ) {
-                    Ok(result) => answer(&self.call.server, &self.call.tool, &result),
-                    Err(CallError::Timeout) => failed(ErrorCode::Timeout, timed_out(&self.call)),
-                    Err(CallError::Cancelled) => {
-                        failed(ErrorCode::McpCancelRequested, cancelled(&self.call))
-                    }
-                    // The call is never replayed: the next call restarts
-                    // the server, if a restart is left.
-                    Err(CallError::Gone) => match slot.died(&server) {
-                        Some(record) => {
-                            let output =
-                                failed(record.error.code.clone(), record.error.message.clone());
-                            servers.push(ServerRecord::Failed(record));
-                            output
-                        }
-                        None => failed(
-                            ErrorCode::McpServerUnavailable,
-                            slot::unavailable(&self.call.server),
-                        ),
-                    },
-                    Err(CallError::JsonRpc { code: _, message }) => {
-                        failed(ErrorCode::ToolError, message)
-                    }
+            Run::Call(server, servers) => {
+                let params = Named {
+                    arguments,
+                    name: &self.call.tool,
                 };
-                output.servers = servers;
-                output
+                let called = slot.call(&server, TOOLS_CALL, &params, self.call.timeout, cancel);
+                // The call is never replayed: the next call restarts
+                // the server, if a restart is left.
+                output(&self.call, called, servers)
             }
+        }
+    }
+}
+
+/// Maps one call outcome to its output.
+fn output(call: &Call, called: Result<Value, Fault>, servers: Vec<ServerRecord>) -> Output {
+    match called {
+        Ok(result) => {
+            let result: CallResult = from_object(result).unwrap_or_default();
+            let mut answered = answer(&call.server, &call.tool, &result);
+            answered.servers = servers;
+            answered
+        }
+        Err(Fault::Timeout) => {
+            let mut out = fail::failed(ErrorCode::Timeout, timed_out(call));
+            out.servers = servers;
+            out
+        }
+        Err(Fault::Cancelled) => {
+            let mut out = fail::failed(ErrorCode::McpCancelRequested, cancelled(call));
+            out.servers = servers;
+            out
+        }
+        Err(Fault::Refused(message)) => {
+            let mut out = fail::failed(ErrorCode::ToolError, message);
+            out.servers = servers;
+            out
+        }
+        Err(Fault::Died(record)) => {
+            let mut out = fail::failed(record.error.code.clone(), record.error.message.clone());
+            let mut all = servers;
+            all.push(ServerRecord::Failed(record));
+            out.servers = all;
+            out
+        }
+        Err(Fault::Gone) => {
+            let mut out = fail::failed(
+                ErrorCode::McpServerUnavailable,
+                slot::unavailable(&call.server),
+            );
+            out.servers = servers;
+            out
         }
     }
 }
@@ -155,29 +176,19 @@ impl Tool for McpTool {
 /// Reads a `tools/call` result: text blocks become content in order, and a
 /// result the server marks as an error ends failed with code `tool_error`.
 /// Non-text parts and `structuredContent` are dropped in this slice.
-fn answer(server: &str, tool: &str, result: &Value) -> Output {
-    let texts: Vec<String> = result
-        .get("content")
-        .and_then(Value::as_array)
-        .map(|parts| {
-            parts
-                .iter()
-                .filter_map(|part| {
-                    if part.get("type").and_then(Value::as_str) == Some("text") {
-                        part.get("text").and_then(Value::as_str).map(str::to_owned)
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+fn answer(server: &str, tool: &str, result: &CallResult) -> Output {
+    let mut texts = Vec::new();
+    for part in &result.content {
+        if let Content::Text { text: Some(text) } = part {
+            texts.push(text.clone());
+        }
+    }
     let text = texts.join("");
     let content = texts
         .into_iter()
         .map(|text| ContentPart::Text { text })
         .collect();
-    if result.get("isError").and_then(Value::as_bool) == Some(true) {
+    if result.is_error {
         let message = if text.is_empty() {
             format!("The MCP server `{server}` reported an error for `{tool}`.")
         } else {
@@ -185,12 +196,7 @@ fn answer(server: &str, tool: &str, result: &Value) -> Output {
         };
         Output {
             content,
-            error: Some(Failure {
-                code: ErrorCode::ToolError,
-                message,
-                retry_after_ms: None,
-                provider: None,
-            }),
+            error: Some(fail::failure(ErrorCode::ToolError, message)),
             ..Output::default()
         }
     } else {
@@ -215,18 +221,6 @@ fn cancelled(call: &Call) -> String {
         "The call to `{}` on the MCP server `{}` was cancelled; the server may still act on it.",
         call.tool, call.server,
     )
-}
-
-fn failed(code: ErrorCode, message: String) -> Output {
-    Output {
-        error: Some(Failure {
-            code,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        }),
-        ..Output::default()
-    }
 }
 
 #[cfg(test)]

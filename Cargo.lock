@@ -411,6 +411,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
+ "thiserror 2.0.21",
  "worktree",
 ]
 
@@ -870,6 +871,7 @@ dependencies = [
  "fakes",
  "flate2",
  "mlua",
+ "net",
  "ring",
  "rustix",
  "serde_json",
@@ -1644,6 +1646,7 @@ dependencies = [
  "fakes",
  "ring",
  "rustix",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
 ]

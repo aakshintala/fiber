@@ -8,6 +8,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use crate::deadline::Deadline;
+
 /// Kills one process group, or every process matching a command line, when
 /// this value is dropped. [`Watchdog::stand_down`] tells it to exit without
 /// signalling.
@@ -94,6 +96,7 @@ impl Watchdog {
         clippy::panic,
         reason = "a watchdog that does not exit leaves a process behind"
     )]
+    #[track_caller]
     pub fn stand_down(mut self, within: Duration) {
         if let Some(mut stdin) = self.stdin.take() {
             match writeln!(stdin) {
@@ -108,7 +111,7 @@ impl Watchdog {
             Ok(()) | Err(mpsc::SendError(_)) => {}
         });
         assert!(
-            finished.recv_timeout(within).is_ok(),
+            Deadline::after(within).recv(&finished).is_ok(),
             "waited {within:?} for the watchdog to exit"
         );
     }

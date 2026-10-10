@@ -15,6 +15,8 @@ use contract::inbox::{Claim, Delivery, JobNotice};
 use contract::jobs::{End, Foreground, Jobs, Lines, OpenError, Opened, Opening};
 use contract::tool::Cancel;
 
+use crate::deadline::Deadline;
+
 /// A job's end not yet reported, as `jobs` keeps one: reporting consumes
 /// it, and dropped unreported it reports the job failed `indeterminate`.
 struct Unreported {
@@ -221,7 +223,7 @@ impl FakeJobs {
 
     /// The next completion, or `None` when none arrives within `within`.
     pub fn ended(&self, within: Duration) -> Option<JobCompleted> {
-        lock(&self.completed_rx).recv_timeout(within).ok()
+        Deadline::after(within).recv(&lock(&self.completed_rx)).ok()
     }
 
     /// How many times `stop_delegates` ran: the loop calls it once per

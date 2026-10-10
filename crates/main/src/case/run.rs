@@ -16,8 +16,8 @@ use serde_json::{Map, Value};
 use super::clock::CaseClock;
 use super::format::{Case, ClockAdvance, Host, Selector, SessionCase};
 
-const ADVANCE_WAIT: Duration = Duration::from_secs(10);
-const UNTIL_WAIT: Duration = Duration::from_secs(30);
+pub(super) const ADVANCE_WAIT: Duration = Duration::from_secs(10);
+pub(super) const UNTIL_WAIT: Duration = Duration::from_secs(30);
 const CLOSE_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy)]
@@ -79,7 +79,7 @@ impl CaseRun {
         Arc::new(Self {
             name,
             expected,
-            host: extensions::HostScript::new(host.http, host.exec),
+            host: extensions::HostScript::new(host.http, host.exec, host.oauth),
             clock: CaseClock::new(),
             advances,
             until,

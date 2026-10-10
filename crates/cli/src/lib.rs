@@ -24,6 +24,7 @@ mod hub_service;
 mod hub_status;
 mod hub_unit;
 mod login;
+mod model_lists;
 mod models;
 mod prune;
 mod release;
@@ -45,7 +46,8 @@ pub use login::{
     LoginCancel, LoginName, LoginStored, LogoutTarget, browser_login, login_store, login_targets,
     providers_in, run_login, run_logout,
 };
-pub use models::{models, providers_and_config, refresh_model_lists};
+pub use model_lists::{ModelLists, ModelListsError, model_lists, roles_of};
+pub use models::{models, refresh_model_lists};
 pub use prune::{PruneArgs, prune};
 pub use release::release_install;
 pub use sessions::{delete, export};

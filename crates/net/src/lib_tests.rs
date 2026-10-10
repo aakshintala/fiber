@@ -176,7 +176,12 @@ fn get(tls: TlsConfig, port: u16) -> mpsc::Receiver<Result<String, ureq::Error>>
                 .tls_config(tls)
                 .proxy(None)
                 .build();
-            let caller = agent(built, Arc::new(()), DefaultResolver::default());
+            let caller = agent(
+                built,
+                Arc::new(()),
+                DefaultResolver::default(),
+                crate::LIMITS,
+            );
             let outcome = match caller.get(format!("https://127.0.0.1:{port}/")).call() {
                 Ok(mut response) => response.body_mut().read_to_string(),
                 Err(err) => Err(err),
@@ -382,4 +387,97 @@ fn agent_config_carries_the_platform_verifier() {
 #[test]
 fn a_stopped_call_reports_connection_failed() {
     assert_eq!(Error::Stopped.code(), contract::ErrorCode::ConnectionFailed);
+}
+
+#[test]
+fn production_limits_are_fifteen_seconds_and_five_minutes() {
+    assert_eq!(
+        super::LIMITS.connect(),
+        Duration::from_secs(15),
+        "the per-address connect limit is 15 s"
+    );
+    assert_eq!(
+        super::LIMITS.idle(),
+        Duration::from_secs(300),
+        "the idle limit is 300 s"
+    );
+    assert_eq!(
+        super::Limits::default(),
+        super::LIMITS,
+        "the default is the production limits"
+    );
+}
+
+/// Each single-zero case kills one side of the `||`: with `&&` the
+/// one-zero limit would be `Some`.
+#[test]
+fn limits_new_refuses_a_zero_bound() {
+    assert!(
+        super::Limits::new(Duration::ZERO, Duration::from_secs(1)).is_none(),
+        "a zero connect is refused"
+    );
+    assert!(
+        super::Limits::new(Duration::from_secs(1), Duration::ZERO).is_none(),
+        "a zero idle is refused"
+    );
+    let limits = super::Limits::new(Duration::from_secs(1), Duration::from_millis(200))
+        .expect("non-zero bounds build a limit");
+    assert_eq!(
+        limits.connect(),
+        Duration::from_secs(1),
+        "the connect getter"
+    );
+    assert_eq!(limits.idle(), Duration::from_millis(200), "the idle getter");
+}
+
+#[test]
+fn timed_out_is_true_for_timeouts_and_false_for_other_failures() {
+    assert!(
+        super::timed_out(&ureq::Error::Timeout(ureq::Timeout::Global)),
+        "ureq's own deadline is a timeout"
+    );
+    assert!(
+        super::timed_out(&ureq::Error::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "waited out"
+        ))),
+        "a timed-out socket is a timeout"
+    );
+    assert!(
+        !super::timed_out(&ureq::Error::HostNotFound),
+        "a missing host is not a timeout"
+    );
+}
+
+#[test]
+fn timed_out_is_false_for_a_refused_peer() {
+    // Negate-check: flipping the kind guard to true would report this
+    // refusal as a timeout.
+    let refused = ureq::Error::Io(std::io::Error::new(
+        std::io::ErrorKind::ConnectionRefused,
+        "refused",
+    ));
+    assert!(
+        !super::timed_out(&refused),
+        "a refused peer is not a timeout"
+    );
+}
+
+#[test]
+fn stall_and_connect_timeout_report_connection_failed() {
+    assert_eq!(
+        Error::Stalled {
+            idle: Duration::from_millis(200)
+        }
+        .code(),
+        contract::ErrorCode::ConnectionFailed
+    );
+    assert_eq!(
+        Error::ConnectTimedOut {
+            addr: std::net::SocketAddr::from(([127, 0, 0, 1], 9)),
+            limit: Duration::from_secs(15),
+        }
+        .code(),
+        contract::ErrorCode::ConnectionFailed
+    );
 }

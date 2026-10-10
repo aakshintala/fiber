@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# The probe for the leak scan's binary-level coverage (docs/testing.md,
+# "Running tests"): `fiber ask` runs a shell command that leaves a
+# `python3` process behind on purpose, and this script requires
+# `scripts/leak-scan` to name its PID.
+#
+# This script sends no signal to any process. The leaked process polls a
+# stop file in this run's temp dir, exits when the file exists, when the
+# directory is gone, or after 120 s on its own, so a run that dies without
+# reaching the EXIT trap still leaves nothing behind. Cleanup touches the
+# stop file in the EXIT trap and waits for the leaked PID to leave the
+# process table; a survivor is reported with its PID and command, and the
+# script fails. The table is only read (`ps -p`); no process is ever
+# signalled.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+probe_dir=$(mktemp -d)
+scan_err=$(mktemp)
+nonce="probe-$$-$(date +%s)-$RANDOM"
+
+# True while ps still lists the PID. Read-only: this sends nothing.
+pid_alive() {
+  env -u FIBER_CHECK_RUN ps -p "$1" >/dev/null 2>&1
+}
+
+# Command line of a PID for a stray report. Read-only: sends nothing.
+pid_command() {
+  env -u FIBER_CHECK_RUN ps -o command= -p "$1" 2>/dev/null || true
+}
+
+# Wait up to $2 seconds for $1 to leave the process table, polling
+# read-only. Returns 0 once ps no longer lists it, 1 after the bound.
+require_gone() {
+  local target=$1
+  local bound=${2-10}
+  local i=0
+  local limit=$((bound * 5))
+  while pid_alive "$target"; do
+    i=$((i + 1))
+    if [ "$i" -ge "$limit" ]; then
+      return 1
+    fi
+    sleep 0.2
+  done
+  return 0
+}
+
+cleanup() {
+  local rc=$?
+  if [ -n "${probe_dir-}" ] && [ -d "$probe_dir" ]; then
+    touch "$probe_dir/stop" 2>/dev/null || true
+  fi
+  local stray=
+  local pid
+  # Discovered from the directory, so a PID file written after a nextest
+  # failure is found too.
+  for pidfile in "$probe_dir"/*.pid; do
+    if [ -f "$pidfile" ]; then
+      pid=$(cat "$pidfile" 2>/dev/null || true)
+      case $pid in '' | *[!0-9]*) continue ;; esac
+      if pid_alive "$pid"; then
+        if require_gone "$pid" 10; then
+          :
+        else
+          echo "scripts/test-leak-probe: leaked process $pid still alive, leaving it alone: $(pid_command "$pid")" >&2
+          stray=1
+        fi
+      fi
+    fi
+  done
+  if [ -n "${probe_dir-}" ]; then
+    rm -rf "$probe_dir" || true
+  fi
+  rm -f "${scan_err-}" || true
+  if [ -n "$stray" ]; then
+    exit 1
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+
+FIBER_CHECK_RUN=$nonce FIBER_LEAK_PROBE_DIR=$probe_dir \
+  cargo nextest run -p main --test leak_probe --run-ignored only
+
+# The shell command backgrounds the leaker, so the PID file lands after
+# `fiber ask` exits: poll read-only for up to 10 s.
+pid=
+tries=0
+while [ "$tries" -lt 50 ] && [ -z "$pid" ]; do
+  if [ -f "$probe_dir/ask.pid" ]; then
+    pid=$(cat "$probe_dir/ask.pid" 2>/dev/null || true)
+  fi
+  if [ -z "$pid" ]; then
+    sleep 0.2
+  fi
+  tries=$((tries + 1))
+done
+if [ -z "$pid" ]; then
+  echo "scripts/test-leak-probe: no ask.pid in $probe_dir after fiber ask" >&2
+  exit 1
+fi
+case $pid in '' | *[!0-9]*) echo "scripts/test-leak-probe: bad PID '$pid'" >&2; exit 1 ;; esac
+
+if LEAK_SCAN_GRACE=0 env -u FIBER_CHECK_START scripts/leak-scan "$nonce" 2>"$scan_err"; then
+  echo "scripts/test-leak-probe: leak-scan exited 0 with leaked process $pid alive: $(pid_command "$pid")" >&2
+  cat "$scan_err" >&2
+  exit 1
+fi
+if ! grep -Fq "leaked process $pid:" "$scan_err"; then
+  echo "scripts/test-leak-probe: leak-scan did not name leaked process $pid:" >&2
+  cat "$scan_err" >&2
+  exit 1
+fi
+
+touch "$probe_dir/stop"
+if require_gone "$pid" 10; then
+  :
+else
+  echo "scripts/test-leak-probe: leaked process $pid still alive, leaving it alone: $(pid_command "$pid")" >&2
+  exit 1
+fi

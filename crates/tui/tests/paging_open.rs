@@ -86,6 +86,7 @@ fn run(exe: &Path, args: &[&str]) -> Output {
     let child = Command::new(exe)
         .args(args)
         .env_clear()
+        .envs(fakes::check_run())
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

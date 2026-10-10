@@ -13,6 +13,7 @@ use contract::shapes::Process;
 use contract::{ErrorCode, JobId};
 
 use super::FakeJobs;
+use crate::deadline::Deadline;
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
@@ -154,7 +155,7 @@ fn stop_calls_that_jobs_stop_and_end_is_delivered() {
     );
     assert!(jobs.stop(&id));
     assert!(
-        fired_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&fired_rx).is_ok(),
         "waited {DEADLINE:?} for the job's stop"
     );
     assert!(jobs.stop(&id), "a second stop of a running job is true");

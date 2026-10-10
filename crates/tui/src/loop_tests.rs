@@ -711,6 +711,12 @@ struct CountingBackend {
     flushes: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
+impl crate::screen::SyncEmit for CountingBackend {
+    fn emit(&mut self, _begin: bool) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
 impl ratatui::backend::Backend for CountingBackend {
     type Error = <TestBackend as ratatui::backend::Backend>::Error;
 

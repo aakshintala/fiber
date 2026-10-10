@@ -24,7 +24,7 @@ use std::time::Duration;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use config::CredentialFile;
-use mlua::{Lua, Table, Value as LuaValue};
+use mlua::{Lua, LuaSerdeExt, Table, Value as LuaValue};
 use ring::digest;
 use ring::rand::{SecureRandom, SystemRandom};
 
@@ -372,19 +372,26 @@ fn utf8_opt(
     Err(crate::host::failure::Raise::Arg(message.to_owned()))
 }
 
+pub(crate) struct Context {
+    pub(crate) browser: Arc<dyn Browser>,
+    pub(crate) script: Option<Arc<crate::HostScript>>,
+}
+
 /// Sets `host.oauth`. `entry` is true while the entry script runs.
 /// `failure` raises a table; `note_failure` preserves refresh's outer mapping.
 pub(crate) fn install(
     lua: &Lua,
     host: &Table,
     tag: &Table,
-    browser: Arc<dyn Browser>,
+    context: Context,
     entry: Rc<Cell<bool>>,
     failure: mlua::Function,
     note_failure: mlua::Function,
 ) -> mlua::Result<()> {
+    let Context { browser, script } = context;
     let oauth = lua.create_table()?;
     let open_browser = Arc::clone(&browser);
+    let open_script = script.clone();
     let open = move |_lua: &mlua::Lua, url: LuaValue| {
         let url = utf8_string(&url, "host.oauth.open: url must be a string")?;
         if !open_browser.attended() {
@@ -393,10 +400,17 @@ pub(crate) fn install(
                 "host.oauth.open needs a person to log in, and nobody is attached".to_owned(),
             ));
         }
-        open_browser.open(&url);
+        if let Some(script) = &open_script {
+            script
+                .oauth("open", &serde_json::json!({"url": url}))
+                .map_err(|(code, message)| crate::host::failure::Raise::Failed(code, message))?;
+        } else {
+            open_browser.open(&url);
+        }
         Ok(mlua::MultiValue::new())
     };
     let show_browser = Arc::clone(&browser);
+    let show_script = script.clone();
     let show = move |_lua: &mlua::Lua, (url, code): (LuaValue, LuaValue)| {
         // `show` runs on the thread like `open`: it shows the code and
         // opens nothing, so it never yields (`docs/extensions.md`, "Host
@@ -415,12 +429,27 @@ pub(crate) fn install(
                 "host.oauth.show needs a person to log in, and nobody is attached".to_owned(),
             ));
         }
-        show_browser.show(&url, &code);
+        if let Some(script) = &show_script {
+            script
+                .oauth("show", &serde_json::json!({"url": url, "code": code}))
+                .map_err(|(code, message)| crate::host::failure::Raise::Failed(code, message))?;
+        } else {
+            show_browser.show(&url, &code);
+        }
         Ok(mlua::MultiValue::new())
     };
     crate::host::failure::register(lua, &oauth, "show", &failure, Some("unattended:show"), show)?;
     crate::host::failure::register(lua, &oauth, "open", &failure, Some("unattended:open"), open)?;
-    crate::host::failure::register(lua, &oauth, "pkce", &failure, None, |lua, ()| {
+    crate::host::failure::register(lua, &oauth, "pkce", &failure, None, move |lua, ()| {
+        if let Some(script) = &script {
+            let pair = script
+                .oauth("pkce", &serde_json::json!({}))
+                .map_err(|(code, message)| crate::host::failure::Raise::Failed(code, message))?;
+            let value = lua
+                .to_value(&pair)
+                .map_err(|e| crate::host::failure::Raise::Arg(e.to_string()))?;
+            return Ok(mlua::MultiValue::from_vec(vec![value]));
+        }
         let verifier = verifier().map_err(|message| {
             crate::host::failure::Raise::Failed(contract::ErrorCode::IoFailed, message)
         })?;

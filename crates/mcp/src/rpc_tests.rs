@@ -8,34 +8,32 @@ use super::{
 };
 
 #[test]
-fn a_request_encodes_with_its_id_method_and_params() {
+fn a_call_line_keeps_the_top_level_name_last_when_arguments_hold_a_name() {
     assert_eq!(
-        encode_request(3, "tools/call", Some(&json!({"name": "echo"}))),
-        r#"{"id":3,"jsonrpc":"2.0","method":"tools/call","params":{"name":"echo"}}"#,
+        encode_request(
+            3,
+            "tools/call",
+            &json!({"name": "echo", "arguments": {"name": "inner"}}),
+        ),
+        r#"{"id":3,"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{"name":"inner"},"name":"echo"}}"#,
     );
 }
 
 #[test]
-fn absent_params_encode_as_an_empty_object() {
+fn a_request_and_a_notification_round_trip_through_decode() {
     assert_eq!(
-        encode_request(2, "tools/list", None),
-        r#"{"id":2,"jsonrpc":"2.0","method":"tools/list","params":{}}"#,
+        decode_line(&encode_request(3, "tools/call", &json!({"name": "echo"}))),
+        Incoming::ServerRequest(super::ServerRequest {
+            id: json!(3),
+            method: "tools/call".to_owned(),
+        }),
     );
-}
-
-#[test]
-fn a_notification_without_params_carries_no_params_key() {
     assert_eq!(
-        encode_notification("notifications/initialized", None),
-        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
-    );
-}
-
-#[test]
-fn a_notification_with_params_carries_them() {
-    assert_eq!(
-        encode_notification("notifications/cancelled", Some(&json!({"requestId": 3}))),
-        r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}"#,
+        decode_line(&encode_notification(
+            "notifications/cancelled",
+            &json!({"requestId": 3})
+        )),
+        Incoming::Ignored,
     );
 }
 

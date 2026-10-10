@@ -24,6 +24,72 @@ use serde_json::json;
 
 const WAIT: Duration = Duration::from_secs(5);
 
+struct Attended;
+#[allow(
+    clippy::panic,
+    reason = "the test fails if a scripted OAuth call reaches the real browser boundary"
+)]
+impl extensions::Browser for Attended {
+    fn open(&self, _: &str) {
+        panic!("scripted open must not reach the browser");
+    }
+    fn show(&self, _: &str, _: &str) {
+        panic!("scripted show must not reach the browser");
+    }
+    fn attended(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn oauth_script_reaches_pkce_open_show_and_callback_without_external_work() {
+    let setup = Setup::new();
+    let dir = setup.root().join("oauth-script");
+    write(
+        &dir.join("init.lua"),
+        r#"
+        fiber.command("oauth", { timeout = 1000, run = function()
+            local p = host.oauth.pkce()
+            host.oauth.open("https://example.test/" .. p.challenge)
+            host.oauth.show("https://example.test/device", p.verifier)
+            local query = host.oauth.callback({port = 1})
+            local ok, err = pcall(host.oauth.callback, {port = 1})
+            return json.encode({ verifier = p.verifier, code = query.code, failed = not ok, error = err.code })
+        end })
+    "#,
+    );
+    let script = HostScript::new(
+        vec![],
+        vec![],
+        vec![
+            json!({"pkce": {"verifier": "v", "challenge": "c"}}),
+            json!({"open": {"url": "https://example.test/c"}}),
+            json!({"show": {"url": "https://example.test/device", "code": "v"}}),
+            json!({"callback": {"reply": {"query": {"code": "yes"}}}}),
+            json!({"callback": {"error": {"code": "io_failed", "message": "busy"}}}),
+        ],
+    );
+    let extension = Arc::new(
+        LuaExtension::new("oauth-script", dir, setup.home(), FakeClock::new())
+            .with_host_script(script.clone())
+            .with_browser(Arc::new(Attended)),
+    );
+    let (sent, received) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        drop(sent.send(extension.command("oauth", "")));
+    });
+    let returned = received
+        .recv_timeout(WAIT)
+        .expect("scripted OAuth command returns")
+        .unwrap();
+    worker.join().unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&returned).unwrap(),
+        json!({"verifier": "v", "code": "yes", "failed": true, "error": "io_failed"})
+    );
+    assert!(script.unmet().is_empty(), "{:?}", script.unmet());
+}
+
 struct NoLock;
 
 impl PathLock for NoLock {
@@ -142,6 +208,7 @@ fiber.provider("host-script", {{ models = {{
                 stderr: "err".to_owned(),
             }),
         }],
+        Vec::new(),
     );
     let config = config(&setup);
     let home = setup.home();
@@ -211,7 +278,7 @@ fn an_unscripted_http_call_fails_in_lua_and_is_reported_as_a_miss() {
             server.url()
         ),
     );
-    let script = HostScript::new(Vec::new(), Vec::new());
+    let script = HostScript::new(Vec::new(), Vec::new(), Vec::new());
     let extension = Arc::new(
         LuaExtension::new("unscripted", dir, setup.home(), FakeClock::new())
             .with_host_script(Arc::clone(&script)),

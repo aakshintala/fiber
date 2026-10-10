@@ -17,18 +17,6 @@ pub struct Hints {
 }
 
 impl Hints {
-    /// The hints a server's `annotations` object declares. Unknown JSON
-    /// types are absent, never an error: a server's schema is best effort
-    /// (`docs/dependencies.md`, "Written ourselves").
-    pub fn from_annotations(value: &Value) -> Self {
-        let object = value.as_object();
-        Self {
-            read_only: object.and_then(|map| hint(map, "readOnlyHint")),
-            destructive: object.and_then(|map| hint(map, "destructiveHint")),
-            open_world: object.and_then(|map| hint(map, "openWorldHint")),
-        }
-    }
-
     /// The person's override for one tool
     /// (`docs/configuration.md`, "MCP servers"): the same three keys, each a
     /// boolean, replacing the server's set as a whole.

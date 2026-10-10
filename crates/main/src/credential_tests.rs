@@ -3,7 +3,7 @@
 
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
-use config::{Config, ProjectKey, ProviderData, Secret, Sources, store_credential};
+use config::{Config, ProviderData, Secret, store_credential};
 
 use super::{Labels, no_label, session_credential, switch_credential};
 
@@ -39,13 +39,7 @@ fn config(root: &fakes::TempDir, stored: &[(&str, &str)], text: &str) -> Config 
         store_credential(&home, name, label, &secret).unwrap();
     }
     std::fs::write(home.join("config.json"), text).unwrap();
-    Config::load(Sources {
-        home,
-        workspace,
-        project: ProjectKey::new("test").unwrap(),
-        overrides: Vec::new(),
-    })
-    .unwrap()
+    crate::test_support::load(&home, &workspace, "test", Vec::<String>::new())
 }
 
 const SETTINGS: &str =

@@ -112,7 +112,7 @@ impl Write for Sink {
 }
 
 /// A loop at 60x12 on `backend`, with no tty, that records attaches.
-pub(super) fn new_loop<B: Backend>(
+pub(super) fn new_loop<B: Backend + crate::screen::SyncEmit>(
     backend: B,
     tty: Option<File>,
 ) -> (Loop<B>, Arc<Mutex<Vec<String>>>) {
@@ -155,7 +155,9 @@ pub(super) fn new_loop<B: Backend>(
     (lp, attached)
 }
 
-/// Runs `lp` over `inputs`, then with every sender gone.
+/// Runs `lp` over `inputs`, then with every sender gone. With no inputs it
+/// returns before drawing, so a test that captures a frame feeds at least one
+/// input first.
 pub(super) fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
     let (tx, rx) = mpsc::channel();
     for input in inputs {
@@ -618,13 +620,16 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
-    // A second restore writes nothing: the next bytes are the test's own.
+    // The screen's drop shows the cursor inside a closed synchronized
+    // block after the restore; a second restore then writes nothing, so
+    // the next bytes are the test's own.
     crate::restore();
     (&pair.slave)
         .write_all(b"mark")
         .unwrap_or_else(|err| panic!("write: {err}"));
     let tail = watched(&frames, "the mark");
-    let expected = [RESTORE, b"mark".as_slice()].concat();
+    let dropped: &[u8] = b"\x1b[?2026h\x1b[?25h\x1b[?2026l";
+    let expected = [RESTORE, dropped, b"mark".as_slice()].concat();
     assert_eq!(
         tail.get(tail.len().saturating_sub(expected.len())..),
         Some(expected.as_slice())

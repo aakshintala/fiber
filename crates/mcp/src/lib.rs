@@ -6,14 +6,18 @@
 
 mod cache;
 mod effects;
+mod fail;
 mod name;
 mod pipes;
 mod prompt;
 mod registry;
 mod rpc;
 mod server;
+mod server_json;
 mod slot;
 mod start;
+#[cfg(test)]
+mod test_support;
 mod tool;
 mod wait;
 

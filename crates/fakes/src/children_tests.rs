@@ -11,6 +11,7 @@ use super::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
 use contract::clock::Clock;
 
 use crate::clock::FakeClock;
+use crate::deadline::Deadline;
 use crate::temp_dir::TempDir;
 use crate::watchdog::Watchdog;
 use crate::within;
@@ -26,11 +27,12 @@ fn pid_alive(pid: u32) -> bool {
     kill_pid(pid, "0").unwrap()
 }
 
+#[track_caller]
 fn wait_child(mut child: Child) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
     assert!(
-        finished.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&finished).is_ok(),
         "waited {DEADLINE:?} for the command to exit"
     );
 }
@@ -101,7 +103,7 @@ fn ignores_sigterm_survives_sigterm() {
         wrote.send(()).unwrap();
     });
     assert!(
-        wrote_rx.recv_timeout(DEADLINE).is_ok(),
+        Deadline::after(DEADLINE).recv(&wrote_rx).is_ok(),
         "waited {DEADLINE:?} for {} to be read after SIGTERM",
         block.display()
     );
@@ -180,6 +182,7 @@ fn in_group(pid: u32, group: u32) -> bool {
         == Some(group)
 }
 
+#[track_caller]
 fn mkfifo(path: &Path) {
     let path = path.to_path_buf();
     let shown = path.display().to_string();

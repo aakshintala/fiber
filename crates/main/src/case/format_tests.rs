@@ -13,6 +13,137 @@ use serde_json::{Value, json};
 
 use super::{CallOutcome, Case};
 
+fn single(case: &super::CallCase) -> (&super::Call, &CallOutcome) {
+    let super::CallOperation::Invoke { call, outcome } = &case.steps[0].operation else {
+        panic!("expected a call");
+    };
+    (call, outcome)
+}
+
+#[test]
+fn credential_case_fields_and_ordered_calls_are_read() {
+    let value = json!({
+        "calls": [
+            {"call": {"provider": "p", "function": "login", "arg": {"method": "browser", "label": "work"}}, "returns": {"token": "one"}},
+            {"await": "credential_idle"},
+            {"call": {"provider": "p", "function": "credential", "arg": {}}, "returns": {"token": "two"}, "clock": [{"advance_ms": 1}]},
+            {"call": {"provider": "p", "function": "sign", "arg": {"method": "POST", "url": "https://example.test", "headers": {}}}, "returns": {}}
+        ],
+        "credentials": {"p/default": {"token": "old"}},
+        "expect_credentials": {"p/default": {"token": "new"}},
+        "attended": false,
+        "clock": [{"advance_ms": 2}],
+        "host": {"oauth": [
+            {"pkce": {"verifier": "v", "challenge": "c"}},
+            {"open": {"url": "https://example.test"}},
+            {"show": {"url": "https://example.test", "code": "1234"}},
+            {"callback": {"reply": {"query": {"state": "v"}}}},
+            {"callback": {"error": {"code": "io_failed", "message": "busy"}}}
+        ]}
+    });
+    let Case::Call(case) = parse(&value).unwrap() else {
+        panic!("expected calls");
+    };
+    assert_eq!(case.steps.len(), 4);
+    assert!(matches!(
+        case.steps[1].operation,
+        super::CallOperation::AwaitCredentialIdle
+    ));
+    assert_eq!(case.steps[2].clock[0].advance_ms, 1);
+    assert_eq!(case.clock[0].advance_ms, 2);
+    assert_eq!(case.credentials["p/default"]["token"], "old");
+    assert_eq!(case.expect_credentials["p/default"]["token"], "new");
+    assert!(!case.attended);
+    assert_eq!(case.host.oauth.len(), 5);
+}
+
+#[test]
+fn new_case_fields_reject_malformed_shapes() {
+    let base =
+        json!({"call": {"provider": "p", "function": "credential", "arg": {}}, "returns": {}});
+    for (field, value, reason) in [
+        ("calls", json!([]), "call and calls"),
+        ("credentials", json!([]), "credentials"),
+        ("credentials", json!({"../default": {}}), "credentials"),
+        ("credentials", json!({"p/../default": {}}), "credentials"),
+        ("expect_credentials", json!({"p": {}}), "credential/label"),
+        ("attended", json!(null), "attended"),
+        ("clock", json!([{"advance_ms": 0}]), "positive"),
+        (
+            "clock",
+            json!([{"advance_ms": 1, "after": {"kind": "notice"}}]),
+            "clock.after",
+        ),
+        ("host", json!({"oauth": [{"open": {"url": 1}}]}), "url"),
+        (
+            "host",
+            json!({"oauth": [{"pkce": {"verifier": "v"}}]}),
+            "challenge",
+        ),
+        (
+            "host",
+            json!({"oauth": [{"callback": {"reply": {"query": {"code": 1}}}}]}),
+            "query",
+        ),
+        (
+            "host",
+            json!({"oauth": [{"callback": {"error": {"code": "io_failed"}}}]}),
+            "message",
+        ),
+        ("host", json!({"oauth": [{}]}), "exactly one"),
+        (
+            "host",
+            json!({"oauth": [{"pkce": {}, "open": {}}]}),
+            "exactly one",
+        ),
+    ] {
+        let mut value_case = base.clone();
+        value_case[field] = value;
+        assert!(case_error(&value_case).contains(reason), "{value_case}");
+    }
+    for calls in [
+        json!([]),
+        json!([{"await": "other"}]),
+        json!([{"await": "credential_idle", "call": {}}]),
+        json!([{"call": {"provider": "p", "function": "sign", "arg": {}}}]),
+    ] {
+        assert!(parse(&json!({"calls": calls})).is_err(), "{calls}");
+    }
+}
+
+#[test]
+fn ordered_outcomes_and_clock_entries_stay_with_their_call() {
+    let entry =
+        json!({"call": {"provider": "p", "function": "credential", "arg": {}}, "returns": {}});
+    for (field, value) in [
+        ("returns", json!({})),
+        ("error", json!({"code": "credential_failed"})),
+    ] {
+        let mut case = json!({"calls": [entry]});
+        case[field] = value;
+        assert!(
+            case_error(&case).contains("their own returns or error"),
+            "{case}"
+        );
+    }
+    let mut entry = entry;
+    entry["clock"] = json!([{"advance_ms": 1, "after": {"kind": "notice"}}]);
+    assert!(case_error(&json!({"calls": [entry]})).contains("clock.after"));
+    for (field, value) in [
+        ("credentials", json!({})),
+        ("expect_credentials", json!({})),
+        ("exact_credentials", json!(true)),
+        ("attended", json!(false)),
+    ] {
+        let mut case = session_case();
+        case[field] = value;
+        assert!(
+            case_error(&case).contains("only valid in a call case"),
+            "{case}"
+        );
+    }
+}
+
 fn session_case() -> Value {
     json!({
         "script": {"steps": [{"text": "hello"}]},
@@ -27,6 +158,35 @@ fn parse(value: &Value) -> Result<Case, String> {
 
 fn case_error(value: &Value) -> String {
     parse(value).err().expect("malformed case is rejected")
+}
+
+#[test]
+fn exact_credentials_parses_boolean_values_and_defaults_to_false() {
+    for (value, expected) in [(json!(true), true), (json!(false), false)] {
+        let case = json!({
+            "call": {"provider": "p", "function": "credential", "arg": {}},
+            "returns": {},
+            "exact_credentials": value
+        });
+        let Case::Call(parsed) = parse(&case).expect("boolean exact_credentials is valid") else {
+            panic!("call case parsed as a session case");
+        };
+        assert_eq!(parsed.exact_credentials, expected);
+    }
+
+    let default = json!({
+        "call": {"provider": "p", "function": "credential", "arg": {}},
+        "returns": {}
+    });
+    let Case::Call(parsed) = parse(&default).expect("exact_credentials defaults to false") else {
+        panic!("call case parsed as a session case");
+    };
+    assert!(!parsed.exact_credentials);
+
+    let mut malformed = default;
+    malformed["exact_credentials"] = json!(null);
+    let error = case_error(&malformed);
+    assert!(error.contains("exact_credentials"), "{error}");
 }
 
 #[test]
@@ -114,12 +274,12 @@ fn every_call_field_is_read() {
     let Case::Call(parsed) = parse(&value).expect("valid call case") else {
         panic!("call case parsed as a session case");
     };
-    assert_eq!(parsed.call.provider, "openrouter");
-    assert_eq!(parsed.call.function, "cost");
-    assert_eq!(parsed.call.arg, json!({"generation_id": "gen-abc"}));
+    assert_eq!(single(&parsed).0.provider, "openrouter");
+    assert_eq!(single(&parsed).0.function, "cost");
+    assert_eq!(single(&parsed).0.arg, json!({"generation_id": "gen-abc"}));
     assert!(matches!(
-        parsed.outcome,
-        CallOutcome::Returns(ref returns) if *returns == json!(0.5)
+        single(&parsed).1,
+        CallOutcome::Returns(returns) if *returns == json!(0.5)
     ));
 
     let error = json!({
@@ -130,8 +290,8 @@ fn every_call_field_is_read() {
         panic!("call case parsed as a session case");
     };
     assert!(matches!(
-        parsed.outcome,
-        CallOutcome::Error(ref error)
+        single(&parsed).1,
+        CallOutcome::Error(error)
             if *error == json!({"code": "extension_failed", "message": "cost failed"})
     ));
 }
@@ -238,10 +398,10 @@ fn a_models_call_case_parses_with_a_list_return() {
     let Case::Call(parsed) = parse(&value).expect("valid models call case") else {
         panic!("call case parsed as a session case");
     };
-    assert_eq!(parsed.call.function, "models");
+    assert_eq!(single(&parsed).0.function, "models");
     assert!(matches!(
-        parsed.outcome,
-        CallOutcome::Returns(ref returns) if *returns == json!([{"id": "m1"}])
+        single(&parsed).1,
+        CallOutcome::Returns(returns) if *returns == json!([{"id": "m1"}])
     ));
 }
 
@@ -263,7 +423,10 @@ fn a_call_case_accepts_null_returns_and_requires_one_outcome() {
     let Case::Call(parsed) = parse(&call).unwrap() else {
         panic!("call case parsed as a session case");
     };
-    assert!(matches!(parsed.outcome, CallOutcome::Returns(Value::Null)));
+    assert!(matches!(
+        single(&parsed).1,
+        CallOutcome::Returns(Value::Null)
+    ));
 
     for value in [
         json!({"call": {"provider": "p", "function": "cost", "arg": {}}, "returns": 0.5, "error": {"code": "extension_failed"}}),
@@ -282,7 +445,7 @@ fn a_call_return_at_zero_is_accepted_and_a_negative_return_is_refused() {
     let Case::Call(parsed) = parse(&value).expect("zero is an allowed return") else {
         panic!("call case parsed as a session case");
     };
-    assert!(matches!(parsed.outcome, CallOutcome::Returns(ref value) if *value == json!(0)));
+    assert!(matches!(single(&parsed).1, CallOutcome::Returns(value) if *value == json!(0)));
 
     let mut beyond = value;
     beyond["returns"] = json!(-0.1);

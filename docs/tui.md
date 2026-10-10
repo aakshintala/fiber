@@ -786,6 +786,15 @@ right-aligned. Clicking a notice shows the whole text in an overlay.
 - A notice that arrives during a drag waits for the release.
 - In the screen-reader mode notices are lines in reading order.
 
+When the hub sends `stream_closed` for the open session (it cannot read
+the session's log to serve this terminal), the conversation keeps every line
+it received and one notice shows: code `stream_closed`, "this session's log
+can't be read past here; reopen the session to try again". A session that is
+not open gets no notice. The terminal does not subscribe again on its own:
+the fold would reach the same line. The composer is unchanged, so a send is
+rejected `not_subscribed` and the draft comes back with that notice.
+Reopening the session subscribes again through the normal open path.
+
 Notices are not logged, so they are this terminal's own memory. A client that
 attaches later never sees them.
 
@@ -1976,6 +1985,7 @@ CPU and time to first frame. The design keeps to them this way:
   large session takes longer to open than a new one.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**
+- **Each frame is written inside synchronized output, mode 2026.** The first frame and frames drawn on resize are included; a terminal without support ignores the sequences.
 
 ## Configuration
 

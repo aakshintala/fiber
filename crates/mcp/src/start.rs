@@ -16,13 +16,13 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{McpServerFailed, ServerFailure, ToolInfo, ToolSource, ToolState};
-use contract::shapes::Failure;
 use contract::tool::Tool;
 
-use crate::cache::{self, Cached};
+use crate::cache;
 use crate::effects::Hints;
-use crate::prompt::{ListedPrompt, PromptSource, Prompts};
-use crate::server::{ListedTool, Server};
+use crate::prompt::{PromptSource, Prompts};
+use crate::server::Server;
+use crate::server_json::{ListedPrompt, ListedTool};
 use crate::slot::Slot;
 use crate::tool::McpTool;
 
@@ -182,17 +182,15 @@ pub fn start(
             Opened::Up(slot, declared, listed) => {
                 slots.push(Arc::clone(&slot));
                 sources.extend(listed);
-                tools.extend(declared.into_iter().map(|tool| {
-                    let info = info(&tool);
-                    let registered_by = tool.registered_by.clone();
-                    let tool: Arc<dyn Tool> = Arc::new(tool.tool);
-                    (registered_by, tool, info)
-                }));
+                tools.extend(declared);
             }
-            Opened::Down(failure) => failed.push(failure),
-            Opened::RequiredDown(failure) => {
-                if required_failed.is_none() {
-                    required_failed = Some(failure);
+            Opened::Down { failure, required } => {
+                if required {
+                    if required_failed.is_none() {
+                        required_failed = Some(failure);
+                    }
+                } else {
+                    failed.push(failure);
                 }
             }
         }
@@ -217,13 +215,7 @@ pub fn start(
             &link,
             spec.call_timeout,
         ));
-        let listed: Vec<ListedTool> = cached.tools.iter().map(ListedTool::read).collect();
-        tools.extend(declare(&spec, &listed, &link).into_iter().map(|tool| {
-            let info = info(&tool);
-            let registered_by = tool.registered_by.clone();
-            let tool: Arc<dyn Tool> = Arc::new(tool.tool);
-            (registered_by, tool, info)
-        }));
+        tools.extend(declare(&spec, &cached.tools, &link));
     }
     tools.sort_by(|left, right| left.1.definition().name.cmp(&right.1.definition().name));
     let (pairs, infos): (Vec<_>, Vec<_>) = tools
@@ -240,15 +232,14 @@ pub fn start(
     }
 }
 
-pub(crate) struct Declared {
-    tool: McpTool,
-    registered_by: String,
-}
+pub(crate) type Declaration = (String, Arc<dyn Tool>, ToolInfo);
 
 pub(crate) enum Opened {
-    Up(Arc<Slot>, Vec<Declared>, Vec<PromptSource>),
-    Down(McpServerFailed),
-    RequiredDown(McpServerFailed),
+    Up(Arc<Slot>, Vec<Declaration>, Vec<PromptSource>),
+    Down {
+        failure: McpServerFailed,
+        required: bool,
+    },
 }
 
 pub(crate) fn open(
@@ -273,24 +264,27 @@ pub(crate) fn open(
         Ok(open) => open,
         Err(error) => {
             return if required {
-                Opened::RequiredDown(failed(&name, &error, timeout, true))
+                Opened::Down {
+                    failure: not_started(&name, &error, timeout, true),
+                    required: true,
+                }
             } else {
-                Opened::Down(failed(&name, &error, timeout, false))
+                Opened::Down {
+                    failure: not_started(&name, &error, timeout, false),
+                    required: false,
+                }
             };
         }
     };
-    let live = Cached {
-        tools: open.tools,
-        prompts: open.prompts,
-    };
+    let live = open.listed;
     cache::write(
         cache,
         &name,
         &cache::key(&spec.command, &spec.args, &spec.env),
         &live,
     );
-    let tools: Vec<ListedTool> = live.tools.iter().map(ListedTool::read).collect();
     let listed_prompts = live.prompts.clone();
+    let tools = live.tools.clone();
     let slot = Slot::running(
         spec.clone(),
         workspace,
@@ -309,15 +303,15 @@ pub(crate) fn open(
 /// One prompt row source per listed prompt of `server`.
 fn sources_of(
     server: &str,
-    prompts: &[serde_json::Value],
+    prompts: &[ListedPrompt],
     slot: &Weak<Slot>,
     timeout: Duration,
 ) -> Vec<PromptSource> {
     prompts
         .iter()
-        .map(|entry| PromptSource {
+        .map(|prompt| PromptSource {
             server: server.to_owned(),
-            prompt: ListedPrompt::read(entry),
+            prompt: prompt.clone(),
             slot: slot.clone(),
             timeout,
         })
@@ -335,15 +329,15 @@ pub(crate) fn kept(spec: &ServerSpec, tool: &str) -> bool {
     !spec.disabled.iter().any(|name| name == tool)
 }
 
-pub(crate) fn info(declared: &Declared) -> ToolInfo {
-    let definition = declared.tool.definition();
+pub(crate) fn info(server: &str, tool: &McpTool) -> ToolInfo {
+    let definition = tool.definition();
     let bytes = u64::try_from(serde_json::to_vec(&definition).unwrap_or_default().len())
         .unwrap_or(u64::MAX);
     ToolInfo {
         name: definition.name,
         source: ToolSource::Mcp {
-            server: declared.registered_by.clone(),
-            tool: declared.tool.tool_name().to_owned(),
+            server: server.to_owned(),
+            tool: tool.tool_name().to_owned(),
         },
         state: ToolState::Full,
         bytes,
@@ -354,25 +348,34 @@ pub(crate) fn info(declared: &Declared) -> ToolInfo {
 /// Declares `tools` (a live list or a cached one) through the tool seam:
 /// `enabled`/`disabled` filtering and the person's hint overrides apply to
 /// either, so changing those keys needs no cache miss.
-pub(crate) fn declare(spec: &ServerSpec, tools: &[ListedTool], link: &Weak<Slot>) -> Vec<Declared> {
+pub(crate) fn declare(
+    spec: &ServerSpec,
+    tools: &[ListedTool],
+    link: &Weak<Slot>,
+) -> Vec<Declaration> {
     let mut declared = Vec::new();
     for tool in tools {
         if !kept(spec, &tool.name) {
             continue;
         }
-        let hints = spec.hints.get(&tool.name).unwrap_or(&tool.hints);
-        declared.push(Declared {
-            registered_by: spec.name.clone(),
-            tool: McpTool::declare(
-                &spec.name,
-                &tool.name,
-                tool.description.clone(),
-                tool.schema.clone(),
-                hints,
-                spec.call_timeout,
-                link.clone(),
-            ),
-        });
+        let hints = spec
+            .hints
+            .get(&tool.name)
+            .cloned()
+            .unwrap_or_else(|| tool.hints());
+        let made = McpTool::declare(
+            &spec.name,
+            &tool.name,
+            tool.description.clone(),
+            tool.schema.clone(),
+            &hints,
+            spec.call_timeout,
+            link.clone(),
+        );
+        let registered = spec.name.clone();
+        let details = info(&spec.name, &made);
+        let made: Arc<dyn Tool> = Arc::new(made);
+        declared.push((registered, made, details));
     }
     declared
 }
@@ -381,7 +384,7 @@ pub(crate) fn declare(spec: &ServerSpec, tools: &[ListedTool], link: &Weak<Slot>
 /// themselves, because the session stops before the log, so a required
 /// failure is never written as `mcp_server_failed` but returned for the
 /// exit-before-session path instead.
-pub(crate) fn failed(
+pub(crate) fn not_started(
     server: &str,
     error: &crate::server::StartError,
     startup: Duration,
@@ -392,12 +395,7 @@ pub(crate) fn failed(
         server: server.to_owned(),
         reason,
         will_restart: false,
-        error: Failure {
-            code: ErrorCode::McpServerUnavailable,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        },
+        error: crate::fail::failure(ErrorCode::McpServerUnavailable, message),
     }
 }
 

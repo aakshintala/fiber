@@ -17,6 +17,8 @@ use std::time::Duration;
 
 use rustix::process::{Pid, Signal};
 
+use crate::deadline::Deadline;
+
 /// The shell script of a watchdog: `sh -c WATCHDOG_SCRIPT watchdog <group>`.
 /// Reading a line from stdin means the run finished; EOF means the test
 /// process died, so the script kills `<group>`. An argument of 1 or less
@@ -121,7 +123,7 @@ pub fn group_empties(group: u32, deadline: Duration) -> bool {
     thread::spawn(move || {
         while group_lives(group) {
             if !matches!(
-                stopped.recv_timeout(Duration::from_millis(50)),
+                Deadline::after(Duration::from_millis(50)).recv(&stopped),
                 Err(mpsc::RecvTimeoutError::Timeout)
             ) {
                 return;
@@ -131,7 +133,7 @@ pub fn group_empties(group: u32, deadline: Duration) -> bool {
             Ok(()) | Err(_) => {}
         }
     });
-    let result = empty.recv_timeout(deadline).is_ok();
+    let result = Deadline::after(deadline).recv(&empty).is_ok();
     drop(stop);
     result
 }
@@ -269,7 +271,7 @@ fn bounded(mut child: Child, what: &str, deadline: Duration) -> io::Result<Finis
                     Ok(None) => {}
                     Err(err) => break Err(err),
                 }
-                match tock.recv_timeout(REAP_POLL) {
+                match Deadline::after(REAP_POLL).recv(&tock) {
                     Ok(()) | Err(_) => {}
                 }
             }
@@ -279,7 +281,7 @@ fn bounded(mut child: Child, what: &str, deadline: Duration) -> io::Result<Finis
             Ok(()) | Err(_) => {}
         }
     });
-    match finished.recv_timeout(deadline) {
+    match Deadline::after(deadline).recv(&finished) {
         Ok(result) => result,
         Err(_) => {
             // The worker holds the lock only across the non-blocking
@@ -379,7 +381,9 @@ pub fn pids_exit(pids: &[u32], deadline: Duration) -> bool {
             Ok(()) | Err(_) => {}
         }
     });
-    let result = finished.recv_timeout(deadline).unwrap_or_default();
+    let result = Deadline::after(deadline)
+        .recv(&finished)
+        .unwrap_or_default();
     drop(stop);
     result
 }
@@ -422,7 +426,9 @@ fn listed_exit(
             Ok(()) | Err(_) => {}
         }
     });
-    let result = finished.recv_timeout(deadline).unwrap_or_default();
+    let result = Deadline::after(deadline)
+        .recv(&finished)
+        .unwrap_or_default();
     drop(stop);
     result
 }

@@ -142,7 +142,7 @@ fn text_lines(rows: &[Row]) -> Vec<String> {
 /// and the notices loading the providers gave: the first half of [`run`],
 /// shared with the terminal's model list, which reads the same providers
 /// (`docs/model-routing.md`, "Model discovery").
-pub fn providers_and_config(
+pub(crate) fn providers_and_config(
     home: &Path,
     workspace: &Path,
 ) -> Result<(Providers, Config, Vec<Notice>), Failure> {

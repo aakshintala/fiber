@@ -5,6 +5,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use super::*;
+use crate::deadline::Deadline;
 
 /// How long a client read waits for the proxy's reply before the test fails.
 const REPLY_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
@@ -203,7 +204,7 @@ fn await_connects_pins_its_boundary_and_deadline() {
             }
         });
         assert_eq!(
-            finished.recv_timeout(QUICK),
+            Deadline::after(QUICK).recv(&finished),
             Ok(true),
             "a met count returns before the deadline within {QUICK:?}"
         );
@@ -257,7 +258,7 @@ fn await_closed_pins_its_deadline() {
             }
         });
         assert_eq!(
-            finished.recv_timeout(QUICK),
+            Deadline::after(QUICK).recv(&finished),
             Ok(true),
             "a met closed count returns before the deadline within {QUICK:?}"
         );

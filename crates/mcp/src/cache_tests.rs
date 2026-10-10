@@ -3,9 +3,10 @@
 use std::collections::BTreeMap;
 
 use fakes::TempDir;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{key, path, read, write};
+use crate::server_json::{ListedPrompt, ListedTool};
 
 fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
@@ -14,21 +15,27 @@ fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn tools() -> Vec<serde_json::Value> {
-    vec![json!({
-        "name": "echo",
-        "description": "Echoes.",
-        "inputSchema": {"type": "object"},
-        "annotations": {"readOnlyHint": true},
-    })]
+fn tools() -> Vec<ListedTool> {
+    vec![
+        serde_json::from_value(json!({
+            "name": "echo",
+            "description": "Echoes.",
+            "inputSchema": {"type": "object"},
+            "annotations": {"readOnlyHint": true},
+        }))
+        .expect("typed tools"),
+    ]
 }
 
-fn prompts() -> Vec<serde_json::Value> {
-    vec![json!({
-        "name": "greet",
-        "description": "Greets someone.",
-        "arguments": [{"name": "who", "required": true}, {"name": "tone"}],
-    })]
+fn prompts() -> Vec<ListedPrompt> {
+    vec![
+        serde_json::from_value(json!({
+            "name": "greet",
+            "description": "Greets someone.",
+            "arguments": [{"name": "who", "required": true}, {"name": "tone"}],
+        }))
+        .expect("typed prompts"),
+    ]
 }
 
 fn cached() -> super::Cached {
@@ -71,18 +78,43 @@ fn a_write_then_a_read_returns_both_lists() {
 
 #[test]
 fn a_file_with_no_prompt_list_is_a_miss() {
-    // A pre-change cache file holds tools but no prompts: the session
-    // starts the server once to list both (`docs/mcp.md`, "Starting
-    // servers").
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
     let declaration = key("fx", &[], &env(&[]));
     std::fs::create_dir_all(&cache).expect("cache dir");
     std::fs::write(
         cache.join("fx.json"),
-        json!({"key": declaration, "tools": tools()}).to_string(),
+        json!({"version": 1, "key": declaration, "tools": [{"name": "echo"}]}).to_string(),
     )
     .expect("tool-only cache");
+    assert_eq!(read(&cache, "fx", &declaration), None);
+}
+
+#[test]
+fn a_pre_change_file_is_a_miss() {
+    let dir = TempDir::new("fiber-mcp-cache");
+    let cache = dir.path().join("mcp");
+    let declaration = key("fx", &[], &env(&[]));
+    std::fs::create_dir_all(&cache).expect("cache dir");
+    std::fs::write(
+        cache.join("fx.json"),
+        json!({"key": declaration, "tools": [{"name": "echo"}], "prompts": []}).to_string(),
+    )
+    .expect("pre-change cache");
+    assert_eq!(read(&cache, "fx", &declaration), None);
+}
+
+#[test]
+fn another_version_is_a_miss() {
+    let dir = TempDir::new("fiber-mcp-cache");
+    let cache = dir.path().join("mcp");
+    let declaration = key("fx", &[], &env(&[]));
+    std::fs::create_dir_all(&cache).expect("cache dir");
+    std::fs::write(
+        cache.join("fx.json"),
+        json!({"version": 2, "key": declaration, "tools": [], "prompts": []}).to_string(),
+    )
+    .expect("future cache");
     assert_eq!(read(&cache, "fx", &declaration), None);
 }
 
@@ -118,10 +150,9 @@ fn a_key_mismatch_shape_is_a_miss() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
     std::fs::create_dir_all(&cache).expect("cache dir");
-    // A `tools` that is not an array.
     std::fs::write(
         cache.join("fx.json"),
-        json!({"key": key("fx", &[], &env(&[])), "tools": {}}).to_string(),
+        json!({"version": 1, "key": key("fx", &[], &env(&[])), "tools": {}}).to_string(),
     )
     .expect("shapeless cache");
     assert_eq!(read(&cache, "fx", &key("fx", &[], &env(&[]))), None);
@@ -176,44 +207,32 @@ fn a_write_leaves_no_tmp_behind_and_creates_the_directory() {
 }
 
 #[test]
-fn entries_are_stored_verbatim() {
-    // A bare entry round-trips unchanged, and reads back through
-    // `ListedTool::read` with the defaults the tool declares.
+fn unknown_fields_survive_a_write_and_read() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
     let declaration = key("fx", &[], &env(&[]));
-    std::fs::create_dir_all(&cache).expect("cache dir");
-    std::fs::write(
-        cache.join("fx.json"),
-        json!({"key": declaration, "tools": [{"name": "bare"}], "prompts": []}).to_string(),
-    )
-    .expect("bare cache");
-    assert_eq!(
-        read(&cache, "fx", &declaration),
-        Some(super::Cached {
-            tools: vec![json!({"name": "bare"})],
-            prompts: Vec::new(),
-        })
-    );
-    let bare = crate::server::ListedTool::read(&json!({"name": "bare"}));
+    let bare: ListedTool = serde_json::from_value(json!({
+        "name": "bare",
+        "idempotentHint": true,
+    }))
+    .expect("bare tool reads");
     assert_eq!(bare.name, "bare");
     assert_eq!(bare.description, String::new());
     assert_eq!(bare.schema, json!({"type": "object"}));
-    assert_eq!(bare.hints, crate::effects::Hints::default());
-    write(
-        &cache,
-        "fx",
-        &declaration,
-        &super::Cached {
-            tools: vec![json!({"name": "bare"})],
-            prompts: Vec::new(),
-        },
-    );
-    assert_eq!(
-        read(&cache, "fx", &declaration),
-        Some(super::Cached {
-            tools: vec![json!({"name": "bare"})],
-            prompts: Vec::new(),
-        })
+    assert_eq!(bare.hints(), crate::effects::Hints::default());
+    let lists = super::Cached {
+        tools: vec![bare],
+        prompts: Vec::new(),
+    };
+    write(&cache, "fx", &declaration, &lists);
+    let back = read(&cache, "fx", &declaration).expect("a current write is a hit");
+    assert_eq!(back, lists);
+    let file: Value =
+        serde_json::from_slice(&std::fs::read(cache.join("fx.json")).expect("cache file"))
+            .expect("cache parses");
+    assert_eq!(file.get("version").and_then(Value::as_u64), Some(1));
+    assert!(
+        file.to_string().contains("idempotentHint"),
+        "the cache holds the raw entry"
     );
 }

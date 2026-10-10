@@ -1730,3 +1730,50 @@ fn an_answered_shell_command_marks_new_lines_while_scrolled_up() {
     ));
     assert!(app.has_new());
 }
+
+/// A hub `stream_closed` for `session`.
+fn stream_closed(session: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "stream_closed".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"session_id": session})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+#[test]
+fn stream_closed_for_the_open_session_is_one_notice_and_keeps_the_lines() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
+    let before = texts(&app);
+    assert!(app.on_line(stream_closed("s_aaaaaaaaaaaaaaaa")).is_empty());
+    assert_eq!(
+        app.notice(),
+        Some(
+            "stream_closed · this session's log can't be read past here; \
+             reopen the session to try again"
+        )
+    );
+    assert_eq!(texts(&app), before);
+}
+
+#[test]
+fn stream_closed_for_another_session_shows_no_notice() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    assert!(app.on_line(stream_closed("s_bbbbbbbbbbbbbbbb")).is_empty());
+    assert!(app.notice().is_none());
+}
+
+#[test]
+fn stream_closed_with_no_session_open_shows_no_notice() {
+    let mut app = app();
+    assert!(app.on_line(stream_closed("s_aaaaaaaaaaaaaaaa")).is_empty());
+    assert!(app.notice().is_none());
+}

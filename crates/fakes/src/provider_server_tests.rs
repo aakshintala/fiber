@@ -5,6 +5,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::*;
+use crate::deadline::Deadline;
 
 const READ_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
 
@@ -82,8 +83,8 @@ fn a_dropped_connection_records_the_request_and_answers_nothing() {
         server.await_requests(1, READ_WITHIN),
         "the request is recorded before the connection drops"
     );
-    let (read, body) = rx
-        .recv_timeout(READ_WITHIN)
+    let (read, body) = Deadline::after(READ_WITHIN)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the dropped connection ends the read within {READ_WITHIN:?}"));
     assert!(
         read.is_ok(),
@@ -116,13 +117,13 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
         "the request is recorded while the response is held"
     );
     assert!(
-        rx.recv_timeout(Duration::from_secs(2)).is_err(),
+        Deadline::after(Duration::from_secs(2)).recv(&rx).is_err(),
         "the client has no body while the response is held"
     );
 
     server.release();
-    let body = rx
-        .recv_timeout(READ_WITHIN)
+    let body = Deadline::after(READ_WITHIN)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("release sends the held body within {READ_WITHIN:?}"));
     assert!(body.ends_with(b"hello"));
 }
@@ -147,19 +148,21 @@ fn hold_from_answers_earlier_requests_and_holds_the_rest_until_release() {
     server.hold_from(2, Duration::from_secs(5));
     let (tx, rx) = mpsc::channel();
     get_on(server.addr, "a", tx.clone());
-    let (name, body) = rx
-        .recv_timeout(READ_WITHIN)
+    let (name, body) = Deadline::after(READ_WITHIN)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the first request is answered at once"));
     assert!(body.ends_with(b"one"), "{name}");
     get_on(server.addr, "b", tx);
     assert!(server.await_requests(2, READ_WITHIN));
     assert!(
-        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&rx)
+            .is_err(),
         "the second reply is held"
     );
     server.release();
-    let (_, body) = rx
-        .recv_timeout(READ_WITHIN)
+    let (_, body) = Deadline::after(READ_WITHIN)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("release sends the held reply"));
     assert!(body.ends_with(b"two"));
 }
@@ -170,8 +173,8 @@ fn a_held_reply_nobody_releases_becomes_a_500_at_its_deadline() {
     server.hold_from(1, Duration::from_millis(200));
     let (tx, rx) = mpsc::channel();
     get_on(server.addr, "a", tx);
-    let (_, body) = rx
-        .recv_timeout(READ_WITHIN)
+    let (_, body) = Deadline::after(READ_WITHIN)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the deadline ends the hold"));
     let text = String::from_utf8_lossy(&body);
     assert!(text.contains("500"), "{text}");
@@ -202,22 +205,27 @@ fn release_one_sends_one_held_response_and_keeps_holding_the_rest() {
         assert!(server.await_requests(if name == "a" { 1 } else { 2 }, READ_WITHIN));
     }
     assert!(
-        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&rx)
+            .is_err(),
         "the second body is still held"
     );
 
     server.release_one();
-    let (first, body) = rx.recv_timeout(READ_WITHIN).unwrap_or_else(|_| {
+    let (first, body) = Deadline::after(READ_WITHIN).recv(&rx).unwrap_or_else(|_| {
         panic!("one held response arrives after release_one within {READ_WITHIN:?}")
     });
     assert!(body.ends_with(b"one") || body.ends_with(b"two"), "{first}");
     assert!(
-        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&rx)
+            .is_err(),
         "the other response is still held"
     );
 
     server.release_one();
-    rx.recv_timeout(READ_WITHIN)
+    Deadline::after(READ_WITHIN)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("the second release sends the other within {READ_WITHIN:?}"));
 }
 
@@ -618,13 +626,15 @@ fn hold_gates_a_responded_answer_as_it_does_a_scripted_one() {
         "the request is recorded while the response is held"
     );
     assert!(
-        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        Deadline::after(Duration::from_millis(200))
+            .recv(&rx)
+            .is_err(),
         "the client has no answer while the response is held"
     );
 
     server.release();
-    let response = rx
-        .recv_timeout(READ_WITHIN)
+    let response = Deadline::after(READ_WITHIN)
+        .recv(&rx)
         .unwrap_or_else(|_| panic!("release sends the held answer within {READ_WITHIN:?}"));
     assert!(response.ends_with(b"saw 4"), "{response:?}");
 }
