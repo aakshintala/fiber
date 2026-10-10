@@ -16,7 +16,6 @@ use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
 use ring::{digest, hmac};
 use serde_json::{Map, Number, Value};
 use ureq::Agent;
-use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::oauth::{self, Browser, Holder};
 
@@ -477,12 +476,7 @@ pub(crate) fn perform(
             (ConnectionFailed, format!("host.http: {e}"))
         }
     };
-    let config = Agent::config_builder()
-        .tls_config(
-            TlsConfig::builder()
-                .root_certs(RootCerts::PlatformVerifier)
-                .build(),
-        )
+    let config = net::config()
         .http_status_as_error(false)
         .max_redirects(0)
         .timeout_global(request.timeout)
