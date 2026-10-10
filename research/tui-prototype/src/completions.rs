@@ -4,7 +4,7 @@
 
 use crate::cases::{Case, Surface};
 use crate::input::{Key, Mods};
-use crate::{bold, dim, fg, fit, left_cut, panel, row, sp, Row, Ui, BLUE, ORANGE};
+use crate::{bold, dim, fg, left_cut, panel, row, sp, Row, Ui, BLUE, ORANGE};
 use ratatui::style::Style;
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
@@ -117,7 +117,7 @@ pub struct State {
 
 /// Every `--completions` case.
 pub(crate) const CASES: &[Case<State>] = &[
-    Case { name: "slash", help: "the `/` list, eight of forty rows", check: "the panel sits above the input box in the shared frame with ▄ ▀ edges and the ▌ stripe; eight rows of name in one fixed column, dim description and right-aligned tag, the focused row `›` on a full-width accent bar, with a `1–8 of 40 · ↓ 32 more` footer.", build: || State { focus: 0 } },
+    Case { name: "slash", help: "the `/` list, eight of forty rows", check: "the panel sits above the input box in the shared frame with ▄ ▀ edges and the ▌ stripe; eight rows of name in one fixed column, dim description and right-aligned tag, the focused row `›` on a full-width accent bar, sized to its content and centred, with a `1–8 of 40 · ↓ 32 more` footer.", build: || State { focus: 0 } },
     Case { name: "slash-filtered", help: "the `/` list filtered to `/re`", check: "the input reads `/re`, only matching rows show, matched letters bold; same frame, names aligned, first row barred.", build: || State { focus: 0 } },
     // the skill with an argument-hint, focused so its row shows
     Case { name: "slash-hint", help: "the `review` row with its argument hint", check: "the `review` row `›` on the accent bar with its `<path>` hint, and the `login` description cut with … keeping its `command` tag; same frame.", build: || State { focus: entries().iter().position(|e| e.hint.is_some()).unwrap_or(0) } },
@@ -248,7 +248,7 @@ pub fn slash_row(e: &Entry, focused: bool, query: &str, name_w: usize, w: usize)
         spans.push(sp(hint, fg(ORANGE)));
     }
     spans.extend([sp("\t", Style::new()), sp(e.tag, dim())]);
-    row(fit(&spans, w))
+    row(spans)
 }
 
 /// One `@` row: the path in the accent colour, cut from the left when long so
@@ -265,7 +265,7 @@ pub fn file_row(path: &str, focused: bool, query: &str, w: usize) -> Row {
         if focused { bold() } else { dim() },
     )];
     spans.extend(highlight(&cut, query, name_style));
-    row(fit(&spans, w))
+    row(spans)
 }
 
 /// At most this many rows show; the footer says what is above or below.
@@ -308,13 +308,32 @@ fn select(rows: Vec<Row>, focus: usize, start: usize) -> Vec<Row> {
         .collect()
 }
 
-/// The panel above the input box: the `/` list or the `@` file search, in
-/// the shared frame with padding and the stripe. It spans the input's width,
-/// like the input box it completes, instead of centring.
-pub fn view(s: &State, input: &str, w: usize) -> Vec<Row> {
-    let inner = panel::inner_w(w);
+/// The content width of a row, counting a tab as one gap: right-aligned
+/// tags stretch to the width, so the panel sizes to text, not padding.
+fn content_w(r: &Row) -> usize {
+    let mut left = 0;
+    let mut right = 0;
+    let mut seen = false;
+    for s in &r.spans {
+        if s.content == "\t" {
+            seen = true;
+        } else if seen {
+            right += s.content.width();
+        } else {
+            left += s.content.width();
+        }
+    }
+    if seen {
+        left + 1 + right
+    } else {
+        left
+    }
+}
+
+/// The panel's rows at an inner width, unframed, the focus barred.
+fn content(s: &State, input: &str, inner: usize) -> Vec<Row> {
     let query = query_of(input);
-    let rows = if input.starts_with('@') {
+    if input.starts_with('@') {
         let all = files();
         let m = filter_files(&all, query);
         if m.is_empty() {
@@ -352,8 +371,20 @@ pub fn view(s: &State, input: &str, w: usize) -> Vec<Row> {
             }
             select(rows, focus, start)
         }
-    };
-    panel::frame(None, rows, None, w)
+    }
+}
+
+/// The panel above the input box: sized to its content between the shared
+/// minimum and maximum, centred over the input area through the module. 
+/// Rows stay area-wide, so existing coordinates keep working; the rows carry
+/// no click targets to translate.
+pub fn view(s: &State, input: &str, w: usize) -> Vec<Row> {
+    let probe = content(s, input, 10_000);
+    let natural = probe.iter().map(content_w).max().unwrap_or(0);
+    let panel_w = panel::fit_width(natural, w.saturating_sub(4).min(96), w);
+    let inner = panel::inner_w(panel_w);
+    let rows = panel::frame(None, content(s, input, inner), None, panel_w);
+    panel::centre(rows, panel_w, w)
 }
 
 /// How many rows the panel shows for this input, so movement can clamp.
@@ -536,27 +567,24 @@ mod tests {
 
     #[test]
     fn a_row_never_exceeds_the_panel_width() {
-        let long = entries().into_iter().find(|e| e.name == "login").unwrap();
-        // at the width edge, one below, one above
+        // Rows size unfitted now; the frame fits them. Drive through the view
+        // at the width edge, one below, one above, focused on the longest
+        // description so something actually truncates.
+        let mut s = for_case("slash");
+        s.focus = 9; // login
         for w in [59, 60, 61] {
-            let r = slash_row(&long, true, "", long.name.len(), w);
-            assert_eq!(width(&r.spans), w, "slash row at {w}");
-            assert!(
-                plain(&r).contains('…'),
-                "the long description is cut at {w}"
-            );
-            assert!(plain(&r).contains("command"), "the tag survives at {w}");
+            let rows = view(&s, "/", w);
+            assert!(rows.iter().all(|r| width(&r.spans) <= w), "slash row over {w}");
+            let t = text(&rows);
+            assert!(t.contains('…'), "the long description is cut at {w}");
+            assert!(t.contains("command"), "the tag survives at {w}");
         }
-        let hinted = entries().into_iter().find(|e| e.hint.is_some()).unwrap();
-        for w in [49, 50, 51] {
-            let r = slash_row(&hinted, false, "", hinted.name.len(), w);
-            assert_eq!(width(&r.spans), w, "hint row at {w}");
-        }
+        // A longer path forces the left cut, keeping its file name.
         for w in [39, 40, 41] {
-            let r = file_row("research/tui-prototype/src/model_picker.rs", false, "", w);
-            assert_eq!(width(&r.spans), w, "file row at {w}");
+            let rows = view(&for_case("at"), "@model", w);
+            assert!(rows.iter().all(|r| width(&r.spans) <= w), "file row over {w}");
             assert!(
-                plain(&r).contains("model_picker.rs"),
+                text(&rows).contains("model_picker.rs"),
                 "the file name survives at {w}"
             );
         }
@@ -635,6 +663,34 @@ mod tests {
             .filter(|r| r.spans.iter().any(|s| s.style.bg == Some(crate::BLUE)))
             .count();
         assert_eq!(barred, 1, "more than the focus is barred");
+    }
+
+    #[test]
+    fn the_panel_sizes_to_content_and_sits_centred() {
+        fn span(rows: &[Row]) -> (usize, usize) {
+            let t = text(rows);
+            let edge = t.split('\n').find(|l| l.contains("\u{2584}\u{2584}")).unwrap();
+            let cells: Vec<char> = edge.chars().collect();
+            let x0 = cells.iter().take_while(|&&c| c == ' ').count();
+            let mut w = 0;
+            while x0 + w < cells.len() && cells[x0 + w] == '\u{2584}' {
+                w += 1;
+            }
+            (x0, w)
+        }
+        let rows = view(&for_case("slash"), "/", 160);
+        let (x0, w) = span(&rows);
+        assert!(w < 160, "panel fills the area");
+        assert!(x0 > 0, "panel flush left");
+        let rest = 160 - (x0 + w);
+        assert!(rest == x0 || rest == x0 + 1, "panel off-centre");
+        // An empty match shrinks to the floor, still centred.
+        let rows = view(&for_case("at-empty"), "@zzz", 160);
+        let (x0, w) = span(&rows);
+        assert_eq!(w, 40, "empty panel misses MIN");
+        assert!(x0 > 0, "empty panel flush left");
+        // The rows carry no click targets, so centring translates nothing.
+        assert!(rows.iter().all(|r| r.act.is_none() && r.hot.is_empty()));
     }
 
     #[test]
