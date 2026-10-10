@@ -90,6 +90,10 @@ impl Provider for Costed {
         self.inner.wire_tools(tools)
     }
 
+    fn warms(&self, request: &ModelRequest) -> bool {
+        self.inner.warms(request)
+    }
+
     fn cost_lookup(&self) -> Option<Arc<dyn CostLookup>> {
         Some(Arc::clone(&self.lookup) as Arc<dyn CostLookup>)
     }
