@@ -10,6 +10,7 @@
 //! `pgrep`, is waited for under a deadline on the wall clock.
 
 use std::io::{self, Read};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
@@ -172,6 +173,13 @@ pub(crate) const MATCHING_PATTERN_VAR: &str = "FIBER_WATCHDOG_PATTERN";
 pub(crate) const MATCHING_WATCHDOG_SCRIPT: &str = r#"[ -n "$FIBER_WATCHDOG_PATTERN" ] || exit 2; read -r line || for p in $(pgrep -f -- "$FIBER_WATCHDOG_PATTERN"); do [ "$p" -gt 1 ] || continue; kill -s KILL -- "-$p"; kill -s KILL "$p"; done"#;
 
 /// `text` as an extended regular expression matching itself, for `pgrep -f`.
+/// A leading plain character becomes a bracket expression (`/tmp/x` is
+/// `[/]tmp/x`), so the pattern's spelling in a pgrep's command line does not
+/// match that command line, and a listing pgrep or a watchdog sweep does not
+/// list a peer's pgrep.
+/// debt: only for the path-shaped texts callers pass (a plain run after the
+/// first character); `a`, `a]` and `.abc` still match their own spelling.
+/// The first caller to pass one breaks the self-match another way.
 ///
 /// # Panics
 ///
@@ -182,7 +190,20 @@ pub(crate) fn pattern(text: &str) -> String {
         "refusing an empty command-line match: it matches every process the user owns"
     );
     let mut escaped = String::with_capacity(text.len());
-    for c in text.chars() {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) if ".[]()*+?{}|^$\\".contains(first) => {
+            escaped.push('\\');
+            escaped.push(first);
+        }
+        Some(first) => {
+            escaped.push('[');
+            escaped.push(first);
+            escaped.push(']');
+        }
+        None => {}
+    }
+    for c in chars {
         if ".[]()*+?{}|^$\\".contains(c) {
             escaped.push('\\');
         }
@@ -388,59 +409,172 @@ pub fn pids_exit(pids: &[u32], deadline: Duration) -> bool {
     result
 }
 
-/// `matching_exits` with the listing injected: `list` is called once before
-/// the probes and once after. The test seam for the final check.
+/// What a command line lookup prints when the process is already gone:
+/// the pid in the expiry message still names the holder.
+const GONE_ARGS: &str = "<gone>";
+
+/// What a command line lookup prints when the lookup itself hung and was
+/// killed: nothing is known about the pid, not even that it is gone.
+const PS_TIMEOUT: &str = "<ps timed out>";
+
+/// Spawns a command line lookup: `program` with `args`, stdio closed but
+/// stdout piped for [`bounded`]. Its own process group, so a watchdog or a
+/// group kill for the lookup never reaches the test, and the test's own
+/// group kills never reach the lookup.
+fn spawn_lookup(program: &str, args: &[&str]) -> io::Result<Child> {
+    Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+}
+
+/// Reads a spawned lookup to its end under `deadline`: its trimmed stdout,
+/// `<gone>` when it fails or prints nothing, `<ps timed out>` when the
+/// lookup itself hung and was killed. [`bounded`] reaps the killed child.
+fn read_lookup(child: Child, what: &str, deadline: Duration) -> String {
+    match bounded(child, what, deadline) {
+        Ok((status, out)) if status.success() => {
+            let args = String::from_utf8_lossy(&out).trim().to_owned();
+            if args.is_empty() {
+                GONE_ARGS.to_owned()
+            } else {
+                args
+            }
+        }
+        Ok(_) => GONE_ARGS.to_owned(),
+        Err(err) if err.kind() == io::ErrorKind::TimedOut => PS_TIMEOUT.to_owned(),
+        Err(_) => GONE_ARGS.to_owned(),
+    }
+}
+
+/// `pid`'s command line through `ps -o args= -p <pid>`, bounded like
+/// [`matching`]'s `pgrep`: a hung `ps` is killed, never waited out.
+fn command_line(pid: u32) -> String {
+    match spawn_lookup("ps", &["-o", "args=", "-p", &pid.to_string()]) {
+        Ok(child) => read_lookup(child, "ps", PGREP_DEADLINE),
+        Err(_) => GONE_ARGS.to_owned(),
+    }
+}
+
+/// Each outstanding pid with its command line, for the expiry message.
+fn describe_holders(pids: &[u32]) -> String {
+    pids.iter()
+        .map(|pid| format!("{pid} {}", command_line(*pid)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The deadline's error: `TimedOut`, naming every pid from the latest
+/// listing still outstanding with its command line, so the failure
+/// diagnoses itself. With no listing yet there is nothing to name.
+fn expiry_error(pids: &[u32]) -> io::Error {
+    if pids.is_empty() {
+        io::Error::new(io::ErrorKind::TimedOut, "deadline expired waiting for exit")
+    } else {
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "deadline expired waiting for exit: {}",
+                describe_holders(pids)
+            ),
+        )
+    }
+}
+
+/// Publishes the latest listing for the expiry error: the wait holds no
+/// lock, so the deadline's read never blocks on it.
+fn publish(published: &Mutex<Vec<u32>>, pids: &[u32]) {
+    *published.lock().unwrap_or_else(PoisonError::into_inner) = pids.to_vec();
+}
+
+/// `matching_exits` with the listing injected: `list` runs before the
+/// probes and again after every wait. The test seam for the final check.
 fn listed_exit(
     list: impl FnMut() -> io::Result<Vec<u32>> + Send + 'static,
     deadline: Duration,
-) -> bool {
-    let (done, finished) = mpsc::channel::<bool>();
+) -> io::Result<()> {
+    let (done, finished) = mpsc::channel::<io::Result<()>>();
     let (stop, stopped) = mpsc::channel::<()>();
+    // The latest listing, published after each one: the deadline's read
+    // names the holders even while the wait still runs.
+    let outstanding = Arc::new(Mutex::new(Vec::<u32>::new()));
+    let published = Arc::clone(&outstanding);
     thread::spawn(move || {
         let mut list = list;
-        let first = match list() {
+        // The first listing's failure names itself; every later listing
+        // ran after a wait, so each names the second.
+        let mut pids = match list() {
             Ok(pids) => pids,
-            Err(_) => {
-                match done.send(false) {
+            Err(err) => {
+                match done.send(Err(io::Error::other(format!("first pgrep failed: {err}")))) {
                     Ok(()) | Err(_) => {}
                 }
                 return;
             }
         };
-        if !wait_exits(&first, &stopped) {
-            match done.send(false) {
-                Ok(()) | Err(_) => {}
-            }
-            return;
-        }
-        let last = match list() {
-            Ok(pids) => pids,
-            Err(_) => {
-                match done.send(false) {
+        loop {
+            publish(&published, &pids);
+            if !wait_exits(&pids, &stopped) {
+                match done.send(Err(expiry_error(&pids))) {
                     Ok(()) | Err(_) => {}
                 }
                 return;
             }
-        };
-        match done.send(last.is_empty()) {
-            Ok(()) | Err(_) => {}
+            pids = match list() {
+                Ok(pids) => pids,
+                Err(err) => {
+                    match done.send(Err(io::Error::other(format!("second pgrep failed: {err}")))) {
+                        Ok(()) | Err(_) => {}
+                    }
+                    return;
+                }
+            };
+            // A process that started after the listing just waited on
+            // shows here; it is waited on like every earlier match.
+            if pids.is_empty() {
+                match done.send(Ok(())) {
+                    Ok(()) | Err(_) => {}
+                }
+                return;
+            }
         }
     });
-    let result = Deadline::after(deadline)
-        .recv(&finished)
-        .unwrap_or_default();
+    let result = match Deadline::after(deadline).recv(&finished) {
+        Ok(result) => result,
+        Err(_) => {
+            let pids = outstanding
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            Err(expiry_error(&pids))
+        }
+    };
     drop(stop);
     result
 }
 
 /// Waits up to `deadline` on the wall clock for every process whose command
 /// line contains `text` to exit: one `pgrep` lists the matches, the probes
-/// wait for each listed pid, and a second `pgrep` checks that nothing
-/// matches. One thread, one deadline, at most two `pgrep`s.
-#[must_use]
-pub fn matching_exits(text: &str, deadline: Duration) -> bool {
+/// wait for each listed pid, and `pgrep` lists again after every wait until
+/// nothing matches. One thread, one deadline; a process that starts after
+/// an earlier listing is waited on like every earlier match.
+///
+/// # Errors
+///
+/// When a `pgrep` fails or when the deadline expires first. The message
+/// names the path; the expiry names the holders too.
+pub fn try_matching_exits(text: &str, deadline: Duration) -> io::Result<()> {
     let text = text.to_owned();
     listed_exit(move || matching(&text), deadline)
+}
+
+/// [`try_matching_exits`] as a boolean: `false` on any failure path.
+#[must_use]
+pub fn matching_exits(text: &str, deadline: Duration) -> bool {
+    try_matching_exits(text, deadline).is_ok()
 }
 
 #[cfg(test)]

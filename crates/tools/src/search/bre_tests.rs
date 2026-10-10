@@ -392,6 +392,7 @@ const BRACKETS: &[BracketCase] = &[
 /// corpus: the engine prints the same lines with the same exit code.
 /// Only where the runner's grep is GNU; elsewhere the pinned table
 /// above carries it.
+#[track_caller]
 fn bracket_matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str]) {
     if !gnu_grep() {
         return;
@@ -444,6 +445,7 @@ fn bracket_matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str]
 /// system grep on the bracket corpus where that grep is GNU. Every row
 /// below runs through here under its own name, so a mutant changing one
 /// case fails fast under that name instead of hiding in a loop.
+#[track_caller]
 fn bracket_case_in_mode(pattern: &str, ere: bool) {
     let case = BRACKETS
         .iter()
@@ -532,6 +534,7 @@ fn ere_keeps_everything_but_the_gnu_extensions() {
 }
 
 /// Whether the runner's grep speaks GNU: only then do outputs compare.
+#[track_caller]
 fn gnu_grep() -> bool {
     let child = Command::new("grep")
         .arg("--version")
@@ -562,6 +565,7 @@ impl Sink for Hit {
 /// corpus line the translated pattern matches through the searcher's own
 /// engine is one the system grep prints, and vice versa. Only where the
 /// runner's grep is GNU; elsewhere the pinned translations above carry it.
+#[track_caller]
 fn matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str], case_insensitive: bool) {
     if !gnu_grep() {
         return;
@@ -727,6 +731,7 @@ fn class_operators_match_grep_line_for_line() {
 /// pattern matches through the searcher's own engine is one the system
 /// grep prints, and vice versa. Only where the runner's grep is GNU;
 /// elsewhere the pinned translations above carry it.
+#[track_caller]
 fn class_matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str]) {
     if !gnu_grep() {
         return;

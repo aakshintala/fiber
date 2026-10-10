@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
 use fakes::CancelToken;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use ureq::config::Config;
 use ureq::http::Uri;
@@ -155,6 +156,7 @@ fn a_call_cancelled_before_it_starts_runs_no_work_and_wins_over_a_passed_deadlin
 }
 
 /// A connected pair: the client end for the hop to keep, and the server end.
+#[track_caller]
 fn pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
@@ -327,7 +329,8 @@ fn park_waits_for_a_wake_before_the_deadline() {
     });
     assert!(fake.await_parked(until, SIGNAL), "park waits on the clock");
     hop.wake();
-    rx.recv_timeout(SIGNAL)
+    Deadline::after(SIGNAL)
+        .recv(&rx)
         .expect("a wake ends park before the deadline");
 }
 
@@ -347,7 +350,8 @@ fn park_returns_at_once_for_a_wake_that_arrived_first() {
         parked.park(timed.as_ref(), until, 0);
         tx.send(()).unwrap_or(());
     });
-    rx.recv_timeout(SIGNAL)
+    Deadline::after(SIGNAL)
+        .recv(&rx)
         .expect("a prior wake ends park at once");
     assert!(fake.parked().is_empty(), "park never waited on the clock");
 }
@@ -366,13 +370,15 @@ fn park_returns_at_once_for_a_finished_hop() {
         parked.park(timed.as_ref(), until, seen);
         tx.send(()).unwrap_or(());
     });
-    rx.recv_timeout(SIGNAL)
+    Deadline::after(SIGNAL)
+        .recv(&rx)
         .expect("a finished hop ends park at once");
     assert!(fake.parked().is_empty(), "park never waited on the clock");
 }
 
 /// The head of one GET of `uri`, pinned to `address`. The GET blocks on
 /// the network, so it runs under its own deadline and names that wait.
+#[track_caller]
 fn head_of(address: SocketAddr, uri: &str) -> super::Head {
     let uri: Uri = uri.parse().unwrap();
     fakes::within("the head of one GET", SIGNAL, move || {
@@ -423,6 +429,8 @@ fn the_head_of_a_body_with_no_stated_length_carries_none() {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port),
         &format!("http://127.0.0.1:{port}/"),
     );
-    done.recv_timeout(SIGNAL).expect("the server answered");
+    Deadline::after(SIGNAL)
+        .recv(&done)
+        .expect("the server answered");
     assert_eq!(head.content_length, None);
 }

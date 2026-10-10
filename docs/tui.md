@@ -73,6 +73,28 @@ shows the picker. The picker is an overlay centred over home ("Look",
 "Overlays"): the title "Workspaces", one row per recent workspace with the
 first focused, and the footer "↑↓ move · enter open · esc closes".
 
+The picker also takes a typed path, so a workspace never used before can be
+picked:
+
+- Typing in the picker opens a row above the recents: "› " in `info`, the
+  text and the cursor. The completions sit under it, the focused one on the
+  selection bar, then a blank row, "── recents ──" dim and the recents, dim.
+  Backspace past the first character returns to the recents alone.
+- The completions are the subdirectories of the directory up to the typed
+  path's last `/` whose names start with the text after it: one listing of
+  that directory, filtered at each keystroke, never a walk of the tree. A
+  hidden directory is listed only when the typed name starts with `.`. `~`
+  is the hub's home, and a path that is neither absolute nor starts with `~`
+  has no completions. The listing is the hub's `directories` command
+  (`docs/invocation.md`, "What the hub speaks"), so a remote client's completions list
+  the hub's machine.
+- The first completion is focused. ↑ and ↓ move through the completions,
+  then the recents. Tab puts the focused completion into the path with a
+  trailing `/` and lists that directory. Enter opens the focused row as the
+  workspace. With no completion matching, Enter takes the typed path when it
+  names a directory; otherwise nothing opens and the list holds one dim row,
+  "no such directory". The footer stays as it is.
+
 **The new worktree switch** sits beside the workspace chip. When it is on,
 the session starts in a new worktree of the workspace, by the same rules a
 delegate's worktree follows (`docs/invocation.md`, "Isolation"). Outside a git
@@ -1589,7 +1611,7 @@ The roles, in order, with the dark theme's values:
 | `type` | type names | `#7dd3fc` |
 | `constant` | constants: `true`, `null`, `ALL_CAPS` names | `#7dd3fc` |
 | `operator` | operators | the terminal's foreground |
-| `info` | inline code, a call's kind, an approval's tool name and rule prefix, the input box's ›, "Copied", the context bar's fill | `#7dd3fc` |
+| `info` | inline code, a call's kind, an approval's tool name and rule prefix, the input box's › and the workspace picker's, "Copied", the context bar's fill | `#7dd3fc` |
 | `secondary` | the git branch, the handoff band's label, the question form's stripe, title and marks, the delegates' ◆ | `#b39ddb` |
 | `rule` | rules, line numbers, a bar's empty cells, the pill, a grip's column under the pointer, "Chat about this" | `#3a3a4a` |
 | `scroll` | the scroll bar's thumb | `#808080` |
