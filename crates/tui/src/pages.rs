@@ -304,7 +304,6 @@ impl Index {
     /// in `[top - height, top + 2 * height)`, clamped to the conversation.
     /// A page in the range that draws no row is in no window.
     pub(crate) fn window(&self, top: usize, height: usize) -> Range<usize> {
-        crate::work::add(|work| work.index_pages += self.pages.len());
         let from = top.saturating_sub(height);
         let to = top
             .saturating_add(height.saturating_mul(2))
@@ -313,6 +312,7 @@ impl Index {
         let mut last = self.pages.len();
         let mut start = 0usize;
         for (at, page) in self.pages.iter().enumerate() {
+            crate::work::add(|work| work.index_pages += 1);
             let end = start.saturating_add(page.rows);
             if first == self.pages.len() && end > from {
                 first = at;

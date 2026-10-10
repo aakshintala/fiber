@@ -664,3 +664,22 @@ fn a_new_page_starts_at_revision_zero() {
     assert_eq!(index.pages().len(), 2);
     assert_eq!(index.revision(1), 0);
 }
+
+#[test]
+fn a_window_near_the_top_counts_only_the_pages_it_walks() {
+    let mut index = Index::default();
+    let mut seq = 0;
+    for _ in 0..6 {
+        filler(&mut index, &mut seq, PAGE_LINES);
+        feed(&mut index, &mut seq, TEXT_STEP);
+    }
+    let pages = index.pages().len();
+    assert!(pages > 4);
+    for at in 0..pages {
+        index.set_rows(at, 10);
+    }
+    crate::work::take();
+    assert_eq!(index.window(0, 5), 0..1);
+    // `total` scans every page once; the walk itself stops at the second.
+    assert_eq!(crate::work::take().index_pages, pages + 2);
+}
