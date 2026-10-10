@@ -716,6 +716,29 @@ fn the_grace_ends_at_its_deadline() {
 }
 
 #[test]
+fn wait_writers_returns_at_once_without_writers_and_at_the_grace() {
+    let clock = FakeClock::new();
+    let now = clock.now();
+    let until = now + super::GRACE;
+    let before = until
+        .checked_sub(Duration::from_millis(1))
+        .expect("the grace exceeds a millisecond");
+    let after = until + Duration::from_millis(1);
+    // No writer: the fast-fail path, on both sides of the deadline.
+    assert!(!super::conns::should_wait(0, before, until));
+    assert!(!super::conns::should_wait(0, until, until));
+    assert!(!super::conns::should_wait(0, after, until));
+    // An open writer waits only before the deadline; the deadline itself
+    // is already past the grace.
+    assert!(super::conns::should_wait(1, before, until));
+    assert!(!super::conns::should_wait(1, until, until));
+    assert!(!super::conns::should_wait(1, after, until));
+    // The count's width changes nothing: open is open.
+    assert!(super::conns::should_wait(u32::MAX, before, until));
+    assert!(!super::conns::should_wait(u32::MAX, until, until));
+}
+
+#[test]
 fn a_published_reader_is_shut_down_before_it_is_joined() {
     reset();
     let opened = open();

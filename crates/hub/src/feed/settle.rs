@@ -11,7 +11,7 @@ use std::time::Instant;
 use contract::clock::Wake;
 use contract::events::SessionStatus;
 
-use super::{Entry, Feed, PoisonError, RUN_SCAN, State, lock};
+use super::{Entry, Feed, RUN_SCAN, State, lock};
 
 /// Settles session `id` when dropped: the caller has taken its line.
 pub(super) struct Settle<'a>(pub(super) &'a Feed, pub(super) &'a str);
@@ -58,32 +58,15 @@ impl Feed {
 
     /// Parks until woken or `until` passes on the clock.
     fn wait_for(&self, until: Option<Instant>, done: impl FnOnce(&State) -> bool) -> bool {
-        let guard = lock(&self.tick.held);
+        // Taken before the check and held into the park: a change that
+        // lands in between wakes this listing instead of nobody.
+        let guard = self.tick.hold();
         if done(&lock(&self.state)) {
             return true;
         }
         #[cfg(test)]
         self.pause_after_check(&guard);
-        let mut slot = Some(guard);
-        self.clock.wait_until(until, &mut |bound| {
-            let Some(held) = slot.take() else {
-                return;
-            };
-            slot = Some(match bound {
-                Some(limit) => {
-                    self.tick
-                        .moved
-                        .wait_timeout(held, limit)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
-                }
-                None => self
-                    .tick
-                    .moved
-                    .wait(held)
-                    .unwrap_or_else(PoisonError::into_inner),
-            });
-        });
+        self.tick.park(self.clock.as_ref(), guard, until);
         false
     }
 

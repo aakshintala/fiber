@@ -32,6 +32,7 @@ mod retire;
 mod rewind;
 mod sessions;
 mod start;
+mod tick;
 
 use std::io;
 use std::path::Path;

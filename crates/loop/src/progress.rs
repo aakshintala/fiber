@@ -129,32 +129,18 @@ impl SharedWake {
     /// cleared on waking (`crates/tools/src/shell/drive.rs` `park` does
     /// the same).
     pub(crate) fn park(&self, clock: &dyn Clock, until: Option<Instant>) {
-        // Taken before `wait_until`, and held until the condvar wait, so a
-        // bump blocks on this lock instead of notifying nobody. `FnMut`
-        // cannot move the guard out and back; the slot holds it across the
-        // one call.
-        let mut slot = Some(lock(&self.inner));
-        clock.wait_until(until, &mut |bound| {
-            let Some(mut guard) = slot.take() else {
-                return;
-            };
-            if guard.set {
-                guard.set = false;
-                slot = Some(guard);
-                return;
-            }
-            guard = match bound {
-                Some(timeout) => {
-                    self.cv
-                        .wait_timeout(guard, timeout)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
-                }
-                None => self.cv.wait(guard).unwrap_or_else(PoisonError::into_inner),
-            };
+        // The guard is taken before `wait_until` and held into the
+        // condvar wait, so a bump blocks on this lock instead of
+        // notifying nobody. The flag is cleared on both paths: taken by
+        // the predicate when set, cleared on waking, so one bump asks
+        // for exactly one more pass.
+        let guard =
+            support::clock::park(clock, until, None, &self.cv, lock(&self.inner), |state| {
+                std::mem::take(&mut state.set)
+            });
+        if let Some(mut guard) = guard {
             guard.set = false;
-            slot = Some(guard);
-        });
+        }
     }
 
     /// Sets or clears the wake every later bump also fires. Setting it

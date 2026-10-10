@@ -378,31 +378,15 @@ impl Call {
             }
             // Held until the condvar wait, so a wake that lands after `seen`
             // was read is seen here instead of notifying nobody.
-            let mut slot = Some(self.pause.lock());
-            self.clock.wait_until(Some(until), &mut |bound| {
-                let Some(guard) = slot.take() else {
-                    return;
-                };
+            support::clock::park(
+                self.clock.as_ref(),
+                Some(until),
+                None,
+                &self.pause.cv,
+                self.pause.lock(),
                 // A cancel bumps the sequence too.
-                if guard.seq != seen {
-                    slot = Some(guard);
-                    return;
-                }
-                slot = Some(match bound {
-                    Some(bound) => {
-                        self.pause
-                            .cv
-                            .wait_timeout(guard, bound)
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .0
-                    }
-                    None => self
-                        .pause
-                        .cv
-                        .wait(guard)
-                        .unwrap_or_else(PoisonError::into_inner),
-                });
-            });
+                |state| state.seq != seen,
+            );
         }
     }
 

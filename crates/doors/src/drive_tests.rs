@@ -13,6 +13,7 @@
 use std::io;
 use std::sync::Arc;
 use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
@@ -53,6 +54,16 @@ fn open(tools: Vec<ToolInfo>) -> Opened {
         log,
         session,
     }
+}
+
+#[track_caller]
+fn close_within(session: Session, log: Arc<Log>) {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        session.close(log);
+        if let Ok(()) = tx.send(()) {}
+    });
+    Deadline::after(DEADLINE).recv(&rx).expect("close returned");
 }
 
 fn tool() -> ToolInfo {
@@ -120,7 +131,7 @@ fn drive_steer_is_accepted_with_an_extension_sender() {
             Ok(())
         })
         .unwrap();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
 }
 
 #[test]
@@ -144,7 +155,7 @@ fn drive_prompt_answered_busy_rejects_busy() {
             Ok(())
         })
         .unwrap();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
 }
 
 #[test]
@@ -168,7 +179,7 @@ fn drive_tools_answers_with_its_result() {
             Ok(())
         })
         .unwrap();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
 }
 
 #[test]
@@ -200,7 +211,7 @@ fn drive_approval_reply_is_rejected_before_the_inbox() {
             Ok(())
         })
         .unwrap();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
 }
 
 #[test]
@@ -220,7 +231,7 @@ fn drive_subscribe_is_rejected_as_a_second_one() {
             Ok(())
         })
         .unwrap();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
 }
 
 #[test]
@@ -245,14 +256,14 @@ fn drive_unknown_command_is_rejected() {
             Ok(())
         })
         .unwrap();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
 }
 
 #[test]
 fn drive_after_close_answers_closing() {
     let opened = open(vec![tool()]);
     let driver = opened.session.driver();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
     let (tx, rx) = mpsc::channel();
     driver.drive(
         "fiber.test/a",
@@ -275,7 +286,7 @@ fn drive_after_close_answers_closing_with_a_retained_handle() {
     // A retained handle keeps the gate alive past `Session::close`: the
     // stopped flag, not the upgrade, answers `closing`.
     let _stopper = opened.session.stopper();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
     let (tx, rx) = mpsc::channel();
     driver.drive(
         "fiber.test/a",
@@ -348,7 +359,7 @@ fn reply_for_a_held_ask_never_reaches_the_inbox() {
             Ok(())
         })
         .unwrap();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
 }
 
 #[test]
@@ -378,7 +389,7 @@ fn reply_handed_back_reaches_the_inbox() {
             Ok(())
         })
         .unwrap();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
 }
 
 #[test]
@@ -407,7 +418,7 @@ fn reply_with_no_door_reaches_the_inbox() {
             Ok(())
         })
         .unwrap();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
 }
 
 #[test]
@@ -441,5 +452,5 @@ fn drive_offer_reply_is_rejected_before_the_inbox() {
             Ok(())
         })
         .unwrap();
-    opened.session.close(opened.log);
+    close_within(opened.session, opened.log);
 }

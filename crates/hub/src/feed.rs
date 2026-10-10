@@ -26,7 +26,7 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -39,6 +39,7 @@ use crate::attention::{Attention, Seen};
 use crate::connection::{Hub, accept_result, reject, send as send_line};
 use crate::recent::{self, Left, PageError, RecentRow};
 use crate::relay::valid_session_id;
+use crate::tick::Tick;
 
 mod settle;
 use settle::Settle;
@@ -320,7 +321,9 @@ impl Feed {
     fn scan_and_wait(self: &Arc<Self>) -> bool {
         self.scan();
         let until = self.clock.now().checked_add(RUN_SCAN);
-        let mut guard = lock(&self.tick.held);
+        // Taken before the checks and held into the park: a change that
+        // lands in between wakes this thread instead of nobody.
+        let mut guard = self.tick.hold();
         loop {
             if lock(&self.state).stopped {
                 return false;
@@ -328,27 +331,7 @@ impl Feed {
             if until.is_none_or(|until| self.clock.now() >= until) {
                 return true;
             }
-            let mut slot = Some(guard);
-            self.clock.wait_until(until, &mut |bound| {
-                let Some(held) = slot.take() else {
-                    return;
-                };
-                slot = Some(match bound {
-                    Some(limit) => {
-                        self.tick
-                            .moved
-                            .wait_timeout(held, limit)
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .0
-                    }
-                    None => self
-                        .tick
-                        .moved
-                        .wait(held)
-                        .unwrap_or_else(PoisonError::into_inner),
-                });
-            });
-            let Some(held) = slot else {
+            let Some(held) = self.tick.park(self.clock.as_ref(), guard, until) else {
                 return true;
             };
             guard = held;
@@ -766,50 +749,6 @@ pub(crate) fn invalid() -> Refusal {
 fn join(handle: JoinHandle<()>) {
     match handle.join() {
         Ok(()) | Err(_) => {}
-    }
-}
-
-/// Woken on every clock move and at stop.
-#[derive(Default)]
-struct Tick {
-    held: Mutex<()>,
-    moved: Condvar,
-    /// Told once of the next wake: when it finds `held` taken, or else
-    /// once its notify has returned.
-    #[cfg(test)]
-    attempt: Mutex<Option<Sender<()>>>,
-}
-
-impl Wake for Tick {
-    fn wake(&self) {
-        #[cfg(test)]
-        let attempt = self.tell_if_contended();
-        // Taken before the notify, so a scanner that has checked and not
-        // yet parked cannot miss it.
-        let held = lock(&self.held);
-        self.moved.notify_all();
-        drop(held);
-        #[cfg(test)]
-        if let Some(attempt) = attempt {
-            attempt.send(()).unwrap_or(());
-        }
-    }
-}
-
-#[cfg(test)]
-impl Tick {
-    /// Tells the armed sender at once when `held` is taken, and otherwise
-    /// returns it to be told after the notify.
-    fn tell_if_contended(&self) -> Option<Sender<()>> {
-        let attempt = lock(&self.attempt).take()?;
-        if matches!(
-            self.held.try_lock(),
-            Err(std::sync::TryLockError::WouldBlock)
-        ) {
-            attempt.send(()).unwrap_or(());
-            return None;
-        }
-        Some(attempt)
     }
 }
 
