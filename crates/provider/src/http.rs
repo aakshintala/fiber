@@ -160,7 +160,7 @@ fn post_with(
             .http_status_as_error(false)
             .max_redirects(0)
             .build(),
-        Arc::clone(cancel),
+        Arc::<Cancel>::clone(cancel),
         DefaultResolver::default(),
         net::LIMITS,
     );

@@ -274,7 +274,7 @@ impl Hop {
                 .http_status_as_error(false)
                 .max_redirects(0)
                 .build(),
-            Arc::clone(self),
+            Arc::<Self>::clone(self),
             Pinned(request.pinned.map(<[SocketAddr]>::to_vec)),
             net::LIMITS,
         );
