@@ -523,10 +523,8 @@ pub(super) fn render(
     if let Some(id) = app.focused() {
         // A focused chip draws as a hovered one, never reversed; every
         // other focused target keeps the focus style.
-        let style = match id {
-            TargetId::Home(spot) if spot.is_chip() => HOVER_TINT,
-            _ => FOCUS_STYLE,
-        };
+        let chip = matches!(id, TargetId::Home(spot) if spot.is_chip());
+        let style = if chip { HOVER_TINT } else { FOCUS_STYLE };
         for target in targets.iter().filter(|target| target.id == id) {
             buf.set_style(target.rect, style);
         }

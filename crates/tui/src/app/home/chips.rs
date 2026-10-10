@@ -56,9 +56,14 @@ impl App {
     fn chip_stops(&self) -> Vec<Spot> {
         order(&self.stops, &self.regions, Area::Conversation)
             .into_iter()
-            .filter_map(|id| match id {
-                TargetId::Home(spot) if spot.is_chip() => Some(spot),
-                _ => None,
+            .filter_map(|id| {
+                if let TargetId::Home(spot) = id
+                    && spot.is_chip()
+                {
+                    Some(spot)
+                } else {
+                    None
+                }
             })
             .collect()
     }
@@ -141,9 +146,7 @@ impl App {
     /// change; every other key keeps the chip focused and acts as from
     /// the entry bar.
     pub(super) fn chip_key(&mut self, key: &Key) -> Option<Effect> {
-        let Some(chip) = self.focused_chip() else {
-            return None;
-        };
+        let chip = self.focused_chip()?;
         match key {
             Key::Up => {
                 self.remember_chip(chip);
@@ -194,15 +197,13 @@ impl App {
     /// at the ends; every other edit returns focus to the entry bar and
     /// applies there. `None` passes the edit on.
     pub(super) fn chip_edit(&mut self, edit: &Edit) -> Option<Effect> {
-        let Some(chip) = self.focused_chip() else {
-            return None;
-        };
+        let chip = self.focused_chip()?;
         match edit {
             Edit::Left | Edit::Right => {
                 let stops = self.chip_stops();
                 if let Some(at) = stops.iter().position(|stop| *stop == chip) {
                     let next = if matches!(edit, Edit::Left) {
-                        at.checked_sub(1).map_or(at, |prev| prev)
+                        at.checked_sub(1).unwrap_or(at)
                     } else {
                         stops.get(at.saturating_add(1)).map_or(at, |_| at + 1)
                     };
@@ -243,10 +244,18 @@ impl App {
         }
         let down = matches!(key, Key::Down);
         let shown = self.shown_keys();
-        let row = match focus {
-            TargetId::Home(Spot::Entry(row) | Spot::Stop(row)) => Some(row),
-            TargetId::Home(Spot::Toggle) => None,
-            _ => return None,
+        let TargetId::Home(spot) = focus else {
+            return None;
+        };
+        let row = match spot {
+            Spot::Entry(row) | Spot::Stop(row) => Some(row),
+            Spot::Toggle => None,
+            Spot::Workspace
+            | Spot::Worktree
+            | Spot::Model
+            | Spot::Thinking
+            | Spot::Pick(_)
+            | Spot::Quit(_) => return None,
         };
         if down {
             let next = match row {

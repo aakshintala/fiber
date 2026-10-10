@@ -212,9 +212,8 @@ impl App {
     /// selection, else the input box. The notice overlay is no context:
     /// it takes only Esc, which is `close_or_interrupt`'s key everywhere.
     fn key_context(&self) -> Context {
-        if self.quit_open() {
-            Context::Overlay
-        } else if self.config_view_open()
+        if self.quit_open()
+            || self.config_view_open()
             || self.session_view_open()
             || self.home_modal()
             || self.keymap_top().is_some()

@@ -1790,9 +1790,12 @@ fn a_focused_model_chip_matches_a_hovered_one() {
     let targets = render(&app, area, &mut focused, None);
     let rect = targets
         .iter()
-        .find_map(|target| match target.id {
-            crate::mouse::TargetId::Home(Spot::Model) => Some(target.rect),
-            _ => None,
+        .find_map(|target| {
+            if let crate::mouse::TargetId::Home(Spot::Model) = target.id {
+                Some(target.rect)
+            } else {
+                None
+            }
         })
         .expect("the model chip draws a target");
     // The same frame with the pointer over the model chip: its cells
@@ -1834,9 +1837,14 @@ fn a_chip_past_the_box_has_no_target() {
     let targets = home_only(&app, area, &mut buf);
     let chips: Vec<(Spot, ratatui::layout::Rect)> = targets
         .into_iter()
-        .filter_map(|target| match target.id {
-            crate::mouse::TargetId::Home(spot) if spot.is_chip() => Some((spot, target.rect)),
-            _ => None,
+        .filter_map(|target| {
+            if let crate::mouse::TargetId::Home(spot) = target.id
+                && spot.is_chip()
+            {
+                Some((spot, target.rect))
+            } else {
+                None
+            }
         })
         .collect();
     // The thinking chip starts past the box's right edge: no target.
