@@ -3149,6 +3149,15 @@ struct Args {
     /// `--completions CASE`: start with the completion panel open
     completions: Option<String>,
 }
+/// The `--home` case to consume: the next argument, but only when it
+/// exists and does not start with `-`. Otherwise the case is `live` and
+/// the next argument is parsed as usual.
+fn home_case(next: Option<&str>) -> Option<String> {
+    match next {
+        Some(s) if !s.starts_with('-') => Some(s.to_string()),
+        _ => None,
+    }
+}
 fn args() -> Args {
     let mut a = Args {
         path: "fixtures/session.jsonl".into(),
@@ -3180,7 +3189,7 @@ fn args() -> Args {
         picker: None,
         completions: None,
     };
-    let mut it = std::env::args().skip(1);
+    let mut it = std::env::args().skip(1).peekable();
     while let Some(x) = it.next() {
         match x.as_str() {
             "--speed" => a.speed = it.next().and_then(|v| v.parse().ok()).expect("--speed N"),
@@ -3202,7 +3211,16 @@ fn args() -> Args {
             "--paging-bench" => a.bench = true,
             "--no-pending" => a.no_pending = true,
             "--hover" => a.hover = true,
-            "--home" => a.home = it.next(),
+            "--home" => {
+                a.home = match home_case(it.peek().map(String::as_str)) {
+                    Some(case) => {
+                        it.next();
+                        Some(case)
+                    }
+                    // Bare `--home` runs the interactive home.
+                    None => Some("live".into()),
+                };
+            }
             "--overlay" => a.overlay = it.next(),
             "--rail" => {
                 a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
@@ -3226,7 +3244,7 @@ fn args() -> Args {
             "--picker" => a.picker = it.next(),
             "--completions" => a.completions = it.next(),
             "-h" | "--help" => {
-                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home CASE] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
+                print!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--picker CASE] [--completions CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}", cases::help(SURFACES));
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -3321,7 +3339,18 @@ fn main() -> io::Result<()> {
         out.write_all(HOVER_ON.as_bytes())?;
     }
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
-    let res = if a.home.is_some() { home::run_home(&a, &mut term) } else if a.overlay.is_some() { overlays::run_overlay(&a, &mut term) } else { run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index) };
+    let mut home_switched = false;
+    let res: io::Result<String> = if a.home.is_some() {
+        match home::run_home(&a, &mut term)? {
+            home::Done::Quit(s) => Ok(s),
+            // Entering a session runs the fixture replay on the same
+            // terminal; the typed prompt is not injected into it.
+            home::Done::Conversation => {
+                home_switched = true;
+                run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index)
+            }
+        }
+    } else if a.overlay.is_some() { overlays::run_overlay(&a, &mut term) } else { run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index) };
     let b = term.backend_mut();
     if a.hover {
         b.write_all(HOVER_OFF.as_bytes())?;
@@ -3336,8 +3365,10 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    // home and the overlays draw no session, so there is nothing to resume
-    if a.home.is_none() && a.overlay.is_none() {
+    // Home and the overlays draw no session, so there is nothing to
+    // resume, unless home switched to the conversation, whose replayed
+    // session resumes as usual.
+    if a.home.is_none() && a.overlay.is_none() || home_switched {
         println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
     }
     Ok(())
@@ -4628,12 +4659,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn home_case_parsing() {
+        assert_eq!(home_case(None), None);
+        assert_eq!(home_case(Some("--static")), None);
+        assert_eq!(home_case(Some("-h")), None);
+        assert_eq!(home_case(Some("sessions")), Some("sessions".into()));
+        assert_eq!(home_case(Some("live")), Some("live".into()));
+    }
+
+    #[test]
     fn the_case_names_are_pinned() {
         let all: Vec<String> = SURFACES.iter().map(|s| format!("{} {}", s.flag, (s.docs)().iter().map(|d| d.name).collect::<Vec<_>>().join(", "))).collect();
         assert_eq!(
             all,
             [
-                "--home empty, sessions, live-only, past-only, selected, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
+                "--home empty, sessions, live-only, past-only, selected, live, hover-workspace, hover-worktree, hover-model, hover-thinking, worktree-on, worktree-off, picker-recent, picker-typed",
                 "--overlay keymap, keymap-tab, keymap-search, keymap-narrow, quit, delete, history, notice, close-mouse",
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",

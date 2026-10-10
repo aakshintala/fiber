@@ -6,11 +6,11 @@
 //! program waits for a key; Esc, q or Ctrl+C quits. The conversation view is
 //! untouched: a home case replaces it.
 
-use super::input::{Ev, Key};
-use super::{Args, Term};
+use super::input::{Ev, Key, Mods, Mouse};
+use super::{Act, Args, Term, Ui};
 use super::{
     BI, BLUE, CYAN, ORANGE, RED, SEL, SState, bold, dim, fg, fit, lift, paint,
-    row, slab, sp, state_glyph, t,
+    row, slab, sp, state_glyph,
 };
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
@@ -26,6 +26,7 @@ const CASES: &[Case<Look>] = &[
     Case { name: "live-only", help: "live sessions only, a still frame", check: "the `Live sessions` header and its five two-line rows; no `Past sessions` header.", build: || Look { list: List::Live, ..base() } },
     Case { name: "past-only", help: "past sessions only, a still frame", check: "the `Past sessions` header and its six two-line rows; no `Live sessions` header.", build: || Look { list: List::Past, ..base() } },
     Case { name: "selected", help: "the first live row selected, a still frame", check: "the first live row with the blue `▸` marker, its prompt bold and its verb blue; the other rows unmarked.", build: || Look { sel: Some(0), ..base() } },
+    Case { name: "live", help: "the interactive home: type, pick, open rows", check: "not a still frame: `--home` with no case runs the event loop, and this name only names it in `--help`.", build: base },
     Case { name: "hover-workspace", help: "the workspace chip hovered, a still frame", check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Workspace), ..base() } },
     Case { name: "hover-worktree", help: "the worktree switch hovered, a still frame", check: "a still frame of the hover tint: the switch chip should sit lighter with its ● still blue.", build: || Look { hover: Some(Hover::Worktree), ..base() } },
     Case { name: "hover-model", help: "the model chip hovered, a still frame", check: "a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.", build: || Look { hover: Some(Hover::Model), ..base() } },
@@ -53,7 +54,7 @@ fn tall_min() -> usize {
     LOGO_Y + 4 + 1 + input_box(&base(), HOME_W).len() + 3
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Hover {
     Workspace,
     Worktree,
@@ -61,13 +62,13 @@ enum Hover {
     Thinking,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Picker {
     Recent,
     Typed,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum List {
     None,
     Live,
@@ -82,10 +83,36 @@ struct Look {
     hover: Option<Hover>,
     worktree: bool,
     picker: Option<Picker>,
+    /// the workspace picker's selection, an index into `RECENTS`
+    wsel: usize,
+    /// the chosen recent workspace, shown on the workspace chip
+    workspace: &'static str,
+    /// the chosen model and thinking level, shown on their chips
+    model: &'static str,
+    level: &'static str,
+    /// the draft, the completion panel and the model picker
+    ui: Ui,
+    /// the draft Esc dismissed the completion panel on: `sync` stays shut
+    /// until the draft changes
+    dismissed: Option<String>,
 }
 
 fn base() -> Look {
-    Look { list: List::Both, sel: None, hover: None, worktree: true, picker: None }
+    let (model, level) =
+        crate::model_picker::chosen(&crate::model_picker::for_case("list"));
+    Look {
+        list: List::Both,
+        sel: None,
+        hover: None,
+        worktree: true,
+        picker: None,
+        wsel: 0,
+        workspace: RECENTS[0],
+        model,
+        level,
+        ui: Ui::default(),
+        dismissed: None,
+    }
 }
 
 /// A session on home's list: live ones carry their rail state, exited ones
@@ -273,47 +300,69 @@ fn chip(text: &str, st: Style, hovered: bool) -> Span<'static> {
     sp(format!("[{text}]"), st.bg(bg))
 }
 
-fn chip_row(c: &Look) -> Vec<Span<'static>> {
+/// The chip row's clickable chips: target, text, style and hover.
+fn chips(c: &Look) -> Vec<(Target, String, Style, bool)> {
     let h = |k: Hover| c.hover == Some(k);
     // The chips start from the model picker's current model, so a pick
-    // agrees with them.
-    let (model, level) = crate::model_picker::chosen(&crate::model_picker::for_case("list"));
-    let mut s = vec![sp("▌ ", fg(BLUE))];
-    s.push(chip("▣ ~/work/fiber", Style::new(), h(Hover::Workspace)));
-    s.push(sp(" ", Style::new()));
-    let (glyph, st) = if c.worktree {
+    // agrees with them; a recorded pick moves them.
+    let (worktree, wst) = if c.worktree {
         ("● new worktree", fg(BLUE))
     } else {
         ("○ new worktree", dim())
     };
-    s.push(chip(glyph, st, h(Hover::Worktree)));
-    s.push(sp(" ", Style::new()));
-    s.push(chip(model, fg(CYAN), h(Hover::Model)));
-    s.push(sp(" ", Style::new()));
-    s.push(chip(level, fg(ORANGE), h(Hover::Thinking)));
-    s.push(t());
+    vec![
+        (Target::Workspace, format!("▣ {}", c.workspace), Style::new(), h(Hover::Workspace)),
+        (Target::Worktree, worktree.into(), wst, h(Hover::Worktree)),
+        (Target::Model, c.model.into(), fg(CYAN), h(Hover::Model)),
+        (Target::Thinking, c.level.into(), fg(ORANGE), h(Hover::Thinking)),
+    ]
+}
+
+fn chip_row(c: &Look) -> Vec<Span<'static>> {
+    let mut s = vec![sp("▌ ", fg(BLUE))];
+    for (i, (_, text, st, hovered)) in chips(c).iter().enumerate() {
+        if i > 0 {
+            s.push(sp(" ", Style::new()));
+        }
+        s.push(chip(text, *st, *hovered));
+    }
+    // No right-aligned tail: when long chips overflow, the hint gives
+    // way, never the chips.
+    s.push(sp("  ", Style::new()));
     s.push(sp("enter starts a session ", dim()));
     s
 }
 
-/// The large input box: the `/? for shortcuts` placeholder over the chip row,
+/// The chip row's click targets as row-relative cell ranges.
+fn chip_hits(c: &Look) -> Vec<(usize, usize, Target)> {
+    let mut x = "▌ ".width();
+    let mut out = vec![];
+    for (i, (t, text, _, _)) in chips(c).iter().enumerate() {
+        if i > 0 {
+            x += 1;
+        }
+        let w = text.width() + 2;
+        out.push((x, x + w, *t));
+        x += w;
+    }
+    out
+}
+
+/// The large input box: the draft with its cursor, or the
+/// `/? for shortcuts` placeholder when empty, over the chip row,
 /// with the prototype's ▌ stripe.
 fn input_box(c: &Look, w: usize) -> Vec<super::Row> {
     let stripe = || sp("▌", fg(BLUE));
     let blank = || row(vec![stripe()]);
+    let mut prompt = vec![stripe(), sp(" ", Style::new()), sp("› ", fg(CYAN))];
+    if c.ui.input.is_empty() {
+        prompt.push(sp("/? for shortcuts", dim()));
+    } else {
+        prompt.push(sp(c.ui.input.clone(), Style::new()));
+    }
+    prompt.push(sp("█", dim()));
     slab(
-        vec![
-            row(vec![
-                stripe(),
-                sp(" ", Style::new()),
-                sp("› ", fg(CYAN)),
-                sp("/? for shortcuts", dim()),
-                sp("█", dim()),
-            ]),
-            blank(),
-            blank(),
-            row(chip_row(c)),
-        ],
+        vec![row(prompt), blank(), blank(), row(chip_row(c))],
         BI,
         None,
         w,
@@ -409,11 +458,16 @@ fn past_header() -> Vec<Span<'static>> {
     vec![sp("Past sessions", bold()), sp("  /resume lists all", dim())]
 }
 
+/// One list line: its left edge, its spans, and the session's index for
+/// clicks. The blank between sections counts for the scroll but draws
+/// nothing.
+type Line = Option<(usize, Vec<Span<'static>>, Option<usize>)>;
+
 /// Pushes one section's header and two-line rows onto the list's lines.
 /// `at` counts sessions in live-then-past order; `sel_end` becomes the
 /// line index just past the selected row's second line.
 fn push_section(
-    lines: &mut Vec<Option<(usize, Vec<Span<'static>>)>>,
+    lines: &mut Vec<Line>,
     geom: (usize, usize),
     header: Vec<Span<'static>>,
     sessions: &[Session],
@@ -422,15 +476,16 @@ fn push_section(
     sel_end: &mut usize,
 ) {
     let (x0, rw) = geom;
-    lines.push(Some((x0 + 2, header)));
+    lines.push(Some((x0 + 2, header, None)));
     for s in sessions {
         let selected = sel == Some(*at);
         if selected {
             *sel_end = lines.len() + 2;
         }
+        let k = *at;
         *at += 1;
-        lines.push(Some((x0 + 1, session_line_one(s, selected, rw))));
-        lines.push(Some((x0 + 1, session_line_two(s, rw))));
+        lines.push(Some((x0 + 1, session_line_one(s, selected, rw), Some(k))));
+        lines.push(Some((x0 + 1, session_line_two(s, rw), Some(k))));
     }
 }
 
@@ -443,9 +498,10 @@ fn list_offset(sel_end: usize, area: usize) -> usize {
 }
 
 /// The workspace picker's rows at an inner width: the typed-path row with
-/// its completions over the recents, or recents alone. The first row rides
-/// a full-width selection bar.
-fn picker_body(p: Picker) -> Vec<super::Row> {
+/// its completions over the recents, or recents alone. The selected recent
+/// rides a full-width selection bar. The typed-path row is a still frame
+/// only: typing never reaches it.
+fn picker_body(p: Picker, wsel: usize) -> Vec<super::Row> {
     let mut out = vec![];
     if p == Picker::Typed {
         out.push(row(vec![
@@ -468,7 +524,7 @@ fn picker_body(p: Picker) -> Vec<super::Row> {
         out.push(row(vec![sp("── recents ──", dim())]));
     }
     for (i, r) in RECENTS.iter().enumerate() {
-        let selected = p == Picker::Recent && i == 0;
+        let selected = p == Picker::Recent && i == wsel;
         if selected {
             out.extend(super::panel::bar(vec![row(vec![
                 sp("› ", bold()),
@@ -494,9 +550,9 @@ fn picker_body(p: Picker) -> Vec<super::Row> {
 /// The workspace picker over home: recent workspaces, or the typed-path row
 /// with its completions over the recents, in the shared panel frame with a
 /// bold-key legend foot.
-fn picker(p: Picker, cols: usize) -> Vec<super::Row> {
+fn picker(p: Picker, wsel: usize, cols: usize) -> Vec<super::Row> {
     const TITLE: &str = "Workspaces";
-    let body = picker_body(p);
+    let body = picker_body(p, wsel);
     let natural = body
         .iter()
         .map(|r| super::width(&r.spans))
@@ -522,6 +578,42 @@ struct Placed {
     row: super::Row,
 }
 
+/// What a click lands on: home-local targets; the model picker's rows
+/// reuse its own `Act`.
+#[derive(Clone, Copy, PartialEq)]
+enum Target {
+    Workspace,
+    Worktree,
+    Model,
+    Thinking,
+    /// a session row in live-then-past order: both its lines hit
+    Session(usize),
+    /// a recent workspace in the open workspace picker
+    Recent(usize),
+    /// a model picker row or chip
+    Picker(Act),
+}
+
+/// One frame: what is on screen, and what a click lands on.
+/// Hits are `(row, start cell, end-exclusive cell, target)`.
+struct Frame {
+    screen: Vec<Vec<Placed>>,
+    hits: Vec<(u16, u16, u16, Target)>,
+}
+
+/// What a key or a click asks the home loop to do.
+enum Step {
+    Stay,
+    Quit,
+    Conversation,
+}
+
+/// Where the home loop went: out, or into the conversation view.
+pub(crate) enum Done {
+    Quit(String),
+    Conversation,
+}
+
 fn put(
     screen: &mut [Vec<Placed>],
     y: usize,
@@ -543,13 +635,38 @@ fn put(
     }
 }
 
-fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Vec<Vec<Placed>> {
+fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
     let blank = || vec![Placed {
         x: 0,
         w: cols as u16,
         row: row(vec![]),
     }];
     let mut screen: Vec<Vec<Placed>> = (0..rows).map(|_| blank()).collect();
+    let mut hits: Vec<(u16, u16, u16, Target)> = vec![];
+    // The model picker opens over home as a full-screen swapped view, as
+    // `/model` does in the conversation.
+    if let Some(p) = &c.ui.picker {
+        let mut all = vec![super::view_header("Models", "/model")];
+        all.extend(crate::model_picker::view(p, cols));
+        // The focused row stays visible: its index, then the header's row.
+        let at = all
+            .iter()
+            .position(|r| r.act == Some(Act::Pick(p.focus)))
+            .unwrap_or(0);
+        let off = list_offset(at + 1, rows.saturating_sub(1));
+        for (k, r) in all.iter().enumerate().skip(off).take(rows) {
+            let y = (k - off) as u16;
+            let bg = r.bg;
+            put(&mut screen, y as usize, 0, cols, r.spans.clone(), bg);
+            if r.act == Some(Act::Back) {
+                hits.push((y, 0, cols as u16, Target::Picker(Act::Back)));
+            }
+            for &(a, b, act) in &r.hot {
+                hits.push((y, a, b, Target::Picker(act)));
+            }
+        }
+        return Frame { screen, hits };
+    }
     let w = HOME_W.min(cols.saturating_sub(4)).max(20);
     let x0 = cols.saturating_sub(w) / 2;
     let mut y = LOGO_Y;
@@ -565,10 +682,26 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Vec<Vec<Placed>> {
         y += 1;
     }
     y += 1;
+    let box_top = y;
     for r in input_box(c, w) {
         let bg = r.bg;
         put(&mut screen, y, x0, w, r.spans, bg);
         y += 1;
+    }
+    // The chip row is the box's fifth row: its chips are click targets.
+    for (a, b, t) in chip_hits(c) {
+        hits.push(((box_top + 4) as u16, (x0 + a) as u16, (x0 + b) as u16, t));
+    }
+    // The `/` and `@` panel draws directly above the input box, entries
+    // first: focus starts at the top, so when the panel is taller than
+    // the room above the box its foot gives way, never its head.
+    if let Some(cp) = &c.ui.completions {
+        let panel = crate::completions::view(cp, &c.ui.input, w);
+        let keep = panel.len().min(box_top);
+        for (k, r) in panel.iter().take(keep).enumerate() {
+            let bg = r.bg;
+            put(&mut screen, box_top - keep + k, x0, w, r.spans.clone(), bg);
+        }
     }
     // Two blank rows under the box, then the list: live sessions under one
     // header, exited ones under another, each row two lines. The list's
@@ -600,10 +733,11 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Vec<Vec<Placed>> {
             None,
         );
     } else {
-        // Each entry is the line's left edge and its spans; the blank
-        // between sections counts for the scroll but draws nothing. The
-        // session index is the row's position in live-then-past order.
-        let mut lines: Vec<Option<(usize, Vec<Span<'static>>)>> = vec![];
+        // Each entry is the line's left edge, its spans, and the session's
+        // index for clicks; the blank between sections counts for the
+        // scroll but draws nothing. The session index is the row's
+        // position in live-then-past order.
+        let mut lines: Vec<Line> = vec![];
         let (mut at, mut sel_end) = (0, 0);
         if !live.is_empty() {
             push_section(&mut lines, (x0, rw), live_header(), live, c.sel, &mut at, &mut sel_end);
@@ -621,8 +755,12 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Vec<Vec<Placed>> {
         let area = rows.saturating_sub(2).saturating_sub(list_top);
         let off = list_offset(sel_end, area);
         for (k, l) in lines.iter().enumerate().skip(off).take(area) {
-            if let Some((x, spans)) = l {
-                put(&mut screen, list_top + k - off, *x, rw, spans.clone(), None);
+            if let Some((x, spans, sess)) = l {
+                let sy = list_top + k - off;
+                put(&mut screen, sy, *x, rw, spans.clone(), None);
+                if let Some(k) = sess {
+                    hits.push((sy as u16, *x as u16, (*x + rw) as u16, Target::Session(*k)));
+                }
             }
         }
     }
@@ -639,15 +777,28 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Vec<Vec<Placed>> {
         );
     }
     if let Some(p) = c.picker {
-        let rows = picker(p, cols);
+        let rows = picker(p, c.wsel, cols);
         let pw = super::width(&rows[0].spans);
         let px0 = super::panel::x_for(pw, cols);
         for (k, r) in rows.into_iter().enumerate() {
             let bg = r.bg;
+            let text: String = r.spans.iter().map(|s| s.content.as_ref()).collect();
+            if let Some(i) = recent_at(&text) {
+                hits.push(((12 + k) as u16, px0 as u16, (px0 + pw) as u16, Target::Recent(i)));
+            }
             put(&mut screen, 12 + k, px0, pw, r.spans, bg);
         }
     }
-    screen
+    Frame { screen, hits }
+}
+
+/// The recent workspace a picker row names, if any: the row's text past
+/// its `› ` or two-space marker, matched exactly.
+fn recent_at(text: &str) -> Option<usize> {
+    let t = text.trim();
+    let t = t.strip_prefix("› ").unwrap_or(t);
+    let t = t.strip_prefix("  ").unwrap_or(t);
+    RECENTS.iter().position(|&r| r == t)
 }
 
 /// Whether the kitty image covers the logo on this draw: supported, past
@@ -659,7 +810,7 @@ fn image_shown(supported: bool, first: bool, c: &Look, cols: usize, rows: usize)
     if !supported || first {
         return false;
     }
-    if c.picker.is_some() {
+    if c.picker.is_some() || c.ui.picker.is_some() || c.ui.completions.is_some() {
         return false;
     }
     if rows < tall_min() {
@@ -722,7 +873,7 @@ fn draw(term: &mut Term, c: &Look, img: &mut Image, supported: bool, first: bool
     term.backend_mut().write_all(b"\x1b[?2026h")?;
     term.draw(|fr| {
         let buf = fr.buffer_mut();
-        for (y, placements) in frame(c, cols as usize, rows as usize, shown).iter().enumerate() {
+        for (y, placements) in frame(c, cols as usize, rows as usize, shown).screen.iter().enumerate() {
             for p in placements {
                 paint(buf, p.x, y as u16, p.w, &p.row);
             }
@@ -742,10 +893,191 @@ fn free(term: &mut Term) {
     let _ = be.flush();
 }
 
-/// Draws the `--home` case and waits for a key. Mutually exclusive with the
-/// conversation view: the fixture replay never draws.
-pub(crate) fn run_home(a: &Args, term: &mut Term) -> io::Result<String> {
-    let name = a.home.clone().unwrap_or_default();
+/// The look's sessions in live-then-past order.
+fn sessions_of(c: &Look) -> Vec<&Session> {
+    let live: &[Session] = match c.list {
+        List::Live | List::Both => LIVE,
+        _ => &[],
+    };
+    let past: &[Session] = match c.list {
+        List::Past | List::Both => PAST,
+        _ => &[],
+    };
+    live.iter().chain(past.iter()).collect()
+}
+
+/// Closes the `/` and `@` panel, unless Esc dismissed it on this draft:
+/// without the dismissal the panel reopens at once, since the draft
+/// still starts with `/`.
+fn end_key(c: &mut Look, before: &str) {
+    if c.ui.input != before {
+        c.dismissed = None;
+    }
+    if c.dismissed.as_deref() != Some(c.ui.input.as_str()) {
+        crate::completions::sync(&mut c.ui, false);
+    }
+}
+
+/// The live home's keys, first match wins: Ctrl+C quits; the workspace
+/// picker takes arrows, Enter and Esc and ignores the rest; the model
+/// picker records on Enter and otherwise takes the picker's keys; Ctrl+L
+/// and `/model` open the model picker; `/` opens slash completions, and
+/// `/mo` Enter completes to `/model ` and opens the picker; Esc quits;
+/// arrows walk the list; Enter switches on a draft or a row; Backspace
+/// pops; `q` on an empty draft quits; other text fills the box.
+fn on_key(c: &mut Look, k: Key, m: Mods) -> Step {
+    // Ctrl+C quits, always.
+    if k == Key::Char('c') && m.ctrl {
+        return Step::Quit;
+    }
+    // The workspace picker takes its own keys; the rest are ignored.
+    if c.picker.is_some() {
+        match k {
+            Key::Up if !m.alt && !m.ctrl => c.wsel = c.wsel.saturating_sub(1),
+            Key::Down if !m.alt && !m.ctrl => c.wsel = (c.wsel + 1).min(RECENTS.len() - 1),
+            Key::Enter if !m.ctrl && !m.alt && !m.sup => {
+                c.workspace = RECENTS[c.wsel];
+                c.picker = None;
+            }
+            Key::Esc => c.picker = None,
+            _ => {}
+        }
+        return Step::Stay;
+    }
+    // The model picker records its choice on Enter, then closes.
+    if c.ui.picker.is_some() {
+        if k == Key::Enter && !m.ctrl && !m.alt && !m.sup {
+            let (model, level) =
+                crate::model_picker::chosen(c.ui.picker.as_ref().unwrap());
+            c.model = model;
+            c.level = level;
+        }
+        crate::model_picker::on_key(&mut c.ui, k, m);
+        return Step::Stay;
+    }
+    let before = c.ui.input.clone();
+    if crate::model_picker::on_key(&mut c.ui, k, m) {
+        end_key(c, &before);
+        return Step::Stay;
+    }
+    let had = c.ui.completions.is_some();
+    if crate::completions::on_key(&mut c.ui, k, m) {
+        if k == Key::Esc && had {
+            c.dismissed = Some(c.ui.input.clone());
+        }
+        end_key(c, &before);
+        return Step::Stay;
+    }
+    // Enter that just completed `/mo` to `/model ` opens the picker.
+    if had && k == Key::Enter && crate::model_picker::on_key(&mut c.ui, k, m) {
+        end_key(c, &before);
+        return Step::Stay;
+    }
+    let plain = !m.ctrl && !m.alt && !m.sup;
+    let step = match k {
+        Key::Esc => Step::Quit,
+        Key::Down if !m.alt && !m.ctrl => {
+            let n = sessions_of(c).len();
+            c.sel = Some(match c.sel {
+                None if n > 0 => 0,
+                Some(i) => i.saturating_add(1).min(n.saturating_sub(1)),
+                None => return Step::Stay,
+            });
+            Step::Stay
+        }
+        Key::Up if !m.alt && !m.ctrl => {
+            c.sel = match c.sel {
+                Some(0) | None => None,
+                Some(i) => Some(i - 1),
+            };
+            Step::Stay
+        }
+        Key::Enter if plain => {
+            if !c.ui.input.trim().is_empty() {
+                Step::Conversation
+            } else {
+                match c.sel.and_then(|i| sessions_of(c).get(i).copied()) {
+                    Some(s) if !s.foreign => Step::Conversation,
+                    _ => Step::Stay,
+                }
+            }
+        }
+        Key::Backspace if plain => {
+            c.ui.input.pop();
+            Step::Stay
+        }
+        Key::Char('q') if plain && c.ui.input.is_empty() => Step::Quit,
+        Key::Char(ch) if plain => {
+            c.ui.input.push(ch);
+            c.sel = None;
+            Step::Stay
+        }
+        _ => Step::Stay,
+    };
+    end_key(c, &before);
+    step
+}
+
+/// The live home's clicks: the chips open their pickers, the worktree
+/// switch toggles, a session row switches unless foreign, and a recent
+/// chooses its workspace.
+fn on_click(c: &mut Look, x: u16, y: u16, cols: usize, rows: usize) -> Step {
+    let fr = frame(c, cols, rows, false);
+    // Later hits sit above earlier ones: the picker floats over the list.
+    let hit = fr.hits.iter().rev().find(|&&(hy, x0, x1, _)| hy == y && x >= x0 && x < x1);
+    let Some((_, _, _, t)) = hit.copied() else {
+        return Step::Stay;
+    };
+    match t {
+        Target::Workspace => {
+            c.picker = Some(Picker::Recent);
+            c.wsel = 0;
+            Step::Stay
+        }
+        Target::Worktree => {
+            c.worktree = !c.worktree;
+            Step::Stay
+        }
+        Target::Model => {
+            c.ui.picker = Some(crate::model_picker::opened_at(c.model, None));
+            c.ui.vscroll = 0;
+            Step::Stay
+        }
+        Target::Thinking => {
+            c.ui.picker =
+                Some(crate::model_picker::opened_at(c.model, Some(c.level)));
+            c.ui.vscroll = 0;
+            Step::Stay
+        }
+        Target::Session(i) => {
+            let foreign = sessions_of(c).get(i).is_some_and(|s| s.foreign);
+            if foreign { Step::Stay } else { Step::Conversation }
+        }
+        Target::Recent(i) => {
+            c.workspace = RECENTS[i];
+            c.wsel = i;
+            c.picker = None;
+            Step::Stay
+        }
+        Target::Picker(Act::Back) => {
+            c.ui.picker = None;
+            Step::Stay
+        }
+        Target::Picker(act) => {
+            crate::model_picker::click(&mut c.ui, act);
+            Step::Stay
+        }
+    }
+}
+
+/// Draws home and waits for a key: `--home` bare or `live` runs the
+/// interactive home, the other cases one still frame each. Mutually
+/// exclusive with the conversation view: the fixture replay never draws.
+pub(crate) fn run_home(a: &Args, term: &mut Term) -> io::Result<Done> {
+    let name = a.home.clone().unwrap_or("live".into());
+    if name == "live" {
+        return run_live(term);
+    }
     let Some(c) = crate::cases::lookup(CASES, &name) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -781,17 +1113,71 @@ pub(crate) fn run_home(a: &Args, term: &mut Term) -> io::Result<String> {
             match ev {
                 Ev::Key(Key::Char('c'), m) if m.ctrl => {
                     free(term);
-                    return Ok(format!("home {name}\n"));
+                    return Ok(Done::Quit(format!("home {name}\n")));
                 }
                 Ev::Key(Key::Esc, _) => {
                     free(term);
-                    return Ok(format!("home {name}\n"));
+                    return Ok(Done::Quit(format!("home {name}\n")));
                 }
                 Ev::Key(Key::Char('q'), m) if !m.ctrl && !m.alt && !m.sup => {
                     free(term);
-                    return Ok(format!("home {name}\n"));
+                    return Ok(Done::Quit(format!("home {name}\n")));
                 }
                 _ => {}
+            }
+        }
+    }
+}
+
+/// The interactive home: typing fills the box, the pickers open over it,
+/// arrows walk the session list, and Enter switches to the conversation.
+fn run_live(term: &mut Term) -> io::Result<Done> {
+    let mut c = base();
+    let supported = crate::logo::supported(|k| std::env::var(k).ok());
+    let mut img = Image::default();
+    let mut err = draw(term, &c, &mut img, supported, true).err();
+    if err.is_none() && supported {
+        err = draw(term, &c, &mut img, supported, false).err();
+    }
+    if let Some(e) = err {
+        free(term);
+        return Err(e);
+    }
+    let mut rd = super::input::Reader::new()?;
+    loop {
+        let (evs, resized) = rd.wait(wait_for(rd.deadline(), Instant::now()))?;
+        let err = if resized {
+            draw(term, &c, &mut img, supported, false).err()
+        } else {
+            None
+        };
+        if let Some(e) = err {
+            free(term);
+            return Err(e);
+        }
+        for ev in evs {
+            let step = match ev {
+                Ev::Key(k, m) => on_key(&mut c, k, m),
+                Ev::Mouse(Mouse::Down, x, y, _) => {
+                    let size = term.size()?;
+                    on_click(&mut c, x, y, size.width as usize, size.height as usize)
+                }
+                _ => Step::Stay,
+            };
+            match step {
+                Step::Stay => {}
+                Step::Quit => {
+                    free(term);
+                    return Ok(Done::Quit("home live\n".into()));
+                }
+                Step::Conversation => {
+                    free(term);
+                    return Ok(Done::Conversation);
+                }
+            }
+            if let Some(e) = draw(term, &c, &mut img, supported, false).err() {
+                free(term);
+                return Err(e);
             }
         }
     }
@@ -804,7 +1190,7 @@ mod tests {
     #[test]
     fn every_case_parses_and_unknown_does_not() {
         assert!(CASES.iter().all(|c| crate::cases::lookup(CASES, c.name).is_some()));
-        assert_eq!(CASES.len(), 13);
+        assert_eq!(CASES.len(), 14);
         assert!(crate::cases::lookup(CASES, "nope").is_none());
     }
 
@@ -824,7 +1210,7 @@ mod tests {
 
     fn painted(c: &Look, cols: u16, rows: u16, image: bool) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, cols, rows));
-        for (y, placements) in frame(c, cols as usize, rows as usize, image).iter().enumerate() {
+        for (y, placements) in frame(c, cols as usize, rows as usize, image).screen.iter().enumerate() {
             for p in placements {
                 paint(&mut buf, p.x, y as u16, p.w, &p.row);
             }
@@ -870,6 +1256,13 @@ mod tests {
             160,
             48
         ));
+        let mut model = plain();
+        model.ui.picker = Some(crate::model_picker::for_case("list"));
+        assert!(!image_shown(true, false, &model, 160, 48));
+        let mut panel = plain();
+        panel.ui.input = "/".into();
+        panel.ui.completions = Some(crate::completions::for_case("slash"));
+        assert!(!image_shown(true, false, &panel, 160, 48));
         // The image needs the four-row logo and its 32 cells.
         assert!(image_shown(true, false, &plain(), 160, tall_min()));
         assert!(!image_shown(true, false, &plain(), 160, tall_min() - 1));
@@ -944,6 +1337,7 @@ mod tests {
 
     fn text(c: &Look, cols: usize, rows: usize) -> String {
         frame(c, cols, rows, false)
+            .screen
             .into_iter()
             .map(|ps| {
                 ps.iter()
@@ -1194,10 +1588,291 @@ mod tests {
         assert!(y1 + 1 < 28, "the last row scrolled off");
     }
 
+    fn live_look() -> Look {
+        base()
+    }
+
+    fn press(c: &mut Look, k: Key) -> Step {
+        on_key(c, k, Mods::default())
+    }
+
+    fn type_str(c: &mut Look, s: &str) {
+        for ch in s.chars() {
+            press(c, Key::Char(ch));
+        }
+    }
+
+    /// The first click target for `t` at 160 by 48.
+    fn hit(c: &Look, t: Target) -> (u16, u16) {
+        let fr = frame(c, 160, 48, false);
+        let (y, x0, _, _) = fr.hits.iter().find(|h| h.3 == t).unwrap();
+        (*x0, *y)
+    }
+
+    fn session_hits(c: &Look, i: usize) -> Vec<(u16, u16)> {
+        frame(c, 160, 48, false)
+            .hits
+            .iter()
+            .filter(|h| h.3 == Target::Session(i))
+            .map(|&(y, x0, _, _)| (x0, y))
+            .collect()
+    }
+
+    #[test]
+    fn typing_fills_the_box() {
+        let mut c = live_look();
+        press(&mut c, Key::Char('a'));
+        press(&mut c, Key::Char('b'));
+        let buf = buffer(&c, 160, 48);
+        find_row(&buf, 160, 48, "› ab█");
+        press(&mut c, Key::Backspace);
+        let buf = buffer(&c, 160, 48);
+        find_row(&buf, 160, 48, "› a█");
+    }
+
+    #[test]
+    fn enter_with_a_draft_switches() {
+        let mut c = live_look();
+        type_str(&mut c, "fix it");
+        assert!(matches!(press(&mut c, Key::Enter), Step::Conversation));
+        let mut c = live_look();
+        type_str(&mut c, " ");
+        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
+    }
+
+    #[test]
+    fn arrows_walk_the_list() {
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        assert_eq!(c.sel, Some(0));
+        press(&mut c, Key::Up);
+        assert_eq!(c.sel, None);
+        press(&mut c, Key::Up);
+        assert_eq!(c.sel, None);
+        c.sel = Some(10);
+        press(&mut c, Key::Down);
+        assert_eq!(c.sel, Some(10));
+        let mut empty = Look { list: List::None, ..base() };
+        press(&mut empty, Key::Down);
+        assert_eq!(empty.sel, None);
+        let mut c = live_look();
+        press(&mut c, Key::Down);
+        let buf = buffer(&c, 160, 48);
+        let y1 = find_row(&buf, 160, 48, "cut the 0.0.1 release");
+        assert_eq!(buf[(39, y1)].symbol(), "▸");
+    }
+
+    #[test]
+    fn enter_opens_a_selected_row() {
+        let mut c = live_look();
+        c.sel = Some(0);
+        assert!(matches!(press(&mut c, Key::Enter), Step::Conversation));
+        // The foreign row cannot attach: Enter does nothing.
+        let mut c = live_look();
+        c.sel = Some(3);
+        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
+    }
+
+    #[test]
+    fn typing_clears_the_selection() {
+        let mut c = live_look();
+        c.sel = Some(2);
+        press(&mut c, Key::Char('x'));
+        assert_eq!(c.sel, None);
+        assert_eq!(c.ui.input, "x");
+    }
+
+    #[test]
+    fn q_quits_only_on_an_empty_draft() {
+        let mut c = live_look();
+        assert!(matches!(press(&mut c, Key::Char('q')), Step::Quit));
+        let mut c = live_look();
+        press(&mut c, Key::Char('a'));
+        assert!(matches!(press(&mut c, Key::Char('q')), Step::Stay));
+        assert_eq!(c.ui.input, "aq");
+        let mut c = live_look();
+        c.picker = Some(Picker::Recent);
+        assert!(matches!(press(&mut c, Key::Char('q')), Step::Stay));
+        assert!(c.picker.is_some());
+    }
+
+    #[test]
+    fn ctrl_c_always_quits() {
+        let mut c = live_look();
+        c.ui.picker = Some(crate::model_picker::for_case("list"));
+        let m = Mods { ctrl: true, ..Default::default() };
+        assert!(matches!(on_key(&mut c, Key::Char('c'), m), Step::Quit));
+    }
+
+    #[test]
+    fn esc_closes_then_quits() {
+        let mut c = live_look();
+        c.picker = Some(Picker::Recent);
+        assert!(matches!(press(&mut c, Key::Esc), Step::Stay));
+        assert!(c.picker.is_none());
+        assert!(matches!(press(&mut c, Key::Esc), Step::Quit));
+    }
+
+    #[test]
+    fn slash_opens_completions() {
+        let mut c = live_look();
+        press(&mut c, Key::Char('/'));
+        assert!(c.ui.completions.is_some());
+        let buf = buffer(&c, 160, 48);
+        let entry = find_row(&buf, 160, 48, "pick the model for this session");
+        let box_top = find_row(&buf, 160, 48, "enter starts a session");
+        assert!(entry < box_top, "the panel is not above the input box");
+    }
+
+    #[test]
+    fn esc_dismisses_completions_until_the_draft_changes() {
+        let mut c = live_look();
+        press(&mut c, Key::Char('/'));
+        assert!(matches!(press(&mut c, Key::Esc), Step::Stay));
+        assert_eq!(c.ui.input, "/");
+        assert!(c.ui.completions.is_none());
+        assert!(!text(&c, 160, 48).contains("/model"));
+        press(&mut c, Key::Char('m'));
+        assert!(c.ui.completions.is_some());
+        assert_eq!(c.ui.input, "/m");
+        let mut c = live_look();
+        press(&mut c, Key::Char('/'));
+        press(&mut c, Key::Esc);
+        press(&mut c, Key::Backspace);
+        assert_eq!(c.ui.input, "");
+        assert!(c.ui.completions.is_none());
+    }
+
+    #[test]
+    fn slash_mo_enter_opens_the_picker() {
+        let mut c = live_look();
+        type_str(&mut c, "/mo");
+        assert!(matches!(press(&mut c, Key::Enter), Step::Stay));
+        assert!(c.ui.picker.is_some());
+        assert_eq!(c.ui.input, "");
+        let buf = buffer(&c, 160, 48);
+        assert!(run_text(&buf, 0, 0, 20).contains("Models"));
+    }
+
+    #[test]
+    fn slash_model_enter_opens_the_picker() {
+        let mut c = live_look();
+        type_str(&mut c, "/model");
+        press(&mut c, Key::Enter);
+        assert!(c.ui.picker.is_some());
+    }
+
+    #[test]
+    fn picker_enter_records_the_model() {
+        let mut c = live_look();
+        let (x, y) = hit(&c, Target::Model);
+        assert!(matches!(on_click(&mut c, x, y, 160, 48), Step::Stay));
+        press(&mut c, Key::Down);
+        press(&mut c, Key::Enter);
+        assert!(c.ui.picker.is_none());
+        let buf = buffer(&c, 160, 48);
+        find_row(&buf, 160, 48, "[claude-sonnet-5-5]");
+        find_row(&buf, 160, 48, "[medium]");
+    }
+
+    #[test]
+    fn picker_esc_records_nothing() {
+        let mut c = live_look();
+        let (x, y) = hit(&c, Target::Model);
+        on_click(&mut c, x, y, 160, 48);
+        press(&mut c, Key::Down);
+        press(&mut c, Key::Esc);
+        assert!(c.ui.picker.is_none());
+        assert_eq!(c.model, "claude-opus-5-5");
+        assert_eq!(c.level, "high");
+    }
+
+    #[test]
+    fn picker_scroll_follows_focus() {
+        let last = crate::model_picker::fixture().last().unwrap().models.last().unwrap().id;
+        let mut c = live_look();
+        let (x, y) = hit(&c, Target::Model);
+        on_click(&mut c, x, y, 160, 48);
+        for _ in 0..11 {
+            press(&mut c, Key::Down);
+        }
+        let buf = buffer(&c, 160, 12);
+        let y = find_row(&buf, 160, 12, last);
+        let mut barred = false;
+        for x in 0..160 {
+            if buf[(x, y)].bg == BLUE {
+                barred = true;
+            }
+        }
+        assert!(barred, "the focused model is not on the accent bar");
+        for _ in 0..11 {
+            press(&mut c, Key::Up);
+        }
+        let buf = buffer(&c, 160, 12);
+        assert!(run_text(&buf, 0, 0, 20).contains("Models"));
+        find_row(&buf, 160, 12, "claude-opus-5-5");
+    }
+
+    #[test]
+    fn workspace_picker_flow() {
+        let mut c = live_look();
+        let (x, y) = hit(&c, Target::Workspace);
+        on_click(&mut c, x, y, 160, 48);
+        assert_eq!((c.picker, c.wsel), (Some(Picker::Recent), 0));
+        press(&mut c, Key::Down);
+        press(&mut c, Key::Enter);
+        assert!(c.picker.is_none());
+        let buf = buffer(&c, 160, 48);
+        find_row(&buf, 160, 48, "[▣ ~/work/fiber-worktrees]");
+        let mut c = live_look();
+        let (x, y) = hit(&c, Target::Workspace);
+        on_click(&mut c, x, y, 160, 48);
+        for _ in 0..5 {
+            press(&mut c, Key::Down);
+        }
+        assert_eq!(c.wsel, 3);
+    }
+
+    #[test]
+    fn chip_clicks() {
+        let mut c = live_look();
+        let (x, y) = hit(&c, Target::Worktree);
+        on_click(&mut c, x, y, 160, 48);
+        assert!(!c.worktree);
+        let (x, y) = hit(&c, Target::Thinking);
+        on_click(&mut c, x, y, 160, 48);
+        let p = c.ui.picker.as_ref().unwrap();
+        assert_eq!((p.focus, p.chip), (0, Some(2)));
+        // After recording sonnet/medium, a model click opens on sonnet.
+        let mut c = live_look();
+        let (x, y) = hit(&c, Target::Model);
+        on_click(&mut c, x, y, 160, 48);
+        press(&mut c, Key::Down);
+        press(&mut c, Key::Enter);
+        assert_eq!((c.model, c.level), ("claude-sonnet-5-5", "medium"));
+        let (x, y) = hit(&c, Target::Model);
+        on_click(&mut c, x, y, 160, 48);
+        assert_eq!(c.ui.picker.as_ref().unwrap().focus, 1);
+    }
+
+    #[test]
+    fn row_click_switches() {        let c = live_look();
+        for (x, y) in session_hits(&c, 0) {
+            let mut c = live_look();
+            assert!(matches!(on_click(&mut c, x, y, 160, 48), Step::Conversation));
+        }
+        assert_eq!(session_hits(&c, 0).len(), 2);
+        let c = live_look();
+        for (x, y) in session_hits(&c, 3) {
+            let mut c = live_look();
+            assert!(matches!(on_click(&mut c, x, y, 160, 48), Step::Stay));
+        }
+    }
+
     #[test]
     fn every_workspace_picker_pads_text_off_both_edges() {
         for p in [Picker::Recent, Picker::Typed] {
-            let rows = picker(p, 160);
+            let rows = picker(p, 0, 160);
             let t = rows
                 .iter()
                 .map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
@@ -1220,6 +1895,7 @@ mod tests {
         // Centred: the picker's edges sit inside the margins, not full width.
         let fr = frame(&c, 160, 48, false);
         let edge = fr
+            .screen
             .iter()
             .flatten()
             .find(|p| p.row.spans.iter().any(|s| s.content.contains("▄▄")))
@@ -1240,7 +1916,7 @@ mod tests {
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
         use ratatui::style::Modifier;
-        let rows = picker(Picker::Recent, 160);
+        let rows = picker(Picker::Recent, 0, 160);
         let w = crate::width(&rows[0].spans);
         let mut buf = Buffer::empty(Rect::new(0, 0, w as u16, rows.len() as u16));
         for (y, r) in rows.iter().enumerate() {

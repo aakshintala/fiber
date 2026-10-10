@@ -7,6 +7,7 @@ One run per case: `--home CASE`.
 - live-only: the `Live sessions` header and its five two-line rows; no `Past sessions` header.
 - past-only: the `Past sessions` header and its six two-line rows; no `Live sessions` header.
 - selected: the first live row with the blue `▸` marker, its prompt bold and its verb blue; the other rows unmarked.
+- live: not a still frame: `--home` with no case runs the event loop, and this name only names it in `--help`.
 - hover-workspace: a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.
 - hover-worktree: a still frame of the hover tint: the switch chip should sit lighter with its ● still blue.
 - hover-model: a still frame of the hover tint: the one chip should sit lighter than its neighbours while keeping its own text colour.

@@ -211,6 +211,25 @@ pub fn chosen(s: &State) -> (&'static str, &'static str) {
     ("", "")
 }
 
+/// Opens the picker on one model: `base` focused on the model's flat
+/// index (0 when unknown), the chip the index of `level` in that model's
+/// levels.
+pub fn opened_at(model: &str, level: Option<&str>) -> State {
+    let mut s = base();
+    let mut i = 0;
+    for p in fixture() {
+        for m in &p.models {
+            if m.id == model {
+                s.focus = i;
+                s.chip = level.and_then(|l| m.levels.iter().position(|&x| x == l));
+                return s;
+            }
+            i += 1;
+        }
+    }
+    s
+}
+
 pub fn for_case(case: &str) -> State {
     crate::cases::lookup(CASES, case).unwrap_or_else(|| panic!("--picker {}", crate::cases::names(CASES).replace(", ", "|")))
 }
@@ -690,6 +709,16 @@ mod tests {
         let mut low = for_case("list");
         low.chip = Some(0);
         assert_eq!(chosen(&low), ("claude-opus-5-5", "low"));
+    }
+
+    #[test]
+    fn opened_at_focuses_model_and_level() {
+        let s = opened_at("claude-sonnet-5-5", None);
+        assert_eq!((s.focus, s.chip), (1, None));
+        let s = opened_at("claude-opus-5-5", Some("low"));
+        assert_eq!((s.focus, s.chip), (0, Some(0)));
+        let s = opened_at("no-such-model", None);
+        assert_eq!((s.focus, s.chip), (0, None));
     }
 
     #[test]
