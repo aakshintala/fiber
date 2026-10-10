@@ -1097,7 +1097,9 @@ fn slash_completions_carry_their_window() {
     assert_eq!(completions.selected, Some(0));
     let names: Vec<&str> = match &completions.rows {
         super::Rows::Slash(rows) => rows.iter().map(|row| row.name.as_str()).collect(),
-        rows => panic!("a slash window, not {rows:?}"),
+        super::Rows::Files(_) | super::Rows::Search(_) | super::Rows::Message(_) => {
+            panic!("a slash window, not {:?}", completions.rows)
+        }
     };
     assert_eq!(names, ["resume", "reload", "areview"]);
     assert_eq!(
@@ -1135,7 +1137,9 @@ fn a_long_slash_list_windows_around_the_selection() {
             assert_eq!(rows.first().map(|row| row.name.as_str()), Some("model"));
             assert_eq!(rows.last().map(|row| row.name.as_str()), Some("rules"));
         }
-        rows => panic!("a slash window, not {rows:?}"),
+        super::Rows::Files(_) | super::Rows::Search(_) | super::Rows::Message(_) => {
+            panic!("a slash window, not {:?}", completions.rows)
+        }
     }
 }
 
@@ -1169,7 +1173,9 @@ fn file_completions_carry_their_window() {
     assert_eq!(completions.selected, Some(0));
     match &completions.rows {
         super::Rows::Files(rows) => assert_eq!(rows, &["src/a.rs", "src/b.rs"]),
-        rows => panic!("a file window, not {rows:?}"),
+        super::Rows::Slash(_) | super::Rows::Search(_) | super::Rows::Message(_) => {
+            panic!("a file window, not {:?}", completions.rows)
+        }
     }
     assert_eq!(completions.lines, ["src/a.rs", "src/b.rs"]);
     assert_eq!(app.completion_rows(), 0);

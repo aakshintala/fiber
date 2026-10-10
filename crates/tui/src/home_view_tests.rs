@@ -1517,9 +1517,12 @@ fn clicking_a_picker_row_chooses_its_workspace() {
     let targets = home_only(&app, area, &mut buf);
     let mut picks: Vec<(usize, Rect)> = targets
         .iter()
-        .filter_map(|target| match target.id {
-            crate::mouse::TargetId::Home(Spot::Pick(at)) => Some((at, target.rect)),
-            _ => None,
+        .filter_map(|target| {
+            if let crate::mouse::TargetId::Home(Spot::Pick(at)) = target.id {
+                Some((at, target.rect))
+            } else {
+                None
+            }
         })
         .collect();
     picks.sort_by_key(|(at, _)| *at);

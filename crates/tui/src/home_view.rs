@@ -439,14 +439,9 @@ pub(super) fn render(
             .saturating_sub(visible.saturating_sub(1))
             .min(items.len().saturating_sub(visible));
         let end = start.saturating_add(visible).min(items.len());
-        draw_picker(
-            &items[start..end],
-            start,
-            *selected,
-            area,
-            buf,
-            &mut targets,
-        );
+        if let Some(window) = items.get(start..end) {
+            draw_picker(window, start, *selected, area, buf, &mut targets);
+        }
     }
     // The completion panel above the box, in the shared frame centred
     // across the box's width (`docs/tui.md`, "Look", "Overlays").
