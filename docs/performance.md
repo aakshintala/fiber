@@ -164,7 +164,7 @@ terminal time minus the hub replay, the parse, the fold and the single frame:
 process start, home and the extra frames.
 
 No test asserts a timing (`docs/testing.md`). The budgets are a benchmark job,
-separate from the tests. The harness, `cargo run -p main --example bench`,
+separate from the tests. The harness, `cargo run -p bench --example bench`,
 measures a `fiber` binary and writes its results to a file, and
 `cargo xtask bench-report` judges that file against the table above. The
 `paging` rows run the jig at scale 1 and 160 by 48, built in the release
