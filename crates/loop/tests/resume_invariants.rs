@@ -12,22 +12,20 @@
 
 mod support;
 
+use support::History;
+use support::{completed_event, requested, standing_request, started, user_turn};
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
-use contract::events::{
-    AskStep, CallStatus, Empty, Event, FiberExited, FiberStarted, InputItem, PermissionRequested,
-    RuleScope, SessionStarted, StandingRule, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
-    TurnOutcome, TurnStarted, Variables, VariablesSource,
-};
+use contract::events::{Empty, Event, FiberExited, FiberStarted, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::{Input, Provider};
-use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender, Tokens, Usage};
+use contract::shapes::{Tokens, Usage};
 use contract::tool::Tool;
-use contract::{ActionId, RequestId, SessionId};
-use fakes::{Scripted, ScriptedProvider};
-use log::Log;
+use contract::{ActionId, RequestId};
+use fakes::Scripted;
 use proptest::prelude::*;
 use serde_json::json;
 
@@ -84,86 +82,18 @@ fn steps() -> impl Strategy<Value = Steps> {
         })
 }
 
-/// A history log with helpers, then a resumed loop on it.
-struct History {
-    _root: fakes::TempDir,
-    dir: std::path::PathBuf,
-    log: Arc<Log>,
-    workspace: String,
-    credentials: std::path::PathBuf,
-    rules: Arc<support::FakeRules>,
-    provider: Arc<ScriptedProvider>,
-    inbox_tx: mpsc::Sender<Delivery>,
-    inbox_rx: Option<mpsc::Receiver<Delivery>>,
-    clock: Arc<fakes::clock::FakeClock>,
-}
-
-impl History {
-    fn new(script: Vec<Scripted>) -> Self {
-        let root = fakes::TempDir::new("fiber-resume-invariants");
-        let workspace_dir = root.path().join("w");
-        std::fs::create_dir_all(&workspace_dir).unwrap();
-        let credentials = root.path().join("credentials");
-        std::fs::create_dir_all(&credentials).unwrap();
-        let workspace = workspace_dir.display().to_string();
-        let clock = fakes::clock::FakeClock::new();
-        let log = Arc::new(
-            Log::create(
-                root.path(),
-                SessionId("s_1".into()),
-                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-            )
-            .unwrap(),
-        );
-        let dir = root.path().join("s_1");
-        let (tx, rx) = mpsc::channel();
-        let history = Self {
-            _root: root,
-            dir,
-            log,
-            workspace: workspace.clone(),
-            credentials,
-            rules: Arc::new(support::FakeRules::empty()),
-            provider: Arc::new(ScriptedProvider::new(script)),
-            inbox_tx: tx,
-            inbox_rx: Some(rx),
-            clock,
-        };
-        history
-            .log
-            .append(
-                &Event::SessionStarted(SessionStarted {
-                    workspace,
-                    variables: Variables {
-                        path: String::new(),
-                        names: Vec::new(),
-                        source: VariablesSource::Inherited,
-                    },
-                    parent: None,
-                    forked_from: None,
-                    rewind: None,
-                    worktree: None,
-                }),
-                None,
-                None,
-            )
-            .unwrap();
-        history
-    }
-
+impl support::History {
     fn write(&self, event: Event, turn: &str, action: Option<&str>) {
-        self.log
-            .append(
-                &event,
-                Some(contract::TurnId(turn.into())),
-                action.map(|a| ActionId(a.into())),
-            )
-            .unwrap();
+        self.append(
+            &event,
+            Some(contract::TurnId(turn.into())),
+            action.map(|a| ActionId(a.into())),
+        );
     }
 
     /// Resumes headless: no person can answer an approval.
     fn resume(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> r#loop::Loop {
-        let root = self._root.path().to_path_buf();
+        let root = self.root.path().to_path_buf();
         r#loop::Loop::resume(
             Arc::clone(&self.log),
             r#loop::resumed(&self.dir).unwrap(),
@@ -192,58 +122,6 @@ impl History {
         .unwrap()
         .answerable(false)
     }
-}
-
-fn user_turn(text: &str) -> Event {
-    Event::TurnStarted(TurnStarted {
-        input: vec![InputItem::Message {
-            content: vec![ContentPart::Text { text: text.into() }],
-            sender: Sender {
-                origin: Origin::Driver,
-                command_id: Some(contract::CommandId("c_1".into())),
-            },
-            changed_by: None,
-        }],
-    })
-}
-
-fn requested(name: &str, city: &str) -> Event {
-    Event::ToolCallRequested(ToolCallRequested {
-        name: name.into(),
-        arguments: json!({"city": city}),
-        provider_id: None,
-        repair: None,
-        ran_by: None,
-        provider_item: None,
-    })
-}
-
-fn started() -> Event {
-    Event::ToolCallStarted(ToolCallStarted {
-        declared: DeclaredEffects {
-            effects: Vec::new(),
-            reversible: true,
-            paths: None,
-        },
-        arguments: None,
-        changed_by: None,
-    })
-}
-
-fn completed(text: &str) -> Event {
-    Event::ToolCallCompleted(ToolCallCompleted {
-        status: CallStatus::Completed,
-        reason: None,
-        error: None,
-        process: None,
-        content: vec![ContentPart::Text { text: text.into() }],
-        details: None,
-        artifact: None,
-        changes: None,
-        control: None,
-        changed_by: None,
-        provider_item: None,
-    })
 }
 
 fn message_started() -> Event {
@@ -277,23 +155,6 @@ fn fiber_exited(suspended_on: Option<&str>) -> Event {
     })
 }
 
-fn standing_request(request_id: &str) -> Event {
-    Event::PermissionRequested(PermissionRequested {
-        request_id: RequestId(request_id.into()),
-        declared: DeclaredEffects {
-            effects: vec![Effect::Executes],
-            reversible: true,
-            paths: None,
-        },
-        step: AskStep::StandingAsk {
-            standing_rule: StandingRule {
-                scope: RuleScope::Project,
-                prefix: "run tests".into(),
-            },
-        },
-    })
-}
-
 /// Writes `steps` as consecutive turns, crashing wherever a step leaves a
 /// call without a result, and closes with `tail`. Returns every history
 /// call's action id with its fate.
@@ -319,7 +180,7 @@ fn write_history(history: &History, steps: &Steps, tail: Tail) -> Vec<(String, F
         for (id, fate) in &calls[base..] {
             if *fate == Fate::Completed {
                 history.write(
-                    completed(&format!("done {id}")),
+                    completed_event(&format!("done {id}")),
                     &format!("t_{turn}"),
                     Some(id),
                 );

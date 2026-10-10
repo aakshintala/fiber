@@ -32,7 +32,7 @@ use fakes::Scripted;
 use log::Watcher;
 use serde_json::Value;
 
-use support::{DEADLINE, Session, delivery, deny, ignore, read_until, steer};
+use support::{DEADLINE, History, Session, delivery, deny, ignore, read_until, steer};
 
 /// A fake repository: a fixed list of unapproved items, every call recorded.
 #[derive(Default)]
@@ -879,78 +879,19 @@ fn the_failure_names_each_required_item_and_how_to_approve() {
 
 use contract::events::{
     AskStep, Empty, InputItem, PermissionRequested, RepositoryCodeOffered, RepositoryCodeResolved,
-    RuleScope, SessionStarted, StandingRule, ToolCallRequested, TurnStarted, Variables,
-    VariablesSource,
+    RuleScope, StandingRule, ToolCallRequested, TurnStarted,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
-use contract::{ActionId, CommandId, SessionId, TurnId};
-use fakes::ScriptedProvider;
-use log::Log;
+use contract::{ActionId, CommandId, TurnId};
 use r#loop::Loop;
 
-/// A session log with earlier processes, resumed by each [`History::resume`].
-struct History {
-    root: fakes::TempDir,
-    dir: std::path::PathBuf,
-    log: Arc<Log>,
-    workspace: String,
-    credentials: std::path::PathBuf,
-    clock: Arc<fakes::clock::FakeClock>,
-    provider: Arc<ScriptedProvider>,
-}
-
-impl History {
-    fn new(script: Vec<Scripted>) -> Self {
-        let root = fakes::TempDir::new("fiber-offer-resume");
-        let workspace = root.path().join("w");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let credentials = root.path().join("credentials");
-        std::fs::create_dir_all(&credentials).unwrap();
-        let clock = fakes::clock::FakeClock::new();
-        let log = Arc::new(
-            Log::create(
-                root.path(),
-                SessionId("s_1".into()),
-                Arc::clone(&clock) as Arc<dyn Clock>,
-            )
-            .unwrap(),
-        );
-        let history = Self {
-            dir: root.path().join("s_1"),
-            root,
-            log,
-            workspace: workspace.display().to_string(),
-            credentials,
-            clock,
-            provider: Arc::new(ScriptedProvider::new(script)),
-        };
-        history.write(
-            &Event::SessionStarted(SessionStarted {
-                workspace: history.workspace.clone(),
-                variables: Variables {
-                    path: String::new(),
-                    names: Vec::new(),
-                    source: VariablesSource::Inherited,
-                },
-                parent: None,
-                forked_from: None,
-                rewind: None,
-                worktree: None,
-            }),
-            None,
-            None,
-        );
-        history
-    }
-
+impl support::History {
     fn write(&self, event: &Event, turn: Option<&str>, action: Option<&str>) {
-        self.log
-            .append(
-                event,
-                turn.map(|t| TurnId(t.into())),
-                action.map(|a| ActionId(a.into())),
-            )
-            .unwrap();
+        self.append(
+            event,
+            turn.map(|t| TurnId(t.into())),
+            action.map(|a| ActionId(a.into())),
+        );
     }
 
     /// A process starts.
@@ -1010,10 +951,6 @@ impl History {
         .repository_code(Arc::clone(code) as Arc<dyn RepositoryCode>)
         .answerable(answerable);
         (looped, tx)
-    }
-
-    fn lines(&self) -> Vec<Envelope> {
-        log::read(&self.dir).unwrap()
     }
 
     fn of(&self, kind: &str) -> Vec<Envelope> {
