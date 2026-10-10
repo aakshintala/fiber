@@ -149,9 +149,7 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
     });
     let switched = grid_rows(&run);
     assert!(
-        switched
-            .iter()
-            .any(|row| row.contains("model  fake/beta")),
+        switched.iter().any(|row| row.contains("model  fake/beta")),
         "the panel names the session model: {switched:?}"
     );
     // The session's log holds the switch, from the driver.

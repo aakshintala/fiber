@@ -104,15 +104,14 @@ fn non_ascii_case_folds() {
     assert!(matches(&entry, "é"));
 }
 
-
 #[test]
 fn hits_mark_the_greedy_leftmost_run() {
     // g0 p1 t2 -3 6(4) -5 s6 o7 l8 -9 m10 i11 n12 i13: 'm' sits at 10.
     assert_eq!(
         id_hits("gpt-6-sol-mini", "mini"),
         vec![
-            false, false, false, false, false, false, false, false, false, false, true, true,
-            true, true
+            false, false, false, false, false, false, false, false, false, false, true, true, true,
+            true
         ]
     );
 }
@@ -133,8 +132,8 @@ fn hits_union_across_words() {
     assert_eq!(
         id_hits("gpt-6-sol-mini", "gpt mini"),
         vec![
-            true, true, true, false, false, false, false, false, false, false, true, true,
-            true, true
+            true, true, true, false, false, false, false, false, false, false, true, true, true,
+            true
         ]
     );
 }

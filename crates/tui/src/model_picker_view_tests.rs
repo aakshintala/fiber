@@ -331,7 +331,11 @@ fn the_filter_row_draws_the_query_bold_with_its_count() {
             ("█".to_owned(), None, Ink::Muted),
         ]
     );
-    assert!(!frame.rows[1].iter().any(|(text, _, _)| text.contains("models")));
+    assert!(
+        !frame.rows[1]
+            .iter()
+            .any(|(text, _, _)| text.contains("models"))
+    );
     // Typing narrows the list to `acme/m1`: the filter names the query
     // bold, and the buttons count the shown rows of every model.
     type_filter(&mut app, "m1");
@@ -347,11 +351,7 @@ fn the_filter_row_draws_the_query_bold_with_its_count() {
     assert_eq!(
         frame.rows[1],
         vec![
-            (
-                "↻ refresh".to_owned(),
-                Some(Spot::Cell(1, 0)),
-                Ink::Plain
-            ),
+            ("↻ refresh".to_owned(), Some(Spot::Cell(1, 0)), Ink::Plain),
             ("  1 of 4 models".to_owned(), None, Ink::Muted),
         ]
     );
@@ -475,10 +475,5 @@ fn a_query_over_an_empty_catalogue_shows_no_no_match_row() {
     // No installed model, so no "No models match": the status names the
     // empty catalogue instead.
     assert_eq!(frame.rows.len(), 2);
-    assert!(
-        frame
-            .below
-            .iter()
-            .any(|line| line.contains("No models"))
-    );
+    assert!(frame.below.iter().any(|line| line.contains("No models")));
 }

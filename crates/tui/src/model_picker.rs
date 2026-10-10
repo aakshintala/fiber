@@ -824,8 +824,7 @@ impl ModelPicker {
                 }
             }
             RowAt::Buttons => {
-                let mut cells =
-                    vec![("↻ refresh".to_owned(), Some(Spot::Cell(at, 0)), Ink::Plain)];
+                let mut cells = vec![("↻ refresh".to_owned(), Some(Spot::Cell(at, 0)), Ink::Plain)];
                 // While a query is typed the count names the shown rows
                 // of every installed model.
                 if !self.query().is_empty() {
@@ -950,12 +949,7 @@ impl ModelPicker {
 /// a role-less row joins the last run's text when that run is plain, and
 /// stands as its own plain run otherwise, so the texts always
 /// concatenate to the unfiltered id cell's text.
-fn id_cells(
-    id: &str,
-    hits: &[bool],
-    at: usize,
-    pad: bool,
-) -> Vec<(String, Option<Spot>, Ink)> {
+fn id_cells(id: &str, hits: &[bool], at: usize, pad: bool) -> Vec<(String, Option<Spot>, Ink)> {
     let spot = Some(Spot::Cell(at, 0));
     if !hits.iter().any(|hit| *hit) {
         let mut text = id.to_owned();

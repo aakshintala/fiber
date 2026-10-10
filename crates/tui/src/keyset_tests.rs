@@ -228,7 +228,10 @@ fn session_only_acts_only_in_the_picker() {
         at(entries, "x", Context::Picker),
         super::Resolved::Action("session_only")
     );
-    assert_eq!(at(entries, "ctrl+s", Context::Picker), super::Resolved::Nothing);
+    assert_eq!(
+        at(entries, "ctrl+s", Context::Picker),
+        super::Resolved::Nothing
+    );
 }
 
 #[test]

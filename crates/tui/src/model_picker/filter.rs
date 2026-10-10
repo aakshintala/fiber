@@ -15,7 +15,8 @@ fn folds(left: char, right: char) -> bool {
 /// Whether `word` is an in-order subsequence of `field`, ignoring case.
 fn subseq(field: &str, word: &str) -> bool {
     let mut chars = field.chars();
-    word.chars().all(|wanted| chars.any(|got| folds(got, wanted)))
+    word.chars()
+        .all(|wanted| chars.any(|got| folds(got, wanted)))
 }
 
 /// Whether `entry` matches `query`: every space-separated word is an
@@ -26,10 +27,7 @@ pub(crate) fn matches(entry: &ModelEntry, query: &str) -> bool {
     query.split_whitespace().all(|word| {
         subseq(&entry.provider, word)
             || subseq(&entry.id, word)
-            || entry
-                .name
-                .as_ref()
-                .is_some_and(|name| subseq(name, word))
+            || entry.name.as_ref().is_some_and(|name| subseq(name, word))
     })
 }
 

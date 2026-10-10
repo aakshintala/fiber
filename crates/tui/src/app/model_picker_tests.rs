@@ -2645,10 +2645,7 @@ fn ctrl_r_with_a_query_asks_every_and_keeps_the_query() {
     open(&mut app);
     assert_eq!(press(&mut app, "m"), Effect::None);
     assert_eq!(press(&mut app, "ctrl+r"), Effect::None);
-    assert_eq!(
-        app.take_reads(),
-        Some(crate::catalogue::Refresh::Every)
-    );
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Every));
     assert_eq!(app.model_picker.query(), "m");
     assert!(app.model_picker_open());
 }
