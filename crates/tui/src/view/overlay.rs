@@ -347,18 +347,16 @@ pub(crate) fn draw(
     let drop = bodies.saturating_sub(keep).min(usize::from(
         stack_height(&stack).saturating_sub(area.height),
     ));
-    if drop > 0 {
-        let keep_bodies = bodies - drop;
-        let mut seen = 0;
-        stack.retain(|slot| {
-            if matches!(slot, Slot::Body(_)) {
-                seen += 1;
-                seen <= keep_bodies
-            } else {
-                true
-            }
-        });
-    }
+    let keep_bodies = bodies - drop;
+    let mut seen = 0;
+    stack.retain(|slot| {
+        if matches!(slot, Slot::Body(_)) {
+            seen += 1;
+            seen <= keep_bodies
+        } else {
+            true
+        }
+    });
     if stack_height(&stack) > area.height {
         stack.retain(|slot| !matches!(slot, Slot::Footer | Slot::FootGap));
     }
