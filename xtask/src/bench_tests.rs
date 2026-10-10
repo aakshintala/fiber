@@ -301,6 +301,71 @@ fn memory_at_the_ceiling_passes_and_one_kib_over_fails() {
 }
 
 #[test]
+fn the_idle_rows_show_their_rss_split_after_the_peak() {
+    let headed = with_metric(
+        with_metric(
+            with_metric(
+                with_metric(
+                    head(),
+                    "session_idle_rss_anon_kib",
+                    json!(vec![4100; 5]),
+                ),
+                "session_idle_rss_file_kib",
+                json!(vec![4800; 5]),
+            ),
+            "terminal_idle_rss_anon_kib",
+            json!(vec![3100; 5]),
+        ),
+        "terminal_idle_rss_file_kib",
+        json!(vec![4820; 5]),
+    );
+    let out = judge(&headed, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let session = row(&out.comment, "Session, idle");
+    assert!(
+        session.contains("session_idle_rss_kib: 10844 KiB (anon 4100, file 4800)"),
+        "{session}"
+    );
+    let terminal = row(&out.comment, "Terminal, idle");
+    assert!(
+        terminal.contains("terminal_idle_rss_kib: 7920 KiB (anon 3100, file 4820)"),
+        "{terminal}"
+    );
+}
+
+#[test]
+fn a_missing_rss_split_leaves_the_cell_as_it_was_and_adds_no_failure() {
+    // No diagnostics at all: the cells read as they do today.
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new());
+    let session = row(&out.comment, "Session, idle");
+    assert!(session.contains("session_idle_rss_kib: 10844 KiB"), "{session}");
+    assert!(!session.contains("anon"), "{session}");
+    let terminal = row(&out.comment, "Terminal, idle");
+    assert!(!terminal.contains("anon"), "{terminal}");
+
+    // One half present, the other missing or malformed: the missing half
+    // is omitted, and nothing fails.
+    let headed = with_metric(
+        with_metric(
+            head(),
+            "session_idle_rss_anon_kib",
+            json!(vec![4100; 5]),
+        ),
+        "session_idle_rss_file_kib",
+        json!([1, 2, 3, 4]),
+    );
+    let out = judge(&headed, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{:?}", out.failures);
+    let session = row(&out.comment, "Session, idle");
+    assert!(
+        session.contains("session_idle_rss_kib: 10844 KiB (anon 4100)"),
+        "{session}"
+    );
+    assert!(!session.contains("file"), "{session}");
+}
+
+#[test]
 fn a_run_count_other_than_five_fails() {
     let short = with_metric(head(), "session_idle_rss_kib", json!([1, 2, 3, 4]));
     assert!(has(&failures_of(&short), "session_idle_rss_kib"));

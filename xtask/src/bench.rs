@@ -177,6 +177,20 @@ const NOT_MEASURED: &[(&str, &str)] = &[(
     "#581 (`session_list`)",
 )];
 
+/// The idle rows' RSS-split diagnostics, by Budget cell: the anon and file
+/// metric ids whose head medians the comment shows after the peak RSS.
+/// Diagnostics are shown, never judged: a missing one is omitted.
+const RSS_SPLIT: &[(&str, (&str, &str))] = &[
+    (
+        "Session, idle, headless",
+        ("session_idle_rss_anon_kib", "session_idle_rss_file_kib"),
+    ),
+    (
+        "Terminal, idle",
+        ("terminal_idle_rss_anon_kib", "terminal_idle_rss_file_kib"),
+    ),
+];
+
 /// The run's trigger, from `GITHUB_EVENT_NAME`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Event {
@@ -645,7 +659,16 @@ fn judge(
         result: "pass",
     };
     match check {
-        Check::Memory(ids) => line.head = memory(cell, ids, head, &mut measured),
+        Check::Memory(ids) => {
+            line.head = memory(cell, ids, head, &mut measured);
+            if let Some((anon, file)) = RSS_SPLIT
+                .iter()
+                .find(|(row, _)| *row == budget)
+                .map(|(_, ids)| *ids)
+            {
+                line.head.push_str(&rss_split(head, anon, file));
+            }
+        }
         Check::Within { row, id } => {
             let other = rows
                 .iter()
@@ -748,6 +771,26 @@ fn judge(
         line.result = "fail";
     }
     (failures, line)
+}
+
+/// One idle row's RSS-split suffix for the head column: the anon and file
+/// medians after the peak, ` (anon 4100, file 4800)`. A diagnostic that is
+/// missing or malformed is omitted, never a failure.
+fn rss_split(head: Option<&Results>, anon: &str, file: &str) -> String {
+    let part = |id: &str, name: &str| {
+        run_median(head, id)
+            .ok()
+            .map(|value| format!("{name} {value:.0}"))
+    };
+    let parts: Vec<String> = [part(anon, "anon"), part(file, "file")]
+        .into_iter()
+        .flatten()
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
 }
 
 /// Each metric's median against the memory ceiling in `cell`, and what the
