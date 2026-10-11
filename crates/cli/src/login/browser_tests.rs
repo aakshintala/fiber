@@ -342,7 +342,7 @@ fn browser_flow(
     });
     let wait = Deadline::after(BROWSER_WAIT);
     let url = await_opened(opened, &wait);
-    let port = free_port_of(&url);
+    let port = port_of(&url);
     assert_eq!(
         port,
         browser.port(),
@@ -356,7 +356,7 @@ fn browser_flow(
 }
 
 /// The redirect port the authorize URL names.
-fn free_port_of(url: &str) -> u16 {
+fn port_of(url: &str) -> u16 {
     let redirect = url
         .split_once('?')
         .unwrap()
@@ -1056,7 +1056,7 @@ fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
     let wait = Deadline::after(BROWSER_WAIT);
     let url = await_opened(&opened, &wait);
     assert_eq!(
-        free_port_of(&url),
+        port_of(&url),
         browser.port(),
         "the package was installed with the held port"
     );
