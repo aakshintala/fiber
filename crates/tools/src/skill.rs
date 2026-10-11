@@ -91,7 +91,6 @@ impl Tool for Skill {
                 "properties": {
                     "name": {
                         "type": "string",
-                        "minLength": 1,
                         "description": "The skill's name, as the skills listing gives it."
                     }
                 },

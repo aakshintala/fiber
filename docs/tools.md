@@ -212,6 +212,8 @@ path's directory, ending in `/`.
 - Arguments: `path` (required); `offset`, the first line to return, counted
   from 1; `limit`, the number of lines; `pages`, a page range such as `1-5`,
   for a PDF only.
+- Its optional properties put its schema outside the strict subset, so it is
+  sent with `strict: false`.
 - Text comes back as it is in the file, without line numbers and without a
   byte order mark. Nothing needs stripping before it is copied into an edit.
 - The cap is the 16 KiB default ("Bounded results"). A cut falls at a line
@@ -468,6 +470,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   (optional); `monitor` (optional; starts a monitor, "Background jobs");
   `deadline_ms` (optional; a monitor's deadline). Each call starts fresh: a `cd` does not carry over to the
   next call.
+- Its optional properties and the `minimum` limits put its schema outside the
+  strict subset, so it is sent with `strict: false`.
 - A monitor takes neither `tty` nor `run_in_background`, and its only limit
   is `deadline_ms`, so it takes no `timeout_ms`. `deadline_ms` without
   `monitor` is refused too. Each of these fails with `invalid_arguments`,
@@ -659,6 +663,8 @@ The kinds are `docs/events.md`.
   the turn.
 - A job's output streams to that file. The model reads it with the ordinary
   `read` tool ("Bounded results"). There is no output action.
+- Its optional properties and the `minimum` limit put its schema outside the
+  strict subset, so it is sent with `strict: false`.
 - The model-facing tool is one `jobs` tool with actions `list`, `wait`,
   `stop` and `write`. `wait` blocks up to a timeout. Cancelling a wait (for
   example because the turn is cancelled) stops only the wait and leaves the
@@ -941,7 +947,9 @@ does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
   It has no description, and its settings, such as a domain list, are fixed
   in the request; the model's call carries only the query.
 - Fiber's own tool, over a backend, takes `query` (required), and either
-  `allowed_domains` or `blocked_domains`, never both.
+  `allowed_domains` or `blocked_domains`, never both. Its optional properties
+  and the `minLength` limit put its schema outside the strict subset, so it is
+  sent with `strict: false`.
 - `web_search` has a guideline line telling the model to end an answer that
   used search with a list of the sources it used, as markdown links
   (`docs/system-prompt.md`, "Tool guidelines"). It reaches the model whether
