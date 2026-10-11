@@ -14,30 +14,17 @@
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::Deadline;
-
-/// The built-in tool order, when no MCP server declares anything.
-const TOOL_NAMES: [&str; 11] = [
-    "ask_user",
-    "delegate_spawn",
-    "edit",
-    "handoff",
-    "jobs",
-    "read",
-    "session_search",
-    "shell",
-    "skill",
-    "web_fetch",
-    "write",
-];
+use support::{
+    Deadline, KillGroup, TOOL_NAMES, function_call, hello, is_status, read_kinds, spawn_watched,
+    stream, tool_names,
+};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -182,43 +169,12 @@ fn write(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group. The watchdog's stdin is a pipe only this process holds: a newline
-/// means the child is reaped, and EOF means this process died, so the
-/// watchdog kills the group. The watchdog is started immediately after the
-/// child; a kill in the gap between the two spawns can still orphan it.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
-}
-
 /// One finished run: its exit code, stdout's lines, as text and parsed, and
 /// stderr.
 struct Run {
     code: Option<i32>,
     lines: Vec<Value>,
     stderr: String,
-}
-
-/// A `session_status` line: ephemeral, and written by an observer thread, so
-/// where it falls among the loop's own lines is not what these tests pin.
-/// `tests/socket.rs` reads it.
-fn is_status(line: &str) -> bool {
-    line.contains(r#""kind":"session_status""#)
 }
 
 impl Run {
@@ -260,90 +216,6 @@ impl Run {
             .join("sessions")
             .join(self.session_id())
     }
-}
-
-/// An `openai-responses` stream of `events`, then a completed reply.
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
-
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
-fn tool_names(body: &[u8]) -> Vec<String> {
-    let body: Value = serde_json::from_slice(body).unwrap();
-    body["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|tool| tool["name"].as_str().unwrap().to_owned())
-        .collect()
-}
-
-/// The event kinds of a turn whose first reply calls one reads-only tool
-/// and whose second is [`hello`]: no `permission_` line is written, as for
-/// a reads-only workspace call (`docs/permissions.md`, "Fast paths").
-fn read_kinds() -> Vec<&'static str> {
-    let mut kinds = vec![
-        "session_started",
-        "fiber_started",
-        "extensions_loaded",
-        "preamble_built",
-        "opening_message",
-        "turn_started",
-        "step_started",
-        "assistant_message_started",
-        "tool_call_requested",
-        "usage_recorded",
-        "assistant_message_completed",
-        "tool_call_started",
-        "tool_call_completed",
-        "step_started",
-        "assistant_message_started",
-    ];
-    kinds.extend(["assistant_message_delta"; 2]);
-    kinds.extend([
-        "text_completed",
-        "usage_recorded",
-        "assistant_message_completed",
-        "turn_completed",
-        "fiber_exited",
-    ]);
-    kinds
 }
 
 /// The event kinds of a turn whose only reply is [`hello`].
