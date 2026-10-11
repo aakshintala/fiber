@@ -81,6 +81,16 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Waits for the test to release the admission lock (`what` names which
+/// wait), failing at [`DEADLINE`]. The probe arms below run on the loop's
+/// thread, so they call this instead of panicking in the closure.
+#[track_caller]
+fn released(release: &Mutex<mpsc::Receiver<()>>, what: &str) {
+    Deadline::after(DEADLINE)
+        .recv(&lock(release))
+        .unwrap_or_else(|_| panic!("the test releases {what}"));
+}
+
 fn wait_until_accept_waits() {
     let guard = lock(&CONTROL.accept_mu);
     let (_guard, _) = CONTROL
@@ -3034,9 +3044,7 @@ fn message_and_close_race_in_both_lock_orders() {
         *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
             Probe::MessageLocked => {
                 if let Ok(()) = entered_tx.send(()) {}
-                lock(&release)
-                    .recv_timeout(DEADLINE)
-                    .expect("the test releases the message");
+                released(&release, "the message");
             }
             Probe::CloseLocked => if let Ok(()) = closed_tx.send(()) {},
             Probe::FirstShellWaitDone
@@ -3104,9 +3112,7 @@ fn message_and_close_race_in_both_lock_orders() {
         *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
             Probe::CloseLocked => {
                 if let Ok(()) = entered_tx.send(()) {}
-                lock(&release)
-                    .recv_timeout(DEADLINE)
-                    .expect("the test releases the close");
+                released(&release, "the close");
             }
             Probe::MessageLocked
             | Probe::FirstShellWaitDone
