@@ -369,13 +369,14 @@ fn repair_object(
         }
         let at = format!("{pointer}/{}", escape(&key));
         // A null is dropped where the tool would see the property as
-        // absent: for an optional property of a single non-null type, and
-        // for any property whose type list joins `null` with another type.
+        // absent: for an optional property of a single non-null type, or
+        // whose type list joins `null` with another type. A required key is
+        // never absent, so it keeps its null.
         let drop_null = map.get(&key).is_some_and(|inner| inner.is_null())
+            && !required_keys.contains(&key.as_str())
             && repaired_list(root, &subs).is_some_and(|child| {
                 child.iter().any(|schema| nullable_union(schema))
-                    || (!required_keys.contains(&key.as_str())
-                        && single_type(&child).is_some_and(|kind| kind != "null"))
+                    || single_type(&child).is_some_and(|kind| kind != "null")
             });
         if drop_null {
             map.remove(&key);
@@ -428,7 +429,7 @@ fn read_string(
 }
 
 /// Whether `schema` joins `null` with another type in one `type` list, so
-/// a null there is absent however the property is required. A lone `"null"`
+/// a null there is absent when the property is optional. A lone `"null"`
 /// and a schema without `type` are not unions.
 fn nullable_union(schema: &Value) -> bool {
     let kinds = types(schema);

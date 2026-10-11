@@ -529,7 +529,7 @@ fn a_tool_spinning_past_its_timeout_fails_timeout_and_the_session_goes_on() {
 }
 
 #[test]
-fn a_null_for_a_nullable_property_reaches_the_tool_as_absent() {
+fn a_null_reaches_the_tool_as_absent_only_for_an_optional_property() {
     let setup = Setup::new_with_fm_root();
     let server = calling(&[
         function_call("call_maybe", "maybe_tag", &json!({"tag": null})),
@@ -562,9 +562,8 @@ fn a_null_for_a_nullable_property_reaches_the_tool_as_absent() {
         ),
     );
     let run = ask(&setup, "check the tags");
-    // The optional call runs and sees no `tag`; the required call fails
-    // before it starts, its dropped null now missing. Had the null been
-    // kept, both calls would have run and answered `"present"`.
+    // Both calls run. The optional call sees no `tag`; the required call
+    // keeps its null, which its type allows, and sees `"present"`.
     assert_eq!(
         run.kinds(),
         kinds(
@@ -572,6 +571,7 @@ fn a_null_for_a_nullable_property_reaches_the_tool_as_absent() {
             2,
             &[],
             &[
+                "tool_call_started",
                 "tool_call_started",
                 "tool_call_completed",
                 "tool_call_completed"
@@ -585,18 +585,10 @@ fn a_null_for_a_nullable_property_reaches_the_tool_as_absent() {
         completed[0]["payload"]["content"],
         json!([{"type": "text", "text": "absent"}])
     );
-    assert_eq!(completed[1]["payload"]["status"], "failed");
+    assert_eq!(completed[1]["payload"]["status"], "completed");
     assert_eq!(
-        completed[1]["payload"]["error"]["code"],
-        "invalid_arguments"
-    );
-    assert!(
-        completed[1]["payload"]["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("`/tag`: missing"),
-        "{}",
-        completed[1]["payload"]["error"]["message"]
+        completed[1]["payload"]["content"],
+        json!([{"type": "text", "text": "present"}])
     );
     assert_eq!(outputs_sent(&server)[0], "absent");
 }

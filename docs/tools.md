@@ -55,9 +55,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 
 - Arguments the model sent are repaired first, and only where a property's
   schema names a single type, after following any `$ref` to its definition.
-  Three repairs are made. A `null` sent for an optional property whose type
-  does not allow `null` is dropped, and so is a `null` for any property whose
-  type list includes `null`, so the tool sees it as absent. A string holding a plain JSON number, such
+  Three repairs are made. A `null` sent for an optional property is dropped,
+  so the tool sees it as absent, unless the property's type is `null` alone. A
+  required property keeps a `null` its type allows. A string holding a plain JSON number, such
   as `5`, `-2.5` or `1e3`, becomes a number where the type is `number`, and
   where the type is `integer` only if its value is whole, so `5.0` becomes
   `5` and `5.5` is left as sent; the string `true` or `false` becomes a

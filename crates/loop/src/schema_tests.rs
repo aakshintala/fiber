@@ -231,6 +231,20 @@ fn a_one_of_is_never_repaired() {
 }
 
 #[test]
+fn a_string_or_null_property_drops_its_null_only_when_optional() {
+    let optional = object(json!({"note": {"type": ["string", "null"]}}));
+    let made = repair(&optional, &json!({"note": null})).unwrap();
+    assert_eq!(Value::Object(made.repaired), json!({}));
+    let required = json!({
+        "type": "object",
+        "properties": {"note": {"type": ["string", "null"]}},
+        "required": ["note"]
+    });
+    assert_eq!(repair(&required, &json!({"note": null})), None);
+    assert!(check(&required, &json!({"note": null})).is_empty());
+}
+
+#[test]
 fn a_null_for_a_nullable_union_is_dropped() {
     let schema = object(json!({"n": {"type": ["integer", "null"]}}));
     let made = repair(&schema, &json!({"n": null})).unwrap();
@@ -246,14 +260,8 @@ fn a_null_for_a_nullable_union_is_dropped() {
         "properties": {"n": {"type": ["integer", "null"]}},
         "required": ["n"]
     });
-    let made = repair(&required_schema, &json!({"n": null})).unwrap();
-    assert_eq!(Value::Object(made.repaired), json!({}));
-    let paths: Vec<_> = made
-        .repairs
-        .iter()
-        .map(|r| (r.path.as_str(), r.fix))
-        .collect();
-    assert_eq!(paths, [("/n", RepairFix::NullDropped)]);
+    // A required property keeps a null its type allows.
+    assert_eq!(repair(&required_schema, &json!({"n": null})), None);
     assert_eq!(repair(&schema, &json!({"n": "5"})), None);
     let one = object(json!({"n": {"type": ["integer"]}}));
     assert_eq!(repair(&one, &json!({"n": "5"})).unwrap().repaired["n"], 5);
