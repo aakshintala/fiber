@@ -233,15 +233,13 @@ impl Reads {
                         kill_group(group);
                         return Err(timed_out());
                     }
-                    match outcome {
-                        Ok(stdout) => {
-                            return Ok(Output {
-                                status,
-                                stdout,
-                                stderr: Vec::new(),
-                            });
-                        }
-                        Err(error) => return Err(error),
+                    {
+                        let stdout = outcome?;
+                        return Ok(Output {
+                            status,
+                            stdout,
+                            stderr: Vec::new(),
+                        });
                     }
                 }
                 (status, outcome) => {
@@ -256,14 +254,14 @@ impl Reads {
                     // the leader. After SIGKILL it answers at once; the
                     // receive is ignored either way, since the answer here
                     // is `Interrupted`.
-                    let _ = status_received.recv();
+                    let _reaped = status_received.recv();
                 }
                 return Err(interrupted());
             }
             if deadline_due(clock.now(), deadline) {
                 kill_group(group);
                 if exit.is_none() {
-                    let _ = status_received.recv();
+                    let _reaped = status_received.recv();
                 }
                 return Err(timed_out());
             }

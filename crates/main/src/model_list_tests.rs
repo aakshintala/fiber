@@ -166,8 +166,7 @@ fn a_model_name_reaches_its_picker_entry() {
 fn the_readers_cached_read_lists_the_installed_models() {
     let setup = Setup::new("fiber-model-list-reader");
     setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
-    let clock: std::sync::Arc<dyn contract::clock::Clock> =
-        fakes::clock::FakeClock::new();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let locks: std::sync::Arc<dyn contract::files::PathLock> =
         std::sync::Arc::new(tools::PathLocks::new());
     let catalogue = reader(setup.home(), setup.workspace(), clock, locks)(tui::Refresh::Cached)

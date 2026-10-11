@@ -535,8 +535,7 @@ fn a_leader_that_closes_stdout_before_it_exits_answers_without_the_clock_moving(
         ready.path().display()
     );
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
-    let finished =
-        credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
+    let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let output = Deadline::after(DEADLINE)
@@ -629,8 +628,7 @@ fn dropping_cancel_on_drop_kills_what_a_finished_command_left() {
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
     // On a thread under a wall-clock deadline: a missed wake fails here,
     // never hangs the test binary.
-    let finished =
-        credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
+    let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
     let output = Deadline::after(DEADLINE)
         .recv_or_fail(&finished, "the finished read")
         .unwrap();
