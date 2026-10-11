@@ -190,7 +190,7 @@ impl Credentials {
                     });
                 }
             },
-            CredentialSource::Command(argv) => self
+            CredentialSource::Command { argv, .. } => self
                 .commands
                 .once((stored.to_owned(), label.to_owned(), argv.clone()), || {
                     command(argv, run)
@@ -272,7 +272,7 @@ impl Credentials {
             .filter_map(|source| match source {
                 // An empty path names no file and is never read.
                 CredentialSource::File(file) => (!file.as_os_str().is_empty()).then_some(file),
-                CredentialSource::Env(_) | CredentialSource::Command(_) => None,
+                CredentialSource::Env(_) | CredentialSource::Command { .. } => None,
             })
             .collect();
         files.into_iter().collect()

@@ -23,9 +23,9 @@ const WARM_CAP: &str = "a whole number less than 12";
 /// whether a repository may set it)
 ///
 /// One row per key type, plus one row per distinct `OneOf` set
-/// (`cache.lifetime`, `thinking`, `tui.logo_glyph`), the three `Credential`
-/// arms (env, file with an extra field, empty command), `reviewer.context`
-/// (the `PersonFiles` row) and one `models.*` row (the per-model view).
+/// (`cache.lifetime`, `thinking`, `tui.logo_glyph`), the `Credential` arms
+/// (env, file with an extra field, empty command, command with a timeout),
+/// `reviewer.context` (the `PersonFiles` row) and one `models.*` row (the per-model view).
 /// `RepoOnly` (`repository_extensions`) is pinned by `tests/declared.rs` and
 /// `GlobalOnly` (`diagnostics.level`) by the diagnostics tests below, so
 /// they get no row; `cache.warm_cap` keeps its own test below.
@@ -148,6 +148,13 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             &["providers", "openrouter", "credentials", "work"],
             json!({"command": ["op", "read"]}),
             json!({"command": []}),
+            "one of {\"env\": name}",
+            false,
+        ),
+        (
+            &["providers", "openrouter", "credentials", "work"],
+            json!({"command": ["op"], "timeout": "2m"}),
+            json!({"command": ["op"], "timeout": "0s"}),
             "one of {\"env\": name}",
             false,
         ),
@@ -285,8 +292,71 @@ fn a_provider_credential_label_reads_as_its_source() {
         .unwrap();
     assert_eq!(
         serde_json::from_value::<CredentialSource>(value).unwrap(),
-        CredentialSource::Command(vec!["op".into(), "read".into(), "op://k".into()])
+        CredentialSource::Command {
+            argv: vec!["op".into(), "read".into(), "op://k".into()],
+            timeout: Duration::from_secs(30),
+        }
     );
+}
+
+#[test]
+fn a_credential_source_reads_its_timeout_and_refuses_a_bad_one() {
+    for (value, expected) in [
+        (
+            json!({"command": ["op"]}),
+            CredentialSource::Command {
+                argv: vec!["op".into()],
+                timeout: Duration::from_secs(30),
+            },
+        ),
+        (
+            json!({"command": ["op"], "timeout": "2m"}),
+            CredentialSource::Command {
+                argv: vec!["op".into()],
+                timeout: Duration::from_secs(120),
+            },
+        ),
+        (
+            json!({"command": ["op"], "timeout": "1s"}),
+            CredentialSource::Command {
+                argv: vec!["op".into()],
+                timeout: Duration::from_secs(1),
+            },
+        ),
+        (json!({"env": "A"}), CredentialSource::Env("A".into())),
+        (json!({"file": "/k"}), CredentialSource::File("/k".into())),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<CredentialSource>(value.clone()).unwrap(),
+            expected,
+            "{value}"
+        );
+    }
+    for (value, hidden) in [
+        (json!({"command": ["op"], "timeout": "0s"}), vec!["op"]),
+        (json!({"command": ["op"], "timeout": "1w"}), vec!["op"]),
+        (json!({"command": ["op"], "timeout": 30}), vec!["op"]),
+        (
+            json!({"command": ["op"], "timeout": "99999999999999999999s"}),
+            vec!["op"],
+        ),
+        (
+            json!({"command": ["op"], "timeout": "213503982334602d"}),
+            vec!["op"],
+        ),
+        (json!({"env": "A", "timeout": "1s"}), vec!["A"]),
+        (json!({"file": "/k", "timeout": "1s"}), vec!["/k"]),
+        (json!({"command": ["op"], "extra": 1}), vec!["op"]),
+        (json!({"env": "A", "file": "/k"}), vec!["A", "/k"]),
+        (json!({}), Vec::new()),
+    ] {
+        let message = serde_json::from_value::<CredentialSource>(value.clone())
+            .unwrap_err()
+            .to_string();
+        for word in hidden {
+            assert!(!message.contains(word), "{value}: {message}");
+        }
+    }
 }
 
 #[test]

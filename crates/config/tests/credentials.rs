@@ -8,6 +8,7 @@
 mod common;
 
 use std::os::unix::fs::symlink;
+use std::time::Duration;
 
 use common::Setup;
 use config::{Config, ConfigError, CredentialSource, ProviderData, Secret, store_credential};
@@ -45,9 +46,10 @@ fn default_key(config: &Config, provider: &ProviderData) -> Result<Secret, Confi
 }
 
 fn command(argv: &[&str]) -> Option<CredentialSource> {
-    Some(CredentialSource::Command(
-        argv.iter().map(|s| (*s).to_owned()).collect(),
-    ))
+    Some(CredentialSource::Command {
+        argv: argv.iter().map(|s| (*s).to_owned()).collect(),
+        timeout: Duration::from_secs(30),
+    })
 }
 
 /// The real `opencode` package's providers, with their shared credential
@@ -864,7 +866,10 @@ fn credential_sources_lists_each_configured_label_in_label_order() {
         vec![
             (
                 "c".to_owned(),
-                CredentialSource::Command(vec!["op".into(), "read".into(), "x".into()]),
+                CredentialSource::Command {
+                    argv: vec!["op".into(), "read".into(), "x".into()],
+                    timeout: Duration::from_secs(30),
+                },
             ),
             ("e".to_owned(), CredentialSource::Env("ACME_KEY".into())),
             (

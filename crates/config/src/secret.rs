@@ -8,9 +8,10 @@ use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use contract::Secret;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::credential_file::{CredentialFile, CredentialLock, credential_path, is_lock_or_tmp};
 use crate::error::ConfigError;
@@ -19,15 +20,73 @@ use crate::write::write_atomic;
 
 /// Where a provider's credential comes from, as
 /// `providers."<name>".credentials."<label>"` sets it. Only the global and per-project layers may set it.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
+/// A `command` source carries its resolved `timeout`: the source's own, or
+/// 30 s. Nothing holding a source is serialised, so there is no `Serialize`.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "RawSource")]
 pub enum CredentialSource {
     /// An environment variable holding the key.
     Env(String),
     /// A file holding the key.
     File(PathBuf),
+    /// A program and its arguments that print the key, and how long a run
+    /// of them may last.
+    Command {
+        /// A program and its arguments that print the key.
+        argv: Vec<String>,
+        /// How long a run of them may last: the source's `timeout`, or 30 s.
+        timeout: Duration,
+    },
+}
+
+/// The default `timeout` of a `command` source: 30 s.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// One credential source as written: exactly one of `env`, `file` or
+/// `command`, and `timeout` only beside `command`, a string `parse_duration`
+/// accepts.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSource {
+    /// An environment variable holding the key; the only field when set.
+    env: Option<String>,
+    /// A file holding the key; the only field when set.
+    file: Option<PathBuf>,
     /// A program and its arguments that print the key.
-    Command(Vec<String>),
+    command: Option<Vec<String>>,
+    /// How long a run of `command` may last; only beside `command`.
+    timeout: Option<String>,
+}
+
+// The refusal names the shape, never the value: arguments may hold a key.
+impl TryFrom<RawSource> for CredentialSource {
+    type Error = String;
+
+    fn try_from(raw: RawSource) -> Result<Self, Self::Error> {
+        let RawSource {
+            env,
+            file,
+            command,
+            timeout,
+        } = raw;
+        if timeout.is_some() && command.is_none() {
+            return Err("`timeout` is only allowed beside `command`".to_owned());
+        }
+        match (env, file, command) {
+            (Some(name), None, None) => Ok(Self::Env(name)),
+            (None, Some(path), None) => Ok(Self::File(path)),
+            (None, None, Some(argv)) => Ok(Self::Command {
+                argv,
+                timeout: match timeout {
+                    None => COMMAND_TIMEOUT,
+                    Some(text) => crate::keys::parse_duration(&text).ok_or_else(|| {
+                        "a command's `timeout` must be a duration such as `\"2m\"`".to_owned()
+                    })?,
+                },
+            }),
+            _ => Err("expected exactly one of `env`, `file` or `command`".to_owned()),
+        }
+    }
 }
 
 impl CredentialSource {
@@ -38,7 +97,7 @@ impl CredentialSource {
         match self {
             Self::Env(name) => format!("the environment variable {name}"),
             Self::File(path) => format!("the file {}", path.display()),
-            Self::Command(argv) => match argv.first() {
+            Self::Command { argv, .. } => match argv.first() {
                 Some(program) => format!("the command {program}"),
                 None => "an empty command".to_owned(),
             },
@@ -53,7 +112,7 @@ impl fmt::Debug for CredentialSource {
         match self {
             Self::Env(name) => f.debug_tuple("Env").field(name).finish(),
             Self::File(path) => f.debug_tuple("File").field(path).finish(),
-            Self::Command(argv) => {
+            Self::Command { argv, .. } => {
                 let program = argv.first().map(String::as_str);
                 let redacted = argv.iter().skip(1).map(|_| "redacted");
                 let argv: Vec<&str> = program.into_iter().chain(redacted).collect();
