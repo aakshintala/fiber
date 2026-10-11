@@ -4,8 +4,8 @@
 
 use std::path::PathBuf;
 
-use super::Home;
 use super::super::{App, Effect};
+use super::Home;
 use crate::keys::Key;
 
 /// The workspace chooser: the picked workspace, whether it is in git,

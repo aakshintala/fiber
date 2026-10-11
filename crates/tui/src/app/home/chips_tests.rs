@@ -305,7 +305,10 @@ fn enter_on_the_workspace_chip_opens_the_picker_and_keeps_focus() {
     drawn(&mut app);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
-    let picker = app.home.as_ref().and_then(|home| home.chooser.picker().cloned());
+    let picker = app
+        .home
+        .as_ref()
+        .and_then(|home| home.chooser.picker().cloned());
     assert_eq!(picker, Some((vec!["/w".to_owned()], 0)));
     // The picker draws over home, so the chip stays focused.
     drawn(&mut app);
@@ -313,7 +316,11 @@ fn enter_on_the_workspace_chip_opens_the_picker_and_keeps_focus() {
     // Esc closes the picker with the chip still focused; a second Esc
     // returns to the entry bar.
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
-    assert!(app.home.as_ref().is_some_and(|home| home.chooser.picker().is_none()));
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.chooser.picker().is_none())
+    );
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert_eq!(app.focused(), None);
@@ -388,7 +395,11 @@ fn enter_on_a_chip_with_a_draft_clicks_the_chip() {
     // The chip's click wins over `start`: the picker opens, nothing is
     // sent, and the draft stays.
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
-    assert!(app.home.as_ref().is_some_and(|home| home.chooser.picker().is_some()));
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.chooser.picker().is_some())
+    );
     assert_eq!(app.input().expand(), "hi");
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
@@ -905,7 +916,11 @@ fn arrows_with_the_picker_open_leave_the_chip_alone() {
     drawn(&mut app);
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
-    assert!(app.home.as_ref().is_some_and(|home| home.chooser.picker().is_some()));
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.chooser.picker().is_some())
+    );
     drawn(&mut app);
     // ← → behind the picker move nothing: the chip stays focused.
     assert_eq!(press(&mut app, "right"), Effect::None);
@@ -917,10 +932,18 @@ fn arrows_with_the_picker_open_leave_the_chip_alone() {
     // ↓ reaches the picker, not the list: the chip stays focused.
     assert_eq!(press(&mut app, "down"), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-    assert!(app.home.as_ref().is_some_and(|home| home.chooser.picker().is_some()));
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.chooser.picker().is_some())
+    );
     // Esc closes the picker with the chip still focused.
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
-    assert!(app.home.as_ref().is_some_and(|home| home.chooser.picker().is_none()));
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.chooser.picker().is_none())
+    );
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
 
@@ -934,7 +957,11 @@ fn paste_with_the_picker_open_keeps_focus_and_draft() {
     assert_eq!(app.on_edit(Edit::Paste("XY".to_owned())), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
     assert!(app.input().expand().is_empty());
-    assert!(app.home.as_ref().is_some_and(|home| home.chooser.picker().is_some()));
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.chooser.picker().is_some())
+    );
 }
 
 #[test]

@@ -89,8 +89,13 @@ pub(super) fn subscribe_line(session: &SessionId, level: Level) -> (String, Stri
         Level::Summary => "summary",
         Level::Full => "full",
     };
-    let line = session_command(&id, "subscribe", session, Some(serde_json::json!({"level": name})))
-        .to_string();
+    let line = session_command(
+        &id,
+        "subscribe",
+        session,
+        Some(serde_json::json!({"level": name})),
+    )
+    .to_string();
     (id, line)
 }
 

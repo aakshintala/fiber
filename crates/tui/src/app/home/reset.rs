@@ -3,11 +3,7 @@
 //! its feed and `recent` again and subscribes afresh. The rows, the stop
 //! asks, the quit question's closes, the launch and the picker stay.
 
-use serde_json::{Map, Value};
-
 use super::super::App;
-use super::super::reconnect::UNANSWERED;
-use super::Ask;
 
 impl App {
     /// Clears the old connection's subscription state and open gate, and
@@ -21,19 +17,6 @@ impl App {
         };
         home.fed = false;
         home.subs.reset();
-        let mut deletes: Vec<String> = home
-            .asks
-            .iter()
-            .filter(|(_, ask)| matches!(ask, Ask::Delete(_)))
-            .map(|(id, _)| id.clone())
-            .collect();
-        deletes.sort();
-        let payload =
-            Map::from_iter([("message".to_owned(), Value::String(UNANSWERED.to_owned()))]);
-        for id in deletes {
-            if let Some(ask) = self.take_ask(&id) {
-                self.answer_ask(ask, false, &payload);
-            }
-        }
+        self.settle_deletes();
     }
 }

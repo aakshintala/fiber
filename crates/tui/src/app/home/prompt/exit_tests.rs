@@ -1,7 +1,7 @@
 //! Tests for quitting with sessions working: what counts, the question
 //! on the foot, and closing all.
 
-use super::super::{App, Effect};
+use super::super::super::{App, Effect};
 use crate::home::Launch;
 use crate::keys::Key;
 use crate::link::Line;
@@ -569,7 +569,8 @@ fn an_unsent_close_keeps_its_session_out_of_closing() {
         .home
         .as_ref()
         .map(|home| {
-            home.closing
+            home.questions
+                .closing
                 .iter()
                 .map(|(session, _)| session.0.clone())
                 .collect()

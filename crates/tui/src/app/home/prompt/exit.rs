@@ -1,12 +1,13 @@
 //! Quitting with sessions working: the quit question, closing all,
 //! and the resume lines (`docs/tui.md`, "Quit", "On exit"). This module
-//! is `App`'s exit: a child of its home, whose rows and levels it reads.
+//! is a child of home's question module, whose closes it owns.
 
 use serde_json::{Value, json};
 
-use super::super::{App, Effect, Link, Phase, mint, session_command};
+use super::super::super::{App, Effect, Link, Phase, mint, session_command};
 use super::Prompt;
-use crate::home::Level;
+use crate::home::{Level, QuitChoice};
+use crate::keys::Key;
 use contract::SessionId;
 
 impl App {
@@ -18,7 +19,7 @@ impl App {
             return Effect::Quit;
         }
         if let Some(home) = self.home.as_mut() {
-            home.prompt = Some(Prompt::Quit);
+            home.questions.prompt = Some(Prompt::Quit);
         }
         self.armed_at = None;
         Effect::None
@@ -39,7 +40,66 @@ impl App {
     /// The quit hint: shown while a first Ctrl+C waits for its second.
     /// The quit question draws as an overlay, not through the hint.
     pub(crate) fn hint_text(&self) -> String {
-        super::super::QUIT_HINT.to_owned()
+        super::super::super::QUIT_HINT.to_owned()
+    }
+
+    /// The quit question's keys, on home or not: Enter leaves working
+    /// sessions running, `c` closes them all now, Esc stays, and
+    /// anything else, Ctrl+C included, does nothing. `None` unless the
+    /// quit question is open.
+    pub(in crate::app::home) fn quit_key(&mut self, key: &Key) -> Option<Effect> {
+        if !self.quit_open() {
+            return None;
+        }
+        match key {
+            Key::Enter => Some(Effect::Quit),
+            Key::Char('c') => Some(self.close_all()),
+            Key::Esc => {
+                self.close_prompt();
+                Some(Effect::None)
+            }
+            Key::Char(_)
+            | Key::Backspace
+            | Key::Up
+            | Key::Down
+            | Key::PageUp
+            | Key::PageDown
+            | Key::End
+            | Key::AltA
+            | Key::Tab
+            | Key::BackTab
+            | Key::F1
+            | Key::CtrlO
+            | Key::CtrlG
+            | Key::CtrlR
+            | Key::CtrlV
+            | Key::CtrlL
+            | Key::CtrlF
+            | Key::CtrlC
+            | Key::AltUp
+            | Key::AltDown
+            | Key::AltX
+            | Key::AltP
+            | Key::AltR
+            | Key::AltDigit(_) => Some(Effect::None),
+        }
+    }
+
+    /// The quit question's choice, on home or over a session: leaving
+    /// quits with the sessions running, closing all stops them first,
+    /// staying closes the question.
+    pub(in crate::app::home) fn quit_click(&mut self, choice: QuitChoice) -> Effect {
+        if !self.quit_open() {
+            return Effect::None;
+        }
+        match choice {
+            QuitChoice::Leave => Effect::Quit,
+            QuitChoice::CloseAll => self.close_all(),
+            QuitChoice::Stay => {
+                self.close_prompt();
+                Effect::None
+            }
+        }
     }
 
     /// `c` in the quit question, for the sessions working at the key
@@ -47,7 +107,7 @@ impl App {
     /// where this connection holds nothing. With nothing working, or the
     /// link down, it quits and closes nothing: with no hub stream nothing
     /// is written and no `write_failed` runs.
-    pub(super) fn close_all(&mut self) -> Effect {
+    fn close_all(&mut self) -> Effect {
         let working = self.working();
         if working.is_empty() || self.link != Link::Up {
             return Effect::Quit;
@@ -66,7 +126,7 @@ impl App {
                 session_command(&id, "close", session, Some(json!({"now": true}))).to_string(),
             );
             if let Some(home) = self.home.as_mut() {
-                home.closing.push((session.clone(), id));
+                home.questions.closing.push((session.clone(), id));
             }
         }
         Effect::Exit(lines)
@@ -84,7 +144,9 @@ impl App {
             })
             .collect();
         if let Some(home) = self.home.as_mut() {
-            home.closing.retain(|(_, close)| !ids.contains(close));
+            home.questions
+                .closing
+                .retain(|(_, close)| !ids.contains(close));
         }
     }
 
@@ -138,14 +200,24 @@ impl App {
             .sessions
             .live()
             .iter()
-            .filter(|row| !home.closing.iter().any(|(session, _)| *session == row.id))
+            .filter(|row| {
+                !home
+                    .questions
+                    .closing
+                    .iter()
+                    .any(|(session, _)| *session == row.id)
+            })
             .map(|row| crate::home::exit_line(&row.id))
             .collect();
         // The attached session without a feed row is still live: without
         // one it never left, and a row would have listed it.
         if let Phase::Attached { session, .. } = &self.phase
             && home.sessions.row(session).is_none()
-            && !home.closing.iter().any(|(closed, _)| closed == session)
+            && !home
+                .questions
+                .closing
+                .iter()
+                .any(|(closed, _)| closed == session)
         {
             lines.push(crate::home::exit_line(session));
         }

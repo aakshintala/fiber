@@ -3406,7 +3406,11 @@ fn an_accepted_delete_closes_its_question() {
     assert_eq!(rows(&app), ["○  older work"]);
     // Its answer closes the question it asked about: the prompt clears,
     // so the drawn question goes with it.
-    assert!(app.home.as_ref().is_some_and(|home| home.prompt.is_none()));
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.questions.prompt().is_none())
+    );
     assert!(
         app.home_screen()
             .is_some_and(|screen| screen.question.is_none())

@@ -2,32 +2,30 @@
 //! went out, and what home draws (`docs/tui.md`, "Home"). The data it
 //! draws lives in [`crate::home`]; this module is `App`'s home.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
-use super::{App, Effect, Kind, Link, mint, session_command};
+use super::{App, Effect, Kind, Link, mint};
 use crate::focus::{Area, order};
 use crate::home::{
-    HomeScreen, Launch, Left, Level, QuitChoice, Sessions, Spot, State, cascade_line,
-    delete_line, dependents, from_status, line, line_with, recent_rows, toggle_line,
+    HomeScreen, Launch, Left, Sessions, Spot, State, cascade_line, delete_line, from_status, line,
+    line_with, recent_rows, toggle_line,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
-use crate::view::max_question_scroll;
 use contract::SessionId;
 
 mod chips;
-mod exit;
 mod open;
 mod open_at;
+mod prompt;
 mod reset;
 mod workspace;
 
 use open::Subscriptions;
+use prompt::{Prompt, Questions};
 use workspace::Chooser;
 
 /// Home's state: the launch description, and whether a `start` went out in
@@ -61,51 +59,9 @@ pub(super) struct Home {
     /// The workspace chooser: the picked workspace, the new worktree
     /// switch and the picker.
     chooser: Chooser,
-    /// The foot's question, while one is open: deleting a session.
-    prompt: Option<Prompt>,
-    /// The stops and deletes waiting for their answers, by command id.
-    asks: HashMap<String, Ask>,
-    /// The sessions `close` went out for from the quit question, with
-    /// their close ids: a close never written keeps its resume line.
-    closing: Vec<(SessionId, String)>,
-}
-
-/// A stop or delete waiting for its answer: a refusal becomes the row's
-/// note and a notice, an accepted delete drops the row.
-enum Ask {
-    /// A `close` with `now` for a live row: stopping one session.
-    Stop(SessionId),
-    /// A `delete` for an exited row, cascading when the question named
-    /// the sessions it would remove.
-    Delete(SessionId),
-}
-
-/// The foot's question: deleting an exited session through the hub.
-/// Delete is permanent, so the terminal asks first, naming the session
-/// and everything `--cascade` would add.
-enum Prompt {
-    /// Asking to delete `id`: without `expect` the plain question, with
-    /// it the cascade question naming the sessions the delete removes.
-    /// `scroll` shows later wrapped rows past the screen.
-    Delete {
-        id: SessionId,
-        expect: Option<Vec<SessionId>>,
-        scroll: usize,
-    },
-    /// Asking to quit while sessions work: Enter leaves them running,
-    /// `c` closes them all now, Esc stays. It stores nothing: the
-    /// question recomputes from the current rows on every frame.
-    Quit,
-}
-
-impl Prompt {
-    /// The session the question asks about; none for quitting.
-    fn id(&self) -> Option<&SessionId> {
-        match self {
-            Prompt::Delete { id, .. } => Some(id),
-            Prompt::Quit => None,
-        }
-    }
+    /// The foot's question, the stops and deletes waiting for their
+    /// answers, and the quit question's closes.
+    questions: Questions,
 }
 
 impl App {
@@ -130,9 +86,7 @@ impl App {
             last_chip: Spot::Workspace,
             blockers: Vec::new(),
             chooser: Chooser::default(),
-            prompt: None,
-            asks: HashMap::new(),
-            closing: Vec::new(),
+            questions: Questions::default(),
         });
     }
 
@@ -150,7 +104,7 @@ impl App {
     pub(crate) fn quit_open(&self) -> bool {
         self.home
             .as_ref()
-            .is_some_and(|home| matches!(home.prompt, Some(Prompt::Quit)))
+            .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::Quit)))
     }
 
     /// Whether a home modal holds the keyboard: the delete question or
@@ -158,10 +112,9 @@ impl App {
     /// question.
     pub(super) fn home_modal(&self) -> bool {
         self.on_home()
-            && self
-                .home
-                .as_ref()
-                .is_some_and(|home| home.prompt.is_some() || home.chooser.picker().is_some())
+            && self.home.as_ref().is_some_and(|home| {
+                home.questions.prompt().is_some() || home.chooser.picker().is_some()
+            })
     }
 
     /// What home draws, or `None` unless [`App::on_home`] holds.
@@ -185,7 +138,7 @@ impl App {
         // The delete question wraps over as many rows as needed in
         // the list's place, naming the session and everything
         // `--cascade` would add.
-        let (question, question_scroll) = match &home.prompt {
+        let (question, question_scroll) = match home.questions.prompt() {
             Some(Prompt::Delete { id, expect, scroll }) => (
                 home.sessions.row(id).map(|row| match expect {
                     None => delete_line(row),
@@ -501,94 +454,29 @@ impl App {
     /// on the chip row first: j moves only while the list has focus, and
     /// the draft keeps every printable key typed into it.
     pub(super) fn home_key(&mut self, key: &Key) -> Option<Effect> {
-        // The quit question takes every key first, on home or not:
-        // Enter leaves working sessions running, `c` closes them all
-        // now, Esc stays, and anything else, Ctrl+C included, does
-        // nothing.
-        if self.quit_open() {
-            match key {
-                Key::Enter => return Some(Effect::Quit),
-                Key::Char('c') => return Some(self.close_all()),
-                Key::Esc => {
-                    self.close_prompt();
-                    return Some(Effect::None);
-                }
-                Key::Char(_)
-                | Key::Backspace
-                | Key::Up
-                | Key::Down
-                | Key::PageUp
-                | Key::PageDown
-                | Key::End
-                | Key::AltA
-                | Key::Tab
-                | Key::BackTab
-                | Key::F1
-                | Key::CtrlO
-                | Key::CtrlG
-                | Key::CtrlR
-                | Key::CtrlV
-                | Key::CtrlL
-                | Key::CtrlF
-                | Key::CtrlC
-                | Key::AltUp
-                | Key::AltDown
-                | Key::AltX
-                | Key::AltP
-                | Key::AltR
-                | Key::AltDigit(_) => return Some(Effect::None),
-            }
+        // The quit question takes every key first, on home or not.
+        if let Some(effect) = self.quit_key(key) {
+            return Some(effect);
         }
         if !self.on_home() {
             return None;
         }
-        // The delete question takes every key first: Enter deletes, Esc
-        // keeps the session, Up and Down scroll its wrapped rows past
-        // the screen, Ctrl+C passes through to quit, and anything else
-        // is swallowed.
-        if self.home.as_ref().is_some_and(|home| home.prompt.is_some()) {
-            match key {
-                Key::Enter => return Some(self.send_delete()),
-                Key::Esc => {
-                    self.close_prompt();
-                    return Some(Effect::None);
-                }
-                Key::Up => {
-                    self.scroll_question(false);
-                    return Some(Effect::None);
-                }
-                Key::Down => {
-                    self.scroll_question(true);
-                    return Some(Effect::None);
-                }
-                Key::CtrlC => return None,
-                Key::Char(_)
-                | Key::Backspace
-                | Key::PageUp
-                | Key::PageDown
-                | Key::End
-                | Key::AltA
-                | Key::Tab
-                | Key::BackTab
-                | Key::F1
-                | Key::CtrlO
-                | Key::CtrlG
-                | Key::CtrlR
-                | Key::CtrlV
-                | Key::CtrlL
-                | Key::CtrlF
-                | Key::AltUp
-                | Key::AltDown
-                | Key::AltX
-                | Key::AltP
-                | Key::AltR
-                | Key::AltDigit(_) => return Some(Effect::None),
-            }
+        // The delete question takes every key first.
+        if self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.questions.prompt().is_some())
+        {
+            return self.question_key(key);
         }
         // The picker takes every key first: moving, choosing and closing
         // it, while Ctrl+C passes through and anything else is swallowed
         // so the draft keeps nothing typed into the picker.
-        if self.home.as_ref().is_some_and(|home| home.chooser.picker().is_some()) {
+        if self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.chooser.picker().is_some())
+        {
             return self.picker_key(key);
         }
         // A focused chip takes its keys ahead of focus: arrows move,
@@ -666,17 +554,7 @@ impl App {
     /// does while the quit question is open, on home or over a session.
     pub(super) fn home_click(&mut self, spot: Spot) -> Effect {
         if let Spot::Quit(choice) = spot {
-            if !self.quit_open() {
-                return Effect::None;
-            }
-            match choice {
-                QuitChoice::Leave => return Effect::Quit,
-                QuitChoice::CloseAll => return self.close_all(),
-                QuitChoice::Stay => {
-                    self.close_prompt();
-                    return Effect::None;
-                }
-            }
+            return self.quit_click(choice);
         }
         match spot {
             Spot::Entry(key) => self.open_row(key),
@@ -691,125 +569,7 @@ impl App {
         }
     }
 
-    /// A row's ✕: `close` with `now` for a live session, stopping it,
-    /// with a `summary` subscribe first when this connection holds
-    /// nothing for it; the delete question for an exited row. With the
-    /// link down nothing goes out. A refusal of the close becomes the
-    /// row's note and a notice.
-    fn stop_or_ask(&mut self, key: u64) -> Effect {
-        if !self.on_home() || self.link != Link::Up {
-            return Effect::None;
-        }
-        let row = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-            .cloned();
-        let Some(row) = row else {
-            return Effect::None;
-        };
-        if row.state == State::Unreadable {
-            self.notices.push(
-                "Cannot attach: this session's schema is newer than this terminal reads."
-                    .to_owned(),
-            );
-            return Effect::None;
-        }
-        if row.left.is_some() {
-            self.ask_delete(key);
-            return Effect::None;
-        }
-        let session = row.id.clone();
-        let mut lines = Vec::new();
-        if self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.subs.expected(&session).is_none())
-        {
-            lines.push(self.subscribe(&session, Level::Summary));
-        }
-        let id = mint();
-        lines.push(session_command(&id, "close", &session, Some(json!({"now": true}))).to_string());
-        if let Some(home) = self.home.as_mut() {
-            home.asks.insert(id, Ask::Stop(session));
-        }
-        Effect::Send(lines)
-    }
-
-    /// Opens the delete question for the row with `key`. Delete through
-    /// the hub is permanent, so the terminal asks first, naming the
-    /// session.
-    fn ask_delete(&mut self, key: u64) {
-        let id = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-            .map(|row| row.id.clone());
-        if let (Some(home), Some(id)) = (self.home.as_mut(), id) {
-            home.prompt = Some(Prompt::Delete {
-                id,
-                expect: None,
-                scroll: 0,
-            });
-        }
-    }
-
-    /// Closes the foot's question, keeping the session.
-    fn close_prompt(&mut self) {
-        if let Some(home) = self.home.as_mut() {
-            home.prompt = None;
-        }
-    }
-
-    /// Scrolls the delete question one row: Up toward its first rows,
-    /// Down toward its later ones, clamped to the wrapped rows past the
-    /// screen. Scrolling a short question changes nothing drawn, and
-    /// Down past the end holds, so one Up steps back one row.
-    fn scroll_question(&mut self, down: bool) {
-        let max = self
-            .home_screen()
-            .map(|screen| {
-                max_question_scroll(
-                    self,
-                    &screen,
-                    Rect::new(0, 0, self.screen.width(), self.screen.height()),
-                )
-            })
-            .unwrap_or(0);
-        if let Some(home) = self.home.as_mut()
-            && let Some(Prompt::Delete { scroll, .. }) = home.prompt.as_mut()
-        {
-            let clamped = (*scroll).min(max);
-            *scroll = if down {
-                clamped.saturating_add(1).min(max)
-            } else {
-                clamped.saturating_sub(1)
-            };
-        }
-    }
-
-    /// Backspace, or Delete through `home_edit`, on a focused row: the
-    /// delete question when it exited. On a focused live or unreadable
-    /// row it does nothing, and on any other focused stop it is
-    /// swallowed; with the box focused the draft keeps the key.
-    fn delete_key(&mut self) -> Option<Effect> {
-        let key = match self.focus {
-            None => return None,
-            Some(TargetId::Home(Spot::Entry(key) | Spot::Stop(key))) => key,
-            Some(_) => return Some(Effect::None),
-        };
-        if self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-            .is_some_and(|row| row.left.is_some())
-        {
-            self.ask_delete(key);
-        }
-        Some(Effect::None)
-    }
-
-    /// Delete on a focused row, ahead of the focus early return in
+    /// Asks the first `recent` page again, naming the launch project
     /// `on_edit`: the delete question when it exited, swallowed
     /// otherwise. The workspace picker owns every edit while open, so
     /// nothing reaches the chip row or the draft behind it. A focused
@@ -820,10 +580,18 @@ impl App {
         if !self.on_home() {
             return None;
         }
-        if self.home.as_ref().is_some_and(|home| home.prompt.is_some()) {
+        if self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.questions.prompt().is_some())
+        {
             return Some(Effect::None);
         }
-        if self.home.as_ref().is_some_and(|home| home.chooser.picker().is_some()) {
+        if self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.chooser.picker().is_some())
+        {
             return Some(Effect::None);
         }
         // A focused chip takes its edits ahead of the row's Delete:
@@ -846,122 +614,6 @@ impl App {
             | Edit::LineStart
             | Edit::LineEnd
             | Edit::Paste(_) => None,
-        }
-    }
-
-    /// Enter in the delete question: `delete` for its session, cascading
-    /// with the confirmed set from the cascade question. With the link
-    /// down nothing goes out and the question stays.
-    fn send_delete(&mut self) -> Effect {
-        let ask = self.home.as_ref().and_then(|home| match &home.prompt {
-            Some(Prompt::Delete { id, expect, .. }) => Some((id.clone(), expect.clone())),
-            Some(Prompt::Quit) | None => None,
-        });
-        let Some((id, expect)) = ask else {
-            return Effect::None;
-        };
-        if self.link != Link::Up {
-            return Effect::None;
-        }
-        let command = mint();
-        let line = match &expect {
-            None => json!({"id": command, "command": "delete", "args": {"session": id.0}}),
-            Some(expect) => json!({
-                "id": command,
-                "command": "delete",
-                "args": {
-                    "session": id.0,
-                    "cascade": true,
-                    "expect": expect.iter().map(|session| &session.0).collect::<Vec<_>>(),
-                },
-            }),
-        }
-        .to_string();
-        if let Some(home) = self.home.as_mut() {
-            home.asks.insert(command, Ask::Delete(id));
-        }
-        Effect::Send(vec![line])
-    }
-
-    /// Takes the stop or delete waiting on command `id`, if any.
-    fn take_ask(&mut self, id: &str) -> Option<Ask> {
-        self.home.as_mut().and_then(|home| home.asks.remove(id))
-    }
-
-    /// A refusal shows on the row, in place of its detail.
-    fn note(&mut self, id: &SessionId, note: String) {
-        if let Some(home) = self.home.as_mut() {
-            home.sessions.note(id, note);
-        }
-    }
-
-    /// Answers a stop or delete. An accepted delete drops the row and
-    /// asks the first `recent` page again. A dependents refusal, or a
-    /// stale cascade refusal, reopens the cascade question naming the
-    /// set the delete would remove now; every other refusal, and one
-    /// naming no other session, becomes the row's note and a notice.
-    fn answer_ask(
-        &mut self,
-        ask: Ask,
-        accepted: bool,
-        payload: &serde_json::Map<String, Value>,
-    ) -> Vec<String> {
-        match ask {
-            Ask::Stop(session) => {
-                if !accepted {
-                    let message = refusal(payload);
-                    self.note(&session, message.clone());
-                    self.notices.push(message);
-                }
-                Vec::new()
-            }
-            Ask::Delete(id) => {
-                if accepted {
-                    self.clear_prompt(&id);
-                    if let Some(home) = self.home.as_mut() {
-                        home.sessions.remove(&id);
-                    }
-                    return self.ask_recent_first();
-                }
-                let (code, message) = refusal_parts(payload);
-                if code == "session_has_dependents" || code == "stale_request" {
-                    // The hub names the root too, so the row goes first
-                    // and the set deduplicates keeping first occurrence.
-                    let mut expect = vec![id.clone()];
-                    for session in dependents(&message) {
-                        if !expect.contains(&session) {
-                            expect.push(session);
-                        }
-                    }
-                    if expect.len() > 1 {
-                        if let Some(home) = self.home.as_mut() {
-                            home.prompt = Some(Prompt::Delete {
-                                id,
-                                expect: Some(expect),
-                                scroll: 0,
-                            });
-                        }
-                        return Vec::new();
-                    }
-                }
-                self.note(&id, message.clone());
-                self.notices.push(message);
-                self.clear_prompt(&id);
-                Vec::new()
-            }
-        }
-    }
-
-    /// Closes the foot's question when it asks about `id`: an answer for
-    /// an older question leaves a newer one open.
-    fn clear_prompt(&mut self, id: &SessionId) {
-        if let Some(home) = self.home.as_mut()
-            && home
-                .prompt
-                .as_ref()
-                .is_some_and(|prompt| prompt.id() == Some(id))
-        {
-            home.prompt = None;
         }
     }
 
@@ -1095,14 +747,6 @@ fn recent_line(id: &str, before: Option<&str>, project: Option<&str>) -> String 
     }
 }
 
-/// A refusal's code and message.
-fn refusal_parts(payload: &serde_json::Map<String, Value>) -> (&str, String) {
-    let code = payload
-        .get("code")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    (code, refusal(payload))
-}
 /// A hub refusal's message, for a notice.
 pub(super) fn refusal(payload: &serde_json::Map<String, Value>) -> String {
     payload
