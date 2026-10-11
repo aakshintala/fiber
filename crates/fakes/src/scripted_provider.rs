@@ -89,18 +89,28 @@ pub fn reply(text: &str) -> Reply {
         },
         finish: Finish::Completed,
         generation_id: Some(GenerationId("gen_1".into())),
-        tokens: Tokens {
-            input: 10,
-            cache_read: 0,
-            cache_write: Default::default(),
-            output: 3,
-        },
+        tokens: tokens(),
         web_searches: None,
         cost: None,
-        input_size: InputSize {
-            bytes: 1000,
-            media: false,
-        },
+        input_size: input_size(),
+    }
+}
+
+/// The counts every scripted answer reports: 10 input and 3 output tokens.
+fn tokens() -> Tokens {
+    Tokens {
+        input: 10,
+        cache_read: 0,
+        cache_write: Default::default(),
+        output: 3,
+    }
+}
+
+/// The input size every scripted answer reports: 1000 input bytes, no media.
+fn input_size() -> InputSize {
+    InputSize {
+        bytes: 1000,
+        media: false,
     }
 }
 
@@ -109,17 +119,9 @@ pub fn reply(text: &str) -> Reply {
 pub fn call_usage(generation: &str) -> CallUsage {
     CallUsage {
         generation_id: Some(GenerationId(generation.into())),
-        tokens: Tokens {
-            input: 10,
-            cache_read: 0,
-            cache_write: Default::default(),
-            output: 3,
-        },
+        tokens: tokens(),
         web_searches: None,
-        input_size: InputSize {
-            bytes: 1000,
-            media: false,
-        },
+        input_size: input_size(),
     }
 }
 
@@ -135,10 +137,7 @@ pub fn unnamed_usage() -> CallUsage {
 /// A call that ended before any stream: no generation, no tokens, and 1000
 /// input bytes, as `reply` sends.
 fn unnamed() -> CallUsage {
-    CallUsage::unnamed(InputSize {
-        bytes: 1000,
-        media: false,
-    })
+    CallUsage::unnamed(input_size())
 }
 
 /// Answers each call with the next scripted one, in order. A call past the

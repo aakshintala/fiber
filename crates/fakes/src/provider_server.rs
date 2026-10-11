@@ -229,24 +229,10 @@ impl ProviderServer {
         script: impl IntoIterator<Item = Response>,
         fallback: Response,
     ) -> io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let addr = listener.local_addr()?;
-        let state = Arc::new(Mutex::new(State {
+        Self::start_with(State {
             script: script.into_iter().collect(),
             fallback: Some(fallback),
             ..State::default()
-        }));
-        let arrived = Arc::new(Condvar::new());
-        let shared = Arc::clone(&state);
-        let wake = Arc::clone(&arrived);
-        let accept = thread::Builder::new()
-            .name("fake-provider".to_owned())
-            .spawn(move || accept_loop(&listener, &shared, &wake))?;
-        Ok(Self {
-            addr,
-            state,
-            arrived,
-            accept: Some(accept),
         })
     }
 
@@ -276,12 +262,19 @@ impl ProviderServer {
     pub fn start_responding(
         responder: impl Fn(&Request) -> Response + Send + Sync + 'static,
     ) -> io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let addr = listener.local_addr()?;
-        let state = Arc::new(Mutex::new(State {
+        Self::start_with(State {
             responder: Some(Arc::new(responder)),
             ..State::default()
-        }));
+        })
+    }
+
+    /// Listens on a free port on 127.0.0.1 with `state` and serves it: the
+    /// one start path behind every constructor. The port accepts
+    /// connections when this returns.
+    fn start_with(state: State) -> io::Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let state = Arc::new(Mutex::new(state));
         let arrived = Arc::new(Condvar::new());
         let shared = Arc::clone(&state);
         let wake = Arc::clone(&arrived);
@@ -674,17 +667,25 @@ fn fingerprint_query(target: &str) -> String {
 }
 
 fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()> {
+    stream.write_all(head(response, true).as_bytes())?;
+    stream.write_all(&response.body)?;
+    stream.flush()
+}
+
+/// The response head: the status line, the scripted headers, the body's
+/// measured length when `with_length`, and `connection: close`. A stalled
+/// response carries its scripted `content-length` instead, since its body
+/// is only a prefix of what it declares.
+fn head(response: &Response, with_length: bool) -> String {
     let mut head = format!("HTTP/1.1 {} Fake\r\n", response.status);
     for (name, value) in &response.headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
-    head.push_str(&format!(
-        "content-length: {}\r\nconnection: close\r\n\r\n",
-        response.body.len()
-    ));
-    stream.write_all(head.as_bytes())?;
-    stream.write_all(&response.body)?;
-    stream.flush()
+    if with_length {
+        head.push_str(&format!("content-length: {}\r\n", response.body.len()));
+    }
+    head.push_str("connection: close\r\n\r\n");
+    head
 }
 
 /// Sends the head with its declared `content-length` and the prefix it
@@ -697,12 +698,7 @@ fn write_stall(
     state: &Mutex<State>,
     arrived: &Condvar,
 ) -> io::Result<()> {
-    let mut head = format!("HTTP/1.1 {} Fake\r\n", response.status);
-    for (name, value) in &response.headers {
-        head.push_str(&format!("{name}: {value}\r\n"));
-    }
-    head.push_str("connection: close\r\n\r\n");
-    stream.write_all(head.as_bytes())?;
+    stream.write_all(head(response, false).as_bytes())?;
     stream.write_all(&response.body)?;
     stream.flush()?;
     {

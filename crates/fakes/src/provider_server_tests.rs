@@ -268,6 +268,7 @@ fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
         .unwrap_or_else(|e| panic!("the stall's status line arrives within {READ_WITHIN:?}: {e}"));
     assert!(status.starts_with("HTTP/1.1 200"), "{status}");
     let mut content_length = String::new();
+    let mut content_lengths = 0;
     let mut content_type = String::new();
     loop {
         let mut line = String::new();
@@ -280,12 +281,19 @@ fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
         }
         let (name, value) = line.split_once(':').unwrap();
         match name.trim().to_ascii_lowercase().as_str() {
-            "content-length" => content_length = value.trim().to_owned(),
+            "content-length" => {
+                content_length = value.trim().to_owned();
+                content_lengths += 1;
+            }
             "content-type" => content_type = value.trim().to_owned(),
             _ => {}
         }
     }
     assert_eq!(content_length, "100");
+    assert_eq!(
+        content_lengths, 1,
+        "the stall's head carries its one scripted content-length"
+    );
     assert_eq!(content_type, "text/plain");
     let mut prefix = vec![0u8; 7];
     reader

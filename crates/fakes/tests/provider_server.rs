@@ -166,6 +166,8 @@ fn it_serves_a_scripted_sequence_one_response_per_request() {
     assert_eq!(second.status, 429);
     assert_eq!(header(&second, "retry-after"), Some("7"));
     assert_eq!(header(&second, "content-type"), Some("application/json"));
+    let length = second.body.len().to_string();
+    assert_eq!(header(&second, "content-length"), Some(length.as_str()));
     assert_eq!(second.body, br#"{"error":"rate_limited"}"#);
     assert_eq!((third.status, third.body), (200, text.as_bytes().to_vec()));
 }
