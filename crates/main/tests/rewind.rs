@@ -386,10 +386,9 @@ fn a_rewind_through_the_hub_resumes_an_exited_session() {
     let old = hubbed.start("c3_start", "c3_sub", "one");
     let client = hubbed.client();
     hubbed.close("c3_close", &old);
-    assert!(
-        fakes::matching_exits(&hubbed.workspace, setup.deadline.left()),
-        "waited until the deadline for the old session process to exit"
-    );
+    fakes::try_matching_exits(&hubbed.workspace, setup.deadline.left()).unwrap_or_else(|err| {
+        panic!("waited until the deadline for the old session process to exit: {err}")
+    });
     assert!(
         !setup.session_socket(&old).exists(),
         "the closed session unlinked its socket"
@@ -523,10 +522,9 @@ fn an_unprompted_rewound_session_is_kept_and_resumes() {
     assert!(dir.is_dir(), "the rewound session is kept");
     // The prompt must reach a gone session, not one still shutting down:
     // its socket accepts until the process releases it.
-    assert!(
-        fakes::matching_exits(&hubbed.workspace, setup.deadline.left()),
-        "waited until the deadline for the closed session process to exit"
-    );
+    fakes::try_matching_exits(&hubbed.workspace, setup.deadline.left()).unwrap_or_else(|err| {
+        panic!("waited until the deadline for the closed session process to exit: {err}")
+    });
 
     // A prompt through the hub resumes it like any exited session.
     hubbed.prompt("c5_p3", &next, "three");
@@ -707,10 +705,9 @@ fn a_rewind_keeps_the_worktree_for_the_next_session() {
     });
 
     // The old process is gone, and the worktree is still there.
-    assert!(
-        fakes::matching_exits(&repo, setup.deadline.left()),
-        "waited until the deadline for the old session process to exit"
-    );
+    fakes::try_matching_exits(&repo, setup.deadline.left()).unwrap_or_else(|err| {
+        panic!("waited until the deadline for the old session process to exit: {err}")
+    });
     support::bounded(setup.deadline, "the old session to be reaped", move || {
         child.wait().unwrap();
     });

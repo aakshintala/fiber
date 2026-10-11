@@ -157,9 +157,8 @@ impl Hubbed {
     fn close(&self) -> Vec<Value> {
         self.send_a("c_close", "close", &json!({}));
         let lines = self.until_a("fiber_exited");
-        assert!(
-            fakes::matching_exits(&self.workspace, self.setup.deadline.left()),
-            "waited until the deadline for the session process to exit"
+        fakes::try_matching_exits(&self.workspace, self.setup.deadline.left()).unwrap_or_else(
+            |err| panic!("waited until the deadline for the session process to exit: {err}"),
         );
         lines
     }
@@ -631,10 +630,9 @@ fn a_session_idle_on_a_form_exits_suspended_and_a_reply_through_the_hub_resumes_
     let requested = asked.last().unwrap().clone();
     let request = request_of(&requested);
     let exited = until(&a, "fiber_exited", |line| line["kind"] == "fiber_exited");
-    assert!(
-        fakes::matching_exits(&workspace, setup.deadline.left()),
-        "waited until the deadline for the session process to exit"
-    );
+    fakes::try_matching_exits(&workspace, setup.deadline.left()).unwrap_or_else(|err| {
+        panic!("waited until the deadline for the session process to exit: {err}")
+    });
     assert_eq!(
         exited.last().unwrap()["payload"]["suspended_on"],
         request.as_str()
@@ -846,10 +844,9 @@ fn sigterm_on_a_session_pending_on_a_form_exits_143_suspended_and_a_reply_throug
         of_kind(&exited, "interaction_resolved").is_empty(),
         "the form stays pending: {exited:?}"
     );
-    assert!(
-        fakes::matching_exits(&session_match, hubbed.setup.deadline.left()),
-        "waited until the deadline for the session process to exit"
-    );
+    fakes::try_matching_exits(&session_match, hubbed.setup.deadline.left()).unwrap_or_else(|err| {
+        panic!("waited until the deadline for the session process to exit: {err}")
+    });
     assert_eq!(
         kinds_through_exit(&hubbed.log()),
         [
