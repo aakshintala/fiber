@@ -386,12 +386,12 @@ fn a_wide_table_shrinks_its_widest_column_and_wraps_its_cells() {
 }
 
 #[test]
-fn shrinking_stops_at_six_columns_each() {
+fn shrinking_stops_at_five_columns_each() {
     let markdown = "| aaaaaaaa | bbbbbbbb |\n|---|---|\n| x | y |";
     let lines = texts(markdown, 4);
-    assert_eq!(lines[0], "aaaaaa   bbbbbb");
-    assert_eq!(lines[1], "aa       bb    ");
-    assert_eq!(lines[2], "──────   ──────");
+    assert_eq!(lines[0], "aaaaa   bbbbb");
+    assert_eq!(lines[1], "aaa     bbb  ");
+    assert_eq!(lines[2], "─────   ─────");
 }
 
 #[test]
@@ -408,9 +408,9 @@ fn rendering_is_pure() {
 #[test]
 fn every_line_fits_the_width() {
     let markdown = "# A heading that is long\n\n- item with words that wrap\n  - nested item that wraps too\n\n> quote that wraps around\n\n```rust\nlet a_long_line = \"with a string\";\n```\n\n| a | b |\n|---|---|\n| 語語語語 | wide |";
-    // The table's minimum is 13: its columns stop shrinking at six and
+    // The table's minimum is 12: its columns stop shrinking at five and
     // four with a three-space gap, so narrower widths overflow by design.
-    for width in 13..40u16 {
+    for width in 12..40u16 {
         for line in render(markdown, width).lines {
             assert!(
                 line.width() <= usize::from(width),

@@ -13,7 +13,7 @@ use super::{Cell, Role, char_width, link_cols, spans_of, style, wrap_joined_indi
 /// Cells between columns.
 const GAP: usize = 3;
 /// A column shrinks no narrower than this.
-const MIN_COLUMN: usize = 6;
+const MIN_COLUMN: usize = 5;
 
 /// One table cell: its inline cells and the link ranges in them, as
 /// indices into the cells (`docs/tui.md`, "Links": links are handled on
