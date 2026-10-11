@@ -2,7 +2,9 @@
 
 use std::sync::PoisonError;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard};
+use std::sync::{Condvar, Mutex};
+
+use super::lock;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -201,6 +203,24 @@ impl Conns {
             .unwrap_or_else(PoisonError::into_inner);
         !waited.timed_out()
     }
+
+    /// How many connections are live right now: one lock, no wait.
+    #[cfg(test)]
+    pub(crate) fn live_len(&self) -> usize {
+        lock(&self.state).live_len()
+    }
+
+    /// How many writers are open right now: one lock, no wait.
+    #[cfg(test)]
+    pub(crate) fn writers_open(&self) -> u32 {
+        lock(&self.state).writers_open()
+    }
+
+    /// Whether `id` is published right now: one lock, no wait.
+    #[cfg(test)]
+    pub(crate) fn published(&self, id: u64) -> bool {
+        lock(&self.state).published(id)
+    }
 }
 
 #[cfg(test)]
@@ -215,6 +235,20 @@ impl State {
 
     pub(crate) fn published(&self, id: u64) -> bool {
         self.live.iter().any(|(slot, _)| *slot == id)
+    }
+
+    /// Some live connection keeps its reader, its writer and its shutdown.
+    pub(crate) fn has_full_entry(&self) -> bool {
+        self.live.iter().any(|(_, live)| {
+            live.reader.is_some() && live.writer.is_some() && live.shutdown.is_some()
+        })
+    }
+
+    /// Some live connection keeps its reader and its shutdown.
+    pub(crate) fn has_reader_shutdown(&self) -> bool {
+        self.live
+            .iter()
+            .any(|(_, live)| live.reader.is_some() && live.shutdown.is_some())
     }
 }
 
@@ -259,8 +293,4 @@ fn reap(live: Live) {
             super::join(reader);
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
