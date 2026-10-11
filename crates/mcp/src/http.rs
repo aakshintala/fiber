@@ -316,7 +316,11 @@ fn pump(
                     let link = Arc::clone(&link);
                     let shared = Arc::clone(&shared);
                     let writer = writer.clone();
-                    move || exchange(id, method, line, link, shared, writer)
+                    move || {
+                        exchange(id, method, line, link, shared, writer);
+                        #[cfg(test)]
+                        exchange_finished(id);
+                    }
                 };
                 match thread::Builder::new()
                     .name("mcp-http-exchange".to_owned())
@@ -579,6 +583,36 @@ fn probe_legacy(id: u64, post_status: u16, link: &Arc<Link>, shared: &Arc<Shared
             http_status(post_status)
         }),
     );
+}
+
+/// Installs the hook [`exchange_finished`] sends to once, when the
+/// exchange with `id` ends: the test receives that end with a deadline
+/// and reads the recorded requests after it, so the absence of a
+/// removed exchange's request never races a thread still starting.
+#[cfg(test)]
+pub(crate) fn wait_exchange_done(id: u64) -> mpsc::Receiver<u64> {
+    let (done, finished) = mpsc::channel();
+    *lock(&EXCHANGE_DONE) = Some((id, done));
+    finished
+}
+
+/// The hook [`wait_exchange_done`] installs, if any.
+#[cfg(test)]
+static EXCHANGE_DONE: Mutex<Option<(u64, mpsc::Sender<u64>)>> = Mutex::new(None);
+
+/// After an exchange ends, on every path, sends its id when it is the
+/// one [`wait_exchange_done`] installed for, keeping the hook for a
+/// later exchange otherwise: a removed exchange's end is the signal its
+/// request was never sent, since any request it would send is recorded
+/// before its answer ends it. As `slot.rs`'s `run_after_serve` hook, one
+/// shot per install.
+#[cfg(test)]
+fn exchange_finished(id: u64) {
+    let mut waiting = lock(&EXCHANGE_DONE);
+    let finished = waiting.as_ref().is_some_and(|(wanted, _)| *wanted == id);
+    if finished && let Some((_, done)) = waiting.take() {
+        let _sent = done.send(id);
+    }
 }
 
 /// Runs the test hook installed by [`pause_after_status`], if any.

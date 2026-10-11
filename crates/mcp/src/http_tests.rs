@@ -1409,6 +1409,9 @@ fn a_call_queued_behind_a_stalled_notice_is_never_sent_once_timed_out() {
             .unwrap_or_else(|_| panic!("the queued call times out within {WITHIN:?}")),
         Err(CallError::Timeout),
     );
+    // The removed exchange runs once the held notice goes: installed
+    // before the release, so its end is never missed.
+    let finished = super::wait_exchange_done(4);
     server.release();
     // A third call proves the pump moved on past the notice and the
     // removed request: only its own request is ever sent.
@@ -1420,19 +1423,16 @@ fn a_call_queued_behind_a_stalled_notice_is_never_sent_once_timed_out() {
     );
     assert!(answered.is_ok(), "the third call answers: {answered:?}");
     // The removed exchange was spawned before the third call's, so a
-    // build that sends it has its request recorded by now. Poll briefly
-    // through the wall-clock deadline, so the absence below never races
-    // a thread still starting.
-    let (live, waiting) = std::sync::mpsc::channel::<()>();
-    for _ in 0..25 {
-        if server.requests().len() >= 7 {
-            break;
-        }
-        match Deadline::after(Duration::from_millis(20)).recv(&waiting) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-    drop(live);
+    // build that sends it has its request recorded before it ends: the
+    // end below is the signal the absence is read after, never a span
+    // of time.
+    assert_eq!(
+        Deadline::after(WITHIN)
+            .recv(&finished)
+            .unwrap_or_else(|_| panic!("the removed exchange ends within {WITHIN:?}")),
+        4,
+        "the removed exchange ends",
+    );
     let mut ids: Vec<Value> = server
         .requests()
         .iter()
