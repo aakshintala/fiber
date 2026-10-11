@@ -777,3 +777,73 @@ fn audio_without_data_reports_through_start() {
     );
     started.servers.stop();
 }
+
+#[test]
+fn image_results_run_through_start_and_process_once() {
+    // `cmF3LWltYWdl` is `raw-image`: the bytes the fake sees.
+    let expected = vec![
+        ContentPart::Text {
+            text: "Image: 2x3 image/png.\n".to_owned(),
+        },
+        ContentPart::Image {
+            path: "artifacts/mcp-fake.png".to_owned(),
+            mime_type: "image/png".to_owned(),
+            width: 2,
+            height: 3,
+        },
+    ];
+    for (name, body) in [
+        (
+            "image part",
+            r#"{"content":[{"type":"image","data":"cmF3LWltYWdl","mimeType":"image/png"}]}"#,
+        ),
+        (
+            "embedded image resource",
+            r#"{"content":[{"type":"resource","resource":{"blob":"cmF3LWltYWdl","mimeType":"image/png"}}]}"#,
+        ),
+    ] {
+        let setup = Setup::new();
+        setup.tools(&json!([{"name": "echo"}]));
+        setup.result("echo", body);
+        std::fs::create_dir_all(setup.artifacts()).expect("artifacts dir");
+        let images = FakeImages::ok();
+        let started =
+            setup.start_with_images(vec![setup.spec("fx")], std::sync::Arc::clone(&images));
+        let tool = setup.tool(&started, "mcp__fx__echo");
+        let output = setup.run(&tool);
+        assert!(output.error.is_none(), "row: {name}");
+        assert_eq!(output.content, expected, "row: {name}");
+        assert_eq!(images.calls(), vec![b"raw-image".to_vec()], "row: {name}");
+        assert_eq!(images.call_count(), 1, "row: {name}");
+        started.servers.stop();
+    }
+}
+
+#[test]
+fn an_embedded_pdf_runs_through_start_and_saves_without_images() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.result(
+        "echo",
+        r#"{"content":[{"type":"resource","resource":{"blob":"aGk=","mimeType":"application/pdf"}}]}"#,
+    );
+    std::fs::create_dir_all(setup.artifacts()).expect("artifacts dir");
+    let images = FakeImages::ok();
+    let started = setup.start_with_images(vec![setup.spec("fx")], std::sync::Arc::clone(&images));
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let output = setup.run(&tool);
+    assert!(output.error.is_none());
+    assert_eq!(
+        output.content,
+        vec![ContentPart::Text {
+            text: saved_line("application/pdf", b"hi"),
+        }],
+    );
+    assert_eq!(images.call_count(), 0);
+    let ContentPart::Text { text } = &output.content[0] else {
+        panic!("one Saved line");
+    };
+    let read = std::fs::read(saved_file(&setup, text)).expect("the artifact is written");
+    assert_eq!(read, b"hi");
+    started.servers.stop();
+}

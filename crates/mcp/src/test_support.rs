@@ -317,7 +317,7 @@ impl Setup {
 /// the configured result immediately, so no test waits on a child process.
 pub(crate) struct FakeImages {
     calls: std::sync::Mutex<Vec<Vec<u8>>>,
-    result: std::sync::Mutex<Result<contract::provider::ImageRef, contract::images::ImageError>>,
+    result: Result<contract::provider::ImageRef, contract::images::ImageError>,
 }
 
 impl FakeImages {
@@ -327,7 +327,7 @@ impl FakeImages {
     ) -> std::sync::Arc<Self> {
         std::sync::Arc::new(Self {
             calls: std::sync::Mutex::new(Vec::new()),
-            result: std::sync::Mutex::new(result),
+            result,
         })
     }
 
@@ -359,7 +359,7 @@ impl contract::images::Images for FakeImages {
         _cancel: &dyn contract::tool::Cancel,
     ) -> Result<contract::provider::ImageRef, contract::images::ImageError> {
         self.calls.lock().expect("fake images").push(bytes.to_vec());
-        self.result.lock().expect("fake images").clone()
+        self.result.clone()
     }
 }
 

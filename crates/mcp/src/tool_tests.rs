@@ -41,14 +41,7 @@ fn declare(
 }
 
 fn call(artifacts: &std::path::Path) -> Call {
-    Call {
-        server: "fx".to_owned(),
-        tool: "echo".to_owned(),
-        timeout: Duration::from_secs(30),
-        artifacts: artifacts.to_path_buf(),
-        images: crate::test_support::FakeImages::ok(),
-        slot: std::sync::Weak::new(),
-    }
+    call_with_images(artifacts, crate::test_support::FakeImages::ok())
 }
 
 fn call_with_images(
@@ -646,7 +639,6 @@ fn image_expected() -> Vec<ContentPart> {
 
 #[test]
 fn an_image_part_is_processed_once_and_keeps_its_bytes() {
-    use contract::images::ImageError;
     let dir = fakes::TempDir::new("mcp-tool-image");
     let images = crate::test_support::FakeImages::with(Ok(contract::provider::ImageRef {
         path: "artifacts/mcp-fake.png".to_owned(),
@@ -663,7 +655,6 @@ fn an_image_part_is_processed_once_and_keeps_its_bytes() {
     assert!(out.error.is_none());
     assert_eq!(out.content, image_expected());
     assert_eq!(images.calls(), vec![image_bytes()]);
-    let _ = ImageError::Unreadable(String::new());
 }
 
 #[test]
