@@ -340,17 +340,29 @@ fn wait(
         if deadline.is_some_and(|deadline| clock.now() >= deadline) {
             return Err(Failed::TimedOut);
         }
-        // Past the cap the region is too large whatever follows, even the
-        // end marker: an overshoot lands here on the same poll.
-        if state.output.len() > OUTPUT_CAP {
-            return Err(Failed::TooLarge);
-        }
         // Only the bytes past the last search, with an overlap holding a
         // split marker: an occurrence starting earlier was already found,
         // so the first occurrence is still the first one seen.
         let from = state.scanned.saturating_sub(end.len());
         let found = find_from(&state.output, &end, from);
         state.scanned = state.output.len();
+        // The cap covers only the bytes before the end marker: the prefix
+        // up to it when found, all buffered bytes otherwise. Past the cap
+        // is `TooLarge` whatever follows, even the end marker. Without a
+        // comparison: the byte at `OUTPUT_CAP` exists inside the prefix
+        // exactly when the prefix runs past the cap, so at the cap parks
+        // while past it fails, with no `>` for a mutant to flip. Chatter
+        // after the end marker never counts, so a valid capture followed
+        // by descendant chatter still succeeds.
+        let before_end = found.unwrap_or(state.output.len());
+        let past_cap = state
+            .output
+            .get(..before_end)
+            .and_then(|prefix| prefix.get(OUTPUT_CAP))
+            .is_some();
+        if past_cap {
+            return Err(Failed::TooLarge);
+        }
         if found.is_some() {
             let output = state.output.clone();
             drop(state);

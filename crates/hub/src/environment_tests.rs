@@ -25,6 +25,13 @@ use super::{Environment, Environments};
 /// How long a wait that must succeed holds, on the wall clock.
 const WITHIN: Duration = Duration::from_secs(10);
 
+/// How long a wait that must see nothing holds: several of the capture's
+/// 20 ms wall-clock polls. `get` and `close` wake on notification rather
+/// than polling, so this only needs to exceed a thread round-trip: an
+/// early return answers at once, while a correct wait holds until the test
+/// releases it.
+const QUIET: Duration = Duration::from_millis(300);
+
 /// A home under a held temporary directory, with a diagnostic log.
 struct Temp {
     /// Holds the directory.
@@ -191,14 +198,19 @@ fn get_blocks_until_the_first_capture_publishes() {
     let clock = fakes::clock::FakeClock::new();
     let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
     let waiting = Arc::clone(&environments);
+    let (started_tx, started_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
+        started_tx.send(()).unwrap_or(());
         done_tx.send(waiting.get()).unwrap_or(());
     });
+    // Signal that the `get` thread started: the bounded wait below then
+    // proves it blocks, rather than passing because the thread never ran.
+    Deadline::after(WITHIN)
+        .recv(&started_rx)
+        .expect("the get thread starts");
     assert!(
-        Deadline::after(Duration::from_millis(300))
-            .recv(&done_rx)
-            .is_err(),
+        Deadline::after(QUIET).recv(&done_rx).is_err(),
         "get blocks while nothing published"
     );
     environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
@@ -393,10 +405,21 @@ fn close_waits_for_a_running_capture() {
         closing.close();
         close_tx.send(()).unwrap_or(());
     });
+    // Signal that `close` began: it set `closed` before waiting, so the
+    // bounded wait below proves it waits for the held capture rather than
+    // passing because its thread never ran.
+    let began = Deadline::after(WITHIN);
+    loop {
+        if environments.is_closed() {
+            break;
+        }
+        if began.left().is_zero() {
+            panic!("waited for close to begin");
+        }
+        thread::yield_now();
+    }
     assert!(
-        Deadline::after(Duration::from_millis(300))
-            .recv(&close_rx)
-            .is_err(),
+        Deadline::after(QUIET).recv(&close_rx).is_err(),
         "close waits for the running capture"
     );
     release_tx.send(()).unwrap_or(());
@@ -457,8 +480,68 @@ fn first_failed_publishes_the_fallback_synchronously() {
     thread::spawn(move || {
         done_tx.send(waiting.get()).unwrap_or(());
     });
-    let environment = Deadline::after(Duration::from_millis(300))
+    let environment = Deadline::after(QUIET)
         .recv(&done_rx)
         .expect("first_failed publishes before it returns");
     assert_eq!(environment.source, VariablesSource::Inherited);
+}
+
+#[test]
+fn close_before_first_returns_with_the_fallback() {
+    // Forces the startup/shutdown interleaving: `close` runs before `first`
+    // runs. Without ending the reserved admission on the early return,
+    // `close` waits forever and the bounded wait below fails.
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let environments = Environments::new(Vec::new(), &temp.home);
+    let closing = Arc::clone(&environments);
+    let (close_tx, close_rx) = mpsc::channel();
+    thread::spawn(move || {
+        closing.close();
+        close_tx.send(()).unwrap_or(());
+    });
+    // Signal that `close` began (it published the fallback and waits for
+    // the reserved admission): `first` below therefore runs after `close`.
+    let began = Deadline::after(WITHIN);
+    loop {
+        if environments.is_closed() {
+            break;
+        }
+        if began.left().is_zero() {
+            panic!("waited for close to begin");
+        }
+        thread::yield_now();
+    }
+    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    Deadline::after(WITHIN)
+        .recv(&close_rx)
+        .expect("close returns once first ends the admission");
+    let environment = environments.get();
+    assert_eq!(environment.source, VariablesSource::Inherited);
+    assert_eq!(
+        get(&environment.vars, "FIBER_HOME").as_deref(),
+        Some(temp.home.to_string_lossy().as_ref())
+    );
+    assert!(
+        temp.log_lines()
+            .iter()
+            .all(|line| line["code"] != "environment_built"),
+        "a cancelled capture writes no line"
+    );
+}
+
+#[test]
+fn debug_holds_names_but_no_values() {
+    let environment = Environment {
+        vars: vec![
+            (OsString::from("SECRET"), OsString::from("s3cret-value")),
+            (OsString::from("PATH"), OsString::from("/secret/bin")),
+        ],
+        source: VariablesSource::LoginShell,
+    };
+    let shown = format!("{environment:?}");
+    assert!(shown.contains("SECRET"), "names are shown: {shown}");
+    assert!(shown.contains("PATH"), "names are shown: {shown}");
+    assert!(!shown.contains("s3cret-value"), "no value leaks: {shown}");
+    assert!(!shown.contains("/secret/bin"), "no value leaks: {shown}");
 }

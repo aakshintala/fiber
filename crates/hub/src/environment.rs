@@ -16,7 +16,7 @@ pub(crate) mod capture;
 
 /// One published environment: exactly what a session process gets, the
 /// `FIBER_HOME` overlay included.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Environment {
     /// The variables, with `FIBER_HOME` set to the hub's own home.
     pub vars: Vec<(OsString, OsString)>,
@@ -28,6 +28,19 @@ impl Environment {
     /// `variables` as `session_started` records them.
     pub fn variables(&self) -> Variables {
         Variables::of(self.vars.clone(), self.source)
+    }
+}
+
+impl std::fmt::Debug for Environment {
+    /// Names only, never values: a type that holds a secret prints it
+    /// redacted in `Debug`, including `env` values
+    /// (`docs/code-quality.md`, "Errors").
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&OsString> = self.vars.iter().map(|(name, _)| name).collect();
+        f.debug_struct("Environment")
+            .field("names", &names)
+            .field("source", &self.source)
+            .finish()
     }
 }
 
@@ -121,13 +134,12 @@ impl Environments {
 
     /// Runs the admitted first capture, publishing it with the
     /// `FIBER_HOME` overlay and writing one `environment_built` line. A
-    /// no-op when already published: `ready` never captures.
+    /// no-op when already published: `ready` never captures. Ends the
+    /// reserved admission on every path, including the early returns after
+    /// `close`, so a `close` before `first` runs never hangs.
     pub(crate) fn first(&self, clock: &dyn Clock, diag: &Diag) {
         let cancel = {
             let state = lock(&self.state);
-            if state.published.is_some() {
-                return;
-            }
             match state.cancels.first() {
                 Some(cancel) => Arc::clone(cancel),
                 None => return,
@@ -135,7 +147,16 @@ impl Environments {
         };
         let _serial = lock(&self.capture_lock);
         if self.is_closed() {
+            self.end(&cancel);
             return;
+        }
+        {
+            let state = lock(&self.state);
+            if state.published.is_some() {
+                drop(state);
+                self.end(&cancel);
+                return;
+            }
         }
         let outcome = capture::capture(&self.inherited, clock, &cancel);
         self.run_before_publish();
@@ -232,6 +253,14 @@ impl Environments {
             let (severity, message) = line;
             diag.line(severity, None, "environment_built", &message);
         }
+        self.end_locked(&mut state, cancel);
+    }
+
+    /// Ends one capture's admission without publishing: `close` no longer
+    /// waits for it. Every early return in `first` after admission ends
+    /// here, so `close` before `first` runs still returns.
+    fn end(&self, cancel: &Arc<capture::Cancel>) {
+        let mut state = lock(&self.state);
         self.end_locked(&mut state, cancel);
     }
 

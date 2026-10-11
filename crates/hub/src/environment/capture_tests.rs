@@ -20,7 +20,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use super::{CAPTURE_DEADLINE, Cancel, Failed, OUTPUT_CAP, capture, parse, shell_command};
+use super::{CAPTURE_DEADLINE, Cancel, Failed, OUTPUT_CAP, capture, parse, shell_command, wait};
 use fakes::Deadline;
 
 /// How long a wait that must succeed holds, on the wall clock.
@@ -758,9 +758,10 @@ fn a_large_environment_under_the_cap_succeeds() {
 fn a_cap_sized_output_without_a_marker_parks() {
     // Exactly `OUTPUT_CAP` bytes, no markers, then a hang: at the cap the
     // wait parks (past the cap is `TooLarge`), so this pins the edge's
-    // exact side, which `==` or `>=` would report as `TooLarge` here. The
-    // side file proves delivery before the park is asserted, so the wait
-    // cannot pass for still transferring.
+    // exact side. The scanned signal proves the wait processed every byte:
+    // the shell's side file only proves writing finished, not that the
+    // capture saw it. The bounded wait is several of the capture's own
+    // 20 ms polls, then the test cancels and requires the answer.
     let fake = Shell::new(&format!(
         "printf '%{OUTPUT_CAP}s' ' '; echo printed > \"$FAKE_DIR/printed\"\nexec sleep 600"
     ));
@@ -768,18 +769,21 @@ fn a_cap_sized_output_without_a_marker_parks() {
     let cancel = Cancel::new();
     let done = capture_on_thread(fake.inherited(), Arc::clone(&clock), Arc::clone(&cancel));
     let watchdog = fake.watchdog();
-    let delivering = Deadline::after(WITHIN);
+    // Signal: the wait scanned the whole cap, so it decided to park rather
+    // than still transferring.
+    let scanned = Deadline::after(WITHIN);
     loop {
-        if fake.dir.join("printed").exists() {
+        let seen = cancel.state.lock().unwrap().scanned;
+        if seen >= OUTPUT_CAP {
             break;
         }
-        if delivering.left().is_zero() {
-            panic!("waited for the shell to print the cap");
+        if scanned.left().is_zero() {
+            panic!("waited for the capture to scan the cap");
         }
         thread::yield_now();
     }
     assert!(
-        Deadline::after(Duration::from_secs(2)).recv(&done).is_err(),
+        Deadline::after(QUIET).recv(&done).is_err(),
         "no result at exactly the cap"
     );
     cancel.cancel();
@@ -790,4 +794,65 @@ fn a_cap_sized_output_without_a_marker_parks() {
     let pid = fake.pid();
     assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
     reap_group(pid, watchdog);
+}
+
+/// `output` through `wait` with no deadline and the reader ended (unless
+/// noted): the result is immediate, so no thread or clock advance is
+/// needed. Only the small result is compared, never the megabytes of input
+/// (`docs/testing.md`, "A test on a large value").
+fn wait_once(
+    output: Vec<u8>,
+    reader_done: bool,
+    nonce: &str,
+) -> Result<Vec<(OsString, OsString)>, Failed> {
+    let clock = fakes::clock::FakeClock::new();
+    let cancel = Cancel::new();
+    {
+        let mut state = cancel.state.lock().unwrap();
+        state.output = output;
+        state.reader_done = reader_done;
+    }
+    wait(&cancel, &*clock, None, nonce)
+}
+
+/// `nonce` framed around an empty region, with `before` chatter bytes ahead
+/// of the begin marker and `after` chatter past the end marker: the bytes
+/// before the end marker are `before + begin.len()`.
+fn framed_sizes(nonce: &str, before: usize, after: usize) -> Vec<u8> {
+    let mut out = vec![b'x'; before];
+    out.extend_from_slice(&begin(nonce));
+    out.extend_from_slice(&end(nonce));
+    out.extend_from_slice(&vec![b'y'; after]);
+    out
+}
+
+#[test]
+fn one_below_the_cap_before_the_end_marker_succeeds() {
+    let before = OUTPUT_CAP - 1 - begin("n1").len();
+    let result = wait_once(framed_sizes("n1", before, 0), true, "n1");
+    assert_eq!(result, Ok(Vec::new()));
+}
+
+#[test]
+fn exactly_the_cap_before_the_end_marker_succeeds() {
+    let before = OUTPUT_CAP - begin("n1").len();
+    let result = wait_once(framed_sizes("n1", before, 0), true, "n1");
+    assert_eq!(result, Ok(Vec::new()));
+}
+
+#[test]
+fn one_past_the_cap_before_the_end_marker_is_too_large() {
+    let before = OUTPUT_CAP + 1 - begin("n1").len();
+    let result = wait_once(framed_sizes("n1", before, 0), true, "n1");
+    assert_eq!(result, Err(Failed::TooLarge));
+}
+
+#[test]
+fn chatter_after_the_end_marker_ignores_the_cap() {
+    // A valid capture with a small prefix, followed by more than the cap
+    // of descendant chatter: the cap covers only bytes before the end
+    // marker, so this succeeds. Under the total-bytes check it reports
+    // `TooLarge`.
+    let result = wait_once(framed_sizes("n1", 0, OUTPUT_CAP + 1), true, "n1");
+    assert_eq!(result, Ok(Vec::new()));
 }
