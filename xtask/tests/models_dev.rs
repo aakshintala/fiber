@@ -7,18 +7,12 @@
     reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); clippy exempts only #[test] functions here"
 )]
 
-#[path = "../src/child.rs"]
-mod child;
-#[path = "../src/test_dir.rs"]
-mod test_dir;
-
 use std::os::unix::process::CommandExt as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use child::finished;
-use test_dir::TestDir;
+use fakes::{TempDir, finished};
 
 /// How long a test waits for one child to exit: generation from the
 /// checked-in snapshot is far quicker; this only bounds a hang.
@@ -132,7 +126,7 @@ fn first_difference_reports_offset_line_and_model() {
 }
 
 /// Runs the built `cargo xtask models-dev` with `args` in `dir`.
-fn models_dev(dir: &TestDir, args: &[&str]) -> (i32, String) {
+fn models_dev(dir: &TempDir, args: &[&str]) -> (i32, String) {
     let child = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(["models-dev"])
         .args(args)
@@ -162,7 +156,7 @@ fn committed(path: &str) -> String {
 
 #[test]
 fn generated_files_match_the_committed_ones() {
-    let dir = TestDir::new("models-dev-drift");
+    let dir = TempDir::new("xtask-models-dev-drift");
     let snapshot = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/models-dev.json");
     let (code, out) = models_dev(&dir, &["--from", &snapshot.display().to_string()]);
     assert_eq!(code, 0, "{out}");
@@ -179,7 +173,7 @@ fn generated_files_match_the_committed_ones() {
 
 #[test]
 fn codex_is_generated_from_the_snapshot() {
-    let dir = TestDir::new("models-dev-codex");
+    let dir = TempDir::new("xtask-models-dev-codex");
     let snapshot = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/models-dev.json");
     let (code, out) = models_dev(&dir, &["--from", &snapshot.display().to_string()]);
     assert_eq!(code, 0, "{out}");
@@ -209,7 +203,7 @@ fn codex_is_generated_from_the_snapshot() {
 
 #[test]
 fn a_missing_from_file_is_an_error_writing_nothing() {
-    let dir = TestDir::new("models-dev-missing");
+    let dir = TempDir::new("xtask-models-dev-missing");
     let missing = dir.path().join("nope.json");
     let (code, out) = models_dev(&dir, &["--from", &missing.display().to_string()]);
     assert_eq!(code, 2, "{out}");
@@ -220,7 +214,7 @@ fn a_missing_from_file_is_an_error_writing_nothing() {
 
 #[test]
 fn a_catalog_missing_a_source_is_an_error_writing_nothing() {
-    let dir = TestDir::new("models-dev-source");
+    let dir = TempDir::new("xtask-models-dev-source");
     dir.write("catalog.json", "{\"anthropic\":{\"models\":{}}}");
     let catalog = dir.path().join("catalog.json");
     let (code, out) = models_dev(&dir, &["--from", &catalog.display().to_string()]);

@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_dir::TestDir;
+use fakes::TempDir;
 
 const TARGET: &str = "# Target
 
@@ -13,7 +13,7 @@ const TARGET: &str = "# Target
 ";
 
 fn check(source: &str) -> Vec<String> {
-    let dir = TestDir::new("docs");
+    let dir = TempDir::new("xtask-docs");
     dir.write("docs/target.md", TARGET);
     dir.write("docs/source.md", source);
     dir.write("scripts/.keep", "");
@@ -183,7 +183,7 @@ fn headings_need_a_space_and_at_most_six_hashes() {
 
 #[test]
 fn the_checked_files_are_docs_and_the_root_guides() {
-    let dir = TestDir::new("files");
+    let dir = TempDir::new("xtask-files");
     dir.write("docs/b.md", "");
     dir.write("docs/adr/a.md", "");
     dir.write("docs/notes.txt", "");

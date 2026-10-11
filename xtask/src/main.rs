@@ -49,8 +49,6 @@ mod models_dev;
 mod models_dev_table;
 mod rules;
 mod select;
-#[cfg(test)]
-mod test_dir;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;

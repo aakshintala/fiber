@@ -11,23 +11,13 @@
     reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); a failure is the test's"
 )]
 
-#[path = "../src/child.rs"]
-mod child;
-#[path = "../src/test_dir.rs"]
-#[allow(
-    dead_code,
-    reason = "the shared TestDir has a writer this test does not call"
-)]
-mod test_dir;
-
 use std::fs;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use child::finished;
-use test_dir::TestDir;
+use fakes::{TempDir, finished};
 
 /// How long a test waits for one child, in real time; a passing run never
 /// waits on it, it only bounds a hang.
@@ -54,7 +44,7 @@ fn run(what: &str, mut command: Command) -> (Option<i32>, String) {
     (output.status.code(), text)
 }
 
-fn git(repo: &TestDir, args: &[&str]) -> String {
+fn git(repo: &TempDir, args: &[&str]) -> String {
     let mut command = Command::new("git");
     command
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
@@ -68,16 +58,16 @@ fn git(repo: &TestDir, args: &[&str]) -> String {
 /// A repository of three commits on one line: the ancestor, the base, the
 /// head. HEAD is the head.
 struct Repo {
-    dir: TestDir,
+    dir: TempDir,
     /// What the script writes under: `$RUNNER_TEMP`.
-    temp: TestDir,
+    temp: TempDir,
     ancestor: String,
     base: String,
 }
 
 impl Repo {
     fn new() -> Self {
-        let dir = TestDir::new("rsrepo");
+        let dir = TempDir::new("xtask-rsrepo");
         git(&dir, &["init", "-q", "-b", "main"]);
         // No commit holds scripts/: the script under test is the head's, so a
         // base that predates it still compares.
@@ -91,7 +81,7 @@ impl Repo {
         let base = git(&dir, &["rev-parse", "HEAD~1"]);
         Self {
             dir,
-            temp: TestDir::new("rstmp"),
+            temp: TempDir::new("xtask-rstmp"),
             ancestor,
             base,
         }

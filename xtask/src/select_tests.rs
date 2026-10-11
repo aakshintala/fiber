@@ -1130,8 +1130,8 @@ fn docs_only_fails_for_empty_or_code_lists() {
     }
 }
 
-fn extension_case_repo() -> crate::test_dir::TestDir {
-    let root = crate::test_dir::TestDir::new("extension-packages");
+fn extension_case_repo() -> fakes::TempDir {
+    let root = fakes::TempDir::new("xtask-extension-packages");
     root.write("providers/openrouter/tests/cost.json", "{}");
     root.write("providers/acme/tests/case.json", "{}");
     root.write("extensions/alpha/tests/case.json", "{}");
@@ -1212,7 +1212,7 @@ fn only_direct_json_files_make_a_case_package() {
 fn a_package_root_that_is_a_file_reports_the_root_path() {
     let selection = selection_with_main_for_loop_change();
 
-    let providers = crate::test_dir::TestDir::new("extension-packages-provider-root-file");
+    let providers = fakes::TempDir::new("xtask-extension-packages-provider-root-file");
     providers.write("providers", "not a directory");
     let error = extension_packages(&selection, providers.path()).unwrap_err();
     assert!(
@@ -1220,7 +1220,7 @@ fn a_package_root_that_is_a_file_reports_the_root_path() {
         "{error}"
     );
 
-    let extensions = crate::test_dir::TestDir::new("extension-packages-extension-root-file");
+    let extensions = fakes::TempDir::new("xtask-extension-packages-extension-root-file");
     extensions.write("providers/.keep", "");
     extensions.write("extensions", "not a directory");
     let error = extension_packages(&selection, extensions.path()).unwrap_err();
@@ -1232,7 +1232,7 @@ fn a_package_root_that_is_a_file_reports_the_root_path() {
 
 #[test]
 fn a_package_tests_path_that_is_a_file_reports_that_path() {
-    let root = crate::test_dir::TestDir::new("extension-packages-tests-file");
+    let root = fakes::TempDir::new("xtask-extension-packages-tests-file");
     root.write("providers/acme/tests", "not a directory");
     let selection = selection_with_main_for_loop_change();
 
@@ -1251,7 +1251,7 @@ fn a_package_tests_path_that_is_a_file_reports_that_path() {
 
 #[test]
 fn missing_package_roots_and_tests_are_skipped() {
-    let root = crate::test_dir::TestDir::new("extension-packages-missing");
+    let root = fakes::TempDir::new("xtask-extension-packages-missing");
     root.write("providers/no-tests/extension.json", "{}");
     let selection = selection_with_main_for_loop_change();
 
@@ -1263,7 +1263,7 @@ fn missing_package_roots_and_tests_are_skipped() {
 
 #[test]
 fn a_missing_package_root_group_is_empty() {
-    let root = crate::test_dir::TestDir::new("extension-packages-no-group");
+    let root = fakes::TempDir::new("xtask-extension-packages-no-group");
     root.write("providers/acme/tests/case.json", "{}");
     let selection = selection_with_main_for_loop_change();
     assert_eq!(

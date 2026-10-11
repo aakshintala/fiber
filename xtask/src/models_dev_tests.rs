@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::test_dir::TestDir;
+use fakes::TempDir;
 
 use super::*;
 
@@ -802,14 +802,14 @@ fn fetched(url: &str) -> Result<Vec<u8>, String> {
 }
 
 /// A `file://` URL for `dir` joining `name`, which no test writes.
-fn missing_url(dir: &TestDir, name: &str) -> String {
+fn missing_url(dir: &TempDir, name: &str) -> String {
     format!("file://{}", dir.path().join(name).display())
 }
 
 #[test]
 fn fetch_reads_a_file_url() {
     assert_curl_argv("https://models.dev/api.json");
-    let dir = TestDir::new("models-dev-fetch-read");
+    let dir = TempDir::new("xtask-models-dev-fetch-read");
     dir.write("catalog.json", "{\"anthropic\":{\"models\":{}}}");
     let file = dir.path().join("catalog.json");
     let url = format!("file://{}", file.display());
@@ -823,7 +823,7 @@ fn fetch_reads_a_file_url() {
 #[test]
 fn fetch_names_a_failed_curl() {
     assert_curl_argv("https://models.dev/api.json");
-    let dir = TestDir::new("models-dev-fetch-fail");
+    let dir = TempDir::new("xtask-models-dev-fetch-fail");
     let missing = missing_url(&dir, "missing.json");
     let error = fetched(&missing).unwrap_err();
     assert!(error.contains("exit status"), "{error}");
