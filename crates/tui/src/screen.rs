@@ -277,12 +277,10 @@ impl<W: std::io::Write> std::io::Write for FrameWriter<W> {
         Ok(bytes.len())
     }
 
+    /// Holds: crossterm's mid-frame flushes deliver nothing; the frame
+    /// backend drains the buffer at the frame's end.
     fn flush(&mut self) -> std::io::Result<()> {
-        let flushed = self.shared.borrow_mut().out.flush();
-        if flushed.is_err() {
-            self.shared.borrow_mut().buf.clear();
-        }
-        flushed
+        Ok(())
     }
 }
 
