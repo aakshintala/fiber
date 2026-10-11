@@ -1621,6 +1621,7 @@ fn a_role_runs_its_reference_and_a_remap_applies_at_resume_without_changing_any_
     assert_eq!(pb.requests().len(), 1, "the first run's child ran again");
     let re_child_id = re_delegate["delegate_session_id"].as_str().unwrap();
     let re_child_lines = read_lines(&ask_sessions(&setup).join(re_child_id).join("events.jsonl"));
+    assert_eq!(durable_kinds(&re_child_lines), ROLE_CHILD_DURABLE);
     let re_built = one(&re_child_lines, "preamble_built");
     assert_eq!(re_built["model"], "pc/m");
     assert!(re_built.get("thinking").is_none(), "{re_built}");
