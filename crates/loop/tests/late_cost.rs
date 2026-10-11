@@ -27,6 +27,7 @@ use contract::inbox::{Ack, Delivery};
 use contract::provider::{CostLookup, ModelCall, ModelRequest, Provider};
 use contract::shapes::{Effect, Failure};
 use contract::{Envelope, ErrorCode, GenerationId, RequestId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{Scripted, ScriptedProvider, call_usage};
 use r#loop::{BlockLimits, Model, Reviewer, TurnCancel};
@@ -186,12 +187,17 @@ fn settle(clock: &FakeClock, due: Instant) {
 }
 
 /// Closes the inbox and runs the loop until it returns.
+#[track_caller]
 fn run_to_end(session: &mut Session) {
     drop(std::mem::replace(&mut session.inbox, mpsc::channel().0));
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
-    assert!(finished.recv_timeout(DEADLINE).expect("run ended in time"));
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv(&finished)
+            .expect("run ended in time")
+    );
 }
 
 fn usage_lines(lines: &[Envelope]) -> Vec<&Envelope> {
@@ -257,6 +263,7 @@ const LATE_NEXT_KINDS: [&str; 10] = [
 ];
 
 /// The first turn's one `usage_recorded`, and its lines.
+#[track_caller]
 fn first_turn(session: &mut Session) -> (Envelope, Vec<Envelope>) {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
@@ -267,6 +274,7 @@ fn first_turn(session: &mut Session) -> (Envelope, Vec<Envelope>) {
 }
 
 /// Runs a second turn and returns its lines.
+#[track_caller]
 fn next_turn(session: &mut Session) -> Vec<Envelope> {
     session.inbox.send(delivery("again")).unwrap();
     session.turn();
@@ -440,8 +448,8 @@ fn a_session_that_ends_before_30_seconds_writes_no_second_record() {
     run_to_end(&mut session);
     session.clock.advance(AFTER);
     // The lookup goes once the loop and the stopped worker have let go.
-    seen.dropped
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&seen.dropped)
         .expect("the worker let go of the lookup");
     assert!(seen.calls().is_empty());
     let all = log::read(&session.dir).unwrap();
@@ -703,6 +711,7 @@ fn a_reviewer_call_s_cost_settles_with_no_action() {
 
 /// Moves the clock to `to` and wakes the loop with a reply naming nothing,
 /// as a real clock's timeout would, returning once the loop took it.
+#[track_caller]
 fn advance_and_wake(session: &Session, to: Instant) {
     session
         .clock
@@ -724,8 +733,8 @@ fn advance_and_wake(session: &Session, to: Instant) {
             })),
         ))
         .unwrap();
-    taken
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&taken)
         .expect("the loop took the wake");
 }
 
@@ -769,7 +778,11 @@ fn a_warming_refresh_s_cost_settles_in_no_turn_and_no_action() {
         "idle counts from the cap"
     );
     advance_and_wake(&session, exit);
-    assert!(finished.recv_timeout(DEADLINE).expect("run ended in time"));
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv(&finished)
+            .expect("run ended in time")
+    );
 
     let all = log::read(&session.dir).unwrap();
     assert_eq!(

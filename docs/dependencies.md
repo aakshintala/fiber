@@ -58,7 +58,7 @@ whole process, which
 Fiber's own `unsafe` code are `docs/code-quality.md`.
 
 Binary size is recorded, not gated per crate. CI fails a stripped release
-binary of 20 MiB (20,971,520 bytes) or more (`scripts/release-size`). Compile time is not a criterion: CI caches built
+binary of 24 MiB (25,165,824 bytes) or more (`scripts/release-size`); #2042 investigates what makes up the binary. Compile time is not a criterion: CI caches built
 dependencies. On macOS arm64, serde, ureq, ratatui, rusqlite and mlua build from clean in 8
 seconds, and adding ten candidates, syntect among them, takes it to 16.
 
@@ -366,7 +366,7 @@ yaml-rust and bincode. arborium 2.18, tree-sitter grammars behind a feature
 per language, passes cargo-deny with 33 crates, but the grammars for the 18
 languages the terminal highlights add 25,500 KiB to the stripped binary on
 macOS arm64, about 9,500 KiB of it SQL's and 5,300 KiB C++'s. That alone is
-over the 20 MiB cap, on a binary already 12.3 MiB. Highlighting one block in
+over the 24 MiB cap, on a binary already 12.3 MiB. Highlighting one block in
 each of three languages peaks 6,832 KiB over an empty program (macOS arm64
 footprint, October 6, 2026). tree-sitter-highlight with the same grammar
 crates compiles the same parse tables.

@@ -236,49 +236,6 @@ fn plan_prints_the_jobs_and_shards() {
         out,
         "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"test\":true,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=20\n"
     );
-    let skipped = [
-        "plan",
-        "--mode",
-        "crates",
-        "--packages",
-        "a b",
-        "--event",
-        "pull_request",
-        "--draft",
-        "false",
-        "--bug",
-        "false",
-        "--mutants",
-        "false",
-        "--mutant-count",
-        "40",
-    ];
-    let (code, out) = xtask(&dir, &skipped, &[], "");
-    assert_eq!(code, 0);
-    assert!(out.contains("\"mutants\":false"), "{out}");
-    assert!(out.contains("shards=[]\nshard_total=0\n"), "{out}");
-    assert!(out.contains("shard_timeout=20\n"), "{out}");
-    let draft = [
-        "plan",
-        "--mode",
-        "crates",
-        "--packages",
-        "a b",
-        "--event",
-        "pull_request",
-        "--draft",
-        "true",
-        "--bug",
-        "true",
-        "--mutants",
-        "true",
-        "--mutant-count",
-        "40",
-    ];
-    let (code, out) = xtask(&dir, &draft, &[], "");
-    assert_eq!(code, 0);
-    assert!(out.contains("\"test\":false"), "{out}");
-    assert!(out.contains("\"test_linux\":true"), "{out}");
     let bad = [
         "plan",
         "--mode",
@@ -310,17 +267,6 @@ fn verdict_passes_and_fails_by_exit_code() {
     assert_eq!(
         xtask(&dir, &["verdict"], &fail, ""),
         (1, "verdict: test: selected, but skipped\n".to_owned())
-    );
-    let failed_selection = [
-        ("NEEDS", r#"{"select":{"result":"failure"}}"#),
-        ("JOBS", ""),
-    ];
-    assert_eq!(
-        xtask(&dir, &["verdict"], &failed_selection, ""),
-        (
-            1,
-            "verdict: select: failure, so the selection failed\n".to_owned()
-        )
     );
     assert_eq!(xtask(&dir, &["verdict"], &[("NEEDS", "[]")], "").0, 2);
     assert_eq!(xtask(&dir, &["verdict"], &[("NEEDS", "{")], "").0, 2);

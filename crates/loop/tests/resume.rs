@@ -40,7 +40,7 @@ use contract::provider::Provider;
 use contract::shapes::Tokens;
 use contract::tool::Tool;
 use contract::{ErrorCode, GenerationId};
-use fakes::{Scripted, ScriptedProvider};
+use fakes::{Deadline, Scripted, ScriptedProvider};
 use r#loop::{Loop, Model};
 
 /// `PromptInputs` over temp `home` with a fixed shell: the opening message
@@ -131,6 +131,7 @@ impl support::History {
     }
 
     /// Sends `prompt`, then runs one turn, failing at [`support::DEADLINE`].
+    #[track_caller]
     fn run(&mut self, looped: Loop, prompt: &str) -> contract::events::TurnOutcome {
         self.inbox_tx
             .send(Delivery::Prompt(
@@ -144,8 +145,8 @@ impl support::History {
             let outcome = looped.turn().unwrap().unwrap();
             done.send((looped, outcome)).unwrap();
         });
-        let (looped, outcome) = finished
-            .recv_timeout(support::DEADLINE)
+        let (looped, outcome) = Deadline::after(support::DEADLINE)
+            .recv(&finished)
             .expect("turn ended");
         let _ = looped;
         outcome
@@ -525,6 +526,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     assert_eq!(completed.payload["error"]["code"], "blocked");
 }
 
+#[track_caller]
 fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::events::TurnOutcome) {
     let mut history = History::new(vec![
         support::tool_call_reply("Go.", &["exec"]),
@@ -1265,6 +1267,7 @@ impl support::History {
     /// prompt: what `rebuild` over the whole log returned. The last thing
     /// a test does with the history: the provider's script holds one more
     /// reply.
+    #[track_caller]
     fn rebuilt(&mut self) -> Vec<Input> {
         let (tx, rx) = mpsc::channel();
         self.inbox_tx = tx;
@@ -1340,14 +1343,15 @@ impl support::History {
 
     /// Runs one turn on its own thread, returning the loop for the next
     /// turn, and failing the test past [`support::DEADLINE`].
+    #[track_caller]
     fn step(&mut self, mut looped: Loop) -> (Loop, Option<contract::events::TurnOutcome>) {
         let (done, finished) = mpsc::channel();
         std::thread::spawn(move || {
             let outcome = looped.turn().unwrap();
             done.send((looped, outcome)).unwrap();
         });
-        finished
-            .recv_timeout(support::DEADLINE)
+        Deadline::after(support::DEADLINE)
+            .recv(&finished)
             .expect("the turn ended in time")
     }
 }
@@ -3101,6 +3105,7 @@ fn handoff_history(script: Vec<Scripted>) -> History {
     history
 }
 
+#[track_caller]
 fn resume_conversation(history: &mut History, prompt: &str) -> Vec<Input> {
     let looped = history.resume(Vec::new());
     history.run(looped, prompt);
@@ -3229,6 +3234,7 @@ const RESUMED_TURN: [&str; 15] = [
 
 /// A resumed turn whose first reply calls a tool with `tokens` in its
 /// prompt: the context is past two thirds of the default trigger.
+#[track_caller]
 fn nudge_after_resume(nudged_before: bool) -> Vec<String> {
     let mut history = History::new(vec![
         support::with_tokens(support::tool_call_reply("", &["get_weather"]), 270_000, 0),
@@ -3464,8 +3470,8 @@ fn a_shutdown_after_the_refusal_ends_the_finishing_turn_interrupted() {
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
     assert!(
-        finished
-            .recv_timeout(support::DEADLINE)
+        Deadline::after(support::DEADLINE)
+            .recv(&finished)
             .expect("run returned")
     );
     match &*answer.lock().unwrap() {
@@ -3912,8 +3918,8 @@ fn the_idle_delay_while_waiting_leaves_the_request_pending_again() {
     );
     clock.advance(std::time::Duration::from_secs(60));
     inbox.send(Delivery::Cancelled).unwrap();
-    let outcome = finished
-        .recv_timeout(support::DEADLINE)
+    let outcome = Deadline::after(support::DEADLINE)
+        .recv(&finished)
         .expect("the finishing turn ended at the idle deadline");
 
     assert_eq!(outcome, None);

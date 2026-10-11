@@ -2,7 +2,7 @@
 //! client on a running session's socket that prints only its own turn.
 //!
 //! Every wait in this file has a named deadline: `attach` runs on a helper
-//! thread and its result is awaited with `recv_timeout(DEADLINE)`, so a hung
+//! thread and its result is awaited with `Deadline::after(DEADLINE)`, so a hung
 //! attach fails the test instead of hanging it, and the session's inbox
 //! thread and close are bounded the same way.
 
