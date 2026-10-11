@@ -12,7 +12,13 @@ use std::path::Path;
 use ring::digest;
 use serde_json::Value;
 
-const FLAGS: i32 = libc::O_NOFOLLOW | libc::O_NONBLOCK;
+/// The open flags for a record: no symlink, and no wait for a FIFO's writer.
+// `O_NOFOLLOW` and `O_NONBLOCK` are distinct bits, so OR and XOR give the same
+// flags; the symlink and FIFO tests pin each flag's behaviour.
+#[cfg_attr(false, mutants::skip)]
+fn open_flags() -> i32 {
+    libc::O_NOFOLLOW | libc::O_NONBLOCK
+}
 
 /// Whether `hub/devices/` holds a record whose hash is the SHA-256 of
 /// `token`. Anything that is not a regular file holding that hash is
@@ -38,7 +44,7 @@ pub(crate) fn holds(home: &Path, token: &str) -> bool {
         });
         let mut file = match fs::OpenOptions::new()
             .read(true)
-            .custom_flags(FLAGS)
+            .custom_flags(open_flags())
             .open(&path)
         {
             Ok(file) => file,
