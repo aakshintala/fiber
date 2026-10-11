@@ -89,7 +89,9 @@ fn read(bytes: &[u8]) -> Incoming {
 #[test]
 fn rfc_6455_masked_hello_reads() {
     assert_eq!(
-        read(&[0x81, 0x85, 0x37, 0xFA, 0x21, 0x3D, 0x7F, 0x9F, 0x4D, 0x51, 0x58]),
+        read(&[
+            0x81, 0x85, 0x37, 0xFA, 0x21, 0x3D, 0x7F, 0x9F, 0x4D, 0x51, 0x58
+        ]),
         Incoming::Text("Hello".to_owned())
     );
 }
@@ -104,10 +106,16 @@ fn the_unmasked_hello_is_written_without_a_mask_and_closes_1002() {
 #[test]
 fn written_lengths_use_the_minimal_encoding() {
     let frame = text_frame(&[b'a'; 125]);
-    assert!(frame.starts_with(&[0x81, 125]), "125 takes the 2-byte header");
+    assert!(
+        frame.starts_with(&[0x81, 125]),
+        "125 takes the 2-byte header"
+    );
     assert_eq!(frame.len(), 2 + 125);
     let frame = text_frame(&[b'a'; 126]);
-    assert!(frame.starts_with(&[0x81, 126, 0, 126]), "126 takes the 4-byte header");
+    assert!(
+        frame.starts_with(&[0x81, 126, 0, 126]),
+        "126 takes the 4-byte header"
+    );
     assert_eq!(frame.len(), 4 + 126);
     let frame = text_frame(&[b'a'; 65_535]);
     assert!(
@@ -185,7 +193,10 @@ fn ping_payloads_of_125_read_and_126_close_1002() {
 #[test]
 fn a_pong_is_ignored() {
     assert_eq!(pong_frame(b"hi"), vec![0x8A, 2, b'h', b'i']);
-    assert_eq!(read(&send(0xA, true, 0x00, true, None, b"hi")), Incoming::Pong);
+    assert_eq!(
+        read(&send(0xA, true, 0x00, true, None, b"hi")),
+        Incoming::Pong
+    );
 }
 
 #[test]
@@ -308,7 +319,11 @@ fn close_codes_an_endpoint_may_send_are_echoed() {
             Incoming::Close(Some((code, String::new()))),
             "code {code} is accepted"
         );
-        assert_eq!(echo_close(Some(code)), close_frame(code, ""), "code {code} echoes");
+        assert_eq!(
+            echo_close(Some(code)),
+            close_frame(code, ""),
+            "code {code} echoes"
+        );
     }
 }
 
@@ -329,9 +344,7 @@ fn short_lengths_in_long_forms_close_1002() {
         read(&send(0x1, true, 0x00, true, Some(126), &[b'a'; 125])),
         Incoming::Fail(1002)
     );
-    let Incoming::Text(text) =
-        read(&send(0x1, true, 0x00, true, Some(126), &[b'a'; 126]))
-    else {
+    let Incoming::Text(text) = read(&send(0x1, true, 0x00, true, Some(126), &[b'a'; 126])) else {
         panic!("126 bytes in the 16-bit form read");
     };
     assert_eq!(text.len(), 126);
@@ -339,8 +352,7 @@ fn short_lengths_in_long_forms_close_1002() {
         read(&send(0x1, true, 0x00, true, Some(127), &[b'a'; 65_535])),
         Incoming::Fail(1002)
     );
-    let Incoming::Text(text) =
-        read(&send(0x1, true, 0x00, true, Some(127), &[b'a'; 65_536]))
+    let Incoming::Text(text) = read(&send(0x1, true, 0x00, true, Some(127), &[b'a'; 65_536]))
     else {
         panic!("65536 bytes in the 64-bit form read");
     };

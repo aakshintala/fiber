@@ -421,14 +421,14 @@ fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool) {
             pause();
         }
         send(
-        &writer,
-        &hub,
-        "hub_hello",
-        Map::from_iter([(
-            "fiber_version".to_owned(),
-            Value::String(hub.fiber_version.clone()),
-        )]),
-    );
+            &writer,
+            &hub,
+            "hub_hello",
+            Map::from_iter([(
+                "fiber_version".to_owned(),
+                Value::String(hub.fiber_version.clone()),
+            )]),
+        );
     }
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     hub.rejoins.register(n, &writer, &relays);
@@ -778,7 +778,12 @@ pub(crate) fn reject(
     code: &ErrorCode,
     message: &str,
 ) {
-    send(writer, hub, "command_rejected", rejection(id, code, message));
+    send(
+        writer,
+        hub,
+        "command_rejected",
+        rejection(id, code, message),
+    );
 }
 
 /// A `command_rejected` payload for `code` and `message`, with `id` when

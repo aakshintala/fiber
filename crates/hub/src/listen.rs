@@ -63,7 +63,7 @@ impl Held {
         }
     }
 
-        /// Holds the installed hub's bound websocket port.
+    /// Holds the installed hub's bound websocket port.
     pub(crate) fn with_port(self, listener: crate::port::Listener) -> Self {
         Self {
             port: Some(listener),

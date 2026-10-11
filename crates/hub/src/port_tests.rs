@@ -14,8 +14,8 @@ use std::fs;
 use std::io::{BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, mpsc};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -293,8 +293,9 @@ fn server_frame(read: &mut BufReader<TcpStream>) -> Option<Item> {
 #[track_caller]
 fn text_of(client: &Ws, what: &str) -> Value {
     match client.next(what) {
-        Item::Text(bytes) => serde_json::from_slice(&bytes)
-            .unwrap_or_else(|_| panic!("{what} is JSON")),
+        Item::Text(bytes) => {
+            serde_json::from_slice(&bytes).unwrap_or_else(|_| panic!("{what} is JSON"))
+        }
         other @ (Item::Response(_) | Item::Close(_, _) | Item::Pong(_) | Item::Eof) => {
             panic!("{what} is text, got {other:?}")
         }
@@ -519,8 +520,15 @@ fn an_unlisted_origin_gets_403_and_a_listed_one_101() {
     assert_eq!(hub.clients(), 0, "a refused origin is never counted");
     let log = temp.log();
     assert!(log.contains("hub_started"), "{log}");
-    for code in ["client_connected", "client_unauthenticated", "client_disconnected"] {
-        assert!(!log.contains(code), "a refused origin writes no log line: {log}");
+    for code in [
+        "client_connected",
+        "client_unauthenticated",
+        "client_disconnected",
+    ] {
+        assert!(
+            !log.contains(code),
+            "a refused origin writes no log line: {log}"
+        );
     }
     let admitted = Ws::connect(port, Some("https://a.example"));
     assert_eq!(admitted.next("the handshake answer"), Item::Response(101));
@@ -736,9 +744,7 @@ fn a_handshake_with_stop_set_gets_101_then_eof() {
     let client = Ws::connect(port, None);
     assert_eq!(client.next("the handshake answer"), Item::Response(101));
     assert_eq!(client.next("the end"), Item::Eof);
-    Deadline::after(DEADLINE)
-        .recv(&rx)
-        .expect("serve returns");
+    Deadline::after(DEADLINE).recv(&rx).expect("serve returns");
 }
 
 #[test]

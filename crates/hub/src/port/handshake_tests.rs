@@ -105,8 +105,14 @@ fn each_refusal_answers_400() {
     let fifteen = base64_key(15);
     let seventeen = base64_key(17);
     let refusals: Vec<(&str, Vec<u8>)> = vec![
-        ("POST", request(KEY, &standard(), "POST", "/hub", "HTTP/1.1")),
-        ("HTTP/1.0", request(KEY, &standard(), "GET", "/hub", "HTTP/1.0")),
+        (
+            "POST",
+            request(KEY, &standard(), "POST", "/hub", "HTTP/1.1"),
+        ),
+        (
+            "HTTP/1.0",
+            request(KEY, &standard(), "GET", "/hub", "HTTP/1.0"),
+        ),
         (
             "no Upgrade",
             request(
@@ -135,7 +141,11 @@ fn each_refusal_answers_400() {
             "version 12",
             request(
                 KEY,
-                &["Upgrade: websocket", "Connection: Upgrade", "Sec-WebSocket-Version: 12"],
+                &[
+                    "Upgrade: websocket",
+                    "Connection: Upgrade",
+                    "Sec-WebSocket-Version: 12",
+                ],
                 "GET",
                 "/hub",
                 "HTTP/1.1",
@@ -145,7 +155,11 @@ fn each_refusal_answers_400() {
             "no key",
             request(
                 "",
-                &["Upgrade: websocket", "Connection: Upgrade", "Sec-WebSocket-Version: 13"],
+                &[
+                    "Upgrade: websocket",
+                    "Connection: Upgrade",
+                    "Sec-WebSocket-Version: 13",
+                ],
                 "GET",
                 "/hub",
                 "HTTP/1.1",
@@ -159,7 +173,11 @@ fn each_refusal_answers_400() {
         ),
     ];
     for (what, bytes) in &refusals {
-        assert_eq!(read(bytes, &[]), Err(Refusal::BadRequest), "{what} is refused");
+        assert_eq!(
+            read(bytes, &[]),
+            Err(Refusal::BadRequest),
+            "{what} is refused"
+        );
     }
     assert_eq!(
         refused(Refusal::BadRequest),
@@ -179,7 +197,10 @@ fn origins_admit_listed_and_refuse_the_rest() {
     );
     assert_eq!(
         read(
-            &browser_with(KEY, &["Origin: https://a.example", "Origin: https://b.example"]),
+            &browser_with(
+                KEY,
+                &["Origin: https://a.example", "Origin: https://b.example"]
+            ),
             &listed
         ),
         Err(Refusal::Forbidden),
@@ -213,8 +234,7 @@ fn requests_at_the_cap_are_admitted_and_past_it_refused() {
 fn sized(size: u64) -> Vec<u8> {
     let prefix = "GET /";
     let suffix = " HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
-    let pad =
-        usize::try_from(size - u64::try_from(prefix.len() + suffix.len()).unwrap()).unwrap();
+    let pad = usize::try_from(size - u64::try_from(prefix.len() + suffix.len()).unwrap()).unwrap();
     let mut out = prefix.as_bytes().to_vec();
     out.extend(std::iter::repeat_n(b'a', pad));
     out.extend_from_slice(suffix.as_bytes());

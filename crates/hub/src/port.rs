@@ -12,8 +12,8 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -181,9 +181,7 @@ pub(crate) fn serve(
     let accept = match handshake::read_request(&mut read, &origins) {
         Ok(accept) => accept,
         Err(refusal) => {
-            write
-                .write_all(&handshake::refused(refusal))
-                .unwrap_or(());
+            write.write_all(&handshake::refused(refusal)).unwrap_or(());
             stream.shutdown(Shutdown::Both).unwrap_or(());
             return;
         }
@@ -408,7 +406,9 @@ fn spawn(
         let mut fail = connection::lock(&hub.fail_spawn);
         if fail.as_deref() == Some(name) {
             *fail = None;
-            return Err(io::Error::other(format!("the test refused to spawn {name}")));
+            return Err(io::Error::other(format!(
+                "the test refused to spawn {name}"
+            )));
         }
     }
     thread::Builder::new()
@@ -486,10 +486,7 @@ fn pump_lines(web: &Arc<Web>, bridge: UnixStream) {
                 if buf.last() == Some(&b'\n') {
                     buf.pop();
                 }
-                if web
-                    .text(String::from_utf8_lossy(&buf).as_bytes())
-                    .is_err()
-                {
+                if web.text(String::from_utf8_lossy(&buf).as_bytes()).is_err() {
                     break;
                 }
             }

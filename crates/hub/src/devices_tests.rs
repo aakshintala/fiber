@@ -54,7 +54,10 @@ fn a_matching_record_holds_its_token() {
     let temp = Temp::new();
     write_record(&temp.dir, "phone", "t0k3n");
     assert!(holds(&temp.dir, "t0k3n"));
-    assert!(!holds(&temp.dir, "t0k3m"), "one character off holds nothing");
+    assert!(
+        !holds(&temp.dir, "t0k3m"),
+        "one character off holds nothing"
+    );
 }
 
 #[test]
@@ -90,9 +93,15 @@ fn each_skipped_shape_alone_holds_nothing() {
         ("no-hash", r#"{"name":"phone"}"#.to_owned()),
         (
             "upper",
-            format!("{{\"token_sha256\":\"{}\"}}", sha256_hex(b"t0k3n").to_uppercase()),
+            format!(
+                "{{\"token_sha256\":\"{}\"}}",
+                sha256_hex(b"t0k3n").to_uppercase()
+            ),
         ),
-        ("wrong", format!("{{\"token_sha256\":\"{}\"}}", sha256_hex(b"other"))),
+        (
+            "wrong",
+            format!("{{\"token_sha256\":\"{}\"}}", sha256_hex(b"other")),
+        ),
     ] {
         let temp = Temp::new();
         fs::create_dir_all(temp.devices()).unwrap();
