@@ -132,7 +132,7 @@ enum Act {
     RailDismiss(usize),
     /// a project header's "+" chip: starts a session in that project
     RailNew(&'static str),
-    /// a project header's "N done": opens that project's session list
+    /// a project header's "N ✓": opens that project's session list
     RailDone(&'static str),
     /// a click region an extension drew, by its interned id
     Ext(usize),
@@ -2218,10 +2218,7 @@ fn panel_rows(f: &Fold, now: i64, keys: &str, pw: usize, waiting: usize) -> Vec<
             let line = [
                 vec![sp("  ! ", fg(ORANGE).add_modifier(Modifier::BOLD))],
                 fit(
-                    &[sp(
-                        format!("{waiting} waiting · rail hidden · show"),
-                        fg(ORANGE),
-                    )],
+                    &[sp(format!("{waiting} waiting · hidden · show"), fg(ORANGE))],
                     w - 7,
                 ),
             ]
@@ -2461,7 +2458,7 @@ fn fake_sessions(f: &Fold, now: i64) -> Vec<Fake> {
 fn short_model(m: &str) -> String {
     m.rsplit('/').next().unwrap_or(m).to_string()
 }
-/// Fake "N done" counts per project, in first-seen order.
+/// Fake "N ✓" counts per project, in first-seen order.
 fn rail_done() -> Vec<u32> {
     vec![2, 0, 1]
 }
@@ -3004,12 +3001,12 @@ fn rail_card_compact(
     rows
 }
 /// A project header: the name in the accent colour, bold, with the group's live spend
-/// summed over its cards and a fake "N done" right-aligned.
+/// summed over its cards and a fake "N ✓" right-aligned.
 /// A project header: the name in the accent colour, bold, a "+" chip starting a session
-/// there, and the group's live spend summed over its cards with a fake "N done" opening
+/// there, and the group's live spend summed over its cards with a fake "N ✓" opening
 /// the project's session list. Click targets are found by scanning the fitted row.
 fn rail_project_head(name: &'static str, dollars: f64, done: u32, w: usize) -> Row {
-    let done_text = format!("{done} done");
+    let done_text = format!("{done} ✓");
     let mut spans = fit(
         &[
             sp(name.to_string(), fg(BLUE).add_modifier(Modifier::BOLD)),
@@ -3109,7 +3106,7 @@ fn rail_full_b(
     out.push(rail_chips(
         &[
             ("full", Act::RailDensity(0)),
-            ("medium", Act::RailDensity(1)),
+            ("med", Act::RailDensity(1)),
             ("three", Act::RailDensity(2)),
             ("compact", Act::RailDensity(3)),
         ],

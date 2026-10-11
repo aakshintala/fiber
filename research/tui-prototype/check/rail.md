@@ -6,4 +6,4 @@ One run per case: `--rail-case CASE`.
 - hovered: the needs-input card brightened across its whole surface, visible in SGR only; its text reads the same as the unhovered rail.
 - context-bars: 30%, 65% and 90% each drawn twice, once with the panel's ▆ track and once with the ░ track; the fills blue, orange and red; pick one.
 - floor-ceiling: the 22-column rail keeps number, glyph, state word, name, branch and spend-plus-percentage with no bar; the 48-column rail shows the full card with its bar; nothing clipped on either.
-- hidden: a 1-column handle with the dim ⋮ grip at the screen's left edge, and the Session card ending `! 2 waiting · rail hidden …` in orange: the `· show` hint clips at the default panel width, as on screen.
+- hidden: a 1-column handle with the dim ⋮ grip at the screen's left edge, and the Session card ending `! 2 waiting · hidden · show` in orange, whole at the default panel width.
