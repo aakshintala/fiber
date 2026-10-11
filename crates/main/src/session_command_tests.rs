@@ -15,6 +15,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 
 use super::report;
+use fakes::Deadline;
 
 /// How long the child may run before the test kills it and fails.
 const CHILD_DEADLINE: Duration = Duration::from_secs(10);
@@ -74,6 +75,7 @@ fn a_failure_with_no_signal_is_reported() {
 /// Installs the signals, records a real SIGTERM to this process when
 /// `signalled`, then reports an `io_failed` failure and exits with what
 /// `report` returns.
+#[track_caller]
 fn report_child(signalled: bool) {
     fakes::within("report_child", CHILD_DEADLINE, move || {
         let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
@@ -82,7 +84,8 @@ fn report_child(signalled: bool) {
         signals.arm(Box::new(move || tx.send(()).unwrap()), Box::new(|| {}));
         if signalled {
             fakes::kill_pid(std::process::id(), "TERM").unwrap();
-            rx.recv_timeout(CHILD_DEADLINE)
+            Deadline::after(CHILD_DEADLINE)
+                .recv(&rx)
                 .expect("the signal was recorded before reporting");
         }
         let code = report(&signals, crate::failed(ErrorCode::IoFailed, "x"));

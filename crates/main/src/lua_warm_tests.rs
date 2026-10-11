@@ -21,6 +21,7 @@ use contract::events::Decision;
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Origin, Sender};
 use contract::{CommandId, RequestId, SessionId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{ProviderServer, Request, Response};
 use log::Log;
@@ -78,6 +79,7 @@ fn prompt(text: &str) -> Delivery {
 
 /// Moves the clock to `to` and wakes the loop with a reply naming nothing,
 /// as a real clock's timeout would; returns once the loop has taken it.
+#[track_caller]
 fn advance_to(clock: &FakeClock, inbox: &mpsc::Sender<Delivery>, to: Instant) {
     clock.advance(to.saturating_duration_since(clock.now()));
     let (done, taken) = mpsc::channel();
@@ -96,8 +98,8 @@ fn advance_to(clock: &FakeClock, inbox: &mpsc::Sender<Delivery>, to: Instant) {
             })),
         ))
         .unwrap();
-    taken
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&taken)
         .expect("the loop took the wake");
 }
 
@@ -163,8 +165,8 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
             None,
         )));
     });
-    let parts = setup
-        .recv_timeout(DEADLINE)
+    let parts = Deadline::after(DEADLINE)
+        .recv(&setup)
         .expect("setup ended in time")
         .unwrap();
 
@@ -213,7 +215,9 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
         "idle counts from the cap"
     );
     advance_to(&clock, &inbox, exit);
-    let ran = finished.recv_timeout(DEADLINE).expect("run ended in time");
+    let ran = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run ended in time");
     assert!(ran.is_ok(), "{ran:?}");
 
     let sent: Vec<Request> = server

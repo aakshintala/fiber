@@ -19,6 +19,7 @@ use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
 use contract::tool::{Effects, Output, Tool};
 use contract::{CommandId, GenerationId, SessionId};
+use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use serde_json::{Map, Value, json};
 
@@ -316,9 +317,12 @@ fn live_reviewer() {
     let mut cache_read = 0;
     let mut cache_write = 0;
     let mut output = 0;
+    // One deadline for the whole wait: the loop reads until the
+    // turn_completed marker.
+    let wait = Deadline::after(DEADLINE);
     loop {
         let line = watcher
-            .recv_timeout(DEADLINE)
+            .recv_timeout(wait.left())
             .expect("a turn_completed line in time")
             .expect("the log outlives the turn")
             .expect("the log ended before turn_completed");

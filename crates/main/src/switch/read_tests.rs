@@ -16,6 +16,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 
 use super::{Reads, signallable};
+use fakes::Deadline;
 
 /// The deadline of each wait in these tests.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -38,6 +39,7 @@ fn listed(reads: &Reads) -> Vec<u32> {
 }
 
 /// Waits under [`DEADLINE`] for `file` to hold a line, and returns it.
+#[track_caller]
 fn ready_line(file: &std::path::Path) -> String {
     let file = file.to_path_buf();
     fakes::within("the ready file", DEADLINE, move || {
@@ -76,7 +78,9 @@ fn cancel_ends_a_blocked_run_with_closing_and_a_late_value_changes_nothing() {
             })
         })
     };
-    began.recv_timeout(DEADLINE).expect("the read started");
+    Deadline::after(DEADLINE)
+        .recv(&began)
+        .expect("the read started");
     reads.cancel();
     let rejected = fakes::within("the cancelled run", DEADLINE, move || {
         waiter.join().unwrap()
@@ -104,7 +108,9 @@ fn cancel_ends_a_blocked_run_started_before_a_quick_one_with_closing() {
             })
         })
     };
-    began.recv_timeout(DEADLINE).expect("the read started");
+    Deadline::after(DEADLINE)
+        .recv(&began)
+        .expect("the read started");
     // A second run takes the next id; under the `*=` mutant it reuses id 0,
     // replaces A's wake, and its finish removes A's entry, so the cancel
     // below never wakes A.
@@ -252,7 +258,9 @@ fn a_cancel_between_a_read_starting_and_its_spawn_starts_no_command() {
             reads.command(&mut sh(&script))
         })
     };
-    began.recv_timeout(DEADLINE).expect("the job started");
+    Deadline::after(DEADLINE)
+        .recv(&began)
+        .expect("the job started");
     reads.cancel();
     open.send(()).unwrap();
     let error = fakes::within("the refused command", DEADLINE, move || job.join().unwrap())

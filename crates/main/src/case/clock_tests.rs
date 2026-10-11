@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 use contract::clock::{Clock, Wake};
 
 use super::CaseClock;
+use fakes::Deadline;
 
 #[test]
 fn per_call_advances_move_time_before_any_operation_parks() {
@@ -159,8 +160,8 @@ fn a_future_wait_is_visible_and_released_by_an_advance() {
     thread::scope(|scope| {
         let (parked, done) = waiter(scope, Arc::clone(&clock), until);
         assert_eq!(
-            parked
-                .recv_timeout(WAIT)
+            Deadline::after(WAIT)
+                .recv(&parked)
                 .expect("waited for the clock park"),
             (Some(until), None)
         );
@@ -168,7 +169,9 @@ fn a_future_wait_is_visible_and_released_by_an_advance() {
 
         clock.advance(Duration::from_secs(3));
         assert_eq!(
-            done.recv_timeout(WAIT).expect("waited for the clock wake"),
+            Deadline::after(WAIT)
+                .recv(&done)
+                .expect("waited for the clock wake"),
             clock.now()
         );
         assert!(clock.parked().is_empty());
@@ -206,14 +209,14 @@ fn sleep_parks_until_its_deadline_is_advanced() {
         sleeping.sleep(delay);
         let _sent = done_tx.send(sleeping.now());
     });
-    started_rx
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&started_rx)
         .expect("waited for sleep to start");
 
     assert_eq!(clock.advance_when_parked(delay, WAIT), Ok(()));
     assert_eq!(
-        done_rx
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&done_rx)
             .expect("waited for sleep to finish"),
         before + delay
     );
@@ -230,14 +233,14 @@ fn only_an_exactly_parked_deadline_authorises_an_advance() {
         let (early_parked, early_done) = waiter(scope, Arc::clone(&clock), early);
         let (late_parked, late_done) = waiter(scope, Arc::clone(&clock), late);
         assert_eq!(
-            early_parked
-                .recv_timeout(WAIT)
+            Deadline::after(WAIT)
+                .recv(&early_parked)
                 .expect("waited for the early deadline to park"),
             (Some(early), None)
         );
         assert_eq!(
-            late_parked
-                .recv_timeout(WAIT)
+            Deadline::after(WAIT)
+                .recv(&late_parked)
                 .expect("waited for the late deadline to park"),
             (Some(late), None)
         );
@@ -247,11 +250,11 @@ fn only_an_exactly_parked_deadline_authorises_an_advance() {
         let before_cleanup = clock.now();
         let parked_before_cleanup = clock.parked();
         clock.advance(Duration::from_millis(9));
-        let early_finished = early_done.recv_timeout(WAIT);
-        let late_reparked = late_parked.recv_timeout(WAIT);
+        let early_finished = Deadline::after(WAIT).recv(&early_done);
+        let late_reparked = Deadline::after(WAIT).recv(&late_parked);
         let late_still_parked = clock.parked().contains(&Some(late));
         clock.advance(Duration::from_millis(2));
-        let late_finished = late_done.recv_timeout(WAIT);
+        let late_finished = Deadline::after(WAIT).recv(&late_done);
 
         assert!(
             result.is_err(),
