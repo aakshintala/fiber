@@ -143,11 +143,11 @@ impl Tool for Read {
                 text
             }
             // `offset` and `limit` do not apply to an image.
-            Ok(Inspected::Image { hash, .. }) => {
+            Ok(Inspected::Image { hash, bytes, .. }) => {
                 if let Err(output) = reject_pages(&path, pages) {
                     return output;
                 }
-                let output = crate::image::read(self.shared.images(), &path, cancel);
+                let output = crate::image::read(self.shared.images(), &path, &bytes, cancel);
                 // Seen for a later `write`: the bytes this read took in. A
                 // failed or cancelled read returned no image, so saw nothing.
                 if output

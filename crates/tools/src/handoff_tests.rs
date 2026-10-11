@@ -54,22 +54,20 @@ fn the_result_has_no_content_and_carries_the_note() {
 
 #[test]
 fn a_missing_or_mistyped_note_is_an_invalid_argument() {
-    for arguments in [json!({"note": 3})] {
-        let arguments = args(arguments);
+    let arguments = args(json!({"note": 3}));
 
-        assert!(matches!(
-            Handoff.effects(&arguments),
-            Err(EffectsError::Arguments(_))
-        ));
-        let output = run(&arguments);
-        assert!(output.control.is_none());
-        assert_eq!(
-            output.error.map(|error| error.code),
-            Some(ErrorCode::InvalidArguments)
-        );
-        assert!(matches!(
-            output.content.as_slice(),
-            [ContentPart::Text { .. }]
-        ));
-    }
+    assert!(matches!(
+        Handoff.effects(&arguments),
+        Err(EffectsError::Arguments(_))
+    ));
+    let output = run(&arguments);
+    assert!(output.control.is_none());
+    assert_eq!(
+        output.error.map(|error| error.code),
+        Some(ErrorCode::InvalidArguments)
+    );
+    assert!(matches!(
+        output.content.as_slice(),
+        [ContentPart::Text { .. }]
+    ));
 }

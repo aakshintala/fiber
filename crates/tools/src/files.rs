@@ -55,7 +55,7 @@ pub(crate) enum Inspected {
         hint: &'static str,
     },
     /// A PNG, JPEG, GIF or WebP file, by its first bytes. The image child
-    /// reads it (`docs/tools.md`, "read").
+    /// reads the bytes on its standard input (`docs/tools.md`, "read").
     Image {
         /// Detected type, such as `a PNG image`.
         kind: &'static str,
@@ -63,6 +63,8 @@ pub(crate) enum Inspected {
         size: u64,
         /// The hash of the bytes read, for the stale-file check.
         hash: u64,
+        /// The file's whole contents, read once per `read` call.
+        bytes: Vec<u8>,
     },
     /// A PDF file, by its first bytes. The image child counts and cuts it
     /// (`docs/tools.md`, "read").
@@ -240,7 +242,12 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
     match magic(&bytes) {
         Some(Magic::Image(kind)) => {
             let hash = hash_bytes(&bytes);
-            return Ok(Inspected::Image { kind, size, hash });
+            return Ok(Inspected::Image {
+                kind,
+                size,
+                hash,
+                bytes,
+            });
         }
         Some(Magic::Pdf) => {
             return Ok(Inspected::Pdf {
