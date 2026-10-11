@@ -3391,6 +3391,13 @@ struct ShutsDown {
 }
 
 impl Provider for ShutsDown {
+    fn wire_tools(
+        &self,
+        tools: &[contract::provider::ToolDefinition],
+    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        fakes::wire_tools(tools)
+    }
+
     fn call(
         &self,
         request: &contract::provider::ModelRequest,

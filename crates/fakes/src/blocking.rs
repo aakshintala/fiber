@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use contract::provider::{
     CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ToolDefinition,
 };
+use serde_json::{Map, Value};
 
 use crate::deadline::Deadline;
 use crate::reply;
@@ -70,6 +72,10 @@ impl BlockingProvider {
 }
 
 impl Provider for BlockingProvider {
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        crate::scripted_provider::wire_tools(tools)
+    }
+
     fn call(&self, _request: &ModelRequest) -> Box<dyn ModelCall> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             Box::new(BlockingCall {

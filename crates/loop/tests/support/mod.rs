@@ -702,6 +702,10 @@ struct FireCancel {
 }
 
 impl Provider for FireCancel {
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        fakes::wire_tools(tools)
+    }
+
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         let call = self.inner.call(request);
         if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.fire_at {
@@ -726,6 +730,10 @@ struct AdvanceClock {
 }
 
 impl Provider for AdvanceClock {
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        fakes::wire_tools(tools)
+    }
+
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
         Box::new(AdvanceCall {
@@ -787,6 +795,10 @@ struct CancelAtCall {
 }
 
 impl Provider for CancelAtCall {
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        fakes::wire_tools(tools)
+    }
+
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         let call = self.inner.call(request);
         if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.at {

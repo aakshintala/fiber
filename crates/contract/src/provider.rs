@@ -25,16 +25,8 @@ pub trait Provider: Send + Sync {
     /// Each tool in the protocol's own shape, in name order: exactly what
     /// the protocol puts in its request for that tool. The strict-tool
     /// budget is spent in name order, so it depends on the whole set.
-    /// The default is each definition as a JSON object, for fakes.
     /// This is the tools Fiber builds.
-    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-        let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
-        sorted.sort_by(|a, b| a.name.cmp(&b.name));
-        sorted
-            .into_iter()
-            .filter_map(|tool| serde_json::to_value(tool).ok()?.as_object().cloned())
-            .collect()
-    }
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>>;
 
     /// The provider's generation lookup, when its package declares `cost()`
     /// (`docs/model-routing.md`, "Cost"); `None` for every other provider.

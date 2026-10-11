@@ -17,6 +17,7 @@ use contract::clock::{Clock, Wake};
 use contract::events::CacheLifetime;
 use contract::provider::{
     CallError, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::shapes::Tokens;
 use fakes::Deadline;
@@ -167,6 +168,41 @@ fn tokens(input: u64, output: u64, cache_read: u64) -> Tokens {
         cache_write: Default::default(),
         output,
     }
+}
+
+#[test]
+fn wire_tools_is_each_definition_as_an_object_in_name_order() {
+    let clock = FakeClock::new();
+    let scripted = provider(json!([{ "text": "hi" }]), &clock);
+    let tools = vec![
+        ToolDefinition {
+            name: "b".into(),
+            description: "second".into(),
+            input_schema: json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        },
+        ToolDefinition {
+            name: "a".into(),
+            description: "first".into(),
+            input_schema: json!({"type": "object"}),
+            deferred: true,
+            hosted: None,
+        },
+    ];
+    let wired = scripted.wire_tools(&tools);
+    let want: Vec<serde_json::Map<String, serde_json::Value>> = ["a", "b"]
+        .iter()
+        .map(|name| {
+            let tool = tools.iter().find(|t| &t.name == name).unwrap();
+            serde_json::to_value(tool)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .clone()
+        })
+        .collect();
+    assert_eq!(wired, want);
 }
 
 #[test]

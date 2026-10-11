@@ -246,6 +246,13 @@ struct NoWarm {
 }
 
 impl Provider for NoWarm {
+    fn wire_tools(
+        &self,
+        tools: &[contract::provider::ToolDefinition],
+    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        fakes::wire_tools(tools)
+    }
+
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         self.inner.call(request)
     }
@@ -624,6 +631,13 @@ struct BlockSecond {
 }
 
 impl Provider for BlockSecond {
+    fn wire_tools(
+        &self,
+        tools: &[contract::provider::ToolDefinition],
+    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        fakes::wire_tools(tools)
+    }
+
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         let call = self.inner.call(request);
         if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
@@ -689,6 +703,13 @@ struct Advance {
 }
 
 impl Provider for Advance {
+    fn wire_tools(
+        &self,
+        tools: &[contract::provider::ToolDefinition],
+    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        fakes::wire_tools(tools)
+    }
+
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
             self.clock.advance(self.by);
