@@ -47,6 +47,17 @@ fn quota_provider_on(
     LuaProvider::new(extension, "p")
 }
 
+/// A provider `p` from the entry script `script`, on a fresh clock.
+fn verbatim_provider(root: &fakes::TempDir, script: &str) -> Arc<LuaProvider> {
+    let home = root.path().join("home");
+    let dir = root.path().join("ext");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("init.lua"), script).unwrap();
+    let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
+    LuaProvider::new(extension, "p")
+}
+
 /// A provider `p` whose `quota()` returns `run`, and its clock.
 fn quota_provider(root: &fakes::TempDir, run: &str) -> (Arc<LuaProvider>, Arc<FakeClock>) {
     let clock = FakeClock::new();
@@ -304,7 +315,7 @@ fn a_package_without_quota_reports_no_quota_and_fetches_nothing() {
     let root = fakes::TempDir::new("fiber-quota-absent");
     let server = fakes::ProviderServer::start([]).unwrap();
     let script = "fiber.provider(\"p\", { sign = { timeout = 1000, run = function() return {} end } })\n";
-    let bare = quota_provider_on(&root, script, FakeClock::new());
+    let bare = verbatim_provider(&root, script);
     assert_eq!(read(&bare), QuotaEntry::NoQuota);
     assert!(
         server.requests().is_empty(),
@@ -528,4 +539,199 @@ fn an_unreachable_last_value_maps_a_passed_reset_time() {
             )),
         }
     );
+}
+
+/// A provider `p` whose `quota()` asks `<server>/<label>` and whose `sign()`
+/// returns no headers, for the off-the-request-path test.
+fn http_quota_sign_provider(root: &fakes::TempDir, server: &str) -> Arc<LuaProvider> {
+    let home = root.path().join("home");
+    let dir = root.path().join("ext");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("init.lua"),
+        format!(
+            "fiber.provider(\"p\", {{\n\
+             quota = {{ timeout = 60000, run = function(a)\n\
+             local reply = host.http({{ url = \"{server}/\" .. a.label }})\n\
+             if reply.status ~= 200 then error(\"denied \" .. reply.status) end\n\
+             return json.decode(reply.body)\n\
+             end }},\n\
+             sign = {{ timeout = 60000, run = function() return {{}} end }},\n\
+             }})"
+        ),
+    )
+    .unwrap();
+    let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
+    LuaProvider::new(extension, "p")
+}
+
+#[track_caller]
+fn quoted(
+    lua: &Arc<LuaProvider>,
+    inner: Arc<crate::test_support::Inner>,
+) -> Arc<dyn contract::provider::Provider> {
+    let lua = Arc::clone(lua);
+    let inner = inner as Arc<dyn contract::provider::Provider>;
+    let pair = pair();
+    within(move || lua.with_quota(inner, pair)).unwrap()
+}
+
+#[test]
+fn with_quota_without_quota_is_the_inner_provider_itself() {
+    let root = fakes::TempDir::new("fiber-quota-unquoted");
+    let script = "fiber.provider(\"p\", { sign = { timeout = 1000, run = function() return {} end } })\n";
+    let lua = verbatim_provider(&root, script);
+    let inner: Arc<dyn contract::provider::Provider> =
+        Arc::new(crate::test_support::Inner::default());
+    let wrapped = {
+        let inner = Arc::clone(&inner);
+        let pair = pair();
+        within(move || lua.with_quota(inner, pair)).unwrap()
+    };
+    assert!(std::ptr::addr_eq(
+        Arc::as_ptr(&wrapped),
+        Arc::as_ptr(&inner)
+    ));
+}
+
+#[test]
+fn a_model_call_fetches_off_the_request_path_without_waiting() {
+    let root = fakes::TempDir::new("fiber-quota-trigger");
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
+    server.hold();
+    let clock = FakeClock::new();
+    let lua = http_quota_provider(&root, &server.url(), clock);
+    let inner = Arc::new(crate::test_support::Inner::default());
+    let wrapped = quoted(&lua, Arc::clone(&inner));
+    let _call = within({
+        let wrapped = Arc::clone(&wrapped);
+        move || wrapped.call(&crate::test_support::request())
+    });
+    assert_eq!(
+        inner.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the call reached the inner provider"
+    );
+    assert!(
+        server.await_requests(1, WAIT),
+        "the model call never started the fetch"
+    );
+    server.release();
+}
+
+#[test]
+fn a_model_call_refetches_only_past_five_minutes() {
+    let root = fakes::TempDir::new("fiber-quota-trigger-fresh");
+    let server = fakes::ProviderServer::start([
+        ok(windows_body("primary", 10.0, None)),
+        ok(windows_body("primary", 11.0, None)),
+    ])
+    .unwrap();
+    let clock = FakeClock::new();
+    let lua = http_quota_provider(&root, &server.url(), Arc::clone(&clock));
+    let inner = Arc::new(crate::test_support::Inner::default());
+    let wrapped = quoted(&lua, inner);
+    let _call = wrapped.call(&crate::test_support::request());
+    assert_eq!(
+        read(&lua),
+        QuotaEntry::Reported(percent("primary", 10.0, None)),
+        "the first fetch"
+    );
+    // Exactly five minutes old is fresh: neither the call nor a reader
+    // refetches.
+    clock.advance(Duration::from_secs(5 * 60));
+    let _call = wrapped.call(&crate::test_support::request());
+    assert_eq!(
+        read(&lua),
+        QuotaEntry::Reported(percent("primary", 10.0, None))
+    );
+    assert_eq!(server.requests().len(), 1);
+    // One nanosecond more, and the model call starts the refetch itself.
+    clock.advance(Duration::from_nanos(1));
+    let _call = wrapped.call(&crate::test_support::request());
+    assert!(
+        server.await_requests(2, WAIT),
+        "the model call never started the refetch"
+    );
+    assert_eq!(
+        read(&lua),
+        QuotaEntry::Reported(percent("primary", 11.0, None))
+    );
+}
+
+#[test]
+fn quoted_forwards_calls_tools_warms_and_cost_lookup() {
+    let root = fakes::TempDir::new("fiber-quota-forward");
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
+    let lua = http_quota_provider(&root, &server.url(), FakeClock::new());
+    let inner = Arc::new(crate::test_support::Inner {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+        warms: true,
+    });
+    let wrapped = quoted(&lua, Arc::clone(&inner));
+    let tools = [contract::provider::ToolDefinition {
+        name: "b".into(),
+        description: String::new(),
+        input_schema: serde_json::json!({"type": "object"}),
+        deferred: false,
+        hosted: None,
+    }];
+    assert_eq!(wrapped.wire_tools(&tools), inner.wire_tools(&tools));
+    assert!(wrapped.warms(&crate::test_support::request()));
+    assert!(wrapped.cost_lookup().is_none());
+    let _call = wrapped.call(&crate::test_support::request());
+    assert_eq!(
+        inner.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[test]
+fn a_failed_fetch_never_reaches_the_caller() {
+    let root = fakes::TempDir::new("fiber-quota-trigger-error");
+    let server = fakes::ProviderServer::start([denied()]).unwrap();
+    let lua = http_quota_provider(&root, &server.url(), FakeClock::new());
+    let inner = Arc::new(crate::test_support::Inner::default());
+    let wrapped = quoted(&lua, Arc::clone(&inner));
+    let _call = within({
+        let wrapped = Arc::clone(&wrapped);
+        move || wrapped.call(&crate::test_support::request())
+    });
+    assert_eq!(
+        inner.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(read(&lua), QuotaEntry::Unreachable { last: None });
+}
+
+#[test]
+fn sign_runs_while_a_quota_fetch_is_held() {
+    use contract::signing::Signer;
+    let root = fakes::TempDir::new("fiber-quota-off-path");
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
+    server.hold();
+    let lua = http_quota_sign_provider(&root, &server.url());
+    let inner = Arc::new(crate::test_support::Inner::default());
+    let wrapped = quoted(&lua, inner);
+    let _call = wrapped.call(&crate::test_support::request());
+    assert!(
+        server.await_requests(1, WAIT),
+        "the quota fetch never reached the server"
+    );
+    // The fetch is parked on `host.http`, which does not hold the extension's
+    // thread: `sign()` on the request path still runs.
+    let found = within({
+        let lua = Arc::clone(&lua);
+        move || {
+            lua.sign(&contract::signing::SignRequest {
+                method: "POST",
+                url: "http://127.0.0.1:9/v1",
+                headers: &[],
+                body: b"{}",
+            })
+        }
+    });
+    assert!(found.is_ok(), "sign never returned: {found:?}");
+    server.release();
 }
