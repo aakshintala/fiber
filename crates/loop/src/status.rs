@@ -50,6 +50,7 @@ pub(crate) struct Fold {
     name: Option<String>,
     /// The first prompt, once the first `turn_started` was seen.
     first_prompt: Option<String>,
+    /// Whether a turn has started: only the first turn locks the name.
     workspace: String,
     project: String,
     parent: Option<SessionId>,
@@ -99,6 +100,7 @@ impl Fold {
         let mut fold = Self {
             name: None,
             first_prompt: None,
+            turn_seen: false,
             project,
             workspace,
             parent: None,
@@ -203,10 +205,11 @@ impl Fold {
                 if self.first_prompt.is_none() {
                     if let Some(prompt) = prompt_of(&started.input) {
                         self.first_prompt = Some(prompt);
-                    } else if !started
-                        .input
-                        .iter()
-                        .any(|item| matches!(item, InputItem::Message { .. }))
+                    } else if !self.turn_seen
+                        && !started
+                            .input
+                            .iter()
+                            .any(|item| matches!(item, InputItem::Message { .. }))
                     {
                         // A first turn with no message at all leaves no
                         // name to fall back on; a turn of others'
@@ -214,6 +217,7 @@ impl Fold {
                         self.first_prompt = Some(String::new());
                     }
                 }
+                self.turn_seen = true;
                 self.turn_running = true;
                 self.retrying = false;
                 self.refresh_running();
