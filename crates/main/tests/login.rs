@@ -810,9 +810,9 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str) -> Run {
     });
     let mut stderr = Vec::new();
     loop {
-        let chunk = setup.deadline.recv(&received).unwrap_or_else(|_| {
+        let Ok(chunk) = setup.deadline.recv(&received) else {
             panic!("`fiber login codex --device` showed no device code within the deadline")
-        });
+        };
         stderr.extend_from_slice(&chunk);
         if String::from_utf8_lossy(&stderr).contains(needle) {
             break;

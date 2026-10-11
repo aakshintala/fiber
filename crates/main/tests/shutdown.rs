@@ -224,9 +224,9 @@ impl Fiber {
             if self.seen.iter().filter(|line| line["kind"] == kind).count() >= nth {
                 return;
             }
-            let line = self.deadline.recv(&self.lines).unwrap_or_else(|_| {
+            let Ok(line) = self.deadline.recv(&self.lines) else {
                 panic!("waited until the deadline for {kind}; saw {:?}", self.seen)
-            });
+            };
             self.seen.push(serde_json::from_slice(&line).unwrap());
             self.raw.push(line);
         }
