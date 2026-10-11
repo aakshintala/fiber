@@ -8,7 +8,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use config::{Config, ModelData};
+use config::Config;
 use contract::ErrorCode;
 use contract::shapes::Failure;
 use extensions::{Providers, SessionExtensions};
@@ -73,10 +73,9 @@ pub fn model_lists(
         .into_iter()
         .map(|notice| notice.message)
         .collect();
-    // The cached lists serve every cached copy, including a removed Lua
-    // provider's, until a refresh answers without it. A refresh works
-    // from the Lua providers alone, so a removed one's cache file shows
-    // no longer once it answers.
+    // The cached lists serve every cached copy an installed extension
+    // declares. A refresh works from the Lua providers alone, so a
+    // removed one's cache file shows no longer once it answers.
     match read {
         ModelLists::Cached => {
             cached_lists(home, &mut providers, &mut notices)?;
@@ -96,7 +95,8 @@ pub fn model_lists(
 /// Adds every cached-only provider's list: each cached name no provider
 /// holds, except `scripted`, which no installed package may register.
 /// A name whose file no longer reads as a list is no copy at all; one
-/// that cannot be read fails the read.
+/// that cannot be read fails the read. A name no installed extension
+/// declares is not listed.
 fn cached_lists(
     home: &Path,
     providers: &mut Providers,
@@ -107,13 +107,9 @@ fn cached_lists(
             continue;
         }
         let models = config::read_model_cache(home, &name)?.unwrap_or_default();
-        let mut models = models;
-        notices.extend(
-            extensions::leave_out_invalid(&name, &name, &mut models)
-                .into_iter()
-                .map(|notice| notice.message),
-        );
-        providers.add_cached(&name, models);
+        if let Some(admitted) = providers.add_cached(&name, models) {
+            notices.extend(admitted.into_iter().map(|notice| notice.message));
+        }
     }
     Ok(())
 }
@@ -130,14 +126,12 @@ fn refreshed(
     max_age: Option<std::time::Duration>,
 ) {
     let loaded = load(config);
-    for (extension, provider) in loaded.lua_providers() {
-        notices.extend(
-            providers
-                .add_lua(extension, provider, config)
-                .into_iter()
-                .map(|notice| notice.message),
-        );
-    }
+    notices.extend(
+        providers
+            .add_session(&loaded, config)
+            .into_iter()
+            .map(|notice| notice.message),
+    );
     let wanted: Vec<Arc<extensions::LuaProvider>> = loaded
         .lua_providers()
         .iter()
@@ -146,14 +140,13 @@ fn refreshed(
     for (name, handle) in extensions::refresh_lists(&wanted, providers, config, max_age) {
         match handle.join() {
             Ok(Ok(models)) => {
-                let mut models: Vec<ModelData> = models;
                 // The caller exposes text, not notice extension metadata.
                 notices.extend(
-                    extensions::leave_out_invalid(&name, &name, &mut models)
+                    providers
+                        .set_models(&name, models)
                         .into_iter()
                         .map(|notice| notice.message),
                 );
-                providers.set_models(&name, models);
             }
             Ok(Err(error)) => {
                 notices.push(format!("Could not refresh {name}'s model list: {error}"));

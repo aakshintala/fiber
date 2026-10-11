@@ -387,7 +387,11 @@ fn stale_refreshes_with_the_age_check_and_every_without() {
     let server =
         fakes::ProviderServer::start_with_fallback([listing(&["m1"])], listing(&["m1", "m2"]))
             .unwrap();
-    setup.install_lua("acme-ext", &server_models(&server.url()), &json!({}));
+    setup.install_lua(
+        "acme-ext",
+        &server_models(&server.url()),
+        &json!({"acme": [format!("{}/v1", server.url())]}),
+    );
     let clock = Arc::new(fakes::clock::FakeClock::new());
     // No cached copy: the first read runs `models()` at once.
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
@@ -411,7 +415,11 @@ fn every_refreshes_whatever_the_cache_holds() {
     let server =
         fakes::ProviderServer::start_with_fallback([listing(&["m1"])], listing(&["m1", "m2"]))
             .unwrap();
-    setup.install_lua("acme-ext", &server_models(&server.url()), &json!({}));
+    setup.install_lua(
+        "acme-ext",
+        &server_models(&server.url()),
+        &json!({"acme": [format!("{}/v1", server.url())]}),
+    );
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
@@ -426,7 +434,11 @@ fn a_failed_refresh_is_a_notice_and_the_cached_list_stays() {
     let setup = Setup::new("fiber-model-list-failed");
     // The script holds one answer: the refresh past it fails.
     let server = fakes::ProviderServer::start([listing(&["m1"])]).unwrap();
-    setup.install_lua("acme-ext", &server_models(&server.url()), &json!({}));
+    setup.install_lua(
+        "acme-ext",
+        &server_models(&server.url()),
+        &json!({"acme": [format!("{}/v1", server.url())]}),
+    );
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
@@ -447,7 +459,11 @@ fn a_failed_refresh_is_a_notice_and_the_cached_list_stays() {
 fn a_cached_lua_only_provider_lists_without_loading() {
     let setup = Setup::new("fiber-model-list-lua-only");
     let server = fakes::ProviderServer::start([listing(&["m1"])]).unwrap();
-    setup.install_lua("acme-ext", &server_models(&server.url()), &json!({}));
+    setup.install_lua(
+        "acme-ext",
+        &server_models(&server.url()),
+        &json!({"acme": [format!("{}/v1", server.url())]}),
+    );
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
@@ -701,6 +717,9 @@ fiber.provider("acme", {{
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: false }).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
-    assert_eq!(catalogue.notices.len(), 1);
-    assert!(catalogue.notices[0].contains("acme/m2"), "{:?}", catalogue.notices);
+    assert!(
+        catalogue.notices.iter().any(|notice| notice.contains("acme/m2")),
+        "{:?}",
+        catalogue.notices
+    );
 }

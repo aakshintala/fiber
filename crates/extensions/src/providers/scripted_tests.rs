@@ -231,12 +231,25 @@ fn a_lua_provider_named_scripted_is_left_out_with_a_notice() {
     );
     let config = Config::load(Sources {
         home: home.clone(),
-        workspace: home,
+        workspace: home.clone(),
         project: ProjectKey::new("p").unwrap(),
         overrides: Vec::new(),
     })
     .unwrap();
-    let mut providers = Providers::default();
+    // `evil` declares `scripted`: the reserved-name notice stands.
+    let dir = home.join("extensions").join("evil");
+    fs::create_dir_all(&dir).unwrap();
+    let mut manifest = json!({ "name": "evil", "version": "v1.0.0", "fiber": "0.1.0", "api": 1 });
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"scripted": ["http://127.0.0.1:1/v1"]}),
+        );
+    }
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
+    write_record(&dir);
+    let (mut providers, loaded) = Providers::load(&home).unwrap();
+    assert!(loaded.is_empty(), "{loaded:?}");
     let notices = providers.add_lua("evil", &lua, &config);
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);

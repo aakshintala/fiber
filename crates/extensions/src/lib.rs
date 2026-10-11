@@ -275,6 +275,16 @@ pub enum Error {
         /// The directories left as they are.
         stuck: Vec<PathBuf>,
     },
+    /// An extension that registers a provider its manifest does not
+    /// declare under `providers`: loading skips the registration
+    /// (`docs/extensions.md`, "What a package holds").
+    #[error("The extension `{extension}` registers the provider `{provider}`, which its manifest does not declare under `providers`.")]
+    UndeclaredProvider {
+        /// The extension.
+        extension: String,
+        /// The provider it registered.
+        provider: String,
+    },
     /// A model reference whose provider is not installed.
     #[error(
         "The provider `{provider}` is not installed. {}",
@@ -473,6 +483,7 @@ impl Error {
             Self::ProviderMissing { .. } => ErrorCode::ExtensionMissing,
             Self::Damaged(_)
             | Self::Lua { .. }
+            | Self::UndeclaredProvider { .. }
             | Self::Timeout { .. }
             | Self::Abandoned { .. }
             | Self::UnknownCallback { .. }

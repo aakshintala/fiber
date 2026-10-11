@@ -82,6 +82,7 @@ fn login_provider_applies_the_manifest_memory_cap_in_mib() {
             "fiber": "0.1.0",
             "api": 1,
             "memory_mib": 2,
+            "providers": {"acme": ["http://127.0.0.1:1/v1"]},
         })
         .to_string(),
     )

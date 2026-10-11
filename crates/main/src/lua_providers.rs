@@ -64,10 +64,7 @@ pub(crate) fn add_lua(
     providers: &mut Providers,
     config: &Config,
 ) -> Result<AddedLua, Failure> {
-    let mut notices = Vec::new();
-    for (extension, provider) in extensions.lua_providers() {
-        notices.extend(providers.add_lua(extension, provider, config));
-    }
+    let mut notices = providers.add_session(extensions, config);
     let naming: Vec<(String, String)> = providers
         .names()
         .flat_map(|name| {
