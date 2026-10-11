@@ -7089,7 +7089,7 @@ mod tests {
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
-                "--view-case delegate-view, job-pty, running, usage, changed-files, search-results",
+                "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools",
             ]
         );
         let h = cases::help(SURFACES);

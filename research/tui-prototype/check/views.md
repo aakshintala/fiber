@@ -8,3 +8,4 @@ One run per case: `--view-case CASE`.
 - usage: usage broken down by turn, by model and by delegate, each with tokens by kind, billed and subscription cost, and the budget left.
 - changed-files: the changed files with the chosen file's hunks as a diff against HEAD, the untracked file wholly added, removals red.
 - search-results: every match one row each with the lines around it, the current match brighter, and the jump hint.
+- tools: tools by source with state and size, two on/off switches per MCP or extension tool, built-ins without a switch, and the reload cost.

@@ -67,6 +67,12 @@ const CASES: &[Case<Look>] = &[
             kind: Kind::SearchResults,
         },
     },
+    Case {
+        name: "tools",
+        help: "every tool by source with its switches",
+        check: "tools by source with state and size, two on/off switches per MCP or extension tool, built-ins without a switch, and the reload cost.",
+        build: || Look { kind: Kind::Tools },
+    },
 ];
 
 /// `--view-case`, for `--help` and `check/views.md`.
@@ -85,6 +91,7 @@ enum Kind {
     Usage,
     ChangedFiles,
     SearchResults,
+    Tools,
 }
 
 struct Look {
@@ -347,6 +354,50 @@ fn search_results_rows() -> Vec<super::Row> {
     ]
 }
 
+/// One on/off switch: on bold, off dim.
+fn switch(on: bool) -> Span<'static> {
+    if on {
+        sp("[on]", bold())
+    } else {
+        sp("[off]", dim())
+    }
+}
+
+/// The tools view: every tool by source with its state and approximate
+/// size. Each MCP or extension tool has two switches, this project and
+/// everywhere; built-ins are always declared, so they have none.
+fn tools_rows() -> Vec<super::Row> {
+    vec![
+        row(vec![sp("Built-in", bold())]),
+        row(vec![sp("read · full · ~1.2k", Style::new())]),
+        row(vec![sp("shell · full · ~800", Style::new())]),
+        super::Row::default(),
+        row(vec![sp("MCP · linear", bold())]),
+        row(vec![
+            sp(
+                "linear_search · deferred · ~800 · this project ",
+                Style::new(),
+            ),
+            switch(true),
+            sp(" · everywhere ", Style::new()),
+            switch(false),
+        ]),
+        super::Row::default(),
+        row(vec![sp("Extension · notes", bold())]),
+        row(vec![
+            sp("notes_save · loaded · ~400 · this project ", Style::new()),
+            switch(false),
+            sp(" · everywhere ", Style::new()),
+            switch(true),
+        ]),
+        super::Row::default(),
+        row(vec![sp(
+            "a change rebuilds the cache (~84k tokens · $0.31) on reload",
+            dim(),
+        )]),
+    ]
+}
+
 fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
     match c.kind {
         Kind::Delegate => {
@@ -386,6 +437,12 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             let mut out = vec![view_header("Search", "⌕ lock")];
             out.push(super::Row::default());
             out.extend(search_results_rows());
+            out
+        }
+        Kind::Tools => {
+            let mut out = vec![view_header("Tools", "/tools")];
+            out.push(super::Row::default());
+            out.extend(tools_rows());
             out
         }
         Kind::JobPty => {
@@ -588,7 +645,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 6);
+        assert_eq!(CASES.len(), 7);
         assert!(parse("nope").is_none());
     }
 
@@ -832,6 +889,57 @@ mod tests {
         }
         assert_eq!(current, 1, "not exactly one current match");
         assert_eq!(other, 2, "not two other matches");
+    }
+
+    #[test]
+    fn tools_header_row() {
+        for cols in [160, NARROW] {
+            let c = parse_case("tools");
+            let buf = buffer(&c, cols, 48);
+            assert_header(&buf, "tools", "Tools", "/tools", cols);
+        }
+    }
+
+    #[test]
+    fn tools_shows_sources_states_and_switches() {
+        for cols in [160, NARROW] {
+            let c = parse_case("tools");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("Built-in"), "no built-in section");
+            assert!(t.contains("read · full"), "no built-in row");
+            assert!(t.contains("MCP · linear"), "no MCP section");
+            assert!(t.contains("linear_search · deferred"), "no MCP row");
+            assert!(t.contains("Extension · notes"), "no extension section");
+            assert!(t.contains("notes_save · loaded"), "no extension row");
+            assert!(t.contains("this project"), "no project switch");
+            assert!(t.contains("everywhere"), "no global switch");
+            assert_eq!(t.matches("[on]").count(), 2, "wrong on count");
+            assert_eq!(t.matches("[off]").count(), 2, "wrong off count");
+            assert!(t.contains("on reload"), "no reload note");
+        }
+    }
+
+    #[test]
+    fn tools_switch_marks_on_bold_and_off_dim() {
+        let on = switch(true);
+        assert_eq!(on.content, "[on]");
+        assert!(on.style.add_modifier.contains(Modifier::BOLD));
+        let off = switch(false);
+        assert_eq!(off.content, "[off]");
+        assert!(off.style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn tools_builtin_rows_carry_no_switch() {
+        for r in tools_rows() {
+            let plain: String = r.spans.iter().map(|s| s.content.as_ref()).collect();
+            if plain.contains("read · full") {
+                assert!(
+                    !plain.contains("[on]") && !plain.contains("[off]"),
+                    "built-in row carries a switch: {plain}"
+                );
+            }
+        }
     }
 
     #[test]
