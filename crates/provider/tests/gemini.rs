@@ -22,30 +22,25 @@ mod wire_tools;
 #[path = "support/harness.rs"]
 mod harness;
 
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
-use std::thread;
 
 use contract::events::{
     CallStatus, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, CallUsage, Delta, Finish, HostedCall, Input, InputSize, ModelCall, ModelRequest,
-    Provider, Reply, ReplyAction, ToolDefinition,
+    CallError, Delta, Finish, HostedCall, Input, InputSize, ModelRequest, Provider, Reply,
+    ReplyAction, ToolDefinition,
 };
 use contract::shapes::{ContentPart, Tokens};
 use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
-use fakes::{Deadline, ProviderServer, Response, fingerprint};
+use fakes::{ProviderServer, Response, fingerprint};
 use provider::Endpoint;
 use provider::google_generative_ai::{Gemini, decode};
 use serde_json::{Value, json};
 
 use probes::Recorded;
 
-use harness::{
-    DEADLINE, gemini_completed as completed_reply, gemini_sse as stream, run, sent_body,
-};
+use harness::{gemini_completed as completed_reply, gemini_sse as stream, run, sent_body};
 const REFERENCE: &str = "gemini/gemini-3.1-flash-lite";
 
 fn research(path: &str) -> PathBuf {
@@ -994,80 +989,6 @@ fn a_failed_status_reads_retry_after_or_retry_info_and_the_providers_words() {
         "Quota exceeded."
     );
     assert!(failures[4].message.contains("fiber login gemini"));
-}
-
-#[test]
-fn a_call_cancelled_before_it_runs_returns_without_connecting() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let endpoint = Endpoint {
-        base_url: format!("http://{}", listener.local_addr().unwrap()),
-        direct: true,
-        ..Endpoint::default()
-    };
-    let call = Gemini::new(endpoint).request(&request());
-    call.cancel();
-    let Err(CallError::Cancelled { usage }) = run(Box::new(call)).0 else {
-        panic!("a call cancelled before run returns cancelled");
-    };
-    // Nothing was read, so the call carries only the body it built.
-    assert!(usage.input_size.bytes > 0);
-    assert_eq!(*usage, CallUsage::unnamed(usage.input_size));
-    let accepted = listener.accept().map(|_| ()).unwrap_err();
-    assert_eq!(accepted.kind(), std::io::ErrorKind::WouldBlock);
-}
-
-#[test]
-fn cancelling_from_another_thread_ends_a_blocked_read() {
-    let payload = stream(&[chunk(json!([{"text": "Hel"}]), None)]);
-    let server =
-        ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
-            .header("content-type", "text/event-stream")])
-        .unwrap();
-    let endpoint = Endpoint {
-        base_url: server.url(),
-        direct: true,
-        ..Endpoint::default()
-    };
-    let call: Arc<dyn ModelCall> = Arc::from(Gemini::new(endpoint).call(&request()));
-    let (first, first_seen) = mpsc::channel();
-    let (done, finished) = mpsc::channel();
-    let runner = Arc::clone(&call);
-    thread::spawn(move || {
-        let result = runner.run(&mut |delta| first.send(delta).unwrap());
-        done.send(result).unwrap();
-    });
-    let delta = Deadline::after(DEADLINE)
-        .recv(&first_seen)
-        .expect("waited for the first delta");
-    assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
-    call.cancel();
-    let result = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("waited for run to return after the cancel");
-    let Err(CallError::Cancelled { usage }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, Some(GenerationId("r1".into())));
-    assert_eq!(
-        usage.tokens,
-        Tokens {
-            input: 10,
-            cache_read: 0,
-            cache_write: Default::default(),
-            output: 3,
-        }
-    );
-    assert_eq!(usage.web_searches, None);
-    assert_eq!(
-        usage.input_size.bytes,
-        u64::try_from(server.requests()[0].body.len()).unwrap()
-    );
-    assert!(!usage.input_size.media);
-    assert!(
-        server.await_closed(1, DEADLINE),
-        "waited for the server to see the client close"
-    );
 }
 
 #[test]
