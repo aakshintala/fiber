@@ -91,6 +91,11 @@ impl Loop {
         if self.preamble.is_some() {
             return Ok(false);
         }
+        // The post-offer load runs once per process, after the offer step
+        // and before the first build: the turn path and `finish_suspended`
+        // both run `offer` before this. A rewound loop's logged preamble
+        // returned above, so no rebuild in that process runs the load.
+        self.load_approved()?;
         let unattended = !self.answerable;
         self.set_trigger();
         let (system_prompt, tools, mut event) = prompt::build(

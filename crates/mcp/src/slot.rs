@@ -221,15 +221,10 @@ impl Slot {
         };
         let timeout = self.spec.startup_timeout;
         let name = self.spec.name.clone();
-        match Server::start(
-            &self.spec.command,
-            &self.spec.args,
-            &self.spec.env,
-            &self.workspace,
-            &self.clock,
-            timeout,
-            &self.version,
-        ) {
+        // Every spawn runs the spec's guard first: a cached server keeps
+        // its spec unspawned until its first call, so a check at
+        // preparation alone would run a file created in between unapproved.
+        match crate::start::spawn(&self.spec, &self.workspace, &self.clock, &self.version) {
             Ok(open) => {
                 // The session keeps the tools it declared, because a tool
                 // set that changes mid-session misses the whole prompt

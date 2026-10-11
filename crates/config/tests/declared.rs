@@ -190,3 +190,60 @@ fn a_symbolic_link_repository_file_is_refused() {
         ErrorCode::ConfigInvalid
     );
 }
+
+#[test]
+fn an_entry_with_only_emptied_objects_is_not_a_declaration() {
+    let setup = Setup::new();
+    // A repository file whose only key was repository hints: the key check
+    // drops the hints but keeps the emptied ancestors, and the entry is
+    // neither offered nor gates anything.
+    setup.write(
+        &setup.repository(),
+        &json!({"mcp": {"servers": {"fx": {"tools": {"echo": {"hints": {"read_only": true}}}}}}})
+            .to_string(),
+    );
+    let declared = config::declared(&setup.workspace()).unwrap();
+    assert!(
+        declared.mcp_servers.is_empty(),
+        "{:?}",
+        declared.mcp_servers
+    );
+}
+
+#[test]
+fn an_entry_with_any_value_is_a_declaration() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.repository(),
+        &json!({"mcp": {"servers": {"fx": {"timeout_ms": 1},
+                                        "empty": {},
+                                        "ghost": {"tools": {"echo": {"hints": {"read_only": true}}}}}}})
+            .to_string(),
+    );
+    let declared = config::declared(&setup.workspace()).unwrap();
+    assert_eq!(
+        declared.mcp_servers.keys().cloned().collect::<Vec<_>>(),
+        vec!["fx".to_owned()]
+    );
+    assert_eq!(declared.mcp_servers["fx"], json!({"timeout_ms": 1}));
+}
+
+#[test]
+fn dropping_empty_entries_leaves_hooks_unchanged() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.repository(),
+        &json!({"mcp": {"servers": {"fx": {"tools": {"echo": {"hints": {"read_only": true}}}}}}})
+            .to_string(),
+    );
+    setup.write(
+        &setup.workspace().join(".fiber").join(HOOKS_FILE),
+        r#"{"hooks": {"fmt": {"point": "after_tool", "command": "cargo"}}}"#,
+    );
+    let declared = config::declared(&setup.workspace()).unwrap();
+    assert!(declared.mcp_servers.is_empty());
+    assert_eq!(
+        serde_json::Value::Object(declared.hooks),
+        json!({"fmt": {"point": "after_tool", "command": "cargo"}})
+    );
+}

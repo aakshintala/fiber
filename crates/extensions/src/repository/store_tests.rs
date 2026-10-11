@@ -711,3 +711,76 @@ fn store_debug_names_the_type_and_its_fields() {
     // The clock is skipped: `Arc<dyn Clock>` has no `Debug`.
     assert!(!text.contains("clock"), "{text}");
 }
+
+#[test]
+fn ensure_copy_builds_the_copy_and_records_no_approval() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let hash = hashed(&item);
+    let held = store(&repo).ensure_copy(&item, &hash).unwrap();
+    assert!(
+        repo.home()
+            .join("pinned")
+            .join(&hash)
+            .join("srv/run.js")
+            .is_file()
+    );
+    // `ensure_copy` never writes under `approvals/`.
+    assert!(!repo.home().join("approvals").exists());
+    drop(held);
+}
+
+#[test]
+fn ensure_copy_keeps_a_ready_copy() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let hash = hashed(&item);
+    store(&repo).approve(&item, &hash).unwrap();
+    let marker = repo.home().join("pinned").join(&hash).join("sentinel");
+    fs::write(&marker, "kept").unwrap();
+    let held = store(&repo).ensure_copy(&item, &hash).unwrap();
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "kept");
+    drop(held);
+}
+
+#[test]
+fn ensure_copy_rebuilds_a_copy_whose_directory_and_marker_are_gone() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let hash = hashed(&item);
+    store(&repo).approve(&item, &hash).unwrap();
+    fs::remove_dir_all(repo.home().join("pinned").join(&hash)).unwrap();
+    fs::remove_file(repo.home().join("pinned").join(format!("{hash}.ready"))).unwrap();
+    let held = store(&repo).ensure_copy(&item, &hash).unwrap();
+    assert!(
+        repo.home()
+            .join("pinned")
+            .join(&hash)
+            .join("srv/run.js")
+            .is_file()
+    );
+    drop(held);
+}
+
+#[test]
+fn ensure_copy_refuses_a_name_that_is_not_a_hash() {
+    let repo = Repo::new();
+    let item = server(&repo);
+    let e = store(&repo).ensure_copy(&item, "xyz").unwrap_err();
+    assert!(matches!(&e, Error::Pin { .. }), "{e}");
+}
+
+#[test]
+fn the_hold_blocks_an_exclusive_lock_until_it_drops() {
+    use std::fs::TryLockError;
+    let repo = Repo::new();
+    let item = server(&repo);
+    let hash = hashed(&item);
+    let held = store(&repo).ensure_copy(&item, &hash).unwrap();
+    let marker = repo.home().join("pinned").join(format!("{hash}.ready"));
+    let probe = File::options().read(true).open(&marker).unwrap();
+    assert!(matches!(probe.try_lock(), Err(TryLockError::WouldBlock)));
+    drop(held);
+    let probe = File::options().read(true).open(&marker).unwrap();
+    assert!(probe.try_lock().is_ok());
+}

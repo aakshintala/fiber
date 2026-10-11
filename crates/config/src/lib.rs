@@ -432,7 +432,14 @@ pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
             }
         }
         if let Some(Value::Object(servers)) = checked.get("mcp").and_then(|m| m.get("servers")) {
-            declared.mcp_servers = servers.clone();
+            // An entry with no value is not a declaration: a repository
+            // file holding only emptied objects (such as a `tools` subtree
+            // whose hints were dropped) neither offers nor gates anything.
+            declared.mcp_servers = servers
+                .iter()
+                .filter(|(_, entry)| has_value(entry))
+                .map(|(name, entry)| (name.clone(), entry.clone()))
+                .collect();
         }
     }
     let mut settings_files = BTreeMap::new();
@@ -455,6 +462,18 @@ pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
         }
     }
     Ok(declared)
+}
+
+/// Whether a declared entry holds at least one value: anything that is
+/// not an object, at any depth. An entry of only emptied objects is not
+/// a declaration.
+fn has_value(entry: &Value) -> bool {
+    match entry {
+        Value::Object(map) => map.values().any(has_value),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            true
+        }
+    }
 }
 
 /// The workspace's `.fiber/config.json`: plain-file checks, then the

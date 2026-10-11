@@ -9,11 +9,12 @@ use std::sync::Arc;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{
     Event, Notice, OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered,
-    RepositoryCodeResolved,
+    RepositoryCodeResolved, ToolReplaced,
 };
 use contract::inbox::{Ack, Delivery};
 use contract::repository::{RepositoryCode, Unapproved};
 use contract::shapes::Failure;
+use contract::tool::Tool;
 use contract::{ErrorCode, RequestId};
 
 use crate::inbox::{self, InboxRecv, TurnInput};
@@ -26,6 +27,58 @@ fn key(item: &OfferedItem) -> Key {
     (item.kind, item.name.clone(), item.hash.clone())
 }
 
+/// What the session loads once its offer step has run, before its first
+/// preamble: the repository code approved since the process started
+/// (`docs/extensions.md`, "Offering").
+pub type LoadApproved = Arc<dyn Fn(&OfferOutcome) -> Result<Approved, Failure> + Send + Sync>;
+
+/// What the post-offer step loaded: each tool with who registered it,
+/// and the durable lines written before `preamble_built`.
+#[derive(Default)]
+pub struct Approved {
+    /// `(registered_by, tool)` pairs for the loop.
+    pub tools: Vec<(String, Arc<dyn Tool>)>,
+    /// Durable events, written in order before `preamble_built`.
+    pub events: Vec<Event>,
+}
+
+/// One content, as `offer.rs`'s private `Key` names it: its kind, name
+/// and content hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfferKey {
+    /// What it is.
+    pub kind: OfferedKind,
+    /// Its name.
+    pub name: String,
+    /// Its content hash.
+    pub hash: String,
+}
+
+impl OfferKey {
+    fn of(key: &Key) -> Self {
+        Self {
+            kind: key.0,
+            name: key.1.clone(),
+            hash: key.2.clone(),
+        }
+    }
+}
+
+/// What the offer step settled: every content this session skipped, and
+/// every content it settled or wrote a line for. Built after `offer`
+/// returned `Ok(true)`, so it holds every answer of this process's offer
+/// step.
+#[derive(Debug, Clone, Default)]
+pub struct OfferOutcome {
+    /// Every content this session skipped: the log's folded skips plus
+    /// this process's `skip` decisions.
+    pub skipped: Vec<OfferKey>,
+    /// Every content the offer step settled or wrote a line for:
+    /// `skipped`, plus this process's decisions and notices, where the
+    /// notices include the `never` items the round filtered.
+    pub reported: Vec<OfferKey>,
+}
+
 /// What the offer step knows: the seam, the session's skips, and whether
 /// this process already ran the step.
 #[derive(Default)]
@@ -36,6 +89,18 @@ pub(crate) struct State {
     folded: Folded,
     /// What a person decided in this process, approvals included.
     decided: Vec<Key>,
+    /// This process's `skip` decisions: content never started in it, even
+    /// when approved meanwhile by `fiber approve` or another session.
+    skipped_now: Vec<Key>,
+    /// The keys `nobody_to_ask` wrote a notice for, and the `never` keys
+    /// the offer round filtered out without offering, required ones
+    /// included: content the load counts as reported.
+    noted: Vec<Key>,
+    /// What the session loads once its offer step has run, before its
+    /// first preamble.
+    load: Option<LoadApproved>,
+    /// The load ran in this process.
+    loaded: bool,
     /// The step ran in this process.
     done: bool,
 }
@@ -152,11 +217,19 @@ impl Loop {
                 self.nobody_to_ask(&unapproved)?;
                 return Ok(true);
             }
-            let items: Vec<OfferedItem> = unapproved
-                .into_iter()
-                .filter(|u| !u.never && !self.offer_answered(&u.offered))
-                .map(|u| u.offered)
-                .collect();
+            let mut items = Vec::new();
+            for u in unapproved {
+                // Content the person never wants is not offered again, but
+                // it counts as reported: the post-offer load drops it with
+                // no line.
+                if u.never && !self.offer_answered(&u.offered) {
+                    self.repository.noted.push(key(&u.offered));
+                    continue;
+                }
+                if !self.offer_answered(&u.offered) {
+                    items.push(u.offered);
+                }
+            }
             if items.is_empty() {
                 return Ok(true);
             }
@@ -179,10 +252,17 @@ impl Loop {
 
     /// With nobody to ask: a notice for each item not `required`, in order,
     /// then, when any is `required`, the run fails naming every required
-    /// one, with the first one's code.
-    fn nobody_to_ask(&self, unapproved: &[Unapproved]) -> Result<(), Error> {
+    /// one, with the first one's code. Content this session already
+    /// answered, inherited or in this process, is left out: a skipped
+    /// item stays skipped with no second notice, and never fails the run.
+    fn nobody_to_ask(&mut self, unapproved: &[Unapproved]) -> Result<(), Error> {
+        let fresh: Vec<&OfferedItem> = unapproved
+            .iter()
+            .map(|u| &u.offered)
+            .filter(|item| !self.offer_answered(item))
+            .collect();
         let mut required = Vec::new();
-        for item in unapproved.iter().map(|u| &u.offered) {
+        for item in fresh {
             if item.required {
                 required.push(item);
                 continue;
@@ -192,6 +272,7 @@ impl Loop {
                 kind_words(item.kind),
                 item.name
             );
+            self.repository.noted.push(key(item));
             self.log.append(
                 &Event::Notice(Notice {
                     code: ErrorCode::RepositoryCodeSkipped,
@@ -287,7 +368,9 @@ impl Loop {
     /// Applies a reply to `offer`: `true` once `repository_code_resolved`
     /// is written and the reply accepted. A reply that does not fit, or a
     /// decision the seam fails to record, is rejected and the offer stays
-    /// pending; decisions recorded before the failure stay recorded.
+    /// pending; non-skip decisions recorded before the failure stay
+    /// recorded, while a skip enters `skipped_now` only after the resolved
+    /// offer is written, so a rejected reply skips nothing.
     fn answer_offer(
         &mut self,
         code: &dyn RepositoryCode,
@@ -304,7 +387,9 @@ impl Loop {
             return Ok(false);
         }
         for (item, decision) in offer.items.iter().zip(&decisions) {
-            // A skip lives only in the log and this session.
+            // A skip is committed by the resolved offer below, never
+            // through the seam: it enters `skipped_now` only after the
+            // resolved offer is written, so a rejected reply skips nothing.
             if *decision == OfferDecision::Skip {
                 continue;
             }
@@ -313,6 +398,16 @@ impl Loop {
                 return Ok(false);
             }
         }
+        // A skip lives only in the log and this session, committed only
+        // once the resolved offer below is written: collected before the
+        // move into the resolved line.
+        let skipped: Vec<Key> = offer
+            .items
+            .iter()
+            .zip(&decisions)
+            .filter(|(_, decision)| **decision == OfferDecision::Skip)
+            .map(|(item, _)| key(item))
+            .collect();
         self.log.append(
             &Event::RepositoryCodeResolved(RepositoryCodeResolved {
                 request_id: offer.request_id.clone(),
@@ -322,6 +417,7 @@ impl Loop {
             None,
         )?;
         self.repository.decided.extend(offer.items.iter().map(key));
+        self.repository.skipped_now.extend(skipped);
         inbox::accept(ack);
         Ok(true)
     }
@@ -342,5 +438,94 @@ fn unapproved_code(kind: OfferedKind) -> ErrorCode {
         OfferedKind::Extension => ErrorCode::ExtensionUnapproved,
         OfferedKind::Hook => ErrorCode::HookUnapproved,
         OfferedKind::McpServer => ErrorCode::McpServerUnapproved,
+    }
+}
+
+impl Loop {
+    /// Loads what the session's offer step settled, once per process,
+    /// before its first preamble: the repository code approved since the
+    /// process started. On a loop that already holds a preamble (a rewound
+    /// one's logged build) the closure is stored and never called in this
+    /// process.
+    pub fn approved_code(mut self, load: LoadApproved) -> Self {
+        if self.preamble.is_some() {
+            self.repository.loaded = true;
+        }
+        self.repository.load = Some(load);
+        self
+    }
+
+    /// What the offer step settled in this session: the log's folded skips
+    /// plus this process's decisions and notices.
+    fn outcome(&self) -> OfferOutcome {
+        let mut skipped = Vec::new();
+        for key in self
+            .repository
+            .folded
+            .skipped
+            .iter()
+            .chain(self.repository.skipped_now.iter())
+        {
+            let key = OfferKey::of(key);
+            if !skipped.contains(&key) {
+                skipped.push(key);
+            }
+        }
+        let mut reported = skipped.clone();
+        for key in self
+            .repository
+            .decided
+            .iter()
+            .chain(self.repository.noted.iter())
+        {
+            let key = OfferKey::of(key);
+            if !reported.contains(&key) {
+                reported.push(key);
+            }
+        }
+        OfferOutcome { skipped, reported }
+    }
+
+    /// Runs the post-offer load once per process, immediately before that
+    /// process's first build, and never once a preamble existed without a
+    /// build in that process. Each event is written through the one
+    /// `Transcript` path, and each tool registers as `calls::register`
+    /// registers it: a same-name tool is replaced and recorded.
+    pub(crate) fn load_approved(&mut self) -> Result<(), Error> {
+        let Some(load) = self.repository.load.clone() else {
+            return Ok(());
+        };
+        if self.repository.loaded {
+            return Ok(());
+        }
+        // Set before calling, so an `Err` is not retried.
+        self.repository.loaded = true;
+        let outcome = self.outcome();
+        match load(&outcome) {
+            Ok(approved) => {
+                for event in &approved.events {
+                    self.write(event, None, None)?;
+                }
+                for (by, tool) in approved.tools {
+                    let definition = tool.definition();
+                    let name = definition.name.clone();
+                    if let Some((from, _, _)) = self
+                        .tools
+                        .insert(name.clone(), (by.clone(), tool, definition))
+                    {
+                        self.replaced.push(ToolReplaced { name, from, to: by });
+                    }
+                }
+                Ok(())
+            }
+            Err(failure) => Err(Error::RepositoryCode(failure)),
+        }
+    }
+}
+
+impl crate::resume::Resumed {
+    /// Every content the session skipped, as the post-offer load takes it.
+    pub fn skipped(&self) -> Vec<OfferKey> {
+        self.offers.skipped.iter().map(OfferKey::of).collect()
     }
 }

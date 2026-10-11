@@ -51,7 +51,7 @@ impl Setup {
     #[track_caller]
     fn kill(&self, started: &Started) {
         fakes::kill_pid(self.pid(), "KILL").expect("the server dies");
-        let slot = Arc::clone(&started.servers.slots[0]);
+        let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
         await_until("the killed server to be gone", move || {
             if let State::Running { server, .. } = &*super::lock(&slot.state) {
                 server.is_gone()
@@ -703,7 +703,7 @@ fn run_rejects_its_server_after_a_concurrent_restart_replaces_it() {
     let setup = Setup::new();
     setup.tools(&json!([{"name": "echo"}]));
     let started = setup.start(vec![setup.spec("fx")]);
-    let slot = Arc::clone(&started.servers.slots[0]);
+    let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
     let old_pid = setup.pid();
     let (served, got_served) = std::sync::mpsc::channel();
     let (resume, wait_to_resume) = std::sync::mpsc::channel();
@@ -758,7 +758,7 @@ fn a_late_death_of_a_replaced_server_records_nothing() {
     setup.tools(&json!([{"name": "echo"}]));
     setup.result("echo", HI);
     let started = setup.start(vec![setup.spec("fx")]);
-    let slot = Arc::clone(&started.servers.slots[0]);
+    let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
     let first = {
         let state = super::lock(&slot.state);
         let State::Running { server, .. } = &*state else {
@@ -835,7 +835,7 @@ fn a_call_ended_by_the_stop_records_no_death() {
         setup.fake.await_parked(deadline, WITHIN),
         "the call waits on its timeout",
     );
-    let slot = std::sync::Arc::clone(&started.servers.slots[0]);
+    let slot = std::sync::Arc::clone(&started.servers.slots.lock().unwrap()[0]);
     let (stopped_tx, stopped) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         slot.stop();
@@ -854,5 +854,155 @@ fn a_call_ended_by_the_stop_records_no_death() {
         "The MCP server `fx` did not start, or it has since exited."
     );
     assert!(output.servers.is_empty(), "a stop is not a death");
+    setup.stop(started.servers);
+}
+
+/// A program running the fixture, refused when `gate` is false. The test
+/// flips `gate` between two operations whose results it has already
+/// received: ordered, never timed.
+fn refusing_run(setup: &Setup, gate: &Arc<std::sync::atomic::AtomicBool>) -> crate::start::Program {
+    let gate = Arc::clone(gate);
+    crate::start::Program {
+        command: fakes::mcp_fixture().display().to_string(),
+        args: vec![setup.dir.path().display().to_string()],
+        guard: Arc::new(move || {
+            if gate.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err("the test refused the spawn".to_owned())
+            }
+        }),
+    }
+}
+
+fn declared_spec(
+    setup: &Setup,
+    name: &str,
+    gate: &Arc<std::sync::atomic::AtomicBool>,
+) -> ServerSpec {
+    let mut spec = setup.spec(name);
+    spec.command = "/no/such/declared".to_owned();
+    spec.args = vec![format!("--declared-{name}")];
+    spec.run = Some(refusing_run(setup, gate));
+    spec
+}
+
+#[test]
+fn a_lazy_slot_spawns_its_run_on_its_first_call() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    setup.result("echo", HI);
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let spec = declared_spec(&setup, "fx", &gate);
+    setup.populate(spec.clone());
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty());
+    assert!(!setup.spawned(), "a cached server starts on its first call");
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let out = setup.run(&tool);
+    assert!(out.error.is_none(), "{:?}", out.error);
+    assert!(setup.spawned(), "the first call spawns the run");
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_first_call_the_guard_refuses_fails_without_a_spawn() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let spec = declared_spec(&setup, "fx", &gate);
+    setup.populate(spec.clone());
+    // Declared lazily while the guard passes; the guard is not consulted
+    // until the first spawn.
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty());
+    assert!(!setup.spawned());
+    gate.store(false, std::sync::atomic::Ordering::SeqCst);
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let out = setup.run(&tool);
+    let error = out.error.expect("the refused call fails");
+    assert_eq!(error.code, ErrorCode::McpServerUnavailable);
+    assert!(
+        error.message.contains("the test refused the spawn"),
+        "message: {}",
+        error.message
+    );
+    let record = only_failed(&out.servers).expect("the refused start is recorded");
+    assert_eq!(record.reason, ServerFailure::StartFailed);
+    assert!(
+        record.will_restart,
+        "a refused first start is its one death"
+    );
+    assert!(!setup.spawned(), "a refused spawn starts nothing");
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_restart_the_guard_refuses_leaves_the_server_dead() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "die"}, {"name": "echo"}]));
+    setup.result("die", "exit");
+    setup.result("echo", HI);
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let spec = declared_spec(&setup, "fx", &gate);
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty());
+    let die = setup.tool(&started, "mcp__fx__die");
+    let first = setup.run(&die);
+    assert_eq!(code(&first), Some(ErrorCode::McpServerUnavailable));
+    assert_eq!(lines(&first.servers), ["failed died restart"]);
+    // The restart is refused: no new spawn, and the slot follows the
+    // failed-restart path.
+    gate.store(false, std::sync::atomic::Ordering::SeqCst);
+    setup.forget_spawn();
+    let echo = setup.tool(&started, "mcp__fx__echo");
+    let second = setup.run(&echo);
+    let error = second.error.expect("the refused restart fails");
+    assert_eq!(error.code, ErrorCode::McpServerUnavailable);
+    assert!(
+        error.message.contains("the test refused the spawn"),
+        "message: {}",
+        error.message
+    );
+    assert_eq!(lines(&second.servers), ["failed start_failed final"]);
+    assert!(!setup.spawned(), "a refused restart spawns nothing");
+    let third = setup.run(&echo);
+    assert_eq!(code(&third), Some(ErrorCode::McpServerUnavailable));
+    assert!(third.servers.is_empty());
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_prompt_run_the_guard_refuses_fails_without_a_spawn() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let spec = declared_spec(&setup, "fx", &gate);
+    crate::cache::write(
+        &setup.cache(),
+        &spec.name,
+        &crate::cache::key(&spec.command, &spec.args, &spec.env),
+        &crate::cache::Cached {
+            tools: Setup::listed("echo"),
+            prompts: vec![serde_json::from_value(json!({"name": "hello"})).expect("a prompt")],
+        },
+    );
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty());
+    assert!(!setup.spawned());
+    gate.store(false, std::sync::atomic::Ordering::SeqCst);
+    let out = setup.get(
+        &started.prompts,
+        "fx",
+        "hello",
+        "{}",
+        &fakes::CancelToken::new(),
+    );
+    let error = out.error.expect("the refused prompt run fails");
+    assert_eq!(error.code, ErrorCode::McpPromptFailed);
+    assert!(
+        error.message.contains("the test refused the spawn"),
+        "message: {}",
+        error.message
+    );
+    assert!(!setup.spawned(), "a refused prompt run spawns nothing");
     setup.stop(started.servers);
 }
