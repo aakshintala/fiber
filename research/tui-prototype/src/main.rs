@@ -4,6 +4,7 @@
 
 mod cases;
 mod completions;
+mod failures;
 mod home;
 mod input;
 mod login;
@@ -4817,6 +4818,7 @@ const SURFACES: &[cases::Surface] = &[
     views::SURFACE,
     offers::SURFACE,
     theme::SURFACE,
+    failures::SURFACE,
 ];
 
 // ============================================================ main
@@ -4854,6 +4856,8 @@ struct Args {
     offer_case: Option<String>,
     /// the theme case (`--theme`), combined with any other flag
     theme: Option<String>,
+    /// the failure case (`--failure-case`), drawn instead of the conversation
+    failure_case: Option<String>,
     /// the rail design at start: 0 list, 1 cards, 2 tabs
     rail: u8,
     /// the B card density at start: 0 full, 1 medium, 2 compact
@@ -4922,6 +4926,7 @@ fn args() -> Args {
         view_case: None,
         offer_case: None,
         theme: None,
+        failure_case: None,
         rail: 1,
         density: 2,
         rail_share: 15.0,
@@ -4982,6 +4987,7 @@ fn args() -> Args {
             "--view-case" => a.view_case = it.next(),
             "--offer-case" => a.offer_case = it.next(),
             "--theme" => a.theme = it.next(),
+            "--failure-case" => a.failure_case = it.next(),
             "--rail" => {
                 a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
                     Some("A") => 0,
@@ -5024,7 +5030,7 @@ fn args() -> Args {
             "--login" => a.login = it.next(),
             "-h" | "--help" => {
                 print!(
-                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--theme CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
                     cases::help(SURFACES)
                 );
                 std::process::exit(0);
@@ -5222,6 +5228,8 @@ fn main() -> io::Result<()> {
         views::run_view(&a, &mut term)
     } else if a.offer_case.is_some() {
         offers::run_offer(&a, &mut term)
+    } else if a.failure_case.is_some() {
+        failures::run_failures(&a, &mut term)
     } else {
         run(
             &a, &events, &mut f, &mut next, &mut term, t0, pager, open_index,
@@ -5241,15 +5249,16 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    // Home, the overlays, the login, the rail cases, the swapped views and the offers draw no
-    // session, so there is nothing to resume, unless home switched to the conversation, whose
-    // replayed session resumes as usual.
+    // Home, the overlays, the login, the rail cases, the swapped views, the offers and the
+    // failures draw no session, so there is nothing to resume, unless home switched to the
+    // conversation, whose replayed session resumes as usual.
     if a.home.is_none()
         && a.overlay.is_none()
         && a.login.is_none()
         && a.rail_case.is_none()
         && a.view_case.is_none()
         && a.offer_case.is_none()
+        && a.failure_case.is_none()
         || home_switched
     {
         println!(
@@ -7130,6 +7139,7 @@ mod tests {
                 "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills",
                 "--offer-case offer, confirm, select, multi_select, text_input",
                 "--theme light, dark-256, light-256, dark-no-color",
+                "--failure-case retry, failed, auth_failed, nudge, connection_lost, crashed, rewind, rewound",
             ]
         );
         let h = cases::help(SURFACES);
