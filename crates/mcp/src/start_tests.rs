@@ -981,8 +981,24 @@ fn adopt_then_stop_stops_the_adopted_server() {
     let pid = setup.pid();
     let idle = setup.start(vec![]);
     idle.servers.adopt(started.servers);
+    assert_eq!(idle.servers.slots.lock().unwrap().len(), 1);
     setup.stop(idle.servers);
     setup.await_reaped(pid);
+}
+
+#[test]
+fn a_program_debug_redacts_its_command_and_arguments() {
+    let program = super::Program {
+        command: "planted-command-secret".to_owned(),
+        args: vec!["--token=planted-argument-secret".to_owned()],
+        guard: std::sync::Arc::new(|| Ok(())),
+    };
+    let printed = format!("{program:?}");
+    assert!(printed.contains("Program"), "{printed}");
+    assert!(printed.contains("command: \"redacted\""), "{printed}");
+    assert!(printed.contains("args: [\"redacted\"]"), "{printed}");
+    assert!(!printed.contains("planted-command-secret"), "{printed}");
+    assert!(!printed.contains("planted-argument-secret"), "{printed}");
 }
 
 #[test]

@@ -28,7 +28,7 @@ use crate::slot::Slot;
 use crate::tool::McpTool;
 
 /// One configured stdio server: what [`start`] spawns.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ServerSpec {
     /// The configured name: the middle of every qualified tool name.
     pub name: String,
@@ -108,16 +108,6 @@ impl Clone for Program {
         }
     }
 }
-
-impl PartialEq for Program {
-    fn eq(&self, other: &Self) -> bool {
-        self.command == other.command
-            && self.args == other.args
-            && Arc::ptr_eq(&self.guard, &other.guard)
-    }
-}
-
-impl Eq for Program {}
 
 // The command and every argument can hold a token, so only their counts
 // print (`docs/code-quality.md`, "Errors").

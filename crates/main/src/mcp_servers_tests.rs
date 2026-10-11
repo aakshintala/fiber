@@ -312,6 +312,24 @@ fn extension_tools_follow_the_built_in_and_mcp_tools_and_replace_their_rows() {
 }
 
 #[test]
+fn a_declaration_error_keeps_a_persons_server_on_the_repository_side() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    std::fs::create_dir_all(setup.rig.workspace.join(".fiber/config")).unwrap();
+    std::fs::write(
+        setup.rig.workspace.join(".fiber/config/hooks.json"),
+        json!({"hooks": true}).to_string(),
+    )
+    .unwrap();
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("a declaration error keeps the server behind approval");
+    };
+    assert_eq!(gated.spec.name, "fx");
+}
+
+#[test]
 fn a_persons_server_the_repository_only_retimes_is_repository_code() {
     let setup = Setup::new();
     setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));

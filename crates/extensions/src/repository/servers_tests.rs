@@ -299,6 +299,50 @@ fn a_gather_error_is_the_outer_error() {
 }
 
 #[test]
+fn a_guard_ignores_an_existing_directory_argument() {
+    let repo = repo();
+    approve(&repo, "db");
+    repo.write("late/child.txt", "not a program\n");
+    let mut got = approved(&repo, &empty());
+    let Ok(ServerApproval::Approved(approved)) = got.remove("db").unwrap() else {
+        panic!("db is approved");
+    };
+    let guard = approved.guard(&["late".to_owned()]);
+    assert!(guard.check().is_ok());
+}
+
+#[test]
+fn a_guard_rejects_a_symlink_loop() {
+    let repo = repo();
+    approve(&repo, "db");
+    repo.link("loop", &repo.root().join("loop"));
+    let mut got = approved(&repo, &empty());
+    let Ok(ServerApproval::Approved(approved)) = got.remove("db").unwrap() else {
+        panic!("db is approved");
+    };
+    let guard = approved.guard(&["loop".to_owned()]);
+    let error = guard.check().unwrap_err();
+    assert!(
+        matches!(&error, Error::Pin { item, why } if item == "db" && why.contains("loop")),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_guard_allows_a_regular_file_outside_the_repository() {
+    let repo = repo();
+    approve(&repo, "db");
+    let outside = repo.elsewhere("outside/tool.sh", "tool\n");
+    repo.link("external", &outside);
+    let mut got = approved(&repo, &empty());
+    let Ok(ServerApproval::Approved(approved)) = got.remove("db").unwrap() else {
+        panic!("db is approved");
+    };
+    let guard = approved.guard(&["external".to_owned()]);
+    assert!(guard.check().is_ok());
+}
+
+#[test]
 fn a_guard_debug_prints_no_argument() {
     let repo = repo();
     approve(&repo, "db");

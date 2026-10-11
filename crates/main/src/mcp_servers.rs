@@ -57,11 +57,10 @@ pub(crate) struct ProgramFields {
 
 /// Reads the merged `mcp.servers`: one spec per entry with a `command`,
 /// partitioned into the person's servers and the repository's. A server is
-/// the repository's when the repository layer declares an entry of that
-/// name holding at least one value, or when any of its effective
-/// `command`, `args` or `env` entries comes from the repository layer, so
-/// nothing offered ever runs unapproved: a person's server the repository
-/// only tweaks needs approval too.
+/// the repository's when the checked repository declaration contains its
+/// name. A declaration includes any non-empty server entry, not only
+/// `command`, `args` or `env`, so a person's server the repository only
+/// tweaks needs approval too.
 pub(crate) fn specs(config: &Config) -> Specs {
     let mut specs = Vec::new();
     let mut repository = Vec::new();
@@ -83,17 +82,13 @@ pub(crate) fn specs(config: &Config) -> Specs {
         let Some(spec) = spec(config, name) else {
             continue;
         };
-        let declared_entry = declared
-            .as_ref()
-            .is_some_and(|declared| declared.mcp_servers.contains_key(name));
         // An error reading the declarations puts every server with a
         // `command` on the repository side: nothing runs unapproved.
-        let declared_entry = declared_entry || declared.is_none();
-        if declared_entry
-            || from_repository(config, name, "command")
-            || from_repository(config, name, "args")
-            || env_from_repository(config, name)
-        {
+        let repository_server = match &declared {
+            Some(declared) => declared.mcp_servers.contains_key(name),
+            None => true,
+        };
+        if repository_server {
             repository.push(RepositorySpec {
                 spec,
                 fields: program_fields(config, name),
@@ -327,31 +322,6 @@ fn program_fields(config: &Config, server: &str) -> ProgramFields {
 /// The merged value of `mcp.servers."<name>".<field>` and its layer.
 fn server_field(config: &Config, server: &str, field: &str) -> Option<(Value, Source)> {
     config.get(&format!("mcp.servers.{}.{field}", quoted(server)), None)
-}
-
-/// Whether the merged value of one field effectively comes from the
-/// repository's layer.
-fn from_repository(config: &Config, server: &str, field: &str) -> bool {
-    server_field(config, server, field)
-        .is_some_and(|(_, source)| matches!(source, Source::Repository(_)))
-}
-
-/// Whether any effective `env` entry comes from the repository's layer:
-/// `env` merges key by key, so each entry's provenance is checked
-/// individually. `command` (`Str`) and `args` (`StrList`, which replaces)
-/// are whole values, so [`from_repository`] on the field is exact for them.
-fn env_from_repository(config: &Config, server: &str) -> bool {
-    let Some((Value::Object(env), _)) = server_field(config, server, "env") else {
-        return false;
-    };
-    env.keys().any(|key| {
-        config
-            .get(
-                &format!("mcp.servers.{}.env.{}", quoted(server), quoted(key)),
-                None,
-            )
-            .is_some_and(|(_, source)| matches!(source, Source::Repository(_)))
-    })
 }
 
 /// A dotted-path segment, quoted when it holds a dot.
