@@ -30,6 +30,7 @@ use contract::provider::{
 };
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode, JobId, RequestId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{Scripted, ScriptedProvider, call_usage};
 
@@ -65,6 +66,7 @@ fn parked(clock: &FakeClock, until: Instant, what: &str) {
 
 /// Moves the clock to `to` and wakes the loop, as a real clock's timeout
 /// would.
+#[track_caller]
 fn advance_to(session: &Session, to: Instant) {
     let now = session.clock.now();
     session.clock.advance(to.saturating_duration_since(now));
@@ -74,6 +76,7 @@ fn advance_to(session: &Session, to: Instant) {
 /// Wakes the loop with a reply naming nothing, and returns once the loop
 /// has taken it: its earlier park is over, so a later [`parked`] sees only
 /// where it parks next.
+#[track_caller]
 fn wake(session: &Session) {
     let (done, taken) = mpsc::channel();
     session
@@ -92,13 +95,14 @@ fn wake(session: &Session) {
             })),
         ))
         .unwrap();
-    taken
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&taken)
         .expect("the loop took the wake");
 }
 
-fn ended(finished: &mpsc::Receiver<Result<(), r#loop::Error>>) {
-    let ran = finished.recv_timeout(DEADLINE).expect("run ended in time");
+#[track_caller]
+fn ended(finished: &mpsc::Receiver<Result<(), r#loop::Error>>, wait: &Deadline) {
+    let ran = wait.recv(finished).expect("run ended in time");
     assert!(ran.is_ok(), "{ran:?}");
 }
 
@@ -191,7 +195,8 @@ fn an_hour_lifetime_refreshes_twice_then_the_idle_clock_starts_at_the_cap() {
     parked(&session.clock, exit, "not idle yet");
     assert!(finished.try_recv().is_err());
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_refreshes(&session, 2);
     assert_usage_only(&session, 2);
 }
@@ -215,7 +220,8 @@ fn a_five_minute_lifetime_refreshes_at_270_and_540_seconds() {
     let exit = start + Duration::from_secs(600) + MINUTE;
     parked(&session.clock, exit, "idle counts from 600 s");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_refreshes(&session, 2);
 }
 
@@ -233,7 +239,8 @@ fn warming_off_or_a_cap_of_zero_sends_nothing_after_the_turn() {
         let exit = start + MINUTE;
         parked(&session.clock, exit, "idle counts from the wait start");
         advance_to(&session, exit);
-        ended(&finished);
+        let wait = Deadline::after(DEADLINE);
+        ended(&finished, &wait);
         assert_refreshes(&session, 0);
         assert_usage_only(&session, 0);
     }
@@ -276,7 +283,8 @@ fn a_provider_that_does_not_warm_sends_no_refresh() {
     let exit = start + MINUTE;
     parked(&session.clock, exit, "idle counts from the wait start");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_refreshes(&session, 0);
     assert_usage_only(&session, 0);
 }
@@ -297,7 +305,8 @@ fn a_refresh_due_at_the_cap_is_not_sent() {
     let exit = start + Duration::from_secs(540) + MINUTE;
     parked(&session.clock, exit, "warming stopped at the cap");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_refreshes(&session, 1);
 }
 
@@ -324,7 +333,8 @@ fn a_refresh_reached_only_at_the_cap_is_not_sent() {
     let exit = late + MINUTE;
     parked(&session.clock, exit, "warming stopped at the cap");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_refreshes(&session, 1);
 }
 
@@ -345,7 +355,8 @@ fn a_spent_budget_stops_warming_and_fails_no_turn() {
     let exit = due + MINUTE;
     parked(&session.clock, exit, "idle counts from the refused refresh");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_refreshes(&session, 0);
     assert_usage_only(&session, 0);
 }
@@ -374,7 +385,8 @@ fn a_refresh_s_spend_counts_toward_the_budget() {
     let exit = second + MINUTE;
     parked(&session.clock, exit, "the first refresh spent the budget");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_refreshes(&session, 1);
     let after = after_turns(&session);
     assert_eq!(after[0].payload["cost"], 0.6);
@@ -412,7 +424,8 @@ fn a_prompt_while_warming_starts_a_turn_and_the_cap_counts_from_the_next_wait() 
     let exit = second + Duration::from_secs(600) + MINUTE;
     parked(&session.clock, exit, "idle counts from the second cap");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     let requests = session.requests();
     assert_eq!(requests.len(), 4);
     assert_eq!(requests[2], capped(&requests[1]));
@@ -456,7 +469,8 @@ fn a_failed_refresh_is_not_retried_and_stops_warming_with_a_notice() {
     let exit = due + MINUTE;
     parked(&session.clock, exit, "idle counts from the failure");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     // One failed refresh, no retry, and its record under an id Fiber
     // minted, with the input it sent.
     assert_eq!(session.requests().len(), 2);
@@ -562,7 +576,8 @@ fn no_refresh_while_a_job_runs_and_one_at_once_when_it_ends_in_time() {
     let exit = expired + idle;
     parked(&session.clock, exit, "an expired cache stops warming");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_refreshes(&session, 1);
 }
 
@@ -583,7 +598,8 @@ fn a_shutdown_while_waiting_for_a_refresh_ends_run() {
     );
     session.cancel.shutdown(130);
     session.inbox.send(Delivery::Cancelled).unwrap();
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_refreshes(&session, 0);
 }
 
@@ -612,11 +628,12 @@ fn a_shutdown_cancels_a_refresh_in_flight_and_records_its_usage() {
     parked(&session.clock, due, "waiting to refresh");
     advance_to(&session, due);
     let blocked = started.lock().unwrap().take().unwrap();
-    blocked
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&blocked)
         .expect("the refresh is in flight");
     session.cancel.shutdown(130);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_eq!(session.requests().len(), 2);
     assert_usage_only(&session, 1);
     assert_minted_refresh(&session);
@@ -660,9 +677,10 @@ struct Blocked {
 }
 
 impl ModelCall for Blocked {
+    #[track_caller]
     fn run(&self, _sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
         self.started.send(()).unwrap();
-        let got = self.cancelled.lock().unwrap().recv_timeout(DEADLINE);
+        let got = Deadline::after(DEADLINE).recv(&self.cancelled.lock().unwrap());
         assert!(got.is_ok(), "the shutdown cancels the refresh");
         Err(CallError::Cancelled {
             usage: Box::new(CallUsage::unnamed(InputSize {
@@ -777,7 +795,8 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
     let exit = due + MINUTE;
     parked(&session.clock, exit, "idle counts from the failure");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_eq!(session.requests().len(), 2);
     let after = after_turns(&session);
     assert_eq!(
@@ -860,7 +879,8 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
     let exit = switched + MINUTE;
     parked(&session.clock, exit, "idle counts from the switch");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     assert_refreshes(&session, 0);
     let after = after_turns(&session);
     assert_eq!(
@@ -998,7 +1018,8 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
     let exit = start + Duration::from_secs(600) + MINUTE;
     parked(&session.clock, exit, "idle counts from the second cap");
     advance_to(&session, exit);
-    ended(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
     // One step on each provider, then two refreshes of the second step,
     // capped at one token.
     assert_eq!(session.requests().len(), 1);

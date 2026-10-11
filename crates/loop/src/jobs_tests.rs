@@ -33,6 +33,7 @@ use contract::shapes::{
 };
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, SessionId};
+use fakes::Deadline;
 use fakes::jobs::FakeJobs;
 use fakes::{Scripted, ScriptedProvider};
 use log::{Log, Watcher};
@@ -46,6 +47,7 @@ const DEADLINE: Duration = Duration::from_secs(5);
 /// Reads `watcher` on its own thread with blocking `recv` until `done`
 /// accepts a line, under one [`DEADLINE`] naming `what`. Returns the
 /// watcher and every line read, the accepted one last.
+#[track_caller]
 fn read_until(
     watcher: Watcher,
     what: &str,
@@ -447,6 +449,7 @@ impl World {
 
     /// The lines written since the last call, ephemeral ones too, through
     /// the next `turn_completed`: call it after a turn ends.
+    #[track_caller]
     fn watched(&mut self) -> Vec<Envelope> {
         let watcher = self.watched.take().unwrap();
         let (watcher, lines) = read_until(watcher, "a turn_completed line", |line| {
@@ -473,19 +476,23 @@ impl World {
     }
 
     /// Waits for the turn [`World::spawn`] started, failing at [`DEADLINE`].
+    #[track_caller]
     fn join(
         &mut self,
         rx: &mpsc::Receiver<(Loop, Result<Option<TurnOutcome>, crate::Error>)>,
+        wait: &Deadline,
     ) -> Option<TurnOutcome> {
-        let (looped, outcome) = rx.recv_timeout(DEADLINE).expect("the turn ended");
+        let (looped, outcome) = wait.recv(rx).expect("the turn ended");
         self.looped = Some(looped);
         outcome.unwrap()
     }
 
     /// Runs one turn on its own thread, failing at [`DEADLINE`].
+    #[track_caller]
     fn turn(&mut self) -> Option<TurnOutcome> {
         let rx = self.spawn();
-        self.join(&rx)
+        let wait = Deadline::after(DEADLINE);
+        self.join(&rx, &wait)
     }
 
     fn send(&self, delivery: Delivery) {
@@ -803,7 +810,7 @@ fn a_prompt_after_a_notice_is_accepted_into_the_same_turn() {
         reported(answered),
     ));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(answer.recv_timeout(DEADLINE), Ok(true));
+    assert_eq!(Deadline::after(DEADLINE).recv(&answer), Ok(true));
     let lines = world.turn_lines();
     assert_eq!(kinds(&lines), one_step_with(&["job_completed"]));
     let input = &lines[0].payload["input"];
@@ -823,7 +830,7 @@ fn a_second_prompt_after_a_notice_joins_its_turn() {
         reported(answered),
     ));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(answer.recv_timeout(DEADLINE), Ok(true));
+    assert_eq!(Deadline::after(DEADLINE).recv(&answer), Ok(true));
     let input = world.turn_lines()[0].payload["input"].clone();
     let input = input.as_array().unwrap();
     assert_eq!(input.len(), 3);
@@ -841,7 +848,8 @@ fn a_notice_whose_claim_fails_starts_no_turn() {
     // prompt starts a turn.
     let rx = world.spawn();
     world.send(prompt("Hello."));
-    assert_eq!(world.join(&rx), Some(TurnOutcome::Completed));
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(world.join(&rx, &wait), Some(TurnOutcome::Completed));
     assert_eq!(asked.count(), 1);
     let lines = world.turn_lines();
     assert_eq!(kinds(&lines), one_step_with(&[]));
@@ -893,7 +901,7 @@ fn a_prompt_turn_that_saw_close_in_its_batch_still_takes_a_steer() {
     world.send(prompt("Hello."));
     world.send(Delivery::Close(ignore()));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(steer_answer.recv_timeout(DEADLINE), Ok(true));
+    assert_eq!(Deadline::after(DEADLINE).recv(&steer_answer), Ok(true));
     let requests = world.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(users(&requests[1]).last(), Some(&"And this.".to_owned()));
@@ -914,7 +922,7 @@ fn a_session_message_turn_without_close_still_takes_a_steer() {
     );
     world.send(session_message("c_message"));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(steer_answer.recv_timeout(DEADLINE), Ok(true));
+    assert_eq!(Deadline::after(DEADLINE).recv(&steer_answer), Ok(true));
     let requests = world.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(users(&requests[0]).last(), Some(&FRAMED.to_owned()));
@@ -933,7 +941,7 @@ fn a_steer_drop_naming_a_session_message_leaves_it_queued() {
         reported(dropped),
     ));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(drop_answer.recv_timeout(DEADLINE), Ok(false));
+    assert_eq!(Deadline::after(DEADLINE).recv(&drop_answer), Ok(false));
     let lines = world.turn_lines();
     assert_eq!(kinds(&lines), one_step_with(&[]));
     assert_eq!(lines[0].payload["input"], message_input("c_message"));
@@ -951,7 +959,7 @@ fn a_steer_drop_while_idle_skips_notices_and_the_prompt() {
         reported(answered),
     ));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(answer.recv_timeout(DEADLINE), Ok(true));
+    assert_eq!(Deadline::after(DEADLINE).recv(&answer), Ok(true));
     let input = world.turn_lines()[0].payload["input"].clone();
     let input = input.as_array().unwrap();
     assert_eq!(input.len(), 2);
@@ -1146,7 +1154,7 @@ fn a_steer_drop_while_running_finds_the_steer_behind_a_notice() {
     );
     world.send(prompt("go"));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(answer.recv_timeout(DEADLINE), Ok(true));
+    assert_eq!(Deadline::after(DEADLINE).recv(&answer), Ok(true));
     let lines = world.turn_lines();
     assert_eq!(kinds(&lines), two_steps_with(&RAN, &["job_completed"]));
     assert_notice(&lines[9], JOB);
@@ -1324,7 +1332,7 @@ fn a_session_message_kept_by_a_cancelled_turn_runs_after_close_with_no_jobs() {
     // after it, while the person's steer in it is refused.
     world.send(Delivery::Close(ignore()));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(steer_answer.recv_timeout(DEADLINE), Ok(false));
+    assert_eq!(Deadline::after(DEADLINE).recv(&steer_answer), Ok(false));
     let lines = world.turn_lines();
     assert_eq!(lines[0].payload["input"], message_input("c_message"));
     // The queue moved into `turn_started`: it is listed empty first.
@@ -1455,6 +1463,7 @@ impl World {
 
     /// The durable lines of the next turn, `turn_started` through
     /// `turn_completed`.
+    #[track_caller]
     fn next_turn(&mut self) -> Vec<Envelope> {
         let lines: Vec<Envelope> = self
             .watched()
@@ -1473,8 +1482,9 @@ impl World {
     }
 }
 
-fn ran(finished: &mpsc::Receiver<Result<(), crate::Error>>) {
-    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+#[track_caller]
+fn ran(finished: &mpsc::Receiver<Result<(), crate::Error>>, wait: &Deadline) {
+    let result = wait.recv(finished).expect("run returned");
     assert!(result.is_ok(), "{result:?}");
 }
 
@@ -1562,7 +1572,8 @@ fn close_with_a_job_running_gives_the_ending_notice_then_waits_for_the_job() {
         json!([{"type": "jobs", "job_ids": [id]}])
     );
     assert_notice(&last[2], &id);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     let requests = world.requests();
     assert_eq!(requests.len(), 3);
     // A resume renders the notice from the log as the loop sent it.
@@ -1591,7 +1602,8 @@ fn close_with_no_job_running_exits_with_no_notice() {
     world.send(prompt("Hello."));
     world.send(Delivery::Close(ignore()));
     let finished = world.spawn_run();
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(durable_kinds(&world), session_of(&[one_step_with(&[])]));
     assert_eq!(world.requests().len(), 1);
 }
@@ -1630,7 +1642,8 @@ fn the_ending_notice_is_given_once_even_when_another_job_starts() {
     let two = world.next_turn();
     assert_eq!(kinds(&two), one_step_with(&["job_completed"]));
     assert_notice(&two[2], &second_id);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(
         durable_kinds(&world),
         session_of(&[
@@ -1674,14 +1687,15 @@ fn after_close_a_prompt_is_rejected_and_a_steer_does_not_join_a_job_turn() {
     ));
     world.send(Delivery::Cancelled);
     let last = world.next_turn();
-    assert_eq!(prompt_answer.recv_timeout(DEADLINE), Ok(false));
-    assert_eq!(steer_answer.recv_timeout(DEADLINE), Ok(false));
+    assert_eq!(Deadline::after(DEADLINE).recv(&prompt_answer), Ok(false));
+    assert_eq!(Deadline::after(DEADLINE).recv(&steer_answer), Ok(false));
     assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
     assert_eq!(
         last[0].payload["input"],
         json!([{"type": "jobs", "job_ids": [JOB]}])
     );
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(
         durable_kinds(&world),
         session_of(&[
@@ -1797,7 +1811,8 @@ fn the_idle_delay_with_a_job_running_gives_the_jobs_check_once_and_never_exits()
     );
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(world.requests().len(), 2);
     assert_eq!(
         durable_kinds(&world),
@@ -1856,7 +1871,8 @@ fn a_prompt_arms_the_jobs_check_again_from_when_it_was_taken() {
     assert!(clock.await_parked(rearmed + IDLE, DEADLINE));
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(
         durable_kinds(&world),
         session_of(&[
@@ -1911,7 +1927,8 @@ fn a_steer_in_the_check_turn_arms_the_check_again() {
     assert!(clock.await_parked(origin + IDLE * 3, DEADLINE));
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(world.requests().len(), 4);
 }
 
@@ -1949,7 +1966,8 @@ fn a_steer_while_idle_arms_the_check_again() {
     assert!(clock.await_parked(origin + IDLE * 3, DEADLINE));
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(world.requests().len(), 4);
 }
 
@@ -1998,7 +2016,8 @@ fn a_session_message_while_idle_does_not_arm_the_check_again() {
     assert!(clock.await_parked(origin + IDLE * 3, DEADLINE));
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(world.requests().len(), 3);
     let requests = world.requests();
     assert_eq!(users(&requests[1]).last(), Some(&FRAMED.to_owned()));
@@ -2057,7 +2076,8 @@ fn a_session_message_in_the_check_turn_does_not_arm_the_check_again() {
     assert!(clock.await_parked(origin + IDLE * 3, DEADLINE));
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(world.requests().len(), 3);
 }
 
@@ -2114,7 +2134,8 @@ fn a_jobs_end_does_not_arm_the_check_again() {
     assert!(clock.await_parked(origin + IDLE * 4, DEADLINE));
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(
         durable_kinds(&world),
         session_of(&[
@@ -2136,7 +2157,8 @@ fn with_jobs_given_and_none_running_the_idle_delay_exits() {
     assert!(clock.await_parked(origin + IDLE, DEADLINE));
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert!(world.requests().is_empty());
     assert_eq!(durable_kinds(&world), ["session_started"]);
 }
@@ -2165,7 +2187,8 @@ fn with_no_idle_delay_a_job_running_gets_no_check() {
     (job.end.0)(failed(&id));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
     world.send(Delivery::Close(ignore()));
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(
         durable_kinds(&world),
         session_of(&[one_step_with(&["job_completed"])])
@@ -2220,7 +2243,8 @@ fn a_steer_arriving_as_the_check_turn_starts_follows_jobs_pending_notified() {
     );
     jobs.set(&[]);
     world.send(Delivery::Close(ignore()));
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
 }
 
 #[test]
@@ -2239,8 +2263,9 @@ fn a_job_listed_while_idle_holds_the_deadline_gets_the_check_and_its_end_restart
     world.send(Delivery::Cancelled);
     // The wait read the job running past the deadline, and did not end:
     // the session was unattended that long, so the check is given.
+    let wait = Deadline::after(DEADLINE);
     fakes::within("the wait to read the jobs", DEADLINE, move || {
-        while read.recv_timeout(DEADLINE).expect("the wait read the jobs") == 0 {}
+        while wait.recv(&read).expect("the wait read the jobs") == 0 {}
     });
     assert_check(&world.next_turn(), JOB);
     // The job ends with its final state already claimed: no turn starts,
@@ -2258,7 +2283,8 @@ fn a_job_listed_while_idle_holds_the_deadline_gets_the_check_and_its_end_restart
     ));
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(world.requests().len(), 1);
     assert_eq!(
         durable_kinds(&world),
@@ -2285,7 +2311,9 @@ fn an_approval_wait_with_a_job_running_outlasts_the_idle_deadline() {
     });
     world.send(prompt("go"));
     let finished = world.spawn_run();
-    let _request_id = request.recv_timeout(DEADLINE).expect("the call asked");
+    let _request_id = Deadline::after(DEADLINE)
+        .recv(&request)
+        .expect("the call asked");
     watcher.join().unwrap();
     assert!(
         clock.await_parked_unbounded(DEADLINE),
@@ -2306,7 +2334,7 @@ fn an_approval_wait_with_a_job_running_outlasts_the_idle_deadline() {
         },
         reported(rejected),
     ));
-    assert_eq!(answer.recv_timeout(DEADLINE), Ok(false));
+    assert_eq!(Deadline::after(DEADLINE).recv(&answer), Ok(false));
     // The job's end waits for the next step; the delay restarts from it.
     (job.end.0)(failed(&id));
     let restarted = origin + IDLE + Duration::from_secs(1) + IDLE;
@@ -2317,7 +2345,8 @@ fn an_approval_wait_with_a_job_running_outlasts_the_idle_deadline() {
     );
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     // The idle exit writes nothing for the pending call.
     assert_eq!(
         durable_kinds(&world),
@@ -2359,7 +2388,8 @@ fn a_job_that_ends_as_the_loop_checks_still_starts_its_turn() {
     let last = world.next_turn();
     assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
     assert_notice(&last[2], JOB);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(
         durable_kinds(&world),
         session_of(&[
@@ -2436,12 +2466,13 @@ fn a_steer_in_a_turn_started_after_close_is_rejected_closing() {
     assert_eq!(kinds(&first), one_step_with(&[]));
     let ending = world.next_turn();
     assert_eq!(kinds(&ending), one_step_with(&["jobs_pending_notified"]));
-    assert_eq!(ending_answer.recv_timeout(DEADLINE), Ok(false));
+    assert_eq!(Deadline::after(DEADLINE).recv(&ending_answer), Ok(false));
     (job.end.0)(failed(&id));
     let last = world.next_turn();
     assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
-    assert_eq!(job_answer.recv_timeout(DEADLINE), Ok(false));
-    ran(&finished);
+    assert_eq!(Deadline::after(DEADLINE).recv(&job_answer), Ok(false));
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(world.requests().len(), 3);
     assert_eq!(
         durable_kinds(&world),
@@ -2469,7 +2500,7 @@ fn the_turn_in_flight_when_close_arrives_still_takes_a_steer() {
     world.send(prompt("Hello."));
     let finished = world.spawn_run();
     let turn = world.next_turn();
-    assert_eq!(answer.recv_timeout(DEADLINE), Ok(true));
+    assert_eq!(Deadline::after(DEADLINE).recv(&answer), Ok(true));
     let mut expected = vec![
         "turn_started",
         "step_started",
@@ -2482,7 +2513,8 @@ fn the_turn_in_flight_when_close_arrives_still_takes_a_steer() {
     ];
     expected.extend_from_slice(&REPLY);
     assert_eq!(kinds(&turn), expected);
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     assert_eq!(world.requests().len(), 2);
     assert_eq!(durable_kinds(&world), session_of(&[expected]));
 }
@@ -2493,7 +2525,8 @@ fn a_session_message_taken_with_close_in_one_idle_batch_runs_its_turn() {
     world.send(session_message("c_message"));
     world.send(Delivery::Close(ignore()));
     let finished = world.spawn_run();
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     // The message starts the turn the close ends the run after.
     assert_eq!(durable_kinds(&world), session_of(&[one_step_with(&[])]));
     let lines = world.turn_lines();
@@ -2537,7 +2570,8 @@ fn a_session_message_queued_before_close_is_applied_by_the_turn_in_flight() {
     assert_eq!(applied.payload["source"], "session");
     assert_eq!(applied.payload["command_id"], "c_message");
     assert_eq!(applied.payload["content"][0]["text"], json!(FRAMED));
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
     let requests = world.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(users(&requests[1]).last(), Some(&FRAMED.to_owned()));
@@ -2733,5 +2767,6 @@ fn a_batch_after_close_while_its_job_runs_starts_a_turn() {
     (job.end.0)(failed(&id));
     let last = world.next_turn();
     assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
-    ran(&finished);
+    let wait = Deadline::after(DEADLINE);
+    ran(&finished, &wait);
 }

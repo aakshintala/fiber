@@ -49,6 +49,7 @@ fn sleep() -> std::process::Child {
 }
 
 /// Reaps `child` on a thread: the wait always ends under [`DEADLINE`].
+#[track_caller]
 fn reap(mut child: std::process::Child) -> std::process::ExitStatus {
     let (done, waited) = mpsc::channel();
     thread::spawn(move || {
@@ -207,7 +208,7 @@ fn spawn_takes_no_lock_across_fork_and_exec() {
     // The spawn waits only to list.
     assert!(
         matches!(
-            result.recv_timeout(Duration::from_millis(200)),
+            Deadline::after(Duration::from_millis(200)).recv(&result),
             Err(RecvTimeoutError::Timeout)
         ),
         "spawn returns only once it can list"
@@ -291,7 +292,7 @@ fn kill_every_group_holds_the_lock_while_it_signals() {
     });
     assert!(
         matches!(
-            finished.recv_timeout(GROUP_POLL * 10),
+            Deadline::after(GROUP_POLL * 10).recv(&finished),
             Err(RecvTimeoutError::Timeout)
         ),
         "the kill waits for the lock"
@@ -336,6 +337,7 @@ fn detach_without_a_terminal_makes_the_child_a_session_leader() {
 /// holding the secondary already has it as its controlling terminal, so
 /// the control for no terminal uses a non-terminal stdin, where `/dev/tty`
 /// has nothing to resolve to.
+#[track_caller]
 fn run_on_pty(
     script: &str,
     controlling_tty: bool,

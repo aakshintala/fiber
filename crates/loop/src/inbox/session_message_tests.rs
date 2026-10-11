@@ -29,6 +29,7 @@ use contract::rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
 use contract::tool::{Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, RequestId, SessionId};
+use fakes::Deadline;
 use fakes::clock::{FakeClock, Mark};
 use fakes::{Scripted, ScriptedProvider};
 use log::{Log, Watcher};
@@ -66,6 +67,7 @@ fn close() -> Delivery {
 }
 
 /// Reads `watcher` until `done` accepts a line, under one [`DEADLINE`].
+#[track_caller]
 fn read_until(
     watcher: Watcher,
     what: &str,
@@ -578,7 +580,9 @@ fn a_message_sent_just_before_the_last_idle_check_is_run() {
     assert!(world.admission.admit(|| true).is_some());
     world.clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run returned");
     assert!(result.is_ok(), "{result:?}");
     assert!(sent.load(Ordering::SeqCst));
     assert!(world.admission.admit(|| true).is_none());
@@ -637,7 +641,9 @@ fn a_message_sent_just_after_the_last_idle_check_is_refused() {
     // again with no later wake.
     world.clock.advance(IDLE);
     world.send(Delivery::Cancelled);
-    let (looped, outcome) = finished.recv_timeout(DEADLINE).expect("the turn ended");
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
     assert!(outcome.unwrap().is_none());
     assert!(refused.load(Ordering::SeqCst));
     assert!(!called.load(Ordering::SeqCst));
@@ -698,15 +704,18 @@ fn a_message_accepted_before_a_close_that_lands_ahead_of_the_last_idle_check_is_
     let finished = world.spawn_run();
     let mark = park_idle(&world);
     world.send(Delivery::Cancelled);
-    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run returned");
     assert!(result.is_ok(), "{result:?}");
     assert!(admitted.load(Ordering::SeqCst));
     assert!(message_in.load(Ordering::SeqCst));
-    let rx = closed_rx
-        .recv_timeout(DEADLINE)
+    let rx = Deadline::after(DEADLINE)
+        .recv(&closed_rx)
         .expect("the close was sent");
     assert!(
-        rx.recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&rx)
             .expect("the close was answered")
             .is_ok()
     );
@@ -794,7 +803,9 @@ fn a_question_wait_with_a_session_message_queued_does_not_end_idle() {
         },
         ignore(),
     ));
-    let (looped, outcome) = finished.recv_timeout(DEADLINE).expect("the turn ended");
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
     world.looped = Some(looped);
     assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
     let lines = world.turn_lines();
@@ -878,7 +889,9 @@ fn an_approval_wait_with_a_session_message_queued_does_not_end_idle() {
         },
         ignore(),
     ));
-    let (looped, outcome) = finished.recv_timeout(DEADLINE).expect("the turn ended");
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
     world.looped = Some(looped);
     assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
     let lines = world.turn_lines();
@@ -935,7 +948,9 @@ fn an_offer_wait_with_a_session_message_in_the_input_does_not_end_idle() {
         },
         ignore(),
     ));
-    let (looped, outcome) = finished.recv_timeout(DEADLINE).expect("the turn ended");
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
     world.looped = Some(looped);
     assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
     // The turn started with the message as its input.
@@ -1002,7 +1017,9 @@ fn an_offer_wait_holding_a_session_message_that_arrived_during_it_does_not_end_i
         },
         ignore(),
     ));
-    let (looped, outcome) = finished.recv_timeout(DEADLINE).expect("the turn ended");
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
     world.looped = Some(looped);
     assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
     // The prompt started the turn; the message held aside joins it.
@@ -1032,7 +1049,9 @@ fn an_offer_wait_with_a_session_message_in_the_input_ends_on_close_and_runs_it()
         }
     });
     world.send(close());
-    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run returned");
     assert!(result.is_ok(), "{result:?}");
     // The close ended the offer wait, and the turn still ran the message.
     let lines = world.turn_lines();
@@ -1072,7 +1091,9 @@ fn a_required_offer_failure_with_a_held_message_fails_the_run() {
         }
     });
     world.send(close());
-    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run returned");
     let error = result.expect_err("the required item fails the run");
     assert!(
         matches!(error, crate::Error::RepositoryCode(_)),
@@ -1134,7 +1155,9 @@ fn a_question_wait_refuses_a_message_sent_just_after_its_last_idle_check() {
     });
     let _mark = world.clock.advance_marked(IDLE);
     world.send(Delivery::Cancelled);
-    let (looped, outcome) = finished.recv_timeout(DEADLINE).expect("the turn ended");
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
     assert!(outcome.unwrap().is_none());
     assert!(refused.load(Ordering::SeqCst));
     assert!(looped.idle_left);

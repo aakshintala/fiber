@@ -724,14 +724,15 @@ impl History {
         .answerable(answerable)
     }
 
+    #[track_caller]
     fn step(&mut self, mut looped: r#loop::Loop) -> (r#loop::Loop, Option<TurnOutcome>) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || {
             let outcome = looped.turn().unwrap();
             done.send((looped, outcome)).unwrap();
         });
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .expect("the turn ended in time")
     }
 
@@ -1254,6 +1255,7 @@ fn run_turn(session: &mut Session) -> Finished {
     finished
 }
 
+#[track_caller]
 fn finish_turn(session: &mut Session, finished: &Finished) -> Option<TurnOutcome> {
     let (looped, outcome) = Deadline::after(DEADLINE)
         .recv(finished)
@@ -1262,6 +1264,7 @@ fn finish_turn(session: &mut Session, finished: &Finished) -> Option<TurnOutcome
     outcome.unwrap()
 }
 
+#[track_caller]
 fn send_form(session: &Session, request: &str) {
     let (tx, rx) = mpsc::channel();
     let ack = Ack(Box::new(move |answer| {
@@ -1275,7 +1278,9 @@ fn send_form(session: &Session, request: &str) {
         .unwrap(),
     };
     session.inbox.send(Delivery::Reply(reply, ack)).unwrap();
-    let answered = rx.recv_timeout(DEADLINE).expect("the reply is answered");
+    let answered = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the reply is answered");
     assert!(answered.is_ok(), "the form reply was accepted");
 }
 
@@ -1286,6 +1291,7 @@ fn request_id(line: &contract::Envelope) -> String {
 /// A live session whose rewritten `asker` call suspends on its form: the
 /// session shuts down on it and exits naming its request. Returns the
 /// session, the live asker, the hooks and the request.
+#[track_caller]
 fn suspended_form() -> (Session, Arc<AskTool>, Arc<FakeHooks>, String) {
     let gate = Arc::new(support::Gate::default());
     let asker = Arc::new(AskTool::loose());
