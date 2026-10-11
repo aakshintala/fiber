@@ -647,3 +647,70 @@ impl Loop {
         Ok(Some(outcome))
     }
 }
+
+#[cfg(test)]
+mod started_arguments_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+
+    use contract::events::{Event, ToolCallStarted};
+    use contract::shapes::DeclaredEffects;
+    use contract::{ActionId, Envelope, Seq, SessionId};
+    use serde_json::{Map, json};
+
+    use super::started_arguments;
+
+    fn envelope(kind: &str, action: &str, payload: Map<String, serde_json::Value>) -> Envelope {
+        Envelope {
+            kind: kind.into(),
+            session_id: SessionId("s_test".into()),
+            ts: 1,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: Some(ActionId(action.into())),
+            seq: Some(Seq(1)),
+            payload,
+        }
+    }
+
+    fn started(action: &str) -> Envelope {
+        let event = Event::ToolCallStarted(ToolCallStarted {
+            declared: DeclaredEffects {
+                effects: Vec::new(),
+                reversible: true,
+                paths: None,
+            },
+            arguments: Some(json!({"path": "b.txt"}).as_object().unwrap().clone()),
+            changed_by: Some(vec!["fiber.test/guard".into()]),
+        });
+        envelope("tool_call_started", action, event.payload().unwrap())
+    }
+
+    #[test]
+    fn ignores_other_event_kinds_even_when_the_action_matches() {
+        let action = ActionId("a_target".into());
+        let line = envelope("tool_call_completed", "a_target", Map::new());
+
+        assert_eq!(started_arguments(&[line], &action).unwrap(), None);
+    }
+
+    #[test]
+    fn ignores_started_lines_for_other_actions() {
+        let action = ActionId("a_target".into());
+
+        assert_eq!(
+            started_arguments(&[started("a_other")], &action).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn returns_the_started_arguments_for_the_matching_action() {
+        let action = ActionId("a_target".into());
+        let arguments = json!({"path": "b.txt"}).as_object().unwrap().clone();
+
+        assert_eq!(
+            started_arguments(&[started("a_target")], &action).unwrap(),
+            Some((arguments, vec!["fiber.test/guard".into()]))
+        );
+    }
+}
