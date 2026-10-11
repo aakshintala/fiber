@@ -9,10 +9,7 @@ fn write_error_codes_match_the_job_input_command() {
             WriteError::Ended(Outcome::Completed),
             ErrorCode::StaleRequest,
         ),
-        (
-            WriteError::Ended(Outcome::Failed),
-            ErrorCode::StaleRequest,
-        ),
+        (WriteError::Ended(Outcome::Failed), ErrorCode::StaleRequest),
         (
             WriteError::Ended(Outcome::Cancelled),
             ErrorCode::StaleRequest,

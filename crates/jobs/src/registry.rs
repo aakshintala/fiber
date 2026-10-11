@@ -14,7 +14,9 @@ use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{DelegateFinished, JobCompleted, JobLine, JobStarted, Outcome};
 use contract::inbox::{Claim, Delivery, JobNotice};
-use contract::jobs::{End, Foreground, JobRecord, Lines, OpenError, Opened, Opening, Stop, StopError, WriteError};
+use contract::jobs::{
+    End, Foreground, JobRecord, Lines, OpenError, Opened, Opening, Stop, StopError, WriteError,
+};
 use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output};
 use contract::{ErrorCode, JobId};

@@ -370,8 +370,9 @@ fn job_input(conn: &mut Conn, id: CommandId, args: &contract::commands::JobInput
         Ok(()) => accept(conn, id, None),
         Err(error) => {
             let message = match &error {
-                contract::jobs::WriteError::NotRunning
-                | contract::jobs::WriteError::Ended(_) => NO_JOB.to_owned(),
+                contract::jobs::WriteError::NotRunning | contract::jobs::WriteError::Ended(_) => {
+                    NO_JOB.to_owned()
+                }
                 contract::jobs::WriteError::NotTty => NOT_TTY.to_owned(),
                 contract::jobs::WriteError::Io(io) => {
                     // A terminal that never took the input reports the wait; any

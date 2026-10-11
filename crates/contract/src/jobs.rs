@@ -6,7 +6,9 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::ErrorCode;
-use crate::events::{DelegateFinished, DelegateStarted, JobCompleted, JobLine, JobStarted, Outcome};
+use crate::events::{
+    DelegateFinished, DelegateStarted, JobCompleted, JobLine, JobStarted, Outcome,
+};
 
 /// What opening a job asks for. The opener supplies [`Stop`]; the registry
 /// mints the id and the output file.
