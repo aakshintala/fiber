@@ -306,13 +306,13 @@ fn cells_of(line: &Line<'_>) -> Vec<Cell> {
 /// space there. No glyph is cut; a glyph wider than `inner` takes a
 /// piece of its own. One plan when the row fits, none when it is empty.
 fn plan(cells: &[Cell], inner: usize) -> Vec<Planned> {
-    if inner == 0 {
+    if inner == 0 || cells.is_empty() {
         return Vec::new();
     }
     let mut plans = Vec::new();
     let mut at = 0;
     let mut join = Join::Break;
-    while at < cells.len() {
+    loop {
         let mut end = at;
         let mut used = 0;
         while let Some(cell) = cells.get(end) {

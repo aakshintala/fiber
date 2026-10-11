@@ -644,6 +644,11 @@ fn a_spin_on_a_piece_boundary_belongs_to_the_next_piece_only() {
 }
 
 #[test]
+fn plan_returns_no_pieces_for_an_empty_row() {
+    assert!(super::plan(&[], 6).is_empty());
+}
+
+#[test]
 fn fitted_counts_the_pieces_pad_draws() {
     // The count and the drawing share one split rule (`docs/tui.md`,
     // "Turns").
