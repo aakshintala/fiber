@@ -557,3 +557,139 @@ fn recorded_is_the_armed_signal_s_code() {
     signals.handle(SIGTERM);
     assert_eq!(signals.recorded(), Some(signal_code(SIGTERM)));
 }
+
+#[test]
+fn a_signal_between_start_and_commit_is_recorded_and_nothing_is_written() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    let until = clock.now() + SHUTDOWN_BOUND;
+    signals.handle(SIGTERM);
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
+    assert!(
+        calls.try_recv().is_err(),
+        "no shutdown ran before the commit"
+    );
+    let mut wrote = false;
+    let commit: Result<(), i32> = signals.commit(|| {
+        wrote = true;
+    });
+    assert_eq!(commit, Err(143));
+    assert!(!wrote, "nothing is written once a signal was recorded");
+    assert_eq!(signals.recorded(), Some(143));
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(SHUTDOWN_BOUND);
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), Did::Exit(143));
+}
+
+#[test]
+fn a_close_now_between_start_and_commit_is_recorded_with_code_0() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    let until = clock.now() + SHUTDOWN_BOUND;
+    signals.close_now();
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
+    assert!(
+        calls.try_recv().is_err(),
+        "no shutdown ran before the commit"
+    );
+    let mut wrote = false;
+    let commit: Result<(), i32> = signals.commit(|| {
+        wrote = true;
+    });
+    assert_eq!(commit, Err(0));
+    assert!(!wrote, "nothing is written once a close was recorded");
+    assert_eq!(signals.recorded(), Some(0));
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(SHUTDOWN_BOUND);
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), Did::Exit(0));
+}
+
+#[test]
+fn a_signal_during_commit_is_handled_once_the_write_returns() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    let until = clock.now() + SHUTDOWN_BOUND;
+    let commit = signals.commit(|| {
+        signals.handle(SIGTERM);
+        assert!(
+            calls.try_recv().is_err(),
+            "no shutdown runs while the write holds the commit"
+        );
+        signals.handle(SIGTERM);
+        assert_eq!(
+            calls.try_recv().unwrap(),
+            Did::Second,
+            "a second signal during the write kills the groups at once"
+        );
+        7
+    });
+    assert_eq!(commit, Ok(7));
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&calls).unwrap(),
+        Did::Signal(143)
+    );
+    assert!(
+        calls.try_recv().is_err(),
+        "the deferred signal shuts down exactly once"
+    );
+    assert_eq!(signals.recorded(), None);
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound counts from the in-write signal"
+    );
+    clock.advance(SHUTDOWN_BOUND);
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), Did::Exit(143));
+}
+
+#[test]
+fn a_close_now_during_commit_shuts_down_with_code_0_after_the_write() {
+    let clock = FakeClock::new();
+    let (signals, did) = recorded(&clock);
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    let until = clock.now() + SHUTDOWN_BOUND;
+    let commit = signals.commit(|| {
+        signals.close_now();
+        assert!(
+            calls.try_recv().is_err(),
+            "no shutdown runs while the write holds the commit"
+        );
+        7
+    });
+    assert_eq!(commit, Ok(7));
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&calls).unwrap(),
+        Did::Signal(0)
+    );
+    assert!(
+        calls.try_recv().is_err(),
+        "the deferred close shuts down exactly once"
+    );
+    assert_eq!(signals.recorded(), None);
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound counts from the in-write close"
+    );
+    clock.advance(SHUTDOWN_BOUND);
+    assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
+    assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), Did::Exit(0));
+}

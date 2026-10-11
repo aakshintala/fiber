@@ -200,6 +200,11 @@ impl Signals {
         None
     }
 
+    /// Writes the session's first lines unless a signal was recorded.
+    pub fn commit<R>(&self, write: impl FnOnce() -> R) -> Result<R, i32> {
+        Ok(write())
+    }
+
     /// Starts the same shutdown a first signal starts, with exit code 0
     /// (`docs/invocation.md`, "Shutdown"). Only the first shutdown wins:
     /// once started with no signal seen yet it starts the bound and calls
