@@ -225,7 +225,13 @@ fn bounded(
     let clock = Arc::clone(clock);
     fakes::within("the model list read", DEADLINE, move || {
         let load = installed(home.as_path(), &clock);
-        match model_lists(&home, &workspace, read, &load) {
+        match model_lists(
+            &home,
+            &workspace,
+            read,
+            &load,
+            &fakes::children::grouped_output,
+        ) {
             Ok(loaded) => Ok(listed(loaded)),
             Err(error) => Err(error.to_string()),
         }
@@ -287,6 +293,7 @@ fn a_cached_read_lists_every_installed_model_sorted_by_provider() {
             &setup.workspace(),
             ModelLists::Cached,
             &unloaded(&called),
+            &fakes::children::grouped_output,
         )
         .unwrap(),
     );
@@ -307,6 +314,7 @@ fn a_cached_list_replaces_the_data_files_models() {
             &setup.workspace(),
             ModelLists::Cached,
             &unloaded(&called),
+            &fakes::children::grouped_output,
         )
         .unwrap(),
     );
@@ -326,6 +334,7 @@ fn an_object_role_marks_by_its_model() {
         &setup.workspace(),
         ModelLists::Cached,
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert_eq!(roles_of(&config, "acme/m1"), ["fast"]);
@@ -344,6 +353,7 @@ fn a_role_of_another_harness_marks_nothing() {
         &setup.workspace(),
         ModelLists::Cached,
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert!(roles_of(&config, "acme/m1").is_empty());
@@ -376,6 +386,7 @@ fn a_cached_read_loads_no_extension() {
         &setup.workspace(),
         ModelLists::Cached,
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert!(!called.get());
@@ -475,6 +486,7 @@ fn a_cached_lua_only_provider_lists_without_loading() {
             &setup.workspace(),
             ModelLists::Cached,
             &unloaded(&called),
+            &fakes::children::grouped_output,
         )
         .unwrap(),
     );
@@ -494,6 +506,7 @@ fn a_provider_with_a_data_file_is_not_listed_twice() {
             &setup.workspace(),
             ModelLists::Cached,
             &unloaded(&called),
+            &fakes::children::grouped_output,
         )
         .unwrap(),
     );
@@ -522,6 +535,7 @@ fn a_held_providers_cached_invalid_model_is_not_reported_twice() {
             &setup.workspace(),
             ModelLists::Cached,
             &unloaded(&called),
+            &fakes::children::grouped_output,
         )
         .unwrap(),
     );
@@ -542,6 +556,7 @@ fn the_scripted_provider_is_never_listed() {
             &setup.workspace(),
             ModelLists::Cached,
             &unloaded(&called),
+            &fakes::children::grouped_output,
         )
         .unwrap(),
     );
@@ -572,6 +587,7 @@ fn load_notices_reach_the_lists() {
             &setup.workspace(),
             ModelLists::Cached,
             &unloaded(&called),
+            &fakes::children::grouped_output,
         )
         .unwrap(),
     );
@@ -594,6 +610,7 @@ fn a_load_failure_names_what_todays_read_named() {
         &setup.workspace(),
         ModelLists::Cached,
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .expect_err("an unreadable configuration reads no list");
     assert!(matches!(error, ModelListsError::Load(_)), "{error:?}");
@@ -614,6 +631,7 @@ fn an_unreadable_cached_list_fails_the_read() {
         &setup.workspace(),
         ModelLists::Cached,
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .expect_err("an unreadable cached list reads no list");
     assert!(matches!(error, ModelListsError::Config(_)), "{error:?}");
@@ -658,6 +676,7 @@ fn a_cached_read_leaves_out_a_cached_model_at_an_unlisted_url() {
             &setup.workspace(),
             ModelLists::Cached,
             &unloaded(&called),
+            &fakes::children::grouped_output,
         )
         .unwrap(),
     );
@@ -687,6 +706,7 @@ fn a_cached_list_no_installed_extension_declares_is_not_listed() {
             &setup.workspace(),
             ModelLists::Cached,
             &unloaded(&called),
+            &fakes::children::grouped_output,
         )
         .unwrap(),
     );

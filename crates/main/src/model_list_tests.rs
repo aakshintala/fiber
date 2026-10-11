@@ -137,6 +137,7 @@ fn a_model_name_reaches_its_picker_entry() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     // Neither the provider nor either id contains "opus": only the
@@ -187,6 +188,7 @@ fn levels_and_default_come_from_the_model() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     let [entry] = catalogue.models.as_slice() else {
@@ -214,6 +216,7 @@ fn configured_is_the_per_model_level_then_the_top_level() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert_eq!(
@@ -230,6 +233,7 @@ fn configured_is_the_per_model_level_then_the_top_level() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert_eq!(
@@ -255,6 +259,7 @@ fn a_fiber_role_marks_its_model_with_or_without_a_level() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     let marked: Vec<(&str, Vec<&str>)> = catalogue
@@ -294,6 +299,7 @@ fn load_notices_reach_the_catalogue() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert!(catalogue.models.is_empty());
@@ -315,6 +321,7 @@ fn no_provider_is_an_empty_catalogue() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert_eq!(catalogue, tui::Catalogue::default());
@@ -336,6 +343,7 @@ fn price_maps_cache_write_and_falls_back_to_input() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     let [entry] = catalogue.models.as_slice() else {
@@ -367,6 +375,7 @@ fn price_maps_cache_write_over_input() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     let [entry] = catalogue.models.as_slice() else {
@@ -403,6 +412,7 @@ fn price_is_none_without_a_cost_and_tiers_sort_ascending() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     let prices: Vec<(&str, Option<tui::Price>)> = catalogue
@@ -439,6 +449,7 @@ fn fresh_cache_lists_its_age() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert_eq!(
@@ -465,6 +476,7 @@ fn cache_at_refresh_after_is_fresh_one_second_over_is_stale() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert!(
@@ -479,6 +491,7 @@ fn cache_at_refresh_after_is_fresh_one_second_over_is_stale() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert!(
@@ -499,6 +512,7 @@ fn missing_cache_has_no_time_and_is_stale() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     assert_eq!(
@@ -536,6 +550,7 @@ fn future_cache_reads_as_updated_now() {
         tui::Refresh::Cached,
         now(),
         &unloaded(&called),
+        &fakes::children::grouped_output,
     )
     .unwrap();
     // A file dated after `now` reads as updated `now`: age zero.

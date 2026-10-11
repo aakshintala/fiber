@@ -26,6 +26,10 @@ pub(crate) fn session_rewound(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
+    // One reads for the process, cancelled when this returns whatever the
+    // result; there is no worktree isolation to outlive here.
+    let reads = Arc::new(crate::switch::Reads::default());
+    let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
         Err(e) => return ask_failed(failed(e.code(), e)),
@@ -81,6 +85,7 @@ pub(crate) fn session_rewound(
             worktree,
             name,
         }),
+        reads,
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),

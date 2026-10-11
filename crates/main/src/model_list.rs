@@ -25,9 +25,20 @@ pub(crate) fn reader(
     locks: Arc<dyn PathLock>,
 ) -> tui::ReadModels {
     Arc::new(move |refresh| {
-        read(&home, &workspace, refresh, clock.wall(), &|config| {
-            SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks), None)
-        })
+        let reads = crate::switch::Reads::default();
+        let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
+            reads.credential(command, timeout, &*clock)
+        };
+        read(
+            &home,
+            &workspace,
+            refresh,
+            clock.wall(),
+            &|config| {
+                SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks), None)
+            },
+            &run,
+        )
     })
 }
 
@@ -41,8 +52,9 @@ pub(crate) fn read(
     refresh: tui::Refresh,
     now: SystemTime,
     load: &dyn Fn(&Config) -> SessionExtensions,
+    run: config::Runner<'_>,
 ) -> Result<tui::Catalogue, String> {
-    let (providers, config, notices) = cli::model_lists(home, workspace, mode(refresh), load)
+    let (providers, config, notices) = cli::model_lists(home, workspace, mode(refresh), load, run)
         .map_err(|error| error.to_string())?;
     Ok(tui::Catalogue {
         models: entries(&providers, &config),
