@@ -106,6 +106,10 @@ A pull request runs only what its diff can affect.
   for every first-party package that has cases, not only the changed ones
   ("Testing an extension"). A change to Fiber's own code can break a package
   that did not change.
+- A diff that touches the code the release job runs, `crates/bench`,
+  `xtask/src/bench*`, `scripts/release-size` or `scripts/stored-results`,
+  also runs `release`, so a broken harness or judge fails its own pull request
+  rather than the backstop.
 
 The selector has its own tests.
 
