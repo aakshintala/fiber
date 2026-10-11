@@ -492,15 +492,12 @@ fn place_grounding(actions: &mut [ReplyAction], grounding: &Value) {
 /// counted; no probe's `usageMetadata` reported that field.
 fn tokens(usage: &Value) -> Result<Tokens, Error> {
     let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-    let cached = count("cachedContentTokenCount");
     let output = count("candidatesTokenCount")
         .checked_add(count("thoughtsTokenCount"))
         .ok_or_else(|| Error::StreamIncomplete("its usageMetadata token counts overflow".into()))?;
     Ok(Tokens {
-        input: count("promptTokenCount").saturating_sub(cached),
-        cache_read: cached,
-        cache_write: BTreeMap::new(),
         output,
+        ..partial_tokens(usage)
     })
 }
 
