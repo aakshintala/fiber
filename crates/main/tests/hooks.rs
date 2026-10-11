@@ -1062,6 +1062,15 @@ fn a_blocking_before_message_failure_exits_1_hook_failed() {
     setup.provider_with_extra(&server, &json!({}));
     let run = setup.run(&["ask", "hello"]);
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ]
+    );
     let exited = run.lines.last().expect("fiber_exited is last");
     assert_eq!(exited["payload"]["error"]["code"], "hook_failed");
     assert!(
@@ -1110,6 +1119,15 @@ fn a_check_before_message_hook_that_replaces_has_failed() {
     setup.provider_with_extra(&server, &json!({}));
     let run = setup.run(&["ask", "hello"]);
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ]
+    );
     let exited = run.lines.last().expect("fiber_exited is last");
     assert_eq!(exited["payload"]["error"]["code"], "hook_failed");
     assert!(server.requests().is_empty(), "the model is never called");

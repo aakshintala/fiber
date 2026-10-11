@@ -915,9 +915,9 @@ fn assert_exited_settled(history: &History) {
     );
 }
 
-/// The complete kinds of a resumed turn refused without its request
-/// raised again: the decision line answers the recorded request, and the
-/// call completes without running.
+/// The complete kinds of a resumed turn whose call never runs: the
+/// decision line answers the recorded request by hook, and the call
+/// completes without running.
 fn refused_kinds() -> Vec<&'static str> {
     vec![
         "preamble_built",
@@ -1059,6 +1059,7 @@ fn a_resumed_hook_failure_answers_its_request_by_hook_and_fails_the_call() {
         !new.iter().any(|line| line.kind == "permission_requested"),
         "the request is not raised again"
     );
+    assert_eq!(new_kinds(&new), refused_kinds());
     let resolved = line(&new, "permission_resolved");
     assert_eq!(resolved.action_id, Some(ActionId("a_1".into())));
     assert_eq!(
@@ -1091,6 +1092,7 @@ fn a_resumed_rewrite_the_schema_rejects_answers_its_request_by_hook() {
         !new.iter().any(|line| line.kind == "permission_requested"),
         "the request is not raised again"
     );
+    assert_eq!(new_kinds(&new), refused_kinds());
     let resolved = line(&new, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "hook");
@@ -1122,6 +1124,7 @@ fn a_resumed_rewrite_its_effects_reject_answers_its_request_by_hook() {
         !new.iter().any(|line| line.kind == "permission_requested"),
         "the request is not raised again"
     );
+    assert_eq!(new_kinds(&new), refused_kinds());
     let resolved = line(&new, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "hook");

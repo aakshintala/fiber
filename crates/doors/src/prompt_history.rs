@@ -76,7 +76,6 @@ pub(crate) fn recorded(ack: Ack, path: PathBuf, gate: &Arc<Gate>, id: CommandId)
         id,
         path,
         inner: Some(ack),
-        called: false,
     };
     Ack(Box::new(move |result| {
         let entry = recorded.gate.prompts.take(&recorded.id);
@@ -89,7 +88,6 @@ pub(crate) fn recorded(ack: Ack, path: PathBuf, gate: &Arc<Gate>, id: CommandId)
                 Ok(()) | Err(_) => {}
             }
         }
-        recorded.called = true;
         if let Some(inner) = recorded.inner.take() {
             (inner.0)(result);
         }
@@ -104,12 +102,11 @@ struct Recorded {
     id: CommandId,
     path: PathBuf,
     inner: Option<Ack>,
-    called: bool,
 }
 
 impl Drop for Recorded {
     fn drop(&mut self) {
-        if !self.called {
+        if self.inner.is_some() {
             self.gate.prompts.take(&self.id);
         }
         drop(self.inner.take());

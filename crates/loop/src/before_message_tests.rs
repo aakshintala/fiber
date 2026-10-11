@@ -211,7 +211,7 @@ struct World {
     provider: Arc<fakes::ScriptedProvider>,
     dir: PathBuf,
     rewrites: Rewrites,
-    watcher: log::Watcher,
+    watcher: Option<log::Watcher>,
     _home: fakes::TempDir,
 }
 
@@ -285,7 +285,7 @@ fn started_with(
         provider,
         dir: home.path().join("s_test"),
         rewrites,
-        watcher,
+        watcher: Some(watcher),
         _home: home,
     }
 }
@@ -345,16 +345,29 @@ fn lines(world: &World) -> Vec<Envelope> {
 }
 
 /// Every line the world's watcher received up to and including
-/// `turn_completed`: the durable lines and the ephemeral ones.
+/// `turn_completed`: the durable lines and the ephemeral ones. The read
+/// runs on its own thread under one [`TURN_DEADLINE`] naming the awaited
+/// completion, so a missing `turn_completed` fails instead of hanging on
+/// the retained log's open watcher.
 fn streamed(world: &mut World) -> Vec<Envelope> {
-    let mut streamed = Vec::new();
-    while let Ok(Some(line)) = world.watcher.recv() {
-        let done = line.kind == "turn_completed";
-        streamed.push(line);
-        if done {
-            break;
-        }
-    }
+    let watcher = world.watcher.take().unwrap();
+    let (watcher, streamed) = fakes::within(
+        "a turn_completed line or the log's end",
+        TURN_DEADLINE,
+        move || {
+            let mut watcher = watcher;
+            let mut streamed = Vec::new();
+            while let Ok(Some(line)) = watcher.recv() {
+                let done = line.kind == "turn_completed";
+                streamed.push(line);
+                if done {
+                    break;
+                }
+            }
+            (watcher, streamed)
+        },
+    );
+    world.watcher = Some(watcher);
     streamed
 }
 
@@ -403,7 +416,13 @@ fn a_replaced_prompt_logs_and_sends_only_the_replacement() {
         finish_turn(&mut world, &finished),
         Some(TurnOutcome::Completed)
     );
-    assert!(answered.recv().unwrap().is_ok(), "the prompt is accepted");
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the prompt's answer")
+            .is_ok(),
+        "the prompt is accepted"
+    );
     drop(world.looped.take());
 
     let all = lines(&world);
@@ -469,7 +488,13 @@ fn a_refused_prompt_is_rejected_and_starts_no_turn() {
         rejection.message,
         "Extension fiber.test/guard refused the message: no keys"
     );
-    assert!(ok_answer.recv().is_ok(), "the second prompt is accepted");
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&ok_answer)
+            .expect("the second prompt's answer")
+            .is_ok(),
+        "the second prompt is accepted"
+    );
     drop(world.looped.take());
 
     let all = lines(&world);
@@ -660,7 +685,7 @@ fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
 
     let all = lines(&world);
     assert_eq!(
-        kinds(&all)[..6],
+        kinds(&all),
         [
             "session_started",
             "preamble_built",
@@ -668,6 +693,12 @@ fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
             "turn_started",
             "context_added",
             "context_added",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
         ]
     );
     let contexts: Vec<&Envelope> = all
@@ -735,8 +766,18 @@ fn the_hook_sees_a_skill_command_before_expansion_and_its_rewrite_expands() {
         finish_turn(&mut world, &finished),
         Some(TurnOutcome::Completed)
     );
-    assert!(first_answered.recv().is_ok());
-    assert!(second_answered.recv().is_ok());
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&first_answered)
+            .expect("the first prompt's answer")
+            .is_ok()
+    );
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&second_answered)
+            .expect("the second prompt's answer")
+            .is_ok()
+    );
     assert_eq!(hooks.seen(), vec!["/second with args", "plain"]);
     drop(world.looped.take());
 
@@ -789,7 +830,11 @@ fn no_hook_runs_for_busy_closing_or_after_a_shutdown_started() {
             &TurnId("t_1".into()),
         )
         .unwrap();
-    let rejection = rejected(answered.recv().unwrap());
+    let rejection = rejected(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the busy rejection"),
+    );
     assert_eq!(rejection.code, ErrorCode::Busy);
     assert_eq!(hooks.count(), 0);
 
@@ -801,7 +846,11 @@ fn no_hook_runs_for_busy_closing_or_after_a_shutdown_started() {
     looped
         .admit_idle(Delivery::Prompt(driver("c_late", "hello"), ack), &mut input)
         .unwrap();
-    let rejection = rejected(answered.recv().unwrap());
+    let rejection = rejected(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the closing rejection"),
+    );
     assert_eq!(rejection.code, ErrorCode::Closing);
     assert_eq!(hooks.count(), 0);
     world.looped = Some(looped);
@@ -817,7 +866,11 @@ fn no_hook_runs_for_busy_closing_or_after_a_shutdown_started() {
     looped
         .admit_idle(Delivery::Prompt(driver("c_shut", "hello"), ack), &mut input)
         .unwrap();
-    let rejection = rejected(answered.recv().unwrap());
+    let rejection = rejected(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the shutdown closing rejection"),
+    );
     assert_eq!(rejection.code, ErrorCode::Closing);
     let (ack, answered) = capture();
     looped
@@ -826,7 +879,11 @@ fn no_hook_runs_for_busy_closing_or_after_a_shutdown_started() {
             &TurnId("t_1".into()),
         )
         .unwrap();
-    let rejection = rejected(answered.recv().unwrap());
+    let rejection = rejected(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the steer's closing rejection"),
+    );
     assert_eq!(rejection.code, ErrorCode::Closing);
     assert_eq!(shutdown_hooks.count(), 0);
     world.looped = Some(looped);
@@ -842,7 +899,12 @@ fn no_hook_runs_for_busy_closing_or_after_a_shutdown_started() {
             &TurnId("t_1".into()),
         )
         .unwrap();
-    assert!(answered.recv().unwrap().is_ok());
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the shutdown steer's answer")
+            .is_ok()
+    );
     world.looped = Some(looped);
 }
 
@@ -863,7 +925,12 @@ fn a_steer_after_close_joins_only_a_batch_that_holds_a_message() {
             &mut input,
         )
         .unwrap();
-    assert!(answered.recv().unwrap().is_ok());
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the joining steer's answer")
+            .is_ok()
+    );
     assert_eq!(input.pieces.len(), 2);
 
     // An empty batch: the same steer is refused `closing`.
@@ -875,7 +942,15 @@ fn a_steer_after_close_joins_only_a_batch_that_holds_a_message() {
             &mut empty,
         )
         .unwrap();
-    assert_eq!(rejected(answered.recv().unwrap()).code, ErrorCode::Closing);
+    assert_eq!(
+        rejected(
+            Deadline::after(TURN_DEADLINE)
+                .recv(&answered)
+                .expect("the empty batch's closing rejection")
+        )
+        .code,
+        ErrorCode::Closing
+    );
     assert!(empty.pieces.is_empty());
     world.looped = Some(looped);
 }
@@ -947,7 +1022,12 @@ fn on_rewrite_hears_a_replaced_prompt_before_its_ack_and_nothing_else() {
         finish_turn(&mut world, &finished),
         Some(TurnOutcome::Completed)
     );
-    assert!(steer_answered.recv().is_ok());
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&steer_answered)
+            .expect("the steer's answer")
+            .is_ok()
+    );
     drop(world.looped.take());
 
     let rewrites = world.rewrites.lock().unwrap().clone();
@@ -1026,7 +1106,12 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
         finish_turn(&mut world, &finished),
         Some(TurnOutcome::Completed)
     );
-    assert!(answered.recv().is_ok());
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&answered)
+            .expect("the prompt's answer")
+            .is_ok()
+    );
     drop(world.looped.take());
 
     let all = streamed(&mut world);
@@ -1034,13 +1119,21 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
     assert!(notice.turn_id.is_none(), "an idle notice names no turn");
     // The notice is written at admission, before the turn's preamble.
     assert_eq!(
-        kinds(&all)[..5],
+        kinds(&all),
         [
             "session_started",
             "notice",
             "preamble_built",
             "opening_message",
             "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
         ]
     );
     let input = started_input(&all);
