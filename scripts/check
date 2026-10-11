@@ -107,7 +107,7 @@ if [ "$scope" != platform ]; then
         crates/main/tests/install_fixture/fiber \
         crates/main/tests/install_fixture/bin/uname \
         crates/main/tests/install_fixture/bin/sysctl
-      shellcheck --shell=bash scripts/flaky-tests scripts/test-flaky-tests scripts/leak-scan scripts/test-leak-scan scripts/test-leak-probe
+      shellcheck --shell=bash scripts/flaky-tests scripts/test-flaky-tests scripts/leak-scan scripts/test-leak-scan scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
     fi
@@ -119,6 +119,8 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   scripts/test-leak-scan
   echo "== flaky-tests self-test"
   scripts/test-flaky-tests
+  echo "== bug-red self-test"
+  scripts/test-bug-red
   echo "== cargo clippy --all-targets -- -D warnings"
   cargo clippy --all-targets "${package_spec_args[@]}" -- -D warnings
   # A per-run nonce in the environment: every descendant inherits it, so
