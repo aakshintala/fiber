@@ -146,8 +146,7 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   esac
   if [ -n "$extension_packages" ]; then
     echo "== fiber extension test"
-    target_directory=$(cargo metadata --format-version 1 --no-deps | \
-      python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
+    target_directory=$(cargo metadata --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
     cargo build -p main --bin fiber
     fiber="$target_directory/debug/fiber"
     for package in $extension_packages; do
