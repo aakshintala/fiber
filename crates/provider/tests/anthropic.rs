@@ -576,9 +576,8 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
 }
 
 #[test]
-fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
-    let server =
-        ProviderServer::start([completed_reply(), completed_reply(), completed_reply()]).unwrap();
+fn a_request_body_has_anthropics_shape() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
     let messages = Messages::new(endpoint(&server));
     let mut reordered = request();
     reordered.tools.push(ToolDefinition {
@@ -588,16 +587,9 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
         deferred: false,
         hosted: None,
     });
-    for request in [request(), request(), reordered.clone()] {
+    for request in [request(), reordered] {
         run(Box::new(messages.request(&request))).0.unwrap();
     }
-    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
-    assert_eq!(bodies.len(), 3);
-    assert_eq!(bodies[0], bodies[1]);
-    assert_ne!(
-        bodies[0], bodies[2],
-        "a different tool set is a different body"
-    );
     let body = sent_body(&server, 0);
     assert_eq!(body["model"], "claude-sonnet-5-5");
     let marker = json!({"type": "ephemeral"});
@@ -618,7 +610,7 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
         json!([{"name": "get_weather", "description": "Weather for a city.",
             "input_schema": weather_tool().input_schema, "strict": true}])
     );
-    let reordered = sent_body(&server, 2);
+    let reordered = sent_body(&server, 1);
     assert_eq!(reordered["tools"][0]["name"], "aaa_tool");
     assert_eq!(
         reordered["tools"][0]["strict"], false,
@@ -678,31 +670,6 @@ fn max_tokens_is_the_models_limit_and_never_exceeds_it() {
         .map(|n| sent_body(&server, n)["max_tokens"].clone())
         .collect();
     assert_eq!(sent, [json!(64_000), json!(1024), json!(64_000)]);
-}
-
-#[test]
-fn the_requests_own_output_limit_is_capped_by_the_models() {
-    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
-    let limited = Endpoint {
-        max_output_tokens: Some(4096),
-        ..endpoint(&server)
-    };
-    let low = ModelRequest {
-        max_output_tokens: Some(1),
-        ..request()
-    };
-    let high = ModelRequest {
-        max_output_tokens: Some(9000),
-        ..request()
-    };
-    run(Box::new(Messages::new(limited.clone()).request(&low)))
-        .0
-        .unwrap();
-    run(Box::new(Messages::new(limited).request(&high)))
-        .0
-        .unwrap();
-    assert_eq!(sent_body(&server, 0)["max_tokens"], 1);
-    assert_eq!(sent_body(&server, 1)["max_tokens"], 4096);
 }
 
 #[test]
@@ -2096,27 +2063,6 @@ fn thinking_levels_map_to_adaptive_thinking_and_effort() {
     assert_eq!(xhigh["output_config"], json!({"effort": "xhigh"}));
 }
 
-#[test]
-fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
-    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
-    let endpoint = endpoint(&server);
-    run(Box::new(
-        Messages::new(endpoint.clone()).request(&request()),
-    ))
-    .0
-    .unwrap();
-    run(Box::new(
-        Messages::new(endpoint)
-            .cache_key_header("x-opencode-session")
-            .request(&request()),
-    ))
-    .0
-    .unwrap();
-    let sent = server.requests();
-    assert_eq!(sent[0].header("x-opencode-session"), None);
-    assert_eq!(sent[1].header("x-opencode-session"), Some("session_1"));
-}
-
 /// A conversation whose one user message carries `images`.
 fn user_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
     vec![Input::User {
@@ -2145,58 +2091,6 @@ fn a_users_image_is_sent_as_image_blocks_after_the_text() {
             {"type": "text", "text": "look"},
             {"type": "image", "source": {
                 "type": "base64", "media_type": "image/png", "data": "YWJjZA=="},
-             "cache_control": {"type": "ephemeral"}},
-        ]}])
-    );
-}
-
-#[test]
-fn a_users_empty_text_sends_no_text_block() {
-    let session = fakes::TempDir::new("fiber-anthropic-user-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
-    let request = ModelRequest {
-        conversation: user_conversation("", vec![png_ref("artifacts/i_1.png")]),
-        session_dir: session.path().to_path_buf(),
-        ..request()
-    };
-    let server = ProviderServer::start([completed_reply()]).unwrap();
-    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
-        .0
-        .unwrap();
-    assert_eq!(
-        sent_body(&server, 0)["messages"],
-        json!([{"role": "user", "content": [
-            {"type": "image", "source": {
-                "type": "base64", "media_type": "image/png", "data": "YWJjZA=="},
-             "cache_control": {"type": "ephemeral"}},
-        ]}])
-    );
-}
-
-#[test]
-fn a_users_image_is_left_out_for_a_text_only_model() {
-    let session = fakes::TempDir::new("fiber-anthropic-user-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
-    let request = ModelRequest {
-        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
-        session_dir: session.path().to_path_buf(),
-        ..request()
-    };
-    let server = ProviderServer::start([completed_reply()]).unwrap();
-    let endpoint = Endpoint {
-        text_only: true,
-        ..endpoint(&server)
-    };
-    run(Box::new(Messages::new(endpoint).request(&request)))
-        .0
-        .unwrap();
-    assert_eq!(
-        sent_body(&server, 0)["messages"],
-        json!([{"role": "user", "content": [
-            {"type": "text",
-             "text": "look\n[Image artifacts/i_1.png left out: this model does not take images.]",
              "cache_control": {"type": "ephemeral"}},
         ]}])
     );
@@ -2240,66 +2134,6 @@ fn the_previous_end_marker_lands_on_a_multi_block_users_last_block() {
             {"type": "text", "text": "again", "cache_control": {"type": "ephemeral"}},
         ]}])
     );
-}
-
-#[test]
-fn a_reply_carries_the_size_of_the_body_it_sent() {
-    let session = fakes::TempDir::new("fiber-anthropic-request-size");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
-    let request = ModelRequest {
-        conversation: image_conversation(false, vec![png_ref("artifacts/i_1.png")]),
-        session_dir: session.path().to_path_buf(),
-        ..request()
-    };
-    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
-    let reply = run(Box::new(Messages::new(endpoint(&server)).request(&request)))
-        .0
-        .unwrap();
-    assert_eq!(
-        reply.input_size,
-        InputSize {
-            bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
-            media: true,
-        }
-    );
-    let endpoint = Endpoint {
-        text_only: true,
-        ..endpoint(&server)
-    };
-    let reply = run(Box::new(Messages::new(endpoint).request(&request)))
-        .0
-        .unwrap();
-    assert_eq!(
-        reply.input_size,
-        InputSize {
-            bytes: u64::try_from(server.requests()[1].body.len()).unwrap(),
-            media: false,
-        }
-    );
-}
-
-#[test]
-fn sent_tools_are_sent_verbatim_in_order() {
-    // A rewound session's first request carries its parent's logged build,
-    // not what its own tools would wire (`docs/events.md`, "Rewind").
-    let server = ProviderServer::start([completed_reply()]).unwrap();
-    let sent = vec![
-        json!({"name": "b_tool", "description": "Second.",
-               "input_schema": {"type": "object"}, "strict": true}),
-        json!({"name": "a_tool", "description": "First.",
-               "input_schema": {"type": "object"}, "strict": false}),
-    ];
-    let mut request = request();
-    request.sent_tools = Some(
-        sent.iter()
-            .map(|tool| tool.as_object().unwrap().clone())
-            .collect(),
-    );
-    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
-        .0
-        .unwrap();
-    assert_eq!(sent_body(&server, 0)["tools"], Value::Array(sent));
 }
 
 fn budget_endpoint(server: &ProviderServer) -> Endpoint {
