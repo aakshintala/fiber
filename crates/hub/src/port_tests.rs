@@ -763,7 +763,7 @@ fn an_oversized_first_message_closes_1009() {
 fn a_large_message_after_authentication_has_no_cap() {
     let temp = Temp::new();
     let clock = FakeClock::new();
-    let (port, hub, _got, _done) = serve_with_port(&temp, Vec::new(), clock);
+    let (port, _hub, _got, _done) = serve_with_port(&temp, Vec::new(), clock);
     pair_device(&temp.dir, "phone", "t0k3n");
     let client = helloed(port, None);
     let accepted = authenticate(&client, "c1", "t0k3n");
