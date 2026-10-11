@@ -412,11 +412,7 @@ fn a_released_port_lets_a_foreign_listener_reset_the_redirect() {
     });
     let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, released)).unwrap();
     stream.set_read_timeout(Some(WAIT)).unwrap();
-    std::io::Write::write_all(
-        &mut stream,
-        b"GET /cb?code=1 HTTP/1.1\r\nHost: x\r\n\r\n",
-    )
-    .unwrap();
+    std::io::Write::write_all(&mut stream, b"GET /cb?code=1 HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
     let mut reply = String::new();
     let err = stream.read_to_string(&mut reply).unwrap_err();
     assert_eq!(
@@ -487,11 +483,7 @@ fn listen_binds_through_the_browser_callback_listener() {
     assert_eq!(browser.seen.lock().unwrap().as_slice(), [port]);
     let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
     stream.set_read_timeout(Some(WAIT)).unwrap();
-    std::io::Write::write_all(
-        &mut stream,
-        b"GET /?code=abc HTTP/1.1\r\nHost: x\r\n\r\n",
-    )
-    .unwrap();
+    std::io::Write::write_all(&mut stream, b"GET /?code=abc HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
     let mut reply = String::new();
     stream.read_to_string(&mut reply).unwrap();
     assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");

@@ -685,10 +685,7 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
             fn attended(&self) -> bool {
                 true
             }
-            fn callback_listener(
-                &self,
-                port: u16,
-            ) -> std::io::Result<std::net::TcpListener> {
+            fn callback_listener(&self, port: u16) -> std::io::Result<std::net::TcpListener> {
                 if let Some(listener) = self.listener.lock().unwrap().take() {
                     return Ok(listener);
                 }
