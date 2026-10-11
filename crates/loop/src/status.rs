@@ -16,7 +16,7 @@ use contract::events::{
     ContextFill, Event, Git, InputItem, Interaction, SessionState, SessionStatus, Waiting,
     WaitingKind,
 };
-use contract::shapes::{ContentPart, Usage};
+use contract::shapes::{ContentPart, Tokens, Usage};
 use contract::{ActionId, Envelope, JobId, SessionId};
 use log::{Injector, Log, Watcher};
 
@@ -72,6 +72,9 @@ pub(crate) struct Fold {
     running: Vec<JobId>,
     git: Option<Git>,
     clients: u32,
+    /// The status as last computed: `observe` builds it once per folded
+    /// line instead of twice.
+    last: SessionStatus,
     since: Option<u64>,
     /// Whether history is folded: from then on `running` and `git` are read.
     live: bool,
@@ -92,7 +95,8 @@ impl Fold {
         read_clients: Count,
     ) -> Self {
         let ledger = Ledger::default();
-        Self {
+        let spend = ledger.usage();
+        let mut fold = Self {
             name: None,
             first_prompt: None,
             project,
@@ -106,18 +110,44 @@ impl Fold {
             turn_running: false,
             retrying: false,
             context: None,
-            spend: ledger.usage(),
+            spend,
             ledger,
             delegates: BTreeSet::new(),
             running: Vec::new(),
             git: None,
             clients: 0,
+            last: SessionStatus {
+                name: String::new(),
+                workspace: String::new(),
+                project: String::new(),
+                parent: None,
+                model: String::new(),
+                state: SessionState::Idle,
+                since: 0,
+                git: None,
+                context: None,
+                spend: Usage {
+                    tokens: Tokens {
+                        input: 0,
+                        cache_read: 0,
+                        cache_write: BTreeMap::new(),
+                        output: 0,
+                    },
+                    cost: Some(0.0),
+                    subscription_cost: 0.0,
+                },
+                delegates: 0,
+                jobs: 0,
+                clients: 0,
+            },
             since: None,
             live: false,
             read_running,
             read_git,
             read_clients,
-        }
+        };
+        fold.last = fold.status();
+        fold
     }
 
     /// History is folded: reads the jobs and the branch now, and from here
@@ -127,6 +157,7 @@ impl Fold {
         self.running = (self.read_running)();
         self.git = (self.read_git)();
         self.clients = (self.read_clients)();
+        self.last = self.status();
     }
 
     /// Folds `line`. True when a field of the status changed.
@@ -140,7 +171,6 @@ impl Fold {
         let Ok(Some(event)) = Event::from_envelope(line) else {
             return false;
         };
-        let before = self.status();
         let key = self.key();
         self.apply(&event, line);
         if self.live {
@@ -149,7 +179,10 @@ impl Fold {
         if self.since.is_none() || self.key() != key {
             self.since = Some(line.ts);
         }
-        self.status() != before
+        let status = self.status();
+        let changed = status != self.last;
+        self.last = status;
+        changed
     }
 
     fn apply(&mut self, event: &Event, line: &Envelope) {

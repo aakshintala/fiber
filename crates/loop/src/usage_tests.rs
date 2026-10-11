@@ -2,6 +2,7 @@ use contract::GenerationId;
 use contract::events::UsageRecorded;
 use contract::provider::{CallUsage, Cost, InputSize, Tier};
 use contract::shapes::Tokens;
+use proptest::prelude::*;
 
 use super::{Ledger, call_cost, price, recorded as built};
 
@@ -400,4 +401,118 @@ fn record_says_whether_it_replaced_an_earlier_line_for_the_generation() {
     corrected.cost = Some(3.0);
     assert!(ledger.record(&corrected));
     assert_eq!(ledger.usage().cost, Some(4.0));
+}
+
+/// A `usage_recorded` line for `id` with `subscription`, `cost` and `input`
+/// input tokens: what the ledger folds is only these three.
+fn line(id: &str, subscription: Option<bool>, cost: Option<f64>, input: u64) -> UsageRecorded {
+    UsageRecorded {
+        generation_id: GenerationId(id.into()),
+        model: "fake/m".into(),
+        tokens: tokens(input, 0, &[], 0),
+        input_bytes: 0,
+        input_media: None,
+        web_searches: None,
+        cost,
+        subscription,
+        extension: None,
+        origin_session_id: None,
+        reviewer: None,
+    }
+}
+
+proptest! {
+    /// After every record the ledger folds exactly what the held lines
+    /// fold: the latest line per id, in first-recorded order.
+    #[test]
+    fn the_ledger_folds_the_latest_line_per_id_in_first_recorded_order(
+        rows in prop::collection::vec(
+            (
+                0..5_usize,
+                prop::bool::ANY,
+                prop::option::of(prop_oneof![
+                    Just(0.0),
+                    Just(0.1),
+                    Just(1.0),
+                    Just(2f64.powi(54)),
+                    0.0..1e15f64,
+                ]),
+                prop_oneof![
+                    Just(0u64),
+                    Just(1u64),
+                    Just(u64::MAX),
+                    0..1000u64,
+                ],
+            ),
+            0..40,
+        ),
+    ) {
+        let mut ledger = Ledger::default();
+        let mut latest: Vec<Option<UsageRecorded>> = vec![None; 5];
+        let mut order: Vec<usize> = Vec::new();
+        for (id, subscribed, cost, input) in rows {
+            let record = line(
+                &format!("g{id}"),
+                subscribed.then_some(true),
+                cost,
+                input,
+            );
+            ledger.record(&record);
+            if latest[id].is_none() {
+                order.push(id);
+            }
+            latest[id] = Some(record);
+            let held: Vec<UsageRecorded> = order
+                .iter()
+                .map(|id| latest[*id].clone().unwrap())
+                .collect();
+            let want = log::usage(held.iter());
+            prop_assert_eq!(ledger.spend(), want.cost.unwrap_or(0.0));
+            prop_assert_eq!(ledger.usage(), want);
+        }
+    }
+}
+
+#[test]
+fn a_correction_recomputes_the_fold_instead_of_subtracting() {
+    let mut ledger = Ledger::default();
+    ledger.record(&line("a", None, Some(2f64.powi(54)), 0));
+    ledger.record(&line("b", None, Some(1.0), 0));
+    ledger.record(&line("a", None, Some(0.0), 0));
+    assert_eq!(ledger.usage().cost, Some(1.0));
+}
+
+#[test]
+fn a_correction_from_an_unknown_cost_moves_it_back_to_null() {
+    let mut ledger = Ledger::default();
+    ledger.record(&line("a", None, None, 0));
+    assert_eq!(ledger.usage().cost, None);
+    ledger.record(&line("a", None, Some(2.0), 0));
+    assert_eq!(ledger.usage().cost, Some(2.0));
+    ledger.record(&line("a", None, None, 0));
+    assert_eq!(ledger.usage().cost, None);
+}
+
+#[test]
+fn a_call_corrected_between_subscription_and_billed_moves_its_cost() {
+    let mut ledger = Ledger::default();
+    ledger.record(&line("a", Some(true), Some(2.0), 0));
+    assert_eq!(ledger.usage().cost, Some(0.0));
+    assert_eq!(ledger.usage().subscription_cost, 2.0);
+    ledger.record(&line("a", None, Some(2.0), 0));
+    assert_eq!(ledger.usage().cost, Some(2.0));
+    assert_eq!(ledger.usage().subscription_cost, 0.0);
+    ledger.record(&line("a", Some(true), Some(2.0), 0));
+    assert_eq!(ledger.usage().cost, Some(0.0));
+    assert_eq!(ledger.usage().subscription_cost, 2.0);
+}
+
+#[test]
+fn a_correction_after_saturation_gives_the_fold_s_exact_total() {
+    let mut ledger = Ledger::default();
+    ledger.record(&line("a", None, None, u64::MAX));
+    ledger.record(&line("b", None, None, 1));
+    assert_eq!(ledger.usage().tokens.input, u64::MAX);
+    ledger.record(&line("a", None, None, 1));
+    assert_eq!(ledger.usage().tokens.input, 2);
 }
