@@ -24,6 +24,7 @@ use log::Log;
 
 use super::isolate;
 use crate::project;
+use fakes::git::git;
 
 /// One budget for the whole wait: setup, the code under test and the
 /// assertions run on one thread under one deadline (`docs/testing.md`,
@@ -34,19 +35,6 @@ const BUDGET: Duration = Duration::from_secs(40);
 /// cancellable one.
 fn direct(command: &mut Command) -> io::Result<Output> {
     command.output()
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(["-c", "init.defaultBranch=main"])
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
 /// `git` with the variables that redirect it elsewhere removed, for the

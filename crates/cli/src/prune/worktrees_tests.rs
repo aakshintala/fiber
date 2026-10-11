@@ -23,21 +23,9 @@ use serde_json::json;
 
 use super::super::{PruneArgs, prune_run};
 use super::*;
+use fakes::git::git;
 
 const PROJECT: &str = "p";
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(["-c", "init.defaultBranch=main"])
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
-}
 
 /// Fiber home, a workspace outside any repository, and a git repository
 /// backing the worktrees, all removed on drop.

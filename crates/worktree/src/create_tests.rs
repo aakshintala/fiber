@@ -20,6 +20,7 @@ use contract::ErrorCode;
 
 use super::*;
 use crate::{Error, Inspected, Inspection, Removed, ignored, inspect, remove};
+use fakes::git::{branch_exists, git, repo};
 
 /// One budget for the whole wait: setup, the code under test and the
 /// assertions run on one thread under one deadline (`docs/testing.md`,
@@ -30,47 +31,6 @@ const BUDGET: Duration = Duration::from_secs(40);
 /// cancellable one.
 fn direct(command: &mut Command) -> io::Result<Output> {
     command.output()
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(["-c", "init.defaultBranch=main"])
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
-}
-
-/// A repository with one commit on `main`, in a temporary directory.
-fn repo(prefix: &str) -> fakes::TempDir {
-    let home = fakes::TempDir::new(prefix);
-    git(home.path(), &["init", "--quiet"]);
-    fs::write(home.path().join("file.txt"), "x").unwrap();
-    git(home.path(), &["add", "."]);
-    git(home.path(), &["commit", "--quiet", "-m", "first"]);
-    home
-}
-
-/// Whether `refs/heads/<branch>` still exists in the repository.
-fn branch_exists(repo: &Path, branch: &str) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args([
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 /// The linked worktree `inspect` found, or the test fails.

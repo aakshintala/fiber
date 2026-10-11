@@ -20,29 +20,7 @@ use contract::ErrorCode;
 
 use super::*;
 use fakes::Deadline;
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(["-c", "init.defaultBranch=main"])
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
-}
-
-/// A repository with one commit on `main`, in a temporary directory.
-fn repo(prefix: &str) -> fakes::TempDir {
-    let home = fakes::TempDir::new(prefix);
-    git(home.path(), &["init", "--quiet"]);
-    fs::write(home.path().join("file.txt"), "x").unwrap();
-    git(home.path(), &["add", "."]);
-    git(home.path(), &["commit", "--quiet", "-m", "first"]);
-    home
-}
+use fakes::git::{branch_exists, git, repo};
 
 /// Adds a worktree on a new branch `branch` at `name` under the repository.
 fn add(repo: &Path, branch: &str, name: &str) -> PathBuf {
@@ -52,24 +30,6 @@ fn add(repo: &Path, branch: &str, name: &str) -> PathBuf {
         &["worktree", "add", "-b", branch, path.to_str().unwrap()],
     );
     path
-}
-
-/// Whether `refs/heads/<branch>` still exists in the repository.
-fn branch_exists(repo: &Path, branch: &str) -> bool {
-    Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args([
-            "rev-parse",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 /// The linked worktree `inspect` found, or the test fails.
