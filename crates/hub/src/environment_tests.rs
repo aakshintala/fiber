@@ -812,3 +812,50 @@ fn a_refresh_queued_on_the_lock_spawns_nothing_after_close() {
     );
     watchdog.stand_down(WITHIN);
 }
+
+#[test]
+fn user_home_answers_the_inherited_home() {
+    let home = PathBuf::from("/Users/me");
+    let environments = Environments::new(
+        vec![
+            (OsString::from("USER"), OsString::from("fiber-test")),
+            (OsString::from("HOME"), home.as_os_str().to_owned()),
+        ],
+        Path::new("/tmp/hub-home"),
+    );
+    assert_eq!(environments.user_home(), Some(home));
+}
+
+#[test]
+fn user_home_answers_the_first_home_when_inherited_twice() {
+    let first = PathBuf::from("/first");
+    let environments = Environments::new(
+        vec![
+            (OsString::from("HOME"), first.as_os_str().to_owned()),
+            (
+                OsString::from("HOME"),
+                OsString::from("/second"),
+            ),
+        ],
+        Path::new("/tmp/hub-home"),
+    );
+    assert_eq!(environments.user_home(), Some(first));
+}
+
+#[test]
+fn user_home_is_none_without_an_inherited_home() {
+    let environments = Environments::new(
+        vec![(OsString::from("USER"), OsString::from("fiber-test"))],
+        Path::new("/tmp/hub-home"),
+    );
+    assert_eq!(environments.user_home(), None);
+}
+
+#[test]
+fn user_home_is_none_for_a_ready_environment() {
+    let environments = Environments::ready(Environment {
+        vars: vec![(OsString::from("HOME"), OsString::from("/Users/me"))],
+        source: VariablesSource::Inherited,
+    });
+    assert_eq!(environments.user_home(), None);
+}

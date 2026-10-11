@@ -138,6 +138,18 @@ impl Environments {
         })
     }
 
+    /// The hub's home for `~/` paths (`docs/invocation.md`, "What the hub
+    /// speaks"): the first `HOME` in the inherited environment, `None`
+    /// when none is there. Reads only the immutable `inherited`, never
+    /// the capture state, so a command before the first capture publishes
+    /// answers at once.
+    pub(crate) fn user_home(&self) -> Option<PathBuf> {
+        self.inherited
+            .iter()
+            .find(|(name, _)| name == "HOME")
+            .map(|(_, value)| PathBuf::from(value))
+    }
+
     /// The published environment, waiting for the first publish when none
     /// is there yet.
     pub fn get(&self) -> Arc<Environment> {
