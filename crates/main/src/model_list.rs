@@ -138,9 +138,7 @@ fn entries(providers: &Providers, config: &Config) -> Vec<tui::ModelEntry> {
                 reference: reference.clone(),
                 provider: name.to_owned(),
                 id: model.id.clone(),
-                // The provider data names no display name yet: the
-                // picker's name match stays dormant until one exists.
-                name: None,
+                name: model.name.clone(),
                 levels: model
                     .thinking_levels
                     .iter()
