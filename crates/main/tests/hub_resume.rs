@@ -249,10 +249,9 @@ impl Hub {
                 ),
             }
         }
-        assert!(
-            fakes::matching_exits(&self.workspace, self.deadline.left()),
-            "waited until the deadline for every session to exit"
-        );
+        fakes::try_matching_exits(&self.workspace, self.deadline.left()).unwrap_or_else(|err| {
+            panic!("waited until the deadline for every session to exit: {err}")
+        });
         if let Some(watchdog) = self.watchdog.take() {
             watchdog.stand_down(self.deadline.cleanup());
         }
@@ -415,9 +414,8 @@ fn until_exited(client: &Socket, setup: &Setup) -> Vec<Value> {
     let lines = until(client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
-    assert!(
-        fakes::matching_exits(&setup.workspace_text(), setup.deadline.left()),
-        "waited until the deadline for the session process to exit"
+    fakes::try_matching_exits(&setup.workspace_text(), setup.deadline.left()).unwrap_or_else(
+        |err| panic!("waited until the deadline for the session process to exit: {err}"),
     );
     lines
 }
