@@ -379,14 +379,39 @@ fn malformed_case_fields_name_the_field() {
 #[test]
 fn a_call_case_names_the_supported_provider_functions() {
     let value = json!({
-        "call": {"provider": "openrouter", "function": "quota", "arg": {}},
+        "call": {"provider": "openrouter", "function": "usage", "arg": {}},
         "returns": 0.5
     });
     let error = case_error(&value);
     assert!(
-        error.contains("call.function") && error.contains("cost") && error.contains("models"),
+        error.contains("call.function")
+            && error.contains("cost")
+            && error.contains("models")
+            && error.contains("quota"),
         "{error}"
     );
+}
+
+#[test]
+fn a_quota_call_case_parses_with_null_or_a_table() {
+    for returns in [json!(null), json!({"credit": {"remaining": 1}})] {
+        let value = json!({
+            "call": {"provider": "openrouter", "function": "quota", "arg": {"key": "sk"}},
+            "returns": returns,
+        });
+        let Case::Call(parsed) = parse(&value).expect("valid quota call case") else {
+            panic!("call case parsed as a session case");
+        };
+        assert_eq!(single(&parsed).0.function, "quota");
+    }
+    for returns in [json!(0.5), json!([]), json!("x")] {
+        let value = json!({
+            "call": {"provider": "openrouter", "function": "quota", "arg": {}},
+            "returns": returns,
+        });
+        let error = case_error(&value);
+        assert!(error.contains("returns:"), "{error}");
+    }
 }
 
 #[test]

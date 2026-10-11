@@ -3,7 +3,12 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
+use fakes::{ProviderServer, Response};
 use serde_json::Value;
 
 /// Copies the first-party package `providers/<name>` to `to` with every
@@ -41,4 +46,55 @@ pub(crate) fn openrouter_listing() -> Vec<u8> {
         .expect("the recording case holds one body")
         .as_bytes()
         .to_vec()
+}
+
+/// The recorded OpenRouter quota reply `quota()` serves in the `ask` tests:
+/// the reply body of `quota-limited-key-returns-credit-and-limit.json`'s
+/// scripted request.
+pub(crate) fn openrouter_quota() -> Vec<u8> {
+    let case: Value = serde_json::from_str(include_str!(
+        "../../../../providers/openrouter/tests/quota-limited-key-returns-credit-and-limit.json"
+    ))
+    .expect("the quota case reads");
+    case["host"]["http"][0]["reply"]["body"]
+        .as_str()
+        .expect("the quota case holds one body")
+        .as_bytes()
+        .to_vec()
+}
+
+/// A fake OpenRouter server answering by path, for the `ask` tests: the
+/// background `quota()` fetch races the turn's own requests, so serving
+/// by order would hand the quota request a queued reply meant for another
+/// path. `/api/v1/key` always answers the recorded quota reply,
+/// `/api/v1/models` the recorded listing, and
+/// `/api/v1/chat/completions` answers `completions` in order, counting
+/// the hits in the closure (the retry test hits it twice). Anything else
+/// gets the fake's scripted-response 500, as an unrouted request would.
+pub(crate) fn openrouter_ask_server(completions: Vec<Response>) -> ProviderServer {
+    let listing = openrouter_listing();
+    let quota = openrouter_quota();
+    let completions = Arc::new(completions);
+    let next = Arc::new(AtomicUsize::new(0));
+    ProviderServer::start_responding(move |request| {
+        let target = request.path.split('?').next().unwrap_or_default();
+        match target {
+            "/api/v1/key" => Response::status(200, quota.clone()),
+            "/api/v1/models" => Response::status(200, listing.clone()),
+            "/api/v1/chat/completions" => {
+                let index = next.fetch_add(1, Ordering::SeqCst);
+                completions.get(index).cloned().unwrap_or_else(|| {
+                    Response::status(
+                        500,
+                        r#"{"error":"fakes: no scripted response left for this request"}"#,
+                    )
+                })
+            }
+            _ => Response::status(
+                500,
+                r#"{"error":"fakes: no scripted response left for this request"}"#,
+            ),
+        }
+    })
+    .unwrap()
 }

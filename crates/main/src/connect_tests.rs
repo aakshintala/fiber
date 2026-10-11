@@ -16,7 +16,8 @@ use serde_json::json;
 /// How long a test waits for the quota fetch.
 const WAIT: Duration = Duration::from_secs(5);
 
-/// A Lua provider `qp` whose `quota()` asks `<server>/<label>` over HTTP.
+/// A Lua provider `qp` whose `quota()` asks `<server>/<label>/<key>` over
+/// HTTP.
 fn quota_lua(root: &fakes::TempDir, server: &str) -> Arc<extensions::LuaProvider> {
     let home = root.path().join("home");
     let dir = root.path().join("ext");
@@ -26,7 +27,7 @@ fn quota_lua(root: &fakes::TempDir, server: &str) -> Arc<extensions::LuaProvider
         dir.join("init.lua"),
         format!(
             "fiber.provider(\"qp\", {{ quota = {{ timeout = 60000, run = function(a)\n\
-             local reply = host.http({{ url = \"{server}/\" .. a.label }})\n\
+             local reply = host.http({{ url = \"{server}/\" .. a.label .. \"/\" .. tostring(a.key) }})\n\
              if reply.status ~= 200 then error(\"denied \" .. reply.status) end\n\
              return json.decode(reply.body)\n\
              end }} }})"
@@ -110,5 +111,5 @@ fn connect_fetches_quota_for_its_label() {
         .iter()
         .map(|request| request.path.clone())
         .collect();
-    assert_eq!(paths, ["/work"]);
+    assert_eq!(paths, ["/work/k"]);
 }

@@ -202,6 +202,10 @@ fn invoke(
                 "message": error.to_string()
             })),
         },
+        Ready::Quota { key, .. } => provider
+            .fetch_quota(pair, key.map(Secret::new).as_ref())
+            .map(|(_, returned)| returned)
+            .map_err(extension_error),
         Ready::Credential(_) => provider.credential_value(pair).map_err(extension_error),
         Ready::Login { method, label } => {
             let logged = provider
@@ -391,12 +395,16 @@ fn provider_extension(
     })
 }
 
-/// A validated provider call: `cost` carries its args, and `models`
-/// takes none.
+/// A validated provider call: `cost` and `quota` carry their args, and
+/// `models` takes none.
 #[derive(Debug)]
 enum Ready {
     Cost(CostArgs),
     Models,
+    Quota {
+        label: Option<String>,
+        key: Option<String>,
+    },
     Credential(Option<String>),
     Login {
         method: extensions::LoginMethod,
@@ -413,20 +421,22 @@ impl Ready {
     fn label(&self) -> Option<&str> {
         match self {
             Ready::Credential(label) | Ready::Login { label, .. } => label.as_deref(),
+            Ready::Quota { label, .. } => label.as_deref(),
             Ready::Cost(_) | Ready::Models | Ready::Sign { .. } => None,
         }
     }
 }
 
-/// Validates `call`'s function and args. Anything but `cost` and `models`
-/// names both supported functions.
+/// Validates `call`'s function and args. Anything but `cost`, `models`
+/// and `quota` names every supported function.
 fn ready(call: &Call) -> Result<Ready, String> {
     match call.function.as_str() {
         "cost" => cost_args(&call.arg).map(Ready::Cost),
         "models" => models_args(&call.arg).map(|()| Ready::Models),
+        "quota" => quota_args(&call.arg),
         "credential" | "login" | "sign" => credential_args(call),
         _ => Err(format!(
-            "call.function: unsupported `{}`; supported functions are `cost`, `models`, `login`, `credential` and `sign`",
+            "call.function: unsupported `{}`; supported functions are `cost`, `models`, `quota`, `login`, `credential` and `sign`",
             call.function
         )),
     }
@@ -506,6 +516,32 @@ fn models_args(value: &Value) -> Result<(), String> {
     } else {
         Err("call.arg: models expects {}".to_owned())
     }
+}
+
+/// `quota` takes an object with only an optional `label` and `key`, as
+/// `credential` takes `label` and `cost` takes `key`. The label defaults
+/// to `default` at the call site; a null key is no key.
+fn quota_args(value: &Value) -> Result<Ready, String> {
+    let map = value
+        .as_object()
+        .ok_or("call.arg: quota expects an object")?;
+    if map
+        .keys()
+        .any(|key| !["label", "key"].contains(&key.as_str()))
+    {
+        return Err("call.arg: quota takes only label and key".to_owned());
+    }
+    let label = match map.get("label") {
+        None => None,
+        Some(Value::String(label)) => Some(label.clone()),
+        Some(_) => return Err("call.arg.label: expected a string".to_owned()),
+    };
+    let key = match map.get("key") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(key)) => Some(key.clone()),
+        Some(_) => return Err("call.arg.key: expected a string or null".to_owned()),
+    };
+    Ok(Ready::Quota { label, key })
 }
 
 #[derive(Debug)]

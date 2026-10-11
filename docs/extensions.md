@@ -486,7 +486,9 @@ declares, and why, is `docs/model-routing.md`. The file is
 A provider may have five pieces of Lua:
 
 - `models()`, which discovers its models
-- `quota()`, which receives `{ label, credential }` and reports its quota
+- `quota()`, which receives `{ label, credential, key }`, where `key` is
+  the label's key (absent when the provider's token comes from
+  `credential()`), and reports its quota
   (`docs/model-routing.md`, "Quota"): `{ windows = { { name, used_percent,
   resets_at } } }` with `resets_at` in Unix seconds where the vendor reports
   one, `{ credit = { remaining, limit } }` with `limit` where there is one,
@@ -601,13 +603,15 @@ closes after the first `turn_completed` or `turn_failed`.
 
 A call case invokes a provider function without starting a session. It requires
 `call` with `provider`, `function` and `arg`, plus exactly one of `returns` or
-`error`. The runner supports `cost`, `models`, `login`, `credential` and
+`error`. The runner supports `cost`, `models`, `quota`, `login`, `credential` and
 `sign`. A `cost` return is `null` or a finite number at or above 0. `models` takes `{}`
 as its `arg`, and its return is the model list, matched as a session case's
 `expect` is: an object checks only the fields it gives, an array matches in
 full, and an expected `null` matches a missing field. An error checks its
 `code` and may also check its `message`. The case can script the same `host`
-replies as a session case.
+replies as a session case. `quota` takes `{}`, with an optional `label` and
+`key`; its return is `null` or the table `quota()` returned, matched as
+`expect` is.
 
 The credential functions take these arguments:
 

@@ -694,6 +694,58 @@ end } })"#,
 }
 
 #[test]
+fn provider_quota_call_cases_match_returns_errors_and_use_no_socket() {
+    let server =
+        ProviderServer::start([Response::status(200, r#"{"live":true}"#.as_bytes())]).unwrap();
+    let url = format!("{}/key", server.url());
+    let lua = format!(
+        r#"fiber.provider("openrouter", {{ quota = {{ timeout = 5000, run = function(a)
+  local reply = host.http({{url = {url:?}, headers = {{authorization = "Bearer " .. a.key}}}})
+  if reply.status ~= 200 then error("quota failed " .. reply.status) end
+  local data = json.decode(reply.body).data
+  return {{ credit = {{ remaining = data.limit_remaining, limit = data.limit }} }}
+end }} }})"#
+    );
+    let setup = setup_named("github.com/aakshintala/fiber/providers/openrouter", &lua);
+    let mut good = json!({
+        "call": {"provider": "openrouter", "function": "quota", "arg": {"key": "secret"}},
+        "host": {"http": [{
+            "request": {"method": "GET", "url": url, "headers": {"authorization": "Bearer secret"}},
+            "reply": {"status": 200, "body": "{\"data\":{\"limit\":10,\"limit_remaining\":9.5}}"}
+        }]},
+        "returns": {"credit": {"remaining": 9.5, "limit": 10}}
+    });
+    assert_success(&run_case(&setup, "quota-match", &good));
+    assert!(server.requests().is_empty(), "call case opened a socket");
+
+    good["returns"] = json!({"credit": {"remaining": 9.5, "limit": 11}});
+    assert_failure(&run_case(&setup, "quota-mismatch", &good), "returns");
+    assert!(server.requests().is_empty(), "call case opened a socket");
+
+    let label_setup = setup_named(
+        "github.com/aakshintala/fiber/providers/openrouter",
+        r#"fiber.provider("openrouter", { quota = { timeout = 5000, run = function(a)
+  return { windows = { { name = a.label, used_percent = 0 } } }
+end } })"#,
+    );
+    let label_case = json!({
+        "call": {"provider": "openrouter", "function": "quota", "arg": {"label": "work"}},
+        "returns": {"windows": [{"name": "work", "used_percent": 0}]}
+    });
+    assert_success(&run_case(&label_setup, "quota-label", &label_case));
+
+    let error_setup = setup_named(
+        "github.com/aakshintala/fiber/providers/openrouter",
+        r#"fiber.provider("openrouter", { quota = { timeout = 5000, run = function() error("quota broke") end } })"#,
+    );
+    let error_case = json!({
+        "call": {"provider": "openrouter", "function": "quota", "arg": {}},
+        "error": {"code": "extension_failed"}
+    });
+    assert_success(&run_case(&error_setup, "quota-error", &error_case));
+}
+
+#[test]
 fn a_call_case_finds_the_provider_when_the_package_name_differs() {
     let server =
         ProviderServer::start([Response::status(200, r#"{"live":true}"#.as_bytes())]).unwrap();
@@ -722,7 +774,7 @@ fiber.provider("acme", {{ cost = {{ timeout = 5000, run = function() return 0.5 
 fn unsupported_provider_call_is_a_malformed_case() {
     let setup = setup("");
     let value = json!({
-        "call": {"provider": "openrouter", "function": "quota", "arg": {}},
+        "call": {"provider": "openrouter", "function": "usage", "arg": {}},
         "returns": []
     });
     let output = run_case(&setup, "unsupported", &value);
@@ -735,7 +787,7 @@ fn unsupported_provider_call_is_a_malformed_case() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.starts_with("FAIL "), "{stdout}");
     assert!(
-        stdout.contains("cost") && stdout.contains("models"),
+        stdout.contains("cost") && stdout.contains("models") && stdout.contains("quota"),
         "{stdout}"
     );
 }

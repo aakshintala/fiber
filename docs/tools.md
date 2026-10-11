@@ -1264,7 +1264,7 @@ the first-party providers:
 |---|---|---|
 | ChatGPT/codex | `/wham/usage` | percent used of a primary and a secondary window, with reset times |
 | OpenCode | `GET /zen/go/v1/usage` | percent used of Go's rolling, weekly and monthly windows, with reset times; Zen reports none |
-| OpenRouter | `GET /api/v1/key` | credit remaining, and the key's limit if it has one |
+| OpenRouter | `GET /api/v1/key` | credit remaining and the limit, for a key with a limit; a key without one reports none |
 | Anthropic, OpenAI, Gemini API, Databricks, muse, AWS Bedrock, Google Vertex, Azure | none | no quota reported |
 
 muse's `x-ratelimit-remaining-*` headers are a per-minute rate limit, not
@@ -1288,7 +1288,7 @@ Each entry is one of:
 
 - windows, each with its name, percent used and reset time where the provider
   reports one
-- credit remaining, and the limit where there is one
+- credit remaining and the limit
 - `no quota reported`, for a provider or harness without `quota()`
 - `unreachable`, when the fetch failed or timed out, with the last value and
   its age if there is one
@@ -1302,8 +1302,7 @@ When a window crosses `quota.notice_at` percent used (default 80), one line
 naming the provider, the credential label, the window and its reset time goes into the model's next
 turn input. It fires once per crossing, and again for that window only after
 it resets. The notice is the durable event `quota_noticed`
-(`docs/events.md`, "Usage and notices"). OpenRouter credit has a percentage
-only when the key has a limit, so a key without one never gives a notice.
+(`docs/events.md`, "Usage and notices"). An OpenRouter key without a limit reports no quota, so it never gives a notice.
 
 ### Fetching
 

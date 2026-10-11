@@ -10,6 +10,16 @@
 -- a call that ended without one, from GET <base_url>/generation?id=<id>.
 -- The lookup answers 404 until the generation's cost is known, which is
 -- nothing, not an error.
+--
+-- OpenRouter's key quota (docs/tools.md, "Where it comes from"): the credit
+-- remaining and the limit from GET https://openrouter.ai/api/v1/key, for
+-- the label's key. A key without a limit (`limit_remaining` null) reports
+-- nothing, and a call without a key makes no request and reports nothing.
+-- Anything else unreadable raises, so the cache reports `unreachable`: a
+-- status other than 200, a body that is not JSON, a `data` field that is
+-- not a table, or a `limit_remaining` or `limit` that is neither a number
+-- nor JSON null. JSON null decodes to a light userdata, never nil, so an
+-- absent field raises too.
 
 -- Every byte outside A-Z, a-z, 0-9 and -_.~ becomes %XX.
 local function encode(text)
@@ -173,6 +183,41 @@ fiber.provider("openrouter", {
         return data.total_cost
       end
       return nil
+    end,
+  },
+  quota = {
+    timeout = 8000,
+    run = function(call)
+      if call.key == nil then
+        return nil
+      end
+      local reply = host.http({
+        url = "https://openrouter.ai/api/v1/key",
+        headers = { authorization = "Bearer " .. call.key },
+      })
+      if reply.status ~= 200 then
+        error("openrouter quota: unexpected status " .. tostring(reply.status), 0)
+      end
+      local data = json.decode(reply.body).data
+      if type(data) ~= "table" then
+        error("openrouter quota: the reply holds no key", 0)
+      end
+      local remaining = data.limit_remaining
+      local limit = data.limit
+      if type(remaining) ~= "number" and type(remaining) ~= "userdata" then
+        error("openrouter quota: unreadable `limit_remaining`", 0)
+      end
+      if type(limit) ~= "number" and type(limit) ~= "userdata" then
+        error("openrouter quota: unreadable `limit`", 0)
+      end
+      if type(remaining) == "userdata" then
+        return nil
+      end
+      local credit = { remaining = remaining }
+      if type(limit) == "number" then
+        credit.limit = limit
+      end
+      return { credit = credit }
     end,
   },
 })

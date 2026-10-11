@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use config::Secret;
 use contract::provider::{ModelCall, ModelRequest, Provider, ToolDefinition};
 use serde_json::{Map, Value, json};
 use support::clock::Parker;
@@ -271,11 +272,15 @@ fn reset_view(quota: &Quota, wall: SystemTime) -> Quota {
 impl LuaProvider {
     /// `inner`, the provider a session's calls go through, fetching this
     /// provider's quota for `pair` off the request path on every call;
-    /// `inner` itself when this provider did not register `quota`.
+    /// `inner` itself when this provider did not register `quota`. `key` is
+    /// the label's resolved key, sent to `quota()` with the fetch and
+    /// absent when the label has none. The cache stays keyed by `pair`
+    /// alone: the key is a function of the label.
     pub fn with_quota(
         self: &Arc<Self>,
         inner: Arc<dyn Provider>,
         pair: CredentialPair,
+        key: Option<Secret>,
     ) -> Result<Arc<dyn Provider>, Error> {
         if !self.registers("quota")? {
             return Ok(inner);
@@ -284,15 +289,17 @@ impl LuaProvider {
             inner,
             provider: Arc::clone(self),
             pair,
+            key,
         }))
     }
 
     /// Starts a fetch for `pair` when one is due and none is in flight, on
-    /// its own thread. Never waits; never returns an error. A fetch is due
+    /// its own thread, sending the `key` the caller passes. Never waits;
+    /// never returns an error. A fetch is due
     /// when nothing was ever fetched, or the last fetch is older than
     /// `FRESH_FOR`; a failure keeps the last fetch time, so the next trigger
     /// retries. The lock is never held across the `quota()` call.
-    pub fn refresh_quota(self: &Arc<Self>, pair: &CredentialPair) {
+    pub fn refresh_quota(self: &Arc<Self>, pair: &CredentialPair, key: Option<&Secret>) {
         let id = {
             let mut states = lock(&self.quotas.state);
             let now = self.extension.clock().now();
@@ -312,24 +319,29 @@ impl LuaProvider {
         };
         let this = Arc::clone(self);
         let pair = pair.clone();
+        let key = key.cloned();
         thread::spawn(move || {
-            let fetched = this.fetch_quota(&pair);
+            let fetched = this
+                .fetch_quota(&pair, key.as_ref())
+                .map(|(quota, _)| quota)
+                .map_err(|_| ());
             this.finish_quota(&pair, id, fetched);
         });
     }
 
     /// What the model sees for `pair`: no quota when the package registers
-    /// none, else the cache, fetching when due and waiting for the flight in
+    /// none, else the cache, fetching with `key` when due and waiting for
+    /// the flight in
     /// flight, bounded by that flight's own deadline. A package that failed
     /// to start reads `unreachable` with no last value. A failure is
     /// `unreachable`, never an error.
-    pub fn quota(self: &Arc<Self>, pair: &CredentialPair) -> QuotaEntry {
+    pub fn quota(self: &Arc<Self>, pair: &CredentialPair, key: Option<&Secret>) -> QuotaEntry {
         match self.registers("quota") {
             Err(_) => return QuotaEntry::Unreachable { last: None },
             Ok(false) => return QuotaEntry::NoQuota,
             Ok(true) => {}
         }
-        self.refresh_quota(pair);
+        self.refresh_quota(pair, key);
         // The flight this read waits on: read once, and waited on at most
         // until its own deadline, so a chain of new flights cannot hold one
         // reader past it.
@@ -371,19 +383,29 @@ impl LuaProvider {
         }
     }
 
-    /// Calls `quota({ label, credential })` and checks what it returned. Any
-    /// failure (a raised error, a bad return, the hub's own timeout) is a
-    /// failed fetch. With no stored credential the call carries none, so
+    /// Calls `quota({ label, credential, key })` and checks what it
+    /// returned, returning the checked quota with the raw return. `key` is
+    /// the label's resolved key, absent from the argument when none was
+    /// given. Any failure (a raised error, a bad return, the hub's own
+    /// timeout) is an error, which the cache path reports as a failed
+    /// fetch. With no stored credential the call carries none, so
     /// `host.oauth.refresh` refuses inside it, as for `models()` and
-    /// `cost()`.
-    fn fetch_quota(&self, pair: &CredentialPair) -> Result<Option<Quota>, ()> {
-        let returned = self
-            .call(
-                "quota",
-                json!({"label": pair.label, "credential": pair.credential}),
-            )
-            .map_err(|_| ())?;
-        parse_quota(&returned).map_err(|_| ())
+    /// `cost()`. Uncached: it never touches `Quotas`.
+    pub fn fetch_quota(
+        &self,
+        pair: &CredentialPair,
+        key: Option<&Secret>,
+    ) -> Result<(Option<Quota>, Value), Error> {
+        let mut arg = Map::new();
+        arg.insert("label".into(), json!(pair.label));
+        arg.insert("credential".into(), json!(pair.credential));
+        if let Some(key) = key {
+            arg.insert("key".into(), json!(key.expose()));
+        }
+        let returned = self.call("quota", Value::Object(arg))?;
+        let parsed =
+            parse_quota(&returned).map_err(|why| self.bad_return("quota", why.to_owned()))?;
+        Ok((parsed, returned))
     }
 
     /// Stores a fetch's result when its id still owns the in-flight slot and
@@ -434,13 +456,14 @@ struct Quoted {
     inner: Arc<dyn Provider>,
     provider: Arc<LuaProvider>,
     pair: CredentialPair,
+    key: Option<Secret>,
 }
 
 impl Provider for Quoted {
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         // Off the request path: only locks the cache and, when due, spawns
         // a fetch thread. It never waits, parks, or calls `registers`.
-        self.provider.refresh_quota(&self.pair);
+        self.provider.refresh_quota(&self.pair, self.key.as_ref());
         self.inner.call(request)
     }
 

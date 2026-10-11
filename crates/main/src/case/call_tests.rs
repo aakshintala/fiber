@@ -27,16 +27,65 @@ fn cost_and_models_dispatch_and_anything_else_names_both() {
     };
     assert!(matches!(super::ready(&models), Ok(super::Ready::Models)));
 
-    let quota = super::Call {
+    let usage = super::Call {
+        provider: "p".to_owned(),
+        function: "usage".to_owned(),
+        arg: json!({}),
+    };
+    let error = super::ready(&usage).unwrap_err();
+    assert!(
+        error.contains("cost") && error.contains("models") && error.contains("quota"),
+        "{error}"
+    );
+}
+
+#[test]
+fn quota_takes_an_optional_label_and_key() {
+    for arg in [
+        json!({}),
+        json!({"label": "work"}),
+        json!({"key": "sk"}),
+        json!({"key": null}),
+        json!({"label": "work", "key": "sk"}),
+    ] {
+        let call = super::Call {
+            provider: "p".to_owned(),
+            function: "quota".to_owned(),
+            arg: arg.clone(),
+        };
+        assert!(
+            matches!(super::ready(&call), Ok(super::Ready::Quota { .. })),
+            "{arg}: {}",
+            super::ready(&call).unwrap_err()
+        );
+    }
+    let labelled = super::Call {
+        provider: "p".to_owned(),
+        function: "quota".to_owned(),
+        arg: json!({"label": "work"}),
+    };
+    assert_eq!(super::ready(&labelled).unwrap().label(), Some("work"));
+    let bare = super::Call {
         provider: "p".to_owned(),
         function: "quota".to_owned(),
         arg: json!({}),
     };
-    let error = super::ready(&quota).unwrap_err();
-    assert!(
-        error.contains("cost") && error.contains("models"),
-        "{error}"
-    );
+    assert_eq!(super::ready(&bare).unwrap().label(), None);
+    for arg in [
+        json!({"generation_id": "x"}),
+        json!({"label": 7}),
+        json!({"key": 7}),
+        json!([]),
+        json!(null),
+    ] {
+        let call = super::Call {
+            provider: "p".to_owned(),
+            function: "quota".to_owned(),
+            arg: arg.clone(),
+        };
+        let error = super::ready(&call).unwrap_err();
+        assert!(error.contains("call.arg"), "{arg}: {error}");
+    }
 }
 
 #[test]

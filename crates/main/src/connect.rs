@@ -81,8 +81,8 @@ fn scripted(id: &str, here: &Here) -> Result<Arc<dyn Provider>, Failure> {
 /// credential label, when it has one: a provider whose package declares
 /// `cost()` carries it as its lookup, bound to this model's base URL and
 /// `key` (`docs/model-routing.md`, "Cost"), and one whose package declares
-/// `quota()` fetches that label's quota off the request path on every call
-/// (`docs/tools.md`, "Provider quota"). A package that fails to start gets
+/// `quota()` fetches that label's quota off the request path on every call,
+/// with the label's key (`docs/tools.md`, "Provider quota"). A package that fails to start gets
 /// neither; the calls' costs stay as first recorded. `here` is where a
 /// `scripted` model's script is read.
 pub(crate) fn connect(
@@ -152,10 +152,18 @@ pub(crate) fn connect(
     Ok(match lua {
         Some((lua, label)) => {
             let costed = lua
-                .costed(Arc::clone(&provider), &model.model.base_url, lookup_key)
+                .costed(
+                    Arc::clone(&provider),
+                    &model.model.base_url,
+                    lookup_key.clone(),
+                )
                 .unwrap_or(Arc::clone(&provider));
-            lua.with_quota(costed, CredentialPair::for_provider(model.provider, label))
-                .unwrap_or(provider)
+            lua.with_quota(
+                costed,
+                CredentialPair::for_provider(model.provider, label),
+                lookup_key,
+            )
+            .unwrap_or(provider)
         }
         None => provider,
     })

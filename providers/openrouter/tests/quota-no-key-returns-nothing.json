@@ -1,0 +1,8 @@
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "quota",
+    "arg": {}
+  },
+  "returns": null
+}

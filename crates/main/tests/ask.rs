@@ -2303,11 +2303,10 @@ fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
 #[test]
 fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
     let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([
-        Response::status(200, support::package::openrouter_listing()),
-        completions_hello("gen-abc123", json!(0.0000072)),
-    ])
-    .unwrap();
+    let server = support::package::openrouter_ask_server(vec![completions_hello(
+        "gen-abc123",
+        json!(0.0000072),
+    )]);
     install(
         &setup,
         &setup.package("openrouter", "https://openrouter.ai", &server.url()),
@@ -2322,10 +2321,16 @@ fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     let requests = server.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].path, "/api/v1/models");
-    assert_eq!(requests[1].path, "/api/v1/chat/completions");
-    assert_fingerprint(&requests[1], "authorization", "Bearer sk-test-openrouter");
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path != "/api/v1/key")
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].path, "/api/v1/models");
+    assert_eq!(calls[1].path, "/api/v1/chat/completions");
+    assert_fingerprint(calls[1], "authorization", "Bearer sk-test-openrouter");
     // The stream's 15 prompt tokens hold 14 cached, so the declared
     // prices give about 0.0000051: the inline figure stands instead.
     let recorded: Vec<_> = run
@@ -2370,12 +2375,10 @@ fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
     // `[DONE]`. The retry completes with the vendor's own figure.
     let early = json!({"id": "gen-early", "object": "chat.completion.chunk", "choices": [
         {"index": 0, "delta": {"role": "assistant", "content": "Hel"}}]});
-    let server = ProviderServer::start([
-        Response::status(200, support::package::openrouter_listing()),
+    let server = support::package::openrouter_ask_server(vec![
         Response::stream(format!("data: {early}\n\n")),
         completions_hello("gen-ok", json!(0.0000072)),
-    ])
-    .unwrap();
+    ]);
     install(
         &setup,
         &setup.package("openrouter", "https://openrouter.ai", &server.url()),
@@ -2438,11 +2441,8 @@ fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
 #[test]
 fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
     let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([
-        Response::status(200, support::package::openrouter_listing()),
-        completions_hello("gen-one", json!(0.0001)),
-    ])
-    .unwrap();
+    let server =
+        support::package::openrouter_ask_server(vec![completions_hello("gen-one", json!(0.0001))]);
     install(
         &setup,
         &setup.package("openrouter", "https://openrouter.ai", &server.url()),
@@ -2467,9 +2467,15 @@ fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
         .unwrap();
     assert_eq!(built["payload"]["cache_lifetime"], "1h");
     let requests = server.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].path, "/api/v1/models");
-    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path != "/api/v1/key")
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].path, "/api/v1/models");
+    let body: Value = serde_json::from_slice(&calls[1].body).unwrap();
     assert_eq!(body["session_id"], run.session_id());
     assert_eq!(body["prompt_cache_key"], run.session_id());
     let hour = json!({"type": "ephemeral", "ttl": "1h"});
@@ -2515,9 +2521,15 @@ fn openrouter_claude_request(
     );
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let requests = server.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0].path, "/api/v1/models");
-    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path != "/api/v1/key")
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].path, "/api/v1/models");
+    let body: Value = serde_json::from_slice(&calls[1].body).unwrap();
     (run, body)
 }
 
@@ -2541,11 +2553,8 @@ fn assert_five_minute_markers(run: &Run, body: &Value) {
 #[test]
 fn a_per_model_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
     let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([
-        Response::status(200, support::package::openrouter_listing()),
-        completions_hello("gen-one", json!(0.0001)),
-    ])
-    .unwrap();
+    let server =
+        support::package::openrouter_ask_server(vec![completions_hello("gen-one", json!(0.0001))]);
     let (run, body) = openrouter_claude_request(
         &server,
         &setup,
@@ -2558,11 +2567,8 @@ fn a_per_model_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
 #[test]
 fn a_repository_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
     let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start([
-        Response::status(200, support::package::openrouter_listing()),
-        completions_hello("gen-one", json!(0.0001)),
-    ])
-    .unwrap();
+    let server =
+        support::package::openrouter_ask_server(vec![completions_hello("gen-one", json!(0.0001))]);
     let (run, body) = openrouter_claude_request(
         &server,
         &setup,
