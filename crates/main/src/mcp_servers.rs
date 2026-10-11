@@ -280,6 +280,11 @@ pub(crate) fn session_tools(
         started.servers.stop();
         return Err(failure);
     }
+    // An `mcp_resources` already declared, by a server or an extension,
+    // survives: the post-offer load never offers a second registration.
+    if declares_resources(&tools) {
+        started.servers.mark_resources_declared();
+    }
     let mut failed = prepared.failed;
     failed.extend(started.failed);
     let servers = Arc::new(started.servers);
@@ -303,6 +308,15 @@ pub(crate) fn session_tools(
         later,
     };
     Ok((tools, infos, driver, servers))
+}
+
+/// Whether the session already declares `mcp_resources`, through an MCP
+/// server or an extension: the post-offer load never offers a second
+/// registration then.
+fn declares_resources(tools: &[(String, Arc<dyn Tool>)]) -> bool {
+    tools
+        .iter()
+        .any(|(_, tool)| tool.definition().name == mcp::RESOURCES_TOOL)
 }
 
 /// Adds the extensions' tools after the built-in and MCP tools, so one

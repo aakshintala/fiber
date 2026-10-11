@@ -1902,3 +1902,82 @@ fn link_debug_redacts_url_secrets_and_the_session_id() {
         "a secret redacts: {printed}"
     );
 }
+
+/// A fake answering `initialize` with `capabilities`, `tools/list` with
+/// one `echo` tool, and `tools/call` with `hi`.
+fn with_capabilities(capabilities: Value) -> impl Fn(&Request) -> Response + Send + Sync + 'static {
+    move |req: &Request| {
+        if req.method == "GET" {
+            return Response::status(404, "no stream here");
+        }
+        if req.method == "DELETE" {
+            return Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => Response::status(
+                200,
+                result(
+                    &id,
+                    json!({
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": capabilities,
+                        "serverInfo": {"name": "remote", "version": "1"},
+                    }),
+                ),
+            )
+            .header("mcp-session-id", SESSION),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                Response::status(202, "")
+            }
+            Some("tools/list") => Response::stream(event(&result(
+                &id,
+                json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]}),
+            ))),
+            Some("tools/call") => Response::status(
+                200,
+                result(&id, json!({"content": [{"type": "text", "text": "hi"}]})),
+            ),
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    }
+}
+
+#[test]
+fn a_server_advertising_resources_as_an_object_offers_them() {
+    let setup = Setup::new();
+    let server =
+        ProviderServer::start_responding(with_capabilities(json!({"tools": {}, "resources": {}})))
+            .unwrap();
+    let (_remote, listed) = setup.start(&server, Duration::from_secs(5));
+    assert_eq!(listed_names(&listed), ["echo"]);
+    assert!(
+        listed.resources,
+        "an object resources capability offers resources",
+    );
+}
+
+#[test]
+fn a_non_object_resources_capability_offers_none() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_responding(with_capabilities(
+        json!({"tools": {}, "resources": true}),
+    ))
+    .unwrap();
+    let (_remote, listed) = setup.start(&server, Duration::from_secs(5));
+    assert_eq!(listed_names(&listed), ["echo"]);
+    assert!(
+        !listed.resources,
+        "a non-object resources capability offers none",
+    );
+}
+
+#[test]
+fn a_server_without_the_resources_capability_offers_none() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_responding(standard()).unwrap();
+    let (_remote, listed) = setup.start(&server, Duration::from_secs(5));
+    assert_eq!(listed_names(&listed), ["echo"]);
+    assert!(!listed.resources, "no resources capability offers none",);
+}

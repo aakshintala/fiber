@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use contract::ErrorCode;
-use contract::events::{McpServerFailed, ServerFailure};
+use contract::events::{McpServerFailed, McpServerReady, ServerFailure};
 use contract::shapes::ContentPart;
 use contract::tool::{ServerRecord, Tool};
 use serde_json::{Map, Value, json};
@@ -599,7 +599,18 @@ fn each_outcome_maps_to_its_code_sentence_and_servers() {
         ),
     ];
     for (name, call, called, servers, code, message, records) in rows {
-        let out = output(call, called, servers, &cancel());
+        // Every row runs with one incoming ready record before its own,
+        // so the mapping must carry incoming records through.
+        let ready = ServerRecord::Ready(McpServerReady {
+            server: "fx".to_owned(),
+        });
+        let mut incoming = vec![ready.clone()];
+        incoming.extend(servers);
+        let mut expected = vec![ready];
+        if name == "died" {
+            expected.push(ServerRecord::Failed(died_record()));
+        }
+        let out = output(call, called, incoming, &cancel());
 
         match (code, message) {
             (None, None) => {
@@ -611,14 +622,16 @@ fn each_outcome_maps_to_its_code_sentence_and_servers() {
                     }],
                     "row: {name}"
                 );
+                assert_eq!(out.servers, expected, "row: {name}");
             }
             (Some(code), Some(message)) => {
                 let failure = out.error.expect("failed");
                 assert_eq!(failure.code, code, "row: {name}");
                 assert_eq!(failure.message, message, "row: {name}");
-                assert_eq!(out.servers.len(), records, "row: {name}");
+                assert_eq!(out.servers.len(), records + 1, "row: {name}");
+                assert_eq!(out.servers, expected, "row: {name}");
                 if name == "died" {
-                    match &out.servers[0] {
+                    match &out.servers[1] {
                         ServerRecord::Failed(record) => {
                             assert_eq!(record.server, "fx");
                             assert_eq!(record.reason, ServerFailure::Died);
