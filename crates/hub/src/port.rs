@@ -9,7 +9,14 @@ use std::sync::Arc;
 /// other address.
 pub(crate) struct Listener {
     /// The bound port socket, accepted once the hub serves.
+    #[expect(dead_code, reason = "read from Task 4")]
     pub(crate) tcp: TcpListener,
     /// The web page origins whose websockets the hub accepts.
+    #[expect(dead_code, reason = "read from Task 4")]
     pub(crate) origins: Arc<[String]>,
 }
+
+#[cfg_attr(not(test), expect(dead_code, reason = "used from Task 4"))]
+mod frame;
+#[cfg_attr(not(test), expect(dead_code, reason = "used from Task 4"))]
+mod handshake;

@@ -16,6 +16,8 @@ mod attention;
 mod closed;
 mod connection;
 mod delete;
+#[cfg_attr(not(test), expect(dead_code, reason = "used from Task 4"))]
+mod devices;
 mod diag;
 mod error;
 #[cfg(test)]

@@ -48,6 +48,7 @@ pub(crate) struct Held {
     dev: u64,
     ino: u64,
     /// The installed hub's websocket port, bound after `run/hub`.
+    #[expect(dead_code, reason = "read from Task 4")]
     pub(crate) port: Option<crate::port::Listener>,
 }
 
