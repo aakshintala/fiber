@@ -441,6 +441,8 @@ impl HubProc {
 pub(crate) struct Socket {
     pub(crate) write: Mutex<UnixStream>,
     pub(crate) read: Mutex<BufReader<UnixStream>>,
+    /// Lines [`recv_answer`] read past, returned by [`Socket::next`] first.
+    kept: Mutex<std::collections::VecDeque<Value>>,
     deadline: Deadline,
 }
 
@@ -476,6 +478,9 @@ impl Socket {
     /// socket. Neither by the deadline panics naming `what`, with the lines
     /// before it.
     pub(crate) fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
+        if let Some(line) = self.kept.lock().unwrap().pop_front() {
+            return Some(line);
+        }
         match read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
             Ok(None) => None,
             Ok(Some(buf)) => {
@@ -511,6 +516,29 @@ pub(crate) fn recv_reply(client: &Socket, what: &str) -> Value {
             None => panic!("the socket closed while waiting for {what}"),
         }
     }
+}
+
+/// The answer to command `id`: the line whose `payload.command_id` is `id`.
+/// `docs/invocation.md` orders no other line against it, so a feed line may
+/// come first: lines before it stay for the caller's next [`recv`] or
+/// [`until`], in order, except `attention` lines, which [`recv_reply`] drops
+/// too.
+#[track_caller]
+pub(crate) fn recv_answer(client: &Socket, id: &str, what: &str) -> Value {
+    let mut passed = Vec::new();
+    let answer = loop {
+        match client.next(what, &passed) {
+            Some(line) if line["payload"]["command_id"] == id => break line,
+            Some(line) if line.get("kind").and_then(Value::as_str) == Some("attention") => {}
+            Some(line) => passed.push(line),
+            None => panic!("the socket closed while waiting for {what}; got {passed:?}"),
+        }
+    };
+    let mut kept = client.kept.lock().unwrap();
+    for line in passed.into_iter().rev() {
+        kept.push_front(line);
+    }
+    answer
 }
 
 /// Collects socket lines until `done`, each taking what remains of the
@@ -637,6 +665,7 @@ impl Socket {
         Self {
             write: Mutex::new(stream),
             read: Mutex::new(BufReader::new(read)),
+            kept: Mutex::default(),
             deadline,
         }
     }
@@ -745,7 +774,7 @@ pub(crate) fn start_session(client: &Socket, workspace: &str, content: &str) -> 
     client.send(&format!(
         "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\",\"content\":[{{\"type\":\"text\",\"text\":\"{content}\"}}]}}}}"
     ));
-    let ack = recv_reply(client, "the start acknowledgement");
+    let ack = recv_answer(client, "c_start", "the start acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     ack["payload"]["result"]["session_id"]
         .as_str()
@@ -759,7 +788,7 @@ pub(crate) fn subscribe(client: &Socket, session: &str) {
     client.send(&format!(
         "{{\"id\":\"c_sub\",\"session_id\":\"{session}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
     ));
-    let ack = recv_reply(client, "the subscribe acknowledgement");
+    let ack = recv_answer(client, "c_sub", "the subscribe acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
 }
 
