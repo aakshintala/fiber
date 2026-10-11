@@ -20,7 +20,7 @@ fn jobs(
 
 #[test]
 fn a_docs_only_pull_request_runs_no_job_after_the_selection() {
-    let plan = plan("docs", &[], "pull_request", false, true, true, 100);
+    let plan = plan("docs", &[], "pull_request", false, true, true, 100, &[]);
     assert_eq!(
         plan,
         Plan {
@@ -40,6 +40,7 @@ fn a_code_pull_request_runs_what_it_selected() {
         true,
         true,
         100,
+        &[],
     );
     assert_eq!(
         plan,
@@ -60,13 +61,14 @@ fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
         false,
         true,
         100,
+        &[],
     );
     assert_eq!(plan.jobs, jobs(true, true, true, false, false));
 }
 
 #[test]
 fn a_pull_request_that_selects_no_crate_skips_the_tests() {
-    let plan = plan("crates", &[], "pull_request", false, false, true, 100);
+    let plan = plan("crates", &[], "pull_request", false, false, true, 100, &[]);
     assert_eq!(plan.jobs, jobs(true, false, false, false, false));
     assert_eq!(plan.shards, 0);
 }
@@ -81,6 +83,7 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
         true,
         true,
         100,
+        &[],
     );
     let ready = plan(
         "crates",
@@ -90,6 +93,7 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
         true,
         true,
         100,
+        &[],
     );
     assert!(!draft.jobs["test"]);
     assert!(draft.jobs["test_linux"]);
@@ -109,6 +113,7 @@ fn an_unlabelled_draft_skips_mutants_and_runs_the_rest() {
         false,
         false,
         100,
+        &[],
     );
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);
@@ -117,7 +122,7 @@ fn an_unlabelled_draft_skips_mutants_and_runs_the_rest() {
 
 #[test]
 fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
-    let plan = plan("docs", &[], "push", false, true, true, 100);
+    let plan = plan("docs", &[], "push", false, true, true, 100, &[]);
     assert_eq!(
         plan,
         Plan {
@@ -129,7 +134,16 @@ fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
 
 #[test]
 fn a_code_push_runs_lint_tests_and_release_but_no_mutants_or_bug_check() {
-    let plan = plan("all", &strings(&["log"]), "push", false, true, true, 1000);
+    let plan = plan(
+        "all",
+        &strings(&["log"]),
+        "push",
+        false,
+        true,
+        true,
+        1000,
+        &[],
+    );
     assert_eq!(
         plan,
         Plan {
@@ -149,6 +163,7 @@ fn a_pull_request_that_selects_the_binary_runs_the_release_job() {
         false,
         true,
         100,
+        &[],
     );
     assert_eq!(plan.jobs, jobs(true, true, true, false, true));
 }
@@ -156,7 +171,16 @@ fn a_pull_request_that_selects_the_binary_runs_the_release_job() {
 #[test]
 fn a_pull_request_that_runs_everything_runs_the_release_job() {
     let packages = strings(&["config", "log", "main", "xtask"]);
-    let plan = plan("all", &packages, "pull_request", false, false, true, 100);
+    let plan = plan(
+        "all",
+        &packages,
+        "pull_request",
+        false,
+        false,
+        true,
+        100,
+        &[],
+    );
     assert_eq!(plan.jobs, jobs(true, true, true, false, true));
 }
 
@@ -170,8 +194,104 @@ fn a_pull_request_without_the_binary_skips_the_release_job() {
         false,
         true,
         100,
+        &[],
     );
     assert_eq!(plan.jobs, jobs(true, true, true, false, false));
+}
+
+#[test]
+fn a_pull_request_touching_the_bench_crate_runs_the_release_job() {
+    for path in [
+        "crates/bench/src/lib.rs",
+        "crates/bench/examples/bench/wheel.rs",
+    ] {
+        let plan = plan(
+            "crates",
+            &strings(&["log"]),
+            "pull_request",
+            false,
+            false,
+            true,
+            100,
+            &strings(&[path]),
+        );
+        assert!(plan.jobs["release"], "{path}");
+    }
+}
+
+#[test]
+fn a_pull_request_touching_the_bench_harness_runs_the_release_job() {
+    for path in [
+        "xtask/src/bench.rs",
+        "xtask/src/bench_tests.rs",
+        "xtask/src/bench/judge.rs",
+    ] {
+        let plan = plan(
+            "crates",
+            &strings(&["log"]),
+            "pull_request",
+            false,
+            false,
+            true,
+            100,
+            &strings(&[path]),
+        );
+        assert!(plan.jobs["release"], "{path}");
+    }
+}
+
+#[test]
+fn a_pull_request_touching_the_release_size_script_runs_the_release_job() {
+    let plan = plan(
+        "crates",
+        &strings(&["log"]),
+        "pull_request",
+        false,
+        false,
+        true,
+        100,
+        &strings(&["scripts/release-size"]),
+    );
+    assert!(plan.jobs["release"]);
+}
+
+#[test]
+fn a_pull_request_touching_the_stored_results_script_runs_the_release_job() {
+    let plan = plan(
+        "crates",
+        &strings(&["log"]),
+        "pull_request",
+        false,
+        false,
+        true,
+        100,
+        &strings(&["scripts/stored-results"]),
+    );
+    assert!(plan.jobs["release"]);
+}
+
+#[test]
+fn a_pull_request_touching_a_release_path_lookalike_skips_the_release_job() {
+    for path in [
+        "crates/benchmark/src/lib.rs",
+        "xtask/src/select.rs",
+        "xtask/tests/bench.rs",
+        "xtask/tests/release_size.rs",
+        "scripts/release-size-old",
+        "scripts/check",
+    ] {
+        let plan = plan(
+            "crates",
+            &strings(&["log", "xtask"]),
+            "pull_request",
+            false,
+            false,
+            true,
+            100,
+            &strings(&[path]),
+        );
+        assert!(!plan.jobs["release"], "{path}");
+    }
 }
 
 fn results(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -319,6 +439,7 @@ fn a_selected_run_with_no_mutants_starts_no_shard() {
         false,
         true,
         0,
+        &[],
     );
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);

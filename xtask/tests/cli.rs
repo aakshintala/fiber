@@ -212,9 +212,11 @@ fn select_fails_without_a_base() {
 
 #[test]
 fn plan_prints_the_jobs_and_shards() {
-    let dir = TempDir::new("xtask-plan");
+    let dir = workspace();
     let args = [
         "plan",
+        "--base",
+        "main",
         "--mode",
         "crates",
         "--packages",
@@ -238,6 +240,8 @@ fn plan_prints_the_jobs_and_shards() {
     );
     let bad = [
         "plan",
+        "--base",
+        "main",
         "--mode",
         "crates",
         "--packages",
