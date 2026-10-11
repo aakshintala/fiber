@@ -1793,3 +1793,20 @@ fn the_run_count_sentence_follows_the_head_file() {
         out.comment
     );
 }
+
+#[test]
+fn a_malformed_binary_size_fails_the_head() {
+    for size in [json!("1000"), json!(-1), json!(1.5), Value::Null] {
+        let mut headed = head();
+        headed["binary_size_bytes"] = size;
+        let out = judge(&headed, None, Event::Push);
+        assert!(
+            has(
+                &out.failures,
+                "head results: binary_size_bytes is not a whole number of bytes"
+            ),
+            "{:?}",
+            out.failures
+        );
+    }
+}
