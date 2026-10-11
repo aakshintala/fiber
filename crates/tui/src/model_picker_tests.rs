@@ -1272,7 +1272,10 @@ fn the_checklist_filters_every_installed_model() {
         shown_in(&models, &scoped, false, Mode::Scope, None, "acme 2"),
         [1]
     );
-    assert_eq!(shown_in(&models, &scoped, false, Mode::Scope, None, ""), [0, 1, 2, 3, 4]);
+    assert_eq!(
+        shown_in(&models, &scoped, false, Mode::Scope, None, ""),
+        [0, 1, 2, 3, 4]
+    );
 }
 
 /// An open picker over `catalogue()` with `lists`, for the view tests.
@@ -1408,7 +1411,11 @@ fn the_checklist_view_counts_marks_and_keeps_its_footer() {
             ("Esc", "close")
         ]
     );
-    for model in view.sections.iter().flat_map(|section| section.models.iter()) {
+    for model in view
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+    {
         assert!(model.mark.is_some());
         assert_eq!(model.chip, None);
         assert!(!model.session_only);

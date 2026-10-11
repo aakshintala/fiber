@@ -60,9 +60,10 @@ fn filter_row(view: &PickerView) -> Row {
     }
 }
 
-/// The buttons row: the count dim, the scope toggle bold, and "⟳ refresh
-/// all" dim at the right end. The refresh and toggle cells take clicks
-/// as their keys do; the count takes none.
+/// The buttons row: the count dim, the scope toggle bold, and, outside
+/// the checklist, "⟳ refresh all" dim at the right end. The refresh
+/// and toggle cells take clicks as their keys do; the count takes none.
+/// The checklist draws no refresh button and no refresh target.
 fn buttons_row(view: &PickerView, refresh_at: Option<(u16, u16)>) -> Row {
     let dim = Style::new().add_modifier(Modifier::DIM);
     let mut spans = vec![Span::styled(view.count.clone(), dim)];
@@ -84,13 +85,17 @@ fn buttons_row(view: &PickerView, refresh_at: Option<(u16, u16)>) -> Row {
     }
     let mut row = Row {
         spans,
-        right: vec![Span::styled("⟳ refresh all".to_owned(), dim)],
+        right: Vec::new(),
         targets,
         barred: false,
     };
-    if let Some((start, end)) = refresh_at {
-        row.targets
-            .push((start, end, TargetId::View(Spot::Cell(view.buttons_at, 0))));
+    // The checklist draws no refresh button and no refresh target.
+    if view.refresh {
+        row.right = vec![Span::styled("⟳ refresh all".to_owned(), dim)];
+        if let Some((start, end)) = refresh_at {
+            row.targets
+                .push((start, end, TargetId::View(Spot::Cell(view.buttons_at, 0))));
+        }
     }
     row
 }
@@ -284,50 +289,83 @@ fn session_row(model: &ModelRow) -> Row {
     }
 }
 
-/// One checklist row: the gutter, the mark cell with its own target,
-/// then the id. A marked row draws bold. Any other cell selects the row.
+/// One checklist row: the gutter, the mark, a space, the id in `accent`
+/// with each query hit bold and underlined, each role dim in brackets,
+/// "● current" bold in `accent` on the on-screen model, and the rebuild
+/// cost dim at the right end. The mark reads dim exactly when unmarked
+/// and takes no bold of its own: the bar bolds the focused row. The mark
+/// and id cells take clicks as Enter does; the roles cell and the row
+/// take clicks anywhere, selecting it. The focused row sits on the bar.
 fn scope_row(model: &ModelRow, focused: bool) -> Row {
+    let dim = Style::new().add_modifier(Modifier::DIM);
     let marked = model.mark.unwrap_or(false);
-    let ink = if marked {
-        Style::new().add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-    let spans = vec![
-        gutter(focused),
-        Span::styled(
-            if marked {
-                "[x] ".to_owned()
-            } else {
-                "[ ] ".to_owned()
-            },
-            ink,
-        ),
-        Span::styled(model.id.clone(), ink),
-    ];
-    let x = 2 + 4 + to_u16(cells(&model.id));
+    let mut spans = vec![gutter(focused)];
+    spans.push(Span::styled(
+        if marked {
+            "[x] ".to_owned()
+        } else {
+            "[ ] ".to_owned()
+        },
+        if marked { Style::new() } else { dim },
+    ));
+    spans.extend(id_spans(&model.id, &model.hits));
+    let id_end = to_u16(6 + cells(&model.id));
     let mut targets = vec![(0, u16::MAX, TargetId::View(Spot::Row(model.at)))];
     targets.push((2, 6, TargetId::View(Spot::Cell(model.at, 0))));
-    targets.push((6, x, TargetId::View(Spot::Cell(model.at, 1))));
-    let mut spans = spans;
+    targets.push((6, id_end, TargetId::View(Spot::Cell(model.at, 1))));
     if !model.roles.is_empty() {
         let roles = format!(" [{}]", model.roles.join("] ["));
         let wide = to_u16(cells(&roles));
-        spans.push(Span::styled(
-            roles,
-            Style::new().add_modifier(Modifier::DIM),
-        ));
+        spans.push(Span::styled(roles, dim));
         targets.push((
-            x,
-            x.saturating_add(wide),
+            id_end,
+            id_end.saturating_add(wide),
             TargetId::View(Spot::Cell(model.at, 2)),
+        ));
+    }
+    if model.current {
+        spans.push(Span::styled(
+            " ● current".to_owned(),
+            Style::new()
+                .fg(Role::Accent.color())
+                .add_modifier(Modifier::BOLD),
         ));
     }
     Row {
         spans,
-        right: Vec::new(),
+        right: model
+            .cost
+            .clone()
+            .map(|cost| vec![Span::styled(cost, dim)])
+            .unwrap_or_default(),
         targets,
         barred: focused,
+    }
+}
+
+/// A checklist model's second row, hung under the id like the choosing
+/// one: "thinking" dim and the levels dim, or "fixed thinking" dim for
+/// a model with none. No level is chosen here, so no chip is bracketed
+/// and no chip takes clicks: the row only selects its model.
+fn scope_second_row(model: &ModelRow) -> Row {
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let mut spans = vec![Span::raw("  ".to_owned()), Span::raw("    ".to_owned())];
+    if model.levels.is_empty() {
+        spans.push(Span::styled("fixed thinking".to_owned(), dim));
+    } else {
+        spans.push(Span::styled("thinking ".to_owned(), dim));
+        for (at, level) in model.levels.iter().enumerate() {
+            if at != 0 {
+                spans.push(Span::raw(" ".to_owned()));
+            }
+            spans.push(Span::styled(level.clone(), dim));
+        }
+    }
+    Row {
+        spans,
+        right: Vec::new(),
+        targets: vec![(0, u16::MAX, TargetId::View(Spot::Row(model.at)))],
+        barred: false,
     }
 }
 
@@ -398,11 +436,10 @@ fn window(view: &PickerView, fit: usize) -> (usize, usize) {
 }
 
 /// The body rows available for the models: the area less the chrome,
-/// the buttons row with the filter above it, the status lines, and the
-/// no-match line. The checklist takes no filter row.
+/// the filter and buttons rows above it, the status lines, and the
+/// no-match line.
 fn model_fit(view: &PickerView, height: u16) -> usize {
-    let reserved =
-        1 + usize::from(view.buttons_at != 0) + view.status.len() + usize::from(view.no_match);
+    let reserved = 2 + view.status.len() + usize::from(view.no_match);
     usize::from(height.saturating_sub(CHROME)).saturating_sub(reserved)
 }
 
@@ -422,15 +459,11 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
 /// sections, and the status lines. Exactly one row is barred while a
 /// model shows; none with only a message.
 fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
-    // The checklist takes no filter: its layout starts at the buttons
-    // row, so `buttons_at` is 0 only there.
-    let mut rows = if view.buttons_at == 0 {
-        Vec::new()
-    } else {
-        vec![filter_row(view)]
-    };
+    // The filter row is first in every mode.
+    let mut rows = vec![filter_row(view)];
     let flats = flats(view);
-    let (start, end) = window(view, model_fit(view, height));
+    let fit = model_fit(view, height);
+    let (start, end) = window(view, fit);
     // The content's natural width sets the refresh click's columns: the
     // overlay cuts both alike on a narrower screen.
     let mut content: usize = 0;
@@ -449,15 +482,22 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
     let mut sections = Vec::new();
     let mut first = true;
     // A window starting inside a provider continues it with no
-    // heading; any other provider change opens one.
+    // heading; any other provider change opens one. On a short overlay
+    // the focused model's heading would push its first row out of the
+    // frame, so that heading alone is omitted: the focused row stays on
+    // screen, and nothing else is trimmed.
+    let trim_heading = fit < 2
+        && flats
+            .get(start)
+            .is_some_and(|flat| Some(flat.row.at) == view.focused);
     let mut before = start
         .checked_sub(1)
         .and_then(|at| flats.get(at))
         .map(|flat| flat.provider);
-    for flat in flats.iter().take(end).skip(start) {
+    for (n, flat) in flats.iter().take(end).skip(start).enumerate() {
         let headed = before.is_none_or(|provider| provider != flat.provider);
         before = Some(flat.provider);
-        if headed {
+        if headed && !(n == 0 && trim_heading) {
             if !first {
                 sections.push(Row {
                     spans: Vec::new(),
@@ -472,6 +512,7 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
         let focused = Some(flat.row.at) == view.focused;
         if flat.row.mark.is_some() {
             sections.push(scope_row(flat.row, focused));
+            sections.push(scope_second_row(flat.row));
         } else {
             sections.push(model_first_row(flat.row, focused));
             sections.push(model_second_row(flat.row, focused));
@@ -499,9 +540,15 @@ fn body(view: &PickerView, width: u16, height: u16) -> Vec<Row> {
         width,
     )) as usize;
     let refresh = cells("⟳ refresh all");
-    let refresh_at = inner
-        .checked_sub(refresh)
-        .map(|from| (to_u16(from), to_u16(inner)));
+    // The checklist draws no refresh button, so it takes no column for
+    // one either.
+    let refresh_at = if view.refresh {
+        inner
+            .checked_sub(refresh)
+            .map(|from| (to_u16(from), to_u16(inner)))
+    } else {
+        None
+    };
     rows.push(buttons_row(view, refresh_at));
     rows.extend(sections);
     rows

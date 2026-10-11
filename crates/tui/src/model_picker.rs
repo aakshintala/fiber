@@ -879,9 +879,7 @@ impl ModelPicker {
                     } else {
                         open.chips.get(*index).copied().flatten()
                     },
-                    mark: checklist
-                        .then(|| open.marks.get(*index).copied())
-                        .flatten(),
+                    mark: checklist.then(|| open.marks.get(*index).copied()).flatten(),
                     session_only: !checklist && only,
                 });
             }
@@ -921,7 +919,12 @@ impl ModelPicker {
             // The checklist marks rows and saves the list: no model
             // or level is chosen here.
             footer: if open.mode == Mode::Scope {
-                vec![("↑↓", "move"), ("Enter", "toggle"), ("Ctrl+S", "save"), ("Esc", "close")]
+                vec![
+                    ("↑↓", "move"),
+                    ("Enter", "toggle"),
+                    ("Ctrl+S", "save"),
+                    ("Esc", "close"),
+                ]
             } else {
                 vec![
                     ("↑↓", "move"),

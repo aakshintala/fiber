@@ -1,20 +1,24 @@
 ---
 source: crates/tui/src/model_picker_view_tests.rs
-assertion_line: 313
 expression: text
 ---
 Models                                                                         ✕
-                    ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-                      4 models               ⟳ refresh all
-                      acme
-                      › [x] m1 [deep] [review]
-                        [ ] m2
+                Type to search █
+                 2 of 4 marked
+                acme
+                › [x] m1 [deep] [review]
+                      thinking low high
+                  [ ] m2
+                      fixed thinking
 
-                      zeta
-                        [ ] z1
-                        [x] z2 [chat]
+                zeta
+                  [ ] z1
+                      thinking low
+                  [x] z2 [chat]
+                      thinking low high
 
-                      Space mark · Enter save · Esc back
+                ↑↓ move · Enter toggle · Ctrl+S save · Esc close
 
-                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

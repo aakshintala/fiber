@@ -373,7 +373,12 @@ fn scope() {
     let view = app.model_picker_view().expect("open");
     assert_eq!(
         view.footer,
-        [("Space", "mark"), ("Enter", "save"), ("Esc", "back")]
+        [
+            ("↑↓", "move"),
+            ("Enter", "toggle"),
+            ("Ctrl+S", "save"),
+            ("Esc", "close")
+        ]
     );
     insta::assert_snapshot!("scope", screen(&app, 160, 48));
 }
@@ -730,22 +735,269 @@ fn a_refreshing_empty_filter_reserves_its_status_and_message_rows() {
 }
 
 #[test]
-fn the_refresh_click_sits_under_its_text_on_a_long_checklist() {
-    let mut cat = catalogue();
-    cat.models.truncate(1);
-    cat.models[0].id = "x".repeat(60);
-    cat.models[0].roles = Vec::new();
-    let mut app = attached(160, 48);
-    app.on_models(Ok(cat));
+fn the_checklist_mark_is_bold_on_focus_and_dim_unmarked() {
+    let mut app = attached(80, 24);
+    app.on_models(Ok(catalogue()));
     assert_eq!(app.scoped_models_command(), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    // Mark `m2`: the focused `m1` stays unmarked.
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    let buf = buffer(&app, 80, 24);
+    let text = crate::view::text(&buf);
+    // The focused mark is bold and black on `accent`, and dim while
+    // unmarked: the bar keeps a span's dim.
+    let (y, line) = find_row(&text, "[ ] m1");
+    let x = cell_x(&line, "[ ]");
+    assert!(buf[(x, y)].modifier.contains(Modifier::BOLD));
+    assert!(buf[(x, y)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(x, y)].fg, crate::look::BAR_TEXT);
+    assert_eq!(buf[(x, y)].bg, Role::Accent.color());
+    // The focused id reads bold in black on `accent`.
+    let x = cell_x(&line, "m1");
+    assert_eq!(buf[(x, y)].fg, crate::look::BAR_TEXT);
+    assert!(buf[(x, y)].modifier.contains(Modifier::BOLD));
+    // An unfocused marked mark is neither bold nor dim.
+    let (y, line) = find_row(&text, "[x] m2");
+    let x = cell_x(&line, "[x]");
+    assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD));
+    assert!(!buf[(x, y)].modifier.contains(Modifier::DIM));
+    // An unfocused unmarked mark is dim and not bold, and so is its id.
+    let (y, line) = find_row(&text, "[ ] z1");
+    let x = cell_x(&line, "[ ]");
+    assert!(buf[(x, y)].modifier.contains(Modifier::DIM));
+    assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD));
+    let x = cell_x(&line, "z1");
+    assert_eq!(buf[(x, y)].fg, Role::Accent.color());
+    assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn the_checklist_thinking_row_is_dim_with_no_chip_targets() {
+    let mut app = attached(80, 24);
+    app.on_models(Ok(catalogue()));
+    assert_eq!(app.scoped_models_command(), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    let at = view.sections[0].models[0].at;
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    // `m1` is focused, yet its thinking row reads dim throughout, with
+    // no bracketed chip.
+    let (y, line) = find_row(&text, "thinking low high");
+    assert!(!line.contains('['), "{line}");
+    for needle in ["low", "high"] {
+        let x = cell_x(&line, needle);
+        assert!(buf[(x, y)].modifier.contains(Modifier::DIM), "{line}");
+    }
+    // Every level's first column selects the row: no chip cell sits
+    // there.
+    for needle in ["low", "high"] {
+        let x = cell_x(&line, needle);
+        assert_eq!(
+            crate::mouse::hit(&targets, x, y),
+            Some(TargetId::View(Spot::Row(at)))
+        );
+    }
+    // No session-only row is drawn on the checklist.
+    assert!(!text.contains("ⓢ"), "{text}");
+}
+
+#[test]
+fn a_long_checklist_draws_no_refresh_button() {
+    let mut app = attached(160, 48);
+    app.on_models(Ok(catalogue()));
+    assert_eq!(app.scoped_models_command(), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    assert!(!view.refresh);
+    assert_eq!(view.buttons_at, 1);
     let area = Rect::new(0, 0, 160, 48);
     let mut buf = Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
     let text = crate::view::text(&buf);
-    let (y, line) = find_row(&text, "⟳ refresh all");
-    let x = cell_x(&line, "⟳");
-    assert_eq!(
-        crate::mouse::hit(&targets, x, y),
-        Some(TargetId::View(Spot::Cell(0, 0)))
+    assert!(!text.contains("⟳ refresh all"), "{text}");
+    let ids: Vec<TargetId> = targets.iter().map(|target| target.id).collect();
+    assert!(
+        ids.iter().all(|id| *id != TargetId::View(Spot::Cell(1, 0))),
+        "a refresh target is drawn"
     );
+}
+
+#[test]
+fn scope_filtered() {
+    let mut app = attached(160, 48);
+    app.set_home(crate::home::Launch {
+        workspace: PathBuf::from("/w"),
+        project: "-w".to_owned(),
+        scoped_models: vec!["acme/m1".to_owned(), "zeta/z2".to_owned()],
+        ..Default::default()
+    });
+    app.on_models(Ok(catalogue()));
+    assert_eq!(app.scoped_models_command(), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Char('z'), now), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.count, " 2 of 4 models · 2 marked ");
+    assert_eq!(
+        view.footer,
+        [
+            ("↑↓", "move"),
+            ("Enter", "toggle"),
+            ("Ctrl+S", "save"),
+            ("Esc", "close")
+        ]
+    );
+    let text = screen(&app, 160, 48);
+    assert!(text.contains("[ ] z1"), "{text}");
+    assert!(text.contains("[x] z2"), "{text}");
+    insta::assert_snapshot!("scope-filtered", text);
+}
+
+#[test]
+fn scope_filtered_empty() {
+    let mut app = attached(160, 48);
+    app.on_models(Ok(catalogue()));
+    assert_eq!(app.scoped_models_command(), Effect::None);
+    let now = fakes::clock::FakeClock::new().now();
+    for ch in ['q', 'q', 'q'] {
+        assert_eq!(app.on_key(Key::Char(ch), now), Effect::None);
+    }
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.count, " 0 of 4 models · 0 marked ");
+    assert!(view.no_match);
+    assert!(view.sections.is_empty());
+    let text = screen(&app, 160, 48);
+    assert!(text.contains("No models match"), "{text}");
+    insta::assert_snapshot!("scope-filtered-empty", text);
+}
+
+#[test]
+fn a_huge_checklist_id_saturates_its_click_targets() {
+    let mut cat = catalogue();
+    cat.models.truncate(1);
+    cat.models[0].id = "x".repeat(65_530);
+    cat.models[0].roles = vec!["chat".to_owned()];
+    let mut app = attached(160, 48);
+    app.on_models(Ok(cat));
+    assert_eq!(app.scoped_models_command(), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.sections[0].models[0].id.len(), 65_530);
+    // Rendering the rows never overflows: every endpoint saturates.
+    let rows = body(&view, 160, 48);
+    let barred: Vec<_> = rows.iter().filter(|row| row.barred).collect();
+    assert_eq!(barred.len(), 1);
+    let at = view.sections[0].models[0].at;
+    assert_eq!(
+        barred[0].targets,
+        vec![
+            (0, u16::MAX, TargetId::View(Spot::Row(at))),
+            (2, 6, TargetId::View(Spot::Cell(at, 0))),
+            (6, u16::MAX, TargetId::View(Spot::Cell(at, 1))),
+            (u16::MAX, u16::MAX, TargetId::View(Spot::Cell(at, 2))),
+        ]
+    );
+    for row in &rows {
+        for (start, end, _) in &row.targets {
+            assert!(start <= end);
+        }
+    }
+    // The whole frame renders too, within its 160 columns.
+    let area = Rect::new(0, 0, 160, 48);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    for line in crate::view::text(&buf).lines() {
+        assert!(crate::format::width(line) <= 160, "{line:.80}...");
+    }
+}
+
+/// The non-blank body lines hold `needles` in order; every other
+/// assertion reads the same text.
+fn body_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn a_short_overlay_keeps_the_focused_model_row() {
+    // A Choose open with the first model focused, over `catalogue()`:
+    // ten rows hold the filter, the buttons, the heading and the
+    // focused row, eleven add its thinking row, and nine cut the
+    // heading rather than the focused row.
+    for (height, heading, thinking) in [(10u16, true, false), (11, true, true), (9, false, false)] {
+        let mut app = attached(80, height);
+        app.on_models(Ok(catalogue()));
+        open(&mut app);
+        let view = app.model_picker_view().expect("open");
+        let area = Rect::new(0, 0, 80, height);
+        let mut buf = Buffer::empty(area);
+        super::draw(&view, area, &mut buf, &mut Vec::new());
+        let text = crate::view::text(&buf);
+        let lines = body_lines(&text);
+        let mut at = 0;
+        for needle in ["Type to search", "4 models", "m1"] {
+            let pos = lines
+                .iter()
+                .skip(at)
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("{needle:?} missing in order: {text}"));
+            at += pos + 1;
+        }
+        assert_eq!(
+            lines.iter().any(|line| line.contains("acme")),
+            heading,
+            "{text}"
+        );
+        assert_eq!(
+            lines.iter().any(|line| line.contains("thinking")),
+            thinking,
+            "{text}"
+        );
+        // The focused row sits on the bar.
+        let (y, _) = find_row(&text, "m1");
+        assert!(
+            (0..area.width).any(|x| buf[(x, y)].bg == Role::Accent.color()),
+            "no bar on {text}"
+        );
+    }
+    // The checklist keeps its focused row the same way, with its own
+    // count.
+    for (height, heading, thinking) in [(10u16, true, false), (11, true, true), (9, false, false)] {
+        let mut app = attached(80, height);
+        app.on_models(Ok(catalogue()));
+        assert_eq!(app.scoped_models_command(), Effect::None);
+        let view = app.model_picker_view().expect("open");
+        let area = Rect::new(0, 0, 80, height);
+        let mut buf = Buffer::empty(area);
+        super::draw(&view, area, &mut buf, &mut Vec::new());
+        let text = crate::view::text(&buf);
+        let lines = body_lines(&text);
+        let mut at = 0;
+        for needle in ["Type to search", "0 of 4 marked", "m1"] {
+            let pos = lines
+                .iter()
+                .skip(at)
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("{needle:?} missing in order: {text}"));
+            at += pos + 1;
+        }
+        assert_eq!(
+            lines.iter().any(|line| line.contains("acme")),
+            heading,
+            "{text}"
+        );
+        assert_eq!(
+            lines.iter().any(|line| line.contains("thinking")),
+            thinking,
+            "{text}"
+        );
+        let (y, _) = find_row(&text, "m1");
+        assert!(
+            (0..area.width).any(|x| buf[(x, y)].bg == Role::Accent.color()),
+            "no bar on {text}"
+        );
+    }
 }
