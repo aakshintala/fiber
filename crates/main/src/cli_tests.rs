@@ -513,6 +513,7 @@ fn parses_argv_into_its_invocation() {
                 rewound_from: None,
                 parent: None,
                 delegate_id: None,
+                login_shell: false,
             }))),
         ),
         (
@@ -539,6 +540,7 @@ fn parses_argv_into_its_invocation() {
                 rewound_from: None,
                 parent: None,
                 delegate_id: None,
+                login_shell: false,
             }))),
         ),
         (
@@ -561,6 +563,7 @@ fn parses_argv_into_its_invocation() {
                 rewound_from: None,
                 parent: None,
                 delegate_id: None,
+                login_shell: false,
             }))),
         ),
         (
@@ -584,6 +587,7 @@ fn parses_argv_into_its_invocation() {
                 rewound_from: None,
                 parent: None,
                 delegate_id: None,
+                login_shell: false,
             }))),
         ),
         (
@@ -614,6 +618,7 @@ fn parses_argv_into_its_invocation() {
                 rewound_from: None,
                 parent: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                 delegate_id: Some("j_bbbbbbbbbbbbbbbb".to_owned()),
+                login_shell: false,
             }))),
         ),
         (
@@ -638,6 +643,31 @@ fn parses_argv_into_its_invocation() {
                 rewound_from: Some("s_aaaaaaaaaaaaaaaa".to_owned()),
                 parent: None,
                 delegate_id: None,
+                login_shell: false,
+            }))),
+        ),
+        (
+            &[
+                "fiber",
+                "session",
+                "--id",
+                "s_0123456789abcdef",
+                "--workspace",
+                "/home/u/proj",
+                "--login-shell",
+            ],
+            Invocation::Run(Some(Commands::Session(SessionArgs {
+                id: "s_0123456789abcdef".to_owned(),
+                workspace: PathBuf::from("/home/u/proj"),
+                model: None,
+                overrides: Vec::new(),
+                prompt: None,
+                resume: false,
+                worktree: false,
+                rewound_from: None,
+                parent: None,
+                delegate_id: None,
+                login_shell: true,
             }))),
         ),
         (

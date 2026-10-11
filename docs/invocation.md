@@ -1074,17 +1074,21 @@ bare one, and a hub a terminal started inherits that terminal's.
   `$SHELL` as an interactive login shell, from an environment holding only
   `HOME`, `USER` and `SHELL`, and takes the variables that shell ends with.
   `SHELL` is set even under launchd and systemd, so the hub finds the shell
-  without being told. The result is every session's environment, so the
-  `PATH` the person's startup files build reaches every command.
+  without being told. A `SHELL` that is unset, empty or not an absolute
+  path is a failed capture. The result, with `FIBER_HOME` set to the hub's
+  own home, is every session's environment, so the `PATH` the person's
+  startup files build reaches every command.
 - **The capture sees what a fresh login terminal sees.** zsh reads all its
   startup files. An interactive login bash reads the first of
   `~/.bash_profile`, `~/.bash_login` and `~/.profile`, and reads `~/.bashrc`
   only when that file sources it.
 - **The capture has 10 seconds.** If the shell fails or runs out of time, the
-  hub uses the environment it inherited instead. `fiber doctor` says so, and
+  hub uses the environment it inherited instead, with `FIBER_HOME` set the
+  same way. `fiber doctor` says so, and
   every session started from it says so when it starts.
 - **A session's environment is fixed when the session starts.** A tool
   installed into a directory already on `PATH` is found without a rebuild.
+  A session the hub resumes gets the hub's environment at the resume.
   A changed `PATH` in a startup file reaches new sessions after
   `fiber hub refresh` rebuilds the hub's environment.
 - **A delegate gets its parent's environment**, and a session started by
