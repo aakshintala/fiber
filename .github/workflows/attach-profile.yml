@@ -13,9 +13,6 @@ name: Attach profile
 
 on:
   workflow_dispatch:
-  # TEMPORARY trial trigger (#1546); removed before merge.
-  push:
-    branches: [ci-attach-profile]
 
 permissions:
   contents: read
@@ -31,10 +28,9 @@ defaults:
 jobs:
   profile:
     runs-on: ubuntu-24.04
-    # No history yet; generous until a few runs set a median. The job builds
-    # fiber, the paging jig and inferno cold, then runs the timing benchmarks
-    # under perf.
-    timeout-minutes: 60
+    # The job builds fiber, the paging jig and inferno cold, then runs the timing
+    # benchmarks under perf: about 9 minutes (run 38113485002), twice that rounded up.
+    timeout-minutes: 20
     env:
       # C code (lua-src, ring) compiles against musl's headers (ci.yml's Release job).
       CC_x86_64_unknown_linux_musl: musl-gcc
@@ -142,13 +138,9 @@ jobs:
             awk '$1 == "fiber" { print $2 }' | sort -u | paste -sd, -)
           test -n "$pids"
           perf script -i "$out/perf.data" --pid "$pids" | inferno-collapse-perf > "$out/fiber-folded.txt"
-          # Where the fiber samples land by binary, and their raw stacks: a profile with
-          # no fiber frames shows here whether the user samples or their symbols are missing.
-          perf report -i "$out/perf.data" --pid "$pids" --sort comm,dso --stdio > "$out/fiber-dso.txt"
           # Self time per function, which needs no unwinding.
           perf report -i "$out/perf.data" --pid "$pids" --no-children -g none \
             --sort dso,sym --stdio > "$out/fiber-symbols.txt"
-          perf script -i "$out/perf.data" --pid "$pids" | head -n 400 > "$out/fiber-script-head.txt"
           inferno-flamegraph < "$out/folded.txt" > "$out/flamegraph.svg"
           inferno-flamegraph < "$out/fiber-folded.txt" > "$out/fiber-flamegraph.svg"
           exit "$status"

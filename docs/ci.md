@@ -349,9 +349,10 @@ workflow file is on `main`.
   or `session-search` (`research/session-search/run.sh`), e.g.
   `gh workflow run dependency-probe.yml --ref main -f probe=session-search`.
 - `attach-profile.yml` runs `bench --only timing` on Linux x86_64 under
-  `perf record`, with fiber built with symbols, and uploads one artifact:
-  `perf.data`, the folded stacks and flamegraph SVGs for every process and for
-  the fiber processes alone, and the harness's JSON. Its timings run under perf,
+  `perf record`, with fiber built with symbols and frame pointers, and uploads
+  one artifact: `perf.data`, the folded stacks and flamegraph SVGs for every
+  process and for the fiber processes alone, the fiber processes' self time per
+  function (`fiber-symbols.txt`), and the harness's JSON. Its timings run under perf,
   so they are not budget evidence: the 60 and 150 ms attach ceilings are judged
   by the Release job's "Print the attach stages" only.
 
