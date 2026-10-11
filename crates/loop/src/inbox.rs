@@ -599,7 +599,14 @@ impl Loop {
                     .inbox
                     .recv()
                     .map_err(|_| RecvTimeoutError::Disconnected),
-                Some(limit) => self.inbox.recv_timeout(limit),
+                Some(limit) => {
+                    #[allow(
+                        clippy::disallowed_methods,
+                        reason = "the bound the injected clock's wait_until hands this closure"
+                    )]
+                    let got = self.inbox.recv_timeout(limit);
+                    got
+                }
             });
         });
         slot.unwrap_or(Err(RecvTimeoutError::Timeout))
