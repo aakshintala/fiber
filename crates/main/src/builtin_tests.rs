@@ -42,7 +42,10 @@ pub(super) fn delegates() -> crate::delegates::Delegates {
         root.path().join("sessions"),
         jobs,
         clock,
-        Arc::new(|_| Err(Vec::new())),
+        jobs::Resolve {
+            lookup: Arc::new(|_| Err(String::new())),
+            catalogue: Arc::from(""),
+        },
     )
 }
 
@@ -271,6 +274,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         names,
         [
             "ask_user",
+            "delegate_models",
             "delegate_spawn",
             "edit",
             "handoff",
@@ -288,6 +292,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         listed,
         [
             "ask_user",
+            "delegate_models",
             "delegate_spawn",
             "edit",
             "handoff",
@@ -611,6 +616,7 @@ const STRICT_KEYWORDS: &[&str] = &[
 /// `strict: false`.
 const NOT_STRICT: &[&str] = &[
     "ask_user",       // "Asking the person", "The call"
+    "delegate_spawn", // "Background jobs"
     "jobs",           // "Background jobs"
     "read",           // "File tools", "read"
     "session_search", // "Searching past sessions"

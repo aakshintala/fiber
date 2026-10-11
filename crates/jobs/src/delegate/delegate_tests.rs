@@ -22,7 +22,8 @@ use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, within};
 
 use super::DelegateSpawn;
-use super::run::{Launch, Launched, Resolve, Watch, mint_session_id};
+use super::models::Resolve;
+use super::run::{Launch, Launched, Watch, mint_session_id};
 use crate::registry::Registry;
 
 /// How long a test waits on the wall clock before it fails.
@@ -90,13 +91,14 @@ fn rig() -> Rig {
 }
 
 fn resolve() -> Resolve {
-    Arc::new(|model: &str| {
-        if model == "fiber:fake/m" {
-            Ok("fake/m".to_owned())
-        } else {
-            Err(vec!["fiber:fake/m".to_owned()])
-        }
-    })
+    Resolve {
+        lookup: Arc::new(|model: &str| match model {
+            "fiber:fake/m" => Ok("fake/m".to_owned()),
+            "deep" => Ok("fake/m:high".to_owned()),
+            _ => Err(format!("Unknown delegate model {model:?}.")),
+        }),
+        catalogue: Arc::from("Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/m"),
+    }
 }
 
 /// The `sleep` the rig's launcher started, read from its pidfile: armed
@@ -146,6 +148,10 @@ fn arguments(model: &str) -> serde_json::Map<String, serde_json::Value> {
     .clone()
 }
 
+/// The stub catalogue, shared with the refusal tests below: every
+/// model refusal lists it after its reason.
+const CATALOGUE: &str = "Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/m";
+
 #[test]
 fn a_non_fiber_model_and_an_unknown_one_fail_without_spawning() {
     for model in ["claude:opus", "fiber:fake/nope"] {
@@ -158,15 +164,13 @@ fn a_non_fiber_model_and_an_unknown_one_fail_without_spawning() {
         );
         let error = output.error.expect("an unknown model fails");
         assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
-        assert!(
-            error.message.contains("fiber:fake/m"),
-            "it lists the valid references: {}",
-            error.message
+        assert_eq!(
+            error.message,
+            format!("Unknown delegate model {model:?}.\n{CATALOGUE}")
         );
         // The model reads the failure in the content, not the error.
         let text = output.content.iter().map(text_of).collect::<String>();
-        assert!(text.contains(model), "{text}");
-        assert!(text.contains("fiber:fake/m"), "{text}");
+        assert_eq!(text, error.message);
         assert!(output.jobs.is_empty());
         assert_eq!(
             rig.launch_count.load(Ordering::SeqCst),
@@ -174,6 +178,125 @@ fn a_non_fiber_model_and_an_unknown_one_fail_without_spawning() {
             "no process starts"
         );
     }
+}
+
+#[test]
+fn a_missing_model_fails_listing_the_roles_and_references() {
+    let rig = rig();
+    let spawned = tool(&rig);
+    let mut call = arguments("fiber:fake/m");
+    call.remove("model");
+    let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
+    let error = output.error.expect("a missing model fails");
+    assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.message,
+        format!("Give model: a role or a full reference.\n{CATALOGUE}")
+    );
+    assert!(output.jobs.is_empty());
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn a_non_string_model_fails_listing_the_roles_and_references() {
+    for model in [
+        serde_json::json!(5),
+        serde_json::json!(null),
+        serde_json::json!(["deep"]),
+        serde_json::json!({"model": "deep"}),
+    ] {
+        let rig = rig();
+        let spawned = tool(&rig);
+        let mut call = arguments("fiber:fake/m");
+        call.insert("model".to_owned(), model);
+        let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
+        let error = output.error.expect("a non-string model fails");
+        assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+        assert_eq!(
+            error.message,
+            format!("model must be a string.\n{CATALOGUE}")
+        );
+        assert!(output.jobs.is_empty());
+        assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn effects_accept_a_call_without_a_model_or_with_a_non_string_one() {
+    use contract::tool::Tool as _;
+    let rig = rig();
+    let spawned = tool(&rig);
+    let mut plain = arguments("fiber:fake/m");
+    plain.remove("model");
+    let mut wrong = arguments("fiber:fake/m");
+    wrong.insert("model".to_owned(), serde_json::json!(5));
+    for call in [plain, wrong] {
+        let effects = spawned.effects(&call).expect("model reaches run");
+        assert_eq!(
+            effects.declared.effects,
+            [contract::shapes::Effect::Executes]
+        );
+        assert!(effects.always_reviewed);
+    }
+}
+
+#[test]
+fn the_schema_leaves_model_optional_and_untyped() {
+    use contract::tool::Tool as _;
+    let rig = rig();
+    let definition = tool(&rig).definition();
+    assert_eq!(
+        definition.input_schema["required"],
+        serde_json::json!(["description", "prompt"])
+    );
+    let model = &definition.input_schema["properties"]["model"];
+    assert!(model.is_object());
+    assert!(model.get("description").and_then(|d| d.as_str()).is_some());
+    assert!(model.get("type").is_none(), "{model}");
+    assert_eq!(
+        definition.input_schema["properties"]["description"]["type"],
+        serde_json::json!("string")
+    );
+    assert_eq!(
+        definition.input_schema["properties"]["prompt"]["type"],
+        serde_json::json!("string")
+    );
+    let encoded = serde_json::to_value(&definition).unwrap().to_string();
+    assert!(!encoded.contains("deep"), "{encoded}");
+    assert!(!encoded.contains("fiber:fake/m"), "{encoded}");
+}
+
+#[test]
+fn a_role_starts_its_resolved_reference_and_records_it() {
+    let rig = rig();
+    let spawned = tool(&rig);
+    let output = spawned.run(
+        &arguments("deep"),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    // Guard first: the child is already running, so arm its watchdog
+    // before any assertion that could fail and strand it.
+    let _watchdog = child_group(&rig);
+    assert!(output.error.is_none());
+    let [
+        JobRecord::Started(started),
+        JobRecord::DelegateStarted(delegate),
+    ] = &output.jobs[..]
+    else {
+        panic!("a good call records its start: {:?}", output.jobs);
+    };
+    assert_eq!(delegate.model, "fiber:fake/m:high");
+    let launched = Deadline::after(DEADLINE)
+        .recv(&rig.launched)
+        .expect("the launcher ran");
+    assert_eq!(launched.job_id, started.job_id);
+    assert_eq!(launched.model, "fake/m:high");
+    // The stop reaches the running child; the clock lets the runner reap
+    // it so no thread is left parked. The watchdog above already guards
+    // it.
+    assert_eq!(rig.registry.stop_delegates(), 1);
+    rig.clock.advance(Duration::from_secs(6));
 }
 
 #[test]

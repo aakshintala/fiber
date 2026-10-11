@@ -8,6 +8,6 @@ mod registry;
 mod support;
 mod tool;
 
-pub use delegate::{DelegateSpawn, Launch, Launched, Resolve, Watch, Watched};
+pub use delegate::{DelegateModels, DelegateSpawn, Launch, Launched, Resolve, Watch, Watched};
 pub use registry::Registry;
 pub use tool::JobsTool;
