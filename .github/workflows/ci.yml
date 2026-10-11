@@ -149,7 +149,7 @@ jobs:
           count=0
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$MODE" != docs ]; then
             git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
-            cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --list >"$RUNNER_TEMP/mutants.txt"
+            cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --list --colors=never >"$RUNNER_TEMP/mutants.txt"
             {
               echo "### Mutants in the diff: $(wc -l <"$RUNNER_TEMP/mutants.txt")"
               echo '```'
