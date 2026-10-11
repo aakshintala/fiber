@@ -196,11 +196,12 @@ impl Clock for AfterReady {
                         Ok(()) | Err(_) => {}
                     }
                 });
-                assert!(
-                    Deadline::after(READY).recv(&rx).is_ok(),
-                    "the child's two ready lines"
-                );
             });
+            // Outside the scope closure, which `#[track_caller]` does not cross.
+            assert!(
+                Deadline::after(READY).recv(&rx).is_ok(),
+                "the child's two ready lines"
+            );
         }
         self.inner.sleep(d);
     }
