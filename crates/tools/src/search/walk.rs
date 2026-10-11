@@ -88,15 +88,20 @@ pub(crate) struct WalkError {
 }
 
 /// Walks the directory `root`, yielding what it found and what it could not
-/// read in sorted file-name order, the root first. `cwd` is the directory
-/// the search runs in. `max_depth` caps how far below the root the walk
-/// goes, counting the root as 0. What the walk skips is the module's
-/// opening paragraph.
+/// read in sorted file-name order, the root first, as the walker finds
+/// each entry: nothing is collected first, so a caller sees the first
+/// entries before the walk has read the rest of the tree. `cwd` is the
+/// directory the search runs in. `max_depth` caps how far below the root
+/// the walk goes, counting the root as 0. What the walk skips is the
+/// module's opening paragraph.
+///
+/// The iterator owns what it reads: it borrows nothing from the caller
+/// past the call.
 pub(crate) fn walk(
     cwd: &Path,
     root: &DirRoot,
     max_depth: Option<usize>,
-) -> Vec<Result<Found, WalkError>> {
+) -> impl Iterator<Item = Result<Found, WalkError>> + use<> {
     let mut builder = ignore::WalkBuilder::new(&root.walk);
     builder
         .hidden(false)
@@ -117,25 +122,21 @@ pub(crate) fn walk(
         entry.path() == walk
             || !(entry.file_type().is_some_and(|kind| kind.is_dir()) && is_vcs(entry.file_name()))
     });
-    let mut out = Vec::new();
-    for result in builder.build() {
-        match result {
-            Ok(entry) => {
-                // Only stdin entries lack a type, and the walk never reads
-                // stdin; anything else carries what the walk stat'ed.
-                let Some(file_type) = entry.file_type() else {
-                    continue;
-                };
-                out.push(Ok(Found {
-                    display: rebased(root, entry.path()),
+    let root = root.clone();
+    builder.build().filter_map(move |result| match result {
+        Ok(entry) => {
+            // Only stdin entries lack a type, and the walk never reads
+            // stdin; anything else carries what the walk stat'ed.
+            entry.file_type().map(|file_type| {
+                Ok(Found {
+                    display: rebased(&root, entry.path()),
                     file_type,
                     depth: entry.depth(),
-                }));
-            }
-            Err(error) => out.push(Err(walk_error(root, error))),
+                })
+            })
         }
-    }
-    out
+        Err(error) => Some(Err(walk_error(&root, error))),
+    })
 }
 
 /// Reports what the walk could not read: the path as printed and the reason.

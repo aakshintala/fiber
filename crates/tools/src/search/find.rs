@@ -456,70 +456,109 @@ pub(crate) fn basename(path: &Path) -> &[u8] {
 /// Whether `text` matches the glob `pattern`: `*` spans any bytes, `?` one
 /// byte, `[...]` a class with ranges and `!`/`^` negation, and `\` quotes
 /// the next byte. Matching is ASCII case-insensitive when `ignore_case`.
+///
+/// One loop walks pattern and text together, backtracking to the last `*`
+/// group when a token misses and letting it swallow one more byte; each
+/// step consumes one pattern token, or advances that group's text start by
+/// one, which only grows, so time stays O(pattern x text).
+///
+/// Example: `glob_match(b"*a*a*a*a*b", b"aaaa...a" (4096), false)` is
+/// false within 10 s.
 pub(crate) fn glob_match(pattern: &[u8], text: &[u8], ignore_case: bool) -> bool {
-    match_here(pattern, text, ignore_case)
+    // Where the pattern resumes after the last `*` group, and where the
+    // text restarts when that group swallows one more byte.
+    let mut star_pi: Option<usize> = None;
+    let mut star_ti = 0;
+    let mut pi = 0;
+    let mut ti = 0;
+    while ti < text.len() {
+        if pattern.get(pi) == Some(&b'*') {
+            // Consecutive stars act as one: the group ends past the last.
+            let mut resume = pi;
+            while pattern.get(resume) == Some(&b'*') {
+                resume += 1;
+            }
+            star_pi = Some(resume);
+            star_ti = ti;
+            pi = resume;
+        } else if let Some((token, next)) = read_token(pattern, pi)
+            && let Some(byte) = text.get(ti)
+            && token_matches(&token, *byte, ignore_case)
+        {
+            pi = next;
+            ti += 1;
+        } else {
+            let Some(resume) = star_pi else {
+                return false;
+            };
+            star_ti += 1;
+            ti = star_ti;
+            pi = resume;
+        }
+    }
+    // The text is spent: only stars may remain.
+    let mut rest = pi;
+    while pattern.get(rest) == Some(&b'*') {
+        rest += 1;
+    }
+    rest == pattern.len()
 }
 
-/// Whether `pattern` matches the start of `text`, and the rest of both
-/// matches after.
-fn match_here(pattern: &[u8], text: &[u8], ignore_case: bool) -> bool {
-    let (first, rest) = match pattern.split_first() {
-        Some(pair) => pair,
-        None => return text.is_empty(),
-    };
-    match first {
-        b'*' => (0..=text.len())
-            .filter_map(|index| text.get(index..))
-            .any(|tail| match_here(rest, tail, ignore_case)),
-        b'?' => match text.split_first() {
-            Some((_, tail)) => match_here(rest, tail, ignore_case),
-            None => false,
+/// One matchable pattern step: any single byte, a literal, or a class.
+/// Stars never reach here; the loop takes them before matching.
+enum Token {
+    /// `?`: any one byte.
+    Any,
+    /// One literal byte: an ordinary byte or an escaped one.
+    Literal(u8),
+    /// A `[...]` class: negation and member ranges.
+    Class {
+        negated: bool,
+        members: Vec<(u8, u8)>,
+    },
+}
+
+/// Reads the matchable step at `at`: the token with the offset where the
+/// rest of the pattern starts. Nothing when the pattern is spent there.
+fn read_token(pattern: &[u8], at: usize) -> Option<(Token, usize)> {
+    match pattern.get(at..)?.split_first()? {
+        (b'?', _) => Some((Token::Any, at + 1)),
+        (b'\\', _) => match pattern.get(at + 1..)?.split_first() {
+            Some((byte, _)) => Some((Token::Literal(*byte), at + 2)),
+            // A trailing backslash quotes nothing: a literal backslash.
+            None => Some((Token::Literal(b'\\'), at + 1)),
         },
-        b'\\' => {
-            let (literal, rest) = match rest.split_first() {
-                Some((byte, rest)) => (*byte, rest),
-                // A trailing backslash quotes nothing: a literal backslash.
-                None => (b'\\', rest),
-            };
-            match text.split_first() {
-                Some((byte, tail)) if fold(*byte, ignore_case) == fold(literal, ignore_case) => {
-                    match_here(rest, tail, ignore_case)
-                }
-                _ => false,
+        (b'[', _) => match parse_class(pattern.get(at + 1..)?) {
+            Some(class) => {
+                let next = pattern.len() - class.rest.len();
+                Some((
+                    Token::Class {
+                        negated: class.negated,
+                        members: class.members,
+                    },
+                    next,
+                ))
             }
-        }
-        b'[' => match_bracket(rest, text, ignore_case),
-        _ => match text.split_first() {
-            Some((byte, tail)) if fold(*byte, ignore_case) == fold(*first, ignore_case) => {
-                match_here(rest, tail, ignore_case)
-            }
-            _ => false,
+            // A `[` without a closer matches itself.
+            None => Some((Token::Literal(b'['), at + 1)),
         },
+        (byte, _) => Some((Token::Literal(*byte), at + 1)),
     }
 }
 
-/// Matches a `[...]` class against `text`'s first byte, then the rest.
-/// A `[` without a closer matches itself.
-fn match_bracket(after: &[u8], text: &[u8], ignore_case: bool) -> bool {
-    let Some(class) = parse_class(after) else {
-        return match text.split_first() {
-            Some((byte, tail)) if *byte == b'[' => match_here(after, tail, ignore_case),
-            _ => false,
-        };
-    };
-    match text.split_first() {
-        Some((byte, tail)) => {
-            let hit = class.members.iter().any(|(low, high)| {
-                fold(*low, ignore_case) <= fold(*byte, ignore_case)
-                    && fold(*byte, ignore_case) <= fold(*high, ignore_case)
+/// Whether `token` matches the one text byte: ASCII case-insensitive when
+/// `ignore_case`, folding the class ends as well as the byte.
+fn token_matches(token: &Token, byte: u8, ignore_case: bool) -> bool {
+    match token {
+        Token::Any => true,
+        Token::Literal(want) => fold(byte, ignore_case) == fold(*want, ignore_case),
+        Token::Class { negated, members } => {
+            let hit = members.iter().any(|(low, high)| {
+                fold(*low, ignore_case) <= fold(byte, ignore_case)
+                    && fold(byte, ignore_case) <= fold(*high, ignore_case)
             });
-            if hit != class.negated {
-                match_here(class.rest, tail, ignore_case)
-            } else {
-                false
-            }
+            hit != *negated
         }
-        None => false,
     }
 }
 
@@ -586,13 +625,16 @@ fn parse_class(after: &[u8]) -> Option<Class<'_>> {
 
 /// Adds the POSIX class opening `body` (`:name:]...`) to `members`,
 /// returning what follows its closer: nothing when no `:]` follows or the
-/// name is unknown, when the `[` stays an ordinary member.
+/// name is unknown, when the `[` stays an ordinary member. The lookahead is
+/// bounded to the longest class name (`xdigit`, 6 bytes): a `:]` past the
+/// first 8 bytes opens no known class, the same answer as a full scan.
 fn take_posix<'a>(members: &mut Vec<(u8, u8)>, body: &'a [u8]) -> Option<&'a [u8]> {
     let (first, body) = body.split_first()?;
     if *first != b':' {
         return None;
     }
-    let end = body.windows(2).position(|pair| pair == *b":]")?;
+    let head = body.get(..8).unwrap_or(body);
+    let end = head.windows(2).position(|pair| pair == b":]")?;
     members.extend(posix_ranges(body.get(..end)?)?);
     body.get(end + 2..)
 }
