@@ -11,8 +11,6 @@
 mod common;
 
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
@@ -28,7 +26,7 @@ use contract::tool::{Effects, EffectsError, Output, Tool};
 use extensions::{LuaExtension, LuaTool, SessionExtensions};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, Recorder};
+use fakes::{CancelToken, ProviderServer, Recorder, Response};
 use serde_json::{Map, Value, json};
 
 /// How long a test waits for a signal or an answer before failing.
@@ -183,50 +181,6 @@ fn text(output: &Output) -> String {
 fn failed(output: &Output) -> (ErrorCode, String) {
     let failure = output.error.clone().expect("the call failed");
     (failure.code, failure.message)
-}
-
-/// An HTTP server holding one request: `accepted` fires once it has read
-/// the request's head, and it answers `body` once `release` is sent. It
-/// closes unanswered after `WAIT`.
-struct Held {
-    url: String,
-    accepted: mpsc::Receiver<()>,
-    release: mpsc::Sender<()>,
-}
-
-fn hold(body: &'static str) -> Held {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted) = mpsc::channel();
-    let (release, release_rx) = mpsc::channel::<()>();
-    std::thread::spawn(move || {
-        let mut sock = listener.accept().unwrap().0;
-        let mut seen = Vec::new();
-        let mut byte = [0; 1];
-        while !seen.ends_with(b"\r\n\r\n") {
-            match sock.read(&mut byte) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => seen.push(byte[0]),
-            }
-        }
-        match accepted_tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        if release_rx.recv().is_ok() {
-            let reply = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            match sock.write_all(reply.as_bytes()) {
-                Ok(()) | Err(_) => {}
-            }
-        }
-    });
-    Held {
-        url,
-        accepted,
-        release,
-    }
 }
 
 const COUNTED: &str = r#"
@@ -508,7 +462,8 @@ fiber.tool("spin", {
 fn a_run_parked_on_a_host_call_past_its_timeout_fails_timeout_and_the_next_call_runs() {
     let dir = fakes::TempDir::new("fiber-lua-tools");
     let clock = FakeClock::new();
-    let held = hold("late");
+    let held = ProviderServer::start([Response::status(200, "late")]).unwrap();
+    held.hold();
     let ext = extension(
         dir.path(),
         "slow",
@@ -525,16 +480,17 @@ fiber.tool("wait", {{
   end,
 }})
 "#,
-            held.url
+            held.url()
         ),
         clock.clone(),
     );
     let tools = by_name(&ext);
     let deadline = clock.now().checked_add(Duration::from_millis(100)).unwrap();
     let first = run(&tools["wait"], json!({}));
-    Deadline::after(WAIT)
-        .recv(&held.accepted)
-        .expect("waited for the request to reach the server");
+    assert!(
+        held.await_requests(1, WAIT),
+        "waited for the request to reach the server"
+    );
     // The caller of a parked call waits to the deadline plus the grace,
     // so the callback is parked under its deadline.
     assert!(
@@ -561,7 +517,10 @@ fiber.tool("wait", {{
 #[test]
 fn two_calls_parked_on_host_calls_both_complete() {
     let dir = fakes::TempDir::new("fiber-lua-tools");
-    let (one, two) = (hold("one"), hold("two"));
+    let one = ProviderServer::start([Response::status(200, "one")]).unwrap();
+    one.hold();
+    let two = ProviderServer::start([Response::status(200, "two")]).unwrap();
+    two.hold();
     let ext = extension(
         dir.path(),
         "pair",
@@ -575,17 +534,19 @@ fiber.tool("fetch", {
         FakeClock::new(),
     );
     let tools = by_name(&ext);
-    let first = run(&tools["fetch"], json!({ "url": one.url }));
-    Deadline::after(WAIT)
-        .recv(&one.accepted)
-        .expect("waited for the first request");
-    let second = run(&tools["fetch"], json!({ "url": two.url }));
-    Deadline::after(WAIT)
-        .recv(&two.accepted)
-        .expect("waited for the second request while the first is parked");
-    two.release.send(()).unwrap();
+    let first = run(&tools["fetch"], json!({ "url": one.url() }));
+    assert!(
+        one.await_requests(1, WAIT),
+        "waited for the first request"
+    );
+    let second = run(&tools["fetch"], json!({ "url": two.url() }));
+    assert!(
+        two.await_requests(1, WAIT),
+        "waited for the second request while the first is parked"
+    );
+    two.release();
     assert_eq!(text(&ran(&second, &Deadline::after(WAIT))), "two");
-    one.release.send(()).unwrap();
+    one.release();
     assert_eq!(text(&ran(&first, &Deadline::after(WAIT))), "one");
 }
 
@@ -1103,7 +1064,8 @@ fiber.tool("count", {
 #[test]
 fn a_call_parked_on_a_host_call_is_cancelled_without_the_clock_moving() {
     let dir = fakes::TempDir::new("fiber-lua-tools");
-    let held = hold("late");
+    let held = ProviderServer::start([Response::status(200, "late")]).unwrap();
+    held.hold();
     let ext = extension(
         dir.path(),
         "parked",
@@ -1120,16 +1082,17 @@ fiber.tool("wait", {{
   end,
 }})
 "#,
-            held.url
+            held.url()
         ),
         FakeClock::new(),
     );
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let first = run_cancellable(&tools["wait"], &cancel);
-    Deadline::after(WAIT)
-        .recv(&held.accepted)
-        .expect("waited for the request to reach the server");
+    assert!(
+        held.await_requests(1, WAIT),
+        "waited for the request to reach the server"
+    );
     cancel.cancel();
     assert_eq!(ran(&first, &Deadline::after(WAIT)), cancelled());
     assert_eq!(
@@ -1347,7 +1310,8 @@ fiber.tool("other", {
 fn a_cancelled_parked_call_ends_when_a_stuck_call_abandons_the_vm() {
     let dir = fakes::TempDir::new("fiber-lua-tools");
     let clock = FakeClock::new();
-    let held = hold("late");
+    let held = ProviderServer::start([Response::status(200, "late")]).unwrap();
+    held.hold();
     let ext = extension(
         dir.path(),
         "stuck",
@@ -1367,7 +1331,7 @@ fiber.tool("find", {{
   end,
 }})
 "#,
-            held.url
+            held.url()
         ),
         clock.clone(),
     );
@@ -1375,9 +1339,10 @@ fiber.tool("find", {{
     let tools = by_name(&ext);
     let cancel = CancelToken::new();
     let waiting = run_cancellable(&tools["wait"], &cancel);
-    Deadline::after(WAIT)
-        .recv(&held.accepted)
-        .expect("waited for the request to reach the server");
+    assert!(
+        held.await_requests(1, WAIT),
+        "waited for the request to reach the server"
+    );
     let asked = clock.now();
     let stuck = run(&tools["find"], json!({}));
     Deadline::after(WAIT)
