@@ -280,9 +280,7 @@ mod browser {
 
     #[track_caller]
     fn await_opened(opened: &mpsc::Receiver<String>, wait: &Deadline) -> String {
-        wait.recv(opened).unwrap_or_else(|_| {
-            panic!("the package never opened the authorize URL within {BROWSER_WAIT:?}")
-        })
+        wait.recv_or_fail(opened, "the package to open the authorize URL")
     }
 
     #[track_caller]

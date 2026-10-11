@@ -248,6 +248,5 @@ fn watch_bounded(
         done.send(watch(&id, &mut on_line)).unwrap_or(());
     });
     Deadline::after(std::time::Duration::from_secs(5))
-        .recv(&finished)
-        .unwrap_or_else(|_| panic!("the watch returned within 5 s"))
+        .recv_or_fail(&finished, "the watch to return")
 }
