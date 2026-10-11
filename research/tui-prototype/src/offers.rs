@@ -51,7 +51,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "text_input",
         help: "a one-question form answering in words with a Submit row",
-        check: "only the answer-in-words row with its cursor, the Submit row, then Chat about this.",
+        check: "only the answer-in-words row, its default text dim as a placeholder with the cursor on its first character, the Submit row, then Chat about this.",
         build: || Look {
             kind: Kind::TextInput,
         },
@@ -228,12 +228,13 @@ fn opt_row(cursor: bool, n: usize, mark: &str, on: bool, label: &str, desc: &str
     panel_row(v)
 }
 
-/// The row to answer in words, with its cursor.
+/// The row to answer in words: the default text dim as a placeholder, the
+/// cursor on its first character.
 fn words_row() -> super::Row {
     panel_row(vec![
         sp("✎ ", dim()),
-        sp("Type an answer", dim()),
-        sp("█", dim()),
+        sp("T", Style::new().add_modifier(Modifier::REVERSED)),
+        sp("ype an answer", dim()),
     ])
 }
 
@@ -765,7 +766,16 @@ mod tests {
         let t = text(&parse_case("text_input"), 160, 48);
         assert!(t.contains("✎ "), "no words row");
         assert!(t.contains("Type an answer"), "no words hint");
-        assert!(t.contains('█'), "no words cursor");
+        assert!(!t.contains('█'), "a block after the placeholder");
+        let r = words_row();
+        let cursor = r.spans.iter().find(|s| s.content == "T").unwrap();
+        assert!(cursor.style.add_modifier.contains(Modifier::REVERSED));
+        let rest = r
+            .spans
+            .iter()
+            .find(|s| s.content == "ype an answer")
+            .unwrap();
+        assert!(rest.style.add_modifier.contains(Modifier::DIM));
         for mark in ["( )", "(•)", "[ ]", "[x]", "▸"] {
             assert!(!t.contains(mark), "an option mark in text_input");
         }
