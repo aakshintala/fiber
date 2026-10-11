@@ -3699,7 +3699,7 @@ fn start_sends_worktree_only_when_the_switch_is_on_and_shown() {
     assert!(app.start_args().get("worktree").is_none());
     // Hidden, even with the switch on: the key is absent.
     let mut app = home();
-    app.home.as_mut().unwrap_or_else(|| panic!("home")).worktree = true;
+    assert_eq!(app.home_click(Spot::Worktree), Effect::None);
     let args = app.start_args();
     assert_eq!(args["workspace"], "/w");
     assert!(args.get("worktree").is_none());
