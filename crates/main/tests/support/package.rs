@@ -52,10 +52,10 @@ pub(crate) fn openrouter_listing() -> Vec<u8> {
 /// the reply body of `quota-limited-key-returns-credit-and-limit.json`'s
 /// scripted request.
 pub(crate) fn openrouter_quota() -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../providers/openrouter/tests/quota-limited-key-returns-credit-and-limit.json");
-    let case: Value =
-        serde_json::from_slice(&fs::read(path).unwrap()).expect("the quota case reads");
+    let case: Value = serde_json::from_str(include_str!(
+        "../../../../providers/openrouter/tests/quota-limited-key-returns-credit-and-limit.json"
+    ))
+    .expect("the quota case reads");
     case["host"]["http"][0]["reply"]["body"]
         .as_str()
         .expect("the quota case holds one body")
