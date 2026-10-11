@@ -1226,33 +1226,35 @@ impl Session {
         let owned: Arc<FakeClock> = Arc::clone(&clock);
         let prompt_clock: Arc<dyn contract::clock::Clock> = owned;
         let looped = Loop::start(
-            Arc::clone(&log),
-            Arc::new(seam),
-            model,
-            {
-                let mut prompt = r#loop::PromptInputs::new(
-                    home.0.clone(),
-                    "/bin/sh".into(),
-                    session_log,
-                    prompt_clock,
-                    window,
-                );
-                prompt.credential = Some("work".into());
-                prompt.extension_sections = sections;
-                prompt.cache_lifetime = cache_lifetime;
-                prompt.thinking = thinking;
-                prompt
-            },
-            rx,
-            tools
-                .into_iter()
-                .map(|tool| ("builtin".to_owned(), tool))
-                .collect(),
-            r#loop::Permissions {
-                workspace: workspace.display().to_string(),
-                credentials: credentials.clone(),
-                credential_files,
-                rules: rules.clone(),
+            r#loop::Session {
+                log: Arc::clone(&log),
+                provider: Arc::new(seam),
+                model,
+                prompt: {
+                    let mut prompt = r#loop::PromptInputs::new(
+                        home.0.clone(),
+                        "/bin/sh".into(),
+                        session_log,
+                        prompt_clock,
+                        window,
+                    );
+                    prompt.credential = Some("work".into());
+                    prompt.extension_sections = sections;
+                    prompt.cache_lifetime = cache_lifetime;
+                    prompt.thinking = thinking;
+                    prompt
+                },
+                inbox: rx,
+                tools: tools
+                    .into_iter()
+                    .map(|tool| ("builtin".to_owned(), tool))
+                    .collect(),
+                permissions: r#loop::Permissions {
+                    workspace: workspace.display().to_string(),
+                    credentials: credentials.clone(),
+                    credential_files,
+                    rules: rules.clone(),
+                },
             },
             None,
         )
@@ -1299,22 +1301,24 @@ impl Session {
         let wake = Arc::new(InboxWake(Arc::downgrade(&sender)));
         self.woken = Some(sender);
         let looped = Loop::resume(
-            Arc::clone(&self.log),
-            folded,
-            Arc::clone(&self.provider) as Arc<dyn Provider>,
-            unpriced(),
-            prompt,
-            rx,
-            tools
-                .into_iter()
-                .map(|tool| ("builtin".to_owned(), tool))
-                .collect(),
-            r#loop::Permissions {
-                workspace: self.workspace.display().to_string(),
-                credentials: self.credentials.clone(),
-                credential_files: Vec::new(),
-                rules: self.rules.clone(),
+            r#loop::Session {
+                log: Arc::clone(&self.log),
+                provider: Arc::clone(&self.provider) as Arc<dyn Provider>,
+                model: unpriced(),
+                prompt,
+                inbox: rx,
+                tools: tools
+                    .into_iter()
+                    .map(|tool| ("builtin".to_owned(), tool))
+                    .collect(),
+                permissions: r#loop::Permissions {
+                    workspace: self.workspace.display().to_string(),
+                    credentials: self.credentials.clone(),
+                    credential_files: Vec::new(),
+                    rules: self.rules.clone(),
+                },
             },
+            folded,
         )
         .unwrap()
         .cancelled_by(Arc::clone(&self.cancel))

@@ -923,29 +923,31 @@ impl support::History {
         let (tx, rx) = mpsc::channel();
         let prompt_clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         let looped = Loop::resume(
-            Arc::clone(&self.log),
+            r#loop::Session {
+                log: Arc::clone(&self.log),
+                provider: Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
+                model: r#loop::Model {
+                    reference: support::MODEL.into(),
+                    cost: None,
+                    subscription: false,
+                },
+                prompt: r#loop::PromptInputs::new(
+                    self.root.path().to_path_buf(),
+                    "/bin/sh".into(),
+                    self.dir.join("events.jsonl").display().to_string(),
+                    prompt_clock,
+                    fakes::CONTEXT_WINDOW,
+                ),
+                inbox: rx,
+                tools: Vec::new(),
+                permissions: r#loop::Permissions {
+                    workspace: self.workspace.clone(),
+                    credentials: self.credentials.clone(),
+                    credential_files: Vec::new(),
+                    rules: Arc::new(support::FakeRules::empty()),
+                },
+            },
             folded,
-            Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
-            r#loop::Model {
-                reference: support::MODEL.into(),
-                cost: None,
-                subscription: false,
-            },
-            r#loop::PromptInputs::new(
-                self.root.path().to_path_buf(),
-                "/bin/sh".into(),
-                self.dir.join("events.jsonl").display().to_string(),
-                prompt_clock,
-                fakes::CONTEXT_WINDOW,
-            ),
-            rx,
-            Vec::new(),
-            r#loop::Permissions {
-                workspace: self.workspace.clone(),
-                credentials: self.credentials.clone(),
-                credential_files: Vec::new(),
-                rules: Arc::new(support::FakeRules::empty()),
-            },
         )
         .unwrap()
         .repository_code(Arc::clone(code) as Arc<dyn RepositoryCode>)

@@ -390,27 +390,29 @@ impl RetryRun {
         ]));
         let rules: Arc<dyn Rules> = Arc::new(NoRules);
         let mut looped = Loop::start(
-            Arc::clone(&log),
-            Arc::clone(&provider) as Arc<dyn contract::provider::Provider>,
-            Model {
-                reference: "fake/model".into(),
-                cost: None,
-                subscription: false,
-            },
-            crate::prompt::PromptInputs::new(
-                home.path().to_path_buf(),
-                "/bin/sh".into(),
-                session_log.display().to_string(),
-                clock_for_loop,
-                fakes::CONTEXT_WINDOW,
-            ),
-            receiver,
-            Vec::new(),
-            crate::Permissions {
-                workspace: workspace.display().to_string(),
-                credentials,
-                credential_files: Vec::new(),
-                rules,
+            crate::Session {
+                log: Arc::clone(&log),
+                provider: Arc::clone(&provider) as Arc<dyn contract::provider::Provider>,
+                model: Model {
+                    reference: "fake/model".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                prompt: crate::prompt::PromptInputs::new(
+                    home.path().to_path_buf(),
+                    "/bin/sh".into(),
+                    session_log.display().to_string(),
+                    clock_for_loop,
+                    fakes::CONTEXT_WINDOW,
+                ),
+                inbox: receiver,
+                tools: Vec::new(),
+                permissions: crate::Permissions {
+                    workspace: workspace.display().to_string(),
+                    credentials,
+                    credential_files: Vec::new(),
+                    rules,
+                },
             },
             None,
         )

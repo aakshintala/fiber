@@ -82,30 +82,32 @@ fn looped(answerable: bool, woken: bool) -> (Loop, fakes::TempDir) {
     let (_, rx) = mpsc::channel::<Delivery>();
     let rules: Arc<dyn Rules> = Arc::new(Still);
     let mut looped = Loop::start(
-        log,
-        Arc::new(fakes::ScriptedProvider::new(Vec::new())),
-        Model {
-            reference: "fake/model".into(),
-            cost: None,
-            subscription: false,
-        },
-        crate::prompt::PromptInputs::new(
-            home.path().to_path_buf(),
-            "/bin/sh".into(),
-            home.path()
-                .join("s_test/events.jsonl")
-                .display()
-                .to_string(),
-            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-            fakes::CONTEXT_WINDOW,
-        ),
-        rx,
-        Vec::new(),
-        crate::Permissions {
-            workspace: workspace.display().to_string(),
-            credentials: home.path().join("credentials"),
-            credential_files: Vec::new(),
-            rules,
+        crate::Session {
+            log,
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules,
+            },
         },
         None,
     )

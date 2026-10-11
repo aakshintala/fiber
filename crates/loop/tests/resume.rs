@@ -111,19 +111,21 @@ impl support::History {
         prompt.credential = credential.map(str::to_owned);
         prompt.cache_lifetime = lifetime;
         Loop::resume(
-            Arc::clone(&self.log),
-            r#loop::resumed(&self.dir).unwrap(),
-            Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
-            Self::model(),
-            prompt,
-            self.inbox_rx.take().unwrap(),
-            tools,
-            r#loop::Permissions {
-                workspace: self.workspace.clone(),
-                credentials: self.credentials.clone(),
-                credential_files: Vec::new(),
-                rules: self.rules.clone(),
+            r#loop::Session {
+                log: Arc::clone(&self.log),
+                provider: Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
+                model: Self::model(),
+                prompt,
+                inbox: self.inbox_rx.take().unwrap(),
+                tools,
+                permissions: r#loop::Permissions {
+                    workspace: self.workspace.clone(),
+                    credentials: self.credentials.clone(),
+                    credential_files: Vec::new(),
+                    rules: self.rules.clone(),
+                },
             },
+            r#loop::resumed(&self.dir).unwrap(),
         )
         .unwrap()
     }
@@ -458,19 +460,21 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     ]));
     let (tx, rx) = mpsc::channel();
     let looped = Loop::resume(
-        Arc::clone(&history.log),
-        r#loop::resumed(&history.dir).unwrap(),
-        Arc::clone(&history.provider) as Arc<dyn Provider>,
-        History::model(),
-        history.prompt(),
-        rx,
-        vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
-        r#loop::Permissions {
-            workspace: history.workspace.clone(),
-            credentials: history.credentials.clone(),
-            credential_files: Vec::new(),
-            rules: history.rules.clone(),
+        r#loop::Session {
+            log: Arc::clone(&history.log),
+            provider: Arc::clone(&history.provider) as Arc<dyn Provider>,
+            model: History::model(),
+            prompt: history.prompt(),
+            inbox: rx,
+            tools: vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
+            permissions: r#loop::Permissions {
+                workspace: history.workspace.clone(),
+                credentials: history.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: history.rules.clone(),
+            },
         },
+        r#loop::resumed(&history.dir).unwrap(),
     )
     .unwrap()
     .answerable(false)
@@ -560,19 +564,21 @@ fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::even
     ]));
     let (tx, rx) = mpsc::channel();
     let looped = Loop::resume(
-        Arc::clone(&history.log),
-        r#loop::resumed(&history.dir).unwrap(),
-        Arc::clone(&history.provider) as Arc<dyn Provider>,
-        History::model(),
-        history.prompt(),
-        rx,
-        vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
-        r#loop::Permissions {
-            workspace: history.workspace.clone(),
-            credentials: history.credentials.clone(),
-            credential_files: Vec::new(),
-            rules: history.rules.clone(),
+        r#loop::Session {
+            log: Arc::clone(&history.log),
+            provider: Arc::clone(&history.provider) as Arc<dyn Provider>,
+            model: History::model(),
+            prompt: history.prompt(),
+            inbox: rx,
+            tools: vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
+            permissions: r#loop::Permissions {
+                workspace: history.workspace.clone(),
+                credentials: history.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: history.rules.clone(),
+            },
         },
+        r#loop::resumed(&history.dir).unwrap(),
     )
     .unwrap()
     .answerable(false)
@@ -693,19 +699,21 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
     let reviewer_provider = Arc::clone(&reviewer);
     let (tx, rx) = mpsc::channel();
     let looped = Loop::resume(
-        Arc::clone(&history.log),
-        r#loop::resumed(&history.dir).unwrap(),
-        Arc::clone(&history.provider) as Arc<dyn Provider>,
-        History::model(),
-        history.prompt(),
-        rx,
-        vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
-        r#loop::Permissions {
-            workspace: history.workspace.clone(),
-            credentials: history.credentials.clone(),
-            credential_files: Vec::new(),
-            rules: history.rules.clone(),
+        r#loop::Session {
+            log: Arc::clone(&history.log),
+            provider: Arc::clone(&history.provider) as Arc<dyn Provider>,
+            model: History::model(),
+            prompt: history.prompt(),
+            inbox: rx,
+            tools: vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
+            permissions: r#loop::Permissions {
+                workspace: history.workspace.clone(),
+                credentials: history.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: history.rules.clone(),
+            },
         },
+        r#loop::resumed(&history.dir).unwrap(),
     )
     .unwrap()
     .reviewer(
@@ -1100,19 +1108,21 @@ fn resume_fails_log_corrupt_on_an_unreadable_line_in_its_window() {
     let (_tx, rx) = mpsc::channel();
 
     let error = match Loop::resume(
-        log,
-        resumed,
-        Arc::new(ScriptedProvider::new(vec![])) as Arc<dyn Provider>,
-        History::model(),
-        resume_prompt(root.path()),
-        rx,
-        Vec::new(),
-        r#loop::Permissions {
-            workspace: root.path().display().to_string(),
-            credentials: root.path().to_path_buf(),
-            credential_files: Vec::new(),
-            rules: Arc::new(support::FakeRules::empty()),
+        r#loop::Session {
+            log,
+            provider: Arc::new(ScriptedProvider::new(vec![])) as Arc<dyn Provider>,
+            model: History::model(),
+            prompt: resume_prompt(root.path()),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: r#loop::Permissions {
+                workspace: root.path().display().to_string(),
+                credentials: root.path().to_path_buf(),
+                credential_files: Vec::new(),
+                rules: Arc::new(support::FakeRules::empty()),
+            },
         },
+        resumed,
     ) {
         Ok(_) => panic!("a window with an unreadable line resumes"),
         Err(error) => error,
@@ -1299,19 +1309,21 @@ impl support::History {
         files: Vec<std::path::PathBuf>,
     ) -> Loop {
         Loop::resume(
-            Arc::clone(&self.log),
-            r#loop::resumed(&self.dir).unwrap(),
-            provider,
-            Self::model(),
-            self.prompt(),
-            self.inbox_rx.take().unwrap(),
-            tools,
-            r#loop::Permissions {
-                workspace: self.workspace.clone(),
-                credentials: self.credentials.clone(),
-                credential_files: files,
-                rules: self.rules.clone(),
+            r#loop::Session {
+                log: Arc::clone(&self.log),
+                provider,
+                model: Self::model(),
+                prompt: self.prompt(),
+                inbox: self.inbox_rx.take().unwrap(),
+                tools,
+                permissions: r#loop::Permissions {
+                    workspace: self.workspace.clone(),
+                    credentials: self.credentials.clone(),
+                    credential_files: files,
+                    rules: self.rules.clone(),
+                },
             },
+            r#loop::resumed(&self.dir).unwrap(),
         )
         .unwrap()
         .answerable(false)
@@ -2417,23 +2429,25 @@ fn a_resumed_credential_refusal_prefers_the_block_budget_over_later_questions() 
     let (tx, rx) = mpsc::channel();
     let looped = with_blocking_reviewer(
         Loop::resume(
-            Arc::clone(&history.log),
-            r#loop::resumed(&history.dir).unwrap(),
-            Arc::clone(&history.provider) as Arc<dyn Provider>,
-            History::model(),
-            history.prompt(),
-            rx,
-            vec![
-                ("builtin".into(), denied.clone() as Arc<dyn Tool>),
-                ("builtin".into(), blocked.clone() as Arc<dyn Tool>),
-                ("builtin".into(), ask.clone() as Arc<dyn Tool>),
-            ],
-            r#loop::Permissions {
-                workspace: history.workspace.clone(),
-                credentials: history.credentials.clone(),
-                credential_files: vec![key.clone()],
-                rules: history.rules.clone(),
+            r#loop::Session {
+                log: Arc::clone(&history.log),
+                provider: Arc::clone(&history.provider) as Arc<dyn Provider>,
+                model: History::model(),
+                prompt: history.prompt(),
+                inbox: rx,
+                tools: vec![
+                    ("builtin".into(), denied.clone() as Arc<dyn Tool>),
+                    ("builtin".into(), blocked.clone() as Arc<dyn Tool>),
+                    ("builtin".into(), ask.clone() as Arc<dyn Tool>),
+                ],
+                permissions: r#loop::Permissions {
+                    workspace: history.workspace.clone(),
+                    credentials: history.credentials.clone(),
+                    credential_files: vec![key.clone()],
+                    rules: history.rules.clone(),
+                },
             },
+            r#loop::resumed(&history.dir).unwrap(),
         )
         .unwrap()
         .answerable(false),
@@ -3521,19 +3535,21 @@ fn a_turn_suspended_after_a_handoff_re_raises_its_request_past_lines_written_aft
     history.freeze();
 
     let looped = Loop::resume(
-        Arc::clone(&history.log),
-        folded,
-        Arc::clone(&history.provider) as Arc<dyn Provider>,
-        History::model(),
-        history.prompt(),
-        history.inbox_rx.take().unwrap(),
-        Vec::new(),
-        r#loop::Permissions {
-            workspace: history.workspace.clone(),
-            credentials: history.credentials.clone(),
-            credential_files: Vec::new(),
-            rules: history.rules.clone(),
+        r#loop::Session {
+            log: Arc::clone(&history.log),
+            provider: Arc::clone(&history.provider) as Arc<dyn Provider>,
+            model: History::model(),
+            prompt: history.prompt(),
+            inbox: history.inbox_rx.take().unwrap(),
+            tools: Vec::new(),
+            permissions: r#loop::Permissions {
+                workspace: history.workspace.clone(),
+                credentials: history.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: history.rules.clone(),
+            },
         },
+        folded,
     )
     .unwrap()
     .answerable(false);
@@ -3744,19 +3760,21 @@ fn an_answered_resume_prefers_the_block_budget_over_later_questions() {
     let (tx, rx) = mpsc::channel();
     let looped = with_blocking_reviewer(
         Loop::resume(
-            Arc::clone(&history.log),
-            r#loop::resumed(&history.dir).unwrap(),
-            Arc::clone(&history.provider) as Arc<dyn Provider>,
-            History::model(),
-            history.prompt(),
-            rx,
-            tools_of(&[&act, &blocked, &ask]),
-            r#loop::Permissions {
-                workspace: history.workspace.clone(),
-                credentials: history.credentials.clone(),
-                credential_files: Vec::new(),
-                rules: history.rules.clone(),
+            r#loop::Session {
+                log: Arc::clone(&history.log),
+                provider: Arc::clone(&history.provider) as Arc<dyn Provider>,
+                model: History::model(),
+                prompt: history.prompt(),
+                inbox: rx,
+                tools: tools_of(&[&act, &blocked, &ask]),
+                permissions: r#loop::Permissions {
+                    workspace: history.workspace.clone(),
+                    credentials: history.credentials.clone(),
+                    credential_files: Vec::new(),
+                    rules: history.rules.clone(),
+                },
             },
+            r#loop::resumed(&history.dir).unwrap(),
         )
         .unwrap(),
         reviewer,

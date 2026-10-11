@@ -208,30 +208,32 @@ impl World {
         let (inbox, rx) = mpsc::channel();
         let cancel = Arc::new(TurnCancel::default());
         let looped = Loop::start(
-            log,
-            Arc::new(fakes::ScriptedProvider::new(Vec::new())),
-            Model {
-                reference: "fake/model".into(),
-                cost: None,
-                subscription: false,
-            },
-            crate::prompt::PromptInputs::new(
-                home.path().to_path_buf(),
-                "/bin/sh".into(),
-                home.path()
-                    .join("s_test/events.jsonl")
-                    .display()
-                    .to_string(),
-                clock,
-                fakes::CONTEXT_WINDOW,
-            ),
-            rx,
-            Vec::new(),
-            crate::Permissions {
-                workspace: workspace.display().to_string(),
-                credentials: home.path().join("credentials"),
-                credential_files: Vec::new(),
-                rules: Arc::new(NoRules),
+            crate::Session {
+                log,
+                provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+                model: Model {
+                    reference: "fake/model".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                prompt: crate::prompt::PromptInputs::new(
+                    home.path().to_path_buf(),
+                    "/bin/sh".into(),
+                    home.path()
+                        .join("s_test/events.jsonl")
+                        .display()
+                        .to_string(),
+                    clock,
+                    fakes::CONTEXT_WINDOW,
+                ),
+                inbox: rx,
+                tools: Vec::new(),
+                permissions: crate::Permissions {
+                    workspace: workspace.display().to_string(),
+                    credentials: home.path().join("credentials"),
+                    credential_files: Vec::new(),
+                    rules: Arc::new(NoRules),
+                },
             },
             None,
         )
@@ -603,30 +605,32 @@ fn an_extension_log_taken_while_settling_is_written_and_never_saved() {
         Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
     let (_inbox, rx) = mpsc::channel::<Delivery>();
     let mut looped = Loop::start(
-        Arc::clone(&log),
-        Arc::new(fakes::ScriptedProvider::new(Vec::new())),
-        Model {
-            reference: "fake/model".into(),
-            cost: None,
-            subscription: false,
-        },
-        crate::prompt::PromptInputs::new(
-            home.path().to_path_buf(),
-            "/bin/sh".into(),
-            home.path()
-                .join("s_test/events.jsonl")
-                .display()
-                .to_string(),
-            clock,
-            fakes::CONTEXT_WINDOW,
-        ),
-        rx,
-        Vec::new(),
-        crate::Permissions {
-            workspace: workspace.display().to_string(),
-            credentials: home.path().join("credentials"),
-            credential_files: Vec::new(),
-            rules: Arc::new(NoRules),
+        crate::Session {
+            log: Arc::clone(&log),
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                clock,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(NoRules),
+            },
         },
         None,
     )

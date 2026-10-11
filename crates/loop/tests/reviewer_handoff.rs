@@ -383,23 +383,25 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
     let tool = shell(None, None);
     let reviewer_b = Arc::new(ScriptedProvider::new(vec![Scripted::text("allow")]));
     let mut looped = Loop::resume(
-        Arc::clone(&session_b.log),
+        r#loop::Session {
+            log: Arc::clone(&session_b.log),
+            provider: Arc::clone(&session_b.provider) as Arc<dyn Provider>,
+            model: Model {
+                reference: MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: vec![("builtin".into(), tool as Arc<dyn Tool>)],
+            permissions: Permissions {
+                workspace: session_b.workspace.display().to_string(),
+                credentials: session_b.credentials.clone(),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
         resumed,
-        Arc::clone(&session_b.provider) as Arc<dyn Provider>,
-        Model {
-            reference: MODEL.into(),
-            cost: None,
-            subscription: false,
-        },
-        prompt,
-        rx,
-        vec![("builtin".into(), tool as Arc<dyn Tool>)],
-        Permissions {
-            workspace: session_b.workspace.display().to_string(),
-            credentials: session_b.credentials.clone(),
-            credential_files: Vec::new(),
-            rules,
-        },
     )
     .unwrap()
     .reviewer(

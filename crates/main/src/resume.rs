@@ -379,14 +379,16 @@ fn resumed_session(
         |inbox, cancel| {
             crate::finish(
                 Loop::resume(
-                    Arc::clone(&log),
+                    r#loop::Session {
+                        log: Arc::clone(&log),
+                        provider,
+                        model,
+                        prompt: prompt_inputs,
+                        inbox,
+                        tools: r#loop::capped(tools, &caps),
+                        permissions,
+                    },
                     folded,
-                    provider,
-                    model,
-                    prompt_inputs,
-                    inbox,
-                    r#loop::capped(tools, &caps),
-                    permissions,
                 )
                 .map(|looped| {
                     let looped = crate::session_extensions::hooked(looped.jobs(jobs), &extensions);
