@@ -68,71 +68,150 @@ pub(crate) fn count(n: u64, one: &str, many: &str) -> String {
 }
 
 /// What a group's calls did, by kind, and how often the model thought.
+/// Read, edited and written files count distinct `path` arguments per
+/// kind; kinds with no calls are left out of the summary.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Kinds {
-    /// `read` calls.
+    /// `read` calls, distinct paths.
     pub(crate) read: u64,
-    /// Shell calls that ran `grep`, `rg` or `find`.
+    /// Shell calls that ran `grep` or `rg`.
     pub(crate) searched: u64,
-    /// Files edited: distinct paths in `changes`, else `edit` and `write`
-    /// calls.
+    /// Shell calls that ran `find`, `ls` or `fd`.
+    pub(crate) listed: u64,
+    /// `edit` calls, distinct paths.
     pub(crate) edited: u64,
-    /// Lines added by the edits.
+    /// `write` calls, distinct paths.
+    pub(crate) wrote: u64,
+    /// Lines added by the `edit` calls.
     pub(crate) added: u64,
-    /// Lines removed by the edits.
+    /// Lines removed by the `edit` calls.
     pub(crate) removed: u64,
     /// Other shell calls.
     pub(crate) ran: u64,
+    /// `delegate_spawn` and `delegate_fork` calls.
+    pub(crate) delegates: u64,
+    /// `jobs` calls.
+    pub(crate) jobs: u64,
     /// Questions `ask_user` asked.
     pub(crate) asked: u64,
     /// Calls to any other tool.
-    pub(crate) other: u64,
+    pub(crate) called: u64,
     /// Thinking blocks.
     pub(crate) thoughts: u64,
 }
 
+/// A dim span.
+fn dim_span(text: String) -> Span<'static> {
+    Span::styled(text, Style::default().add_modifier(Modifier::DIM))
+}
+
 impl Kinds {
-    /// "Read 2 files, edited 1 file +3 −1, ran 1 command, asked 2
-    /// questions, thought once":
-    /// kinds with no calls left out, the first letter capitalised. Empty
-    /// when nothing was done.
-    pub(crate) fn summary(&self) -> String {
-        let mut parts = Vec::new();
+    /// The kinds in the doc's fixed order, each dim, with the edit's
+    /// totals in the added and removed colours: "Read 2 files, searched
+    /// 1 pattern, edited 1 file +2 −1, ran 1 command, thought 4 times".
+    /// Kinds with no calls are left out; the first letter is capitalised.
+    /// Empty when nothing was done.
+    pub(crate) fn summary(&self) -> Vec<Span<'static>> {
+        let mut out = Vec::new();
+        let mut first = true;
+        let push = |out: &mut Vec<Span<'static>>, first: &mut bool, text: String| {
+            let mut text = text;
+            if *first {
+                text = capitalise(&text);
+                *first = false;
+            } else {
+                out.push(dim_span(", ".to_owned()));
+            }
+            out.push(dim_span(text));
+        };
         if self.read > 0 {
-            parts.push(format!("read {}", count(self.read, "file", "files")));
+            push(
+                &mut out,
+                &mut first,
+                format!("read {}", count(self.read, "file", "files")),
+            );
         }
         if self.searched > 0 {
-            parts.push(format!(
-                "searched {}",
-                count(self.searched, "pattern", "patterns")
-            ));
+            push(
+                &mut out,
+                &mut first,
+                format!("searched {}", count(self.searched, "pattern", "patterns")),
+            );
+        }
+        if self.listed > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("listed {}", count(self.listed, "directory", "directories")),
+            );
         }
         if self.edited > 0 {
-            let mut part = format!("edited {}", count(self.edited, "file", "files"));
+            push(
+                &mut out,
+                &mut first,
+                format!("edited {}", count(self.edited, "file", "files")),
+            );
             if self.added > 0 || self.removed > 0 {
-                part.push_str(&format!(" +{} −{}", self.added, self.removed));
+                out.push(dim_span(" ".to_owned()));
+                out.push(Span::styled(
+                    format!("+{}", self.added),
+                    style(Role::Added).add_modifier(Modifier::DIM),
+                ));
+                out.push(dim_span(" ".to_owned()));
+                out.push(Span::styled(
+                    format!("−{}", self.removed),
+                    style(Role::Removed).add_modifier(Modifier::DIM),
+                ));
             }
-            parts.push(part);
+        }
+        if self.wrote > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("wrote {}", count(self.wrote, "file", "files")),
+            );
         }
         if self.ran > 0 {
-            parts.push(format!("ran {}", count(self.ran, "command", "commands")));
+            push(
+                &mut out,
+                &mut first,
+                format!("ran {}", count(self.ran, "command", "commands")),
+            );
+        }
+        if self.delegates > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("started {}", count(self.delegates, "delegate", "delegates")),
+            );
+        }
+        if self.jobs > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("checked {}", count(self.jobs, "job", "jobs")),
+            );
         }
         if self.asked > 0 {
-            parts.push(format!(
-                "asked {}",
-                count(self.asked, "question", "questions")
-            ));
+            push(
+                &mut out,
+                &mut first,
+                format!("asked {}", count(self.asked, "question", "questions")),
+            );
         }
-        if self.other > 0 {
-            parts.push(count(self.other, "other call", "other calls"));
+        if self.called > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("called {}", count(self.called, "tool", "tools")),
+            );
         }
         match self.thoughts {
             0 => {}
-            1 => parts.push("thought once".to_owned()),
-            2 => parts.push("thought twice".to_owned()),
-            n => parts.push(format!("thought {n} times")),
+            1 => push(&mut out, &mut first, "thought once".to_owned()),
+            n => push(&mut out, &mut first, format!("thought {n} times")),
         }
-        capitalise(&parts.join(", "))
+        out
     }
 }
 
@@ -232,16 +311,26 @@ pub(crate) fn wrap_joined(text: &str, max: usize) -> Vec<(String, Join)> {
     rows
 }
 
-/// What a call is, for the summary line.
+/// What a call is, for the summary line and the ledger's kind word.
+/// `find`, `ls` and `fd` list directories; only `grep` and `rg`
+/// search (`research/tui-prototype`, `kind_of`).
 pub(crate) enum Kind {
     /// `read`.
     Read,
-    /// `edit` or `write`.
-    Edit,
-    /// A shell `grep`, `rg` or `find`.
+    /// A shell `grep` or `rg`.
     Search,
+    /// A shell `find`, `ls` or `fd`.
+    List,
+    /// `edit`.
+    Edit,
+    /// `write`.
+    Write,
     /// Any other shell command.
-    Ran,
+    Shell,
+    /// `delegate_spawn` or `delegate_fork`.
+    Delegate,
+    /// `jobs`.
+    Jobs,
     /// `ask_user`, with how many questions it asked.
     Ask(u64),
     /// Any other tool.
@@ -251,12 +340,16 @@ pub(crate) enum Kind {
 pub(crate) fn kind(name: &str, arguments: &Value) -> Kind {
     match name {
         "read" => Kind::Read,
-        "edit" | "write" => Kind::Edit,
+        "edit" => Kind::Edit,
+        "write" => Kind::Write,
+        "delegate_spawn" | "delegate_fork" => Kind::Delegate,
+        "jobs" => Kind::Jobs,
         "shell" => match argument(arguments, "command")
             .and_then(|command| command.split_whitespace().next())
         {
-            Some("grep" | "rg" | "find") => Kind::Search,
-            Some(_) | None => Kind::Ran,
+            Some("grep" | "rg") => Kind::Search,
+            Some("find" | "ls" | "fd") => Kind::List,
+            Some(_) | None => Kind::Shell,
         },
         // A call whose `questions` is not a list of at least one is no
         // question asked.
@@ -327,11 +420,11 @@ pub(crate) fn label(name: &str, arguments: &str) -> String {
     }
 }
 
-/// What opening a call shows: a failed call's error, a denial's reason,
-/// an edit's diff, else the content's text.
+/// What opening a call shows: a failed call's "<code>: <message>", a
+/// denial's reason, an edit's diff, else the content's text.
 pub(crate) fn detail(done: &ToolCallCompleted) -> String {
     if let (CallStatus::Failed, Some(error)) = (done.status, &done.error) {
-        return error.message.clone();
+        return format!("{}: {}", code(&error.code), error.message);
     }
     if let (CallStatus::Denied, Some(reason)) = (done.status, &done.reason) {
         return reason.clone();
@@ -503,34 +596,62 @@ fn opened_diff(text: &str, indent: &str, out: &mut Rows) {
 
 impl Group {
     /// What its calls did, by kind, and how often the model thought.
+    /// Read, edited and written files count distinct `path` argument
+    /// strings per kind; a call with no string `path` counts as one
+    /// file of its own. The added and removed totals sum the `changes`
+    /// of the `edit` calls.
     fn kinds(&self) -> Kinds {
         let mut kinds = Kinds::default();
-        let mut paths = Vec::new();
-        let mut edits = 0u64;
+        let mut read_paths: Vec<&str> = Vec::new();
+        let mut read_missing = 0u64;
+        let mut edit_paths: Vec<&str> = Vec::new();
+        let mut edit_missing = 0u64;
+        let mut write_paths: Vec<&str> = Vec::new();
+        let mut write_missing = 0u64;
         for call in self.calls() {
             match kind(&call.name, &call.arguments) {
-                Kind::Read => kinds.read = kinds.read.saturating_add(1),
+                Kind::Read => match argument(&call.arguments, "path") {
+                    Some(path) => {
+                        if !read_paths.contains(&path) {
+                            read_paths.push(path);
+                        }
+                    }
+                    None => read_missing = read_missing.saturating_add(1),
+                },
                 Kind::Search => kinds.searched = kinds.searched.saturating_add(1),
-                Kind::Ran => kinds.ran = kinds.ran.saturating_add(1),
+                Kind::List => kinds.listed = kinds.listed.saturating_add(1),
+                Kind::Shell => kinds.ran = kinds.ran.saturating_add(1),
+                Kind::Delegate => kinds.delegates = kinds.delegates.saturating_add(1),
+                Kind::Jobs => kinds.jobs = kinds.jobs.saturating_add(1),
                 Kind::Ask(questions) => kinds.asked = kinds.asked.saturating_add(questions),
-                Kind::Other => kinds.other = kinds.other.saturating_add(1),
+                Kind::Other => kinds.called = kinds.called.saturating_add(1),
                 Kind::Edit => {
-                    edits = edits.saturating_add(1);
+                    match argument(&call.arguments, "path") {
+                        Some(path) => {
+                            if !edit_paths.contains(&path) {
+                                edit_paths.push(path);
+                            }
+                        }
+                        None => edit_missing = edit_missing.saturating_add(1),
+                    }
                     for change in &call.changes {
                         kinds.added = kinds.added.saturating_add(change.added);
                         kinds.removed = kinds.removed.saturating_add(change.removed);
-                        if !paths.contains(&&change.path) {
-                            paths.push(&change.path);
-                        }
                     }
                 }
+                Kind::Write => match argument(&call.arguments, "path") {
+                    Some(path) => {
+                        if !write_paths.contains(&path) {
+                            write_paths.push(path);
+                        }
+                    }
+                    None => write_missing = write_missing.saturating_add(1),
+                },
             }
         }
-        kinds.edited = if paths.is_empty() {
-            edits
-        } else {
-            paths.len() as u64
-        };
+        kinds.read = read_paths.len() as u64 + read_missing;
+        kinds.edited = edit_paths.len() as u64 + edit_missing;
+        kinds.wrote = write_paths.len() as u64 + write_missing;
         kinds.thoughts = self.thoughts().count() as u64;
         kinds
     }
@@ -554,7 +675,7 @@ impl Group {
             return;
         }
         let mut parts = Vec::new();
-        let kinds = self.kinds().summary();
+        let kinds = Line::from(self.kinds().summary()).to_string();
         if !kinds.is_empty() {
             parts.push(kinds);
         }

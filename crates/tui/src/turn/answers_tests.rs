@@ -629,7 +629,7 @@ fn the_group_line_counts_the_questions_asked() {
     );
     let texts = texts(&app);
     assert!(
-        texts.contains(&" • Asked 4 questions, 1 other call".to_owned()),
+        texts.contains(&" • Asked 4 questions, called 1 tool".to_owned()),
         "{texts:#?}"
     );
 }

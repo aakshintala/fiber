@@ -261,7 +261,7 @@ fn shell_searches_and_other_tools_have_their_own_kinds() {
     text(&mut app, "a_m", "ok", 0);
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Searched 3 patterns, edited 2 files, ran 2 commands, 1…")
+        Some(" • Searched 2 patterns, listed 2 directories, edited 1 fi…")
     );
 }
 
@@ -278,7 +278,8 @@ fn edited_files_count_distinct_paths_and_sum_their_lines() {
             json!({"changes": [{"path": path, "added": added, "removed": 1}]}),
         );
     }
-    // A failed edit with no changes adds no file once others changed some.
+    // A failed edit still counts its path: files count distinct `path`
+    // arguments per kind.
     request(&mut app, "a_4", "edit", json!({"path": "c.rs"}), 0);
     feed(
         &mut app,
@@ -290,7 +291,7 @@ fn edited_files_count_distinct_paths_and_sum_their_lines() {
     text(&mut app, "a_m", "ok", 0);
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Edited 2 files +7 −3")
+        Some(" • Edited 3 files +7 −3")
     );
 }
 
@@ -514,7 +515,7 @@ fn raw_arguments_stream_until_their_call_is_requested() {
     request(&mut app, "a_2", "shell", json!({"command": "ls"}), 0);
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Read 1 file, ran 1 command · read a.rs, shell ls")
+        Some(" • Read 1 file, listed 1 directory · read a.rs, shell ls")
     );
 }
 
@@ -1031,7 +1032,10 @@ fn opening_a_call_shows_its_error_reason_diff_or_output() {
     app.open(group(&app));
     for (row, shown) in [
         ("   2 edit src/a.rs +3 −1", vec!["     -old", "     +new"]),
-        ("     shell cargo t · failed", vec!["     exit 101"]),
+        (
+            "     shell cargo t · failed",
+            vec!["     nonzero_exit: exit 101"],
+        ),
         ("     web_fetch u · denied", vec!["     not allowed"]),
         ("     custom · cancelled", vec!["     x"]),
         ("     read a.rs", vec!["     ok"]),
