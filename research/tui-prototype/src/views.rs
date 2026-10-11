@@ -14,10 +14,11 @@
 
 use super::input::{Ev, Key};
 use super::{Args, Term};
-use super::{BC, BI, BK, BW, RED};
-use super::{bold, dim, fg, paint, row, slab, sp, view_header};
+use super::{BC, BI, BK, BW, ORANGE, RED};
+use super::{bold, dim, fg, paint, rgb, row, slab, sp, view_header};
 use crate::cases::{Case, Surface};
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 use std::io::{self, Write};
 
 /// Every `--view-case` case, named in README.md.
@@ -58,6 +59,14 @@ const CASES: &[Case<Look>] = &[
             kind: Kind::ChangedFiles,
         },
     },
+    Case {
+        name: "search-results",
+        help: "every search match with its surrounding lines",
+        check: "every match one row each with the lines around it, the current match brighter, and the jump hint.",
+        build: || Look {
+            kind: Kind::SearchResults,
+        },
+    },
 ];
 
 /// `--view-case`, for `--help` and `check/views.md`.
@@ -75,6 +84,7 @@ enum Kind {
     Running,
     Usage,
     ChangedFiles,
+    SearchResults,
 }
 
 struct Look {
@@ -287,6 +297,56 @@ fn changed_files_rows(w: usize) -> Vec<super::Row> {
     out
 }
 
+/// A marked search hit: the current one brighter, the rest on the dim
+/// mark. These are the main loop's real colours: docs/tui.md's `match` and
+/// `match_current` tokens name no palette entry in the code.
+fn mark(word: &str, current: bool) -> Span<'static> {
+    if current {
+        Span::styled(word.to_string(), Style::new().bg(ORANGE).fg(Color::Black))
+    } else {
+        Span::styled(
+            word.to_string(),
+            Style::new().bg(rgb(0x5a4a1a)).fg(Color::White),
+        )
+    }
+}
+
+/// Search results: every match one row each, with the lines around it.
+/// The first match is the current one.
+fn search_results_rows() -> Vec<super::Row> {
+    vec![
+        row(vec![sp("3 of 5 · ⌕ lock", dim())]),
+        super::Row::default(),
+        row(vec![sp("crates/log/tests/lock.rs:41", bold())]),
+        row(vec![
+            sp("    let _guard = ", Style::new()),
+            mark("lock", true),
+            sp("();", Style::new()),
+        ]),
+        row(vec![sp("    map.insert(path, _guard);", Style::new())]),
+        super::Row::default(),
+        row(vec![sp("crates/tui/src/main.rs:1905", bold())]),
+        row(vec![sp("    // the handoff point", dim())]),
+        row(vec![
+            sp("    holds the ", Style::new()),
+            mark("lock", false),
+            sp(" for the turn", Style::new()),
+        ]),
+        row(vec![sp("    while running {", Style::new())]),
+        super::Row::default(),
+        row(vec![sp("crates/panel/src/cards.rs:88", bold())]),
+        row(vec![sp("    let cards = vec![];", Style::new())]),
+        row(vec![
+            sp("    for c in ", Style::new()),
+            mark("lock", false),
+            sp(" { lock held }", Style::new()),
+        ]),
+        row(vec![sp("        cards.push(c);", Style::new())]),
+        super::Row::default(),
+        row(vec![sp("Enter jumps to the match", dim())]),
+    ]
+}
+
 fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
     match c.kind {
         Kind::Delegate => {
@@ -320,6 +380,12 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             let mut out = vec![view_header("Changed files", "diff against HEAD")];
             out.push(super::Row::default());
             out.extend(changed_files_rows(cols));
+            out
+        }
+        Kind::SearchResults => {
+            let mut out = vec![view_header("Search", "⌕ lock")];
+            out.push(super::Row::default());
+            out.extend(search_results_rows());
             out
         }
         Kind::JobPty => {
@@ -522,7 +588,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 5);
+        assert_eq!(CASES.len(), 6);
         assert!(parse("nope").is_none());
     }
 
@@ -721,6 +787,51 @@ mod tests {
             .find(|r| r.spans.iter().any(|s| s.content.starts_with("@@")))
             .unwrap();
         assert!(hunk.spans[0].style.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn search_results_header_row() {
+        for cols in [160, NARROW] {
+            let c = parse_case("search-results");
+            let buf = buffer(&c, cols, 48);
+            assert_header(&buf, "search-results", "Search", "⌕ lock", cols);
+        }
+    }
+
+    #[test]
+    fn search_results_shows_matches_with_context() {
+        for cols in [160, NARROW] {
+            let c = parse_case("search-results");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("3 of 5"), "no count");
+            assert!(t.contains("crates/log/tests/lock.rs:41"), "no first match");
+            assert!(t.contains("let _guard = "), "no surrounding line");
+            assert!(t.contains("crates/tui/src/main.rs:1905"), "no second match");
+            assert!(t.contains("Enter jumps to the match"), "no jump hint");
+        }
+    }
+
+    #[test]
+    fn search_results_marks_the_current_match_brighter() {
+        use ratatui::style::Color;
+        let rows = search_results_rows();
+        let mut current = 0;
+        let mut other = 0;
+        for r in &rows {
+            for s in &r.spans {
+                if s.content == "lock" {
+                    if s.style.bg == Some(crate::ORANGE) {
+                        assert_eq!(s.style.fg, Some(Color::Black));
+                        current += 1;
+                    } else {
+                        assert_eq!(s.style.bg, Some(crate::rgb(0x5a4a1a)));
+                        other += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(current, 1, "not exactly one current match");
+        assert_eq!(other, 2, "not two other matches");
     }
 
     #[test]

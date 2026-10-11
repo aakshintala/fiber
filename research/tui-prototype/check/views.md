@@ -7,3 +7,4 @@ One run per case: `--view-case CASE`.
 - running: two rows per running delegate and one row per running job, in start order, each opening that item's view.
 - usage: usage broken down by turn, by model and by delegate, each with tokens by kind, billed and subscription cost, and the budget left.
 - changed-files: the changed files with the chosen file's hunks as a diff against HEAD, the untracked file wholly added, removals red.
+- search-results: every match one row each with the lines around it, the current match brighter, and the jump hint.
