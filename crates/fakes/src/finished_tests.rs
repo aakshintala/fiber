@@ -53,6 +53,35 @@ fn a_child_past_its_deadline_fails_naming_the_wait_and_leaves_no_group() {
     );
 }
 
+#[test]
+fn a_backgrounded_descendant_leaves_no_group() {
+    let child = spawn("sh", &["-c", "sleep 30 >/dev/null 2>&1 & echo ok"]);
+    let pid = child.id();
+    let output = finished("backgrounded descendant", child, &[], WITHIN);
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"ok\n");
+    assert!(
+        crate::group_empties(pid, WITHIN),
+        "the backgrounded group {pid} is still alive"
+    );
+}
+
+#[test]
+fn a_stdin_write_error_kills_and_reaps_the_group() {
+    let child = spawn("sh", &["-c", "exec 0<&-; sleep 30"]);
+    let pid = child.id();
+    let stdin = vec![b'x'; 1 << 20];
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        finished("closed stdin", child, &stdin, WITHIN)
+    }));
+    let message = panic_message(caught.unwrap_err());
+    assert!(message.contains("closed stdin"), "{message}");
+    assert!(
+        crate::group_empties(pid, WITHIN),
+        "the killed group {pid} is still alive"
+    );
+}
+
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     payload
         .downcast_ref::<String>()

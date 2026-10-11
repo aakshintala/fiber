@@ -16,45 +16,6 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use support::{SESSION_KINDS, Setup, expected};
 
-// Rooted at `/tmp` on purpose: case sockets bind under this root and must stay under 104 bytes on macOS, while `fakes::TempDir` follows a long `TMPDIR`.
-struct TempRoot(fakes::TempDir);
-
-impl TempRoot {
-    fn new() -> Self {
-        Self(fakes::TempDir::under(Path::new("/tmp"), "ft"))
-    }
-
-    fn path(&self) -> &Path {
-        self.0.path()
-    }
-
-    fn is_empty(&self) -> bool {
-        fs::read_dir(self.0.path()).unwrap().next().is_none()
-    }
-}
-
-/// A `TMPDIR` of about 50 bytes under `/tmp`, the length of macOS's default:
-/// a case's session socket stays inside the 104-byte limit only if the
-/// runner keeps its own directory names short. Removed on drop.
-struct LongRoot(fakes::TempDir);
-
-impl LongRoot {
-    fn new() -> Self {
-        Self(fakes::TempDir::under(
-            Path::new("/tmp"),
-            "long-tmp-dir-0123456789abcdefghijklmno",
-        ))
-    }
-
-    fn path(&self) -> &Path {
-        self.0.path()
-    }
-
-    fn is_empty(&self) -> bool {
-        fs::read_dir(self.0.path()).unwrap().next().is_none()
-    }
-}
-
 fn case(kinds: &[&str]) -> Value {
     json!({
         "script": {"steps": [{"text": "Hello."}]},
@@ -97,7 +58,10 @@ fn run(setup: &Setup, package: &Path, temp_root: &Path, args: &[&str]) -> Output
 fn test_runs_cases_without_a_path_and_isolates_every_home() {
     let setup = Setup::new();
     let package = package(&setup);
-    let temp_root = TempRoot::new();
+    // Rooted at `/tmp` on purpose: case sockets bind under this root and
+    // must stay under 104 bytes on macOS, while `fakes::TempDir` follows a
+    // long `TMPDIR`.
+    let temp_root = fakes::TempDir::under(Path::new("/tmp"), "ft");
     fs::write(setup.home().join("owner.marker"), "leave this home alone").unwrap();
 
     let failed = run(&setup, &package, temp_root.path(), &["extension", "test"]);
@@ -112,7 +76,7 @@ fn test_runs_cases_without_a_path_and_isolates_every_home() {
         "leave this home alone"
     );
     assert!(
-        temp_root.is_empty(),
+        fs::read_dir(temp_root.path()).unwrap().next().is_none(),
         "case homes remain in {}",
         temp_root.path().display()
     );
@@ -140,7 +104,7 @@ fn test_runs_cases_without_a_path_and_isolates_every_home() {
         "leave this home alone"
     );
     assert!(
-        temp_root.is_empty(),
+        fs::read_dir(temp_root.path()).unwrap().next().is_none(),
         "case homes remain in {}",
         temp_root.path().display()
     );
@@ -155,7 +119,11 @@ fn session_cases_pass_with_a_long_tmpdir() {
         case(SESSION_KINDS).to_string(),
     )
     .unwrap();
-    let temp_root = LongRoot::new();
+    // About 50 bytes under `/tmp`, the length of macOS's default `TMPDIR`:
+    // a case's session socket stays inside the 104-byte limit only if the
+    // runner keeps its own directory names short.
+    let temp_root =
+        fakes::TempDir::under(Path::new("/tmp"), "long-tmp-dir-0123456789abcdefghijklmno");
     assert!(
         temp_root.path().as_os_str().len() >= 50,
         "{} is too short to cover the long-TMPDIR layout",
@@ -170,7 +138,7 @@ fn session_cases_pass_with_a_long_tmpdir() {
     );
     assert!(passed.stderr.is_empty());
     assert!(
-        temp_root.is_empty(),
+        fs::read_dir(temp_root.path()).unwrap().next().is_none(),
         "case homes remain in {}",
         temp_root.path().display()
     );
