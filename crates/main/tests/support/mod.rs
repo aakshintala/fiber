@@ -30,22 +30,11 @@ use serde_json::{Value, json};
 pub(crate) mod package;
 pub(crate) mod pty;
 
-/// Writes a healthy extension install record beside its manifest.
-pub(crate) fn write_record(dir: &Path) {
-    let text = fs::read_to_string(dir.join("extension.json")).unwrap();
-    let manifest: Value = serde_json::from_str(&text).unwrap();
-    let name = manifest.get("name").and_then(|n| n.as_str()).unwrap();
-    let version = manifest
-        .get("version")
-        .and_then(|v| v.as_str())
-        .unwrap_or("v0.0.0");
-    fs::write(
-        dir.join(".fiber.json"),
-        json!({"name": name, "version": version, "requested": true, "source": {"path": "/p"}})
-            .to_string(),
-    )
-    .unwrap();
-}
+#[allow(
+    unused_imports,
+    reason = "each test binary uses its own subset of the helpers"
+)]
+pub(crate) use fakes::write_record;
 
 /// The test's one deadline and its bounds, shared from `fakes`
 /// (`docs/testing.md`, "Waits and timeouts").

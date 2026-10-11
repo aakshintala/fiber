@@ -200,6 +200,42 @@ impl Origin {
             .to_owned())
     }
 
+    /// Clones the repository at the exact recorded `commit` to `dest`
+    /// and returns it. Only a full commit hash is checked out: anything
+    /// else fails before `git` runs, so a record can never inject a `git`
+    /// option or name a ref. `dest/.git` stays.
+    pub(crate) fn clone_at(
+        &self,
+        repo: &str,
+        commit: &str,
+        dest: &Path,
+        clock: &dyn Clock,
+    ) -> Result<String, Error> {
+        if ![40, 64].contains(&commit.len())
+            || !commit
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(Error::Git {
+                command: "checkout".into(),
+                why: format!("the recorded commit `{commit}` is not a full commit hash"),
+            });
+        }
+        let url = (self.url)(repo);
+        let to = dest.to_string_lossy();
+        self.run(
+            &["clone", "--quiet", "--no-checkout", url.as_str(), &to],
+            None,
+            clock,
+        )?;
+        self.run(
+            &["checkout", "--quiet", "--detach", commit],
+            Some(dest),
+            clock,
+        )?;
+        Ok(commit.to_owned())
+    }
+
     /// What changed in `dir` of the clone since commit `old`. A call stopped
     /// at its deadline fails the update: an update never commits a change
     /// list the call did not finish reading.

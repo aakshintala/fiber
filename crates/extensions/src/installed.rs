@@ -87,7 +87,7 @@ impl fmt::Display for Damaged {
         let shown = short_name(&self.name);
         write!(
             f,
-            "`{shown}` is damaged; run `fiber extension remove {shown}`, then install it again."
+            "`{shown}` is damaged; run `fiber extension reinstall {shown}`."
         )
     }
 }
@@ -99,7 +99,7 @@ impl Damaged {
     pub fn skipped(&self) -> String {
         let shown = short_name(&self.name);
         format!(
-            "`{shown}` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension remove {shown}`, then install it again."
+            "`{shown}` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension reinstall {shown}`."
         )
     }
 }
@@ -181,9 +181,14 @@ pub(crate) fn read_entries(home: &Path) -> Result<Entries, Error> {
         let record = match Record::read(&dir) {
             Ok(record) => record,
             Err(_) => {
+                // The fix names the directory: only a manifest whose name
+                // slugs to this directory names the entry, so `reinstall`
+                // of the displayed name reaches this directory.
                 let name = config::read_manifest(&dir)
+                    .ok()
                     .map(|manifest| manifest.name)
-                    .unwrap_or_else(|_| dir_name.clone());
+                    .filter(|name| slug(name).is_ok_and(|mine| mine == dir_name))
+                    .unwrap_or_else(|| dir_name.clone());
                 damaged.push(Damaged {
                     name,
                     dir: dir_name,

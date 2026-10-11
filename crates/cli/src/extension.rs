@@ -1,4 +1,4 @@
-//! `fiber extension install`, `update`, `remove` and `list`
+//! `fiber extension install`, `update`, `remove`, `reinstall` and `list`
 //! (`docs/extensions.md`, "Installing"): install fetches and checks an
 //! extension and its dependencies, shows what they register and asks
 //! before going ahead in a terminal; update moves one or every installed
@@ -102,6 +102,34 @@ pub fn extension_remove(name: &str, clock: &dyn Clock) -> i32 {
             remove(
                 &home,
                 name,
+                clock,
+                Io {
+                    terminal,
+                    input: &mut stdin.lock(),
+                    err: &mut io::stderr(),
+                },
+            )
+        });
+    match ran {
+        Ok(code) => code,
+        Err(e) => fail(e),
+    }
+}
+
+/// `fiber extension reinstall <name>`: removes the extension and installs
+/// it again from its recorded source and commit, or from `<name>` as given
+/// when it is damaged, asking first in a terminal.
+pub fn extension_reinstall(name: &str, fiber_version: &str, clock: &dyn Clock) -> i32 {
+    let stdin = io::stdin();
+    let terminal = stdin.is_terminal();
+    let ran = config::fiber_home_from_env()
+        .map_err(|e| failed(e.code(), e))
+        .and_then(|home| {
+            install(
+                &home,
+                Request::Reinstall(name.to_owned()),
+                fiber_version,
+                &Origin::github(),
                 clock,
                 Io {
                     terminal,

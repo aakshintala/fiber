@@ -26,6 +26,10 @@ pub enum Request {
     Install(String),
     /// An installed extension, moved to its newest version.
     Update(String),
+    /// An installed extension, installed again: from its record's source
+    /// and commit, or, when its directory is damaged, the name as given
+    /// at its newest version (`docs/extensions.md`, "Installing").
+    Reinstall(String),
 }
 
 /// One extension an install will put in place.
@@ -207,7 +211,7 @@ pub fn plan<'c>(
         Request::Path(path) => ctx.add_path(&mut plan, path, None)?,
         Request::Install(typed) => {
             let name = full_name(typed);
-            ctx.add_git(&mut plan, &name, None, true)?;
+            ctx.add_git(&mut plan, &name, None, true, None)?;
             name
         }
         Request::Update(typed) => {
@@ -221,8 +225,38 @@ pub fn plan<'c>(
             match &have.provenance {
                 Provenance::Path(path) => ctx.add_path(&mut plan, path, Some(&name))?,
                 Provenance::Git { .. } => {
-                    ctx.add_git(&mut plan, &name, None, true)?;
+                    ctx.add_git(&mut plan, &name, None, true, None)?;
                     name
+                }
+            }
+        }
+        Request::Reinstall(typed) => {
+            let name = full_name(typed);
+            // A damaged directory is taken out of the plan's damaged
+            // list, so the reinstall claims its slug and no skip line is
+            // printed for it; other damaged directories still get theirs.
+            if plan
+                .damaged
+                .iter()
+                .position(|hit| is_damaged(hit, &name))
+                .map(|i| plan.damaged.remove(i))
+                .is_some()
+            {
+                ctx.add_git(&mut plan, &name, None, true, None)?;
+                name
+            } else {
+                let Some(have) = listing.installed.iter().find(|i| i.name == name) else {
+                    return Err(Error::NotInstalled { name });
+                };
+                match &have.provenance {
+                    Provenance::Path(path) => ctx.add_path(&mut plan, path, Some(&name))?,
+                    Provenance::Git { commit } => {
+                        let version = have.version.clone();
+                        let asked = have.requested;
+                        let commit = commit.clone();
+                        ctx.add_git(&mut plan, &name, Some(version), asked, Some(&commit))?;
+                        name
+                    }
                 }
             }
         }
@@ -247,7 +281,7 @@ impl Ctx<'_, '_> {
 
     /// Refuses a name whose directory another name already has, in Fiber
     /// home or in this plan. A directory slug a damaged extension holds
-    /// fails as [`Error::Damaged`]: remove it, then install it again.
+    /// fails as [`Error::Damaged`]: reinstall it.
     fn slug_free(&self, plan: &Plan, name: &str) -> Result<(), Error> {
         let mine = slug(name)?;
         if let Some(hit) = plan.damaged.iter().find(|hit| is_damaged(hit, name)) {
@@ -313,12 +347,15 @@ impl Ctx<'_, '_> {
     }
 
     /// Fetches `name` at `tag`, or at its newest tag when none, and stages it.
+    /// With `pin`, no tag is listed: the recorded version is fetched at
+    /// the recorded commit, with no change list.
     fn add_git(
         &mut self,
         plan: &mut Plan,
         name: &str,
         tag: Option<String>,
         asked: bool,
+        pin: Option<&str>,
     ) -> Result<(), Error> {
         let (repo, dir) = split(name)?;
         self.slug_free(plan, name)?;
@@ -329,20 +366,29 @@ impl Ctx<'_, '_> {
         };
         let clone = plan.scratch.join(slug(name)?);
         remove(&clone)?;
-        let old = self
-            .installed
-            .iter()
-            .find(|i| i.name == name)
-            .and_then(|i| match &i.provenance {
-                Provenance::Git { commit } => Some(commit.as_str()),
-                Provenance::Path(_) => None,
-            });
-        let history = asked && old.is_some();
-        let commit = self.origin.clone(repo, &tag, history, &clone, self.clock)?;
-        let changes = old
-            .filter(|_| history)
-            .map(|old| self.origin.changes(&clone, old, dir, self.clock))
-            .transpose()?;
+        let (commit, changes) = match pin {
+            Some(commit) => (
+                self.origin.clone_at(repo, commit, &clone, self.clock)?,
+                None,
+            ),
+            None => {
+                let old = self
+                    .installed
+                    .iter()
+                    .find(|i| i.name == name)
+                    .and_then(|i| match &i.provenance {
+                        Provenance::Git { commit } => Some(commit.as_str()),
+                        Provenance::Path(_) => None,
+                    });
+                let history = asked && old.is_some();
+                let commit = self.origin.clone(repo, &tag, history, &clone, self.clock)?;
+                let changes = old
+                    .filter(|_| history)
+                    .map(|old| self.origin.changes(&clone, old, dir, self.clock))
+                    .transpose()?;
+                (commit, changes)
+            }
+        };
         remove(&clone.join(".git"))?;
         let record = Record {
             name: name.into(),
@@ -479,8 +525,7 @@ impl Ctx<'_, '_> {
     }
 
     /// Stages the lowest tag of `dep` that meets `wants`. A slug a
-    /// damaged directory holds fails before any fetch: remove it, then
-    /// install it again.
+    /// damaged directory holds fails before any fetch: reinstall it.
     fn stage_dep(
         &mut self,
         plan: &mut Plan,
@@ -492,7 +537,7 @@ impl Ctx<'_, '_> {
         }
         let (repo, _) = split(dep)?;
         let tag = pick(dep, wants, &self.origin.tags(repo, self.clock)?)?;
-        self.add_git(plan, dep, Some(tag), false)
+        self.add_git(plan, dep, Some(tag), false, None)
     }
 
     /// Each reachable extension's dependencies and, for an installed one the

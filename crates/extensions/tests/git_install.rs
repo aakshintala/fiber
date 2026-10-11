@@ -1254,14 +1254,14 @@ fn a_damaged_messages_name_the_extension_and_the_fix() {
     assert_eq!(listing.damaged[0].name, name);
     assert_eq!(
         listing.damaged[0].to_string(),
-        "`opencode` is damaged; run `fiber extension remove opencode`, then install it again."
+        "`opencode` is damaged; run `fiber extension reinstall opencode`."
     );
     let shown = listing.damaged[0].to_string();
     assert!(!shown.contains(setup.home().to_str().unwrap()), "{shown}");
     assert!(!shown.contains("os error"), "{shown}");
     assert_eq!(
         listing.damaged[0].skipped(),
-        "`opencode` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension remove opencode`, then install it again."
+        "`opencode` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension reinstall opencode`."
     );
 }
 
@@ -1359,8 +1359,7 @@ fn install_or_update_of_a_damaged_name_fails_as_damaged() {
         } else {
             write(&dir.join(".fiber.json"), "{");
         }
-        let fix =
-            "`opencode` is damaged; run `fiber extension remove opencode`, then install it again.";
+        let fix = "`opencode` is damaged; run `fiber extension reinstall opencode`.";
         for request in [
             Request::Install(name.into()),
             Request::Update("opencode".into()),
@@ -2309,4 +2308,499 @@ fn a_record_in_a_directory_with_another_name_is_not_removed() {
     let err = uninstall(&setup.home(), name).unwrap_err();
     assert!(matches!(err, Error::NothingToRemove { .. }));
     assert!(legacy.is_dir());
+}
+
+fn reinstall(setup: &Setup, origin: &Origin, name: &str) -> Result<Vec<String>, Error> {
+    plan(
+        &setup.home(),
+        &Request::Reinstall(name.into()),
+        FIBER,
+        origin,
+        &*fakes::clock::FakeClock::new(),
+    )?
+    .commit()
+}
+
+fn installed_named(home: &Path, name: &str) -> Installed {
+    list(home, &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .installed
+        .into_iter()
+        .find(|i| i.name == name)
+        .unwrap()
+}
+
+fn record_text(home: &Path, dir: &str) -> String {
+    fs::read_to_string(home.join("extensions").join(dir).join(".fiber.json")).unwrap()
+}
+
+fn set_record_commit(home: &Path, dir: &str, commit: &str) {
+    let file = home.join("extensions").join(dir).join(".fiber.json");
+    let mut record: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    record["source"] = json!({"commit": commit});
+    fs::write(&file, record.to_string()).unwrap();
+}
+
+#[test]
+fn a_reinstall_stays_at_the_recorded_commit() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/ext";
+    repos.tag(name, "", "v1.0.0", &manifest(name), &[]);
+    assert_eq!(install_named(&setup, &repos, name).unwrap(), [name]);
+    let commit_v1 = repos.commit(name, "v1.0.0");
+    assert_eq!(
+        commit(&installed_named(&setup.home(), name)),
+        Some(commit_v1.clone())
+    );
+    repos.tag(name, "", "v2.0.0", &manifest(name), &[]);
+    assert_eq!(reinstall(&setup, &repos.origin(), name).unwrap(), [name]);
+    let have = installed_named(&setup.home(), name);
+    assert_eq!(have.version, "v1.0.0");
+    assert_eq!(commit(&have), Some(commit_v1));
+    assert!(have.requested);
+}
+
+#[test]
+fn a_reinstall_ignores_a_tag_moved_since_the_install() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/ext";
+    repos.tag(name, "", "v1.0.0", &manifest(name), &[]);
+    install_named(&setup, &repos, name).unwrap();
+    let commit_v1 = repos.commit(name, "v1.0.0");
+    let path = setup.root().join("repos").join(name.replace('/', "-"));
+    fs::write(path.join("moved.txt"), "moved").unwrap();
+    git(&path, &["add", "."]);
+    git(&path, &["commit", "--quiet", "-m", "moved"]);
+    git(&path, &["tag", "-f", "v1.0.0"]);
+    assert_ne!(repos.commit(name, "v1.0.0"), commit_v1);
+    reinstall(&setup, &repos.origin(), name).unwrap();
+    let have = installed_named(&setup.home(), name);
+    assert_eq!(commit(&have), Some(commit_v1));
+    assert!(
+        !setup
+            .home()
+            .join("extensions/example.com-acme-ext/moved.txt")
+            .exists()
+    );
+}
+
+#[test]
+fn a_reinstalled_dependency_stays_unrequested() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    let top = "example.com/acme/top";
+    repos.tag(dep, "", "v1.0.0", &manifest(dep), &[]);
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "v1.0.0")]), &[]);
+    install_named(&setup, &repos, top).unwrap();
+    assert!(!installed_named(&setup.home(), dep).requested);
+    reinstall(&setup, &repos.origin(), dep).unwrap();
+    assert!(!installed_named(&setup.home(), dep).requested);
+}
+
+#[test]
+fn a_reinstall_of_a_commit_missing_from_the_repository_fails_unchanged() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/ext";
+    repos.tag(name, "", "v1.0.0", &manifest(name), &[]);
+    install_named(&setup, &repos, name).unwrap();
+    let before = record_text(&setup.home(), "example.com-acme-ext");
+    let path = setup.root().join("repos").join(name.replace('/', "-"));
+    fs::remove_dir_all(&path).unwrap();
+    fs::create_dir_all(&path).unwrap();
+    git(&path, &["init", "--quiet"]);
+    fs::write(path.join("other.txt"), "other").unwrap();
+    git(&path, &["add", "."]);
+    git(&path, &["commit", "--quiet", "-m", "other"]);
+    git(&path, &["tag", "v1.0.0"]);
+    let err = reinstall(&setup, &repos.origin(), name).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::FetchFailed, "{err}");
+    assert_eq!(record_text(&setup.home(), "example.com-acme-ext"), before);
+    assert!(
+        setup
+            .home()
+            .join("extensions/example.com-acme-ext/extension.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn a_reinstall_refuses_a_commit_that_is_not_a_full_hash() {
+    for commit in ["--upload-pack=x", "deadbeef"] {
+        let setup = Setup::new();
+        let mut repos = Repos::new(&setup);
+        let name = "example.com/acme/ext";
+        repos.tag(name, "", "v1.0.0", &manifest(name), &[]);
+        install_named(&setup, &repos, name).unwrap();
+        let before = record_text(&setup.home(), "example.com-acme-ext");
+        set_record_commit(&setup.home(), "example.com-acme-ext", commit);
+        let err = reinstall(&setup, &repos.origin(), name).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::FetchFailed, "{commit}: {err}");
+        assert!(
+            err.to_string().contains("is not a full commit hash"),
+            "{commit}: {err}"
+        );
+        assert_eq!(
+            record_text(&setup.home(), "example.com-acme-ext"),
+            before.replace(&repos.commit(name, "v1.0.0"), commit,)
+        );
+        assert!(
+            setup
+                .home()
+                .join("extensions/example.com-acme-ext/extension.json")
+                .is_file()
+        );
+    }
+}
+
+#[test]
+fn a_reinstall_refuses_a_commit_shorter_than_a_full_hash() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/ext";
+    repos.tag(name, "", "v1.0.0", &manifest(name), &[]);
+    install_named(&setup, &repos, name).unwrap();
+    let full = repos.commit(name, "v1.0.0");
+    assert_eq!(full.len(), 40);
+    set_record_commit(&setup.home(), "example.com-acme-ext", &full[..39]);
+    let err = reinstall(&setup, &repos.origin(), name).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::FetchFailed, "{err}");
+    assert!(
+        err.to_string().contains("is not a full commit hash"),
+        "{err}"
+    );
+    assert!(
+        setup
+            .home()
+            .join("extensions/example.com-acme-ext/extension.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn a_reinstall_of_a_path_extension_reads_the_paths_current_files() {
+    let setup = Setup::new();
+    let name = "example.com/acme/ext";
+    let source = setup.source("src", &manifest(name), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    fs::write(source.join("added.txt"), "new").unwrap();
+    reinstall(&setup, &Origin::github(), name).unwrap();
+    let have = installed_named(&setup.home(), name);
+    assert!(
+        matches!(&have.provenance, Provenance::Path(p) if *p == fs::canonicalize(&source).unwrap())
+    );
+    assert_eq!(
+        fs::read_to_string(
+            setup
+                .home()
+                .join("extensions/example.com-acme-ext/added.txt")
+        )
+        .unwrap(),
+        "new"
+    );
+}
+
+#[test]
+fn a_reinstall_of_a_path_whose_source_is_gone_keeps_the_old_directory() {
+    let setup = Setup::new();
+    let name = "example.com/acme/ext";
+    let source = setup.source("src", &manifest(name), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    fs::remove_dir_all(&source).unwrap();
+    reinstall(&setup, &Origin::github(), name).unwrap_err();
+    assert!(
+        setup
+            .home()
+            .join("extensions/example.com-acme-ext/extension.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn a_reinstall_of_a_path_whose_manifest_was_renamed_fails_unchanged() {
+    let setup = Setup::new();
+    let name = "example.com/acme/ext";
+    let source = setup.source("src", &manifest(name), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    fs::write(
+        source.join("extension.json"),
+        manifest("example.com/acme/other").to_string(),
+    )
+    .unwrap();
+    let err = reinstall(&setup, &Origin::github(), name).unwrap_err();
+    assert!(matches!(err, Error::WrongName { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::ExtensionNotFound, "{err}");
+    assert!(
+        setup
+            .home()
+            .join("extensions/example.com-acme-ext/extension.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn a_failing_reinstall_step_puts_the_old_directory_back() {
+    let setup = Setup::new();
+    let name = "example.com/acme/ext";
+    let source = setup.source("src", &manifest(name), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    fs::write(
+        source.join("extension.json"),
+        with_step(name, &["sh", "-c", "exit 3"]).to_string(),
+    )
+    .unwrap();
+    fs::write(source.join("changed.txt"), "changed").unwrap();
+    reinstall(&setup, &Origin::github(), name).unwrap_err();
+    let dir = setup.home().join("extensions/example.com-acme-ext");
+    assert!(!dir.join("changed.txt").exists());
+    let installed: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("extension.json")).unwrap()).unwrap();
+    assert!(installed.get("install").is_none());
+}
+
+#[test]
+fn a_reinstall_of_a_damaged_short_name_installs_the_newest_tag() {
+    let setup = Setup::new();
+    let name = "github.com/aakshintala/fiber/providers/opencode";
+    let source = setup.source("broken", &manifest(name), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    let dir = setup.home().join("extensions/opencode");
+    fs::remove_file(dir.join(".fiber.json")).unwrap();
+    let mut repos = Repos::new(&setup);
+    repos.tag(
+        "github.com/aakshintala/fiber",
+        "providers/opencode",
+        "v1.0.0",
+        &manifest(name),
+        &[],
+    );
+    repos.tag(
+        "github.com/aakshintala/fiber",
+        "providers/opencode",
+        "v2.0.0",
+        &manifest(name),
+        &[],
+    );
+    assert_eq!(
+        reinstall(&setup, &repos.origin(), "opencode").unwrap(),
+        [name]
+    );
+    let listing = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    assert!(listing.damaged.is_empty());
+    let have = installed_named(&setup.home(), name);
+    assert_eq!(have.version, "v2.0.0");
+}
+
+#[test]
+fn a_reinstall_of_a_damaged_git_address_installs_the_newest_tag() {
+    let setup = Setup::new();
+    let name = "example.com/acme/broken";
+    let source = setup.source("broken", &manifest(name), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    let dir = setup.home().join("extensions/example.com-acme-broken");
+    fs::remove_file(dir.join(".fiber.json")).unwrap();
+    let mut repos = Repos::new(&setup);
+    repos.tag(name, "", "v3.0.0", &manifest(name), &[]);
+    assert_eq!(reinstall(&setup, &repos.origin(), name).unwrap(), [name]);
+    let listing = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    assert!(listing.damaged.is_empty());
+    assert_eq!(installed_named(&setup.home(), name).version, "v3.0.0");
+}
+
+#[test]
+fn a_reinstall_of_a_damaged_name_that_cannot_be_fetched_keeps_it() {
+    let setup = Setup::new();
+    let name = "example.com/acme/broken";
+    let source = setup.source("broken", &manifest(name), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    let dir = setup.home().join("extensions/example.com-acme-broken");
+    fs::remove_file(dir.join(".fiber.json")).unwrap();
+    fs::write(dir.join("kept.txt"), "kept").unwrap();
+    let repos = Repos::new(&setup);
+    reinstall(&setup, &repos.origin(), name).unwrap_err();
+    assert!(dir.join("extension.json").is_file());
+    assert_eq!(fs::read_to_string(dir.join("kept.txt")).unwrap(), "kept");
+    assert_eq!(
+        list(&setup.home(), &*fakes::clock::FakeClock::new())
+            .unwrap()
+            .damaged
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_reinstall_of_a_name_never_installed_reports_it_missing() {
+    let setup = Setup::new();
+    let repos = Repos::new(&setup);
+    let err = reinstall(&setup, &repos.origin(), "example.com/acme/nope").unwrap_err();
+    assert!(matches!(err, Error::NotInstalled { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::ExtensionMissing, "{err}");
+    assert!(dirs(&setup).is_empty());
+}
+
+#[test]
+fn a_reinstall_leaves_the_other_damaged_directories_listed() {
+    let setup = Setup::new();
+    let name = "github.com/aakshintala/fiber/providers/opencode";
+    let broken = setup.source("broken", &manifest(name), &[]);
+    common::install(&setup.home(), &broken, FIBER).unwrap();
+    fs::remove_file(setup.home().join("extensions/opencode/.fiber.json")).unwrap();
+    let other = "example.com/acme/other";
+    let source = setup.source("other", &manifest(other), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    fs::remove_file(
+        setup
+            .home()
+            .join("extensions/example.com-acme-other/.fiber.json"),
+    )
+    .unwrap();
+    let mut repos = Repos::new(&setup);
+    repos.tag(
+        "github.com/aakshintala/fiber",
+        "providers/opencode",
+        "v1.0.0",
+        &manifest(name),
+        &[],
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let held = plan(
+        &setup.home(),
+        &Request::Reinstall("opencode".into()),
+        FIBER,
+        &repos.origin(),
+        &*clock,
+    )
+    .unwrap();
+    let damaged: Vec<_> = held.damaged().iter().map(|d| d.name.clone()).collect();
+    assert_eq!(damaged, [other]);
+}
+
+#[test]
+fn a_reinstall_item_carries_no_change_list() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/ext";
+    repos.tag(name, "", "v1.0.0", &manifest(name), &[]);
+    install_named(&setup, &repos, name).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let held = plan(
+        &setup.home(),
+        &Request::Reinstall(name.into()),
+        FIBER,
+        &repos.origin(),
+        &*clock,
+    )
+    .unwrap();
+    let items: Vec<_> = held.items().collect();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].name, name);
+    assert_eq!(items[0].changes, None);
+}
+
+#[test]
+fn a_reinstall_refuses_a_record_naming_a_branch_instead_of_a_commit() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/ext";
+    repos.tag(name, "", "v1.0.0", &manifest(name), &[]);
+    install_named(&setup, &repos, name).unwrap();
+    let before = record_text(&setup.home(), "example.com-acme-ext");
+    let path = setup.root().join("repos").join(name.replace('/', "-"));
+    fs::write(path.join("other.txt"), "other").unwrap();
+    git(&path, &["add", "."]);
+    git(&path, &["commit", "--quiet", "-m", "other"]);
+    let masked = format!("{:040x}", 0xdeadbeefu64);
+    git(&path, &["branch", &masked, "HEAD"]);
+    set_record_commit(&setup.home(), "example.com-acme-ext", &masked);
+    // `git` never resolves a 40-hex name to the branch, so the checkout
+    // itself refuses it; the HEAD comparison is the backstop when one
+    // ever does.
+    let err = reinstall(&setup, &repos.origin(), name).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::FetchFailed, "{err}");
+    assert_eq!(
+        record_text(&setup.home(), "example.com-acme-ext"),
+        before.replace(&repos.commit(name, "v1.0.0"), &masked,)
+    );
+}
+
+#[test]
+fn a_reinstall_refuses_a_64_hex_record_naming_a_branch() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/ext";
+    repos.tag(name, "", "v1.0.0", &manifest(name), &[]);
+    install_named(&setup, &repos, name).unwrap();
+    let before = record_text(&setup.home(), "example.com-acme-ext");
+    // A SHA-1 repository records 40-hex commits; a 64-hex record there
+    // can only name a branch.
+    assert_eq!(repos.commit(name, "v1.0.0").len(), 40);
+    let path = setup.root().join("repos").join(name.replace('/', "-"));
+    fs::write(path.join("other.txt"), "other").unwrap();
+    git(&path, &["add", "."]);
+    git(&path, &["commit", "--quiet", "-m", "other"]);
+    let masked = format!("{:064x}", 0xdeadbeefu64);
+    git(&path, &["branch", &masked, "HEAD"]);
+    set_record_commit(&setup.home(), "example.com-acme-ext", &masked);
+    // The 64-hex name resolves to the branch rather than a commit, so
+    // the reinstall fails and leaves the installed directory alone.
+    let err = reinstall(&setup, &repos.origin(), name).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::FetchFailed, "{err}");
+    assert_eq!(
+        record_text(&setup.home(), "example.com-acme-ext"),
+        before.replace(&repos.commit(name, "v1.0.0"), &masked,)
+    );
+    assert!(
+        setup
+            .home()
+            .join("extensions/example.com-acme-ext/extension.json")
+            .is_file()
+    );
+    assert!(
+        !setup
+            .home()
+            .join("extensions/example.com-acme-ext/other.txt")
+            .exists()
+    );
+}
+
+#[test]
+fn a_damaged_directory_whose_manifest_names_another_extension_reinstalls_by_its_directory() {
+    let setup = Setup::new();
+    let dir = setup.home().join("extensions/opencode");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        manifest("example.com/acme/other").to_string(),
+    )
+    .unwrap();
+    let listing = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(listing.damaged.len(), 1);
+    assert_eq!(listing.damaged[0].name, "opencode");
+    assert_eq!(
+        listing.damaged[0].to_string(),
+        "`opencode` is damaged; run `fiber extension reinstall opencode`."
+    );
+    let name = "github.com/aakshintala/fiber/providers/opencode";
+    let mut repos = Repos::new(&setup);
+    repos.tag(
+        "github.com/aakshintala/fiber",
+        "providers/opencode",
+        "v1.0.0",
+        &manifest(name),
+        &[],
+    );
+    assert_eq!(
+        reinstall(&setup, &repos.origin(), "opencode").unwrap(),
+        [name]
+    );
+    assert!(
+        list(&setup.home(), &*fakes::clock::FakeClock::new())
+            .unwrap()
+            .damaged
+            .is_empty()
+    );
 }

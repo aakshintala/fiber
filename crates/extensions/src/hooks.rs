@@ -23,7 +23,6 @@ use contract::search::SearchBackend;
 use contract::tool::Tool;
 
 use crate::commands::{CommandSource, SessionCommands};
-use crate::git::short_name;
 use crate::lua::{DeclaredHooks, LuaExtension};
 use crate::{API, Error, LuaProvider, LuaTool};
 
@@ -116,15 +115,8 @@ impl SessionExtensions {
                 return session;
             }
         };
-        // A damaged directory is skipped, with a notice naming it and
-        // the fix, and the rest load.
-        for hit in &entries.damaged {
-            session.notices.push(notice(
-                ErrorCode::ExtensionFailed,
-                hit.to_string(),
-                Some(short_name(&hit.name)),
-            ));
-        }
+        // A damaged directory is skipped: `Providers::load` already
+        // reported it, so no notice here.
         let found = entries.found;
         let mut chain = chain::Builder::default();
         // debt: entry scripts load one after another, each up to its load

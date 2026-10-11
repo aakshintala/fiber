@@ -13,6 +13,7 @@ use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::Value;
 
+use crate::git::short_name;
 use crate::{API, Error, LuaProvider, SessionExtensions};
 use contract::ThinkingLevel;
 
@@ -261,11 +262,22 @@ impl Providers {
     /// `docs/extensions.md`, "Installing", says: a directory with no
     /// `.fiber.json` record holds no installed extension. One written for
     /// another extension API is left out, with a notice naming it and both
-    /// numbers.
+    /// numbers. Each damaged directory leaves one `extension_failed`
+    /// notice naming it and the fix, before the healthy entries' notices.
     pub fn load(home: &Path) -> Result<(Self, Vec<Notice>), Error> {
         let entries = crate::installed::read_entries(home)?;
         let mut providers = Self::default();
         let mut notices = Vec::new();
+        // A damaged directory contributes no provider, model or secret:
+        // one notice naming it and the fix, in the order `read_entries`
+        // sorts them.
+        for hit in &entries.damaged {
+            notices.push(Notice {
+                code: ErrorCode::ExtensionFailed,
+                message: hit.to_string(),
+                extension: Some(short_name(&hit.name).to_owned()),
+            });
+        }
         for entry in entries.found {
             let dir = entry.dir;
             let manifest = entry.manifest;

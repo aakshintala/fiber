@@ -38,6 +38,7 @@ Extensions:
   extension install <name or path>  Install an extension and its dependencies
   extension update [<name>]         Update one extension, or every installed extension, to its newest tag
   extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
+  extension reinstall <name>        Remove an extension and install it again from its recorded source and commit
   extension list                    List installed extensions: name, version and commit
   extension test [<path>]           Run an extension's test cases against the scripted provider
 
@@ -330,6 +331,12 @@ pub(crate) enum ExtensionCommands {
     },
     /// Remove an extension, the dependencies nothing else uses, and their data
     Remove {
+        /// The installed extension's name.
+        #[arg(value_name = "name")]
+        name: String,
+    },
+    /// Remove an extension and install it again from its recorded source and commit
+    Reinstall {
         /// The installed extension's name.
         #[arg(value_name = "name")]
         name: String,

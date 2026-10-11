@@ -140,6 +140,12 @@ fn parses_argv_into_its_invocation() {
             }))),
         ),
         (
+            &["fiber", "extension", "reinstall", "acme"],
+            Invocation::Run(Some(Commands::Extension(ExtensionCommands::Reinstall {
+                name: "acme".to_owned(),
+            }))),
+        ),
+        (
             &["fiber", "extension", "test"],
             Invocation::Run(Some(Commands::Extension(ExtensionCommands::Test {
                 path: None,
@@ -1030,7 +1036,7 @@ fn completion_without_one_shell_is_a_usage_error() {
 fn extension_alone_is_a_one_line_usage_sentence() {
     assert_eq!(
         sentence(&["fiber", "extension"]),
-        "'fiber extension' requires a subcommand but one was not provided [subcommands: install, update, remove, list, test]. Run `fiber --help` for usage."
+        "'fiber extension' requires a subcommand but one was not provided [subcommands: install, update, remove, reinstall, list, test]. Run `fiber --help` for usage."
     );
 }
 

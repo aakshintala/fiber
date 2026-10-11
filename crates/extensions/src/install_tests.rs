@@ -140,6 +140,32 @@ fn every_staged_copy_goes_in_place_and_nothing_is_left_beside() {
 }
 
 #[test]
+fn a_failed_committed_journal_write_puts_every_target_back() {
+    let dirs = Dirs::new("committed-journal");
+    let paths = [Paths {
+        fresh: dirs.path("fresh"),
+        target: dirs.path("target"),
+        old: dirs.path("old"),
+    }];
+    let err = commit_all(
+        &paths,
+        |from, to| fs::rename(from, to),
+        |_, _| {
+            // The committed journal write creates `<dir>/.commit.new` as
+            // a file; a directory in its place fails that write.
+            fs::create_dir(dirs.root.join(".commit.new")).unwrap();
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains(".commit.new"), "{err}");
+    assert_eq!(fs::read_to_string(dirs.path("target/v")).unwrap(), "old");
+    assert!(!dirs.path("old").exists());
+    assert!(!dirs.path("fresh").exists());
+    assert!(!dirs.root.join(".commit").exists());
+}
+
+#[test]
 fn a_copy_that_cannot_be_put_back_is_an_error_naming_it() {
     // Moves: a aside, a in place, b aside (fails), then a's old copy back
     // (fails).

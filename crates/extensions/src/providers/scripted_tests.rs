@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use config::{Config, CredentialSource, ModelData, ProjectKey, Protocol, ProviderData, Sources};
 use contract::ErrorCode;
+use contract::events::Notice;
 use fakes::clock::FakeClock;
 use serde_json::{Map, json};
 
@@ -95,7 +96,14 @@ fn a_damaged_directory_s_providers_are_left_out() {
     )
     .unwrap();
     let (providers, notices) = Providers::load(&home).unwrap();
-    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        notices,
+        [Notice {
+            code: ErrorCode::ExtensionFailed,
+            message: "`broken` is damaged; run `fiber extension reinstall broken`.".to_owned(),
+            extension: Some("broken".to_owned()),
+        }]
+    );
     assert_eq!(providers.names().collect::<Vec<_>>(), ["healthy"]);
     assert!(providers.get("broken").is_none());
     assert!(providers.resolve("healthy/m").is_ok());
