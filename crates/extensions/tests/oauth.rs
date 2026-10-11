@@ -46,7 +46,7 @@ const GRACE: Duration = Duration::from_secs(1);
 
 /// How long a freed port may take to come back: the listener looks at its
 /// cancel receiver every 20 ms.
-const PORT_FREE_WITHIN: Duration = Duration::from_secs(2);
+const PORT_FREE_WITHIN: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// Fake-clock wall time at construction, in Unix seconds.
 const WALL: u64 = 1_700_000_000;
