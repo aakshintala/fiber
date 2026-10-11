@@ -29,20 +29,12 @@ use contract::{JobId, SessionId};
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, SystemClock, assert_one_continued_log, group_alive, hello_item_done as hello, stream,
-    write_json,
+    Deadline, Setup, SystemClock, assert_one_continued_log, group_alive, hello_item_done as hello,
+    stream, write_json,
 };
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
-    fn new() -> Self {
+    fn new_with_fr_root() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fr");
         fs::create_dir_all(root.path().join("h")).unwrap();
@@ -50,45 +42,8 @@ impl Setup {
         Self { deadline, root }
     }
 
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
     fn workspace_text(&self) -> String {
         self.workspace().to_string_lossy().into_owned()
-    }
-
-    /// Installs a provider `fake` with model `m` on `openai-responses` at the
-    /// fake server, and makes `fake/m` the configured model.
-    fn provider(&self, server: &ProviderServer) {
-        let source = self.root.path().join("src");
-        write_json(
-            &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-        );
-        write_json(
-            &source.join("providers/fake.json"),
-            &json!({
-                "name": "fake",
-                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
-            }),
-        );
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
-        self.idle(None);
     }
 
     /// The configured model, with `session.idle_exit_ms` when given.
@@ -115,7 +70,7 @@ impl Setup {
 
     /// One `fiber` invocation with `args` in the workspace: the environment
     /// every test runs under.
-    fn fiber(&self, args: &[&str]) -> Command {
+    fn fiber_in_workspace(&self, args: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -137,7 +92,7 @@ impl Setup {
     /// [`Deadline`]: its exit code and stdout lines.
     #[track_caller]
     fn run(&self, args: &[&str]) -> (Option<i32>, Vec<Value>) {
-        let child = self.fiber(args).spawn().unwrap();
+        let child = self.fiber_in_workspace(args).spawn().unwrap();
         let group = child.id();
         let watchdog = Watchdog::group(group);
         let (done, finished) = mpsc::channel();
@@ -185,10 +140,6 @@ impl Setup {
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
-    }
-
-    fn hub_log(&self) -> String {
-        fs::read_to_string(self.home().join("logs").join("hub.log")).unwrap_or_default()
     }
 
     /// The `sessions` directory of the workspace's project.
@@ -346,7 +297,7 @@ fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> V
 fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
     let slot = Arc::clone(hub);
     let deadline = setup.deadline;
-    let mut serve = setup.fiber(&["hub", "serve"]);
+    let mut serve = setup.fiber_in_workspace(&["hub", "serve"]);
     let workspace = setup.workspace_text();
     let home = setup.home();
     let connected = support::bounded(deadline, "the hub to start and say hub_hello", move || {
@@ -422,7 +373,7 @@ fn until_exited(client: &Socket, setup: &Setup) -> Vec<Value> {
 
 #[test]
 fn a_prompt_through_the_hub_resumes_an_exited_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fr_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     let (code, lines) = setup.run(&["ask", "one"]);
@@ -488,7 +439,7 @@ fn a_prompt_through_the_hub_resumes_an_exited_session() {
 
 #[test]
 fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fr_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let (code, lines) = setup.run(&["ask", "one"]);
@@ -540,7 +491,7 @@ fn a_refused_subscribe_is_not_replayed_when_the_session_resumes() {
 
 #[test]
 fn a_reply_after_the_session_exited_resumes_it_on_the_same_connection() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fr_root();
     let server = ProviderServer::start([echo_call(), hello()]).unwrap();
     server.hold();
     setup.provider(&server);
@@ -622,7 +573,7 @@ fn a_reply_after_the_session_exited_resumes_it_on_the_same_connection() {
 
 #[test]
 fn a_fresh_connection_answers_a_request_raised_again_on_resume() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fr_root();
     let server = ProviderServer::start([echo_call(), hello()]).unwrap();
     setup.provider(&server);
     setup.standing_ask();
@@ -682,7 +633,7 @@ fn a_fresh_connection_answers_a_request_raised_again_on_resume() {
 
 #[test]
 fn a_subscribe_through_the_hub_to_an_exited_delegate_is_refused() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fr_root();
     let id = "s_00000000000000d1";
     let log = log::Log::create(
         &setup.sessions(),

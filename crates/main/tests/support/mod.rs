@@ -337,6 +337,42 @@ impl Setup {
     }
 }
 
+/// A finished `fiber` run whose stdout is one JSON line per line: every
+/// binary-level `ask` test reads the same shape, so the event kinds and
+/// the session id are shared here (`docs/testing.md`, "Levels").
+pub(crate) struct Run {
+    pub(crate) code: Option<i32>,
+    pub(crate) lines: Vec<Value>,
+    pub(crate) stderr: String,
+}
+
+impl Run {
+    pub(crate) fn session_id(&self) -> &str {
+        self.lines[0]["session_id"].as_str().unwrap()
+    }
+
+    pub(crate) fn kinds(&self) -> Vec<&str> {
+        self.lines
+            .iter()
+            .map(|line| line["kind"].as_str().unwrap())
+            .collect()
+    }
+
+    pub(crate) fn first(&self, kind: &str) -> &Value {
+        self.lines
+            .iter()
+            .find(|line| line["kind"] == kind)
+            .unwrap_or_else(|| panic!("no {kind} line"))
+    }
+
+    pub(crate) fn all(&self, kind: &str) -> Vec<&Value> {
+        self.lines
+            .iter()
+            .filter(|line| line["kind"] == kind)
+            .collect()
+    }
+}
+
 pub(crate) fn write_json(file: &Path, value: &Value) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, value.to_string()).unwrap();

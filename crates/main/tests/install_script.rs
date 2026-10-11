@@ -23,7 +23,7 @@ use std::thread;
 
 use fakes::Watchdog;
 use fakes::ustar::{archive, gzip, header, sha256};
-use support::Deadline;
+use support::{Deadline, Setup};
 
 /// Every target a release publishes an archive for.
 const TARGETS: [&str; 3] = [
@@ -39,14 +39,6 @@ fn fixture() -> PathBuf {
 /// The checked-in stub binary each fixture archive holds.
 fn stub() -> Vec<u8> {
     fs::read(fixture().join("fiber")).unwrap()
-}
-
-/// A temporary root holding the fixture release, the install directory,
-/// `HOME`, `TMPDIR` and the stub's data files, removed on drop; and the
-/// test's deadline.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
 }
 
 /// The operating system and CPU the stubs report.
@@ -69,7 +61,7 @@ struct Run {
 
 impl Setup {
     /// A root whose stub binary reports `version`.
-    fn new(version: &str) -> Self {
+    fn new_with_stub_version(version: &str) -> Self {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
@@ -188,7 +180,7 @@ impl Setup {
 
 #[test]
 fn a_good_install_puts_the_binary_in_place_and_runs_its_step() {
-    let setup = Setup::new("0.0.9");
+    let setup = Setup::new_with_stub_version("0.0.9");
     setup.publish("latest/download", &TARGETS);
     let run = setup.install(&LINUX_X86_64, &[]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
@@ -246,7 +238,7 @@ fn each_released_pair_picks_its_archive() {
     for (host, target) in pairs {
         // Only the expected archive is published, so a success proves the
         // pick.
-        let setup = Setup::new("0.0.9");
+        let setup = Setup::new_with_stub_version("0.0.9");
         setup.publish("latest/download", &[target]);
         let run = setup.install(&host, &[]);
         assert_eq!(
@@ -264,7 +256,7 @@ fn each_released_pair_picks_its_archive() {
 #[test]
 fn a_checksum_mismatch_leaves_the_destination_untouched() {
     for existing in [true, false] {
-        let setup = Setup::new("0.0.9");
+        let setup = Setup::new_with_stub_version("0.0.9");
         setup.publish("latest/download", &TARGETS);
         let sum =
             setup.path("release/latest/download/fiber-x86_64-unknown-linux-musl.tar.gz.sha256");
@@ -294,7 +286,7 @@ fn a_checksum_mismatch_leaves_the_destination_untouched() {
 
 #[test]
 fn a_checksum_file_without_a_digest_is_refused() {
-    let setup = Setup::new("0.0.9");
+    let setup = Setup::new_with_stub_version("0.0.9");
     setup.publish("latest/download", &TARGETS);
     let sum = setup.path("release/latest/download/fiber-x86_64-unknown-linux-musl.tar.gz.sha256");
     for text in ["", "abc\n", &"g".repeat(64), &"a".repeat(65)] {
@@ -311,7 +303,7 @@ fn a_checksum_file_without_a_digest_is_refused() {
 
 #[test]
 fn a_checksum_in_capitals_with_a_crlf_is_accepted() {
-    let setup = Setup::new("0.0.9");
+    let setup = Setup::new_with_stub_version("0.0.9");
     setup.publish("latest/download", &TARGETS);
     let name = "fiber-x86_64-unknown-linux-musl.tar.gz";
     let at = setup.path("release/latest/download");
@@ -350,7 +342,7 @@ fn an_unreleased_pair_stops_before_any_download() {
             "fiber: Linux riscv64 has no release.\n",
         ),
     ] {
-        let setup = Setup::new("0.0.9");
+        let setup = Setup::new_with_stub_version("0.0.9");
         setup.publish("latest/download", &TARGETS);
         let run = setup.install(&host, &[]);
         assert_eq!(run.code, Some(1), "{}", run.stderr);
@@ -368,13 +360,13 @@ fn an_install_directory_not_on_path_is_warned_about_without_failing() {
             setup.dest().display()
         )
     };
-    let setup = Setup::new("0.0.9");
+    let setup = Setup::new_with_stub_version("0.0.9");
     setup.publish("latest/download", &TARGETS);
     let run = setup.install(&LINUX_X86_64, &[]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert!(run.stderr.contains(&warning(&setup)), "{}", run.stderr);
 
-    let setup = Setup::new("0.0.9");
+    let setup = Setup::new_with_stub_version("0.0.9");
     setup.publish("latest/download", &TARGETS);
     let path = format!(
         "{}:{}:/usr/bin:/bin",
@@ -389,7 +381,7 @@ fn an_install_directory_not_on_path_is_warned_about_without_failing() {
 #[test]
 fn fiber_version_installs_that_release() {
     for asked in ["0.0.8", "v0.0.8"] {
-        let setup = Setup::new("0.0.9");
+        let setup = Setup::new_with_stub_version("0.0.9");
         setup.publish("download/v0.0.8", &TARGETS);
         let run = setup.install(&LINUX_X86_64, &[("FIBER_VERSION", asked)]);
         assert_eq!(run.code, Some(0), "{asked}: {}", run.stderr);
@@ -412,7 +404,7 @@ fn a_fiber_version_that_is_not_a_version_is_refused() {
         "0.0.8-rc1",
         "vv0.0.8",
     ] {
-        let setup = Setup::new("0.0.9");
+        let setup = Setup::new_with_stub_version("0.0.9");
         setup.publish("latest/download", &TARGETS);
         let run = setup.install(&LINUX_X86_64, &[("FIBER_VERSION", asked)]);
         assert_eq!(run.code, Some(2), "{asked}: {}", run.stderr);
@@ -426,7 +418,7 @@ fn a_fiber_version_that_is_not_a_version_is_refused() {
 
 #[test]
 fn an_empty_install_directory_means_the_default() {
-    let setup = Setup::new("0.0.9");
+    let setup = Setup::new_with_stub_version("0.0.9");
     setup.publish("latest/download", &TARGETS);
     let run = setup.install(&LINUX_X86_64, &[("FIBER_INSTALL_DIR", "")]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
@@ -436,7 +428,7 @@ fn an_empty_install_directory_means_the_default() {
 
 #[test]
 fn a_failed_step_keeps_the_binary_and_says_to_run_again() {
-    let setup = Setup::new("0.0.9");
+    let setup = Setup::new_with_stub_version("0.0.9");
     setup.publish("latest/download", &TARGETS);
     fs::write(setup.path("stub/exit"), "1").unwrap();
     let run = setup.install(&LINUX_X86_64, &[]);

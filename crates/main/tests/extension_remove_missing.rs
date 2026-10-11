@@ -14,32 +14,22 @@ mod support;
 
 use std::fs;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::Watchdog;
 use serde_json::json;
-use support::Deadline;
-
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
+use support::{Deadline, Setup};
 
 impl Setup {
-    fn new() -> Self {
+    fn new_with_home() -> Self {
         let setup = Self {
             deadline: Deadline::start(),
             root: fakes::TempDir::new("fiber-ext-remove-missing"),
         };
         fs::create_dir_all(setup.home()).unwrap();
         setup
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
     }
 
     /// A source package named `acme`, version `v1`.
@@ -109,7 +99,7 @@ struct Run {
 
 #[test]
 fn removing_a_name_nothing_is_installed_under_fails() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_home();
     let run = setup.extension(&["remove", "muse"]);
     assert_eq!(run.code, Some(1), "{}", run.stderr);
     assert!(!run.stderr.contains("removed"), "{}", run.stderr);
@@ -120,7 +110,7 @@ fn removing_a_name_nothing_is_installed_under_fails() {
 
 #[test]
 fn a_leftover_directory_under_another_name_is_not_touched() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_home();
     let other = setup.home().join("extensions/github.com-acme-muse");
     fs::create_dir_all(&other).unwrap();
     let run = setup.extension(&["remove", "muse"]);
@@ -132,7 +122,7 @@ fn a_leftover_directory_under_another_name_is_not_touched() {
 /// older layout left it: the record names `acme`, `extensions/acme/` is gone.
 #[test]
 fn a_record_in_a_directory_with_another_name_is_not_removed() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_home();
     let run = setup.extension(&["install", &setup.source()]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let legacy = setup.home().join("extensions/legacy-acme");

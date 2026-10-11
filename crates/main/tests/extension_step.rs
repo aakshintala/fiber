@@ -22,21 +22,15 @@ use std::thread;
 
 use fakes::Watchdog;
 use serde_json::json;
-use support::Deadline;
+use support::{Deadline, Setup};
 
 /// The install step: it records its directory in `where`, then leaves a
 /// script that reads the payload through that recorded directory. The
 /// script only works when the step ran where the files stayed.
 const STEP: &str = r#"pwd > where; printf '#!/bin/sh\ncat "%s/payload.txt"\n' "$(pwd)" > run.sh"#;
 
-/// A temporary root holding Fiber home and the extension source.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
-    fn new() -> Self {
+    fn new_with_source() -> Self {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
@@ -45,10 +39,6 @@ impl Setup {
         fs::create_dir_all(setup.home()).unwrap();
         setup.source("one\n", "v1.0.0");
         setup
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
     }
 
     fn source_dir(&self) -> PathBuf {
@@ -177,7 +167,7 @@ fn script_output(deadline: Deadline, script: &Path) -> String {
 
 #[test]
 fn an_install_step_runs_at_the_final_path() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_source();
     let run = setup.extension(&["install", setup.source_dir().to_str().unwrap()]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_step_at_final_path(&setup, "one\n");
@@ -185,7 +175,7 @@ fn an_install_step_runs_at_the_final_path() {
 
 #[test]
 fn an_update_step_runs_at_the_final_path_again() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_source();
     let installed = setup.extension(&["install", setup.source_dir().to_str().unwrap()]);
     assert_eq!(installed.code, Some(0), "{}", installed.stderr);
     setup.source("two\n", "v1.1.0");

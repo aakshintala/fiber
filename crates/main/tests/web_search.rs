@@ -21,19 +21,9 @@ use std::process::Output;
 use std::sync::mpsc;
 use std::thread;
 
-use extension_harness::Setup;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{function_call, hello_single_delta as hello, outputs_sent, stream};
-
-/// One finished `fiber ask`: its exit code, its stdout lines parsed (less
-/// `session_status`, which an observer thread writes), its raw stdout and
-/// its stderr.
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
-    stderr: String,
-}
+use support::{Run, Setup, function_call, hello_single_delta as hello, outputs_sent, stream};
 
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
@@ -52,20 +42,6 @@ impl From<Output> for Run {
 }
 
 impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn all(&self, kind: &str) -> Vec<&Value> {
-        self.lines
-            .iter()
-            .filter(|line| line["kind"] == kind)
-            .collect()
-    }
-
     fn payload(&self, kind: &str) -> &Value {
         &self
             .lines
@@ -95,10 +71,6 @@ impl Run {
                 )
             })
             .collect()
-    }
-
-    fn session_id(&self) -> &str {
-        self.lines[0]["session_id"].as_str().unwrap()
     }
 
     /// The session's directory, from its id.
@@ -284,7 +256,7 @@ fn assert_str_eq(expected: &str, actual: &str, what: &str) {
 
 #[test]
 fn one_backend_runs_the_search_and_writes_its_results() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = calling(&[function_call(
         "call_search",
         "web_search",
@@ -328,7 +300,7 @@ fn one_backend_runs_the_search_and_writes_its_results() {
 
 #[test]
 fn a_hosted_search_stands_over_an_installed_backend() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     install_hosted_model(&setup, &server);
     setup.lua("searcher", &echo_backend("brave", "T"));
@@ -391,7 +363,7 @@ fn write_json(file: &std::path::Path, value: &Value) {
 
 #[test]
 fn two_backends_with_no_setting_declare_nothing_and_name_the_setting() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     setup.lua("one", &echo_backend("one", "one"));
@@ -418,7 +390,7 @@ fn two_backends_with_no_setting_declare_nothing_and_name_the_setting() {
 
 #[test]
 fn two_backends_with_the_setting_run_the_named_one() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = calling(&[function_call(
         "call_search",
         "web_search",
@@ -446,7 +418,7 @@ fn two_backends_with_the_setting_run_the_named_one() {
 
 #[test]
 fn a_setting_naming_a_missing_backend_declares_nothing_and_names_it() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     setup.lua("searcher", &echo_backend("brave", "T"));
@@ -472,7 +444,7 @@ fn a_setting_naming_a_missing_backend_declares_nothing_and_names_it() {
 
 #[test]
 fn a_backend_past_its_timeout_fails_and_the_turn_ends() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = calling(&[function_call(
         "call_search",
         "web_search",
@@ -494,7 +466,7 @@ fn a_backend_past_its_timeout_fails_and_the_turn_ends() {
 
 #[test]
 fn a_result_past_the_default_cap_is_cut_to_its_start() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = calling(&[function_call(
         "call_search",
         "web_search",
@@ -554,7 +526,7 @@ fn a_result_past_the_default_cap_is_cut_to_its_start() {
 
 #[test]
 fn a_resumed_session_lists_the_backend_search() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_search",

@@ -19,16 +19,9 @@ use std::sync::{Arc, Mutex};
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{
-    HubProc, SessionGuard, Setup, connect_hub, hello, kinds_without_attention as kinds, recv_reply,
-    run_to_exit, subscribe, until, write_json,
+    HubProc, Run, SessionGuard, Setup, connect_hub, hello, kinds_without_attention as kinds,
+    recv_reply, run_to_exit, subscribe, until, write_json,
 };
-
-/// One `fiber` run: its exit code, every stdout line and stderr.
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
-    stderr: String,
-}
 
 impl Run {
     fn from(output: Output) -> Self {

@@ -23,16 +23,10 @@ use contract::tool::Tool;
 use fakes::CancelToken;
 use fakes::clock::FakeClock;
 use serde_json::{Map, Value};
-use support::{Deadline, KillGroup, spawn_watched};
-
-/// A temporary workspace, removed on drop.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
+use support::{Deadline, KillGroup, Setup, spawn_watched};
 
 impl Setup {
-    fn new() -> Self {
+    fn new_with_workspace() -> Self {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
@@ -40,10 +34,6 @@ impl Setup {
         };
         fs::create_dir_all(setup.workspace()).unwrap();
         setup
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
     }
 
     fn write(&self, path: &str, contents: &str) {
@@ -56,7 +46,7 @@ impl Setup {
     /// under the test's [`Deadline`] in its own process group with a watchdog beside
     /// it, and asserts that nothing it started is left behind.
     #[track_caller]
-    fn fiber(&self, args: &[&str], stdin: Option<&str>) -> Run {
+    fn run_with_stdin(&self, args: &[&str], stdin: Option<&str>) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -130,9 +120,9 @@ impl From<Output> for Run {
 
 #[test]
 fn help_hides_the_search_subcommands() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_workspace();
     for args in [&["--help"][..], &["help"]] {
-        let run = setup.fiber(args, None);
+        let run = setup.run_with_stdin(args, None);
         assert_eq!(run.code, Some(0), "{args:?}");
         assert!(!run.stdout.contains("grep"), "{args:?}:\n{}", run.stdout);
         assert!(!run.stdout.contains("find"), "{args:?}:\n{}", run.stdout);
@@ -141,31 +131,31 @@ fn help_hides_the_search_subcommands() {
 
 #[test]
 fn grep_searches_a_file() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_workspace();
     setup.write("a.txt", "needle\nhay\n");
-    let run = setup.fiber(&["grep", "needle", "a.txt"], None);
+    let run = setup.run_with_stdin(&["grep", "needle", "a.txt"], None);
     assert_eq!(run.code, Some(0));
     assert_eq!(run.stdout, "needle\n");
     assert_eq!(run.stderr, "");
-    let missing = setup.fiber(&["grep", "absent", "a.txt"], None);
+    let missing = setup.run_with_stdin(&["grep", "absent", "a.txt"], None);
     assert_eq!(missing.code, Some(1));
     assert_eq!(missing.stdout, "");
 }
 
 #[test]
 fn grep_filters_standard_input() {
-    let setup = Setup::new();
-    let run = setup.fiber(&["grep", "b"], Some("a\nb\nc\n"));
+    let setup = Setup::new_with_workspace();
+    let run = setup.run_with_stdin(&["grep", "b"], Some("a\nb\nc\n"));
     assert_eq!(run.code, Some(0));
     assert_eq!(run.stdout, "b\n");
 }
 
 #[test]
 fn grep_keeps_the_argv_delimiter() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_workspace();
     setup.write("dash.txt", "-needle\nplain\n");
     // `--` ends flags: the pattern is `-needle`, not `-n` with `eedle`.
-    let run = setup.fiber(&["grep", "--", "-needle", "dash.txt"], None);
+    let run = setup.run_with_stdin(&["grep", "--", "-needle", "dash.txt"], None);
     assert_eq!(run.code, Some(0));
     assert_eq!(run.stdout, "-needle\n");
     assert_eq!(run.stderr, "");
@@ -173,10 +163,10 @@ fn grep_keeps_the_argv_delimiter() {
 
 #[test]
 fn grep_prints_only_the_match() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_workspace();
     setup.write("a.txt", "xneedle yneedle\nnone\n");
     // Built-in `-o`: each non-empty match on its own line.
-    let run = setup.fiber(&["grep", "-o", "needle", "a.txt"], None);
+    let run = setup.run_with_stdin(&["grep", "-o", "needle", "a.txt"], None);
     assert_eq!(run.code, Some(0));
     assert_eq!(run.stdout, "needle\nneedle\n");
     assert_eq!(run.stderr, "");
@@ -184,13 +174,13 @@ fn grep_prints_only_the_match() {
 
 #[test]
 fn grep_only_matching_skips_ignored_directories() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_workspace();
     setup.write(".gitignore", "ignored/\n");
     setup.write("ignored/needle.txt", "needle\n");
     setup.write("kept.txt", "needle\n");
     // Built-in `-o` walks like the search, not the system grep: the
     // ignored directory stays skipped.
-    let run = setup.fiber(&["grep", "-ro", "needle", "."], None);
+    let run = setup.run_with_stdin(&["grep", "-ro", "needle", "."], None);
     assert_eq!(run.code, Some(0));
     assert_eq!(run.stdout, "./kept.txt:needle\n");
     assert_eq!(run.stderr, "");
@@ -198,21 +188,21 @@ fn grep_only_matching_skips_ignored_directories() {
 
 #[test]
 fn find_lists_the_tree() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_workspace();
     setup.write("a.txt", "a\n");
     setup.write("sub/b.txt", "b\n");
-    let run = setup.fiber(&["find", "."], None);
+    let run = setup.run_with_stdin(&["find", "."], None);
     assert_eq!(run.code, Some(0));
     assert_eq!(run.stdout, ".\n./a.txt\n./sub\n./sub/b.txt\n");
     assert_eq!(run.stderr, "");
-    let filtered = setup.fiber(&["find", ".", "-name", "*.txt"], None);
+    let filtered = setup.run_with_stdin(&["find", ".", "-name", "*.txt"], None);
     assert_eq!(filtered.code, Some(0));
     assert_eq!(filtered.stdout, "./a.txt\n./sub/b.txt\n");
 }
 
 #[test]
 fn shell_functions_reach_the_built_binary() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_workspace();
     setup.write(".gitignore", "target/\n");
     setup.write("target/needle.txt", "needle\n");
     setup.write("kept_needle.txt", "needle\n");
