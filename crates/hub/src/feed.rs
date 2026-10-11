@@ -15,9 +15,9 @@
 //! waiting on a person stays until resumed. A delegate, whose status names
 //! a `parent`, is never in the feed.
 //!
-//! Each subscriber has its own channel and writer thread. The registry
-//! lock is held only to update entries and queue lines, never across a
-//! socket write, so one slow or dead client blocks no other.
+//! Each subscriber has its own channel and writer thread (`fanout`). The
+//! registry lock is held only to update entries and queue lines, never
+//! across a socket write, so one slow or dead client blocks no other.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
@@ -27,7 +27,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
+#[cfg(test)]
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -43,8 +44,12 @@ use crate::recent::{self, Left, PageError, RecentRow};
 use crate::relay::valid_session_id;
 use crate::tick::Tick;
 
+mod fanout;
 mod settle;
+use fanout::Fanout;
 use settle::Settle;
+
+pub(crate) use fanout::{Line, spawn_writer, to_line};
 
 /// How often the hub rescans `run/` for new sessions.
 pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
@@ -52,9 +57,6 @@ pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
 /// The most of a log's end read to find its last line: `fiber_exited` and
 /// `rewound` are far shorter, so a longer last line is neither.
 pub(crate) const TAIL: u64 = 64 * 1024;
-
-/// One line queued for a subscriber.
-pub(crate) type Line = Arc<[u8]>;
 
 /// A rejected feed command: its code and sentence.
 pub(crate) type Refusal = (ErrorCode, String);
@@ -104,9 +106,8 @@ struct State {
     /// Sessions whose status named a parent, while their socket is in
     /// `run/`: never connected again.
     delegates: BTreeSet<String>,
-    subscribers: Vec<Subscriber>,
-    next_subscriber: u64,
-    /// Summary and finished subscriber threads, joined at stop or once done.
+    fanout: Fanout,
+    /// Summary reader threads, joined at stop or once done.
     threads: Vec<JoinHandle<()>>,
     /// Whether the first scan of `run/` has finished.
     scanned: bool,
@@ -144,12 +145,6 @@ enum Entry {
 struct Status {
     line: Line,
     payload: SessionStatus,
-}
-
-struct Subscriber {
-    id: u64,
-    tx: Sender<Line>,
-    writer: JoinHandle<()>,
 }
 
 impl Feed {
@@ -208,12 +203,12 @@ impl Feed {
     /// threads. Every tracked `Stop` is stopped before the first join of a
     /// summary reader or a subscriber writer.
     pub(crate) fn stop(&self) {
-        let (tracked, subscribers, threads) = {
+        let (tracked, fanout, threads) = {
             let mut state = lock(&self.state);
             state.stopped = true;
             (
                 std::mem::take(&mut state.tracked),
-                std::mem::take(&mut state.subscribers),
+                std::mem::take(&mut state.fanout),
                 std::mem::take(&mut state.threads),
             )
         };
@@ -233,10 +228,7 @@ impl Feed {
             }
             tracked.stream.shutdown(Shutdown::Both).unwrap_or(());
         }
-        for subscriber in subscribers {
-            drop(subscriber.tx);
-            join(subscriber.writer);
-        }
+        fanout.close().into_iter().for_each(join);
         threads.into_iter().for_each(join);
     }
 
@@ -244,50 +236,39 @@ impl Feed {
     /// status and its `session_left`, then every running one's status,
     /// then every change. The caller has written `command_accepted`.
     pub(crate) fn subscribe(&self, writer: Arc<Mutex<UnixStream>>) -> Option<u64> {
-        let (tx, handle) = spawn_writer(writer, "hub-feed-out")?;
+        let spawned = spawn_writer(writer, "hub-feed-out")?;
         let mut state = lock(&self.state);
         if state.stopped {
             return None;
         }
+        let mut snapshot = Vec::new();
         for (id, entry) in &state.entries {
             if let Entry::Left(status, how) = entry {
-                send(&tx, &status.line);
-                send(&tx, &self.left_line(id, *how));
+                snapshot.push(Arc::clone(&status.line));
+                snapshot.push(self.left_line(id, *how));
             }
         }
         for entry in state.entries.values() {
             if let Entry::Running(status) = entry {
-                send(&tx, &status.line);
+                snapshot.push(Arc::clone(&status.line));
             }
         }
-        state.next_subscriber += 1;
-        let id = state.next_subscriber;
-        state.subscribers.push(Subscriber {
-            id,
-            tx,
-            writer: handle,
-        });
-        Some(id)
+        Some(state.fanout.push(spawned, &snapshot))
     }
 
     /// Ends subscriber `id`: no more lines are queued, and its writer
     /// thread is joined once it has written what was queued.
     pub(crate) fn unsubscribe(&self, id: u64) {
-        let gone = {
-            let mut state = lock(&self.state);
-            let at = state.subscribers.iter().position(|sub| sub.id == id);
-            at.map(|at| state.subscribers.remove(at))
-        };
-        if let Some(subscriber) = gone {
-            drop(subscriber.tx);
-            join(subscriber.writer);
+        let gone = lock(&self.state).fanout.remove(id);
+        if let Some(writer) = gone {
+            join(writer);
         }
     }
 
     /// How many subscribers the feed holds.
     #[cfg(test)]
     pub(crate) fn subscribers(&self) -> usize {
-        lock(&self.state).subscribers.len()
+        lock(&self.state).fanout.ids().len()
     }
 
     /// `dismiss`: drops a crashed session from the feed.
@@ -377,16 +358,18 @@ impl Feed {
                     .collect()
             })
             .unwrap_or_default();
-        let (fresh, done) = {
+        let (fresh, done, ended) = {
             let mut state = lock(&self.state);
             state.delegates.retain(|id| names.contains(id));
             let (done, live) = std::mem::take(&mut state.threads)
                 .into_iter()
                 .partition(JoinHandle::is_finished);
             state.threads = live;
-            (state.fresh(&names), done)
+            let ended = state.fanout.finished();
+            (state.fresh(&names), done, ended)
         };
         done.into_iter().for_each(join);
+        ended.into_iter().for_each(join);
         for id in fresh {
             self.follow(id);
         }
@@ -519,7 +502,7 @@ impl Feed {
         };
         self.attention.notify(id, seen, &payload, unseen);
         let line: Line = Arc::from(bytes);
-        broadcast(&mut state, &line);
+        state.fanout.broadcast(&line);
         state
             .entries
             .insert(id.to_owned(), Entry::Running(Status { line, payload }));
@@ -568,7 +551,7 @@ impl Feed {
         if let Some(Entry::Running(status) | Entry::Left(status, _)) = state.entries.remove(id) {
             let left = how.unwrap_or(Left::Exited);
             let line = self.left_line(id, left);
-            broadcast(&mut state, &line);
+            state.fanout.broadcast(&line);
             let stays = match how {
                 Some(Left::Crashed) => true,
                 Some(Left::Exited) => recent::is_waiting(&status.payload),
@@ -741,48 +724,6 @@ fn status_line(row: &RecentRow, payload: &SessionStatus) -> Line {
         seq: None,
         payload,
     })
-}
-
-/// A channel whose lines a new thread named `name` writes to `writer`, each flushed;
-/// the thread ends on the first failed write or once every sender is dropped.
-pub(crate) fn spawn_writer(
-    writer: Arc<Mutex<UnixStream>>,
-    name: &str,
-) -> Option<(Sender<Line>, JoinHandle<()>)> {
-    let (tx, rx) = mpsc::channel::<Line>();
-    let handle = thread::Builder::new()
-        .name(name.to_owned())
-        .spawn(move || {
-            for line in rx {
-                let mut out = lock(&writer);
-                if out.write_all(&line).and_then(|()| out.flush()).is_err() {
-                    return;
-                }
-            }
-        })
-        .ok()?;
-    Some((tx, handle))
-}
-
-pub(crate) fn to_line(value: &impl serde::Serialize) -> Line {
-    let mut bytes = serde_json::to_vec(value).unwrap_or_default();
-    bytes.push(b'\n');
-    Arc::from(bytes)
-}
-
-/// Queues `line` for every subscriber; one whose writer ended is dropped
-/// and its thread kept for joining.
-fn broadcast(state: &mut State, line: &Line) {
-    let (live, dead): (Vec<_>, Vec<_>) = std::mem::take(&mut state.subscribers)
-        .into_iter()
-        .partition(|sub| sub.tx.send(Arc::clone(line)).is_ok());
-    state.subscribers = live;
-    state.threads.extend(dead.into_iter().map(|sub| sub.writer));
-}
-
-fn send(tx: &Sender<Line>, line: &Line) {
-    // A writer that already ended is dropped at the next broadcast.
-    tx.send(Arc::clone(line)).unwrap_or(());
 }
 
 pub(crate) fn invalid() -> Refusal {
