@@ -136,7 +136,9 @@ rules out a derived database, and the ruling stands while this budget holds.
 
 ## Measuring
 
-Each number is the median of 5 runs. Memory is peak RSS on Linux and peak
+Each number is the median of 5 runs, except a pull request's timings, which
+are the median of 3. Every results file records the runner's CPU model.
+Memory is peak RSS on Linux and peak
 footprint on macOS, by the method in `docs/dependencies.md`. The retained rows
 read RssAnon from `/proc/<pid>/status` 10 s after the work ends, once freed
 pages have settled: 10 s after the 429-call turn completes, and 10 s after the
@@ -154,7 +156,10 @@ memory sample, and log bytes are the size of `events.jsonl`, so both are
 exact.
 
 Linux x86_64 gates every pull request, and the backstop on `main` measures
-the same benchmarks. Linux arm64 and macOS arm64 are
+the same benchmarks. On a pull request the base binary runs the timing
+benchmarks only; memory and exact rows compare against the backstop's
+stored results for the base commit (`docs/ci.md`, "On every pull request
+that changes code"). Linux arm64 and macOS arm64 are
 measured at each release and reported, never gated: timings differ by about
 20 times between macOS and Linux on I/O, and macOS memory counts system
 frameworks Fiber does not control. Listing with a cold cache is reported,
@@ -194,17 +199,25 @@ slowest report's ms.
 An exact or memory budget fails the pull request from its first run. Its
 author may raise the ceiling in the same pull request by editing the table
 above with the new measurement and the reason. A budget the base commit
-already fails, measured in the same job, does not fail the pull request: the
+already fails, in the backstop's stored results for it, does not fail the
+pull request: the
 comment marks the row over at the base and names the base, and the backstop
 on `main` fails on it, which makes the fix a backstop ticket.
 
-A timing budget is advisory until 20 backstop runs on `main` have measured
-it. Until then CI posts the head and base medians as a comment on the pull
-request and never fails it. The pull request that turns a timing gate on
-sets its tolerance from the spread those runs showed. From then on a timing
-gate fails only when the median is over its ceiling and over the base
-commit's median by more than that tolerance, measured in the same job on the
-same runner, and its author may raise the ceiling as above. A benchmark's
+A timing budget is advisory: CI posts the head and base medians as a
+comment on the pull request and never fails it. Timing gates turn on per
+runner speed class, once stored results show that the recorded CPU model
+identifies the class. GitHub's Linux x86_64 runners fall into three speed
+classes, the slowest 1.34 to 1.64 times the fastest; within a class a median
+varies by about 2% on the drawing benchmarks and up to 10% on session start
+and listing, and memory varies by 3% across all runners (353 backstop
+results, 2026-10-07 to 2026-10-11). The pull request that turns the gates on
+sets each gate's ceiling per class and its tolerance from that spread. From
+then on a timing gate fails only when the median is over its class's ceiling
+and over the base commit's median by more than that tolerance, measured in
+the same job on the same runner, and its author may raise the ceiling as
+above. The attach 1 MiB row's gate turns on only once `main` meets its
+ceiling or the ceiling is ruled again (#1546). A benchmark's
 own self-check failing is a failed run, not a slow sample.
 
 At each release, every ceiling more than twice its measured value drops to
