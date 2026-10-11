@@ -385,12 +385,10 @@ impl Loop {
             ending: crate::jobs::Ending::default(),
             // The log does not hold requests: a resumed loop warms only
             // after its own first step.
-            warm: None,
-            last_request: None,
+            warming: crate::warm::Warming::default(),
             switcher: None,
             pending: Vec::new(),
             chosen: thinking.and_then(|level| level.parse().ok()),
-            warm_stopped: None,
             late_cost: crate::late_cost::LateCost::default(),
         };
         resumed.mark_orphans(orphans)?;

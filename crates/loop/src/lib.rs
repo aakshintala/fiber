@@ -3,8 +3,8 @@
 //! (`docs/architecture.md`, "The threads").
 //!
 //! A [`Loop`] runs on the session's loop thread. It blocks on its inbox while
-//! idle, starts a turn from everything waiting there, and streams each model
-//! reply on its own thread (`docs/architecture.md`, "One inbox" and
+//! idle, starts a turn from everything waiting there, and reads each model
+//! reply itself, on the loop thread (`docs/architecture.md`, "One inbox" and
 //! "Streaming").
 
 use std::collections::{BTreeMap, VecDeque};
@@ -18,7 +18,7 @@ use contract::events::{
     CacheLifetime, Event, Grant, Parent, PreambleReason, SessionStarted, ToolReplaced,
 };
 use contract::inbox::Delivery;
-use contract::provider::{Cost, Input, ModelRequest, Provider, ToolDefinition};
+use contract::provider::{Cost, Input, Provider, ToolDefinition};
 use contract::shapes::Failure;
 use contract::shapes::Worktree;
 use contract::tool::Tool;
@@ -240,22 +240,14 @@ pub struct Loop {
     handoff: handoff::State,
     /// The session's jobs, and how far the loop is in ending with them.
     ending: jobs::Ending,
-    /// `cache.warm_cap` when `cache.warm_idle` is set: how many cache
-    /// lifetimes after the last turn an idle wait keeps the cache warm.
-    /// `None` never warms (`docs/prompt-cache.md`, "Warming while idle").
-    warm: Option<u32>,
-    /// The last step's request and when it was handed to the provider, or
-    /// the last refresh's send: what a refresh resends and counts from.
-    /// Kept only while warming is on.
-    last_request: Option<(ModelRequest, std::time::Instant)>,
+    /// An idle wait's warming state (`docs/prompt-cache.md`, "Warming while idle").
+    warming: warm::Warming,
     /// How a `model` command is prepared, with what the session started with.
     switcher: Option<(Prepare, Switchable)>,
     /// Switches admitted during a turn, applied at the next turn boundary.
     pending: Vec<Prepared>,
     /// The session's own thinking choice.
     chosen: Option<contract::ThinkingLevel>,
-    /// When a switch cleared the last request while warming.
-    warm_stopped: Option<std::time::Instant>,
     /// Puts a wake in the inbox; `None` leaves tool interactions unanswerable.
     inbox_wake: Option<Arc<dyn contract::clock::Wake>>,
 }
@@ -452,12 +444,10 @@ impl Loop {
             hooks: None,
             handoff: handoff::State::new(handoff::Carry::default()),
             ending: jobs::Ending::default(),
-            warm: None,
-            last_request: None,
+            warming: warm::Warming::default(),
             switcher: None,
             pending: Vec::new(),
             chosen: None,
-            warm_stopped: None,
             inbox_wake: None,
         })
     }

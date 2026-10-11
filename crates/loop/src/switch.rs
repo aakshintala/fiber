@@ -310,10 +310,7 @@ impl Loop {
             self.chosen = prepared.chosen;
             self.preamble = None;
             self.preamble_reason = contract::events::PreambleReason::Switch;
-            if self.last_request.is_some() {
-                self.last_request = None;
-                self.warm_stopped = Some(self.log.clock().now());
-            }
+            self.warming.stop(self.log.clock().now());
         }
         Ok(())
     }
