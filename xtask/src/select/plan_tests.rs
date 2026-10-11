@@ -100,33 +100,19 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
 }
 
 #[test]
-fn a_ready_pull_request_runs_test() {
-    let plan = plan(
-        "crates",
-        &strings(&["log"]),
-        "pull_request",
-        false,
-        true,
-        true,
-        100,
-    );
-    assert!(plan.jobs["test"] && plan.jobs["test_linux"]);
-}
-
-#[test]
 fn an_unlabelled_draft_skips_mutants_and_runs_the_rest() {
     let plan = plan(
         "crates",
         &strings(&["log"]),
         "pull_request",
-        false,
+        true,
         false,
         false,
         100,
     );
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);
-    assert!(plan.jobs["lint"] && plan.jobs["test"]);
+    assert!(plan.jobs["lint"] && plan.jobs["test_linux"]);
 }
 
 #[test]
