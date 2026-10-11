@@ -1026,41 +1026,6 @@ impl contract::emit::Emit for SealRecorder {
     }
 }
 
-fn read_head(sock: &mut impl std::io::Read) {
-    let mut buf = [0; 1];
-    let mut seen = Vec::new();
-    loop {
-        match std::io::Read::read(&mut *sock, &mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => seen.push(buf[0]),
-        }
-        if seen.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
-}
-
-/// A test HTTP server that parks the extension's `host.http` call until the
-/// test releases it, then answers `ok`. The accepted signal proves the
-/// command parked; each wait has the one named deadline.
-fn reply_server() -> (String, mpsc::Receiver<()>, mpsc::Sender<()>) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut sock = listener.accept().unwrap().0;
-        read_head(&mut sock);
-        let _sent = accepted_tx.send(());
-        let _got = release_rx.recv();
-        let _wrote = std::io::Write::write_all(
-            &mut sock,
-            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
-        );
-    });
-    (url, accepted_rx, release_tx)
-}
-
 fn hold_init(url: &str) -> String {
     format!(
         "fiber.command(\"hold\", {{ timeout = 8000, run = function() local r = host.http({{ url = \"{url}\" }}) host.status(\"late\") host.log(\"late\") host.emit({{x=1}}) return r.body end }})\n"
@@ -1072,7 +1037,9 @@ fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
     // Through the session-level `ExtensionDoor::seal`: a command parked on
     // `host.http` resumes after the seal, and its later `host.status`,
     // `host.log` and `host.emit` reach neither the Emit nor the inbox.
-    let (url, accepted_rx, release_tx) = reply_server();
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
     let home = Home::new();
     home.install("a", Some(&hold_init(&url)));
     let session = home.load(&[]);
@@ -1086,11 +1053,12 @@ fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
     thread::spawn(move || {
         let _sent = done_tx.send(lua.command("hold", ""));
     });
-    Deadline::after(WAIT)
-        .recv(&accepted_rx)
-        .expect("waited for the command to park on host.http");
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for the command to park on host.http"
+    );
     contract::extension::ExtensionDoor::seal(&*session);
-    let _sent = release_tx.send(());
+    server.release();
     let result = Deadline::after(WAIT)
         .recv(&done_rx)
         .expect("waited for the parked command to return");
