@@ -20,7 +20,11 @@ use std::time::Duration;
 
 use contract::Envelope;
 use contract::events::TurnOutcome;
-use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
+use contract::hook::{
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
+    BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
+    CheckOutcome, Hooks,
+};
 use contract::inbox::Delivery;
 use contract::shapes::ContentPart;
 use contract::tool::Tool;
@@ -129,6 +133,30 @@ impl Hooks for Replaces {
                 artifact: None,
             },
             changed_by: vec!["replaces".to_owned()],
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_tool(&self, _call: &BeforeToolCall<'_>) -> BeforeToolAnswer {
+        BeforeToolAnswer {
+            outcome: BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(&self, _call: &BeforeToolCall<'_>) -> CheckAnswer {
+        CheckAnswer {
+            outcome: CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(&self, _message: &BeforeMessage<'_>) -> BeforeMessageAnswer {
+        BeforeMessageAnswer {
+            outcome: BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
             notices: Vec::new(),
         }
     }

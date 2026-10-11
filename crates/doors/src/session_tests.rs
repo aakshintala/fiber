@@ -1398,6 +1398,39 @@ impl contract::hook::Hooks for InboxHooks {
         }
     }
 
+    fn before_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::BeforeToolAnswer {
+        contract::hook::BeforeToolAnswer {
+            outcome: contract::hook::BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(
+        &self,
+        _call: &contract::hook::BeforeToolCall<'_>,
+    ) -> contract::hook::CheckAnswer {
+        contract::hook::CheckAnswer {
+            outcome: contract::hook::CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(
+        &self,
+        _message: &contract::hook::BeforeMessage<'_>,
+    ) -> contract::hook::BeforeMessageAnswer {
+        contract::hook::BeforeMessageAnswer {
+            outcome: contract::hook::BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
+            notices: Vec::new(),
+        }
+    }
+
     fn deliver_to(&self, inbox: mpsc::Sender<Delivery>) {
         if let Some(tx) = self.0.lock().unwrap().as_ref() {
             let _sent = tx.send(inbox);

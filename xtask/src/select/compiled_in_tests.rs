@@ -56,6 +56,15 @@ fn main_src(source: &str) -> RustFile {
     }
 }
 
+fn extensions_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "extensions".to_owned(),
+        path: "crates/extensions/src/hooks/keys_tests.rs".to_owned(),
+        rel: "src/hooks/keys_tests.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
 /// The listed includes of `krate`, each resolvable from its fixture source.
 fn listed_includes(krate: &str) -> String {
     COMPILED_IN
@@ -69,6 +78,7 @@ fn listed_includes(krate: &str) -> String {
 fn listed_files() -> Vec<RustFile> {
     vec![
         contract_src(&listed_includes("contract")),
+        extensions_src("include_str!(\"../../../../docs/extensions.md\");\n"),
         loop_src(&listed_includes("loop")),
         tools_src(&listed_includes("tools")),
         tui_src(&listed_includes("tui")),
