@@ -2,7 +2,9 @@
 //! rejected `duplicate_command`.
 
 use std::collections::HashSet;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::Mutex;
+
+use super::lock;
 
 use contract::CommandId;
 
@@ -32,8 +34,4 @@ impl Accepted {
     pub(crate) fn release(&self, id: &CommandId) {
         lock(&self.ids).remove(&id.0);
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

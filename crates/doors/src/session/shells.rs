@@ -1,6 +1,8 @@
 //! Owns the registry of running driver shells and their shutdown cancellation.
 
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+
+use super::lock;
 
 /// Driver shells running now, and whether shutdown has begun, which cancels a
 /// new one as it registers.
@@ -105,8 +107,4 @@ impl Shells {
     pub(crate) fn running_len(&self) -> usize {
         lock(&self.running).running.len()
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

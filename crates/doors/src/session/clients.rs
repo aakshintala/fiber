@@ -1,7 +1,9 @@
 //! Owns the count of `full` connections and whether `clients` lines are
 //! sealed, so an emission in flight finishes before `seal` returns.
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::Mutex;
+
+use super::lock;
 
 /// The `full` connections, and whether `clients` lines are sealed.
 pub(crate) struct Clients {
@@ -40,8 +42,4 @@ impl Clients {
     pub(super) fn seal(&self) {
         lock(&self.state).1 = true;
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
