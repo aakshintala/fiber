@@ -30,8 +30,15 @@ use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{Deadline, SessionGuard, function_call};
 
-/// Installs provider `name` with model `m` on `protocol` at `url`.
-fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str) {
+/// Installs provider `name` with model `m` on `protocol` at `url`, with
+/// `extra` merged into the model's fields (such as `thinking_levels`).
+fn install_url(
+    setup: &support::Setup,
+    name: &str,
+    url: &str,
+    protocol: &str,
+    extra: &serde_json::Value,
+) {
     let source = setup.root.path().join(format!("src-{name}"));
     let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
     manifest["providers"] = Value::Object(
@@ -40,13 +47,16 @@ fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str) {
             .collect(),
     );
     support::write_json(&source.join("extension.json"), &manifest);
+    let mut model = json!({"id": "m", "protocol": protocol, "base_url": format!("{url}/v1"), "context_window": 100000});
+    for (key, value) in extra.as_object().unwrap() {
+        model[key] = value.clone();
+    }
     support::write_json(
         &source.join(format!("providers/{name}.json")),
         &json!({
             "name": name,
             "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-            "models": [{"id": "m", "protocol": protocol,
-                "base_url": format!("{url}/v1"), "context_window": 100000}]
+            "models": [model]
         }),
     );
     extensions::plan(
@@ -64,8 +74,8 @@ fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str) {
 /// Installs the parent's `pa/m` and the child's `pb/m` on `protocol` at the
 /// two base URLs, and configures the parent's model and reviewer.
 fn providers_url(setup: &support::Setup, parent: &str, child: &str, protocol: &str) {
-    install_url(setup, "pa", parent, protocol);
-    install_url(setup, "pb", child, protocol);
+    install_url(setup, "pa", parent, protocol, &json!({}));
+    install_url(setup, "pb", child, protocol, &json!({}));
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "pa/m", "reviewer": {"model": "pa/m"}}),
@@ -1164,8 +1174,17 @@ fn a_delegate_spawn_with_an_unknown_model_fails_and_starts_nothing() {
     .unwrap();
     let child = ProviderServer::start([support::hello()]).unwrap();
     providers(&setup, &parent, &child);
+    // A configured role: the refusal lists it with the references.
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000},
+            "roles": {"deep": "fiber:pb/m"}}),
+    );
     standing_allow(&setup);
-    slow_idle(&setup);
+    // `slow_idle` would overwrite the roles above, so its long idle is
+    // inlined in the config written here: an exit proves the run ended
+    // on its own.
 
     let output = support::run_to_exit(
         setup.deadline,
@@ -1188,6 +1207,11 @@ fn a_delegate_spawn_with_an_unknown_model_fails_and_starts_nothing() {
     let error = failed["payload"]["error"].as_object().unwrap();
     assert_eq!(error["code"], "invalid_arguments");
     let message = error["message"].as_str().unwrap();
+    assert!(
+        message.contains("Unknown delegate model \"fiber:fake/none\"."),
+        "{message}"
+    );
+    assert!(message.contains("deep: fiber:pb/m"), "{message}");
     assert!(message.contains("fiber:pa/m"), "{message}");
     assert!(message.contains("fiber:pb/m"), "{message}");
     // No child started: no delegate line, and the parent's is the only
@@ -1202,6 +1226,414 @@ fn a_delegate_spawn_with_an_unknown_model_fails_and_starts_nothing() {
         .collect();
     assert_eq!(entries.len(), 1);
     assert!(child.requests().is_empty());
+}
+
+/// A `delegate_spawn` call without `model`: the schema leaves it optional
+/// and untyped, so it reaches the tool's own check.
+fn spawn_call_without_model() -> Value {
+    function_call(
+        "call_no_model",
+        "delegate_spawn",
+        &json!({"description": "scan", "prompt": "say hello"}),
+    )
+}
+
+/// A `delegate_spawn` call with a non-string `model`.
+fn spawn_call_with_model_value(model: &Value) -> Value {
+    let mut arguments = json!({"description": "scan", "prompt": "say hello"});
+    arguments["model"] = model.clone();
+    function_call("call_bad_model", "delegate_spawn", &arguments)
+}
+
+/// The refused spawn's parent durable kinds, in order, pinned from a real
+/// run: two refused `delegate_spawn` calls, each reviewed and failed.
+const REFUSED_MODEL_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+#[test]
+fn a_delegate_spawn_without_a_model_lists_the_roles_and_references() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start([
+        support::stream(&[spawn_call_without_model()]),
+        text_reply("allow"),
+        support::stream(&[spawn_call_with_model_value(&json!(5))]),
+        text_reply("allow"),
+        support::hello(),
+    ])
+    .unwrap();
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000},
+            "roles": {"deep": "fiber:pb/m"}}),
+    );
+    standing_allow(&setup);
+
+    let output = support::run_to_exit(
+        setup.deadline,
+        "fiber ask",
+        setup.fiber(&["ask", "scan the tree"]),
+    );
+    let lines: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8(output.stderr).unwrap()
+    );
+    assert_eq!(durable_kinds(&lines), REFUSED_MODEL_DURABLE);
+    let actions: Vec<&str> = lines
+        .iter()
+        .filter(|line| {
+            line["kind"] == "tool_call_requested" && line["payload"]["name"] == "delegate_spawn"
+        })
+        .map(|line| line["action_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions.len(), 2);
+    for (action, prefix) in [
+        (actions[0], "Give model: a role or a full reference."),
+        (actions[1], "model must be a string."),
+    ] {
+        let completed = lines
+            .iter()
+            .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == action)
+            .unwrap();
+        let error = completed["payload"]["error"].as_object().unwrap();
+        assert_eq!(error["code"], "invalid_arguments");
+        let message = error["message"].as_str().unwrap();
+        assert!(message.starts_with(prefix), "{message}");
+        for part in ["deep: fiber:pb/m", "fiber:pa/m", "fiber:pb/m"] {
+            assert!(message.contains(part), "{message}");
+        }
+    }
+    // No child started: no delegate line, and the child saw no request.
+    assert!(
+        lines.iter().all(|line| line["kind"] != "delegate_started"),
+        "a delegate started"
+    );
+    assert!(child.requests().is_empty());
+}
+
+#[test]
+fn delegate_models_returns_the_roles_and_references_and_its_definition_lists_neither() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start([
+        support::stream(&[function_call("call_models", "delegate_models", &json!({}))]),
+        support::hello(),
+    ])
+    .unwrap();
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000},
+            "roles": {"deep": "fiber:pb/m"}}),
+    );
+
+    let output = support::run_to_exit(
+        setup.deadline,
+        "fiber ask",
+        setup.fiber(&["ask", "list the models"]),
+    );
+    let lines: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8(output.stderr).unwrap()
+    );
+    // A reads-only call then the final text: no reviewer, no permission
+    // line, exactly as for a reads-only workspace call. `session_status`
+    // lines are ephemeral observer output, never pinned.
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] != "session_status")
+            .map(|line| line["kind"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        support::read_kinds()
+    );
+    let requests = parent.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        lines
+            .iter()
+            .all(|line| line["kind"] != "permission_resolved"),
+        "a reviewer was asked"
+    );
+    let completed = completed_for(&lines, "delegate_models");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = completed["payload"]["content"][0]["text"].as_str().unwrap();
+    assert_eq!(
+        text,
+        "Roles:\ndeep: fiber:pb/m\nReferences:\nfiber:pa/m\nfiber:pb/m"
+    );
+    let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let tools = first["tools"].as_array().unwrap();
+    assert!(
+        tools.iter().any(|tool| tool["name"] == "delegate_models"),
+        "{tools:?}"
+    );
+    let encoded = serde_json::to_string(&first["tools"]).unwrap();
+    assert!(!encoded.contains("deep"), "{encoded}");
+    assert!(!encoded.contains("pb/m"), "{encoded}");
+}
+
+/// A role run's parent durable kinds, in order, pinned from a real run:
+/// the spawn turn, the ending notice while the delegate runs, and the
+/// wake turn carrying its finish.
+const ROLE_PARENT_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "jobs_pending_notified",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// A role run's child durable kinds, in order, pinned from a real run:
+/// one reply completing, then the turn ends.
+const ROLE_CHILD_DURABLE: &[&str] = &[
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// The resumed run's parent durable kinds, in order, pinned from a real
+/// run: the spawn turn, the ending notice while the delegate runs, and
+/// the wake turn carrying its finish. A resume writes no
+/// `session_started` and no `opening_message`: the log already holds
+/// both.
+const RESUMED_PARENT_DURABLE: &[&str] = &[
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "usage_recorded",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "delegate_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "jobs_pending_notified",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "turn_started",
+    "step_started",
+    "delegate_finished",
+    "job_completed",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+#[test]
+fn a_role_runs_its_reference_and_a_remap_applies_at_resume_without_changing_any_definition() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let thinking = json!({"thinking_levels": ["low", "high"], "thinking_default": "low"});
+    let parent = ProviderServer::start_with_fallback(
+        [
+            support::stream(&[spawn_call("qzdeep")]),
+            text_reply("allow"),
+            support::hello(),
+            support::hello(),
+            support::hello(),
+            support::stream(&[spawn_call("qzdeep")]),
+            text_reply("allow"),
+            support::hello(),
+            support::hello(),
+            support::hello(),
+        ],
+        support::hello(),
+    )
+    .unwrap();
+    let pb = ProviderServer::start([support::hello()]).unwrap();
+    let pc = ProviderServer::start([support::hello()]).unwrap();
+    pb.hold();
+    install_url(&setup, "pa", &parent.url(), "openai-responses", &json!({}));
+    install_url(&setup, "pb", &pb.url(), "openai-responses", &thinking);
+    install_url(&setup, "pc", &pc.url(), "openai-responses", &json!({}));
+    let config_with = |target: &str| {
+        json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000},
+            "roles": {"qzdeep": target}})
+    };
+    support::write_json(
+        &setup.home().join("config.json"),
+        &config_with("fiber:pb/m:high"),
+    );
+    standing_allow(&setup);
+
+    // Run 1: the role runs its reference with its level.
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    let mut ended = 0;
+    running.wait_line("the ending notice's turn end", |line| {
+        ended += usize::from(line["kind"] == "turn_completed");
+        ended == 2
+    });
+    pb.release();
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    assert_eq!(durable_kinds(&lines), ROLE_PARENT_DURABLE);
+    let delegate = one(&lines, "delegate_started");
+    assert_eq!(delegate["model"], "fiber:pb/m:high");
+    assert_eq!(pb.requests().len(), 1);
+    assert!(pc.requests().is_empty());
+    let child_id = delegate["delegate_session_id"].as_str().unwrap();
+    let child_lines = read_lines(&ask_sessions(&setup).join(child_id).join("events.jsonl"));
+    assert_eq!(durable_kinds(&child_lines), ROLE_CHILD_DURABLE);
+    let built = one(&child_lines, "preamble_built");
+    assert_eq!(built["model"], "pb/m");
+    assert_eq!(built["thinking"], "high");
+    let parent_id = lines[0]["session_id"].as_str().unwrap().to_owned();
+    let first: Value = serde_json::from_slice(&parent.requests()[0].body).unwrap();
+    let run1_requests = parent.requests().len();
+
+    // Run 2: the remapped role runs the new reference, and neither the
+    // tools nor the instructions changed with it.
+    support::write_json(
+        &setup.home().join("config.json"),
+        &config_with("fiber:pc/m"),
+    );
+    pc.hold();
+    let mut resumed = Running::spawn(&setup, &["ask", "--resume", &parent_id, "scan again"]);
+    let mut re_ended = 0;
+    resumed.wait_line("the resumed ending notice's turn end", |line| {
+        re_ended += usize::from(line["kind"] == "turn_completed");
+        re_ended == 2
+    });
+    pc.release();
+    let (re_status, re_lines, re_stderr) = resumed.wait();
+    assert_eq!(re_status.code(), Some(0), "stderr: {re_stderr}");
+    assert_eq!(durable_kinds(&re_lines), RESUMED_PARENT_DURABLE);
+    let re_delegate = one(&re_lines, "delegate_started");
+    assert_eq!(re_delegate["model"], "fiber:pc/m");
+    assert_eq!(pc.requests().len(), 1);
+    assert_eq!(pb.requests().len(), 1, "the first run's child ran again");
+    let re_child_id = re_delegate["delegate_session_id"].as_str().unwrap();
+    let re_child_lines = read_lines(&ask_sessions(&setup).join(re_child_id).join("events.jsonl"));
+    let re_built = one(&re_child_lines, "preamble_built");
+    assert_eq!(re_built["model"], "pc/m");
+    assert!(re_built.get("thinking").is_none(), "{re_built}");
+    let re_requests = parent.requests();
+    let second: Value = serde_json::from_slice(&re_requests[run1_requests].body).unwrap();
+    assert_eq!(second["tools"], first["tools"]);
+    assert_eq!(second["instructions"], first["instructions"]);
+    for field in [&second["tools"], &second["instructions"]] {
+        let encoded = serde_json::to_string(field).unwrap();
+        for part in ["qzdeep", "pb/m", "pc/m"] {
+            assert!(!encoded.contains(part), "{encoded}");
+        }
+    }
 }
 
 // A client opens a running delegate through the hub (see #634): the tests
