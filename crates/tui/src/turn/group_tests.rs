@@ -948,3 +948,165 @@ fn thinking_rows_without_a_heading_show_the_bare_form() {
     assert_eq!(rows[0].to_string(), "    2 ○ Thinking");
     assert_eq!(rows[1].to_string(), "      + Thought · 2s");
 }
+
+fn open_read_call(id: usize, lines: usize) -> Call {
+    let detail = (1..=lines)
+        .map(|n| format!("L{n:04}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Call {
+        id,
+        action: format!("a_{id}"),
+        name: "read".to_owned(),
+        arguments: json!({"path": "notes.txt"}),
+        status: Some(CallStatus::Completed),
+        detail,
+        lines: lines as u64,
+        started: true,
+        open: true,
+        ..Call::default()
+    }
+}
+
+/// The rows an opened call draws under its ledger row.
+fn opened_rows(group: &Group, width: u16) -> Vec<String> {
+    let (rows, _) = summary_row(group, false, width);
+    rows.into_iter()
+        .skip(2)
+        .map(|row| row.0.to_string())
+        .collect()
+}
+
+fn opened_group(call: Call) -> Group {
+    Group {
+        key: Some("a_0".to_owned()),
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![call],
+            ..Section::default()
+        }],
+        ..Group::default()
+    }
+}
+
+/// An opened call shows its output indented eight columns: 19 lines draw
+/// whole, 20 draw with no "more" row, and 21 draw 20 rows then "… 1 more
+/// line" dim.
+#[test]
+fn an_opened_call_is_capped_at_twenty_lines() {
+    for (lines, shown, more) in [
+        (19usize, 19usize, None),
+        (20, 20, None),
+        (21, 20, Some("… 1 more line")),
+    ] {
+        let rows = opened_rows(&opened_group(open_read_call(1, lines)), 76);
+        assert_eq!(rows.len(), shown + usize::from(more.is_some()), "{lines}");
+        assert_eq!(rows[0], "        L0001");
+        assert_eq!(rows[shown - 1], format!("        L{shown:04}"));
+        match more {
+            None => assert!(!rows.iter().any(|row| row.contains('…')), "{lines}"),
+            Some(last) => assert_eq!(rows[shown], format!("        {last}")),
+        }
+        for row in &rows {
+            assert!(row.starts_with("        "), "{row:?} indented eight");
+        }
+    }
+    // 300 lines draw 20 rows, then "… 280 more lines".
+    let rows = opened_rows(&opened_group(open_read_call(1, 300)), 76);
+    assert_eq!(rows.len(), 21);
+    assert_eq!(rows[19], "        L0020");
+    assert_eq!(rows[20], "        … 280 more lines");
+    assert!(!rows.iter().any(|row| row.contains("L0021")));
+}
+
+/// An opened diff of 25 lines is capped with its colours kept.
+#[test]
+fn an_opened_diff_is_capped_with_its_colours() {
+    let detail = (1..=25)
+        .map(|n| {
+            if n % 2 == 0 {
+                format!("+added {n}")
+            } else {
+                format!("-removed {n}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let call = Call {
+        detail,
+        changes: vec![contract::events::FileChange {
+            path: "a.rs".to_owned(),
+            added: 13,
+            removed: 12,
+        }],
+        open: true,
+        ..edit_call(1, "a.rs", 13, 12)
+    };
+    let (rows, _) = summary_row(&opened_group(call), false, 76);
+    let shown: Vec<_> = rows.into_iter().skip(2).collect();
+    assert_eq!(shown.len(), 21);
+    assert_eq!(shown[20].0.to_string(), "        … 5 more lines");
+    let added = &shown[1].0;
+    assert_eq!(
+        added.style.fg,
+        Some(crate::theme::Role::Added.color()),
+        "{added:?} keeps its colour"
+    );
+}
+
+/// An opened failure reads "<code>: <message>", and empty output reads
+/// "no output".
+#[test]
+fn an_opened_call_shows_its_error_or_no_output() {
+    let call = Call {
+        detail: "ambiguous_match: boom".to_owned(),
+        open: true,
+        ..failed_call(1)
+    };
+    let rows = opened_rows(&opened_group(call), 76);
+    assert_eq!(rows, vec!["        ambiguous_match: boom".to_owned()]);
+    let call = Call {
+        detail: "".to_owned(),
+        open: true,
+        ..shell_call(2, "true", Some(0), 0, "")
+    };
+    let rows = opened_rows(&opened_group(call), 76);
+    assert_eq!(rows, vec!["        no output".to_owned()]);
+}
+
+/// An opened thought shows all of its text: thoughts are not capped.
+#[test]
+fn an_opened_thought_is_not_capped() {
+    let text = (1..=30)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let group = Group {
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            thoughts: vec![Thought {
+                id: 1,
+                action: "t".to_owned(),
+                text,
+                started: 0,
+                ended: Some(1_000),
+                open: true,
+            }],
+            calls: vec![read_call(2, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let (rows, _) = summary_row(&group, false, 76);
+    let shown: Vec<String> = rows
+        .into_iter()
+        .skip(2)
+        .map(|row| row.0.to_string())
+        .collect();
+    assert_eq!(shown.len(), 31);
+    assert_eq!(shown[0], "        line 1");
+    assert_eq!(shown[29], "        line 30");
+    assert!(!shown.iter().any(|row| row.contains('…')));
+}

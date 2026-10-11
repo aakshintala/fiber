@@ -566,3 +566,19 @@ fn kinds_name_the_ledgers_kind_word() {
         assert!(word(name, json!({"command": "cargo t", "questions": [{}]})).len() <= 9);
     }
 }
+
+#[test]
+fn opened_notes_draw_every_line_uncapped() {
+    use super::opened;
+    use crate::rows::Rows;
+    let text = (1..=30)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut out = Rows::default();
+    opened(&text, "  ", &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 30);
+    assert_eq!(rows[0].0.to_string(), "  line 1");
+    assert_eq!(rows[29].0.to_string(), "  line 30");
+}

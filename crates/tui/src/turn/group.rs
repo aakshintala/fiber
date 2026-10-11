@@ -188,20 +188,46 @@ impl Group {
 
 /// The diff of a call that changed a file, as [`opened`] draws text, each
 /// line added or removed in the added or removed colour.
-fn opened_diff(text: &str, indent: &str, out: &mut Rows) {
-    for line in text.split('\n') {
-        let role = if line.starts_with('+') {
-            Some(Role::Added)
-        } else if line.starts_with('-') {
-            Some(Role::Removed)
-        } else {
-            None
-        };
-        let mut row = dim(format!("{indent}{line}"));
-        if let Some(role) = role {
-            row = row.patch_style(style(role));
+/// An opened call's output, error or diff under its row, indented eight
+/// columns: the first 20 logical lines, then "… N more lines" dim, or
+/// "no output" when empty. Diff lines keep their added and removed
+/// colours. The cap counts logical lines, not wrapped rows: a long line
+/// still wraps through `Rows::pad` (`docs/tui.md`, "Tool groups and the
+/// ledger").
+const OPENED_LINES: usize = 20;
+
+fn opened_call(text: &str, diff: bool, out: &mut Rows) {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        out.push((dim(format!("{INDENT}no output")), None));
+        return;
+    }
+    for line in lines.iter().take(OPENED_LINES) {
+        let mut row = dim(format!("{INDENT}{line}"));
+        if diff {
+            let role = if line.starts_with('+') {
+                Some(Role::Added)
+            } else if line.starts_with('-') {
+                Some(Role::Removed)
+            } else {
+                None
+            };
+            if let Some(role) = role {
+                row = row.patch_style(style(role));
+            }
         }
         out.push((row, None));
+    }
+    let more = lines.len().saturating_sub(OPENED_LINES);
+    if more > 0 {
+        let more = u64::try_from(more).unwrap_or(u64::MAX);
+        out.push((
+            dim(format!(
+                "{INDENT}… {}",
+                count(more, "more line", "more lines")
+            )),
+            None,
+        ));
     }
 }
 impl Group {
@@ -498,11 +524,7 @@ impl Group {
                 out.push((Line::from(row), Some(Target::Call(call.id))));
                 crate::turn::images::call_rows(&call.images, width, layout, out);
                 if out.open_scope(Target::Call(call.id), call.open) {
-                    if call.changes.is_empty() {
-                        opened(&call.detail, INDENT, out);
-                    } else {
-                        opened_diff(&call.detail, INDENT, out);
-                    }
+                    opened_call(&call.detail, !call.changes.is_empty(), out);
                 }
                 out.end_scope();
             }
