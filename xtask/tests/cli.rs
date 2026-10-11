@@ -255,6 +255,119 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(xtask(&dir, &not_a_count, &[], "").0, 2);
 }
 
+/// The `plan` arguments the release-code CLI tests run: a code pull request
+/// without the binary-level tests, so only a release-code path selects
+/// `release`.
+fn release_plan_args(base: &str) -> Vec<&str> {
+    vec![
+        "plan",
+        "--base",
+        base,
+        "--mode",
+        "crates",
+        "--packages",
+        "a",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ]
+}
+
+fn plan_selects_release(dir: &TempDir, base: &str) -> bool {
+    let args = release_plan_args(base);
+    let (code, out) = xtask(dir, &args, &[], "");
+    assert_eq!(code, 0, "{out}");
+    let jobs = out
+        .lines()
+        .find(|line| line.starts_with("jobs="))
+        .unwrap_or_default()
+        .to_owned();
+    assert!(!jobs.is_empty(), "{out}");
+    jobs.contains("\"release\":true")
+}
+
+#[test]
+fn plan_runs_release_for_a_changed_bench_harness() {
+    let dir = workspace();
+    assert!(!plan_selects_release(&dir, "main"));
+    dir.write("xtask/src/bench.rs", "//! bench\n");
+    assert!(plan_selects_release(&dir, "main"));
+}
+
+#[test]
+fn plan_runs_release_when_the_bench_harness_is_renamed_away() {
+    let dir = workspace();
+    dir.write("xtask/src/bench.rs", "//! bench\n//! line\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "bench"]);
+    git(&dir, &["checkout", "-qb", "topic"]);
+    git(&dir, &["mv", "xtask/src/bench.rs", "xtask/src/judge.rs"]);
+    git(&dir, &["commit", "-qm", "rename"]);
+    // Without `--no-renames` git reports only `xtask/src/judge.rs`, so no
+    // release-code path is seen and `release` stays off.
+    assert!(plan_selects_release(&dir, "main"));
+}
+
+#[test]
+fn plan_runs_release_for_a_non_ascii_bench_path() {
+    let dir = workspace();
+    git(&dir, &["checkout", "-qb", "topic"]);
+    dir.write("crates/bench/examples/bench/\u{e9}.rs", "//! bench\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "bench"]);
+    // Without `-z` git quotes the path, so the `crates/bench/` prefix is
+    // missed and `release` stays off.
+    assert!(plan_selects_release(&dir, "main"));
+
+    let dir = workspace();
+    dir.write("crates/bench/src/\u{e9}.rs", "//! bench\n");
+    assert!(plan_selects_release(&dir, "main"));
+}
+
+#[test]
+fn select_ignores_a_rename_source_for_its_own_selection() {
+    let dir = workspace();
+    dir.write("crates/a/src/x.rs", "//! x\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "x"]);
+    git(&dir, &["checkout", "-qb", "topic"]);
+    git(&dir, &["mv", "crates/a/src/x.rs", "docs/x.rs"]);
+    git(&dir, &["commit", "-qm", "rename"]);
+    let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.starts_with("mode=docs\n"), "{out}");
+}
+
+#[test]
+fn plan_fails_without_a_base() {
+    let dir = workspace();
+    let args = [
+        "plan",
+        "--mode",
+        "crates",
+        "--packages",
+        "a",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ];
+    assert_eq!(xtask(&dir, &args, &[], "").0, 2);
+}
+
 #[test]
 fn verdict_passes_and_fails_by_exit_code() {
     let dir = TempDir::new("xtask-verdict");
