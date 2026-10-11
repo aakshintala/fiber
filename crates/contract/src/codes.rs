@@ -116,7 +116,7 @@ codes! {
     McpServerUnavailable,
     /// The server has removed the tool.
     McpToolRemoved,
-    /// The target session's `before_message` refused a session message.
+    /// A `before_message` hook refused a message: a session message, or a person's or a driver's.
     MessageRefused,
     /// A bare model id matches models of two or more installed providers.
     ModelAmbiguous,
