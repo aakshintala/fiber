@@ -118,7 +118,7 @@ fn words(len: usize, seed: usize) -> String {
     source
         .chars()
         .cycle()
-        .skip(seed % source.len())
+        .skip(seed)
         .take(len)
         .collect()
 }
