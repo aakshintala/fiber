@@ -53,10 +53,11 @@ fn bubble_has_edges_and_a_right_stripe() {
 }
 
 #[test]
-fn seventy_percent_from_width_six() {
-    let text: String = std::iter::repeat_n('a', 100).collect();
-    // Seventy percent, at least 4 columns.
-    for (columns, bubble) in [(6, 4), (8, 5), (10, 7), (80, 56)] {
+fn seventy_two_percent_of_the_width() {
+    let text: String = std::iter::repeat_n('a', 200).collect();
+    // Seventy-two percent, at least 4 columns: 124 gives 89, and 50
+    // gives 36, neither 35 (70%) nor 37 (rounded up).
+    for (columns, bubble) in [(5, 4), (50, 36), (124, 89)] {
         let (shown, texts) = bubbled(&text, columns);
         assert!(!shown.is_empty(), "columns {columns}");
         for row in &shown {
@@ -69,6 +70,13 @@ fn seventy_percent_from_width_six() {
         }
         assert!(texts.first().is_some_and(|text| text.decoration));
         assert!(texts.last().is_some_and(|text| text.decoration));
+    }
+    // Every text row of the 124-column bubble is 89 cells, with the
+    // stripe at its last cell.
+    let (shown, _) = bubbled(&text, 124);
+    for row in shown.iter().skip(1).take(shown.len().saturating_sub(2)) {
+        assert_eq!(width(row), 89);
+        assert!(row.ends_with('▐'));
     }
 }
 
@@ -115,17 +123,17 @@ fn wide_glyphs_at_narrow_widths() {
 #[test]
 fn continuation_rows_join_as_the_wrap_broke_them() {
     use Join::{Break, Wrap, WrapSpace};
-    // 70% of 14 is 9 columns, 6 inside the pads and the stripe.
+    // 72% of 14 is 10 columns, 7 inside the pads and the stripe.
     let (shown, texts) = bubbled("hello world abcdefghij", 14);
     assert_eq!(
         shown,
         [
-            "▄▄▄▄▄▄▄▄▄",
-            " hello  ▐",
-            " world  ▐",
-            " abcdef ▐",
-            " ghij   ▐",
-            "▀▀▀▀▀▀▀▀▀"
+            "▄▄▄▄▄▄▄▄▄▄",
+            " hello   ▐",
+            " world   ▐",
+            " abcdefg ▐",
+            " hij     ▐",
+            "▀▀▀▀▀▀▀▀▀▀"
         ]
     );
     let joins: Vec<_> = texts

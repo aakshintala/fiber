@@ -1178,12 +1178,12 @@ fn repaired_arguments_are_the_ones_shown() {
 }
 
 #[test]
-fn the_prompt_is_a_tinted_bubble_on_the_right_at_most_seventy_percent_wide() {
+fn the_prompt_is_a_tinted_bubble_on_the_right_at_most_seventy_two_percent_wide() {
     let mut app = app();
     let long = "word ".repeat(20);
     start(&mut app, long.trim(), 0);
     let lines = app.lines();
-    // 59 columns of rows: at most 41 columns, its text wrapped at 38
+    // 59 columns of rows: at most 42 columns, its text wrapped at 39
     // with the stripe; the block fits its widest row.
     assert_eq!(lines.len(), 6);
     for line in &lines[1..4] {
@@ -1191,7 +1191,7 @@ fn the_prompt_is_a_tinted_bubble_on_the_right_at_most_seventy_percent_wide() {
             line.alignment,
             Some(ratatui::layout::HorizontalAlignment::Right)
         );
-        assert_eq!(line.width(), 37);
+        assert_eq!(line.width(), 42);
     }
     assert!(
         lines[1..4]
@@ -1207,11 +1207,11 @@ fn the_prompt_is_a_tinted_bubble_on_the_right_at_most_seventy_percent_wide() {
     assert!(time.style.add_modifier.contains(Modifier::DIM));
     assert_eq!(
         lines.get(1).map(ToString::to_string).as_deref(),
-        Some(" word word word word word word word ▐")
+        Some(" word word word word word word word word ▐")
     );
     assert_eq!(
         lines.get(3).map(ToString::to_string).as_deref(),
-        Some(format!(" word word word word word word{}▐", " ".repeat(6)).as_str())
+        Some(format!(" word word word word{}▐", " ".repeat(21)).as_str())
     );
 }
 

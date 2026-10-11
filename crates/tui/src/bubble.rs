@@ -1,4 +1,4 @@
-//! The person's prompt as a tinted bubble on the right, at most 70% of
+//! The person's prompt as a tinted bubble on the right, at most 72% of
 //! the width, with half-block edges and the prompt stripe
 //! (`docs/tui.md`, "Turns", "Look").
 
@@ -21,9 +21,9 @@ pub(crate) fn rows(text: &str, columns: u16, out: &mut Rows) {
         narrow(text, columns, out);
         return;
     }
-    // The bubble is 70% of the columns, at least 4: the left pad, the
+    // The bubble is 72% of the columns, at least 4: the left pad, the
     // text, the right pad and the stripe.
-    let bubble = usize::from(columns).saturating_mul(7) / 10;
+    let bubble = usize::from(columns).saturating_mul(72) / 100;
     let bubble = bubble.clamp(4, usize::from(columns));
     let wrapped = wrap_joined(text, bubble.saturating_sub(3));
     let widest = wrapped.iter().map(|(row, _)| width(row)).max().unwrap_or(0);
