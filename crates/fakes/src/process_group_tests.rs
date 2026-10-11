@@ -17,7 +17,7 @@ use super::{
     GONE_ARGS, MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, PS_TIMEOUT, WATCHDOG_SCRIPT, alive,
     bounded, group_empties, group_lives, kill_group, kill_matching, kill_pid, listed_exit,
     matching, matching_exits, pattern, pids_exit, read_lookup, signal_group, signal_named,
-    signal_pid, spawn_lookup, try_matching_exits,
+    signal_pid, spawn_lookup, try_matching_exits, wait_exits,
 };
 use crate::deadline::Deadline;
 
@@ -628,6 +628,45 @@ fn pids_exit_waits_for_both_pids() {
         Ok(true),
         "waited {DEADLINE:?} for both pids to exit"
     );
+}
+
+#[test]
+fn wait_exits_probes_a_live_pid_about_every_10_ms() {
+    let mut child = held();
+    let pid = child.id();
+    let stdin = child.stdin.take().unwrap();
+    let (stop, stopped) = mpsc::channel::<()>();
+    let (answered, answer) = mpsc::channel();
+    thread::spawn(move || {
+        let mut probes = 0;
+        let exited = wait_exits(&[pid], &stopped, |id| {
+            probes += 1;
+            alive(id)
+        });
+        match answered.send((exited, probes)) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    // The pid lives, so no answer arrives within 100 ms: the receive must
+    // time out, bounding the probes below. Dropping `stop` then ends the
+    // wait, so a mutant that stopped probing cannot hang the test either.
+    assert!(
+        Deadline::after(Duration::from_millis(100))
+            .recv(&answer)
+            .is_err(),
+        "wait_exits answered while its pid lived"
+    );
+    drop(stop);
+    let (exited, probes) = Deadline::after(DEADLINE)
+        .recv(&answer)
+        .expect("waited {DEADLINE:?} for wait_exits to end once stopped");
+    assert!(!exited, "a live pid must not read as exited");
+    assert!(
+        probes <= 20,
+        "100 ms at a 10 ms poll is about 11 probes, got {probes}"
+    );
+    drop(stdin);
+    reaped(child, "the held child to exit once its stdin closed");
 }
 
 #[test]
