@@ -293,7 +293,7 @@ fn the_pace_is_the_encoded_event_length() {
     let text = "a\"\n\u{1}é".repeat(2000);
     queue(&shared, text.as_bytes());
     stream.pass(&shared, clock.as_ref());
-    assert_eq!(texts(&deltas), [text.clone()]);
+    assert_eq!(texts(&deltas), [text.as_str()]);
     let event = Event::JobDelta(JobDelta {
         job_id: JobId("j_x".to_owned()),
         progress: Progress {

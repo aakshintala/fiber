@@ -482,7 +482,8 @@ pub(crate) fn glob_match(pattern: &[u8], text: &[u8], ignore_case: bool) -> bool
             star_ti = ti;
             pi = resume;
         } else if let Some((token, next)) = read_token(pattern, pi)
-            && token_matches(&token, text[ti], ignore_case)
+            && let Some(byte) = text.get(ti)
+            && token_matches(&token, *byte, ignore_case)
         {
             pi = next;
             ti += 1;
