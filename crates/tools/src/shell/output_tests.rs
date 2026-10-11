@@ -123,6 +123,17 @@ fn assert_delta_eq(actual: &str, expected: &str) {
     assert_eq!(offset, None, "first differing byte offset");
 }
 
+/// Asserts `actual` equals `expected` by length and first differing
+/// offset, without printing either whole on failure.
+fn assert_same_bytes(actual: &[u8], expected: &[u8]) {
+    assert_eq!(actual.len(), expected.len(), "bytes length");
+    let offset = actual
+        .iter()
+        .zip(expected.iter())
+        .position(|(left, right)| left != right);
+    assert_eq!(offset, None, "first differing byte offset");
+}
+
 #[test]
 fn the_first_change_goes_out_at_once_and_later_ones_collapse() {
     let (clock, deltas, mut stream, shared) = stream();
@@ -450,8 +461,7 @@ fn a_pending_push_of_exactly_64_kib_keeps_everything() {
     let mut pending = Pending::default();
     pending.push(&vec![b'a'; HELD_MAX]);
     assert!(!pending.dropped);
-    assert_eq!(pending.bytes.len(), HELD_MAX);
-    assert_eq!(pending.bytes, vec![b'a'; HELD_MAX]);
+    assert_same_bytes(&pending.bytes, &vec![b'a'; HELD_MAX]);
 }
 
 #[test]
@@ -461,8 +471,7 @@ fn a_pending_push_of_one_byte_past_64_kib_drops_the_first_byte() {
     over.extend_from_slice(&vec![b'a'; HELD_MAX]);
     pending.push(&over);
     assert!(pending.dropped);
-    assert_eq!(pending.bytes.len(), HELD_MAX);
-    assert_eq!(pending.bytes, vec![b'a'; HELD_MAX]);
+    assert_same_bytes(&pending.bytes, &vec![b'a'; HELD_MAX]);
 }
 
 #[test]
@@ -478,8 +487,7 @@ fn a_pending_cut_skips_at_most_three_leading_continuation_bytes() {
         let skipped = n.min(3);
         let mut expected = vec![0x80; n - skipped];
         expected.extend_from_slice(&vec![b'a'; HELD_MAX - n]);
-        assert_eq!(pending.bytes.len(), HELD_MAX - skipped, "n = {n}");
-        assert_eq!(pending.bytes, expected, "n = {n}");
+        assert_same_bytes(&pending.bytes, &expected);
     }
 }
 
@@ -503,12 +511,7 @@ fn a_pending_cut_skips_only_continuation_bytes() {
             expected.push(lead);
         }
         expected.extend_from_slice(&vec![b'a'; HELD_MAX - 1]);
-        assert_eq!(
-            pending.bytes.len(),
-            HELD_MAX - usize::from(skipped),
-            "lead = {lead:#X}"
-        );
-        assert_eq!(pending.bytes, expected, "lead = {lead:#X}");
+        assert_same_bytes(&pending.bytes, &expected);
     }
 }
 
@@ -521,8 +524,7 @@ fn two_pending_pushes_past_the_cap_keep_the_last_64_kib_in_order() {
     assert!(pending.dropped);
     let mut expected = vec![b'a'; 25_536];
     expected.extend_from_slice(&vec![b'b'; 40_000]);
-    assert_eq!(pending.bytes.len(), HELD_MAX);
-    assert_eq!(pending.bytes, expected);
+    assert_same_bytes(&pending.bytes, &expected);
 }
 
 #[test]
@@ -541,7 +543,7 @@ fn a_pending_take_clears_both_bytes_and_flag() {
     pending.push(&over);
     let (bytes, dropped) = pending.take();
     assert!(dropped);
-    assert_eq!(bytes, vec![b'a'; HELD_MAX]);
+    assert_same_bytes(&bytes, &vec![b'a'; HELD_MAX]);
     assert!(pending.bytes.is_empty());
     let (_, dropped) = pending.take();
     assert!(!dropped);
