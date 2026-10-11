@@ -1,7 +1,9 @@
 //! A provider's Lua (`docs/model-routing.md`, "Model discovery", "Signing a
 //! request" and "Credentials"): its model list from `models()`, cached on
 //! disk and refreshed in the background; its token from `credential()`,
-//! refreshed off the request path before it expires; and `sign()`, the one
+//! refreshed off the request path before it expires; its quota from
+//! `quota()`, cached per credential label and refreshed off the request
+//! path (`docs/tools.md`, "Provider quota"); and `sign()`, the one
 //! function on the request path, which sees the body's SHA-256 and never the
 //! body.
 
@@ -25,8 +27,10 @@ use crate::host::sha256_hex;
 use crate::{Error, LuaExtension};
 
 mod login;
+mod quota;
 
 pub use login::{LoggedIn, LoginMethod, StoredLogin};
+pub use quota::{Quota, QuotaEntry, Window, WindowUse};
 
 /// How long before its expiry a token is refreshed.
 pub const REFRESH_BEFORE: Duration = Duration::from_secs(5 * 60);
@@ -72,6 +76,9 @@ pub struct LuaProvider {
     /// Completed call values, bounded per pair, plus the values currently
     /// handed to running calls (`docs/errors.md`, "The shape").
     used: Mutex<BTreeMap<CredentialPair, UsedState>>,
+    /// One quota cache per credential label, refreshed off the request path
+    /// (`docs/tools.md`, "Provider quota").
+    quotas: quota::Quotas,
     /// A test's signal just before a caller waits on [`LuaProvider::fetched`].
     #[cfg(test)]
     waiting: Mutex<Option<mpsc::Sender<()>>>,
@@ -200,6 +207,7 @@ impl LuaProvider {
     /// The provider `name` of `extension`. Its model cache and secrets use
     /// the extension's Fiber home.
     pub fn new(extension: Arc<LuaExtension>, name: impl Into<String>) -> Arc<Self> {
+        let quotas = quota::Quotas::new(extension.clock());
         Arc::new(Self {
             extension,
             name: name.into(),
@@ -207,6 +215,7 @@ impl LuaProvider {
             token: Mutex::default(),
             fetched: Condvar::new(),
             used: Mutex::default(),
+            quotas,
             #[cfg(test)]
             waiting: Mutex::default(),
             #[cfg(test)]
