@@ -1,7 +1,8 @@
 //! The hook seam (`docs/architecture.md`, "Hook seam"): "here is what is
 //! about to happen: allow it, change it, or refuse it". The loop asks
 //! through [`Hooks`] and never learns which extension answered, except as
-//! data on the answer. `contract` holds no behaviour.
+//! data on the answer. `contract` holds no behaviour beyond checking that a value fits the
+//! vocabulary, and pure conversions of its own values.
 
 use serde_json::{Map, Value};
 

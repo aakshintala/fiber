@@ -1,5 +1,6 @@
 //! Standing rules (`docs/permissions.md`, "Remembering a decision"): data and
-//! a trait only. `contract` holds no behaviour.
+//! a trait only. `contract` holds no behaviour beyond checking that a value
+//! fits the vocabulary, and pure conversions of its own values.
 
 use serde::{Deserialize, Serialize};
 
