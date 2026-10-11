@@ -143,7 +143,7 @@ fn the_queue_draws_heading_rows_and_footer() {
         "  • Steering, joins the turn at the next step",
         "  ↳ use the parser  ✕",
         "  ↳ and test it",
-        "  ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop",
+        "  ⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop",
     ] {
         assert!(shown.contains(line), "{line}\n{shown}");
     }
@@ -442,14 +442,14 @@ fn while_editing_the_stripe_is_attention_with_its_hint() {
         Role::Attention.color().into()
     );
     // The hint ends at the box's right end, dim throughout.
-    let hint = "editing a queued message · enter amends · ⌥x drops · esc stops";
+    let hint = "editing a queued message · Enter amends · ⌥X drops · Esc stops";
     let shown = screen(&app, 80, 12);
     assert!(shown.contains(hint), "{shown}");
     let row = shown
         .lines()
         .find(|row| row.contains("editing a queued message"))
         .expect("the hint row");
-    assert!(row.ends_with("esc stops"), "{row:?}");
+    assert!(row.ends_with("Esc stops"), "{row:?}");
     let y = shown
         .lines()
         .position(|r| r == row)
@@ -526,7 +526,7 @@ fn the_hint_starts_at_the_drafts_end() {
             (0..60)
                 .map(|x| buf[(x, *y)].symbol().to_owned())
                 .collect::<String>()
-                .contains("esc sto")
+                .contains("Esc sto")
         })
         .expect("the hint row");
     assert_eq!(buf[(15, y)].symbol(), "█");

@@ -3430,7 +3430,7 @@ fn input_box(ui: &Ui, w: usize) -> Vec<Row> {
         line.extend([
             t(),
             sp(
-                "editing a queued message · enter amends · ⌥x drops · esc stops ",
+                "editing a queued message · Enter amends · ⌥X drops · Esc stops ",
                 dim(),
             ),
         ]);
@@ -3466,7 +3466,7 @@ fn view_header(name: &str, cmd: &str) -> Row {
             sp(name.to_string(), bold()),
             sp(format!("  {cmd}"), dim()),
             t(),
-            sp("esc returns ", dim()),
+            sp("Esc returns ", dim()),
         ],
         bg: Some(BI),
         act: Some(Act::Back),
@@ -3680,7 +3680,7 @@ fn approval_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, w: usize) -> Vec<Row
         ),
         (sp(format!(" · {}", f.asker(&p.sid)), fg(ORANGE)), None),
         (t(), None),
-        (sp("esc puts it aside", dim()), None),
+        (sp("Esc puts it aside", dim()), None),
     ])];
     rows.extend(wrap_rows(
         vec![
@@ -3749,7 +3749,7 @@ fn approval_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, w: usize) -> Vec<Row
     }
     rows.push(Row::default());
     rows.push(row(vec![sp(
-        "↑↓ choose · enter confirms · typing goes to the feedback · click a choice",
+        "↑↓ choose · Enter confirms · typing goes to the feedback · click a choice",
         dim(),
     )]));
     let rows = rows
@@ -3789,7 +3789,7 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
             Some(Act::NextPending),
         ));
     }
-    title.extend([(t(), None), (sp("esc: chat about this", dim()), None)]);
+    title.extend([(t(), None), (sp("Esc: chat about this", dim()), None)]);
     let mut rows = vec![hot_row(title), Row::default()];
     let mut tabs = vec![(sp("← ", dim()), None)];
     for (j, q) in fields.iter().enumerate() {
@@ -3925,7 +3925,7 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
             ]));
         }
         rows.push(Row::default());
-        rows.push(row(vec![sp("←→ question · ↑↓ choose · enter chooses and moves on · space toggles · type to answer in words", dim())]));
+        rows.push(row(vec![sp("←→ question · ↑↓ choose · Enter chooses and moves on · Space toggles · type to answer in words", dim())]));
     } else {
         rows.extend([row(vec![sp("Review", bold())]), Row::default()]);
         for (j, q) in fields.iter().enumerate() {
@@ -3981,7 +3981,7 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
         ]));
         rows.push(Row::default());
         rows.push(row(vec![sp(
-            "←→ question · enter submits · type to add the note · esc: chat about this",
+            "←→ question · Enter submits · type to add the note · Esc: chat about this",
             dim(),
         )]));
     }
@@ -4054,7 +4054,7 @@ fn bottom(
         s.extend(glimmer("Working", tick, v.reduced));
         // Esc interrupts only when nothing is open, so the hint shows only then
         let hint = if ui.nothing_open(f) {
-            " · esc to interrupt"
+            " · Esc to interrupt"
         } else {
             ""
         };
@@ -4084,7 +4084,7 @@ fn bottom(
             ]));
         }
         out.push(row(vec![sp(
-            "      ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop",
+            "      ⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop",
             dim(),
         )]));
     }

@@ -53,7 +53,7 @@ no rail. It is centred. From the top:
 
 1. the logo, centred over the box
 2. a large input box, whose bottom row carries the workspace chip, the new worktree
-   switch, and the model and thinking chips and "enter starts a session"
+   switch, and the model and thinking chips and "Enter starts a session"
 3. under the box, at its width, the session list ("The session list")
 
 A key hint sits at the foot. It names the key map action's bound key,
@@ -409,7 +409,7 @@ it starts and after each turn.
 
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
-bold, its command dim ("  /context"), and "esc returns" dim, right-aligned;
+bold, its command dim ("  /context"), and "Esc returns" dim, right-aligned;
 a click on it returns too. The views are:
 
 - **A delegate's or job's view.** Its header is a breadcrumb
@@ -527,10 +527,10 @@ a click on it returns too. The views are:
 
 ### The working line
 
-The working line ("⠋ Working 11m 14s · esc to interrupt") sits at the bottom of
+The working line ("⠋ Working 11m 14s · Esc to interrupt") sits at the bottom of
 the conversation, above the steering queue, not in the input box. It is
 indented two columns: a braille spinner (⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏) in
-`attention`, "Working", then the elapsed time dim and " · esc to interrupt"
+`attention`, "Working", then the elapsed time dim and " · Esc to interrupt"
 dim, the hint only while nothing is open ("Keys").
 
 A glimmer runs across its word: a band three cells wide sweeps left to right,
@@ -733,10 +733,10 @@ queue. ⌥↑ and ⌥↓ select a row and load it into the input box, Enter send
 The queue is indented two columns under the working line: "• Steering, joins
 the turn at the next step" dim; each message "  ↳ <text>  ✕" dim, or "  ▸ "
 in `attention` and the text in the text colour while it is selected; then
-"⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop" dim. A click
+"⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop" dim. A click
 on a row selects it and a click on its ✕ drops it. While a message is being
 edited, the input box's stripe is `attention` and the box ends, right-aligned
-and dim, "editing a queued message · enter amends · ⌥x drops · esc stops".
+and dim, "editing a queued message · Enter amends · ⌥X drops · Esc stops".
 
 ### Interrupts
 
@@ -891,7 +891,7 @@ and a space: the `approval` tint and an `attention` stripe for a standing
 ask, the `alert` tint and an `error` stripe for a reviewer's escalation.
 
 ```
-▌ Approval 1 of 2 · main · irreversible                  esc puts it aside
+▌ Approval 1 of 2 · main · irreversible                  Esc puts it aside
 ▌ shell cargo mutants -p hub
 ▌ runs a command, writes files · asked by the project rule cargo
 ▌
@@ -900,12 +900,12 @@ ask, the `alert` tint and an `error` stripe for a reviewer's escalation.
 ▌   3 Always allow in this project cargo mutants *
 ▌   4 Deny  type to add feedback
 ▌
-▌ ↑↓ choose · enter confirms · typing goes to the feedback · click a choice
+▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
 ```
 
 - The first row is "Approval k of n" bold in `attention`, which moves to the
   next request on a click, " · " and the asking session in `attention`,
-  " · irreversible" in `error` when the call declares itself so, and "esc
+  " · irreversible" in `error` when the call declares itself so, and "Esc
   puts it aside" dim, right-aligned.
 - Then the tool's name bold in `info` and its main argument bold, wrapped.
 - Then one dim facts line: the call's declared effects joined by ", ",
@@ -958,7 +958,7 @@ The form is an `approval` slab with ▄ and ▀ edges, every row starting with a
 ▌ stripe in `secondary` and a space:
 
 ```
-▌ Question from main · 3 questions, any can be skipped · 1 of 2      esc: chat about this
+▌ Question from main · 3 questions, any can be skipped · 1 of 2      Esc: chat about this
 ▌
 ▌ ←  ✔ Scope    ☐ Tests    ☐ Docs    ✔ Submit  →
 ▌
@@ -970,12 +970,12 @@ The form is an `approval` slab with ▄ and ▀ edges, every row starting with a
 ▌   3 ✎ Type an answer, alone or with the options
 ▌   Next →
 ▌
-▌ ←→ question · ↑↓ choose · enter chooses and moves on · space toggles · type to answer in words
+▌ ←→ question · ↑↓ choose · Enter chooses and moves on · Space toggles · type to answer in words
 ```
 
 - The title row is "Question" bold in `secondary`, " from <session> · N
   questions, any can be skipped" in `secondary`, " · k of n" bold in
-  `secondary` when more requests wait, and "esc: chat about this" dim,
+  `secondary` when more requests wait, and "Esc: chat about this" dim,
   right-aligned. A blank row follows.
 - The tab row: "← " dim, a tab per question, " ☐ <header> " or, once
   answered, " ✔ <header> " in `accent`, the current tab reversed, then
@@ -992,8 +992,8 @@ The form is an `approval` slab with ▄ and ▀ edges, every row starting with a
   options), or the answer bold with a cursor.
 - In a multi-choice question, "Next →", or "Review →" on the last question,
   in `secondary`, bold under the cursor.
-- After a blank row, the hint, dim: "←→ question · ↑↓ choose · enter chooses
-  and moves on · space toggles · type to answer in words".
+- After a blank row, the hint, dim: "←→ question · ↑↓ choose · Enter chooses
+  and moves on · Space toggles · type to answer in words".
 
 The Submit tab is "Review" bold, a blank row, one row per question, its
 header padded to 13 columns in `accent` and the answer bold or "skipped" dim,
@@ -1001,7 +1001,7 @@ then "▸ " in `secondary`, "note" in `accent` and "Add a note on the whole
 form" dim, or the note bold, with a cursor. After a blank row, " Submit "
 reversed and " Chat about this " on the `rule` tint, then "  declines and
 ends the turn, so you can answer in your own words" dim; after a blank row,
-the hint, "←→ question · enter submits · type to add the note · esc: chat
+the hint, "←→ question · Enter submits · type to add the note · Esc: chat
 about this", dim.
 
 In the turn's card the answers are a rule like a steering message: "you
@@ -1178,7 +1178,7 @@ search box and the draft shows without a cursor.
 |---|---|---|---|
 | Send a prompt, or a steering message during a turn | `send` | Enter | |
 | Insert a line break | `line_break` | Shift+Enter | Ctrl+J |
-| Close what is on top; interrupt the turn when nothing is open | `close_or_interrupt` | Esc | click the overlay's ✕ or outside it; click "esc to interrupt" |
+| Close what is on top; interrupt the turn when nothing is open | `close_or_interrupt` | Esc | click the overlay's ✕ or outside it; click "Esc to interrupt" |
 | Clear the draft, then quit | `clear_then_quit` | Ctrl+C, twice within about a second on an empty box | `/quit` |
 | Go home | `go_home` | ⌥0 | `/home` |
 | Start a new session | `new_session` | Ctrl+N | `/new` |
@@ -1403,8 +1403,8 @@ widening it. Esc goes back to the provider list.
 - **Quit** is a second Ctrl+C, or `/quit`. With no session working, meaning
   no turn, job or delegate running, the terminal exits without asking. With
   some working, it asks in an overlay ("Look", "Overlays"): the title
-  "Quit", "2 sessions working" dim, then three choices, "enter" to leave them
-  running, "c" to close all and "esc" to stay, with Enter's focused. The
+  "Quit", "2 sessions working" dim, then three choices, "Enter" to leave them
+  running, "c" to close all and "Esc" to stay, with Enter's focused. The
   footer reads "click a choice · they keep running meanwhile".
   - Enter, the default, leaves them running. The terminal closes its
     connections, and each session follows the lifecycle rules
@@ -1571,9 +1571,9 @@ the model picker inside its view.
 ▌
 ▌  2 sessions working
 ▌
-▌  › enter  leave them running
+▌  › Enter  leave them running
 ▌    c      close all
-▌    esc    stay
+▌    Esc    stay
 ▌
 ▌  click a choice · they keep running meanwhile
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

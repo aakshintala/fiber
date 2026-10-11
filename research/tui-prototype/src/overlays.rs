@@ -66,7 +66,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "quit",
         help: "the quit question",
-        check: "the question should read `2 sessions working` muted under a bold accent `Quit`; `enter` marked `›` with its key bold on a full-width accent bar and no `· default`; the foot sits left with the body and names no choice.",
+        check: "the question should read `2 sessions working` muted under a bold accent `Quit`; `Enter` marked `›` with its key bold on a full-width accent bar and no `· default`; the foot sits left with the body and names no choice.",
         build: || Look {
             kind: Kind::Quit,
             narrow: false,
@@ -168,7 +168,7 @@ const BINDINGS: &[Binding] = &[
         area: "Session",
         action: "Close what is on top; interrupt the turn when nothing is open",
         key: "Esc",
-        other: "click the overlay's ✕ or outside it; click \"esc to interrupt\"",
+        other: "click the overlay's ✕ or outside it; click \"Esc to interrupt\"",
         when: "",
     },
     Binding {
@@ -617,17 +617,17 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
 /// The quit question: who is working and the three ways out, the default on
 /// a full-width selection bar instead of `· default`.
 fn quit_body(inner: usize) -> Vec<super::Row> {
-    let key_w = panel::key_width(&["enter", "c", "esc"]);
+    let key_w = panel::key_width(&["Enter", "c", "Esc"]);
     let mut out = vec![row(vec![sp("2 sessions working", dim())]), row(vec![])];
     out.extend(panel::bar(panel::choice_row(
         true,
-        "enter",
+        "Enter",
         "leave them running",
         key_w,
         inner,
     )));
     out.extend(panel::choice_row(false, "c", "close all", key_w, inner));
-    out.extend(panel::choice_row(false, "esc", "stay", key_w, inner));
+    out.extend(panel::choice_row(false, "Esc", "stay", key_w, inner));
     out
 }
 
@@ -1385,8 +1385,8 @@ mod tests {
         assert!(t.contains("leave them running"));
         assert!(!t.contains("default"), "the rejected marker is back");
         let foot = line_with(&t, "click a choice");
-        assert!(!foot.contains("enter"), "foot repeats a choice");
-        assert!(!foot.contains("esc"), "foot repeats a choice");
+        assert!(!foot.contains("Enter"), "foot repeats a choice");
+        assert!(!foot.contains("Esc"), "foot repeats a choice");
         let buf = buffer(&c, 160, 48);
         let y = t
             .split('\n')

@@ -24,7 +24,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "empty",
         help: "no sessions yet: logo, input box, chips",
-        check: "the pixel logo four rows tall with `0.0.1` dim on the last row; under it the large input box with `/? for shortcuts`, the chip row and `enter starts a session`; under the box one dim `No sessions yet` line and no headers; the key hint at the foot.",
+        check: "the pixel logo four rows tall with `0.0.1` dim on the last row; under it the large input box with `/? for shortcuts`, the chip row and `Enter starts a session`; under the box one dim `No sessions yet` line and no headers; the key hint at the foot.",
         build: || Look {
             list: List::None,
             ..base()
@@ -519,7 +519,7 @@ fn chip_row(c: &Look) -> Vec<Span<'static>> {
     // No right-aligned tail: when long chips overflow, the hint gives
     // way, never the chips.
     s.push(sp("  ", Style::new()));
-    s.push(sp("enter starts a session", dim()));
+    s.push(sp("Enter starts a session", dim()));
     s
 }
 
@@ -999,7 +999,7 @@ fn frame(c: &Look, cols: usize, rows: usize, image: bool) -> Frame {
             }
         }
     }
-    let hint = "enter starts a session · ↑↓ select · q quits";
+    let hint = "Enter starts a session · ↑↓ select · q quits";
     if rows >= 2 {
         let pad = cols.saturating_sub(hint.width()) / 2;
         put(
@@ -2155,7 +2155,7 @@ mod tests {
         assert!(c.ui.completions.is_some());
         let buf = buffer(&c, 160, 48);
         let entry = find_row(&buf, 160, 48, "pick the model for this session");
-        let box_top = find_row(&buf, 160, 48, "enter starts a session");
+        let box_top = find_row(&buf, 160, 48, "Enter starts a session");
         assert!(entry < box_top, "the panel is not above the input box");
     }
 

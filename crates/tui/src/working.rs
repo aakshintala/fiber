@@ -25,7 +25,7 @@ pub(crate) struct Laid {
     pub(crate) word: Option<Range<usize>>,
     /// The spinner's cell, for its colour; none when cut or retrying.
     pub(crate) spinner: Option<usize>,
-    /// The cells of "esc to interrupt", while it shows.
+    /// The cells of "Esc to interrupt", while it shows.
     pub(crate) interrupt: Option<Range<u16>>,
     /// The retry form replaces the whole line.
     pub(crate) retrying: bool,
@@ -56,7 +56,7 @@ pub(crate) fn lay(working: &Working, now_ms: Option<u64>, spinner: &str, width: 
         Some(time) => format!("{INDENT}{spinner} {WORD} {time}"),
         None => format!("{INDENT}{spinner} {WORD}"),
     };
-    let tail = " · esc to interrupt";
+    let tail = " · Esc to interrupt";
     let room = usize::from(width);
     let (text, interrupt) = if format::width(&head) + format::width(tail) <= room {
         let start = u16::try_from(format::width(&head) + format::width(" · ")).unwrap_or(u16::MAX);

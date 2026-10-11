@@ -893,11 +893,11 @@ impl ModelPicker {
                 vec![
                     ("↑↓", "move"),
                     ("←→", "levels"),
-                    ("enter", "choose"),
-                    ("tab", "all"),
-                    ("ctrl+s", "session"),
-                    ("ctrl+r", "refresh"),
-                    ("esc", "close"),
+                    ("Enter", "choose"),
+                    ("Tab", "all"),
+                    ("Ctrl+S", "session"),
+                    ("Ctrl+R", "refresh"),
+                    ("Esc", "close"),
                 ]
             },
             // The selection may sit off the shown rows after a read
