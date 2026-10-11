@@ -132,7 +132,7 @@ pub(crate) fn specs(config: &Config) -> Result<Specs, Failure> {
                 });
                 continue;
             }
-            Entry::Stdio(spec) | Entry::Remote(spec) => spec,
+            Entry::Spec(spec) => spec,
         };
         let declared_entry = declared
             .as_ref()
@@ -161,13 +161,15 @@ pub(crate) fn specs(config: &Config) -> Result<Specs, Failure> {
     })
 }
 
-/// What one `mcp.servers` entry declares: a stdio spec, a remote spec,
-/// both transports (never started), or nothing to start.
+/// What one `mcp.servers` entry declares: a spec, both transports
+/// (never started), or nothing to start.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the spec is built and matched at once; boxing would allocate per entry"
+)]
 enum Entry {
-    /// A `command` without a `url`.
-    Stdio(mcp::ServerSpec),
-    /// A `url` without a `command`.
-    Remote(mcp::ServerSpec),
+    /// A runnable spec, of either transport.
+    Spec(mcp::ServerSpec),
     /// Both `command` and `url`, with whether the entry is `required`.
     Both { name: String, required: bool },
     /// Neither: nothing to start.
@@ -327,8 +329,8 @@ fn add_extension_tools(
     Ok(())
 }
 
-/// What the server `name` declares: a stdio spec, a remote spec, both
-/// transports, or nothing. The merged `command`, `args`, `env` and `url`
+/// What the server `name` declares: a spec, both transports, or
+/// nothing. The merged `command`, `args`, `env` and `url`
 /// are the person's and the repository's merged key by key; a
 /// repository's share is partitioned out by `specs`, never skipped here.
 fn spec(config: &Config, name: &str) -> Entry {
@@ -377,12 +379,7 @@ fn spec(config: &Config, name: &str) -> Entry {
         hints: hints(config, name),
         required,
     };
-    // The transport was just built above; the match names the entry kind.
-    if matches!(spec.transport, mcp::Transport::Http { .. }) {
-        Entry::Remote(spec)
-    } else {
-        Entry::Stdio(spec)
-    }
+    Entry::Spec(spec)
 }
 
 /// The merged `command`, `args`, `env` and `url` the repository's layer
