@@ -18,8 +18,8 @@ use similar::TextDiff;
 use matching::{Applied, Block, MatchError, Report};
 
 use crate::files::{
-    InspectError, Inspected, Shared, declare, effects_error, hash_bytes, inspect,
-    path_text, resolve, resolved, unsupported_message,
+    InspectError, Inspected, Shared, declare, effects_error, hash_bytes, inspect, path_text,
+    resolve, resolved, unsupported_message,
 };
 use crate::tool_util::failed;
 use crate::write::line_changes;
@@ -86,11 +86,9 @@ impl Tool for Edit {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let args: Args =
-            crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        let args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
         blocks(&args.edits).map_err(EffectsError::Arguments)?;
-        let resolved =
-            resolve(self.shared.workspace(), &args.path).map_err(effects_error)?;
+        let resolved = resolve(self.shared.workspace(), &args.path).map_err(effects_error)?;
         self.shared.note_judged(&args.path, &resolved);
         Ok(declare(Effect::Writes, false, &resolved))
     }

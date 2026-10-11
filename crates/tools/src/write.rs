@@ -69,10 +69,8 @@ impl Tool for Write {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let args: Args =
-            crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
-        let resolved =
-            resolve(self.shared.workspace(), &args.path).map_err(effects_error)?;
+        let args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        let resolved = resolve(self.shared.workspace(), &args.path).map_err(effects_error)?;
         self.shared.note_judged(&args.path, &resolved);
         Ok(declare(Effect::Writes, reversible(&resolved), &resolved))
     }

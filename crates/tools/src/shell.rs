@@ -402,7 +402,6 @@ fn workdir(workdir: Option<&str>, workspace: &Path) -> Result<PathBuf, String> {
     }
 }
 
-
 /// The first part is the text before the first `;`, `&`, `|` or newline.
 /// It is a bare wait when that part is `sleep` and one duration of 25 seconds
 /// or more.

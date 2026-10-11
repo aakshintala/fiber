@@ -14,8 +14,8 @@ use contract::shapes::{ContentPart, ImagePart, PdfPart};
 use contract::tool::{Cancel, Output};
 use serde_json::Value;
 
-use crate::tool_util::{failed, text_output};
 use crate::image::{ImageChild, run_to_end};
+use crate::tool_util::{failed, text_output};
 
 /// The most pages a PDF without `pages` may hold (`docs/tools.md`, "read").
 const WHOLE_MAX: u32 = 10;

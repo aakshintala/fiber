@@ -26,7 +26,6 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use ureq::http::Uri;
 
-
 use crate::tool_util::{failed, text_output};
 use download::{Artifact, Html, Sink, Wrap};
 use http::{Ended, Get, Head, Hop, Limit, Stop, guarded};
@@ -135,8 +134,7 @@ impl Tool for WebFetch {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let args: Args =
-            crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        let args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
         let uri = target::parse(&args.url).map_err(EffectsError::Arguments)?;
         Ok(crate::tool_util::effects(
             vec![Effect::Network],

@@ -172,7 +172,10 @@ i=0; while [ $i -lt 2048 ]; do printf a >&2; i=$((i+1)); done; exit 1"#,
 fn exit_3_exit_2_and_a_signal_are_tool_error() {
     let dir = workspace();
     for (body, expect) in [
-        ("cat >/dev/null; echo disk full >&2; exit 3", "exited with status 3"),
+        (
+            "cat >/dev/null; echo disk full >&2; exit 3",
+            "exited with status 3",
+        ),
         ("cat >/dev/null; exit 2", "exited with status 2"),
         ("cat >/dev/null; kill -9 $$", "killed by a signal"),
     ] {
@@ -192,7 +195,10 @@ fn unparseable_extra_or_incomplete_output_is_tool_error() {
     let dir = workspace();
     for (body, expect) in [
         ("cat >/dev/null; echo hello", "not JSON"),
-        ("cat >/dev/null; echo '{\"file\":\"x.png\"}'", "without file"),
+        (
+            "cat >/dev/null; echo '{\"file\":\"x.png\"}'",
+            "without file",
+        ),
         (
             "cat >/dev/null; echo '{\"file\":\"x.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}'; echo more",
             "more than one line",
@@ -406,8 +412,7 @@ exit 3"#,
     );
 }
 
-const OK_CHILD: &str =
-    r#"cat >/dev/null
+const OK_CHILD: &str = r#"cat >/dev/null
 printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#;
 
 /// A `write` of `a.png` through the same `Files` that read it.
@@ -548,7 +553,10 @@ fn process_exit_1_is_unreadable_with_the_childs_message() {
 fn process_exit_2_exit_3_and_a_signal_are_failed() {
     let dir = workspace();
     for (body, expect) in [
-        ("cat >/dev/null; echo disk full >&2; exit 3", "exited with status 3"),
+        (
+            "cat >/dev/null; echo disk full >&2; exit 3",
+            "exited with status 3",
+        ),
         ("cat >/dev/null; exit 2", "exited with status 2"),
         ("cat >/dev/null; kill -9 $$", "killed by a signal"),
     ] {
@@ -567,7 +575,10 @@ fn process_unparseable_extra_or_incomplete_output_is_failed() {
     let dir = workspace();
     for (body, expect) in [
         ("cat >/dev/null; echo hello", "not JSON"),
-        ("cat >/dev/null; echo '{\"file\":\"x.png\"}'", "without file"),
+        (
+            "cat >/dev/null; echo '{\"file\":\"x.png\"}'",
+            "without file",
+        ),
         (
             "echo '{\"file\":\"x.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}'; echo more",
             "more than one line",

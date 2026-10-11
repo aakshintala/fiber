@@ -12,11 +12,11 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::files::{
-    InspectError, Inspected, ResolveError, Shared, declare, effects_error, hash_bytes,
-    inspect, resolve, unsupported_message,
+    InspectError, Inspected, ResolveError, Shared, declare, effects_error, hash_bytes, inspect,
+    resolve, unsupported_message,
 };
-use crate::tool_util::{failed, text_output};
 use crate::pdf::{PageRange, page_range};
+use crate::tool_util::{failed, text_output};
 
 /// The tool's own cut (`docs/tools.md`, "Bounded results"): the default cap.
 /// The loop's bound sits above this, so a result is not cut twice and no
@@ -88,10 +88,8 @@ impl Tool for Read {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let args: Args =
-            crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
-        let resolved =
-            resolve(self.shared.workspace(), &args.path).map_err(effects_error)?;
+        let args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        let resolved = resolve(self.shared.workspace(), &args.path).map_err(effects_error)?;
         self.shared.note_judged(&args.path, &resolved);
         Ok(declare(Effect::Reads, true, &resolved))
     }

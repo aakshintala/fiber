@@ -78,8 +78,7 @@ impl Tool for SessionSearch {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let args: Args =
-            crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        let args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
         let scope = self.scan.scope(args.all_projects);
         Ok(effects(
             vec![Effect::Reads],

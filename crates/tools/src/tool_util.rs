@@ -98,7 +98,8 @@ pub(crate) fn recheck(
     judged: Option<&Path>,
     act: Act,
 ) -> Result<(), Output> {
-    let changed = held.is_some_and(|held| held != path) || judged.is_some_and(|judged| judged != path);
+    let changed =
+        held.is_some_and(|held| held != path) || judged.is_some_and(|judged| judged != path);
     if !changed {
         return Ok(());
     }

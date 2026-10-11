@@ -78,8 +78,9 @@ fn recheck_fails_when_the_held_path_differs() {
     assert_eq!(
         output.content,
         vec![ContentPart::Text {
-            text: "`a.txt` changed between the permission check and the write. Nothing was written.\n"
-                .to_owned()
+            text:
+                "`a.txt` changed between the permission check and the write. Nothing was written.\n"
+                    .to_owned()
         }]
     );
     assert_eq!(
@@ -118,8 +119,14 @@ fn recheck_passes_when_both_paths_agree() {
 
 #[test]
 fn recheck_passes_without_a_held_or_judged_path() {
-    recheck(Path::new("a.txt").as_os_str().to_str().unwrap_or("a.txt"), Path::new("/work/a.txt"), None, None, Act::Read)
-        .expect("a read with no lock passes");
+    recheck(
+        Path::new("a.txt").as_os_str().to_str().unwrap_or("a.txt"),
+        Path::new("/work/a.txt"),
+        None,
+        None,
+        Act::Read,
+    )
+    .expect("a read with no lock passes");
 }
 
 #[test]
@@ -154,7 +161,10 @@ fn arguments_names_a_missing_field() {
         error.starts_with("The arguments do not fit the schema:"),
         "unexpected message: {error}"
     );
-    assert!(error.contains("missing field `path`"), "unexpected message: {error}");
+    assert!(
+        error.contains("missing field `path`"),
+        "unexpected message: {error}"
+    );
     let map = json!({"path": "a.txt"}).as_object().unwrap().clone();
     let args = arguments::<Args>(&map).expect("a well-formed map parses");
     assert_eq!(args.path, "a.txt");

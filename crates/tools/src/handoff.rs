@@ -11,8 +11,6 @@ use serde_json::{Map, Value, json};
 
 use crate::tool_util::{failed, no_effects};
 
-
-
 /// The call's arguments, checked against the schema before the call runs.
 #[derive(Debug, Deserialize)]
 struct Args {
@@ -50,7 +48,8 @@ impl Tool for Handoff {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let _args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        let _args: Args =
+            crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
         Ok(no_effects())
     }
 

@@ -104,7 +104,6 @@ fn pdf_part(output: &Output) -> Option<(String, u32, Option<usize>)> {
     })
 }
 
-
 #[test]
 fn the_pdf_cap_fails_over_not_at() {
     for (len, over) in [
