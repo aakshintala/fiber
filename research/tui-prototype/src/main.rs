@@ -5265,12 +5265,9 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    // Home, the overlays, the login, the rail cases, the swapped views, the offers and the
-    // images draw no
-    // session, so there is nothing to resume, unless home switched to the conversation, whose
-    // replayed session resumes as usual.
-    // failures draw no session, so there is nothing to resume, unless home switched to the
-    // conversation, whose replayed session resumes as usual.
+    // Home, the overlays, the login, the rail cases, the swapped views, the offers, the images
+    // and the failures draw no session, so there is nothing to resume, unless home switched to
+    // the conversation, whose replayed session resumes as usual.
     if a.home.is_none()
         && a.overlay.is_none()
         && a.login.is_none()
