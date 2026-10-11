@@ -1420,12 +1420,19 @@ fn a_call_queued_behind_a_stalled_notice_is_never_sent_once_timed_out() {
     );
     assert!(answered.is_ok(), "the third call answers: {answered:?}");
     // The removed exchange was spawned before the third call's, so a
-    // build that sends it has its request recorded by now. Poll briefly,
-    // so the absence below never races a thread still starting.
-    let settled = std::time::Instant::now();
-    while server.requests().len() < 7 && settled.elapsed() < Duration::from_millis(500) {
-        std::thread::sleep(Duration::from_millis(20));
+    // build that sends it has its request recorded by now. Poll briefly
+    // through the wall-clock deadline, so the absence below never races
+    // a thread still starting.
+    let (live, waiting) = std::sync::mpsc::channel::<()>();
+    for _ in 0..25 {
+        if server.requests().len() >= 7 {
+            break;
+        }
+        match Deadline::after(Duration::from_millis(20)).recv(&waiting) {
+            Ok(()) | Err(_) => {}
+        }
     }
+    drop(live);
     let mut ids: Vec<Value> = server
         .requests()
         .iter()
