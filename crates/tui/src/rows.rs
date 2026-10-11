@@ -132,9 +132,13 @@ impl Rows {
     /// [`Rows::on_surface`], whose edge rows are never padded.
     pub(crate) fn pad(&mut self, from: usize, pad: u16, inner: u16) {
         let mut at = from;
-        while let (Some((line, target)), Some(text)) =
-            (self.rows.get(at).cloned(), self.texts.get(at).cloned())
-        {
+        let original_len = self.rows.len();
+        for _ in from..original_len {
+            let (Some((line, target)), Some(text)) =
+                (self.rows.get(at).cloned(), self.texts.get(at).cloned())
+            else {
+                break;
+            };
             let cells = cells_of(&line);
             let off = offsets(&cells);
             let total = off.last().copied().unwrap_or(0);
@@ -312,15 +316,15 @@ fn plan(cells: &[Cell<'_>], inner: usize) -> Vec<Planned> {
     let mut plans = Vec::new();
     let mut at = 0;
     let mut join = Join::Break;
-    loop {
+    for _ in 0..cells.len() {
         let mut end = at;
         let mut used = 0;
-        while let Some(cell) = cells.get(end) {
+        for (index, cell) in cells.iter().enumerate().skip(at) {
             if used + cell.width > inner {
                 break;
             }
             used = used.saturating_add(cell.width);
-            end = end.saturating_add(1);
+            end = index.saturating_add(1);
         }
         let end = end.max(at.saturating_add(1));
         if end == cells.len() {
