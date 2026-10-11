@@ -706,10 +706,7 @@ fn provider_quota_call_cases_match_returns_errors_and_use_no_socket() {
   return {{ credit = {{ remaining = data.limit_remaining, limit = data.limit }} }}
 end }} }})"#
     );
-    let setup = setup_named(
-        "github.com/aakshintala/fiber/providers/openrouter",
-        &lua,
-    );
+    let setup = setup_named("github.com/aakshintala/fiber/providers/openrouter", &lua);
     let mut good = json!({
         "call": {"provider": "openrouter", "function": "quota", "arg": {"key": "secret"}},
         "host": {"http": [{

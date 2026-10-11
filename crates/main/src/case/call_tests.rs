@@ -64,10 +64,7 @@ fn quota_takes_an_optional_label_and_key() {
         function: "quota".to_owned(),
         arg: json!({"label": "work"}),
     };
-    assert_eq!(
-        super::ready(&labelled).unwrap().label(),
-        Some("work")
-    );
+    assert_eq!(super::ready(&labelled).unwrap().label(), Some("work"));
     let bare = super::Call {
         provider: "p".to_owned(),
         function: "quota".to_owned(),

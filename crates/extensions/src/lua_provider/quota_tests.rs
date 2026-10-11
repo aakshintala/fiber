@@ -968,7 +968,10 @@ fn fetch_quota_passes_label_credential_and_key() {
         Some(percent("work/codex/nil", 0.0, None)),
         "an absent key did not arrive absent"
     );
-    assert_eq!(raw["windows"][0]["name"], serde_json::json!("work/codex/nil"));
+    assert_eq!(
+        raw["windows"][0]["name"],
+        serde_json::json!("work/codex/nil")
+    );
 }
 
 #[test]
@@ -990,8 +993,7 @@ fn a_read_passes_its_key() {
 #[test]
 fn a_model_call_fetches_with_the_bound_key() {
     let root = fakes::TempDir::new("fiber-quota-bound-key");
-    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))])
-        .unwrap();
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
     server.hold();
     let home = root.path().join("home");
     let dir = root.path().join("ext");
@@ -1025,7 +1027,8 @@ fn a_model_call_fetches_with_the_bound_key() {
         "the model call never started the fetch"
     );
     assert_eq!(
-        server.requests()[0].path, "/work/sk-test",
+        server.requests()[0].path,
+        "/work/sk-test",
         "the bound key did not make the fetch"
     );
     server.release();
@@ -1035,10 +1038,7 @@ fn a_model_call_fetches_with_the_bound_key() {
         let lua = Arc::clone(&lua);
         within(move || lua.quota(&pair(), None))
     };
-    assert_eq!(
-        found,
-        QuotaEntry::Reported(percent("primary", 10.0, None))
-    );
+    assert_eq!(found, QuotaEntry::Reported(percent("primary", 10.0, None)));
     assert_eq!(
         server.requests().len(),
         1,
@@ -1049,11 +1049,7 @@ fn a_model_call_fetches_with_the_bound_key() {
 #[test]
 fn fetch_quota_reports_a_bad_return_and_a_raise_as_errors() {
     let root = fakes::TempDir::new("fiber-quota-bad-return");
-    let provider = quota_provider_on(
-        &root,
-        "{ credit = \"x\" }",
-        FakeClock::new(),
-    );
+    let provider = quota_provider_on(&root, "{ credit = \"x\" }", FakeClock::new());
     let err = {
         let provider = Arc::clone(&provider);
         within(move || provider.fetch_quota(&pair(), None))

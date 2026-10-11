@@ -525,7 +525,10 @@ fn quota_args(value: &Value) -> Result<Ready, String> {
     let map = value
         .as_object()
         .ok_or("call.arg: quota expects an object")?;
-    if map.keys().any(|key| !["label", "key"].contains(&key.as_str())) {
+    if map
+        .keys()
+        .any(|key| !["label", "key"].contains(&key.as_str()))
+    {
         return Err("call.arg: quota takes only label and key".to_owned());
     }
     let label = match map.get("label") {
