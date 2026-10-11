@@ -178,6 +178,12 @@ fn with_cpu(mut results: Value, model: &str) -> Value {
     results
 }
 
+/// `results` with its `binary_size_bytes` field set to `bytes`.
+fn with_size(mut results: Value, bytes: u64) -> Value {
+    results["binary_size_bytes"] = json!(bytes);
+    results
+}
+
 fn judge(head: &Value, base: Option<&Value>, event: Event) -> Report {
     judge_doc(DOC, head, base, event)
 }
@@ -1792,6 +1798,153 @@ fn the_run_count_sentence_follows_the_head_file() {
         "{}",
         out.comment
     );
+}
+
+#[test]
+fn the_comment_shows_head_and_base_size_and_the_change() {
+    let out = report(
+        DOC,
+        &with_size(head(), 1000).to_string(),
+        Some(Ok(with_size(base(), 900).to_string())),
+        None,
+        Event::PullRequest,
+        "anc0000",
+    );
+    assert!(
+        out.comment.contains("- Head size: 1000 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(
+        out.comment.contains("- Base size (anc0000): 900 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(
+        out.comment
+            .contains("- Size change, head - base: +100 bytes"),
+        "{}",
+        out.comment
+    );
+    assert_eq!(out.failures, Vec::<String>::new());
+
+    let out = report(
+        DOC,
+        &with_size(head(), 900).to_string(),
+        Some(Ok(with_size(base(), 1000).to_string())),
+        None,
+        Event::PullRequest,
+        "anc0000",
+    );
+    assert!(
+        out.comment
+            .contains("- Size change, head - base: -100 bytes"),
+        "{}",
+        out.comment
+    );
+
+    let out = report(
+        DOC,
+        &with_size(head(), 1000).to_string(),
+        Some(Ok(with_size(base(), 1000).to_string())),
+        None,
+        Event::PullRequest,
+        "anc0000",
+    );
+    assert!(
+        out.comment.contains("- Size change, head - base: +0 bytes"),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
+fn a_file_without_a_size_shows_not_recorded() {
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert!(
+        out.comment.contains("- Head size: not recorded"),
+        "{}",
+        out.comment
+    );
+    assert!(out.comment.contains("- Base size ("), "{}", out.comment);
+    assert!(out.comment.contains(": not recorded"), "{}", out.comment);
+    assert!(!out.comment.contains("Size change"), "{}", out.comment);
+    assert!(
+        !out.failures.iter().any(|f| f.contains("binary_size")),
+        "{:?}",
+        out.failures
+    );
+
+    let out = judge(&with_size(head(), 1000), Some(&base()), Event::PullRequest);
+    assert!(
+        out.comment.contains("- Head size: 1000 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("Size change"), "{}", out.comment);
+
+    let out = judge(&head(), Some(&with_size(base(), 900)), Event::PullRequest);
+    assert!(
+        out.comment.contains("- Head size: not recorded"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("Size change"), "{}", out.comment);
+}
+
+#[test]
+fn the_base_size_line_names_no_commit_when_none_is_given() {
+    let out = report(
+        DOC,
+        &with_size(head(), 1000).to_string(),
+        Some(Ok(with_size(base(), 900).to_string())),
+        None,
+        Event::PullRequest,
+        "",
+    );
+    assert!(
+        out.comment.contains("- Base size: 900 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("- Base size ("), "{}", out.comment);
+}
+
+#[test]
+fn a_push_or_a_failed_base_shows_the_head_size_alone() {
+    let headed = with_size(head(), 1000);
+    let based = with_size(base(), 900);
+    let out = report(
+        DOC,
+        &headed.to_string(),
+        Some(Ok(based.to_string())),
+        None,
+        Event::Push,
+        "base0000",
+    );
+    assert!(
+        out.comment.contains("- Head size: 1000 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("Base size"), "{}", out.comment);
+    assert!(!out.comment.contains("Size change"), "{}", out.comment);
+
+    let out = report(
+        DOC,
+        &headed.to_string(),
+        Some(Err("base.json: no such file".to_owned())),
+        None,
+        Event::PullRequest,
+        "base0000",
+    );
+    assert!(
+        out.comment.contains("- Head size: 1000 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("Base size"), "{}", out.comment);
+    assert!(!out.comment.contains("Size change"), "{}", out.comment);
 }
 
 #[test]
