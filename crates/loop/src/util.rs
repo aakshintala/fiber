@@ -50,37 +50,67 @@ pub(crate) fn variables() -> Variables {
     }
 }
 
-/// Writes `event` to `log` and renders it into `conversation` and
-/// `reviewed`: the one path every event the loop emits takes, so the
-/// conversation is the log's rendering (`docs/loop.md`, "What the model is
-/// sent") and the reviewer's transcript its projection
-/// (`docs/permissions.md`, "What it is shown"). `had` is the content the
-/// model last had per instruction file path, updated as instruction lines
-/// render. `carry` is the render state a handoff reads.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the one write path takes every sink it renders into"
-)]
-pub(crate) fn write(
-    log: &Log,
-    conversation: &mut Vec<Input>,
-    reviewed: &mut Vec<crate::reviewer::Reviewed>,
-    model: &str,
-    event: &Event,
-    turn: Option<&TurnId>,
-    action: Option<&ActionId>,
-    had: &mut BTreeMap<String, String>,
-    carry: &mut crate::handoff::Carry,
-) -> Result<(), Error> {
-    let line = log.append(event, turn.cloned(), action.cloned())?;
-    if event.class() == Class::Durable {
-        crate::conversation::render(conversation, event, action, model, had, carry);
-        crate::reviewer::render_reviewed(reviewed, event, action, line.seq);
+/// The render sinks every durable line is written into.
+pub(crate) struct Transcript<'a> {
+    /// The conversation, built from the durable events as they are written.
+    pub(crate) conversation: &'a mut Vec<Input>,
+    /// What the reviewer is shown, rendered from the same events.
+    pub(crate) reviewed: &'a mut Vec<crate::reviewer::Reviewed>,
+    /// The content the model last had per instruction file path.
+    pub(crate) had: &'a mut BTreeMap<String, String>,
+    /// The render state a handoff reads.
+    pub(crate) carry: &'a mut crate::handoff::Carry,
+}
+
+impl Transcript<'_> {
+    /// Writes `event` to `log` and renders it into the sinks: the one path
+    /// every event the loop emits takes, so the conversation is the log's
+    /// rendering (`docs/loop.md`, "What the model is sent") and the
+    /// reviewer's transcript its projection (`docs/permissions.md`, "What
+    /// it is shown"). A non-durable event is appended and renders nothing;
+    /// an append error returns before any render.
+    pub(crate) fn write(
+        &mut self,
+        log: &Log,
+        model: &str,
+        event: &Event,
+        turn: Option<&TurnId>,
+        action: Option<&ActionId>,
+    ) -> Result<(), Error> {
+        let line = log.append(event, turn.cloned(), action.cloned())?;
+        if event.class() == Class::Durable {
+            crate::conversation::render(
+                self.conversation,
+                event,
+                action,
+                model,
+                self.had,
+                self.carry,
+            );
+            crate::reviewer::render_reviewed(self.reviewed, event, action, line.seq);
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 impl crate::Loop {
+    /// Writes `event` to the log and renders it into the conversation and
+    /// the reviewer's transcript, through the one [`Transcript`] path.
+    pub(crate) fn write(
+        &mut self,
+        event: &Event,
+        turn: Option<&TurnId>,
+        action: Option<&ActionId>,
+    ) -> Result<(), crate::Error> {
+        Transcript {
+            conversation: &mut self.conversation,
+            reviewed: &mut self.reviewed,
+            had: &mut self.changes.had,
+            carry: &mut self.handoff.carry,
+        }
+        .write(&self.log, &self.model.reference, event, turn, action)
+    }
+
     /// Writes `event` and renders it into the conversation.
     pub(crate) fn append(
         &mut self,
