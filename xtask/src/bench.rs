@@ -169,6 +169,14 @@ const MEASURED: &[(&str, Check)] = &[
         "`paging` jig, slowest append frame",
         Check::Timing("paging_append_ms"),
     ),
+    (
+        "Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48",
+        Check::Timing("wheel_paging_ms"),
+    ),
+    (
+        "Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48",
+        Check::Timing("wheel_read_ms"),
+    ),
 ];
 
 /// Each row with no benchmark yet, by its Budget cell, and what owns it.

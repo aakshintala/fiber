@@ -491,6 +491,19 @@ fn ms_since(clock: &dyn Clock, since: Instant) -> f64 {
     clock.now().saturating_duration_since(since).as_secs_f64() * 1000.0
 }
 
+/// Reads the report's send time, then runs `write`, and returns that
+/// time. The read comes first so a frame the reader timestamps after the
+/// write still covers the report.
+fn send_stamped(
+    clock: &dyn Clock,
+    origin: Instant,
+    write: impl FnOnce() -> Result<(), String>,
+) -> Result<f64, String> {
+    let sent = ms_since(clock, origin);
+    write()?;
+    Ok(sent)
+}
+
 /// The ms from `since` to a frame's stamp.
 fn frame_ms(at: Instant, since: Instant) -> f64 {
     at.saturating_duration_since(since).as_secs_f64() * 1000.0
@@ -609,8 +622,8 @@ fn burst(
     let mut target = origin + EVERY;
     for _ in 1..=REPORTS {
         clock.sleep(target.saturating_duration_since(clock.now()));
-        terminal.write(up.as_bytes())?;
-        writes_ms.push(ms_since(clock, origin));
+        let sent = send_stamped(clock, origin, || terminal.write(up.as_bytes()))?;
+        writes_ms.push(sent);
         target += EVERY;
     }
     wait_frames(

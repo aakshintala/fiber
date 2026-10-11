@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::sync::mpsc::{self, Receiver};
 
-use super::{HUB_BATCH, batch, batchable};
+use super::{HUB_BATCH, batch, batchable, joins};
 use crate::Input;
 use crate::link::Line;
 
@@ -174,4 +174,53 @@ fn hub_lines_and_ticks_hold_and_nothing_else_does() {
     assert!(!batchable(&key()));
     assert!(!batchable(&Input::Resize));
     assert!(!batchable(&Input::Disconnected));
+}
+
+#[test]
+fn joins_takes_two_reads_or_two_batchable_inputs() {
+    assert!(joins(&key(), &key()));
+    assert!(joins(&hub(0), &hub(1)));
+    assert!(joins(&hub(0), &Input::Tick));
+    assert!(!joins(&key(), &hub(0)));
+    assert!(!joins(&hub(0), &key()));
+    assert!(!joins(&key(), &Input::Resize));
+    assert!(!joins(&Input::Resize, &Input::Resize));
+}
+
+#[test]
+fn bytes_batch_with_bytes_in_order() {
+    let (_tx, rx) = channel(vec![key(), key()]);
+    let mut stash = VecDeque::new();
+    let got = batch(key(), &mut stash, &rx);
+    assert_eq!(described(&got), ["bytes", "bytes", "bytes"]);
+    assert!(stash.is_empty());
+}
+
+#[test]
+fn a_hub_line_ends_a_bytes_batch_and_stays_first() {
+    let (_tx, rx) = channel(vec![key(), hub(1)]);
+    let mut stash = VecDeque::new();
+    let got = batch(key(), &mut stash, &rx);
+    assert_eq!(described(&got), ["bytes", "bytes"]);
+    assert_eq!(described(stash.make_contiguous()), ["hub-1"]);
+}
+
+#[test]
+fn exactly_the_cap_makes_one_bytes_batch() {
+    let (_tx, rx) = channel((1..HUB_BATCH).map(|_| key()).collect());
+    let mut stash = VecDeque::new();
+    let got = batch(key(), &mut stash, &rx);
+    assert_eq!(got.len(), HUB_BATCH);
+    assert!(rx.try_recv().is_err());
+    assert!(stash.is_empty());
+}
+
+#[test]
+fn a_closed_channel_ends_a_bytes_batch_without_blocking() {
+    let (tx, rx) = channel(Vec::new());
+    drop(tx);
+    let mut stash = VecDeque::new();
+    let got = batch(key(), &mut stash, &rx);
+    assert_eq!(described(&got), ["bytes"]);
+    assert!(stash.is_empty());
 }

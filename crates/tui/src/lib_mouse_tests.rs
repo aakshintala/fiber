@@ -1197,3 +1197,132 @@ fn a_link_click_runs_the_opener() {
     );
     watchdog.stand_down(LINK_DEADLINE);
 }
+
+/// `turns` turns that each read one file: every turn leaves a group line,
+/// so scrolled rows hold groups to click.
+fn reads(turns: usize) -> Vec<Input> {
+    use serde_json::json;
+    let mut inputs = Vec::new();
+    let mut seq = 0u64;
+    let mut push = |kind: &str, action: Option<String>, payload: serde_json::Value| {
+        inputs.push(Input::Hub(Line::Session(contract::Envelope {
+            kind: kind.to_owned(),
+            session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: action.map(contract::ActionId),
+            seq: Some(contract::Seq(seq)),
+            payload: payload.as_object().cloned().unwrap_or_default(),
+        })));
+        seq += 1;
+    };
+    for turn in 0..turns {
+        let call = format!("a_c{turn}");
+        push(
+            "turn_started",
+            None,
+            json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": format!("prompt {turn}")}]}]}),
+        );
+        push(
+            "tool_call_requested",
+            Some(call.clone()),
+            json!({"name": "read", "arguments": {"path": format!("src/a{turn}.rs")}}),
+        );
+        push(
+            "tool_call_completed",
+            Some(call),
+            json!({"status": "completed", "content": [{"type": "text", "text": "body"}]}),
+        );
+        push("turn_completed", None, json!({"outcome": "completed"}));
+    }
+    inputs
+}
+
+#[test]
+fn a_click_queued_after_wheel_ups_opens_the_scrolled_group() {
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut lp, reads(3));
+    // Queued with the wheels, so the click must hit the group the wheels
+    // drew: the scroll clamps at the top, leaving turn 0's group at grid
+    // row 5, holding a group line the bottom never shows.
+    let mut inputs: Vec<Input> = (0..30).map(|_| wheel_up(10, 5)).collect();
+    inputs.push(click(40, 5));
+    feed(&mut lp, inputs);
+    assert!(shown(&lp).contains("read src/a0.rs"), "{}", shown(&lp));
+}
+
+#[test]
+fn queued_page_ups_keep_their_frames_and_fresh_targets() {
+    // Queued together: the click hits turn 0's group at grid row 5,
+    // drawn after the third PageUp.
+    let queued = || vec![page_up(), page_up(), page_up(), click(40, 5)];
+    let (mut shown_lp, _) = new_loop(TestBackend::new(60, 12), None);
+    shown_lp
+        .app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut shown_lp, reads(4));
+    feed(&mut shown_lp, queued());
+    assert!(
+        shown(&shown_lp).contains("read src/a0.rs"),
+        "{}",
+        shown(&shown_lp)
+    );
+    // Each PageUp keeps its frame: the three mid-batch frames and the
+    // batch's own, as four batches draw today.
+    let sink = Sink::default();
+    let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    // Four turns, so each of the three PageUps still moves: a clamped
+    // PageUp changes nothing and draws no frame of its own.
+    feed(&mut lp, reads(4));
+    let drawn = blocks(&sink.bytes());
+    feed(&mut lp, queued());
+    assert_eq!(blocks(&sink.bytes()) - drawn, 4);
+}
+
+#[test]
+fn queued_motions_keep_their_frames() {
+    let sink = Sink::default();
+    let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut lp, reads(3));
+    let drawn = blocks(&sink.bytes());
+    // The hover tint toggles between turn 2's group row and the row above
+    // it, so every report changes the frame, as one batch each does today.
+    let inputs: Vec<Input> = (0..10)
+        .map(|i| motion(5, if i % 2 == 0 { 6 } else { 0 }))
+        .collect();
+    feed(&mut lp, inputs);
+    assert_eq!(blocks(&sink.bytes()) - drawn, 10);
+}
+
+#[test]
+fn an_empty_chunk_breaks_the_wheel_run_but_wheel_downs_do_not() {
+    let sink = Sink::default();
+    let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut lp, long_session(80));
+    let drawn = blocks(&sink.bytes());
+    // No events, so not wheel-only: frames on both sides, each showing
+    // the same rows once. The downs share the run, netting back to the
+    // bottom.
+    feed(
+        &mut lp,
+        vec![
+            wheel_up(10, 5),
+            Input::Bytes(Vec::new()),
+            wheel_up(10, 5),
+            wheel_down(10, 5),
+            wheel_down(10, 5),
+        ],
+    );
+    assert_eq!(blocks(&sink.bytes()) - drawn, 2);
+    assert_eq!(lp.app.top(), None);
+}

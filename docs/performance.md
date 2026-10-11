@@ -72,6 +72,8 @@ a 20-thousand-token one fit the same ceiling.
 | `paging` jig, slowest jump frame | 11 ms | Linux x86_64 | measured |
 | `paging` jig, slowest re-count at a new width | 123 ms | Linux x86_64 | measured |
 | `paging` jig, slowest append frame | 3 ms | Linux x86_64 | measured |
+| Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked |
+| Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48 | 16 ms | Linux x86_64 | picked |
 
 Basis says where a number came from:
 
@@ -171,6 +173,11 @@ measures a `fiber` binary and writes its results to a file, and
 `cargo xtask bench-report` judges that file against the table above. The
 `paging` rows run the jig at scale 1 and 160 by 48, built in the release
 profile for the target that ships, and read its peak RSS from GNU time.
+The wheel rows burst 30 wheel-up reports, 8 ms apart, against `fiber resume`
+in a pseudo-terminal at 160 by 48, in the `paging` jig's session at scale 1
+and in one turn with an opened `read` of 300 lines, and time each report
+from its write to the frame showing the scrolled rows; each row holds the
+slowest report's ms.
 
 ## When a budget is exceeded
 

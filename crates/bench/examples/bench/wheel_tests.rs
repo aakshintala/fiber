@@ -1,12 +1,17 @@
 //! Tests for the wheel workload's pure functions: latency mapping,
 //! calibration compares, report strings, session typing and sample rows.
-//! Every case runs on literal data with no clock and no terminal.
+//! Cases run on literal data, with a fake clock only where the send stamp's
+//! ordering is under test, and never a terminal.
 
 use contract::clock::Clock;
 use contract::{ActionId, SessionId, TurnId};
 use serde_json::json;
 
-use super::{conversation, distinct, latencies, position, session_samples, sgr_wheel, typed};
+use std::time::Duration;
+
+use super::{
+    conversation, distinct, latencies, position, send_stamped, session_samples, sgr_wheel, typed,
+};
 use crate::pty::Frame;
 use crate::run::System;
 
@@ -34,6 +39,21 @@ fn one_frame_per_report_gives_each_its_own_latency() {
 fn a_frame_before_a_reports_write_cannot_cover_it() {
     let covered = latencies(&[100.0], &[(90.0, 1), (110.0, 1)], 1).unwrap();
     assert_eq!(covered, [10.0]);
+}
+
+#[test]
+fn the_send_stamp_is_read_before_the_write_it_precedes() {
+    let clock = fakes::clock::FakeClock::new();
+    let origin = clock.now();
+    clock.advance(Duration::from_millis(10));
+    // The write itself moves the clock on by 5 ms, as a real write would
+    // while the reader runs: the stamp must still be the 10 ms read first.
+    let sent = send_stamped(&*clock, origin, || {
+        clock.advance(Duration::from_millis(5));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(sent, 10.0);
 }
 
 #[test]

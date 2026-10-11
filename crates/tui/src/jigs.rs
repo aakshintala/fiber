@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 use contract::{Envelope, Seq};
-use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -218,7 +217,7 @@ pub fn measure_open(
 /// per batch at most.
 fn fold_batch(
     app: &mut App,
-    screen: &mut Screen<CrosstermBackend<screen::FrameWriter<Counter>>>,
+    screen: &mut Screen<screen::FrameBackend<Counter>>,
     stages: &mut OpenStages,
     since_frame: &mut usize,
     frame_every: usize,
@@ -250,7 +249,7 @@ fn fold_batch(
 
 /// One frame through the loop's screen, and how long it took.
 fn draw_frame(
-    screen: &mut Screen<CrosstermBackend<screen::FrameWriter<Counter>>>,
+    screen: &mut Screen<screen::FrameBackend<Counter>>,
     app: &mut App,
     clock: &Arc<dyn Clock>,
 ) -> Result<Duration, String> {
