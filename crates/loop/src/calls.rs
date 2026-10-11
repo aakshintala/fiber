@@ -41,13 +41,14 @@ enum State {
     Ready(Box<ToolCallCompleted>),
     /// Running on its own thread, streaming through its call's emitter.
     /// `declared` rides along for the change check at completion; `tool`
-    /// and `arguments` for the hooks.
+    /// and `arguments` for the hooks; `rewritten` for the result line.
     Running {
         bound: Bound,
         stream: Arc<Stream>,
         declared: DeclaredEffects,
         tool: String,
         arguments: Arc<Map<String, Value>>,
+        rewritten: Option<Vec<String>>,
     },
     /// Its completion is written.
     Done,
@@ -286,6 +287,7 @@ impl Loop {
                             declared: prepared.effects.declared,
                             tool: name,
                             arguments,
+                            rewritten: prepared.rewritten,
                         }
                     }
                 };
@@ -538,13 +540,16 @@ impl Loop {
 
     /// The completion of a call of `tool` with `arguments` that ran and
     /// returned `output`, as the hooks left it, its text cut to `bound`
-    /// (`docs/tools.md`, "Bounded results"). Writes the call's job lines and
+    /// (`docs/tools.md`, "Bounded results"). `rewritten` names the
+    /// extensions that rewrote the arguments, heading the text with the
+    /// result line. Writes the call's job lines and
     /// the hooks' notices under `id` before the caller writes
     /// `tool_call_completed`.
     fn finish(
         &mut self,
         output: Output,
         (tool, arguments): (&str, &Map<String, Value>),
+        rewritten: Option<&[String]>,
         bound: Bound,
         id: &ActionId,
         turn: &TurnId,
@@ -605,6 +610,7 @@ impl Loop {
             images,
             details,
             process: process.as_ref(),
+            rewritten,
         };
         let shaped = self.shape(ran, bound, id, turn)?;
         Ok(ToolCallCompleted {
@@ -656,6 +662,7 @@ impl Loop {
                 bound,
                 tool,
                 arguments,
+                rewritten,
                 ..
             } => match stream.take_finished() {
                 Some((output, flushed)) => {
@@ -663,7 +670,8 @@ impl Loop {
                         self.write_delta(&delta, turn, &call.id);
                     }
                     let call_of = (tool.as_str(), arguments.as_ref());
-                    Box::new(self.finish(output, call_of, *bound, &call.id, turn)?)
+                    let rewritten = rewritten.as_deref();
+                    Box::new(self.finish(output, call_of, rewritten, *bound, &call.id, turn)?)
                 }
                 None => return Ok(false),
             },
