@@ -363,5 +363,12 @@ const OPENCODE_ZEN: Package = Package {
 };
 
 /// The seven first-party provider files generated from models.dev.
-pub(crate) const PACKAGES: [Package; 7] =
-    [ANTHROPIC, GEMINI, OPENAI, CODEX, MUSE, OPENCODE_GO, OPENCODE_ZEN];
+pub(crate) const PACKAGES: [Package; 7] = [
+    ANTHROPIC,
+    GEMINI,
+    OPENAI,
+    CODEX,
+    MUSE,
+    OPENCODE_GO,
+    OPENCODE_ZEN,
+];
