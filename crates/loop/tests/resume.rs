@@ -2255,6 +2255,7 @@ fn asking(name: &'static str) -> Arc<support::TestTool> {
             multi_select: None,
         }]),
         skill: None,
+        name: None,
     });
     Arc::new(tool)
 }

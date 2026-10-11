@@ -1945,6 +1945,7 @@ fn skilled_result(status: contract::events::CallStatus, name: &str, path: &str) 
                 name: name.into(),
                 path: path.into(),
             }),
+            name: None,
         }),
         changed_by: None,
         provider_item: None,

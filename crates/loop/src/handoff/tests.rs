@@ -286,6 +286,7 @@ fn asking(texts: &[&str]) -> Control {
         handoff: None,
         questions: Some(texts.iter().map(|text| question(text)).collect()),
         skill: None,
+        name: None,
     }
 }
 
@@ -316,6 +317,7 @@ fn a_handoff_note_alone_asks_nothing() {
         handoff: Some("the note".into()),
         questions: None,
         skill: None,
+        name: None,
     };
     carry.call_completed(&first, &user("r1"), None, Some(&note));
     carry.call_completed(&second, &user("r2"), None, None);
@@ -332,6 +334,7 @@ fn skilled(name: &str, path: &str) -> Control {
             name: name.into(),
             path: path.into(),
         }),
+        name: None,
     }
 }
 

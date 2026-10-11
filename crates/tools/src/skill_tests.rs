@@ -184,6 +184,7 @@ fn effects_then_run_returns_the_body_under_its_path() {
                 name: "tdd".into(),
                 path: listing,
             }),
+            name: None,
         })
     );
 }
