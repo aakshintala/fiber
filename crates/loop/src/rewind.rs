@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use contract::events::{Event, Rewind, SessionStarted, ToolCallRequested};
+use contract::events::{Event, Rewind, SessionNamed, SessionStarted, ToolCallRequested};
 use contract::provider::{Input, ToolDefinition};
 use contract::shapes::{Effect, Point, Worktree};
 use contract::{ActionId, Seq};
@@ -56,6 +56,14 @@ impl Loop {
             None,
             None,
         )?;
+        // The name goes with the conversation: a copy of the parent's
+        // latest `session_named`, `by` included, so a pin holds
+        // (`docs/events.md`, "Rewind").
+        if let Some(named) = parent_name(session.log.dir()) {
+            session
+                .log
+                .append(&Event::SessionNamed(named), None, None)?;
+        }
         let mut folded = crate::resume::resumed(session.log.dir())?;
         let logged = folded.preamble.clone();
         // The new session adopts no job: nothing it folds can orphan. It
@@ -77,6 +85,21 @@ impl Loop {
         }
         Ok(rewound)
     }
+}
+
+/// The latest `session_named` in the log of the session the one in `dir`
+/// continues, read from the end backwards; `None` when the chain has no
+/// parent log, the parent never named itself, or its log cannot be read.
+fn parent_name(dir: &Path) -> Option<SessionNamed> {
+    let chain = log::history(dir).ok()?;
+    let parent = chain.iter().rev().nth(1)?;
+    log::last_line_where(&parent.dir, |line| {
+        let event: Value = serde_json::from_slice(line).ok()?;
+        if event.get("kind")?.as_str()? != "session_named" {
+            return None;
+        }
+        serde_json::from_value(event.get("payload")?.clone()).ok()
+    })
 }
 
 impl Preamble {
