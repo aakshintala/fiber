@@ -669,19 +669,24 @@ fn turn_started_sets_busy_and_completed_clears_it() {
     assert_eq!(
         texts(&app),
         vec![
+            "",
             "▄▄▄▄▄",
             " hi ▐",
             "▀▀▀▀▀",
-            "00:00",
+            "you 00:00 ",
+            "",
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            "steer · 00:00 ─────────────────────────────────────────────────────────────────",
-            "more",
-            "▣ completed",
+            " steer · 00:00 ───────────────────────────────────────────────────────────────",
+            " more",
+            "",
+            " ▣ completed",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "",
             "▄▄▄▄▄▄▄",
             " next ▐",
             "▀▀▀▀▀▀▀",
-            "00:00",
+            "you 00:00 ",
+            "",
         ]
     );
 }
@@ -694,11 +699,11 @@ fn failed_turn_says_why_before_it_closes() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
     assert_eq!(
-        texts(&app)[4..],
+        texts(&app)[6..],
         [
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            "✗ boom · io_failed",
-            "▣ failed",
+            " ✗ boom · io_failed",
+            " ▣ failed",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
@@ -722,14 +727,14 @@ fn deltas_accumulate_and_completed_replaces() {
         serde_json::json!({"text": "lo"}),
         Some("a_1"),
     ));
-    assert!(texts(&app).contains(&"Hello".to_owned()));
+    assert!(texts(&app).contains(&" Hello".to_owned()));
     app.on_line(session_line(
         "s_aaaaaaaaaaaaaaaa",
         "text_completed",
         serde_json::json!({"text": "Hi."}),
         Some("a_1"),
     ));
-    assert!(texts(&app).contains(&"Hi.".to_owned()));
+    assert!(texts(&app).contains(&" Hi.".to_owned()));
 }
 
 #[test]
@@ -749,13 +754,16 @@ fn each_action_streams_its_own_reply() {
     assert_eq!(
         texts(&app),
         vec![
+            "",
             "▄▄▄▄▄",
             " hi ▐",
             "▀▀▀▀▀",
-            "00:00",
+            "you 00:00 ",
+            "",
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            "one more",
-            "two",
+            " one more",
+            "",
+            " two",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );

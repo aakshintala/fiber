@@ -2,11 +2,11 @@
 source: crates/tui/src/view_tests.rs
 expression: wide(&mut app).0
 ---
-
                                                                       ▄▄▄▄▄▄▄▄▄
-                                                                       run it ▐
-                                                                      ▀▀▀▀▀▀▀▀▀
-                                                                     you 00:00
+                                                                       run it ▐┃
+                                                                      ▀▀▀▀▀▀▀▀▀┃
+                                                                     you 00:00 ┃
+                                                                               ┃
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ approval · s_bbbbbbbbbbbbbbbb · 2 of 3
 ▌ asked by a global rule: echo hi

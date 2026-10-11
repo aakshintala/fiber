@@ -523,7 +523,7 @@ fn a_streaming_reply_on_the_open_page_is_never_dropped() {
         .iter()
         .map(|(line, _)| line.to_string())
         .collect();
-    assert!(texts.contains(&"still streaming".to_owned()));
+    assert!(texts.contains(&" still streaming".to_owned()));
 }
 
 #[test]
@@ -669,7 +669,7 @@ fn ctrl_o_reaches_pages_loaded_later() {
     frame(&mut app, &lines);
     let texts = page_texts(&app, 0);
     assert!(
-        texts.iter().any(|line| line.starts_with("  2 read")),
+        texts.iter().any(|line| line.starts_with("   2 read")),
         "{texts:?}"
     );
 }
@@ -997,14 +997,22 @@ fn orphan_line_survives(lines: &[Envelope], name: &str) -> Pages {
     }
     let want = format!("Orphaned jobs: {name}");
     let live = pages.rows();
-    assert!(texts(&live).contains(&want), "{:?}", texts(&live));
+    assert!(
+        texts(&live).iter().any(|row| row.contains(&want)),
+        "{:?}",
+        texts(&live)
+    );
     drop_all(&mut pages);
     let reloaded = joined(&mut pages, lines);
     assert_eq!(differs(&reloaded, &live), None);
     drop_all(&mut pages);
     pages.set_width(50);
     let narrow = joined(&mut pages, lines);
-    assert!(texts(&narrow).contains(&want), "{:?}", texts(&narrow));
+    assert!(
+        texts(&narrow).iter().any(|row| row.contains(&want)),
+        "{:?}",
+        texts(&narrow)
+    );
     pages
 }
 
@@ -1557,7 +1565,9 @@ fn a_resumed_crash_leaves_the_session_idle() {
     app.on_line(Line::Session(resumed(true)));
     let lines: Vec<String> = app.lines().iter().map(ToString::to_string).collect();
     assert!(
-        lines.iter().any(|line| line.starts_with("▣ cut short")),
+        lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("▣ cut short")),
         "{lines:?}"
     );
     // Not busy: Enter sends `prompt`, where `steer` would go to a turn
@@ -1639,6 +1649,24 @@ fn the_open_page_caches_only_its_lines_too_wide_for_one_row() {
     for line in &lines {
         pages.apply(line);
     }
+    // A long line outside any card stays unwrapped, so the open page
+    // caches it.
+    let long: String = std::iter::repeat_n('w', 100).collect();
+    pages.apply(&Envelope {
+        kind: "mcp_server_failed".to_owned(),
+        session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"server": "one", "reason": "died",
+            "will_restart": true, "error": {"code": "mcp_server_unavailable",
+            "message": long}})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
     assert!(!pages.wrapped.is_empty());
     // Exactly the open page's lines wider than the screen are cached, with
     // the rows drawing them takes.
@@ -1774,12 +1802,14 @@ fn a_reloaded_page_shows_the_same_time_row_as_live() {
     assert_eq!(
         texts(&live),
         vec![
+            "".to_owned(),
             "▄▄▄▄▄".to_owned(),
             " go ▐".to_owned(),
             "▀▀▀▀▀".to_owned(),
-            time,
+            format!("you {time} "),
+            "".to_owned(),
             "▄".repeat(80),
-            "▣ completed".to_owned(),
+            " ▣ completed".to_owned(),
             "▀".repeat(80),
         ]
     );
@@ -2227,7 +2257,7 @@ fn only_the_cut_turn_loses_its_bottom_edge() {
     let first = cut_texts(&pages, 0);
     let closing = first
         .iter()
-        .position(|row| row.starts_with("▣ completed"))
+        .position(|row| row.starts_with(" ▣ completed"))
         .expect("the finished turn's closing line");
     assert!(shown_edge(first[closing + 1].clone(), 40, '▀'));
     assert!(!shown_edge(
@@ -2261,8 +2291,9 @@ fn a_new_turn_on_a_continuing_page_opens_its_card() {
         .iter()
         .position(|row| row == " next ▐")
         .expect("the second turn's bubble");
-    // The bubble, its bottom edge, its time row, then the card's top edge.
-    assert!(is_edge(&rows[bubble + 3].0, 40, '▄'));
+    // The bubble, its bottom edge, its time row, a blank row, then the
+    // card's top edge.
+    assert!(is_edge(&rows[bubble + 4].0, 40, '▄'));
     let reference = whole(&pages, &lines);
     assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
 }
@@ -2375,10 +2406,11 @@ fn a_blank_reply_cut_then_the_turn_completes_joins_once_it_draws() {
         '▀'
     ));
     let second = cut_texts(&pages, 1);
+    assert_eq!(second.first().cloned().unwrap_or_default(), "");
     assert!(
         second
-            .first()
-            .is_some_and(|row| row.starts_with("▣ completed")),
+            .get(1)
+            .is_some_and(|row| row.starts_with(" ▣ completed")),
         "{second:?}"
     );
     assert_eq!(pages.index().pages()[0].rows, before - 1);
@@ -2534,7 +2566,7 @@ fn a_cut_at_turn_started_joins_nothing() {
         .iter()
         .position(|row| row == " two ▐")
         .expect("the second turn's bubble");
-    assert!(shown_edge(&second[bubble + 3], 40, '▄'));
+    assert!(shown_edge(&second[bubble + 4], 40, '▄'));
     let reference = whole(&pages, &lines);
     assert_eq!(differs(&joined(&mut pages, &lines), &reference), None);
 }
@@ -2588,8 +2620,8 @@ fn shown_carries_the_spin_marks_of_its_lines() {
     let moving = shown
         .lines
         .iter()
-        .rposition(|(line, _, _)| line.to_string().starts_with("• Read 1 file"));
-    assert_eq!(shown.spins, vec![(moving.unwrap_or(usize::MAX), 0)]);
+        .rposition(|(line, _, _)| line.to_string().starts_with(" • Read 1 file"));
+    assert_eq!(shown.spins, vec![(moving.unwrap_or(usize::MAX), 1)]);
 }
 
 #[test]
@@ -2618,5 +2650,5 @@ fn drawing_a_page_keeps_each_replys_render() {
             | Entry::Answers(_) => None,
         });
     let reply = replies.next().expect("the turn has a reply");
-    assert_eq!(reply.cached_at(), Some(60));
+    assert_eq!(reply.cached_at(), Some(58));
 }

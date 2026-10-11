@@ -153,7 +153,8 @@ fn prompt_bubble_shows_the_local_time_under_it() {
             "▄▄▄▄▄".to_owned(),
             " go ▐".to_owned(),
             "▀▀▀▀▀".to_owned(),
-            "you 10:15 ".to_owned()
+            "you 10:15 ".to_owned(),
+            "".to_owned()
         ]
     );
     let time = app
@@ -197,7 +198,8 @@ fn prompt_bubble_defaults_to_utc() {
             "▄▄▄▄▄".to_owned(),
             " go ▐".to_owned(),
             "▀▀▀▀▀".to_owned(),
-            "you 14:15 ".to_owned()
+            "you 14:15 ".to_owned(),
+            "".to_owned()
         ]
     );
 }
@@ -255,9 +257,19 @@ fn scrolled_up_the_view_stays_put_and_end_follows_again() {
     assert!(!before.contains("↓ New messages below"));
     app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", "streamed"));
     let after = screen(&app);
-    // The rows above the overlay are the rows that were there.
+    // The rows above the overlay are the rows that were there, bar
+    // column aside: the taller history moves the thumb.
     let kept: Vec<&str> = before.lines().take(8).collect();
-    assert_eq!(after.lines().take(8).collect::<Vec<_>>(), kept);
+    let kept_again: Vec<&str> = after.lines().take(8).collect();
+    assert_eq!(
+        kept_again
+            .iter()
+            .map(|row| row.trim_end_matches(['┃', '│', '█']))
+            .collect::<Vec<_>>(),
+        kept.iter()
+            .map(|row| row.trim_end_matches(['┃', '│', '█']))
+            .collect::<Vec<_>>()
+    );
     assert!(after.contains("↓ New messages below"));
     app.on_key(Key::End, now);
     let followed = screen(&app);
@@ -275,20 +287,22 @@ fn page_down_to_the_bottom_follows_again() {
         app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("prompt {n}")));
     }
     let bottom = screen(&app);
-    // The bottom shows prompt 29's bubble through prompt 30: five rows
-    // a turn over 150 rows, nine of conversation. A page is those 9
+    // The bottom shows prompt 28's bubble through prompt 29: six rows
+    // a turn over 180 rows, nine of conversation. A page is those 9
     // rows less one, and the top stops at the first row.
     app.on_key(Key::PageUp, now);
     let shown = screen(&app);
     let shown: Vec<&str> = shown.lines().collect();
     assert_eq!(
         shown[0],
-        format!("{:>59}", "▀".repeat(12)),
+        format!("{:>59}", "▄".repeat(12)),
         "one page up moves eight rows"
     );
-    assert_eq!(shown[1], format!("{:>58}", "you 00:00"));
-    assert_eq!(shown[2], "");
-    assert!(shown[4].contains("prompt 28"), "{shown:?}");
+    assert!(shown[1].contains("prompt 28"), "{shown:?}");
+    assert_eq!(shown[2], format!("{:>59}", "▀".repeat(12)));
+    assert_eq!(shown[3], format!("{:>58}", "you 00:00"));
+    assert_eq!(shown[4], "");
+    assert_eq!(shown[5], "");
     // One page down lands exactly on the bottom, which follows again: new
     // output scrolls in with no overlay.
     app.on_key(Key::PageDown, now);
@@ -297,22 +311,24 @@ fn page_down_to_the_bottom_follows_again() {
     let followed = screen(&app);
     assert!(!followed.contains("↓ New messages below"));
     assert!(followed.contains("prompt 31"));
-    // Nineteen pages up reaches the top, where another stops.
-    for _ in 0..19 {
+    // Twenty-three pages up reaches the top, where another stops.
+    for _ in 0..23 {
         app.on_key(Key::PageUp, now);
     }
     assert_eq!(app.top(), Some(0));
     let top = screen(&app);
     let top: Vec<&str> = top.lines().collect();
-    assert_eq!(top[0], "");
+    // The first row is the blank before the first bubble, with the
+    // thumb in the bar's column.
+    assert_eq!(top[0], format!("{}┃", " ".repeat(59)));
     assert!(top[1].trim_start().starts_with('▄'), "{top:?}");
     assert!(top[2].contains("prompt 1"), "{top:?}");
     app.on_key(Key::PageUp, now);
     assert_eq!(app.top(), Some(0));
-    // Nineteen pages down lands exactly on the bottom.
+    // Twenty-three pages down lands exactly on the bottom.
     app.on_key(Key::PageDown, now);
     assert_eq!(app.top(), Some(8));
-    for _ in 0..18 {
+    for _ in 0..22 {
         app.on_key(Key::PageDown, now);
     }
     assert!(screen(&app).contains("prompt 31"));
@@ -1368,11 +1384,11 @@ fn the_badge_is_a_target_over_the_cells_it_drew() {
         id: TargetId::Badge,
         rect: Rect::new(0, 8, 30, 1),
     };
-    // The open turn's prompt and its time are stops on the two rows above
-    // the badge.
+    // The open turn's prompt, its time and its blank row are stops on
+    // the rows above the badge.
     let turn = Target {
         id: TargetId::Turn(0),
-        rect: Rect::new(0, 3, 39, 5),
+        rect: Rect::new(0, 2, 39, 6),
     };
     assert_eq!(targets, vec![badge, turn]);
     // Narrower than its text, it takes the whole row.
@@ -1845,18 +1861,21 @@ fn a_streaming_reply_renders_its_markdown_in_place() {
         u16::try_from(at.unwrap_or_else(|| panic!("{needle} on screen"))).unwrap_or(0)
     };
     use crate::markdown::Role;
-    assert_eq!(fg(0, row("Plan")), Some(Role::Heading.color()));
-    assert_eq!(fg(0, row("read the")), Some(Role::Accent.color()));
-    assert_eq!(fg(2, row("read the")), Some(Role::Text.color()));
+    assert_eq!(fg(1, row("Plan")), Some(Role::Heading.color()));
+    assert_eq!(fg(1, row("read the")), Some(Role::Accent.color()));
+    assert_eq!(fg(3, row("read the")), Some(Role::Text.color()));
     let header = row("rust");
     assert_eq!(fg(36, header), Some(Role::Muted.color()));
-    for x in 0..39 {
+    // The padding sits on the card's tint; the code rows sit on theirs.
+    assert_eq!(bg(0, header), Some(Role::Turn.color()), "header pad");
+    assert_eq!(bg(0, header + 2), Some(Role::Turn.color()), "code pad");
+    for x in 1..38 {
         assert_eq!(bg(x, header), Some(Role::Code.color()), "header col {x}");
         assert_eq!(bg(x, header + 2), Some(Role::Code.color()), "code col {x}");
     }
-    assert_eq!(fg(10, header + 2), Some(Role::Keyword.color()));
-    assert_eq!(fg(18, header + 2), Some(Role::Number.color()));
-    assert_eq!(fg(0, row("────")), Some(Role::Rule.color()));
+    assert_eq!(fg(11, header + 2), Some(Role::Keyword.color()));
+    assert_eq!(fg(19, header + 2), Some(Role::Number.color()));
+    assert_eq!(fg(1, row("────")), Some(Role::Rule.color()));
 }
 
 #[test]

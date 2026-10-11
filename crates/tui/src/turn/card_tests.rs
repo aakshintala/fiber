@@ -206,8 +206,8 @@ fn the_card_is_a_turn_surface_below_the_bubble() {
 #[test]
 fn a_turn_has_a_blank_row_before_its_bubble_and_before_its_card() {
     // One blank row opens the turn, and one separates the time row from
-    // the card; a turn with no card draws no blank after its time row
-    // (`docs/tui.md`, "Turns").
+    // the card; a turn with no card yet keeps the blank row ahead of
+    // where the card draws (`docs/tui.md`, "Turns").
     let mut cards = fresh();
     start(&mut cards, "go");
     text(&mut cards, "a_1", "Hello.");
@@ -235,7 +235,8 @@ fn a_turn_has_a_blank_row_before_its_bubble_and_before_its_card() {
             "▄".repeat(5),
             " go ▐".to_owned(),
             "▀".repeat(5),
-            "you 00:00 ".to_owned()
+            "you 00:00 ".to_owned(),
+            String::new()
         ]
     );
     for (line, _) in &rows {
@@ -1004,4 +1005,25 @@ fn an_opened_edit_group_wraps_inside_the_padding() {
         .find(|span| span.style.fg == Some(Role::Removed.color()))
         .expect("the removed count keeps its span");
     assert!(removed.content.contains("−1"), "{removed:?}");
+}
+
+#[test]
+fn a_bubble_whose_card_draws_nothing_yet_keeps_a_trailing_gap() {
+    // A running turn with only its bubble keeps the blank row one fold
+    // has ahead of its card, where the blank before the card lands once
+    // it draws (`docs/tui.md`, "Turns", "History and paging").
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    let (rows, texts, pieces) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    assert_eq!(
+        pieces,
+        Pieces {
+            first: false,
+            last: false
+        }
+    );
+    let shown = shown_rows(&rows);
+    assert_eq!(shown[4], "you 00:00 ");
+    assert_eq!(shown[5], "");
+    assert_eq!(texts[5], RowText::plain());
 }

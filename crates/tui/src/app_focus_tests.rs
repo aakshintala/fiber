@@ -577,7 +577,7 @@ fn keys_the_input_box_owns_do_nothing_while_navigating() {
 
 #[test]
 fn global_keys_still_work_while_navigating() {
-    let mut app = groups(3, 60, 8);
+    let mut app = groups(3, 60, 12);
     frame(&mut app);
     app.on_key(Key::BackTab, now());
     frame(&mut app);
@@ -767,21 +767,23 @@ fn a_wrapped_item_is_revealed_whole() {
             .map(|text| crate::view::rows(text.clone(), 12))
             .unwrap_or(0)
     };
-    let mut wrapped = false;
+    // An open ledger's long call row splits inside the padding, so every
+    // stop is one row; navigating still lands each stop whole.
+    let mut stops = 0;
     for (line, _) in app.targets() {
         let rows = rows_of(line);
         if app
             .lines()
             .get(line)
-            .is_some_and(|text| text.to_string().starts_with('•'))
+            .is_some_and(|text| text.to_string().starts_with(" •"))
         {
             assert_eq!(rows, 1, "the summary is one row");
         } else {
-            assert!(rows >= 2, "line {line} wraps, with {rows} rows");
-            wrapped = true;
+            assert_eq!(rows, 1, "line {line} draws whole, with {rows} rows");
+            stops += 1;
         }
     }
-    assert!(wrapped, "a wrapping call row");
+    assert!(stops > 0, "a split call row");
     let ids = group_ids(&app);
     key(&mut app, Key::BackTab);
     assert_eq!(app.focused(), ids.last().copied());
@@ -1163,11 +1165,11 @@ fn y_on_a_turn_copies_its_prompt_and_replies() {
     let mut app = replied_turn();
     focus_turn(&mut app, 0);
     // The rows with no target of their own: the prompt, the time under
-    // it, the replies and the closing line; the group's own row is its
-    // line's text.
+    // it, the replies and the closing line, with the blank rows between
+    // them; the group's own row is its line's text.
     assert_eq!(
         key(&mut app, Key::Char('y')),
-        Effect::Copy("go\n00:00\none\ntwo\n▣ completed · 1 call".to_owned())
+        Effect::Copy("\ngo\nyou 00:00\n\none\n\n\ntwo\n\n▣ completed · 1 call".to_owned())
     );
 }
 

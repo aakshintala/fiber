@@ -509,28 +509,35 @@ fn the_interrupt_target_goes_with_its_text() {
 
 #[test]
 fn a_marked_line_under_new_messages_below_does_not_spin() {
-    // One prompt, the running turn, one prompt: the group line sits on
-    // the bottom row, so one page up from following stops at the top
-    // with the group line under the overlay, and following shows it.
+    // One prompt, the running turn, one prompt: at sixteen rows the
+    // group line sits on the conversation's bottom row from the top,
+    // so new output there covers its mark with the overlay, and
+    // following shows it spinning.
     let (mut app, clock) = running_first();
     let origin = clock.origin();
     let now = clock.now();
     app.set_now(origin, 0);
-    app.on_key(Key::PageUp, now);
-    // New output while scrolled up: the overlay takes the bottom row.
+    app.jump(0);
+    // New output at the top: the overlay takes the bottom row,
+    // covering the group line's mark.
     app.on_line(session_line(
         "assistant_message_delta",
         serde_json::json!({"text": "streamed"}),
         Some("a_2"),
     ));
-    let shown = screen(&app);
+    let area = Rect::new(0, 0, WIDTH, 16);
+    let mut buf = Buffer::empty(area);
+    render(&app, area, &mut buf, None);
+    let shown = text(&buf);
     assert!(shown.contains("New messages below"), "{shown}");
     // The covered mark schedules nothing: it is the only mark on
     // screen, and with no home there is no working line to ask.
     assert_eq!(app.take_wake(), None);
-    // One row higher the same line spins: following again draws it.
+    // Following again draws it: the mark spins.
     app.on_key(Key::End, now);
-    let followed = screen(&app);
+    let mut followed = Buffer::empty(area);
+    render(&app, area, &mut followed, None);
+    let followed = text(&followed);
     assert!(!followed.contains("New messages below"), "{followed}");
     assert!(followed.contains(SPINNER[0]), "{followed}");
     assert!(app.take_wake().is_some());
@@ -743,7 +750,7 @@ fn untargeted_lines_never_spin() {
     }
     assert_eq!(diffs.len(), 1, "{diffs:?}");
     let (x, _y, before, after) = &diffs[0];
-    assert_eq!((*x, before.as_str()), (0, "•"));
+    assert_eq!((*x, before.as_str()), (1, "•"));
     assert_eq!(after.as_str(), SPINNER[0]);
 }
 
@@ -785,7 +792,7 @@ fn a_clipped_group_line_off_screen_asks_nothing() {
     let summary = all
         .lines
         .iter()
-        .position(|(line, _, _)| line.to_string().starts_with("• Read"))
+        .position(|(line, _, _)| line.to_string().starts_with(" • Read"))
         .expect("a group summary");
     // One row, cut with "…": the tail never draws.
     let text = all
@@ -979,7 +986,7 @@ fn rest_frames_keep_asking_for_the_next_frame() {
 }
 
 #[test]
-fn a_band_clipped_at_the_bottom_row_keeps_its_still_form() {
+fn a_wrapped_band_mark_keeps_its_still_form() {
     let clock = FakeClock::new();
     let mut app = App::new(PathBuf::from("/w"));
     // Forty columns: the band wraps in two, its dot on the first row in
@@ -1008,13 +1015,12 @@ fn a_band_clipped_at_the_bottom_row_keeps_its_still_form() {
         serde_json::json!({"trigger": "auto"}),
         None,
     ));
-    // Two prompts below: thirty-four rows, so three wheel steps up from
-    // following lands the band's first row on the bottom row, its second
-    // row below the area.
-    for n in 1..=2 {
+    // One prompt below: two wheel steps up from following shows both
+    // band rows at the bottom.
+    for n in 1..=1 {
         app.on_line(prompt(format!("after {n}")));
     }
-    for _ in 0..3 {
+    for _ in 0..2 {
         app.on_wheel(&Mouse {
             kind: MouseKind::WheelUp,
             col: 15,
@@ -1026,17 +1032,17 @@ fn a_band_clipped_at_the_bottom_row_keeps_its_still_form() {
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     let shown = text(&buf);
-    // The first band row shows on the conversation's bottom row with
-    // its dot still: a wrapped mark never spins.
+    // Both band rows show with the dot still: a wrapped mark never
+    // spins.
     assert!(
         shown
             .lines()
-            .nth(8)
+            .nth(7)
             .is_some_and(|row| row.starts_with("⇄ Handoff")),
         "{shown}"
     );
     assert!(
-        shown.lines().nth(8).is_some_and(|row| row.contains('●')),
+        shown.lines().nth(7).is_some_and(|row| row.contains('●')),
         "{shown}"
     );
     assert!(!shown.contains(SPINNER[0]), "{shown}");

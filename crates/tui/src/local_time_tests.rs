@@ -85,7 +85,7 @@ fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
         &mut out,
     );
     let (rows, _) = out.into_parts();
-    assert_eq!(rows.len(), 5);
+    assert_eq!(rows.len(), 6);
     let (line, target) = &rows[4];
     assert_eq!(line.to_string(), "you 14:15 ");
     assert!(line.alignment == Some(Alignment::Right));
@@ -103,5 +103,5 @@ fn the_time_row_is_a_dim_right_aligned_row_with_no_target() {
         &mut out,
     );
     let (rows, _) = out.into_parts();
-    assert_eq!(rows.len(), 3);
+    assert_eq!(rows.len(), 5);
 }

@@ -3,7 +3,6 @@ source: crates/tui/src/view_tests.rs
 expression: screen(&app)
 ---
 
-
                  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                   wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww ▐
                   wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww ▐
@@ -11,6 +10,7 @@ expression: screen(&app)
                   wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww       ▐
                  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                                                  you 00:00
+
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

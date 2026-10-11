@@ -1,12 +1,11 @@
 ---
 source: crates/tui/src/view/banner_tests.rs
-assertion_line: 74
 expression: "screen(&app, 24)"
 ---
                Connect ✕
                ion
-               lost.
-             you 00:00 ┃
+             yolost.
+                       ┃
 Connection lost · reconn
   • Steering, joins the
   ↳ use the parser  ✕

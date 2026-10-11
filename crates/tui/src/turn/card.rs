@@ -78,10 +78,13 @@ impl Turn {
         let mut top = edges.top;
         let mut first = false;
         let mut broken = false;
-        // Whether the next drawn block separates from the block before,
-        // or from the piece's withheld top edge, with a blank row.
+        // Whether the next drawn block separates from the block before
+        // or from the piece's withheld top edge with a blank row.
         let mut separates = !top;
         let mut piece_drew = false;
+        // Whether a band drew since the last block: no blank row goes
+        // next to a handoff band (`docs/tui.md`, "Turns", "Handoff").
+        let mut after_band = false;
         for entry in &self.entries {
             if let Entry::Band(band) = entry {
                 if !broken {
@@ -104,6 +107,7 @@ impl Turn {
                 top = true;
                 separates = false;
                 piece_drew = false;
+                after_band = true;
                 continue;
             }
             let gap_before = separates;
@@ -127,6 +131,7 @@ impl Turn {
             piece_drew = piece_drew || drew;
             if drew {
                 separates = true;
+                after_band = false;
             }
         }
         if let Some((ending, ts)) = &self.ended {
@@ -149,6 +154,9 @@ impl Turn {
                 out.push((format::dim(closing), None));
             });
             piece_drew = piece_drew || drew;
+            if drew {
+                after_band = false;
+            }
         }
         let last = piece_drew;
         if !broken {
@@ -165,6 +173,13 @@ impl Turn {
         );
         if led && (first || last) {
             out.gap(card_at);
+        }
+        // A bubble whose card draws nothing yet, on a turn still
+        // running: the blank row one fold has ahead of its card, in the
+        // same place the blank before the card takes once it draws
+        // (`docs/tui.md`, "Turns", "History and paging").
+        if led && !first && !last && !after_band && self.is_open() {
+            out.gap(out.len());
         }
         Pieces { first, last }
     }

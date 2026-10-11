@@ -92,10 +92,12 @@ fn the_zone_survives_a_session_switch() {
     assert_eq!(
         texts,
         vec![
+            "".to_owned(),
             "▄▄▄▄▄".to_owned(),
             " go ▐".to_owned(),
             "▀▀▀▀▀".to_owned(),
-            "10:15".to_owned()
+            "you 10:15 ".to_owned(),
+            "".to_owned()
         ]
     );
 }
