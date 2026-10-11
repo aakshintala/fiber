@@ -65,6 +65,16 @@ pub struct Environments {
     /// takes the lock to publish.
     #[cfg(test)]
     pub(crate) before_publish: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot signal run after a `refresh` is admitted
+    /// and before it takes the serializing lock, so a test can force the
+    /// admitted-but-queued interleaving with `close`.
+    #[cfg(test)]
+    pub(crate) after_admit: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot signal run when `get` finds nothing
+    /// published and is about to wait, so a test can prove a waiter is
+    /// parked before asserting it has answered nothing yet.
+    #[cfg(test)]
+    pub(crate) before_get_wait: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// What [`Environments`] shares, under one lock.
@@ -98,6 +108,10 @@ impl Environments {
             capture_lock: Mutex::new(()),
             #[cfg(test)]
             before_publish: Mutex::new(None),
+            #[cfg(test)]
+            after_admit: Mutex::new(None),
+            #[cfg(test)]
+            before_get_wait: Mutex::new(None),
         })
     }
 
@@ -117,6 +131,10 @@ impl Environments {
             capture_lock: Mutex::new(()),
             #[cfg(test)]
             before_publish: Mutex::new(None),
+            #[cfg(test)]
+            after_admit: Mutex::new(None),
+            #[cfg(test)]
+            before_get_wait: Mutex::new(None),
         })
     }
 
@@ -127,6 +145,16 @@ impl Environments {
         loop {
             if let Some(environment) = state.published.clone() {
                 return environment;
+            }
+            #[cfg(test)]
+            {
+                let hook = lock(&self.before_get_wait).take();
+                if let Some(hook) = hook {
+                    drop(state);
+                    hook();
+                    state = lock(&self.state);
+                    continue;
+                }
             }
             state = self
                 .changed
@@ -195,6 +223,12 @@ impl Environments {
             let mut state = lock(&self.state);
             state.running = state.running.saturating_add(1);
             state.cancels.push(Arc::clone(&cancel));
+        }
+        #[cfg(test)]
+        {
+            if let Some(hook) = lock(&self.after_admit).take() {
+                hook();
+            }
         }
         let _serial = lock(&self.capture_lock);
         if self.is_closed() {

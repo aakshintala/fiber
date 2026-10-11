@@ -91,14 +91,24 @@ impl Client {
         self.write.flush().unwrap();
     }
 
-    /// The next line, parsed. Panics past the deadline naming the wait.
+    /// The next line, parsed: the blocking read runs on a thread and its
+    /// result is received under one deadline, never parking the test
+    /// thread past the wait. Panics past the deadline naming the wait.
     fn next(&mut self, what: &str) -> Value {
-        let mut text = String::new();
-        self.read
-            .read_line(&mut text)
-            .unwrap_or_else(|_| panic!("never received {what}"));
-        assert!(!text.is_empty(), "the hub closed before {what}");
-        serde_json::from_str(&text).unwrap()
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut text = String::new();
+                let outcome = self.read.read_line(&mut text);
+                done_tx.send((outcome, text)).unwrap_or(());
+            });
+            let (outcome, text) = Deadline::after(DEADLINE)
+                .recv(&done_rx)
+                .unwrap_or_else(|_| panic!("never received {what}"));
+            outcome.unwrap_or_else(|_| panic!("never received {what}"));
+            assert!(!text.is_empty(), "the hub closed before {what}");
+            serde_json::from_str(&text).unwrap()
+        })
     }
 
     fn hello(&mut self) -> Value {
@@ -1474,35 +1484,46 @@ fn status_waits_for_the_first_publish() {
         )
         .with_environments(Arc::clone(&pending)),
     );
+    // Signal the `status` wait itself: nothing is published yet, so the
+    // admission proves the handler parks in `get` rather than passing
+    // because the command never arrived.
+    let (waiting_tx, waiting_rx) = mpsc::channel();
+    *pending.before_get_wait.lock().unwrap() = Some(Box::new(move || {
+        waiting_tx.send(()).unwrap_or(());
+    }));
     let mut client = Client::connect(&hub);
     client.hello();
     client.send(&command("c_1", "status", json!({})));
-    // Nothing is published yet: the answer must not arrive within a short
-    // wait, which proves `status` blocks on the first capture.
-    client
-        .read
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_millis(300)))
-        .unwrap();
-    let mut buf = String::new();
-    match client.read.read_line(&mut buf) {
-        Err(e)
-            if e.kind() == std::io::ErrorKind::WouldBlock
-                || e.kind() == std::io::ErrorKind::TimedOut =>
-        {
-            // Still waiting: the pending `status` answers nothing yet.
-        }
-        other => panic!("the pending status must not answer yet: {other:?}"),
-    }
-    client
-        .read
-        .get_ref()
-        .set_read_timeout(Some(DEADLINE))
-        .unwrap();
-    let clock: Arc<fakes::clock::FakeClock> = fakes::clock::FakeClock::new();
-    let timed: Arc<dyn Clock> = clock.clone();
-    pending.first(&*clock, &crate::diag::open(&temp.dir, timed));
-    let (id, result) = accepted(&client.next("the acknowledgement"));
+    let (id, result) = thread::scope(|scope| {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        scope.spawn(move || {
+            let line = client.next("the acknowledgement");
+            ack_tx.send(line).unwrap_or(());
+        });
+        Deadline::after(DEADLINE)
+            .recv(&waiting_rx)
+            .expect("status waits for the first publish");
+        assert!(
+            matches!(ack_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "the pending status answers nothing yet"
+        );
+        let clock: Arc<fakes::clock::FakeClock> = fakes::clock::FakeClock::new();
+        let timed: Arc<dyn Clock> = clock.clone();
+        let pending = Arc::clone(&pending);
+        let diag = crate::diag::open(&temp.dir, timed);
+        let (first_tx, first_rx) = mpsc::channel();
+        scope.spawn(move || {
+            pending.first(&*clock, &diag);
+            first_tx.send(()).unwrap_or(());
+        });
+        Deadline::after(DEADLINE)
+            .recv(&first_rx)
+            .expect("first publishes");
+        let line = Deadline::after(DEADLINE)
+            .recv(&ack_rx)
+            .expect("the acknowledgement");
+        accepted(&line)
+    });
     assert_eq!(id, "c_1");
     assert_eq!(result["variables"]["source"], json!("inherited"));
 }

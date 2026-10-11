@@ -117,6 +117,44 @@ fn get(vars: &[(OsString, OsString)], name: &str) -> Option<String> {
         .find_map(|(n, v)| (n == name).then(|| v.to_string_lossy().into_owned()))
 }
 
+/// `first` on a thread, received under one deadline: a blocking capture
+/// never parks the test thread past the wait.
+fn first_wait(
+    environments: &Arc<Environments>,
+    clock: &Arc<fakes::clock::FakeClock>,
+    diag: log::diag::Diag,
+) {
+    let environments = Arc::clone(environments);
+    let clock = Arc::clone(clock);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        environments.first(&*clock, &diag);
+        done_tx.send(()).unwrap_or(());
+    });
+    Deadline::after(WITHIN)
+        .recv(&done_rx)
+        .expect("first returns");
+}
+
+/// `refresh` on a thread, received under one deadline.
+fn refresh_wait(
+    environments: &Arc<Environments>,
+    clock: &Arc<fakes::clock::FakeClock>,
+    diag: log::diag::Diag,
+) -> Arc<Environment> {
+    let environments = Arc::clone(environments);
+    let clock = Arc::clone(clock);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        done_tx
+            .send(environments.refresh(&*clock, &diag))
+            .unwrap_or(());
+    });
+    Deadline::after(WITHIN)
+        .recv(&done_rx)
+        .expect("refresh returns")
+}
+
 #[test]
 fn a_capture_replaces_a_captured_fiber_home_with_the_hub_home() {
     let temp = Temp::new();
@@ -552,7 +590,7 @@ fn refresh_publishes_a_new_environment_from_a_rewritten_body() {
     let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
     let clock = fakes::clock::FakeClock::new();
     let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
-    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    first_wait(&environments, &clock, temp.diag(Arc::clone(&clock)));
     let old = environments.get();
     assert_eq!(get(&old.vars, "MARK").as_deref(), Some("1"));
     fakes::script(
@@ -563,7 +601,7 @@ fn refresh_publishes_a_new_environment_from_a_rewritten_body() {
             temp.dir.display(),
         ),
     );
-    let new = environments.refresh(&*clock, &temp.diag(Arc::clone(&clock)));
+    let new = refresh_wait(&environments, &clock, temp.diag(Arc::clone(&clock)));
     assert_eq!(get(&new.vars, "MARK").as_deref(), Some("2"));
     assert_eq!(new.source, VariablesSource::LoginShell);
     assert!(!Arc::ptr_eq(&old, &new), "a refresh publishes a new Arc");
@@ -583,7 +621,7 @@ fn a_failed_refresh_publishes_the_fallback() {
     let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
     let clock = fakes::clock::FakeClock::new();
     let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
-    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    first_wait(&environments, &clock, temp.diag(Arc::clone(&clock)));
     assert_eq!(environments.get().source, VariablesSource::LoginShell);
     fakes::script(
         &temp.dir,
@@ -593,7 +631,7 @@ fn a_failed_refresh_publishes_the_fallback() {
             temp.dir.display(),
         ),
     );
-    let new = environments.refresh(&*clock, &temp.diag(Arc::clone(&clock)));
+    let new = refresh_wait(&environments, &clock, temp.diag(Arc::clone(&clock)));
     assert_eq!(new.source, VariablesSource::Inherited);
     assert!(get(&new.vars, "MARK").is_none());
     assert_eq!(
@@ -615,7 +653,7 @@ fn two_refreshes_run_one_capture_at_a_time() {
     let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
     let clock = fakes::clock::FakeClock::new();
     let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
-    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    first_wait(&environments, &clock, temp.diag(Arc::clone(&clock)));
     // The first refresh is held between its capture's end and its publish.
     fakes::script(
         &temp.dir,
@@ -656,6 +694,13 @@ fn two_refreshes_run_one_capture_at_a_time() {
         ),
     );
     fs::remove_file(&second_ran).unwrap_or(());
+    // The second refresh signals its admission: it runs only after the
+    // first holds the serializing lock, so the assertions below prove it
+    // waits rather than passing because its thread never ran.
+    let (admitted_tx, admitted_rx) = mpsc::channel();
+    *support::lock(&environments.after_admit) = Some(Box::new(move || {
+        admitted_tx.send(()).unwrap_or(());
+    }));
     let second_env = Arc::clone(&environments);
     let second_clock = Arc::clone(&clock);
     let second_diag = temp.diag(Arc::clone(&clock));
@@ -665,8 +710,11 @@ fn two_refreshes_run_one_capture_at_a_time() {
             .send(second_env.refresh(&*second_clock, &second_diag))
             .unwrap_or(());
     });
+    Deadline::after(WITHIN)
+        .recv(&admitted_rx)
+        .expect("the second refresh is admitted");
     assert!(
-        Deadline::after(QUIET).recv(&second_rx).is_err(),
+        matches!(second_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the second refresh waits for the first"
     );
     assert!(
@@ -692,12 +740,12 @@ fn a_refresh_after_close_spawns_nothing_and_returns_the_published() {
     let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
     let clock = fakes::clock::FakeClock::new();
     let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
-    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    first_wait(&environments, &clock, temp.diag(Arc::clone(&clock)));
     let published = environments.get();
     let lines_before = temp.log_lines().len();
     fs::remove_file(temp.dir.join("pid")).unwrap();
     environments.close();
-    let after = environments.refresh(&*clock, &temp.diag(Arc::clone(&clock)));
+    let after = refresh_wait(&environments, &clock, temp.diag(Arc::clone(&clock)));
     assert!(
         Arc::ptr_eq(&published, &after),
         "no new publish after close"
@@ -726,6 +774,13 @@ fn a_refresh_queued_on_the_lock_spawns_nothing_after_close() {
     // The queued refresh's spawn would rewrite the pid file: remove it,
     // so any spawn after `close` is seen.
     fs::remove_file(temp.dir.join("pid")).unwrap();
+    // Signal the refresh's admission while the first capture holds the
+    // lock: `close` below lands between admission and spawn, forcing the
+    // race instead of running entirely afterwards.
+    let (admitted_tx, admitted_rx) = mpsc::channel();
+    *support::lock(&environments.after_admit) = Some(Box::new(move || {
+        admitted_tx.send(()).unwrap_or(());
+    }));
     let second = Arc::clone(&environments);
     let second_clock = Arc::clone(&clock);
     let second_diag = temp.diag(Arc::clone(&clock));
@@ -735,6 +790,9 @@ fn a_refresh_queued_on_the_lock_spawns_nothing_after_close() {
             .send(second.refresh(&*second_clock, &second_diag))
             .unwrap_or(());
     });
+    Deadline::after(WITHIN)
+        .recv(&admitted_rx)
+        .expect("the refresh is admitted while the first capture holds the lock");
     environments.close();
     first_done.join().expect("the first capture ends");
     let refreshed = Deadline::after(WITHIN)

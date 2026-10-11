@@ -75,21 +75,37 @@ fn connect(client: UnixStream) -> impl FnMut() -> io::Result<doors::hub::Hub> {
     }
 }
 
-/// The two command lines the hub read, in order.
+/// The two command lines the hub read, in order: one deadline for the
+/// whole wait, never one per line.
 fn received(got: &mpsc::Receiver<String>) -> Vec<Value> {
+    let wait = Deadline::after(DEADLINE);
     (0..2)
         .map(|_| {
-            let line = Deadline::after(DEADLINE).recv(got).unwrap();
+            let line = wait.recv(got).unwrap();
             serde_json::from_str(&line).unwrap()
         })
         .collect()
 }
 
+/// `run` on a thread, with its result received under one deadline: a
+/// blocking socket read never parks the test thread past the wait.
+fn run_wait(client: UnixStream) -> (Result<(), contract::shapes::Failure>, Vec<u8>) {
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut out = Vec::new();
+        let result = run(&mut out, &mut connect(client));
+        done_tx.send((result, out)).unwrap_or(());
+    });
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("run returns")
+}
+
 #[test]
 fn a_login_shell_status_prints_where_sessions_start() {
     let (got, client) = fake_hub(vec![refreshed(), status("login_shell")]);
-    let mut out = Vec::new();
-    run(&mut out, &mut connect(client)).unwrap();
+    let (result, out) = run_wait(client);
+    result.unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "sessions now start with the login shell's environment\n"
@@ -106,8 +122,8 @@ fn a_login_shell_status_prints_where_sessions_start() {
 #[test]
 fn an_inherited_status_prints_the_fallback() {
     let (got, client) = fake_hub(vec![refreshed(), status("inherited")]);
-    let mut out = Vec::new();
-    run(&mut out, &mut connect(client)).unwrap();
+    let (result, out) = run_wait(client);
+    result.unwrap();
     assert_eq!(
         String::from_utf8(out).unwrap(),
         "the login-shell capture failed; sessions start with the hub's inherited environment\n"
@@ -122,8 +138,8 @@ fn a_status_without_variables_is_a_failure() {
         "running": true, "fiber_version": "0.0.1", "clients": 1,
     }}});
     let (_got, client) = fake_hub(vec![refreshed(), bare]);
-    let mut out = Vec::new();
-    let error = run(&mut out, &mut connect(client)).unwrap_err();
+    let (result, out) = run_wait(client);
+    let error = result.unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert!(out.is_empty(), "nothing is printed without variables");
 }
@@ -131,8 +147,8 @@ fn a_status_without_variables_is_a_failure() {
 #[test]
 fn a_status_with_an_unknown_source_is_a_failure() {
     let (_got, client) = fake_hub(vec![refreshed(), status("elsewhere")]);
-    let mut out = Vec::new();
-    let error = run(&mut out, &mut connect(client)).unwrap_err();
+    let (result, out) = run_wait(client);
+    let error = result.unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert!(out.is_empty(), "nothing is printed for an unknown source");
 }
@@ -142,8 +158,8 @@ fn a_rejected_refresh_is_a_failure_with_its_code() {
     let rejected = json!({"kind": "command_rejected", "ts": 1, "schema_version": 1,
         "payload": {"command_id": "c_refresh", "code": "busy", "message": "try later"}});
     let (got, client) = fake_hub(vec![rejected]);
-    let mut out = Vec::new();
-    let error = run(&mut out, &mut connect(client)).unwrap_err();
+    let (result, out) = run_wait(client);
+    let error = result.unwrap_err();
     assert_eq!(error.code, ErrorCode::Busy);
     assert_eq!(error.message, "try later");
     assert!(out.is_empty());
@@ -163,8 +179,8 @@ fn a_connection_closed_before_the_answer_is_a_failure() {
         read.read_line(&mut line).unwrap_or(0);
         // No answer: the connection closes here.
     });
-    let mut out = Vec::new();
-    let error = run(&mut out, &mut connect(client)).unwrap_err();
+    let (result, out) = run_wait(client);
+    let error = result.unwrap_err();
     assert_eq!(error.code, ErrorCode::IoFailed);
     assert!(out.is_empty());
 }
