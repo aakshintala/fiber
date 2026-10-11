@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Stub cargo for scripts/test-bug-red: docs-only exits 1 (not
+# docs-only), bug-filter records its file args in the file named by
+# BUG_RED_RECORD and prints a filter plus one package, and nextest
+# exits 100 (a test failed).
+set -euo pipefail
+if [ "${1-}" = xtask ] && [ "${2-}" = docs-only ]; then
+  exit 1
+fi
+if [ "${1-}" = xtask ] && [ "${2-}" = bug-filter ]; then
+  shift 2
+  if [ "$#" -gt 0 ]; then
+    printf '%s\n' "$@" >"$BUG_RED_RECORD"
+    # Like the real bug-filter, only test files reach the filter: a
+    # red commit with no test file prints an empty one.
+    joined=""
+    for f in "$@"; do
+      case "$f" in
+        */tests/*)
+          if [ -z "$joined" ]; then
+            joined="$f"
+          else
+            joined="$joined|$f"
+          fi
+          ;;
+      esac
+    done
+    printf 'filter\t%s\n' "$joined"
+  else
+    : >"$BUG_RED_RECORD"
+    printf 'filter\t\n'
+  fi
+  printf 'package\ta\n'
+  exit 0
+fi
+if [ "${1-}" = nextest ]; then
+  exit 100
+fi
+echo "stub cargo: unexpected args: $*" >&2
+exit 1
