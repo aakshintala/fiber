@@ -69,7 +69,6 @@ fn tinted(role: Role) -> Style {
 /// Renders `text` at `width` columns. Pure: the same input gives the same
 /// output. An unclosed fence is a code block to the end of the text.
 pub(crate) fn render(text: &str, width: u16) -> Rendered {
-    crate::work::add(|work| work.markdown_renders += 1);
     let mut writer = Writer {
         width,
         out: Rendered::default(),

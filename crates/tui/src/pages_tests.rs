@@ -682,4 +682,9 @@ fn a_window_near_the_top_counts_only_the_pages_it_walks() {
     assert_eq!(index.window(0, 5), 0..1);
     // `total` scans every page once; the walk itself stops at the second.
     assert_eq!(crate::work::take().index_pages, pages + 2);
+    // `start` walks the pages before `at`, once each: every page holds
+    // ten rows, so the fourth starts at row 30.
+    crate::work::take();
+    assert_eq!(index.start(3), 30);
+    assert_eq!(crate::work::take().index_pages, 3);
 }

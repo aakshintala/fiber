@@ -123,13 +123,16 @@ fn open_report(
     .to_string())
 }
 
-/// The work counts as one JSON object, by name.
+/// The work counts as one JSON object, by name: the last batch's fold
+/// work and the last frame's work, since nothing accumulates them.
 fn work(work: &tui::work::Work) -> serde_json::Value {
-    work.named()
-        .into_iter()
-        .map(|(name, count)| (name.to_owned(), serde_json::json!(count)))
-        .collect::<serde_json::Map<_, _>>()
-        .into()
+    serde_json::json!({
+        "reply_renders": work.reply_renders,
+        "turn_rows": work.turn_rows,
+        "page_counts": work.page_counts,
+        "index_pages": work.index_pages,
+        "usage_summaries": work.usage_summaries,
+    })
 }
 
 fn main() -> ExitCode {

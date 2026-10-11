@@ -745,7 +745,6 @@ impl Pages {
     /// the pages a pending copy asked for until it runs.
     pub(crate) fn trim(&mut self, top: usize, height: usize) {
         let window = self.index.window(top, height);
-        crate::work::add(|work| work.trim_pages += self.closed.len());
         for (at, part) in self.closed.iter_mut().enumerate() {
             if !window.contains(&at) && !self.pins.contains(at) {
                 *part = None;
@@ -1133,7 +1132,6 @@ impl Pages {
 
     /// A page's lines, their turn ranges, and stable focus stops.
     fn draw_data(&self, page: usize, part: &Part, mode: Draw) -> DrawData {
-        crate::work::add(|work| work.page_builds += 1);
         let mut out = match mode {
             Draw::Shown => Rows::default(),
             Draw::AllOpen => Rows::all_open(),

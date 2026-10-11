@@ -108,15 +108,20 @@ fn folding_a_session_does_the_same_work_for_each_line() {
             let lines = session(turns, shared);
             let (work, pages) = fold_work(&lines);
             let case = format!("{turns} turns, shared ids {shared}: {work:?}");
-            assert_eq!(work.lines, lines.len(), "{case}");
-            // Each reply renders once, to count its rows.
-            assert_eq!(work.markdown_renders, turns, "{case}");
+            // Each reply draws once for its page's count, and a page
+            // cut draws one reply again on its scratch pad.
+            assert!(work.reply_renders >= turns, "{case}");
+            assert!(work.reply_renders <= turns + pages, "{case}");
+            // Each turn draws once for its page's count, and a cut
+            // draws the cards on either side of it on scratch pads.
+            assert!(work.turn_rows >= turns, "{case}");
+            assert!(work.turn_rows <= turns + 3 * pages, "{case}");
             // Each page is counted once: when it closes, and the open one
             // at the batch's end. A usage line counts no page again.
-            assert!(work.page_counts <= pages, "{pages} pages; {case}");
-            // Each turn draws its rows for its page's count, and a cut
-            // draws the cards on either side of it once more.
-            assert!(work.turn_rows <= turns + 2 * pages, "{case}");
+            assert_eq!(work.page_counts, pages, "{case}");
+            // The batch's end settles once: `view_top` totals every
+            // page, and `trim`'s window totals them and walks them.
+            assert_eq!(work.index_pages, 3 * pages, "{case}");
             // A usage line looks its turn up once, never walking the
             // turns before it.
             assert_eq!(work.usage_summaries, turns, "{case}");
@@ -181,4 +186,27 @@ fn a_late_usage_line_on_a_held_page_counts_its_rows_exactly() {
     let fresh = folded(&log.lines, 30);
     assert_eq!(rows(&pages), rows(&fresh));
     assert_eq!(pages.rows(), fresh.rows());
+}
+
+/// Folding one turn counts each step exactly once: seven lines on one
+/// page, so every kept counter has the number a `*=` or `-=` mutant
+/// cannot satisfy.
+#[test]
+fn folding_one_turn_counts_each_step_once() {
+    let lines = session(1, false);
+    assert_eq!(lines.len(), 7);
+    let (work, pages) = fold_work(&lines);
+    assert_eq!(pages, 1);
+    let case = format!("{work:?}");
+    // The reply draws once, for the batch-end count.
+    assert_eq!(work.reply_renders, 1, "{case}");
+    // The turn draws once, for the batch-end count.
+    assert_eq!(work.turn_rows, 1, "{case}");
+    // The open page counts once, at the batch's end.
+    assert_eq!(work.page_counts, 1, "{case}");
+    // The settle totals the one page in `view_top`, and the trim's
+    // window totals it and walks it: three visits to the one page.
+    assert_eq!(work.index_pages, 3, "{case}");
+    // The usage line looks its turn up once.
+    assert_eq!(work.usage_summaries, 1, "{case}");
 }

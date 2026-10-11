@@ -70,7 +70,6 @@ pub(crate) fn paragraph(line: Line<'_>) -> Paragraph<'_> {
 /// How many rows `line` takes at `width`: one when it fits, without
 /// wrapping it.
 pub(crate) fn rows(line: Line<'_>, width: u16) -> usize {
-    crate::work::add(|work| work.line_measures += 1);
     if line.width() <= usize::from(width) {
         return 1;
     }

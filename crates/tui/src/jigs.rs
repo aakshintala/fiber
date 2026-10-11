@@ -113,9 +113,9 @@ pub struct OpenStages {
     pub frames: usize,
     /// Time in `Screen::draw` across those frames.
     pub frame_time: Duration,
-    /// The work folding the batches did.
+    /// The work the last batch's fold did.
     pub fold_work: crate::work::Work,
-    /// The work drawing the frames did.
+    /// The work the last frame's draw did.
     pub frame_work: crate::work::Work,
 }
 
@@ -206,7 +206,7 @@ pub fn measure_open(
                 .frame_time
                 .saturating_add(draw_frame(&mut screen, &mut app, &clock)?);
         stages.frames = stages.frames.saturating_add(1);
-        stages.frame_work += crate::work::take();
+        stages.frame_work = crate::work::take();
     }
     Ok(stages)
 }
@@ -235,14 +235,14 @@ fn fold_batch(
     stages.fold = stages
         .fold
         .saturating_add(clock.now().saturating_duration_since(started));
-    stages.fold_work += crate::work::take();
+    stages.fold_work = crate::work::take();
     *since_frame = since_frame.saturating_add(folded);
     if *since_frame >= frame_every {
         stages.frame_time = stages
             .frame_time
             .saturating_add(draw_frame(screen, app, clock)?);
         stages.frames = stages.frames.saturating_add(1);
-        stages.frame_work += crate::work::take();
+        stages.frame_work = crate::work::take();
         *since_frame = 0;
     }
     Ok(())

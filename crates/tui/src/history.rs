@@ -472,7 +472,6 @@ impl App {
     /// a page it notes what covers the input box; once that differs,
     /// whatever opened or closed a panel, the recall waits no more.
     pub(super) fn settle(&mut self) {
-        crate::work::add(|work| work.settle += 1);
         self.relayout();
         let height = self.conversation_height();
         // A batch settles once at its end: trimming mid-batch would drop
