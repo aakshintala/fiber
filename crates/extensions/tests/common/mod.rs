@@ -9,7 +9,6 @@
 )]
 
 use std::fs;
-use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
@@ -341,15 +340,6 @@ pub(crate) fn pair(credential: &str, label: &str) -> CredentialPair {
         credential: credential.to_owned(),
         label: label.to_owned(),
     }
-}
-
-/// A port nothing listens on.
-pub(crate) fn free_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
 }
 
 /// The value of `name` in `headers`, case-sensitively.
