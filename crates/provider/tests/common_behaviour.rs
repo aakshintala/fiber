@@ -378,7 +378,9 @@ fn user_parts(
             }
             (texts, images)
         }
-        _ => panic!("a user message is a string or blocks, got {content}"),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_) => {
+            panic!("a user message is a string or blocks, got {content}")
+        }
     }
 }
 
