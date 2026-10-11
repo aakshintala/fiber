@@ -118,7 +118,7 @@ const STEP: u64 = 64 * 1024;
 /// The first `Some` that `found` gives for the complete lines of
 /// `dir/events.jsonl`, read from the end backwards; bytes after the last
 /// newline are torn and skipped.
-pub(crate) fn last_line_where<T>(dir: &Path, found: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
+pub fn last_line_where<T>(dir: &Path, found: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
     let path = dir.join(EVENTS);
     let file = File::open(&path).ok()?;
     let len = file.metadata().ok()?.len();

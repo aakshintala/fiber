@@ -37,7 +37,8 @@ pub use rate::{Rate, RateFold};
 pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::{most_recent, resolve};
 pub use scan::{
-    Hold, SessionLock, Started, last_ts, remaining, session_bytes, started_sessions, try_hold,
+    Hold, SessionLock, Started, last_line_where, last_ts, remaining, session_bytes,
+    started_sessions, try_hold,
 };
 pub use search::{Identity, SessionScan};
 pub use usage::usage;
