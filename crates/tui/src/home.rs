@@ -689,7 +689,7 @@ pub(crate) fn exit_line(id: &SessionId) -> String {
 /// asks first, naming the session.
 pub(crate) fn delete_line(row: &Row) -> String {
     format!(
-        "Delete {} ({})? It cannot be undone · enter delete · esc keep",
+        "Delete {} ({})? It cannot be undone · Enter delete · Esc keep",
         title(row),
         row.id.0
     )
@@ -710,7 +710,7 @@ pub(crate) fn cascade_line(row: &Row, others: &[SessionId]) -> String {
         )
     };
     format!(
-        "Delete {} ({}) {}? It cannot be undone · enter delete all · esc keep",
+        "Delete {} ({}) {}? It cannot be undone · Enter delete all · Esc keep",
         title(row),
         row.id.0,
         continued
