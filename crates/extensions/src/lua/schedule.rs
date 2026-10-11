@@ -10,12 +10,15 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::MutexGuard;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use contract::RequestId;
 use contract::events::ExtensionExec;
+use contract::inbox::Delivery;
 use contract::shapes::Process;
 use mlua::Thread;
 
@@ -313,17 +316,49 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
     }
 }
 
-/// Records a finished callback's result, or parks it on its host call. A
-/// finished timer firing ends the firing instead: its result goes nowhere,
-/// and an `every` that was not cancelled fires again.
-///
-/// What a request arm admits for the single park below: `Callback`, `Lock`,
-/// `Sleep` and every immediate reply drop the admission lock first and park
-/// once, so the park lives in one place. Arms that already parked and
-/// started their work return from `settle` directly.
-struct Admitted {
-    cancel: Option<Sender<()>>,
-    wake: Option<Instant>,
+/// The suspended call a host request belongs to.
+struct Call<'t> {
+    id: u64,
+    target: &'t Target,
+    deadline: Option<Instant>,
+}
+
+/// What an admitted request leaves `settle` to do. The first two still hold
+/// the admission lock and park under it; the rest released it, and park
+/// under a fresh lock.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "an ask carries its unsent delivery to drop after unlocking; boxing would allocate on every host call"
+)]
+enum Admitted<'a> {
+    /// A `host.ask` raised: park waiting on `request`, then drop `unsent`
+    /// after unlocking.
+    Asked {
+        shared: MutexGuard<'a, Shared>,
+        request: RequestId,
+        unsent: Option<Delivery>,
+    },
+    /// Off-thread work: park, then start `spawn`, still under the lock.
+    Spawning {
+        shared: MutexGuard<'a, Shared>,
+        spawn: Spawn,
+    },
+    /// An answer ready at once: deliver it with no lock held, then park.
+    Replied(Reply),
+    /// A listener or lock wait started under the lock: park holding its
+    /// stop sender.
+    Started(Sender<()>),
+    /// A sleep: park until this instant.
+    Sleep(Instant),
+    /// Park with nothing to wait on (a sleep past the end of time).
+    Nothing,
+}
+
+/// Off-thread work that starts only after its callback is parked.
+struct Spawn {
+    builder: thread::Builder,
+    work: Box<dyn FnOnce() + Send>,
+    exec: bool,
 }
 
 /// Parks the callback and marks it parked: the admission lock when the arm
@@ -390,58 +425,38 @@ fn spawn_failed(
     );
 }
 
-fn settle(
+/// Admits one suspended callback's host request under the admission lock.
+/// Each arm returns what `settle` then parks and starts: `Asked` and
+/// `Spawning` keep the admission lock they carry, so the park and any spawn
+/// happen under one lock hold; every other arm released the lock and parks
+/// under a fresh one. Off-thread work starts only after its callback is
+/// parked, so a reply arriving from work that answers in-process never lands
+/// on an unparked id.
+fn admit<'a>(
     start: &Start,
     hub: &Arc<Hub>,
-    parked: &mut Vec<Parked>,
-    id: u64,
-    target: &Target,
-    step: Result<Step, Error>,
-) {
+    mut shared: MutexGuard<'a, Shared>,
+    call: Call<'_>,
+    request: Request,
+    driver: Option<Arc<dyn contract::extension::Drive>>,
+    deliver: &Deliver,
+) -> Admitted<'a> {
     let name = start.name.as_str();
-    let dir = start.dir.as_path();
     let home = start.home.as_path();
-    if let Target::Timer { id: timer_id } = target
-        && !matches!(step, Ok(Step::Suspend { .. }))
-    {
-        hub.timer_call_done(id, *timer_id);
-        return;
-    }
-    let (thread, target, deadline, timeout, request) = match step {
-        Ok(Step::Done(value)) => return hub.finish(id, Ok(value)),
-        Err(e) => return hub.finish(id, Err(e)),
-        Ok(Step::Suspend {
-            thread,
-            target,
-            deadline,
-            timeout,
-            request,
-        }) => (thread, target, deadline, timeout, request),
-    };
-    #[cfg(test)]
-    settle_hook(&target, Pause::Admission);
-    // Read before the admission lock below takes it.
-    let driver = hub.driver();
-    // Every host call is admitted here: a stopped extension, whose callback
-    // may still run on an abandoned thread, or a cancelled call starts
-    // nothing. Work that spawns starts under this lock hold; the rest drops
-    // it first and is stopped with its parked callback.
-    let Some(mut shared) = hub.admit(id) else {
-        return;
-    };
-    let deliver: Deliver = {
-        let hub = Arc::clone(hub);
-        Arc::new(move |reply| hub.deliver(id, reply))
-    };
-    let admitted = match request {
+    let Call {
+        id,
+        target,
+        deadline,
+    } = call;
+    match request {
         Request::Ask(interaction) => {
             if !shared.answerable || shared.sealed || shared.disposed {
                 // nobody_to_answer_returns_declined_at_once: as headless
                 // approvals write no request.
                 drop(shared);
-                deliver(host::Reply::Ask(contract::events::Answer::Declined {
+                Admitted::Replied(host::Reply::Ask(contract::events::Answer::Declined {
                     declined: contract::shapes::True,
-                }));
+                }))
             } else {
                 let request_id = asks::mint();
                 let requested = contract::events::InteractionRequested {
@@ -454,127 +469,73 @@ fn settle(
                 let unsent = shared.raise(id, requested);
                 // Parked before anything can answer: the answer resumes
                 // only from the loop's ack, after the drain.
-                park(
-                    parked,
-                    &mut shared,
-                    id,
-                    thread,
-                    target.clone(),
-                    deadline,
-                    timeout,
-                    None,
-                    None,
-                    Some(request_id),
-                );
-                hub.notify();
+                Admitted::Asked {
+                    shared,
+                    request: request_id,
+                    unsent,
+                }
+            }
+        }
+        Request::Drive(request) => match driver {
+            Some(driver) => {
+                // The door runs the command elsewhere, as `host.http`
+                // does: a driven `prompt` carrying an image blocks on
+                // the image child, and the thread serves other work
+                // meanwhile. Parked before the spawn: the door answers
+                // in-process, so its reply can arrive before a spawn
+                // returns, and a reply for an unparked id is dropped.
+                // No off-thread wait to cancel: the parked deadline
+                // bounds the call, and a late answer is dropped.
+                let answered = Arc::clone(hub);
+                let extension = name.to_owned();
+                let command = request.command;
+                let args = request.args;
+                Admitted::Spawning {
+                    shared,
+                    spawn: Spawn {
+                        builder: thread::Builder::new().name(format!("drive {name}")),
+                        work: Box::new(move || {
+                            let ack = contract::inbox::Ack(Box::new(move |answer| {
+                                answered.deliver(
+                                    id,
+                                    match answer {
+                                        Ok(result) => Reply::Drive(Ok(result)),
+                                        Err(rejection) => {
+                                            Reply::Drive(Err((rejection.code, rejection.message)))
+                                        }
+                                    },
+                                );
+                            }));
+                            driver.drive(&extension, &command, args, ack);
+                        }),
+                        exec: false,
+                    },
+                }
+            }
+            None => {
+                // drive_without_a_driver_is_closing: only a sealed
+                // extension sees this; it raises `closing`.
                 drop(shared);
-                drop(unsent);
-                return;
+                Admitted::Replied(Reply::Drive(Err((
+                    contract::ErrorCode::Closing,
+                    "host.drive: the session is closing".to_owned(),
+                ))))
             }
-            Admitted {
-                cancel: None,
-                wake: None,
-            }
-        }
-        Request::Drive(request) => {
-            match driver {
-                Some(driver) => {
-                    // The door runs the command elsewhere, as `host.http`
-                    // does: a driven `prompt` carrying an image blocks on
-                    // the image child, and the thread serves other work
-                    // meanwhile. Parked before the spawn: the door answers
-                    // in-process, so its reply can arrive before a spawn
-                    // returns, and a reply for an unparked id is dropped.
-                    // No off-thread wait to cancel: the parked deadline
-                    // bounds the call, and a late answer is dropped.
-                    park(
-                        parked,
-                        &mut shared,
-                        id,
-                        thread,
-                        target.clone(),
-                        deadline,
-                        timeout,
-                        None,
-                        None,
-                        None,
-                    );
-                    let answered = Arc::clone(hub);
-                    let extension = name.to_owned();
-                    let command = request.command;
-                    let args = request.args;
-                    let spawned =
-                        thread::Builder::new()
-                            .name(format!("drive {name}"))
-                            .spawn(move || {
-                                let ack = contract::inbox::Ack(Box::new(move |answer| {
-                                    answered.deliver(
-                                        id,
-                                        match answer {
-                                            Ok(result) => Reply::Drive(Ok(result)),
-                                            Err(rejection) => Reply::Drive(Err((
-                                                rejection.code,
-                                                rejection.message,
-                                            ))),
-                                        },
-                                    );
-                                }));
-                                driver.drive(&extension, &command, args, ack);
-                            });
-                    if let Err(source) = spawned {
-                        spawn_failed(hub, parked, shared, id, dir, source, false);
-                        return;
-                    }
-                    drop(shared);
-                    hub.notify();
-                    return;
-                }
-                None => {
-                    // drive_without_a_driver_is_closing: only a sealed
-                    // extension sees this; it raises `closing`.
-                    drop(shared);
-                    deliver(Reply::Drive(Err((
-                        contract::ErrorCode::Closing,
-                        "host.drive: the session is closing".to_owned(),
-                    ))));
-                    Admitted {
-                        cancel: None,
-                        wake: None,
-                    }
-                }
-            }
-        }
+        },
         Request::Http(request) => {
             if let Some(script) = hub.host_script() {
                 drop(shared);
-                deliver(Reply::Http(script.http(request.case_value())));
+                Admitted::Replied(Reply::Http(script.http(request.case_value())))
             } else {
-                park(
-                    parked,
-                    &mut shared,
-                    id,
-                    thread,
-                    target.clone(),
-                    deadline,
-                    timeout,
-                    None,
-                    None,
-                    None,
-                );
-                let spawned = thread::Builder::new()
-                    .name(format!("http {name}"))
-                    .spawn(move || deliver(Reply::Http(host::perform(&request))));
-                if let Err(source) = spawned {
-                    spawn_failed(hub, parked, shared, id, dir, source, false);
-                    return;
+                let http_deliver = Deliver::clone(deliver);
+                Admitted::Spawning {
+                    shared,
+                    spawn: Spawn {
+                        builder: thread::Builder::new().name(format!("http {name}")),
+                        work: Box::new(move || http_deliver(Reply::Http(host::perform(&request)))),
+                        exec: false,
+                    },
                 }
-                drop(shared);
-                hub.notify();
-                return;
-            }
-            Admitted {
-                cancel: None,
-                wake: None,
             }
         }
         Request::Callback { port, path } => {
@@ -582,7 +543,7 @@ fn settle(
             // or stop lands between admission and the bind; a failure is
             // delivered after releasing it.
             #[cfg(test)]
-            settle_hook(&target, Pause::Start);
+            settle_hook(target, Pause::Start);
             let started = if let Some(script) = hub.host_script() {
                 let result = script
                     .oauth("callback", &serde_json::json!({}))
@@ -599,17 +560,13 @@ fn settle(
                     });
                 Err(Reply::Query(result))
             } else {
-                oauth::listen(port, path.clone(), &deliver, start.browser.as_ref())
+                oauth::listen(port, path.clone(), deliver, start.browser.as_ref())
             };
             drop(shared);
-            let cancel = match started {
-                Ok(cancel) => Some(cancel),
-                Err(reply) => {
-                    deliver(reply);
-                    None
-                }
-            };
-            Admitted { cancel, wake: None }
+            match started {
+                Ok(cancel) => Admitted::Started(cancel),
+                Err(reply) => Admitted::Replied(reply),
+            }
         }
         Request::Exec(request) => {
             let hub_exec = Arc::clone(hub);
@@ -635,32 +592,18 @@ fn settle(
                     send_exec(&hub_exec, meta.as_ref(), &ran);
                     ran
                 });
-                deliver(Reply::Exec(result));
-                Admitted {
-                    cancel: None,
-                    wake: None,
-                }
+                Admitted::Replied(Reply::Exec(result))
             } else {
                 // The stop sender stays in the hub, so the stop reaches the
                 // run without the Lua thread, and the run's end clears it.
                 let cancel_rx = shared.register_exec(id);
-                park(
-                    parked,
-                    &mut shared,
-                    id,
-                    thread,
-                    target.clone(),
-                    deadline,
-                    timeout,
-                    None,
-                    None,
-                    None,
-                );
                 let clock = hub.clock_handle();
-                let spawned =
-                    thread::Builder::new()
-                        .name(format!("exec {name}"))
-                        .spawn(move || {
+                let run_deliver = Deliver::clone(deliver);
+                Admitted::Spawning {
+                    shared,
+                    spawn: Spawn {
+                        builder: thread::Builder::new().name(format!("exec {name}")),
+                        work: Box::new(move || {
                             let outcome = exec::run(&request, clock.as_ref(), deadline, cancel_rx);
                             // The group is empty or killed and drained past
                             // here: a cancelled call may return only now.
@@ -674,18 +617,14 @@ fn settle(
                                     }
                                 }
                             }
-                            deliver(match outcome {
+                            run_deliver(match outcome {
                                 Ok(ran) => Reply::Exec(Ok(ran)),
                                 Err(failed) => Reply::Exec(Err((failed.code, failed.message))),
                             });
-                        });
-                if let Err(source) = spawned {
-                    spawn_failed(hub, parked, shared, id, dir, source, true);
-                    return;
+                        }),
+                        exec: true,
+                    },
                 }
-                drop(shared);
-                hub.notify();
-                return;
             }
         }
         Request::Lock => {
@@ -701,21 +640,18 @@ fn settle(
             // lock below, so no cancel or stop lands between admission and
             // the start. Every other target releases the lock first and
             // delivers its error after.
-            let cancel = match &target {
+            match target {
                 Target::Provider {
                     credential: Some(CredentialFor::Stored(pair)),
                     ..
                 } => {
                     #[cfg(test)]
-                    settle_hook(&target, Pause::Start);
-                    let started = oauth::lock(home, pair, &deliver);
+                    settle_hook(target, Pause::Start);
+                    let started = oauth::lock(home, pair, deliver);
                     drop(shared);
                     match started {
-                        Ok(cancel) => Some(cancel),
-                        Err(reply) => {
-                            deliver(reply);
-                            None
-                        }
+                        Ok(cancel) => Admitted::Started(cancel),
+                        Err(reply) => Admitted::Replied(reply),
                     }
                 }
                 Target::Provider {
@@ -726,8 +662,7 @@ fn settle(
                     // `fiber login` stores what it holds after the flow
                     // (`docs/model-routing.md`, "Logging in").
                     drop(shared);
-                    deliver(Reply::Lock(Ok(Holder::Login(Arc::clone(slot)))));
-                    None
+                    Admitted::Replied(Reply::Lock(Ok(Holder::Login(Arc::clone(slot)))))
                 }
                 Target::Provider {
                     name,
@@ -735,52 +670,108 @@ fn settle(
                     credential: None,
                 } => {
                     drop(shared);
-                    deliver(Reply::Lock(Err(crate::host::LockError::Arg(format!(
+                    Admitted::Replied(Reply::Lock(Err(crate::host::LockError::Arg(format!(
                         "host.oauth.refresh: {name}.{function} has no credential to refresh; only credential() refreshes"
-                    )))));
-                    None
+                    )))))
                 }
                 Target::Command(_) => {
                     drop(shared);
-                    deliver(Reply::Lock(Err(no_credential("command"))));
-                    None
+                    Admitted::Replied(Reply::Lock(Err(no_credential("command"))))
                 }
                 Target::Hook { .. } => {
                     drop(shared);
-                    deliver(Reply::Lock(Err(no_credential("hook"))));
-                    None
+                    Admitted::Replied(Reply::Lock(Err(no_credential("hook"))))
                 }
                 Target::Timer { .. } => {
                     drop(shared);
-                    deliver(Reply::Lock(Err(no_credential("timer"))));
-                    None
+                    Admitted::Replied(Reply::Lock(Err(no_credential("timer"))))
                 }
                 Target::Tool(_) | Target::Effects(_) => {
                     drop(shared);
-                    deliver(Reply::Lock(Err(no_credential("tool"))));
-                    None
+                    Admitted::Replied(Reply::Lock(Err(no_credential("tool"))))
                 }
                 Target::Search(_) => {
                     drop(shared);
-                    deliver(Reply::Lock(Err(no_credential("search backend"))));
-                    None
+                    Admitted::Replied(Reply::Lock(Err(no_credential("search backend"))))
                 }
-            };
-            Admitted { cancel, wake: None }
+            }
         }
         Request::Sleep(d) => {
             drop(shared);
             // Past the end of time is no sleep.
-            Admitted {
-                cancel: None,
-                wake: hub.clock().now().checked_add(d),
+            match hub.clock().now().checked_add(d) {
+                Some(wake) => Admitted::Sleep(wake),
+                None => Admitted::Nothing,
             }
         }
+    }
+}
+
+fn settle(
+    start: &Start,
+    hub: &Arc<Hub>,
+    parked: &mut Vec<Parked>,
+    id: u64,
+    target: &Target,
+    step: Result<Step, Error>,
+) {
+    let dir = start.dir.as_path();
+    if let Target::Timer { id: timer_id } = target
+        && !matches!(step, Ok(Step::Suspend { .. }))
+    {
+        hub.timer_call_done(id, *timer_id);
+        return;
+    }
+    let (thread, target, deadline, timeout, request) = match step {
+        Ok(Step::Done(value)) => return hub.finish(id, Ok(value)),
+        Err(e) => return hub.finish(id, Err(e)),
+        Ok(Step::Suspend {
+            thread,
+            target,
+            deadline,
+            timeout,
+            request,
+        }) => (thread, target, deadline, timeout, request),
     };
-    let Admitted { cancel, wake } = admitted;
+    #[cfg(test)]
+    settle_hook(&target, Pause::Admission);
+    // Read before the admission lock below takes it.
+    let driver = hub.driver();
+    // Every host call is admitted here: a stopped extension, whose callback
+    // may still run on an abandoned thread, or a cancelled call starts
+    // nothing. Work that spawns starts under this lock hold; the rest drops
+    // it first and is stopped with its parked callback.
+    let Some(shared) = hub.admit(id) else {
+        return;
+    };
+    let deliver: Deliver = {
+        let hub = Arc::clone(hub);
+        Arc::new(move |reply| hub.deliver(id, reply))
+    };
+    let call = Call {
+        id,
+        target: &target,
+        deadline,
+    };
+    let admitted = admit(start, hub, shared, call, request, driver, &deliver);
+    let (mut shared, wake, cancel, ask, unsent, spawn) = match admitted {
+        Admitted::Asked {
+            shared,
+            request,
+            unsent,
+        } => (shared, None, None, Some(request), unsent, None),
+        Admitted::Spawning { shared, spawn } => (shared, None, None, None, None, Some(spawn)),
+        Admitted::Replied(reply) => {
+            deliver(reply);
+            (hub.lock(), None, None, None, None, None)
+        }
+        Admitted::Started(cancel) => (hub.lock(), None, Some(cancel), None, None, None),
+        Admitted::Sleep(wake) => (hub.lock(), Some(wake), None, None, None, None),
+        Admitted::Nothing => (hub.lock(), None, None, None, None, None),
+    };
     park(
         parked,
-        &mut hub.lock(),
+        &mut shared,
         id,
         thread,
         target,
@@ -788,9 +779,17 @@ fn settle(
         timeout,
         wake,
         cancel,
-        None,
+        ask,
     );
+    if let Some(spawn) = spawn
+        && let Err(source) = spawn.builder.spawn(spawn.work)
+    {
+        spawn_failed(hub, parked, shared, id, dir, source, spawn.exec);
+        return;
+    }
+    drop(shared);
     hub.notify();
+    drop(unsent);
 }
 
 /// What a test pauses `settle` with: called with the suspending target and
