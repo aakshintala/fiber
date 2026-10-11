@@ -210,7 +210,10 @@ fn unnamed(server: &ProviderServer) -> CallUsage {
 
 /// Every call in order under one [`DEADLINE`], each of which must fail:
 /// one deadline however many calls the protocol needs.
-fn failures(protocol: &'static str, calls: Vec<Box<dyn ModelCall>>) -> Vec<(contract::shapes::Failure, Option<bool>)> {
+fn failures(
+    protocol: &'static str,
+    calls: Vec<Box<dyn ModelCall>>,
+) -> Vec<(contract::shapes::Failure, Option<bool>)> {
     fakes::within("the calls to fail", DEADLINE, move || {
         calls
             .into_iter()
@@ -488,8 +491,7 @@ fn timeout_conflict_and_server_errors_are_provider_unavailable() {
             );
             assert_eq!(should_retry, &None, "{}: {status}", wire.protocol.name);
             assert_eq!(
-                failure.retry_after_ms,
-                None,
+                failure.retry_after_ms, None,
                 "{}: {status}",
                 wire.protocol.name
             );
@@ -525,12 +527,7 @@ fn a_503_carries_retry_after_and_a_500_carries_x_should_retry() {
             wire.protocol.name
         );
         assert_eq!(should_retry, &None, "{}", wire.protocol.name);
-        assert_eq!(
-            failure.retry_after_ms,
-            Some(7000),
-            "{}",
-            wire.protocol.name
-        );
+        assert_eq!(failure.retry_after_ms, Some(7000), "{}", wire.protocol.name);
         let (failure, should_retry) = &got[1];
         assert_eq!(
             failure.code,
@@ -539,12 +536,7 @@ fn a_503_carries_retry_after_and_a_500_carries_x_should_retry() {
             wire.protocol.name
         );
         assert_eq!(should_retry, &Some(true), "{}", wire.protocol.name);
-        assert_eq!(
-            failure.retry_after_ms,
-            None,
-            "{}",
-            wire.protocol.name
-        );
+        assert_eq!(failure.retry_after_ms, None, "{}", wire.protocol.name);
     }
 }
 
