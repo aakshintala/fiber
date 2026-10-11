@@ -175,7 +175,7 @@ impl Drop for Finish {
     fn drop(&mut self) {
         #[cfg(test)]
         crate::session::park_reader_for_test();
-        self.gate.finish(self.id);
+        self.gate.conns.finish(self.id);
     }
 }
 
@@ -729,7 +729,7 @@ pub(crate) fn spawn_writer(
     stream: Box<dyn Write + Send>,
     summary: bool,
 ) -> mpsc::Sender<level::Switch> {
-    gate.begin_writer();
+    gate.conns.begin_writer();
     let ended = Arc::clone(&gate);
     let failed = Arc::clone(&gate);
     let (tx, rx) = mpsc::channel();
@@ -746,14 +746,14 @@ pub(crate) fn spawn_writer(
                 // The watcher failed: the reader and socket stay open, so
                 // the connection is shut and the client sees EOF after
                 // every line before the one that failed.
-                failed.shut(id);
+                failed.conns.shut(id);
             }
         }) {
         Ok(handle) => {
-            gate.push_writer(id, handle);
+            gate.conns.push_writer(id, handle);
             if let Ok(()) = tx.send(()) {}
         }
-        Err(_) => gate.end_writer(),
+        Err(_) => gate.conns.end_writer(),
     }
     switch_tx
 }
@@ -762,7 +762,7 @@ struct WriterEnd(Arc<Gate>);
 
 impl Drop for WriterEnd {
     fn drop(&mut self) {
-        self.0.end_writer();
+        self.0.conns.end_writer();
     }
 }
 

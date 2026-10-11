@@ -7,9 +7,8 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 
 use crate::client;
@@ -103,11 +102,9 @@ pub(crate) struct Gate {
     /// What a test observes, or holds, at a [`tests::Probe`] point.
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
-    stop: AtomicBool,
     clients: ClientCounts,
-    /// Paired with [`Gate::conns`].
-    writers: Condvar,
-    conns: Mutex<Conns>,
+    /// The live connections, their writers, and whether the session stopped.
+    pub(crate) conns: Conns,
 }
 
 /// Replaces (`Some`) or removes (`None`) the `tools` answer's entry for a
@@ -301,7 +298,7 @@ impl Session {
             let Some(gate) = gate.upgrade() else {
                 return;
             };
-            if gate.stopped() {
+            if gate.conns.stopped() {
                 return;
             }
             let mut tools = lock(&gate.tools);
@@ -388,7 +385,7 @@ impl Session {
         self.gate.wait_shells();
         #[cfg(test)]
         self.gate.note(tests::Probe::FirstShellWaitDone);
-        self.gate.mark_stopped();
+        self.gate.conns.mark_stopped();
         // The inbox sender is dropped here, so a kept receiver sees
         // `Disconnected`: the detached accept thread keeps its own `Arc`
         // until process exit and can no longer be relied on to release it.
@@ -402,8 +399,8 @@ impl Session {
             fs::remove_dir_all(&self.dir).unwrap_or(());
         }
         drop(log);
-        self.gate.wait_writers();
-        self.gate.join_clients();
+        self.gate.conns.wait_writers(self.gate.clock.as_ref());
+        self.gate.conns.join_clients();
         self.gate.wait_shells();
         // The printer's watcher returns only on a `client::STOP` line or
         // the log's end: with nothing written and another `Arc<Log>` still
@@ -538,12 +535,7 @@ impl Wake for InboxWake {
 
 impl Wake for Gate {
     fn wake(&self) {
-        // The lock is taken before the notify, so a waiter that has judged
-        // and not yet parked cannot miss this wake.
-        {
-            let _held = lock(&self.conns);
-            self.writers.notify_all();
-        }
+        self.conns.notify();
         // A clock move wakes the loop the way an accepted cancel does.
         // The delivery means only that the loop should look again.
         self.deliver(Delivery::Cancelled);
@@ -587,14 +579,8 @@ fn open_in(
         shells: Shells::new(),
         #[cfg(test)]
         probe: Mutex::new(None),
-        stop: AtomicBool::new(false),
         clients: ClientCounts::new(),
-        writers: Condvar::new(),
-        conns: Mutex::new(Conns {
-            live: Vec::new(),
-            writers_open: 0,
-            next: 1,
-        }),
+        conns: Conns::new(),
     });
     // The session's `Arc<Gate>` keeps this subscription alive: the weak
     // handle upgrades for as long as that allocation lives.

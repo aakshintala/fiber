@@ -57,7 +57,7 @@ impl contract::extension::Drive for Driver {
         // drive_after_close_is_closing: the gate is gone, or a retained
         // handle (a release closure, a shell thread) keeps it alive past
         // `Session::close`.
-        let Some(gate) = self.gate.upgrade().filter(|gate| !gate.stopped()) else {
+        let Some(gate) = self.gate.upgrade().filter(|gate| !gate.conns.stopped()) else {
             answer.0(Err(Rejection {
                 code: ErrorCode::Closing,
                 message: client::ENDED.to_owned(),

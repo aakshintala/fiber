@@ -191,15 +191,10 @@ fn descriptors() -> usize {
 }
 
 fn wait_idle(gate: &Gate) {
-    let conns = super::lock(&gate.conns);
-    let (conns, _) = gate
-        .writers
-        .wait_timeout_while(conns, DEADLINE, |conns| {
-            !conns.live.is_empty() || conns.writers_open > 0
-        })
-        .unwrap_or_else(PoisonError::into_inner);
     assert!(
-        conns.live.is_empty() && conns.writers_open == 0,
+        gate.conns.wait_while(DEADLINE, |state| {
+            state.live_len() != 0 || state.writers_open() > 0
+        }),
         "a disconnected client left a socket or a thread held"
     );
 }
@@ -209,15 +204,10 @@ fn wait_idle(gate: &Gate) {
 /// its socket's last clone; `Gate::finish` notifies under the lock after that,
 /// so the count, not an empty `live`, proves the descriptors are released.
 fn wait_released(gate: &Gate, before: usize) {
-    let conns = super::lock(&gate.conns);
-    let (_conns, waited) = gate
-        .writers
-        .wait_timeout_while(conns, DEADLINE, |conns| {
-            !conns.live.is_empty() || conns.writers_open > 0 || descriptors() != before
-        })
-        .unwrap_or_else(PoisonError::into_inner);
     assert!(
-        !waited.timed_out(),
+        gate.conns.wait_while(DEADLINE, |state| {
+            state.live_len() != 0 || state.writers_open() > 0 || descriptors() != before
+        }),
         "descriptors return to the count from before the clients connected"
     );
 }
@@ -236,20 +226,9 @@ fn many_connections_leave_nothing_held() {
             client.send(&subscribe_line("c_live", "full")).unwrap();
             let _ack = recv(&client);
             {
-                let conns = super::lock(&gate.conns);
-                let (conns, _) = gate
-                    .writers
-                    .wait_timeout_while(conns, DEADLINE, |conns| {
-                        !conns.live.iter().any(|(_, live)| {
-                            live.reader.is_some()
-                                && live.writer.is_some()
-                                && live.shutdown.is_some()
-                        })
-                    })
-                    .unwrap_or_else(PoisonError::into_inner);
                 assert!(
-                    conns.live.iter().any(|(_, live)| {
-                        live.reader.is_some() && live.writer.is_some() && live.shutdown.is_some()
+                    gate.conns.wait_while(DEADLINE, |state| {
+                        state.live_len() != 1 || state.writers_open() == 0
                     }),
                     "a live connection keeps its reader, its writer and its shutdown"
                 );
@@ -350,21 +329,9 @@ fn close_returns_while_a_silent_client_stays_open() {
     // The reader is published and blocked: it holds its reader and its
     // shutdown, and the client sends nothing from here on.
     {
-        let conns = lock(&gate.conns);
-        let (conns, _) = gate
-            .writers
-            .wait_timeout_while(conns, DEADLINE, |conns| {
-                !conns
-                    .live
-                    .iter()
-                    .any(|(_, live)| live.reader.is_some() && live.shutdown.is_some())
-            })
-            .unwrap_or_else(PoisonError::into_inner);
         assert!(
-            conns
-                .live
-                .iter()
-                .any(|(_, live)| { live.reader.is_some() && live.shutdown.is_some() }),
+            gate.conns
+                .wait_while(DEADLINE, |state| state.live_len() != 1),
             "the silent client's reader is published and blocked"
         );
     }
@@ -540,6 +507,7 @@ fn attach_held(gate: &Arc<super::Gate>, held: &Arc<Held>, watcher: log::Watcher)
     });
     let fail = Arc::clone(held);
     let id = gate
+        .conns
         .push_reader(
             reader,
             Box::new(move || {
@@ -765,6 +733,7 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
     // has reached `read` yet or not.
     let flag = Arc::clone(&shut);
     let id = gate
+        .conns
         .push_reader(
             reader,
             Box::new(move || {
@@ -773,10 +742,14 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
             }),
         )
         .expect("the gate is running");
+    assert!(
+        gate.conns.wait_while(DEADLINE, |state| !state.published(id)),
+        "the reader is published under its id"
+    );
     let (done_tx, done_rx) = mpsc::channel();
     let finishing = Arc::clone(&gate);
     thread::spawn(move || {
-        finishing.finish(id);
+        finishing.conns.finish(id);
         if let Ok(()) = done_tx.send(()) {}
     });
     Deadline::after(DEADLINE)
@@ -805,6 +778,7 @@ fn a_reader_that_reaps_itself_finishes() {
         if let Ok(()) = done_tx.send(()) {}
     });
     let id = gate
+        .conns
         .push_reader(reader, crate::client::ender(shutdown, stop))
         .expect("the gate is running");
     if let Ok(()) = id_tx.send(id) {}
@@ -829,9 +803,9 @@ fn a_reading_writer_records_fiber_exited_before_it_ends() {
         "a reading writer records fiber_exited",
     );
     {
-        let conns = super::lock(&gate.conns);
         assert!(
-            conns.writers_open > 0,
+            gate.conns
+                .wait_while(DEADLINE, |state| state.writers_open() == 0),
             "fiber_exited arrives before the writer ends"
         );
     }
@@ -893,7 +867,7 @@ fn accept_waits_after_an_error_until_a_connection_ends() {
     let waiter = Arc::clone(&gate);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        waiter.wait_for_room();
+        waiter.conns.wait_for_room();
         if let Ok(()) = tx.send(()) {}
     });
     wait_until_accept_waits();
@@ -901,7 +875,7 @@ fn accept_waits_after_an_error_until_a_connection_ends() {
         rx.try_recv().is_err(),
         "accept waits until a connection ends or the session stops"
     );
-    gate.end_writer();
+    gate.conns.end_writer();
     Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("a connection ending lets accept try again");
@@ -1696,7 +1670,10 @@ fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
     // before it stops accepting. A subscriber's writer would hold close
     // later anyway, as the shell's answer keeps its queue open.
     assert!(gate.shells.running_len() != 0);
-    assert!(!gate.stopped(), "close went on before the shell ended");
+    assert!(
+        !gate.conns.stopped(),
+        "close went on before the shell ended"
+    );
     running.release.send(()).unwrap();
     // The answer is queued before the shell leaves the registry, so it
     // reaches the client before close drops the log.
@@ -2775,7 +2752,7 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
     let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
     // The acceptor passed its stopped check before close began.
-    assert!(!gate.stopped());
+    assert!(!gate.conns.stopped());
     let (checked_tx, checked_rx) = mpsc::channel();
     let (stopped_tx, stopped_rx) = mpsc::channel();
     let closer = Arc::clone(&gate);
@@ -2783,8 +2760,8 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
         Deadline::after(DEADLINE)
             .recv(&checked_rx)
             .expect("the acceptor checked before the stop");
-        closer.mark_stopped();
-        closer.join_clients();
+        closer.conns.mark_stopped();
+        closer.conns.join_clients();
         stopped_tx.send(()).unwrap_or(());
     });
     checked_tx.send(()).unwrap();
@@ -2805,7 +2782,7 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
         let _received = id_rx.recv();
         exited_tx.send(()).unwrap_or(());
     });
-    let handle = match gate.push_reader(
+    let handle = match gate.conns.push_reader(
         reader,
         Box::new(move || {
             flag.store(true, Ordering::SeqCst);
@@ -2820,7 +2797,8 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
         "the rejection shuts the stream"
     );
     assert!(
-        super::lock(&gate.conns).live.is_empty(),
+        gate.conns
+            .wait_while(DEADLINE, |state| state.live_len() != 0),
         "the rejected reader is never published"
     );
     drop(id_tx);
