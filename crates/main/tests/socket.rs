@@ -13,7 +13,7 @@ mod support;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -22,58 +22,15 @@ use std::time::Duration;
 
 use fakes::{Client, ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{Deadline, answered, first_line, group_alive, write_json};
-
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
+use support::{Deadline, Setup, answered, first_line, group_alive};
 
 impl Setup {
-    fn new() -> Self {
+    fn new_with_fa_root() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { deadline, root }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
-    fn provider(&self, server: &ProviderServer) {
-        let source = self.root.path().join("src");
-        write_json(
-            &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-        );
-        write_json(
-            &source.join("providers/fake.json"),
-            &json!({
-                "name": "fake",
-                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
-            }),
-        );
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
-        write_json(
-            &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
-        );
     }
 }
 
@@ -311,7 +268,7 @@ fn finish(running: Running) {
 
 #[test]
 fn two_clients_see_the_log_while_ask_is_held() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     server.hold();
     setup.provider(&server);
@@ -438,7 +395,7 @@ fn two_clients_see_the_log_while_ask_is_held() {
 
 #[test]
 fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     server.hold();
     setup.provider(&server);
@@ -535,7 +492,7 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
 
 #[test]
 fn session_status_carries_the_project_and_counts_full_connections() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     server.hold();
     setup.provider(&server);
@@ -699,7 +656,7 @@ fn session_status_carries_the_project_and_counts_full_connections() {
 
 #[test]
 fn an_empty_args_matches_a_missing_one_on_the_socket() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     server.hold();
     setup.provider(&server);
@@ -753,7 +710,7 @@ fn an_empty_args_matches_a_missing_one_on_the_socket() {
 
 #[test]
 fn cancel_on_the_same_socket_stops_a_driver_shell() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     server.hold();
     setup.provider(&server);

@@ -23,21 +23,13 @@ use std::thread;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, TOOL_NAMES, function_call, hello, holds_marker,
-    is_status, read_kinds, spawn_watched, stream, text_reply, tool_names,
+    Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, Setup, TOOL_NAMES, function_call, hello,
+    holds_marker, is_status, read_kinds, spawn_watched, stream, text_reply, tool_names,
 };
-
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
 
 impl Setup {
     #[track_caller]
-    fn new() -> Self {
+    fn new_with_started_deadline() -> Self {
         Self::within(Deadline::start())
     }
 
@@ -48,26 +40,18 @@ impl Setup {
         Self { deadline, root }
     }
 
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
     /// fake server, and makes `fake/m` the configured model.
-    fn provider(&self, server: &ProviderServer) {
+    fn provider_with_defaults(&self, server: &ProviderServer) {
         self.provider_on_cost(server, "openai-responses", None);
     }
 
-    /// [`Setup::provider`] with `cost` as model `m`'s declared prices.
+    /// [`Setup::provider_with_defaults`] with `cost` as model `m`'s declared prices.
     fn provider_priced(&self, server: &ProviderServer, cost: Value) {
         self.provider_on_cost(server, "openai-responses", Some(cost));
     }
 
-    /// [`Setup::provider`] on `protocol`.
+    /// [`Setup::provider_with_defaults`] on `protocol`.
     fn provider_on(&self, server: &ProviderServer, protocol: &str) {
         self.provider_on_input(server, protocol, Some(vec!["text", "image"]));
     }
@@ -84,7 +68,7 @@ impl Setup {
         self.provider_on_cost_input(server, protocol, cost, Some(vec!["text", "image"]));
     }
 
-    /// The shared body behind [`Setup::provider`] and
+    /// The shared body behind [`Setup::provider_with_defaults`] and
     /// [`Setup::provider_priced`]: `cost` is written only when present.
     fn provider_on_cost_input(
         &self,
@@ -459,7 +443,7 @@ fn reasoning_allow() -> Response {
 
 #[test]
 fn a_new_session_offers_the_builtin_tools_and_a_read_completes() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let note = "alpha line\n";
     fs::write(setup.workspace().join("note.txt"), note).unwrap();
     let server = ProviderServer::start([
@@ -471,7 +455,7 @@ fn a_new_session_offers_the_builtin_tools_and_a_read_completes() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
 
     let run = setup.run(&["ask", "read the note"]);
 
@@ -499,9 +483,9 @@ fn a_new_session_offers_the_builtin_tools_and_a_read_completes() {
 
 #[test]
 fn a_resumed_session_offers_the_same_tools_in_the_same_order() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
 
     let first = setup.run(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
@@ -623,7 +607,7 @@ fn assert_session_has_no_marker(dir: &Path) {
 
 #[test]
 fn a_credential_path_is_denied_for_a_read_and_a_shell_cat_under_every_spelling() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let secret = setup.home().join("credentials").join("secret.txt");
     fs::create_dir_all(secret.parent().unwrap()).unwrap();
     fs::write(&secret, format!("{MARKER}\n")).unwrap();
@@ -670,7 +654,7 @@ fn a_credential_path_is_denied_for_a_read_and_a_shell_cat_under_every_spelling()
     assert!(holds_marker(&fs::read(&secret).unwrap(), MARKER));
 
     let server = ProviderServer::start([stream(&events), hello()]).unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
 
     let run = setup.run(&["ask", "show the secret"]);
 
@@ -718,7 +702,7 @@ fn a_configured_file_credential_source_is_denied_for_a_read() {
     // A `file` source outside Fiber home and outside the workspace, named
     // by the global configuration: the model reads it, and the credential
     // deny refuses the read before it runs.
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let key = setup.root.path().join("keys").join("openrouter");
     fs::create_dir_all(key.parent().unwrap()).unwrap();
     fs::write(&key, format!("{MARKER}\n")).unwrap();
@@ -735,7 +719,7 @@ fn a_configured_file_credential_source_is_denied_for_a_read() {
     assert!(holds_marker(&fs::read(&key).unwrap(), MARKER));
 
     let server = ProviderServer::start([stream(&events), hello()]).unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     write(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m",
@@ -789,7 +773,7 @@ fn a_configured_file_credential_source_is_denied_for_a_read() {
 
 #[test]
 fn a_grep_that_follows_a_link_below_its_operand_into_the_credentials_is_reviewed() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let credentials = setup.home().join("credentials");
     fs::create_dir_all(&credentials).unwrap();
     fs::write(credentials.join("secret.txt"), format!("{MARKER}\n")).unwrap();
@@ -804,7 +788,7 @@ fn a_grep_that_follows_a_link_below_its_operand_into_the_credentials_is_reviewed
         &json!({"command": "grep -R quorum ws"}),
     )];
     let server = ProviderServer::start([stream(&events), hello()]).unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
 
     let run = setup.run(&["ask", "search the workspace"]);
 
@@ -910,7 +894,7 @@ fn completed_line(run: &Run) -> &Value {
 fn a_tool_call_with_no_arguments_is_logged_and_sent_back_as_an_empty_object() {
     // Anthropic streams a call with no arguments as `input: {}` and no
     // deltas; the log and the next request carried `""`, an HTTP 400 (#1295).
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         anthropic(&[
             json!({"type": "content_block_start", "index": 0, "content_block": {
@@ -950,7 +934,7 @@ fn a_tool_call_with_no_arguments_is_logged_and_sent_back_as_an_empty_object() {
 
 #[test]
 fn an_image_is_stored_logged_by_path_and_sent_inside_the_tool_result_on_every_request() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     fs::write(setup.workspace().join("pic.png"), PIXEL).unwrap();
     let server = ProviderServer::start([
         anthropic_read("pic.png"),
@@ -1090,7 +1074,7 @@ fn header_only_png(width: u32, height: u32) -> Vec<u8> {
 
 #[test]
 fn an_image_over_50_megapixels_fails_unsupported_file_with_the_pixel_count() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     fs::write(
         setup.workspace().join("big.png"),
         header_only_png(8000, 7000),
@@ -1170,7 +1154,7 @@ fn of_kind<'a>(run: &'a Run, kind: &str) -> Vec<&'a Value> {
 
 #[test]
 fn handoff_configuration_reaches_a_new_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     fs::write(setup.workspace().join("note.txt"), "alpha line\n").unwrap();
     let server = ProviderServer::start([
         stream(&[function_call(
@@ -1182,7 +1166,7 @@ fn handoff_configuration_reaches_a_new_session() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     tiny_trigger(&setup);
 
     let run = setup.run(&["ask", "read the note"]);
@@ -1216,7 +1200,7 @@ fn handoff_configuration_reaches_a_new_session() {
 
 #[test]
 fn handoff_configuration_reaches_a_resumed_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     fs::write(setup.workspace().join("note.txt"), "alpha line\n").unwrap();
     let server = ProviderServer::start([
         hello(),
@@ -1229,7 +1213,7 @@ fn handoff_configuration_reaches_a_resumed_session() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     tiny_trigger(&setup);
     let first = setup.run(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
@@ -1277,7 +1261,7 @@ fn handoff_configuration_reaches_a_resumed_session() {
 
 #[test]
 fn a_background_shell_job_is_waited_for_before_ask_exits() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let ready = setup.workspace().join("ready");
     mkfifo(&setup, &ready);
     // Held read-write, the FIFO always has a writer: neither this open nor
@@ -1308,7 +1292,7 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     // A shell call is reviewed; a global standing rule allows this one.
     fs::write(
         setup.home().join("rules"),
@@ -1406,7 +1390,7 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
 
 #[test]
 fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let ready = setup.workspace().join("ready");
     mkfifo(&setup, &ready);
     // Held read-write, the FIFO always has a writer: neither this open nor
@@ -1442,7 +1426,7 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     fs::write(
         setup.home().join("rules"),
         format!(
@@ -1637,7 +1621,7 @@ fn completed_call(run: &Run) -> &Value {
 
 #[test]
 fn a_web_fetch_allowed_by_a_standing_rule_returns_the_pages_first_line() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let site = page(
         "text/html; charset=utf-8",
         "<h1>Hello</h1><p>from the page</p>",
@@ -1652,7 +1636,7 @@ fn a_web_fetch_allowed_by_a_standing_rule_returns_the_pages_first_line() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     allow_fetch_of(&setup, &site);
 
     let run = setup.run(&["ask", "fetch the page"]);
@@ -1704,7 +1688,7 @@ fn a_web_fetch_allowed_by_a_standing_rule_returns_the_pages_first_line() {
 
 #[test]
 fn a_fetched_page_over_16_kib_is_cut_and_its_whole_markdown_is_in_the_artifact() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let paragraph = "<p>0123456789 0123456789 0123456789 0123456789</p>";
     let html = paragraph.repeat(20_000 / paragraph.len() + 1);
     let markdown =
@@ -1721,7 +1705,7 @@ fn a_fetched_page_over_16_kib_is_cut_and_its_whole_markdown_is_in_the_artifact()
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     allow_fetch_of(&setup, &site);
 
     let run = setup.run(&["ask", "fetch the long page"]);
@@ -1769,7 +1753,7 @@ fn a_fetched_page_over_16_kib_is_cut_and_its_whole_markdown_is_in_the_artifact()
 
 #[test]
 fn a_web_fetch_with_no_rule_is_judged_at_step_7() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let site = page("text/plain", "never fetched");
     let url = format!("{}/doc", site.url());
     let server = ProviderServer::start([
@@ -1781,7 +1765,7 @@ fn a_web_fetch_with_no_rule_is_judged_at_step_7() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
 
     let run = setup.run(&["ask", "fetch the page"]);
 
@@ -1828,7 +1812,7 @@ fn a_web_fetch_with_no_rule_is_judged_at_step_7() {
 
 #[test]
 fn markdown_writes_in_extension_data_directories_take_the_fast_path() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     // Absolute paths: the tools join relative paths to the workspace.
     let machine = setup.home().join("data/notes/a.md").display().to_string();
     // The project key, as `Run::session_dir` derives it.
@@ -1859,7 +1843,7 @@ fn markdown_writes_in_extension_data_directories_take_the_fast_path() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
 
     let run = setup.run(&["ask", "keep notes"]);
 
@@ -1996,9 +1980,9 @@ fn assert_blocked_by_reviewer(run: &Run, server: &ProviderServer) {
 
 #[test]
 fn a_command_credential_runs_once_per_process_with_a_same_provider_reviewer() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     let counter = setup.home().join("counter");
     let probe = format!("echo run >> '{}'; echo k", counter.display());
     write(
@@ -2028,7 +2012,7 @@ fn with_reviewer(setup: &Setup) {
 
 #[test]
 fn a_lua_write_in_a_data_directory_is_reviewed_and_blocked() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let lua = setup.home().join("data/notes/x.lua").display().to_string();
     let server = ProviderServer::start([
         stream(&[function_call(
@@ -2041,7 +2025,7 @@ fn a_lua_write_in_a_data_directory_is_reviewed_and_blocked() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     with_reviewer(&setup);
 
     let run = setup.run(&["ask", "save the snippet"]);
@@ -2058,7 +2042,7 @@ fn a_lua_write_in_a_data_directory_is_reviewed_and_blocked() {
 /// exact limit.
 #[test]
 fn a_first_stage_allow_that_takes_several_tokens_runs_the_reviewed_call() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let lua = setup.home().join("data/notes/x.lua").display().to_string();
     let server = ProviderServer::start([
         stream(&[function_call(
@@ -2070,7 +2054,7 @@ fn a_first_stage_allow_that_takes_several_tokens_runs_the_reviewed_call() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     with_reviewer(&setup);
 
     let run = setup.run(&["ask", "save the snippet"]);
@@ -2144,7 +2128,7 @@ fn a_first_stage_allow_that_takes_several_tokens_runs_the_reviewed_call() {
 
 #[test]
 fn a_reviewer_that_reasons_for_1000_tokens_then_allows_runs_the_reviewed_call() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let lua = setup.home().join("data/notes/x.lua").display().to_string();
     let server = ProviderServer::start([
         stream(&[function_call(
@@ -2229,7 +2213,7 @@ fn a_reviewer_that_reasons_for_1000_tokens_then_allows_runs_the_reviewed_call() 
 
 #[test]
 fn a_reviewed_call_at_the_spending_budget_is_denied_by_the_budget() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let lua = setup.home().join("data/notes/x.lua").display().to_string();
     let server = ProviderServer::start([
         stream(&[function_call(
@@ -2320,7 +2304,7 @@ fn a_reviewed_call_at_the_spending_budget_is_denied_by_the_budget() {
 
 #[test]
 fn a_failed_reviewer_at_stage_1_denies_naming_the_reviewer() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let lua = setup.home().join("data/notes/x.lua").display().to_string();
     let server = ProviderServer::start([
         stream(&[function_call(
@@ -2332,7 +2316,7 @@ fn a_failed_reviewer_at_stage_1_denies_naming_the_reviewer() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     with_reviewer(&setup);
 
     let run = setup.run(&["ask", "save the snippet"]);
@@ -2404,7 +2388,7 @@ fn a_failed_reviewer_at_stage_1_denies_naming_the_reviewer() {
 
 #[test]
 fn a_failed_reviewer_at_stage_2_denies_naming_the_reviewer() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let lua = setup.home().join("data/notes/x.lua").display().to_string();
     let server = ProviderServer::start([
         stream(&[function_call(
@@ -2417,7 +2401,7 @@ fn a_failed_reviewer_at_stage_2_denies_naming_the_reviewer() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     with_reviewer(&setup);
 
     let run = setup.run(&["ask", "save the snippet"]);
@@ -2490,7 +2474,7 @@ fn a_failed_reviewer_at_stage_2_denies_naming_the_reviewer() {
 
 #[test]
 fn a_markdown_write_escaping_its_data_directory_through_a_link_is_reviewed_and_blocked() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     fs::create_dir_all(setup.home().join("../outside")).unwrap();
     let outside = fs::canonicalize(setup.home().join("../outside")).unwrap();
     let target = outside.join("kept.md");
@@ -2510,7 +2494,7 @@ fn a_markdown_write_escaping_its_data_directory_through_a_link_is_reviewed_and_b
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     with_reviewer(&setup);
 
     let run = setup.run(&["ask", "save the note"]);
@@ -2530,7 +2514,7 @@ fn a_shell_read_of_proc_environ_is_reviewed_and_blocked() {
     // The provider's key comes from `FIBER_TEST_FAKE_KEY`, an `env` source,
     // so the session's own environment holds it (`docs/configuration.md`,
     // "Secrets").
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         stream(&[function_call(
             "cat_environ",
@@ -2542,7 +2526,7 @@ fn a_shell_read_of_proc_environ_is_reviewed_and_blocked() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     with_reviewer(&setup);
 
     let run = setup.run(&["ask", "show the environment"]);
@@ -2568,7 +2552,7 @@ fn tool_in<'a>(body: &'a Value, name: &str) -> &'a Value {
 
 #[test]
 fn ask_user_ends_the_run_with_its_questions_and_a_resume_answers_them() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let questions = json!([
         {"header": "Base", "question": "Which branch?", "options": [
             {"label": "main (Recommended)"},
@@ -2585,7 +2569,7 @@ fn ask_user_ends_the_run_with_its_questions_and_a_resume_answers_them() {
         text_reply("Done."),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
 
     let first = setup.run(&["ask", "start"]);
 
@@ -2663,7 +2647,7 @@ fn ask_user_ends_the_run_with_its_questions_and_a_resume_answers_them() {
 
 #[test]
 fn an_ask_user_call_outside_its_limits_fails_before_it_starts() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let question = |header: &str, options: Value| json!({"header": header, "question": "Which?", "options": options});
     let two = json!([{"label": "a"}, {"label": "b"}]);
     let free = json!({"header": "h", "question": "q"});
@@ -2683,7 +2667,7 @@ fn an_ask_user_call_outside_its_limits_fails_before_it_starts() {
         .map(|(n, arguments)| function_call(&format!("call_{n}"), "ask_user", arguments))
         .collect();
     let server = ProviderServer::start([stream(&events), hello()]).unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
 
     let run = setup.run(&["ask", "ask me"]);
 
@@ -2739,7 +2723,7 @@ fn an_ask_user_call_outside_its_limits_fails_before_it_starts() {
 
 #[test]
 fn a_reviewed_call_carries_the_notes_after_the_shared_instructions() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let lua = setup.home().join("data/notes/x.lua").display().to_string();
     let server = ProviderServer::start([
         stream(&[function_call(
@@ -2751,7 +2735,7 @@ fn a_reviewed_call_carries_the_notes_after_the_shared_instructions() {
         hello(),
     ])
     .unwrap();
-    setup.provider(&server);
+    setup.provider_with_defaults(&server);
     write(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m",

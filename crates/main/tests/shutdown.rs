@@ -22,63 +22,15 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, function_call};
-
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
+use support::{Deadline, Setup, function_call};
 
 impl Setup {
-    fn new() -> Self {
+    fn new_with_fs_root() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fs");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { deadline, root }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
-    /// Installs a provider `fake` with model `m` on `openai-responses` at the
-    /// fake server, and makes `fake/m` the configured model.
-    fn provider(&self, server: &ProviderServer) {
-        let source = self.root.path().join("src");
-        write(
-            &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-        );
-        write(
-            &source.join("providers/fake.json"),
-            &json!({
-                "name": "fake",
-                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
-            }),
-        );
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
-        write(
-            &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
-        );
     }
 
     /// Starts `fiber` with `args` in its own process group, its stdout read
@@ -404,7 +356,7 @@ fn assert_exited(setup: &Setup, ended: &Ended, code: i32, kinds: &[&str], before
 /// with `signal` once the request arrived.
 #[track_caller]
 fn held_ask(signal: &'static str, code: i32) {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fs_root();
     let server = ProviderServer::start([hello()]).unwrap();
     server.hold();
     setup.provider(&server);
@@ -463,7 +415,7 @@ fn sighup_mid_request_exits_129_with_the_turn_interrupted() {
 
 #[test]
 fn a_shutdown_stops_a_background_job_before_fiber_exited() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fs_root();
     let ready = ready_fifo(&setup);
     // The job writes its group id, then runs until it is stopped.
     fs::write(
@@ -561,7 +513,7 @@ fn a_shutdown_stops_a_background_job_before_fiber_exited() {
 
 #[test]
 fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fs_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let mut fiber = setup.start(&["ask", "-"], Stdio::piped());
@@ -590,7 +542,7 @@ fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
 
 #[test]
 fn sigterm_mid_turn_of_a_resumed_session_exits_143() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fs_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     let first = setup.start(&["ask", "hi"], Stdio::null()).end();
@@ -639,7 +591,7 @@ fn sigterm_mid_turn_of_a_resumed_session_exits_143() {
 
 #[test]
 fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fs_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let ready = ready_fifo(&setup);
@@ -709,7 +661,7 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
 
 #[test]
 fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fs_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let ready = ready_fifo(&setup);

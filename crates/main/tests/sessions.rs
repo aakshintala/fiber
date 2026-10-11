@@ -24,7 +24,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::Deadline;
+use support::{Deadline, Setup};
 
 /// The `session_started` first line of session `id` in `workspace`: a full
 /// envelope, so `resolve` keeps it, in this project's workspace.
@@ -42,15 +42,8 @@ fn first(id: &str, workspace: &Path) -> String {
 const SECOND: &str = "{\"seq\":1,\"kind\":\"b\"}\n";
 const TORN: &str = "{\"seq\":2,\"kin";
 
-/// Fiber home and a workspace in a temporary directory, removed on
-/// drop.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
-    fn new() -> Self {
+    fn new_with_fiber_export_root() -> Self {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
@@ -59,14 +52,6 @@ impl Setup {
         fs::create_dir_all(setup.home()).unwrap();
         fs::create_dir_all(setup.workspace()).unwrap();
         setup
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
     }
 
     /// The project's sessions directory, as the command derives it: a
@@ -100,12 +85,12 @@ impl Setup {
     fn export(&self, args: &[&str]) -> Run {
         let mut all = vec!["sessions", "export"];
         all.extend_from_slice(args);
-        self.fiber(&all)
+        self.run_in_workspace(&all)
     }
 
     /// Runs `fiber` with `args` in the workspace.
     #[track_caller]
-    fn fiber(&self, args: &[&str]) -> Run {
+    fn run_in_workspace(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -160,7 +145,7 @@ fn canonical(setup: &Setup) -> PathBuf {
 
 #[test]
 fn a_unique_prefix_exports_the_complete_lines_and_the_artifacts() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fiber_export_root();
     setup.session("s_exportaa01");
     let run = setup.export(&["s_exportaa"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
@@ -179,7 +164,7 @@ fn a_unique_prefix_exports_the_complete_lines_and_the_artifacts() {
 
 #[test]
 fn an_explicit_relative_path_is_taken_from_the_workspace() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fiber_export_root();
     setup.session("s_exportbb01");
     let run = setup.export(&["s_exportbb01", "deep/out"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
@@ -197,7 +182,7 @@ fn an_explicit_relative_path_is_taken_from_the_workspace() {
 
 #[test]
 fn an_existing_target_is_refused_and_left_alone() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fiber_export_root();
     setup.session("s_exportcc01");
     let target = setup.workspace().join("out");
     fs::create_dir_all(&target).unwrap();
@@ -212,7 +197,7 @@ fn an_existing_target_is_refused_and_left_alone() {
 
 #[test]
 fn an_ambiguous_prefix_names_every_match() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fiber_export_root();
     setup.session("s_amb11111");
     setup.session("s_amb22222");
     let run = setup.export(&["s_amb"]);
@@ -223,7 +208,7 @@ fn an_ambiguous_prefix_names_every_match() {
 
 #[test]
 fn an_unknown_id_exits_1() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fiber_export_root();
     setup.session("s_exportdd01");
     let run = setup.export(&["s_missing"]);
     assert_eq!(run.code, Some(1), "{}", run.stderr);
@@ -232,21 +217,21 @@ fn an_unknown_id_exits_1() {
 
 #[test]
 fn sessions_help_and_export_help_print() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fiber_export_root();
     for args in [
         &["help", "sessions"][..],
         &["sessions", "--help"],
         &["sessions", "export", "--help"],
     ] {
-        let run = setup.fiber(args);
+        let run = setup.run_in_workspace(args);
         assert_eq!(run.code, Some(0), "{args:?}: {}", run.stderr);
         assert_eq!(run.stderr, "", "{args:?}");
         assert!(run.stdout.contains("export"), "{args:?}: {}", run.stdout);
     }
-    let help = setup.fiber(&["help", "sessions"]);
-    let flag = setup.fiber(&["sessions", "--help"]);
+    let help = setup.run_in_workspace(&["help", "sessions"]);
+    let flag = setup.run_in_workspace(&["sessions", "--help"]);
     assert_eq!(help.stdout, flag.stdout);
-    let export_help = setup.fiber(&["sessions", "export", "--help"]);
+    let export_help = setup.run_in_workspace(&["sessions", "export", "--help"]);
     assert!(
         export_help.stdout.contains("Usage: fiber sessions export"),
         "{}",
