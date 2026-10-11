@@ -471,7 +471,8 @@ impl App {
     /// then the old list's entries that are not installed, or `[]` when
     /// none is marked. The write goes through the configuration seam to
     /// the global file at once, on home and attached alike: no command
-    /// is sent. The picker's list follows a successful write, scoping
+    /// is sent. Ctrl+S, the `session_only` action's key, runs it, so a
+    /// rebind follows. The picker's list follows a successful write, scoping
     /// the next open. The picker closes either way.
     fn save_scoped(&mut self) -> super::Effect {
         let list = {
@@ -546,9 +547,11 @@ impl App {
 
     /// A key for the open picker; `None` while it is closed, for Ctrl+C,
     /// for the global actions' keys, and while the quit question is up,
-    /// so quitting and every global action keep their keys. Enter chooses
-    /// and saves, Ctrl+S chooses for this session only. Every other key but
-    /// the picker's own does nothing, and no key cycles.
+    /// so quitting and every global action keep their keys. Enter toggles
+    /// the checklist's focused mark and types nothing; on a choosing
+    /// picker Enter chooses and saves, Ctrl+S chooses for this session
+    /// only. Every other key but the picker's own does nothing, and no
+    /// key cycles.
     pub(in crate::app) fn model_picker_key(&mut self, key: &Key) -> Option<super::Effect> {
         if !self.model_picker_open() || self.quit_open() {
             return None;
@@ -608,11 +611,13 @@ impl App {
                 }
             }
             Key::Enter => {
-                // The checklist saves its marks; choosing sends one
-                // command. With no scoped row to choose the picker stays
-                // open, sending nothing; the key never reaches the draft.
+                // The checklist toggles its focused row's mark, keeping
+                // the picker open; choosing sends one command. With no
+                // scoped row to choose the picker stays open, sending
+                // nothing; the key never reaches the draft.
                 if self.model_picker.is_scope() {
-                    return Some(self.save_scoped());
+                    self.model_picker.toggle_mark();
+                    return Some(super::Effect::None);
                 }
                 Some(match self.model_picker.choice(false) {
                     Some(choice) => self.choose(choice),
@@ -620,25 +625,14 @@ impl App {
                 })
             }
             Key::Char(c) => {
-                // Typing filters the choosing list on every letter. The
-                // checklist takes no filter: Space marks its row there,
-                // and every other character does nothing.
-                if self.model_picker.is_scope() {
-                    if *c == ' ' {
-                        self.model_picker.toggle_mark();
-                    }
-                    Some(super::Effect::None)
-                } else {
-                    self.model_picker.push_query(*c);
-                    Some(super::Effect::None)
-                }
+                // Typing filters the list on every letter, Space
+                // included, in every mode.
+                self.model_picker.push_query(*c);
+                Some(super::Effect::None)
             }
             Key::Backspace => {
-                // Backspace shortens the filter query; the checklist
-                // takes none, so it does nothing there.
-                if !self.model_picker.is_scope() {
-                    self.model_picker.pop_query();
-                }
+                // Backspace shortens the filter query in every mode.
+                self.model_picker.pop_query();
                 Some(super::Effect::None)
             }
             // Every other key does nothing, and no key cycles.
@@ -655,17 +649,23 @@ impl App {
 
     /// Chooses in the open picker for this session only, through the
     /// `session_only` action: Ctrl+S chooses at once, sending one `model`
-    /// command and saving nothing. Nothing while the picker is closed,
-    /// while the quit question is up, or while the key map is open above
-    /// the picker, so nothing reaches the picker underneath. With no row
+    /// command and saving nothing, or saves the open checklist as
+    /// `scoped_models`. Nothing while the picker is closed, while the
+    /// quit question is up, or while the key map is open above the
+    /// picker, so nothing reaches the picker underneath. With no row
     /// to choose the picker stays open, sending nothing.
     pub(in crate::app) fn model_picker_session_only(&mut self) -> super::Effect {
         if !self.model_picker_open() || self.quit_open() || self.keymap_top().is_some() {
             return super::Effect::None;
         }
-        let effect = match self.model_picker.choice(true) {
-            Some(choice) => self.choose(choice),
-            None => super::Effect::None,
+        // A rebound `session_only` key saves the checklist too.
+        let effect = if self.model_picker.is_scope() {
+            self.save_scoped()
+        } else {
+            match self.model_picker.choice(true) {
+                Some(choice) => self.choose(choice),
+                None => super::Effect::None,
+            }
         };
         self.edited();
         self.settle();
