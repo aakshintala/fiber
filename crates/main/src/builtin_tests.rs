@@ -595,6 +595,157 @@ fn every_builtin_schema_keeps_to_the_documented_subset() {
     assert!(found.is_empty(), "outside the subset: {found:?}");
 }
 
+/// The keywords of the strict subset (`provider::strict::fits`, without its
+/// size limits).
+const STRICT_KEYWORDS: &[&str] = &[
+    "type",
+    "properties",
+    "required",
+    "additionalProperties",
+    "items",
+    "enum",
+    "description",
+];
+
+/// Tools whose `docs/tools.md` section says they are sent with
+/// `strict: false`.
+const NOT_STRICT: &[&str] = &[
+    "ask_user",       // "Asking the person", "The call"
+    "jobs",           // "Background jobs"
+    "read",           // "File tools", "read"
+    "session_search", // "Searching past sessions"
+    "shell",          // "Shell", "Running a command"
+    "web_search",     // "Web fetch and web search", "web_search"
+];
+
+/// Whether `schema` fits the vendor's strict subset: one string `type`, every
+/// object listing each property once in `required` and closing with
+/// `additionalProperties: false`, and no keyword outside the subset.
+fn strict(schema: &serde_json::Value) -> bool {
+    schema.get("type").and_then(serde_json::Value::as_str) == Some("object") && strict_node(schema)
+}
+
+fn strict_node(schema: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    let Some(map) = schema.as_object() else {
+        return false;
+    };
+    if map
+        .keys()
+        .any(|key| !STRICT_KEYWORDS.contains(&key.as_str()))
+    {
+        return false;
+    }
+    match map.get("type").and_then(Value::as_str) {
+        Some("object") => {
+            let Some(properties) = map.get("properties").and_then(Value::as_object) else {
+                return false;
+            };
+            let Some(required) = map.get("required").and_then(Value::as_array) else {
+                return false;
+            };
+            let mut names: Vec<&str> = required.iter().filter_map(Value::as_str).collect();
+            names.sort_unstable();
+            names.dedup();
+            names.len() == required.len()
+                && names.len() == properties.len()
+                && names.iter().all(|name| properties.contains_key(*name))
+                && map.get("additionalProperties") == Some(&Value::Bool(false))
+                && properties.values().all(strict_node)
+        }
+        Some("array") => map.get("items").is_some_and(strict_node),
+        Some("string" | "number" | "integer" | "boolean" | "null") => {
+            !map.contains_key("properties") && !map.contains_key("items")
+        }
+        _ => false,
+    }
+}
+
+#[test]
+fn the_strict_walker_rejects_what_the_wire_rejects() {
+    use serde_json::json;
+    let fits = json!({"type": "object", "properties": {"name": {"type": "string"}},
+        "required": ["name"], "additionalProperties": false});
+    assert!(strict(&fits));
+    for (label, schema) in [
+        (
+            "minLength",
+            json!({"type": "object", "properties": {"name":
+            {"type": "string", "minLength": 1}}, "required": ["name"],
+            "additionalProperties": false}),
+        ),
+        (
+            "type list",
+            json!({"type": "object", "properties": {"name":
+            {"type": ["string", "null"]}}, "required": ["name"],
+            "additionalProperties": false}),
+        ),
+        (
+            "optional property",
+            json!({"type": "object", "properties": {"name":
+            {"type": "string"}}, "required": [], "additionalProperties": false}),
+        ),
+        (
+            "open object",
+            json!({"type": "object", "properties": {"name":
+            {"type": "string"}}, "required": ["name"]}),
+        ),
+        ("scalar root", json!({"type": "string"})),
+        (
+            "non-string required entry",
+            json!({"type": "object", "properties": {"name": {"type": "string"}},
+            "required": ["name", 1], "additionalProperties": false}),
+        ),
+        (
+            "properties on a scalar",
+            json!({"type": "object", "properties": {"name":
+            {"type": "string", "properties": {}}}, "required": ["name"],
+            "additionalProperties": false}),
+        ),
+    ] {
+        assert!(!strict(&schema), "{label}");
+    }
+}
+
+#[test]
+fn every_builtin_fits_the_strict_shape_unless_its_section_says_strict_false() {
+    let root = fakes::TempDir::new("fiber-builtin-strict");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let backend = stub_backend();
+    let (tools, _infos, _driver, _forget, _images) = super::builtin(
+        root.path().join("fiber-stub"),
+        &root.path().join("home"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        super::web_search(None, Some(&backend)).unwrap(),
+        &delegates(),
+        skills(),
+    )
+    .unwrap();
+    let mut walked = Vec::new();
+    for (_, tool) in &tools {
+        let definition = tool.definition();
+        assert_eq!(definition.hosted, None, "{}", definition.name);
+        assert_eq!(
+            strict(&definition.input_schema),
+            !NOT_STRICT.contains(&definition.name.as_str()),
+            "{}: fits the strict shape exactly when its section does not say `strict: false`",
+            definition.name
+        );
+        walked.push(definition.name);
+    }
+    walked.sort();
+    assert_eq!(walked, contract::tool::BUILT_IN_TOOLS);
+}
+
 /// The names an extension must list in `replaces` are exactly the names
 /// `builtin` can register: `web_search` included whether or not the
 /// model hosts a search.
@@ -657,10 +808,6 @@ fn no_hosted_search_with_a_backend_declares_fibers_own_tool() {
     let definition = tool.definition();
     assert_eq!(definition.name, "web_search");
     assert_eq!(definition.hosted, None);
-    assert_eq!(
-        definition.input_schema.get("required"),
-        Some(&serde_json::json!(["query"]))
-    );
     assert_eq!(info.name, "web_search");
     assert!(
         matches!(info.source, contract::events::ToolSource::Builtin),

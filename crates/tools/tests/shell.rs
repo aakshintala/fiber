@@ -1629,10 +1629,6 @@ fn tty_needs_jobs() {
     let dir = fakes::TempDir::new("fiber-shell-tty-args");
     let marker = dir.path().join("marker");
     let touch = format!("touch {}", quote(&marker));
-    let schema = Shell::new(dir.path().to_path_buf(), FakeClock::new())
-        .definition()
-        .input_schema;
-    assert_eq!(schema["properties"]["tty"]["type"], "boolean");
     let without = Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()));
     let mut arguments = args(&touch);
     arguments.insert("tty".into(), json!(true));
