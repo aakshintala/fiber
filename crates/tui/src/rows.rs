@@ -323,18 +323,6 @@ fn plan(cells: &[Cell], inner: usize) -> Vec<Planned> {
             end = end.saturating_add(1);
         }
         let end = end.max(at.saturating_add(1));
-        if cells.get(at).is_some_and(|cell| cell.width > inner) {
-            // One glyph wider than the room: it takes a piece of its
-            // own and draws as one blank cell.
-            plans.push(Planned {
-                start: at,
-                end: at + 1,
-                join: Join::Wrap,
-            });
-            at = at.saturating_add(1);
-            join = Join::Wrap;
-            continue;
-        }
         if end == cells.len() {
             plans.push(Planned {
                 start: at,
