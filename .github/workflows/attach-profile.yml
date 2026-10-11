@@ -62,10 +62,13 @@ jobs:
           # shellcheck disable=SC2086 # APT_OPTS is a list of options
           sudo apt-get $APT_OPTS install -y --no-install-recommends "linux-tools-$(uname -r)" ||
             echo "::warning::no linux-tools package for kernel $(uname -r); using linux-tools-generic"
-          # ubuntu's /usr/bin/perf wrapper wants a tools package for the running kernel, so
-          # link the newest installed perf binary directly.
-          perf_bin=$(find /usr/lib/linux-tools -mindepth 2 -maxdepth 2 -name perf -type f | sort -V | tail -n 1)
-          sudo ln -sf "$perf_bin" /usr/local/bin/perf
+          # ubuntu's /usr/bin/perf wrapper wants a tools package for the running kernel;
+          # without one, link the newest installed perf (a symlink itself, so no -type f).
+          if ! perf --version > /dev/null 2>&1; then
+            perf_bin=$(find /usr/lib/linux-tools -mindepth 2 -maxdepth 2 -name perf | sort -V | tail -n 1)
+            test -n "$perf_bin"
+            sudo ln -sf "$perf_bin" /usr/local/bin/perf
+          fi
           perf --version
 
       - name: Install inferno
