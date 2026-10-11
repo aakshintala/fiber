@@ -5,7 +5,6 @@
 
 mod common;
 
-use std::io::{Read, Write};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -17,6 +16,7 @@ use contract::clock::Clock;
 use extensions::{Error, LuaExtension};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
+use fakes::{ProviderServer, Response};
 
 /// How long a test waits for one call before failing. A callback that is
 /// stopped returns on the fake clock, so this fires only when one is never
@@ -70,21 +70,6 @@ fn start(ext: &Arc<LuaExtension>, command: &'static str) -> mpsc::Receiver<Resul
     let ext = Arc::clone(ext);
     std::thread::spawn(move || tx.send(ext.command(command, "")));
     rx
-}
-
-/// Reads an HTTP head, through the blank line that ends it.
-fn read_head(sock: &mut impl Read) {
-    let mut buf = [0; 1];
-    let mut seen = Vec::new();
-    loop {
-        match sock.read(&mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => seen.push(buf[0]),
-        }
-        if seen.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
 }
 
 /// `require("hold")` blocks in the loader's read of this fifo. The receiver
@@ -477,35 +462,15 @@ fn a_module_larger_than_the_memory_cap_is_not_read() {
     assert!(message.contains("memory cap"), "{message}");
 }
 
-/// Accepts one connection, reads its head, signals, and answers when
-/// `release` arrives or is dropped, so a parked `host.http` stays parked
-/// until the test says.
-#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
-fn answer_when_released(
-    listener: std::net::TcpListener,
-    accepted: mpsc::Sender<()>,
-    release: mpsc::Receiver<()>,
-) {
-    let mut sock = listener.accept().unwrap().0;
-    read_head(&mut sock);
-    accepted.send(()).unwrap();
-    match release.recv() {
-        Ok(()) | Err(mpsc::RecvError) => {}
-    }
-    drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"));
-}
-
 /// A command queued behind a parked command runs once the parked command
 /// finishes. That it does not start while parked is proved by the unit test
 /// `a_command_queued_behind_a_parked_command_does_not_start`.
 #[test]
 fn a_command_queued_behind_a_parked_command_runs_once_it_finishes() {
     let setup = Setup::new();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    std::thread::spawn(move || answer_when_released(listener, accepted_tx, release_rx));
+    let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
@@ -517,9 +482,10 @@ fn a_command_queued_behind_a_parked_command_runs_once_it_finishes() {
     );
     let ext = extension("ext", dir, setup.home(), FakeClock::new());
     let first = start(&ext, "first");
-    Deadline::after(WAIT)
-        .recv(&accepted_rx)
-        .expect("waited for the first command to reach the server");
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for the first command to reach the server"
+    );
     let (listed_tx, listed_rx) = mpsc::channel();
     let listed = Arc::clone(&ext);
     std::thread::spawn(move || listed_tx.send(listed.provider_functions("p")));
@@ -531,7 +497,7 @@ fn a_command_queued_behind_a_parked_command_runs_once_it_finishes() {
         ["sign"]
     );
     let second = start(&ext, "second");
-    release_tx.send(()).unwrap();
+    server.release();
     let first = Deadline::after(WAIT)
         .recv(&first)
         .expect("waited for the first command")
@@ -547,11 +513,9 @@ fn a_command_queued_behind_a_parked_command_runs_once_it_finishes() {
 #[test]
 fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     let setup = Setup::new();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    std::thread::spawn(move || answer_when_released(listener, accepted_tx, release_rx));
+    let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
@@ -565,9 +529,10 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let slow = start(&ext, "slow");
-    Deadline::after(WAIT)
-        .recv(&accepted_rx)
-        .expect("waited for the slow command to reach the server");
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for the slow command to reach the server"
+    );
     let asked = clock.now();
     let quick = start(&ext, "quick");
     assert!(
@@ -589,7 +554,7 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     };
     assert_eq!((callback.as_str(), *timeout_ms), ("quick", 300));
     assert!(ext.is_running(), "the queued timeout stopped the extension");
-    release_tx.send(()).unwrap();
+    server.release();
     assert!(
         Deadline::after(WAIT)
             .recv(&slow)
@@ -602,14 +567,14 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
 #[test]
 fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     let setup = Setup::new();
-    let work = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let work_url = format!("http://{}/", work.local_addr().unwrap());
-    let (work_ok_tx, _work_ok_rx) = mpsc::channel();
-    let (work_release_tx, work_release_rx) = mpsc::channel();
-    std::thread::spawn(move || answer_n(work, work_ok_tx, work_release_rx, 2));
     // A call that ignores time spent registering runs `work` and gets an
     // answer at once, so the timeout assertion fails.
-    drop(work_release_tx);
+    let work = ProviderServer::start([
+        Response::status(200, "ok"),
+        Response::status(200, "ok"),
+    ])
+    .unwrap();
+    let work_url = work.url();
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
@@ -654,11 +619,9 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
 #[test]
 fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
     let setup = Setup::new();
-    let hold = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let hold_url = format!("http://{}/", hold.local_addr().unwrap());
-    let (hold_ok_tx, hold_ok_rx) = mpsc::channel();
-    let (hold_release_tx, hold_release_rx) = mpsc::channel();
-    std::thread::spawn(move || answer_when_released(hold, hold_ok_tx, hold_release_rx));
+    let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let hold_url = server.url();
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
@@ -692,10 +655,11 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
     };
     assert_eq!(*timeout_ms, 400);
     assert!(ext.is_running());
-    Deadline::after(WAIT)
-        .recv(&hold_ok_rx)
-        .expect("waited for hold to reach the server");
-    hold_release_tx.send(()).unwrap();
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for hold to reach the server"
+    );
+    server.release();
     assert!(
         Deadline::after(WAIT)
             .recv(&held)
@@ -707,11 +671,9 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
 #[test]
 fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     let setup = Setup::new();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (ok_tx, ok_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    std::thread::spawn(move || answer_n(listener, ok_tx, release_rx, 1));
+    let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
@@ -724,9 +686,10 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let asked = clock.now();
     let ran = start(&ext, "p.sign");
-    Deadline::after(WAIT)
-        .recv(&ok_rx)
-        .expect("waited for p.sign to reach the server");
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for p.sign to reach the server"
+    );
     let grace = asked + Duration::from_millis(30000) + GRACE;
     assert!(
         clock.await_parked(grace, WAIT),
@@ -743,7 +706,7 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
         ran.try_recv().is_err(),
         "p.sign returned on the provider function's timeout"
     );
-    release_tx.send(()).unwrap();
+    server.release();
     assert_eq!(
         Deadline::after(WAIT)
             .recv(&ran)
@@ -751,28 +714,6 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
             .unwrap(),
         "ok"
     );
-}
-
-/// Answers `times` connections, each once the test sends on `release` or
-/// drops it, so a parked `host.http` stays parked until the test says.
-#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
-fn answer_n(
-    listener: std::net::TcpListener,
-    accepted: mpsc::Sender<()>,
-    release: mpsc::Receiver<()>,
-    times: usize,
-) {
-    for _ in 0..times {
-        let mut sock = listener.accept().unwrap().0;
-        read_head(&mut sock);
-        accepted.send(()).unwrap();
-        match release.recv() {
-            Ok(()) | Err(mpsc::RecvError) => {}
-        }
-        drop(
-            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"),
-        );
-    }
 }
 
 #[test]
