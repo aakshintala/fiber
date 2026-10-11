@@ -322,25 +322,17 @@ fiber.provider("codex", {
     end
     return returned
   end },
-  quota = { timeout = 8000, run = function(call)
-    local session = host.oauth.refresh(function(stored)
-      if stored == nil then
-        error("codex quota: no stored credential; run `fiber login codex`", 0)
-      end
-      return refresh_session(stored)
-    end)
-    -- The stored value holds no headers: every request rebuilds them from
-    -- the session's account id, so a request never pairs a token with
-    -- another token's headers (docs/model-routing.md, "Keys, tokens and
-    -- OAuth"). A stored value from before this check still passes through
-    -- `host.oauth.refresh` untouched while it is fresh, so the reads test
-    -- the type.
-    local token = session.token
+  quota = { timeout = 8000, run = function(arg)
+    -- The label's current token and headers arrive in the argument,
+    -- refreshed as a request's are; only `credential()` refreshes, so
+    -- this reads them and never calls `host.oauth` itself
+    -- (`docs/model-routing.md`, "Keys, tokens and OAuth").
+    local token = arg.token
     if type(token) ~= "string" or token == "" then
-      error("codex quota: the stored credential holds no token;"
-        .. " run `fiber login codex` again", 0)
+      error("codex quota: no token; run `fiber login codex` again", 0)
     end
-    local account_id = session.account_id
+    local headers = arg.headers
+    local account_id = type(headers) == "table" and headers["chatgpt-account-id"] or nil
     if type(account_id) ~= "string" or account_id == "" then
       error("codex quota: the stored credential holds no account id;"
         .. " run `fiber login codex` again", 0)
