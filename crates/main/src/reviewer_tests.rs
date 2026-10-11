@@ -77,14 +77,17 @@ fn reviewer_lifetime(overrides: &[&str]) -> contract::events::CacheLifetime {
     let session = providers.resolve("fake/session").unwrap();
     let here = here();
     let mut lookup = |_: &config::ProviderData| -> Result<
-        crate::lua_providers::Access,
+        (String, crate::lua_providers::Access),
         contract::shapes::Failure,
     > {
-        Ok(crate::lua_providers::Access {
-            key: Some(contract::Secret::new("key".to_owned())),
-            signer: None,
-            lua: None,
-        })
+        Ok((
+            "test".to_owned(),
+            crate::lua_providers::Access {
+                key: Some(contract::Secret::new("key".to_owned())),
+                signer: None,
+                lua: None,
+            },
+        ))
     };
     let reviewer =
         crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup).unwrap();
@@ -185,14 +188,119 @@ fn the_reviewer_connects_with_the_lua_provider_its_access_names() {
     let here = here();
     for (with, carries) in [(Some(&lua), true), (None, false)] {
         let mut lookup = |_: &config::ProviderData| {
-            Ok(crate::lua_providers::Access::new(
-                with,
-                (Some(contract::Secret::new("key".to_owned())), None),
+            Ok((
+                "test".to_owned(),
+                crate::lua_providers::Access::new(
+                    with,
+                    (Some(contract::Secret::new("key".to_owned())), None),
+                ),
             ))
         };
         let reviewer =
             crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup).unwrap();
         assert_eq!(reviewer.model.reference, reference);
         assert_eq!(reviewer.provider.cost_lookup().is_some(), carries);
+    }
+}
+
+/// How long a test waits for the quota fetch.
+const QUOTA_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A model call through the reviewer `choose_reviewer` builds fetches quota
+/// for the label its lookup returned, which proves `choose_reviewer` hands
+/// that label to `connect` (`docs/tools.md`, "Provider quota").
+#[test]
+fn the_reviewer_fetches_quota_for_the_lookup_label() {
+    let root = fakes::TempDir::new("fiber-reviewer-quota");
+    let home = root.path().join("home");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{\"windows\": []}")])
+        .unwrap();
+    test_support::install_extension(
+        &home,
+        "extensions/qp",
+        serde_json::from_str(
+            r#"{"name": "qp", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}"#,
+        )
+        .unwrap(),
+        &[(
+            "qp",
+            serde_json::from_str(
+                r#"{"name": "qp", "models": [
+            {"id": "m1", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+            {"id": "m2", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}
+        ]}"#,
+            )
+            .unwrap(),
+        )],
+    );
+    std::fs::write(
+        home.join("extensions/qp/init.lua"),
+        format!(
+            "fiber.provider(\"qp\", {{ quota = {{ timeout = 60000, run = function(a)\n\
+             local reply = host.http({{ url = \"{}/\" .. a.label }})\n\
+             if reply.status ~= 200 then error(\"denied \" .. reply.status) end\n\
+             return json.decode(reply.body)\n\
+             end }} }})",
+            server.url(),
+        ),
+    )
+    .unwrap();
+    let config = test_support::load(&home, &workspace, "test", ["reviewer.model=qp/m2"]);
+    let (providers, _notices) = extensions::Providers::load(&home).unwrap();
+    let session_extensions = extensions::SessionExtensions::load(
+        &home,
+        &config,
+        fakes::clock::FakeClock::new(),
+        std::sync::Arc::new(tools::PathLocks::new()),
+        None,
+    );
+    let lua = session_extensions
+        .lua_providers()
+        .iter()
+        .find(|(_, provider)| provider.name() == "qp")
+        .map(|(_, provider)| std::sync::Arc::clone(provider))
+        .expect("the package registers its provider");
+    let session = providers.resolve("qp/m1").unwrap();
+    let here = here();
+    let mut lookup = |_: &config::ProviderData| {
+        Ok((
+            "work".to_owned(),
+            crate::lua_providers::Access::new(
+                Some(&lua),
+                (Some(contract::Secret::new("key".to_owned())), None),
+            ),
+        ))
+    };
+    let reviewer =
+        crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup).unwrap();
+    assert_eq!(reviewer.model.reference, "qp/m2");
+    let _call = reviewer.provider.call(&reviewer_request());
+    assert!(
+        server.await_requests(1, QUOTA_WAIT),
+        "the reviewer call never fetched quota"
+    );
+    let paths: Vec<String> = server
+        .requests()
+        .iter()
+        .map(|request| request.path.clone())
+        .collect();
+    assert_eq!(paths, ["/work"]);
+}
+
+fn reviewer_request() -> contract::provider::ModelRequest {
+    contract::provider::ModelRequest {
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: contract::events::CacheLifetime::FiveMinutes,
+        cache_key: String::new(),
+        conversation: Vec::new(),
+        previous_end: None,
+        sent_tools: None,
+        max_output_tokens: None,
+        session_dir: std::path::PathBuf::new(),
     }
 }

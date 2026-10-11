@@ -11,7 +11,7 @@ use contract::clock::Clock;
 use contract::provider::Provider;
 use contract::shapes::Failure;
 use doors::failure;
-use extensions::LuaProvider;
+use extensions::{CredentialPair, LuaProvider};
 use provider::anthropic_messages::Messages;
 use provider::google_generative_ai::Gemini;
 use provider::openai_completions::Completions;
@@ -77,16 +77,19 @@ fn scripted(id: &str, here: &Here) -> Result<Arc<dyn Provider>, Failure> {
 /// back to the session's model (`docs/permissions.md`, "How it runs").
 /// `key` is `None` when a Lua `credential()` supplies the token, which
 /// rides the signing seam instead (`docs/model-routing.md`, "Keys, tokens
-/// and OAuth"). `lua` is the model's provider's Lua, when it has one: a
-/// provider whose package declares `cost()` carries it as its lookup, bound
-/// to this model's base URL and `key` (`docs/model-routing.md`, "Cost"). A
-/// package that fails to start gets no lookup; the calls' costs stay as
-/// first recorded. `here` is where a `scripted` model's script is read.
+/// and OAuth"). `lua` is the model's provider's Lua and the session's
+/// credential label, when it has one: a provider whose package declares
+/// `cost()` carries it as its lookup, bound to this model's base URL and
+/// `key` (`docs/model-routing.md`, "Cost"), and one whose package declares
+/// `quota()` fetches that label's quota off the request path on every call
+/// (`docs/tools.md`, "Provider quota"). A package that fails to start gets
+/// neither; the calls' costs stay as first recorded. `here` is where a
+/// `scripted` model's script is read.
 pub(crate) fn connect(
     model: extensions::Model<'_>,
     key: Option<Secret>,
     signer: Option<Arc<dyn contract::signing::Signer>>,
-    lua: Option<&Arc<LuaProvider>>,
+    lua: Option<(&Arc<LuaProvider>, &str)>,
     here: &Here,
 ) -> Result<Arc<dyn Provider>, Failure> {
     let lookup_key = key.clone();
@@ -147,9 +150,20 @@ pub(crate) fn connect(
         Protocol::Scripted => scripted(&model.model.id, here)?,
     };
     Ok(match lua {
-        Some(lua) => lua
-            .costed(Arc::clone(&provider), &model.model.base_url, lookup_key)
-            .unwrap_or(provider),
+        Some((lua, label)) => {
+            let costed = lua
+                .costed(Arc::clone(&provider), &model.model.base_url, lookup_key)
+                .unwrap_or(Arc::clone(&provider));
+            lua.with_quota(
+                costed,
+                CredentialPair::for_provider(model.provider, label),
+            )
+            .unwrap_or(provider)
+        }
         None => provider,
     })
 }
+
+#[cfg(test)]
+#[path = "connect_tests.rs"]
+mod tests;

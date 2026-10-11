@@ -391,14 +391,14 @@ pub(crate) fn prepare(
         resolved,
         got.access.key.clone(),
         got.access.signer.clone(),
-        got.access.lua.as_ref(),
+        got.access.lua.as_ref().map(|lua| (lua, got.label.as_str())),
         &here,
     )
     .map_err(|failure| invalid(failure.message))?;
-    let mut lookup = |provider: &ProviderData| -> Result<Access, Failure> {
+    let mut lookup = |provider: &ProviderData| -> Result<(String, Access), Failure> {
         match &judge_got {
-            _ if provider.name == session => Ok(got.access.clone()),
-            Some(Ok(judged)) => Ok(judged.access.clone()),
+            _ if provider.name == session => Ok((got.label.clone(), got.access.clone())),
+            Some(Ok(judged)) => Ok((judged.label.clone(), judged.access.clone())),
             Some(Err(failure)) => Err(failure.clone()),
             None => Err(doors::failure(
                 ErrorCode::InvalidArguments,
