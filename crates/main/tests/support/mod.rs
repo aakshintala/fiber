@@ -1127,3 +1127,51 @@ impl Drop for KillGroup {
 pub(crate) fn expected(kinds: &[&str]) -> Vec<Value> {
     kinds.iter().map(|kind| json!({"kind": kind})).collect()
 }
+
+/// The request's tool order: the loop keys tools by name, so this is name
+/// order, whatever order `main` pushes them in.
+pub(crate) const TOOL_NAMES: [&str; 11] = [
+    "ask_user",
+    "delegate_spawn",
+    "edit",
+    "handoff",
+    "jobs",
+    "read",
+    "session_search",
+    "shell",
+    "skill",
+    "web_fetch",
+    "write",
+];
+
+/// The event kinds of a turn whose first reply calls one reads-only tool
+/// and whose second is [`hello`]: no `permission_` line is written, as for
+/// a reads-only workspace call (`docs/permissions.md`, "Fast paths").
+pub(crate) fn read_kinds() -> Vec<&'static str> {
+    let mut kinds = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+    ];
+    kinds.extend(["assistant_message_delta"; 2]);
+    kinds.extend([
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    kinds
+}

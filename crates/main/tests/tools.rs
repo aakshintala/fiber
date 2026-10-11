@@ -23,25 +23,9 @@ use std::thread;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, function_call, hello, holds_marker, is_status,
-    spawn_watched, stream, text_reply, tool_names,
+    Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, TOOL_NAMES, function_call, hello, holds_marker,
+    is_status, read_kinds, spawn_watched, stream, text_reply, tool_names,
 };
-
-/// The request's tool order: the loop keys tools by name, so this is name
-/// order, whatever order `main` pushes them in.
-const TOOL_NAMES: [&str; 11] = [
-    "ask_user",
-    "delegate_spawn",
-    "edit",
-    "handoff",
-    "jobs",
-    "read",
-    "session_search",
-    "shell",
-    "skill",
-    "web_fetch",
-    "write",
-];
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -471,38 +455,6 @@ fn reasoning_allow() -> Response {
         done["type"].as_str().unwrap()
     ));
     Response::stream(body)
-}
-
-/// The event kinds of a turn whose first reply calls one tool and whose
-/// second is [`hello`]. A reads-only workspace call is a fast path, so no
-/// `permission_` line is written (`docs/permissions.md`, "Fast paths").
-fn read_kinds() -> Vec<&'static str> {
-    let mut kinds = vec![
-        "session_started",
-        "fiber_started",
-        "extensions_loaded",
-        "preamble_built",
-        "opening_message",
-        "turn_started",
-        "step_started",
-        "assistant_message_started",
-        "tool_call_requested",
-        "usage_recorded",
-        "assistant_message_completed",
-        "tool_call_started",
-        "tool_call_completed",
-        "step_started",
-        "assistant_message_started",
-    ];
-    kinds.extend(["assistant_message_delta"; 2]);
-    kinds.extend([
-        "text_completed",
-        "usage_recorded",
-        "assistant_message_completed",
-        "turn_completed",
-        "fiber_exited",
-    ]);
-    kinds
 }
 
 #[test]
