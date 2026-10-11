@@ -280,7 +280,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             // error: the base only feeds advisory timings.
             let base = optional(rest, "--base").map(|path| read(&path));
             let base_commit = optional(rest, "--base-commit").unwrap_or_default();
-            let out = bench::report(&doc, &head, base, event, &base_commit);
+            let out = bench::report(&doc, &head, base, None, event, &base_commit);
             std::fs::write(&comment_path, &out.comment)
                 .map_err(|e| format!("{comment_path}: {e}"))?;
             report(
