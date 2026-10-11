@@ -1582,12 +1582,17 @@ fn an_unattended_open_callback_and_poll_are_authentication_failed_for_pcall() {
         let env = Env::new();
         let ext = caught(&env, Arc::new(Recording::never()));
         let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
-        if mode == "callback" {
-            // Held for the check below: the unattended callback fails
-            // before the package binds anything.
+        // Held in the iteration's scope until the callback assertion
+        // completes, so no gap remains between choosing and binding the
+        // port: the unattended callback fails before the package binds
+        // anything.
+        let _held = if mode == "callback" {
             let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
             env.secret("port", &held.local_addr().unwrap().port().to_string());
-        }
+            Some(held)
+        } else {
+            None
+        };
         assert_eq!(
             caught_token(&env, &ext, &server, mode),
             "caught:authentication_failed",

@@ -505,4 +505,74 @@ mod browser {
             }
         });
     }
+
+    /// A `LoginShow` that records each `open` through the production
+    /// `ShownBrowser`.
+    struct OpenShow {
+        notify: mpsc::Sender<String>,
+    }
+
+    impl tui::LoginShow for OpenShow {
+        fn open(&self, url: &str) {
+            match self.notify.send(url.to_owned()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+
+        fn show(&self, _url: &str, _code: &str) {}
+    }
+
+    #[test]
+    fn browser_login_through_the_production_entry_point_opens_the_authorize_url() {
+        // Through `Configure::browser_login` (its factory and
+        // `ShownBrowser`): the held port stays bound, so the production
+        // browser's bind fails, but the authorize URL still reaches the
+        // `LoginShow` through `ShownBrowser::open`. Broken factory wiring
+        // or URL forwarding fails this test; the held-listener tests above
+        // cover the success path through `cli::browser_login`.
+        let root = fakes::TempDir::new("fiber-configure-login-factory");
+        let home = root.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+        let (access, id) = tokens(EMAIL);
+        let server = OauthServer::start(vec![exchange(&access, &id)]);
+        // Held, never released: choosing and binding leave no gap. The
+        // production browser cannot take it, so the callback fails, but
+        // the open proves the factory and the show.
+        let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = held.local_addr().unwrap().port();
+        install_codex(&home, &server, port);
+        let seam = crate::configure::Seam::new(home.clone());
+        let (tx, opened) = mpsc::channel();
+        let login: Arc<dyn BrowserLogin> = tui::Configure::browser_login(
+            &seam,
+            "codex",
+            Arc::new(OpenShow { notify: tx }),
+            Arc::clone(&clock),
+        );
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || match done.send(login.run()) {
+            Ok(()) | Err(_) => {}
+        });
+        let url = await_opened(&opened, &Deadline::after(BROWSER_WAIT));
+        assert_eq!(
+            port_of(&url),
+            port,
+            "the package was installed with the held port"
+        );
+        // The callback fails on the held port, naming it and the
+        // device-login way out; the held listener outlives the whole run.
+        let result = Deadline::after(WAIT)
+            .recv(&finished)
+            .unwrap_or_else(|_| panic!("the login did not return within {WAIT:?}"));
+        let error = result.expect_err("the production bind on the held port fails");
+        assert!(
+            error.message.contains(&format!("port {port}")),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("is in use"), "{}", error.message);
+        drop(held);
+        drop(server);
+    }
 }

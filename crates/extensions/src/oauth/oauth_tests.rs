@@ -395,7 +395,8 @@ fn a_released_port_lets_a_foreign_listener_reset_the_redirect() {
     // `ConnectionReset` in the redirect's `read_to_string`.
     let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, released))
         .expect("the released port stayed free for the foreign listener");
-    let reset = thread::spawn(move || {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
         let (stream, _) = foreign.accept().expect("the redirect connects");
         stream
             .set_read_timeout(Some(Duration::from_millis(20)))
@@ -409,18 +410,30 @@ fn a_released_port_lets_a_foreign_listener_reset_the_redirect() {
             }
         }
         drop(stream);
+        match done.send(()) {
+            Ok(()) | Err(_) => {}
+        }
     });
-    let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, released)).unwrap();
-    stream.set_read_timeout(Some(WAIT)).unwrap();
-    std::io::Write::write_all(&mut stream, b"GET /cb?code=1 HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
-    let mut reply = String::new();
-    let err = stream.read_to_string(&mut reply).unwrap_err();
-    assert_eq!(
-        err.kind(),
-        std::io::ErrorKind::ConnectionReset,
-        "a reset foreign listener fails the redirect"
+    // The whole redirect runs under one wall-clock deadline, so a mutant
+    // cannot hang the test on the connect or the read.
+    fakes::within(
+        "the reset redirect to fail with ConnectionReset",
+        WAIT,
+        move || {
+            let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, released)).unwrap();
+            stream.set_read_timeout(Some(WAIT)).unwrap();
+            std::io::Write::write_all(&mut stream, b"GET /cb?code=1 HTTP/1.1\r\nHost: x\r\n\r\n")
+                .unwrap();
+            let mut reply = String::new();
+            let err = stream.read_to_string(&mut reply).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                std::io::ErrorKind::ConnectionReset,
+                "a reset foreign listener fails the redirect"
+            );
+        },
     );
-    reset.join().unwrap();
+    Deadline::after(WAIT).recv_or_fail(&finished, "the foreign listener to reset the redirect");
 }
 
 #[test]
@@ -441,16 +454,26 @@ fn a_held_listener_serves_the_redirect_with_no_gap_for_a_foreign_listener() {
     let Ok(cancel) = listen(port, None, &deliver, &browser) else {
         panic!("the callback serves the redirect on the held port");
     };
-    let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
-    stream.set_read_timeout(Some(WAIT)).unwrap();
-    std::io::Write::write_all(
-        &mut stream,
-        b"GET /?code=abc&state=s HTTP/1.1\r\nHost: x\r\n\r\n",
-    )
-    .unwrap();
-    let mut reply = String::new();
-    stream.read_to_string(&mut reply).unwrap();
+    // The whole redirect runs under one wall-clock deadline, so a mutant
+    // cannot hang the test on the connect or the read.
+    let reply = fakes::within("the held listener to serve the redirect", WAIT, move || {
+        let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        std::io::Write::write_all(
+            &mut stream,
+            b"GET /?code=abc&state=s HTTP/1.1\r\nHost: x\r\n\r\n",
+        )
+        .unwrap();
+        let mut reply = String::new();
+        stream.read_to_string(&mut reply).unwrap();
+        reply
+    });
     assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
+    assert_eq!(
+        browser.seen.lock().unwrap().as_slice(),
+        [port],
+        "`listen` asked the browser for the port it was given"
+    );
     let Reply::Query(Ok(pairs)) = Deadline::after(WAIT).recv(&rx).expect("the reply arrives")
     else {
         panic!("the callback delivered its query");
@@ -462,36 +485,6 @@ fn a_held_listener_serves_the_redirect_with_no_gap_for_a_foreign_listener() {
             ("state".to_owned(), "s".to_owned())
         ]
     );
-    drop(cancel);
-}
-
-#[test]
-fn listen_binds_through_the_browser_callback_listener() {
-    // The port stays held, so binding it directly would fail: serving the
-    // request proves `listen` took the browser's listener, and the record
-    // proves it asked for the port it was given.
-    let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = held.local_addr().unwrap().port();
-    let browser = HeldBrowser::holding(held);
-    let (tx, rx) = mpsc::channel();
-    let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
-        Ok(()) | Err(_) => {}
-    });
-    let Ok(cancel) = listen(port, None, &deliver, &browser) else {
-        panic!("the handover binds");
-    };
-    assert_eq!(browser.seen.lock().unwrap().as_slice(), [port]);
-    let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
-    stream.set_read_timeout(Some(WAIT)).unwrap();
-    std::io::Write::write_all(&mut stream, b"GET /?code=abc HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
-    let mut reply = String::new();
-    stream.read_to_string(&mut reply).unwrap();
-    assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
-    let Reply::Query(Ok(pairs)) = Deadline::after(WAIT).recv(&rx).expect("the reply arrives")
-    else {
-        panic!("the callback delivered its query");
-    };
-    assert_eq!(pairs, [("code".to_owned(), "abc".to_owned())]);
     drop(cancel);
 }
 
