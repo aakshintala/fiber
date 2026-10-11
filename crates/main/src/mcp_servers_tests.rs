@@ -1,6 +1,7 @@
 //! Configuration to [`ServerSpec`], without starting a process: every
 //! server becomes a spec, a repository's stays out (the repository's offer
-//! names it), and a `url` server is skipped silently.
+//! names it), a `url` server becomes a remote spec, and an entry with
+//! both is never started.
 
 use std::time::Duration;
 
@@ -40,9 +41,15 @@ impl Setup {
         .unwrap();
     }
 
+    fn project(&self, value: &serde_json::Value) {
+        let dir = self.rig.home.join("projects").join("test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), value.to_string()).unwrap();
+    }
+
     fn specs(&self) -> super::Specs {
         let config = self.rig.config(Vec::<String>::new());
-        specs(&config)
+        specs(&config).expect("the specs read")
     }
 }
 
@@ -214,7 +221,7 @@ fn a_declaration_removed_after_load_still_gates_through_command_provenance() {
     setup.repository(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
     let config = setup.rig.config(Vec::<String>::new());
     setup.repository(&json!({}));
-    let specs = specs(&config);
+    let specs = specs(&config).expect("the specs read");
     assert!(specs.specs.is_empty());
     let [gated] = specs.repository.as_slice() else {
         panic!("the server is the repository's through provenance alone");
@@ -232,7 +239,7 @@ fn a_declaration_removed_after_load_still_gates_through_env_provenance() {
     setup.repository(&json!({"mcp": {"servers": {"fx": {"env": {"BASH_ENV": "/tmp/evil"}}}}}));
     let config = setup.rig.config(Vec::<String>::new());
     setup.repository(&json!({}));
-    let specs = specs(&config);
+    let specs = specs(&config).expect("the specs read");
     assert!(specs.specs.is_empty());
     let [gated] = specs.repository.as_slice() else {
         panic!("the server is the repository's through provenance alone");
@@ -263,12 +270,25 @@ fn program_fields_debug_prints_no_token_or_env_value() {
 }
 
 #[test]
-fn a_url_server_is_skipped_silently() {
+fn a_url_server_becomes_a_remote_spec() {
     let setup = Setup::new();
     setup.global(&json!({"mcp": {"servers": {"remote": {"url": "https://example.com/mcp"}}}}));
     let specs = setup.specs();
-    assert!(specs.specs.is_empty());
     assert!(specs.notices.is_empty());
+    let [spec] = specs.specs.as_slice() else {
+        panic!("one remote spec");
+    };
+    assert_eq!(spec.name, "remote");
+    let mcp::Transport::Http { url } = &spec.transport else {
+        panic!("a remote transport");
+    };
+    assert_eq!(url, "https://example.com/mcp");
+    assert_eq!(spec.startup_timeout, Duration::from_millis(5000));
+    assert_eq!(spec.call_timeout, Duration::from_millis(600_000));
+    assert_eq!(spec.enabled, None);
+    assert!(spec.disabled.is_empty());
+    assert!(spec.hints.is_empty());
+    assert!(!spec.required);
 }
 
 #[test]
@@ -453,4 +473,118 @@ fn repository_fields_hold_exactly_what_the_repository_supplied() {
         gated.fields.env,
         std::collections::BTreeMap::from([("MODE".to_owned(), json!("fast"))])
     );
+}
+
+#[test]
+fn a_server_with_both_command_and_url_is_never_started_with_a_notice() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {
+        "command": "/bin/bash",
+        "url": "https://example.com/mcp",
+    }}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    assert!(specs.repository.is_empty());
+    let [notice] = specs.notices.as_slice() else {
+        panic!("exactly one notice");
+    };
+    assert_eq!(notice.code, contract::ErrorCode::ConfigInvalid);
+    assert_eq!(
+        notice.message,
+        "The MCP server `fx` declares both `command` and `url`, so Fiber starts neither. Keep the one you mean."
+    );
+}
+
+#[test]
+fn a_required_server_with_both_command_and_url_fails_the_session() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {
+        "command": "/bin/bash",
+        "url": "https://example.com/mcp",
+        "required": true,
+    }}}}));
+    let config = setup.rig.config(Vec::<String>::new());
+    let error = match specs(&config) {
+        Ok(_) => panic!("a required both-keys entry fails"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, contract::ErrorCode::ConfigInvalid);
+    assert_eq!(
+        error.message,
+        "The required MCP server `fx` declares both `command` and `url`, so Fiber cannot start it. Keep the one you mean."
+    );
+}
+
+#[test]
+fn command_and_url_from_different_layers_are_still_both() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.project(&json!({"mcp": {"servers": {"fx": {"url": "https://example.com/mcp"}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    assert!(specs.repository.is_empty());
+    let [notice] = specs.notices.as_slice() else {
+        panic!("exactly one notice");
+    };
+    assert_eq!(notice.code, contract::ErrorCode::ConfigInvalid);
+    assert!(notice.message.contains("`fx`"), "{}", notice.message);
+}
+
+#[test]
+fn a_server_with_neither_command_nor_url_is_skipped_silently() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"timeout_ms": 1}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    assert!(specs.repository.is_empty());
+    assert!(specs.notices.is_empty());
+}
+
+#[test]
+fn a_repositorys_url_server_is_repository_code_with_its_url_in_fields() {
+    let setup = Setup::new();
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"url": "https://example.com/mcp"}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    assert!(specs.notices.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    let mcp::Transport::Http { url } = &gated.spec.transport else {
+        panic!("a remote transport");
+    };
+    assert_eq!(url, "https://example.com/mcp");
+    assert_eq!(gated.fields.url, Some(json!("https://example.com/mcp")));
+    // A token can ride in the URL, so only its presence prints.
+    let printed = format!("{:?}", gated.fields);
+    assert!(!printed.contains("example.com"), "{printed}");
+}
+
+#[test]
+fn a_persons_url_server_the_repository_only_retimes_is_repository_code() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"url": "https://example.com/mcp"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"timeout_ms": 1}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    let mcp::Transport::Http { url } = &gated.spec.transport else {
+        panic!("a remote transport");
+    };
+    assert_eq!(url, "https://example.com/mcp");
+    assert_eq!(gated.fields.url, None);
+}
+
+#[test]
+fn a_dotted_name_reads_its_own_url() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"my.server": {"url": "https://example.com/mcp"}}}}));
+    let specs = setup.specs();
+    assert_eq!(specs.specs.len(), 1);
+    let mcp::Transport::Http { url } = &specs.specs[0].transport else {
+        panic!("a remote transport");
+    };
+    assert_eq!(url, "https://example.com/mcp");
 }

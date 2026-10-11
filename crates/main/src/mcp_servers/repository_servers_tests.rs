@@ -61,7 +61,7 @@ impl Setup {
     }
 
     fn repository(&self) -> Vec<RepositorySpec> {
-        specs(&self.config()).repository
+        specs(&self.config()).expect("the specs read").repository
     }
 
     /// The gathered item and its current hash.
@@ -684,4 +684,47 @@ fn the_load_reports_a_drift_it_refuses_without_starting() {
         failure.error.message
     );
     assert!(!setup.home().join("cache").exists(), "no server starts");
+}
+
+#[test]
+fn prepare_starts_an_approved_remote_server_as_declared() {
+    let setup = Setup::new();
+    setup.write_repo(&json!({"db": {"url": "https://example.com/mcp"}}));
+    let repository = setup.repository();
+    setup.approve("db");
+    let prepared = setup.prepare(&[], repository);
+    assert!(prepared.failed.is_empty());
+    assert!(prepared.waiting.is_empty());
+    let [spec] = prepared.ready.as_slice() else {
+        panic!("one ready spec");
+    };
+    // No files to pin and no `run`: the declaration runs as declared.
+    let mcp::Transport::Http { url } = &spec.transport else {
+        panic!("a remote transport");
+    };
+    assert_eq!(url, "https://example.com/mcp");
+}
+
+#[test]
+fn a_changed_url_after_approval_fails_the_server() {
+    let setup = Setup::new();
+    setup.write_repo(&json!({"db": {"url": "https://example.com/first"}}));
+    let repository = setup.repository();
+    // The approval covers the second declaration; the session read the first.
+    setup.write_repo(&json!({"db": {"url": "https://example.com/second"}}));
+    setup.approve("db");
+    let prepared = setup.prepare(&[], repository);
+    assert!(prepared.ready.is_empty());
+    assert!(prepared.waiting.is_empty());
+    let [failure] = prepared.failed.as_slice() else {
+        panic!("the drift fails the server");
+    };
+    assert_eq!(failure.server, "db");
+    assert!(
+        failure.error.message.contains(
+            "the repository's declaration of it changed after this session read its configuration"
+        ),
+        "{}",
+        failure.error.message
+    );
 }

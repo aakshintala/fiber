@@ -211,6 +211,11 @@ pub(crate) fn pinned_spec(
     {
         return Err(drifted);
     }
+    if let Some(url) = candidate.fields.url.as_ref()
+        && entry.and_then(|entry| entry.get("url")) != Some(url)
+    {
+        return Err(drifted);
+    }
     for (key, value) in &candidate.fields.env {
         if entry
             .and_then(|entry| entry.get("env"))

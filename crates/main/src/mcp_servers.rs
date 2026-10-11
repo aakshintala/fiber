@@ -1,12 +1,14 @@
 //! MCP servers from configuration (`docs/configuration.md`, "MCP
 //! servers"): each `mcp.servers` entry becomes an [`mcp::ServerSpec`], with
-//! the documented defaults. A server the repository declares starts only
-//! when its current content is approved (`docs/mcp.md`, "A repository's
-//! servers"): it runs from its pinned copy in Fiber home, and one
-//! approved in the session's own offer starts before that session's first
-//! model request. Servers with a `url` and no `command` are #593's and
-//! are skipped silently. A server with neither is skipped silently too:
-//! there is nothing to start.
+//! the documented defaults: `command` without `url` is a stdio server,
+//! `url` without `command` a remote one. A server the repository declares
+//! starts only when its current content is approved (`docs/mcp.md`, "A
+//! repository's servers"): it runs from its pinned copy in Fiber home,
+//! and one approved in the session's own offer starts before that
+//! session's first model request. A server with both `command` and `url`
+//! is never started: a `notice` with code `config_invalid` says so, and
+//! a `required` one fails the session instead. A server with neither is
+//! skipped silently: there is nothing to start.
 
 pub(crate) mod repository_servers;
 
@@ -43,10 +45,11 @@ pub(crate) struct RepositorySpec {
     pub fields: ProgramFields,
 }
 
-/// The merged `command`, `args` and `env` the repository's layer supplies:
-/// what the approved declaration must still hold for the server to start.
-/// The values can hold argument tokens and environment secrets, so only
-/// their shape prints (`docs/code-quality.md`, "What a reviewer checks").
+/// The merged `command`, `args`, `env` and `url` the repository's layer
+/// supplies: what the approved declaration must still hold for the server
+/// to start. The values can hold argument tokens and environment secrets,
+/// so only their shape prints (`docs/code-quality.md`, "What a reviewer
+/// checks").
 #[derive(Clone, Default, PartialEq)]
 pub(crate) struct ProgramFields {
     /// The merged `command`, when the repository supplies it.
@@ -55,6 +58,8 @@ pub(crate) struct ProgramFields {
     pub args: Option<Value>,
     /// The merged `env` entries the repository supplies, by key.
     pub env: BTreeMap<String, Value>,
+    /// The merged `url`, when the repository supplies it.
+    pub url: Option<Value>,
 }
 
 impl std::fmt::Debug for ProgramFields {
@@ -70,27 +75,32 @@ impl std::fmt::Debug for ProgramFields {
                     .map(|name| (name, "redacted"))
                     .collect::<BTreeMap<_, _>>(),
             )
+            // A token can ride in the URL, so only its presence prints.
+            .field("url", &self.url.as_ref().map(|_| "redacted"))
             .finish()
     }
 }
 
-/// Reads the merged `mcp.servers`: one spec per entry with a `command`,
-/// partitioned into the person's servers and the repository's. A server is
-/// the repository's when the repository layer declares an entry of that
-/// name holding at least one value, or when any of its effective
-/// `command`, `args` or `env` entries comes from the repository layer, so
-/// nothing offered ever runs unapproved: a person's server the repository
-/// only tweaks needs approval too.
-pub(crate) fn specs(config: &Config) -> Specs {
+/// Reads the merged `mcp.servers`: one spec per entry with a `command`
+/// or a `url`, partitioned into the person's servers and the
+/// repository's. A server is the repository's when the repository layer
+/// declares an entry of that name holding at least one value, or when
+/// any of its effective `command`, `args`, `env` or `url` entries comes
+/// from the repository layer, so nothing offered ever runs unapproved: a
+/// person's server the repository only tweaks needs approval too. An
+/// entry with both `command` and `url` is never started: without
+/// `required` it is skipped with a `notice`, with `required` the whole
+/// read fails, before the partition, whatever layers supplied them.
+pub(crate) fn specs(config: &Config) -> Result<Specs, Failure> {
     let mut specs = Vec::new();
     let mut repository = Vec::new();
-    let notices = Vec::new();
+    let mut notices = Vec::new();
     let Some((Value::Object(servers), _)) = config.get("mcp.servers", None) else {
-        return Specs {
+        return Ok(Specs {
             specs,
             repository,
             notices,
-        };
+        });
     };
     // The repository's own declarations, after the key check: an entry
     // with no value is not a declaration and gates nothing.
@@ -99,8 +109,30 @@ pub(crate) fn specs(config: &Config) -> Specs {
     // `serde_json::Map` is a `BTreeMap` without `preserve_order`
     // (`docs/dependencies.md`), so this is name order.
     for name in servers.keys() {
-        let Some(spec) = spec(config, name) else {
-            continue;
+        let entry = spec(config, name);
+        let spec = match entry {
+            Entry::Neither => continue,
+            Entry::Both { name, required } => {
+                if required {
+                    return Err(Failure {
+                        code: ErrorCode::ConfigInvalid,
+                        message: format!(
+                            "The required MCP server `{name}` declares both `command` and `url`, so Fiber cannot start it. Keep the one you mean."
+                        ),
+                        retry_after_ms: None,
+                        provider: None,
+                    });
+                }
+                notices.push(Notice {
+                    code: ErrorCode::ConfigInvalid,
+                    message: format!(
+                        "The MCP server `{name}` declares both `command` and `url`, so Fiber starts neither. Keep the one you mean."
+                    ),
+                    extension: None,
+                });
+                continue;
+            }
+            Entry::Stdio(spec) | Entry::Remote(spec) => spec,
         };
         let declared_entry = declared
             .as_ref()
@@ -111,6 +143,7 @@ pub(crate) fn specs(config: &Config) -> Specs {
         if declared_entry
             || from_repository(config, name, "command")
             || from_repository(config, name, "args")
+            || from_repository(config, name, "url")
             || env_from_repository(config, name)
         {
             repository.push(RepositorySpec {
@@ -121,11 +154,24 @@ pub(crate) fn specs(config: &Config) -> Specs {
             specs.push(spec);
         }
     }
-    Specs {
+    Ok(Specs {
         specs,
         repository,
         notices,
-    }
+    })
+}
+
+/// What one `mcp.servers` entry declares: a stdio spec, a remote spec,
+/// both transports (never started), or nothing to start.
+enum Entry {
+    /// A `command` without a `url`.
+    Stdio(mcp::ServerSpec),
+    /// A `url` without a `command`.
+    Remote(mcp::ServerSpec),
+    /// Both `command` and `url`, with whether the entry is `required`.
+    Both { name: String, required: bool },
+    /// Neither: nothing to start.
+    Neither,
 }
 
 /// What a session started: the failures for the log and the running
@@ -281,28 +327,43 @@ fn add_extension_tools(
     Ok(())
 }
 
-/// The spec for the server `name`, or `None` when it is skipped: a `url`
-/// server (#593) or nothing to start at all. The merged `command`, `args`
-/// and `env` are the person's and the repository's merged key by key; a
+/// What the server `name` declares: a stdio spec, a remote spec, both
+/// transports, or nothing. The merged `command`, `args`, `env` and `url`
+/// are the person's and the repository's merged key by key; a
 /// repository's share is partitioned out by `specs`, never skipped here.
-fn spec(config: &Config, name: &str) -> Option<mcp::ServerSpec> {
+fn spec(config: &Config, name: &str) -> Entry {
     let command = server_field(config, name, "command")
         .and_then(|(value, _)| value.as_str().map(str::to_owned));
-    let Some(command) = command else {
-        // A `url` server (#593) or nothing to start at all.
-        return None;
+    let url =
+        server_field(config, name, "url").and_then(|(value, _)| value.as_str().map(str::to_owned));
+    let required = server_field(config, name, "required")
+        .and_then(|(value, _)| value.as_bool())
+        .unwrap_or(false);
+    let transport = match (command, url) {
+        (Some(_), Some(_)) => {
+            return Entry::Both {
+                name: name.to_owned(),
+                required,
+            };
+        }
+        (Some(command), None) => {
+            let args =
+                server_field(config, name, "args").map_or(Vec::new(), |(value, _)| strings(&value));
+            let env = server_field(config, name, "env")
+                .map_or(BTreeMap::new(), |(value, _)| string_map(&value));
+            mcp::Transport::Stdio(mcp::StdioSpec {
+                command,
+                args,
+                env,
+                run: None,
+            })
+        }
+        (None, Some(url)) => mcp::Transport::Http { url },
+        (None, None) => return Entry::Neither,
     };
-    let args = server_field(config, name, "args").map_or(Vec::new(), |(value, _)| strings(&value));
-    let env =
-        server_field(config, name, "env").map_or(BTreeMap::new(), |(value, _)| string_map(&value));
-    Some(mcp::ServerSpec {
+    let spec = mcp::ServerSpec {
         name: name.to_owned(),
-        transport: mcp::Transport::Stdio(mcp::StdioSpec {
-            command,
-            args,
-            env,
-            run: None,
-        }),
+        transport,
         startup_timeout: millis(
             config,
             name,
@@ -314,14 +375,18 @@ fn spec(config: &Config, name: &str) -> Option<mcp::ServerSpec> {
         disabled: server_field(config, name, "tools.disabled")
             .map_or(Vec::new(), |(value, _)| strings(&value)),
         hints: hints(config, name),
-        required: server_field(config, name, "required")
-            .and_then(|(value, _)| value.as_bool())
-            .unwrap_or(false),
-    })
+        required,
+    };
+    // The transport was just built above; the match names the entry kind.
+    if matches!(spec.transport, mcp::Transport::Http { .. }) {
+        Entry::Remote(spec)
+    } else {
+        Entry::Stdio(spec)
+    }
 }
 
-/// The merged `command`, `args` and `env` the repository's layer supplies:
-/// exactly the values the approved declaration must still hold.
+/// The merged `command`, `args`, `env` and `url` the repository's layer
+/// supplies: exactly the values the approved declaration must still hold.
 fn program_fields(config: &Config, server: &str) -> ProgramFields {
     let one = |field: &str| {
         server_field(config, server, field)
@@ -342,6 +407,7 @@ fn program_fields(config: &Config, server: &str) -> ProgramFields {
         command: one("command"),
         args: one("args"),
         env,
+        url: one("url"),
     }
 }
 
