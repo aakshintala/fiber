@@ -87,8 +87,8 @@ pub(crate) struct Hub {
     /// Tests only: runs handing a queued command over, or clearing it.
     #[cfg(test)]
     pub(crate) on_pass_on: PassOnHook,
-    /// Tests only: names one `hub-ws-*` thread whose next spawn fails, so
-    /// the port's spawn-failure paths run without an outside seam.
+    /// Tests only: names `hub-ws-*` threads whose spawns fail, so the
+    /// port's spawn-failure paths run without an outside seam.
     #[cfg(test)]
     pub(crate) fail_spawn: Mutex<Option<&'static str>>,
 }

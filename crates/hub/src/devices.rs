@@ -12,6 +12,8 @@ use std::path::Path;
 use ring::digest;
 use serde_json::Value;
 
+const FLAGS: i32 = libc::O_NOFOLLOW | libc::O_NONBLOCK;
+
 /// Whether `hub/devices/` holds a record whose hash is the SHA-256 of
 /// `token`. Anything that is not a regular file holding that hash is
 /// skipped, fail closed: a missing directory, an unreadable file, a
@@ -20,11 +22,6 @@ use serde_json::Value;
 /// at open even when an entry is swapped between the directory read and
 /// the open. `O_NONBLOCK` prevents a FIFO from stalling authentication
 /// before its opened-file metadata can reject it.
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "On Unix, O_NOFOLLOW and O_NONBLOCK are distinct flag bits, so OR and XOR produce the same flags; the symlink and FIFO tests separately pin each flag's behavior."
-)]
 pub(crate) fn holds(home: &Path, token: &str) -> bool {
     let want = sha256_hex(token.as_bytes());
     let entries = match fs::read_dir(home.join("hub").join("devices")) {
@@ -41,7 +38,7 @@ pub(crate) fn holds(home: &Path, token: &str) -> bool {
         });
         let mut file = match fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .custom_flags(FLAGS)
             .open(&path)
         {
             Ok(file) => file,

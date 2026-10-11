@@ -658,6 +658,42 @@ fn a_signal_closes_every_websocket_saying_the_hub_is_stopping() {
 }
 
 #[test]
+fn failed_stop_spawns_still_shut_every_websocket_without_waiting() {
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let (port, hub, _got, _done) = serve_with_port(&temp, Vec::new(), Arc::clone(&clock));
+    let first = helloed(port, None);
+    let second = helloed(port, None);
+    let webs = hub.webs();
+    assert_eq!(webs.len(), 2);
+    *lock(&hub.fail_spawn) = Some("hub-ws-stop");
+
+    let start = clock.now();
+    let (stopped_tx, stopped_rx) = mpsc::channel();
+    let stopping_hub = Arc::clone(&hub);
+    thread::Builder::new()
+        .name("hub-test-stop-all".to_owned())
+        .spawn(move || {
+            stop_all(&stopping_hub, webs);
+            stopped_tx.send(()).unwrap_or(());
+        })
+        .unwrap();
+    Deadline::after(WITHIN)
+        .recv(&stopped_rx)
+        .expect("stop_all returns after every stop spawn fails");
+
+    assert_eq!(
+        clock.now(),
+        start,
+        "stop_all returns without advancing time"
+    );
+    for (client, what) in [(&first, "the first"), (&second, "the second")] {
+        assert_eq!(client.next(&format!("{what} end")), Item::Eof);
+    }
+    await_zero(&hub);
+}
+
+#[test]
 fn a_stalled_sink_bounds_the_stop_but_still_shuts_down() {
     let temp = Temp::new();
     let clock = FakeClock::new();

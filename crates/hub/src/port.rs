@@ -392,20 +392,16 @@ fn refuse(
     hub.rollback(n);
 }
 
-/// Starts a `hub-ws-*` thread. In tests, `Hub::fail_spawn` refuses the
-/// named thread once, so the spawn-failure paths run with no outside seam.
-fn spawn(
-    hub: &Arc<Hub>,
-    name: &'static str,
-    run: impl FnOnce() + Send + 'static,
-) -> io::Result<()> {
+/// Starts a `hub-ws-*` thread. In tests, `Hub::fail_spawn` refuses every
+/// spawn of the named thread, so the spawn-failure paths run with no outside
+/// seam.
+fn spawn(hub: &Hub, name: &'static str, run: impl FnOnce() + Send + 'static) -> io::Result<()> {
     #[cfg(not(test))]
     let _ = hub;
     #[cfg(test)]
     {
-        let mut fail = connection::lock(&hub.fail_spawn);
+        let fail = connection::lock(&hub.fail_spawn);
         if fail.as_deref() == Some(name) {
-            *fail = None;
             return Err(io::Error::other(format!(
                 "the test refused to spawn {name}"
             )));
@@ -508,18 +504,16 @@ pub(crate) fn stop_all(hub: &Hub, webs: Vec<Arc<Web>>) {
     let done = Arc::new(Mutex::new(0usize));
     let total = webs.len();
     for web in &webs {
-        let stopped = thread::Builder::new()
-            .name("hub-ws-stop".to_owned())
-            .spawn({
-                let web = Arc::clone(web);
-                let done = Arc::clone(&done);
-                let tick = Arc::clone(&hub.tick);
-                move || {
-                    web.close(1001, "The hub is stopping.");
-                    *connection::lock(&done) += 1;
-                    tick.wake();
-                }
-            });
+        let stopped = spawn(hub, "hub-ws-stop", {
+            let web = Arc::clone(web);
+            let done = Arc::clone(&done);
+            let tick = Arc::clone(&hub.tick);
+            move || {
+                web.close(1001, "The hub is stopping.");
+                *connection::lock(&done) += 1;
+                tick.wake();
+            }
+        });
         if stopped.is_err() {
             // A thread that cannot be spawned counts as done at once.
             *connection::lock(&done) += 1;
