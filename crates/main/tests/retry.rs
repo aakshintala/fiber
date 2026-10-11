@@ -21,7 +21,9 @@ use std::thread;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{Deadline, HELLO_KINDS, KillGroup, Run, Setup, group_alive, is_status, spawn_watched};
+use support::{
+    Deadline, HELLO_KINDS, KillGroup, Run, Setup, group_alive, is_status, spawn_watched,
+};
 
 impl Setup {
     #[track_caller]

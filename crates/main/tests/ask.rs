@@ -727,8 +727,16 @@ fn two_prompts_or_none_is_a_usage_error() {
 
     assert_pre_session(&setup.run_with_stdin(&["ask"], None), 2, "usage");
     assert_pre_session(&setup.run_with_stdin(&["ask", "a", "b"], None), 2, "usage");
-    assert_pre_session(&setup.run_with_stdin(&["ask", "--model", "x"], None), 2, "usage");
-    assert_pre_session(&setup.run_with_stdin(&["ask", "--verbose"], None), 2, "usage");
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "--model", "x"], None),
+        2,
+        "usage",
+    );
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "--verbose"], None),
+        2,
+        "usage",
+    );
     assert_pre_session(
         &setup.run_with_stdin(&["ask", "x", "fake/m", "hi"], None),
         2,
@@ -851,7 +859,11 @@ fn a_missing_credential_fails_before_the_session() {
         .replace("FIBER_TEST_FAKE_KEY", "FIBER_TEST_UNSET_KEY");
     fs::write(&source, text).unwrap();
 
-    assert_pre_session(&setup.run_with_stdin(&["ask", "hi"], None), 1, "credential_missing");
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "hi"], None),
+        1,
+        "credential_missing",
+    );
 }
 
 #[test]
@@ -1102,7 +1114,10 @@ fn each_command_prints_its_own_help() {
     for (name, about) in commands {
         if name.starts_with("extension ") {
             let verb = name.strip_prefix("extension ").unwrap();
-            assert_help(&setup.run_with_stdin(&["extension", verb, "--help"], None), about);
+            assert_help(
+                &setup.run_with_stdin(&["extension", verb, "--help"], None),
+                about,
+            );
         } else {
             for args in [vec![name, "--help"], vec!["help", name]] {
                 assert_help(&setup.run_with_stdin(&args, None), about);
@@ -1348,7 +1363,12 @@ fn list_and_remove_show_and_delete_what_an_install_put_in_home() {
     let removed = setup.run_with_stdin(&["extension", "remove", "muse"], None);
     assert_eq!(removed.code, Some(0), "stderr: {}", removed.stderr);
     assert_eq!(removed.stderr, format!("fiber: removed {name}\n"));
-    assert!(setup.run_with_stdin(&["extension", "list"], None).raw.is_empty());
+    assert!(
+        setup
+            .run_with_stdin(&["extension", "list"], None)
+            .raw
+            .is_empty()
+    );
     let again = setup.run_with_stdin(&["extension", "remove", "muse"], None);
     assert_eq!(again.code, Some(1));
     assert!(
@@ -1454,7 +1474,12 @@ fn extension_update_all_skips_unrequested_dependencies() {
         removed.stderr,
         format!("fiber: removed {NEEDS_MUSE}\nfiber: removed {MUSE}\n")
     );
-    assert!(setup.run_with_stdin(&["extension", "list"], None).raw.is_empty());
+    assert!(
+        setup
+            .run_with_stdin(&["extension", "list"], None)
+            .raw
+            .is_empty()
+    );
 }
 
 #[test]

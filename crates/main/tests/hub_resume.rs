@@ -29,8 +29,8 @@ use contract::{JobId, SessionId};
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, Setup, SystemClock, assert_one_continued_log, group_alive,
-    hello_item_done as hello, stream, write_json,
+    Deadline, Setup, SystemClock, assert_one_continued_log, group_alive, hello_item_done as hello,
+    stream, write_json,
 };
 
 impl Setup {

@@ -545,7 +545,11 @@ fn resume_failures_end_stdout_with_a_pre_session_fiber_exited() {
 
     // `--resume` with no value, and with an empty value, are usage errors.
     assert_pre_session(&setup.run_in_workspace(&["ask", "--resume"]), 2, "usage");
-    assert_pre_session(&setup.run_in_workspace(&["ask", "--resume", ""]), 2, "usage");
+    assert_pre_session(
+        &setup.run_in_workspace(&["ask", "--resume", ""]),
+        2,
+        "usage",
+    );
     // An ambiguous prefix is a usage error naming the matches.
     let ambiguous = setup.run_in_workspace(&["ask", "--resume", "s_aa", "x"]);
     assert_pre_session(&ambiguous, 2, "usage");

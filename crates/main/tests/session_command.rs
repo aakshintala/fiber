@@ -25,8 +25,8 @@ use std::thread;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, PIXEL, PIXEL_BASE64, Setup, function_call, git, group_alive, hello, kinds,
-    stream, text_reply, write_json,
+    Deadline, PIXEL, PIXEL_BASE64, Setup, function_call, git, group_alive, hello, kinds, stream,
+    text_reply, write_json,
 };
 
 impl Setup {
