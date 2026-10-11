@@ -219,9 +219,13 @@ fn answer(call: &Call, result: &CallResult) -> Output {
                 lines.push(resource_line(&call.artifacts, resource));
             }
             Content::Audio { data, mime_type } => {
-                if let Some(encoded) = data {
-                    lines.push(saved_line(&call.artifacts, mime_type, encoded));
-                }
+                lines.push(match data {
+                    Some(encoded) => saved_line(&call.artifacts, mime_type, encoded),
+                    None => format!(
+                        "Could not save {} content: no data",
+                        mime_type.as_deref().unwrap_or(DEFAULT_MIME_TYPE),
+                    ),
+                });
             }
             Content::Image => {}
             Content::Other | Content::Unreadable => {

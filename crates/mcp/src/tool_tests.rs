@@ -337,12 +337,15 @@ fn answer_maps_each_part_to_its_own_text_in_order() {
             None,
         ),
         (
-            "audio without data is dropped",
+            "audio without data is reported",
             CallResult {
                 content: vec![text_part(Some("seen")), audio_part(None, None)],
                 is_error: false,
             },
-            vec![text_line("seen")],
+            vec![
+                text_line("seen"),
+                text_line("Could not save application/octet-stream content: no data"),
+            ],
             None,
         ),
         (
