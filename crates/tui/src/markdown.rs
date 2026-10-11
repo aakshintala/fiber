@@ -143,7 +143,7 @@ impl Writer {
                 Some((_, code)) => code.push_str(&text),
                 None => self.push(&text, self.style()),
             },
-            Event::Code(text) => self.push(&text, tinted(Role::CodeText)),
+            Event::Code(text) => self.push(&text, style(Role::Info)),
             Event::Html(text)
             | Event::InlineHtml(text)
             | Event::InlineMath(text)

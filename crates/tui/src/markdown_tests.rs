@@ -109,14 +109,15 @@ fn inline_styles() {
     let rendered = render("**b** *i* ~~s~~ `c` [l](http://x)", 40);
     let line = &rendered.lines[0];
     assert!(style_at(line, 0).add_modifier.contains(Modifier::BOLD));
+    assert_eq!(style_at(line, 0).fg, fg(Role::Text));
     assert!(style_at(line, 2).add_modifier.contains(Modifier::ITALIC));
     assert!(
         style_at(line, 4)
             .add_modifier
             .contains(Modifier::CROSSED_OUT)
     );
-    assert_eq!(style_at(line, 6).fg, fg(Role::CodeText));
-    assert_eq!(style_at(line, 6).bg, TINT);
+    assert_eq!(style_at(line, 6).fg, fg(Role::Info));
+    assert_eq!(style_at(line, 6).bg, None);
     assert!(
         style_at(line, 8)
             .add_modifier
