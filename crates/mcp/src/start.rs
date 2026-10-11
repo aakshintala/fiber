@@ -63,10 +63,7 @@ impl std::fmt::Debug for ServerSpec {
         f.debug_struct("ServerSpec")
             .field("name", &self.name)
             .field("command", &self.command)
-            .field(
-                "args",
-                &self.args.iter().map(|_| "redacted").collect::<Vec<_>>(),
-            )
+            .field("args", &self.args.len())
             .field(
                 "env",
                 &self
@@ -115,10 +112,7 @@ impl std::fmt::Debug for Program {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Program")
             .field("command", &"redacted")
-            .field(
-                "args",
-                &self.args.iter().map(|_| "redacted").collect::<Vec<_>>(),
-            )
+            .field("args", &self.args.len())
             .field("guard", &"<guard>")
             .finish()
     }

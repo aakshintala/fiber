@@ -25,6 +25,77 @@ use support::{
     Deadline, HubProc, KillGroup, Run, function_call, hello, is_status, spawn_watched, stream,
 };
 
+/// The stdout kinds of one `fiber ask` text turn, in order: the
+/// complete list, so a duplicated, missing or reordered event fails
+/// (`docs/testing.md`, "Event streams").
+const ASK_TEXT_TURN: [&str; 15] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// [`ASK_TEXT_TURN`] with the headless skip notice before the preamble:
+/// an unapproved server is skipped with a `notice`.
+const ASK_SKIPPED_TURN: [&str; 16] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "notice",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// [`ASK_TEXT_TURN`] for a turn that calls a tool: the key check drops
+/// the repository's hints with a `notice`, and the call's lines sit
+/// between the turn's.
+const ASK_TOOL_TURN: [&str; 23] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "notice",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
     root: fakes::TempDir,
@@ -322,6 +393,7 @@ fn an_approved_server_runs_from_its_pinned_copy() {
             .to_string()
             .as_str()
     );
+    assert_eq!(support::kinds(&run.lines), ASK_TEXT_TURN);
 }
 
 #[test]
@@ -355,6 +427,7 @@ fn a_changed_pinned_file_needs_a_new_approval() {
             .join("srv/run.sh")
             .is_file()
     );
+    assert_eq!(support::kinds(&run.lines), ASK_SKIPPED_TURN);
 }
 
 #[test]
@@ -381,6 +454,7 @@ fn a_changed_declaration_needs_a_new_approval() {
         !run.declares("mcp__db__echo"),
         "the changed server's tools are not declared"
     );
+    assert_eq!(support::kinds(&run.lines), ASK_SKIPPED_TURN);
 }
 
 #[test]
@@ -401,6 +475,7 @@ fn an_approval_in_one_repository_covers_another_on_this_machine() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(!run.notice("repository_code_skipped", "db"), "no notice");
     assert!(run.declares("mcp__db__echo"), "the tools are declared");
+    assert_eq!(support::kinds(&run.lines), ASK_TEXT_TURN);
 }
 
 #[test]
@@ -430,6 +505,7 @@ fn a_pruned_copy_is_rebuilt() {
             .to_string()
             .as_str()
     );
+    assert_eq!(support::kinds(&run.lines), ASK_TEXT_TURN);
 }
 
 #[test]
@@ -461,6 +537,9 @@ fn a_required_server_that_fails_to_start_exits_before_the_session() {
             .any(|line| line["kind"] == "preamble_built"),
         "no session line"
     );
+    // A `required` failure stops the session before any line: the only
+    // stdout line is the exit.
+    assert_eq!(support::kinds(&run.lines), ["fiber_exited"]);
 }
 
 #[test]
@@ -479,6 +558,7 @@ fn a_reapproved_file_change_keeps_the_cached_tool_list() {
         dir.join("pid.txt").exists(),
         "the first run starts the server"
     );
+    assert_eq!(support::kinds(&first.lines), ASK_TEXT_TURN);
     // The declaration is unchanged, so the tool-list cache stays keyed to
     // it across the re-approval of the changed file.
     fs::write(workspace.join("srv/run.sh"), "# changed\n").unwrap();
@@ -494,6 +574,7 @@ fn a_reapproved_file_change_keeps_the_cached_tool_list() {
         !dir.join("pid.txt").exists(),
         "the cached server never spawns"
     );
+    assert_eq!(support::kinds(&second.lines), ASK_TEXT_TURN);
 }
 
 #[test]
@@ -532,6 +613,7 @@ fn a_repositorys_hints_do_not_change_the_declared_effects() {
     // destructive would not run it past the person.
     assert_eq!(started["payload"]["effects"], json!(["reads"]));
     assert_eq!(started["payload"]["reversible"], true);
+    assert_eq!(support::kinds(&run.lines), ASK_TOOL_TURN);
 }
 
 /// The session process for `id`, with its stdout lines as they come.
@@ -640,6 +722,7 @@ fn a_file_created_after_gathering_is_refused_on_a_lazy_start() {
         dir.join("pid.txt").exists(),
         "the first run starts the server"
     );
+    assert_eq!(support::kinds(&first.lines), ASK_TEXT_TURN);
     fs::remove_file(dir.join("pid.txt")).unwrap();
 
     // The hub session declares the server from the cache and spawns nothing.
@@ -679,6 +762,46 @@ fn a_file_created_after_gathering_is_refused_on_a_lazy_start() {
     assert!(
         lines.iter().any(|line| line["kind"] == "turn_completed"),
         "the turn completes"
+    );
+    // The complete ordered list from the attach: the fresh offer is
+    // skipped and resolved, the load drops it with no line, and the
+    // guard's refusal is recorded as `mcp_server_failed`, so a
+    // duplicated, missing or reordered event fails (`docs/testing.md`,
+    // "Event streams").
+    assert_eq!(
+        support::kinds_without_attention(&lines),
+        [
+            "clients",
+            "repository_code_offered",
+            "repository_code_resolved",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "mcp_server_failed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1,
+        "one clients line for the attach"
     );
     let failed = lines
         .iter()

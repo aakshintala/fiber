@@ -343,6 +343,26 @@ fn a_guard_allows_a_regular_file_outside_the_repository() {
 }
 
 #[test]
+fn an_approved_server_debug_prints_no_token_or_env_value() {
+    let repo = Repo::new();
+    repo.write("srv/run.sh", "echo\n");
+    repo.config(&json!({"mcp": {"servers": {"db": {
+        "command": "./srv/run.sh",
+        "args": ["--token=planted2b7e"],
+        "env": {"SECRET": "planted9d41"},
+    }}}}));
+    approve(&repo, "db");
+    let mut got = approved(&repo, &empty());
+    let Ok(ServerApproval::Approved(approved)) = got.remove("db").unwrap() else {
+        panic!("db is approved");
+    };
+    let printed = format!("{approved:?}");
+    assert!(printed.contains("db"), "{printed}");
+    assert!(!printed.contains("planted2b7e"), "{printed}");
+    assert!(!printed.contains("planted9d41"), "{printed}");
+}
+
+#[test]
 fn a_guard_debug_prints_no_argument() {
     let repo = repo();
     approve(&repo, "db");

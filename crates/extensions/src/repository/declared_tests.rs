@@ -739,3 +739,19 @@ fn a_broken_extensions_path_fails_items_but_not_servers() {
         vec!["db".to_owned()]
     );
 }
+
+#[test]
+fn an_item_debug_prints_no_token_or_env_value() {
+    let repo = Repo::new();
+    repo.write("srv/run.sh", "echo");
+    repo.config(&json!({"mcp": {"servers": {"db": {
+        "command": "./srv/run.sh",
+        "args": ["--token=planted3a9c"],
+        "env": {"SECRET": "planted7e02"},
+    }}}}));
+    let item = repo.item(OfferedKind::McpServer, "db");
+    let printed = format!("{item:?}");
+    assert!(printed.contains("db"), "{printed}");
+    assert!(!printed.contains("planted3a9c"), "{printed}");
+    assert!(!printed.contains("planted7e02"), "{printed}");
+}

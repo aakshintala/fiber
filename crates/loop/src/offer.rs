@@ -368,7 +368,9 @@ impl Loop {
     /// Applies a reply to `offer`: `true` once `repository_code_resolved`
     /// is written and the reply accepted. A reply that does not fit, or a
     /// decision the seam fails to record, is rejected and the offer stays
-    /// pending; decisions recorded before the failure stay recorded.
+    /// pending; non-skip decisions recorded before the failure stay
+    /// recorded, while a skip enters `skipped_now` only after the resolved
+    /// offer is written, so a rejected reply skips nothing.
     fn answer_offer(
         &mut self,
         code: &dyn RepositoryCode,
@@ -385,9 +387,10 @@ impl Loop {
             return Ok(false);
         }
         for (item, decision) in offer.items.iter().zip(&decisions) {
-            // A skip lives only in the log and this session.
+            // A skip is committed by the resolved offer below, never
+            // through the seam: it enters `skipped_now` only after the
+            // resolved offer is written, so a rejected reply skips nothing.
             if *decision == OfferDecision::Skip {
-                self.repository.skipped_now.push(key(item));
                 continue;
             }
             if let Err(failure) = code.decide(item, *decision) {
@@ -395,6 +398,16 @@ impl Loop {
                 return Ok(false);
             }
         }
+        // A skip lives only in the log and this session, committed only
+        // once the resolved offer below is written: collected before the
+        // move into the resolved line.
+        let skipped: Vec<Key> = offer
+            .items
+            .iter()
+            .zip(&decisions)
+            .filter(|(_, decision)| **decision == OfferDecision::Skip)
+            .map(|(item, _)| key(item))
+            .collect();
         self.log.append(
             &Event::RepositoryCodeResolved(RepositoryCodeResolved {
                 request_id: offer.request_id.clone(),
@@ -404,6 +417,7 @@ impl Loop {
             None,
         )?;
         self.repository.decided.extend(offer.items.iter().map(key));
+        self.repository.skipped_now.extend(skipped);
         inbox::accept(ack);
         Ok(true)
     }

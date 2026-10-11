@@ -996,7 +996,7 @@ fn a_program_debug_redacts_its_command_and_arguments() {
     let printed = format!("{program:?}");
     assert!(printed.contains("Program"), "{printed}");
     assert!(printed.contains("command: \"redacted\""), "{printed}");
-    assert!(printed.contains("args: [\"redacted\"]"), "{printed}");
+    assert!(printed.contains("args: 1"), "{printed}");
     assert!(!printed.contains("planted-command-secret"), "{printed}");
     assert!(!printed.contains("planted-argument-secret"), "{printed}");
 }

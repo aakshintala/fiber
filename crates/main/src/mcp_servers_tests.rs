@@ -196,6 +196,64 @@ fn a_repositorys_hints_never_reach_the_spec() {
 }
 
 #[test]
+fn a_declaration_removed_after_load_still_gates_through_command_provenance() {
+    // The declaration is removed between `Config::load` and `specs`:
+    // the merged `command` still comes from the repository's layer, so
+    // the fail-closed provenance fallback keeps the server the
+    // repository's even though the declaration read no longer names it.
+    let setup = Setup::new();
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    let config = setup.rig.config(Vec::<String>::new());
+    setup.repository(&json!({}));
+    let specs = specs(&config);
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's through provenance alone");
+    };
+    assert_eq!(gated.spec.name, "fx");
+}
+
+#[test]
+fn a_declaration_removed_after_load_still_gates_through_env_provenance() {
+    // As above, through one repository-supplied `env` entry: `env`
+    // merges key by key, so each entry's provenance is checked
+    // individually.
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"env": {"BASH_ENV": "/tmp/evil"}}}}}));
+    let config = setup.rig.config(Vec::<String>::new());
+    setup.repository(&json!({}));
+    let specs = specs(&config);
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's through provenance alone");
+    };
+    assert_eq!(gated.spec.name, "fx");
+    assert_eq!(
+        gated.fields.env,
+        std::collections::BTreeMap::from([("BASH_ENV".to_owned(), json!("/tmp/evil"))])
+    );
+}
+
+#[test]
+fn program_fields_debug_prints_no_token_or_env_value() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {
+        "args": ["--token=planted6a3f"],
+        "env": {"SECRET": "planted1c8b"},
+    }}}}));
+    let specs = setup.specs();
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    let printed = format!("{:?}", gated.fields);
+    assert!(printed.contains("SECRET"), "{printed}");
+    assert!(!printed.contains("planted6a3f"), "{printed}");
+    assert!(!printed.contains("planted1c8b"), "{printed}");
+}
+
+#[test]
 fn a_url_server_is_skipped_silently() {
     let setup = Setup::new();
     setup.global(&json!({"mcp": {"servers": {"remote": {"url": "https://example.com/mcp"}}}}));

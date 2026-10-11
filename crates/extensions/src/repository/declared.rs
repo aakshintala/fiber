@@ -29,8 +29,10 @@ pub(crate) struct PinnedFile {
 }
 
 /// An extension, hook or MCP server a repository declares, with what its
-/// hash covers.
-#[derive(Debug, Clone)]
+/// hash covers. The declaration and the strings it named can hold
+/// argument tokens, so they never print
+/// (`docs/code-quality.md`, "What a reviewer checks").
+#[derive(Clone)]
 pub struct RepoItem {
     /// What it is.
     pub kind: OfferedKind,
@@ -56,6 +58,25 @@ pub struct RepoItem {
     pub(crate) named: BTreeMap<String, Named>,
     /// An extension's package directory, resolved.
     pub(crate) dir: PathBuf,
+}
+
+impl std::fmt::Debug for RepoItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RepoItem")
+            .field("kind", &self.kind)
+            .field("name", &self.name)
+            .field("path", &self.path)
+            .field("required", &self.required)
+            .field(
+                "declaration",
+                &self.declaration.as_ref().map(|_| "redacted"),
+            )
+            .field("files", &self.files)
+            .field("outside", &self.outside.len())
+            .field("named", &self.named.len())
+            .field("dir", &self.dir)
+            .finish()
+    }
 }
 
 /// Where one string a declaration named resolved to when gathered.

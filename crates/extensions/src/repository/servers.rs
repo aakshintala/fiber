@@ -40,7 +40,8 @@ pub enum ServerApproval {
 }
 
 /// A server whose current content is approved: how to run the copy.
-#[derive(Debug)]
+/// `entry` holds the declared command, arguments and environment, so it
+/// never prints (`docs/code-quality.md`, "What a reviewer checks").
 pub struct ApprovedServer {
     /// The server's name.
     pub name: String,
@@ -52,6 +53,23 @@ pub struct ApprovedServer {
     root: PathBuf,
     named: BTreeMap<String, Named>,
     hold: Arc<CopyHold>,
+}
+
+// The checked entry holds the declaration's command, arguments and
+// environment values, so only the server's name and hash print
+// (`docs/code-quality.md`, "What a reviewer checks").
+impl std::fmt::Debug for ApprovedServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApprovedServer")
+            .field("name", &self.name)
+            .field("entry", &"redacted")
+            .field("hash", &self.hash)
+            .field("copy", &self.copy)
+            .field("root", &self.root)
+            .field("named", &self.named.len())
+            .field("hold", &"<guard>")
+            .finish()
+    }
 }
 
 impl ApprovedServer {
@@ -106,10 +124,7 @@ impl std::fmt::Debug for SpawnGuard {
         f.debug_struct("SpawnGuard")
             .field("name", &self.name)
             .field("root", &self.root)
-            .field(
-                "open",
-                &self.open.iter().map(|_| "redacted").collect::<Vec<_>>(),
-            )
+            .field("open", &self.open.len())
             .field("hold", &"<guard>")
             .finish()
     }
