@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 
 use crate::Error;
 use crate::unfinished::named;
+use crate::wire::{args_value, str_at};
 
 /// Reads a reply stream, passing each fragment to `sink` as it arrives, and
 /// returns the reply once `message_stop` arrives. A stream that fails keeps
@@ -260,7 +261,7 @@ impl Decoder {
             }
             Some(Block::Text { .. }) => {}
             Some(Block::HostedCall { id, name, input }) => {
-                let arguments = parsed_input(input);
+                let arguments = args_value(input);
                 let item = json!({
                     "type": "server_tool_use",
                     "id": id,
@@ -308,7 +309,7 @@ impl Decoder {
                 name,
                 arguments,
             }) => {
-                let arguments = parsed_input(arguments);
+                let arguments = args_value(arguments);
                 self.actions.push(ReplyAction::ToolCall(ToolCallRequested {
                     name,
                     arguments,
@@ -393,19 +394,6 @@ fn seeded_input(block: &Value) -> String {
         .map_or_else(String::new, Value::to_string)
 }
 
-/// A call's streamed input text as its arguments: the JSON object or array
-/// it holds, `{}` for no text (a tool that takes no arguments), or the raw
-/// text as a string when it holds neither.
-fn parsed_input(input: String) -> Value {
-    if input.is_empty() {
-        return Value::Object(Map::new());
-    }
-    match serde_json::from_str(&input) {
-        Ok(value @ (Value::Object(_) | Value::Array(_))) => value,
-        Ok(_) | Err(_) => Value::String(input),
-    }
-}
-
 /// A hosted search's outcome from its result block: the result URLs, one per
 /// line, or a `failed` completion carrying the vendor's error code.
 fn hosted_completion(block: &Value) -> ToolCallCompleted {
@@ -451,9 +439,4 @@ fn tokens(usage: &Value) -> Tokens {
 /// The `index` field on a content-block event.
 fn index(event: &Value) -> u64 {
     event.get("index").and_then(Value::as_u64).unwrap_or(0)
-}
-
-/// The string at `key`, or `""`.
-fn str_at<'a>(value: &'a Value, key: &str) -> &'a str {
-    value.get(key).and_then(Value::as_str).unwrap_or("")
 }

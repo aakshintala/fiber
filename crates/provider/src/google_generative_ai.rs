@@ -20,6 +20,7 @@ use crate::http::{self, Cancel};
 use crate::redact::Secrets;
 
 use crate::google_generative_ai_request::{body, wire_tools};
+use crate::wire::str_at;
 use crate::{Endpoint, Error};
 
 /// One model reached over `google-generative-ai`.
@@ -218,7 +219,3 @@ fn retry_info(error: Error) -> Error {
     }
 }
 
-/// The string at `key`, or `""`.
-pub(crate) fn str_at<'a>(value: &'a Value, key: &str) -> &'a str {
-    value.get(key).and_then(Value::as_str).unwrap_or("")
-}

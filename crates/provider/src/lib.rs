@@ -24,6 +24,7 @@ pub mod scripted;
 mod sse;
 mod strict;
 mod unfinished;
+mod wire;
 
 pub use error::Error;
 

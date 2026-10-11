@@ -22,6 +22,7 @@ use serde_json::{Map, Value, json};
 use crate::http::{self, Cancel};
 use crate::redact::Secrets;
 use crate::unfinished::named;
+use crate::wire::str_at;
 use crate::{Endpoint, Error, sse, strict};
 
 /// One model reached over `openai-responses`.
@@ -762,11 +763,6 @@ fn tokens(usage: &Value) -> Tokens {
         cache_write: BTreeMap::new(),
         output: count("/output_tokens"),
     }
-}
-
-/// The string at `key`, or `""`.
-fn str_at<'a>(value: &'a Value, key: &str) -> &'a str {
-    value.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
 #[cfg(test)]

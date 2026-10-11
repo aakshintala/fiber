@@ -25,6 +25,7 @@ use crate::http::{self, Cancel};
 use crate::openai_completions_messages::messages;
 use crate::redact::Secrets;
 use crate::unfinished::named;
+use crate::wire::{args_value, str_at};
 use crate::{Endpoint, Error, sse};
 
 /// One model reached over `openai-completions`.
@@ -554,11 +555,7 @@ impl Decoder {
         let mut calls: Vec<StreamedCall> = self.calls.into_values().collect();
         calls.sort_by_key(|c| c.position);
         actions.extend(calls.into_iter().map(|call| {
-            let arguments = match serde_json::from_str(&call.arguments) {
-                Ok(Value::Object(map)) => Value::Object(map),
-                _ if call.arguments.is_empty() => Value::Object(serde_json::Map::new()),
-                Ok(_) | Err(_) => Value::String(call.arguments),
-            };
+            let arguments = args_value(call.arguments);
             ReplyAction::ToolCall(ToolCallRequested {
                 name: call.name,
                 arguments,
@@ -621,7 +618,3 @@ fn cost(usage: &Value) -> Option<f64> {
         .filter(|cost| *cost >= 0.0)
 }
 
-/// The string at `key`, or `""`.
-fn str_at<'a>(value: &'a Value, key: &str) -> &'a str {
-    value.get(key).and_then(Value::as_str).unwrap_or("")
-}

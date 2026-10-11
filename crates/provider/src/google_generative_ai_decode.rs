@@ -12,9 +12,9 @@ use contract::provider::{CallUsage, Delta, Finish, HostedCall, InputSize, Reply,
 use contract::shapes::{ContentPart, Tokens};
 use serde_json::{Value, json};
 
-use crate::google_generative_ai::str_at;
 use crate::google_generative_ai_request::with;
 use crate::unfinished::named;
+use crate::wire::str_at;
 use crate::{Error, sse};
 
 /// Reads a reply stream, passing each fragment to `sink` as it arrives, and
