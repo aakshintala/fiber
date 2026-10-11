@@ -204,10 +204,7 @@ fn commands_without_args_read_missing_and_empty_as_missing() {
         );
         assert!(parse(&extra).is_err(), "{extra}");
     }
-    for (name, command) in [
-        ("commands", Command::Commands),
-        ("skills", Command::Skills),
-    ] {
+    for (name, command) in [("commands", Command::Commands), ("skills", Command::Skills)] {
         let line = CommandLine {
             id: CommandId("c_1".into()),
             command,

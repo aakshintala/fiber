@@ -25,7 +25,6 @@ pub trait ExtensionDoor: Send + Sync {
     }
 }
 
-
 /// Sends one driver command from inside the session; `answer` is called once.
 /// (`docs/extensions.md`, "Host calls": `host.drive`.)
 pub trait Drive: Send + Sync {

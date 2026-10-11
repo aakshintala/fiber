@@ -220,4 +220,3 @@ pub enum JobRecord {
     /// `job_completed`.
     Completed(JobCompleted),
 }
-
