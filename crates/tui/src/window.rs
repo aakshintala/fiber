@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::{Range, RangeInclusive};
 
 use contract::events::{TurnCompleted, TurnOutcome, UsageRecorded};
-use contract::{Envelope, Seq};
+use contract::{Envelope, GenerationId, Seq};
 use jiff::tz::TimeZone;
 use ratatui::text::Line;
 
@@ -239,6 +239,9 @@ pub(crate) struct Pages {
     open: Part,
     pending: Option<Pending>,
     summaries: Vec<Summary>,
+    /// The summary keeping each generation's usage, by its id, so a
+    /// `usage_recorded` line finds its turn without walking every turn.
+    generations: HashMap<GenerationId, usize>,
     /// The ledger default, the last Ctrl+O.
     fold: Fold,
     /// Shell output, placed after the number of turns in the page where it ran.
@@ -284,6 +287,7 @@ impl Pages {
             open: Part::seeded(seed),
             pending: None,
             summaries: Vec::new(),
+            generations: HashMap::new(),
             fold: Fold::default(),
             shells: Vec::new(),
             focus: vec![Vec::new()],
@@ -436,20 +440,24 @@ impl Pages {
     }
 
     /// `usage_recorded`: the turn holding its generation, else the running
-    /// one, keeps it. A late line moves no row on a dropped page but its ▣
-    /// line's.
+    /// one, keeps it. A late line moves no row but its ▣ line's. The open
+    /// page is counted again, at the batch's end while one folds; a closed
+    /// page holding its cards only when that line's rows change, and
+    /// otherwise, as a dropped page, it adds the difference.
     fn usage(&mut self, envelope: &Envelope) -> Folded {
         let Some(line) = read!(envelope, UsageRecorded) else {
             return Folded::Nothing;
         };
-        let known = self
-            .summaries
-            .iter()
-            .rposition(|summary| summary.spend.holds(&line.generation_id));
-        let Some(summary) = known
+        crate::work::add(|work| work.usage_summaries += 1);
+        let Some(at) = self
+            .generations
+            .get(&line.generation_id)
+            .copied()
             .or_else(|| self.running())
-            .and_then(|at| self.summaries.get_mut(at))
         else {
+            return Folded::Nothing;
+        };
+        let Some(summary) = self.summaries.get_mut(at) else {
             return Folded::Nothing;
         };
         let width = self.width;
@@ -458,8 +466,12 @@ impl Pages {
         summary.spend.record(&line);
         let after = rows(summary);
         let page = summary.closed_on;
+        self.generations.insert(line.generation_id, at);
         if let (Some(before), Some(after)) = (before, after) {
-            if self.part(page).is_some() {
+            let open = page == self.closed.len();
+            if open && self.held {
+                self.dirty = true;
+            } else if (open || before != after) && self.part(page).is_some() {
                 self.count(page);
             } else if let Some(held) = self.index.pages().get(page).map(|page| page.rows) {
                 let rows = held.saturating_sub(before).saturating_add(after);
@@ -1205,6 +1217,7 @@ impl Pages {
 
     /// Counts page `at`'s rows and focus stops from its cards, while it holds them.
     fn count(&mut self, at: usize) {
+        crate::work::add(|work| work.page_counts += 1);
         let Some(part) = self.part(at) else {
             return;
         };
@@ -1307,3 +1320,7 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
 #[cfg(test)]
 #[path = "paging_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "window/usage_tests.rs"]
+mod usage_tests;

@@ -117,8 +117,22 @@ fn open_report(
         "fold_ms": ms(stages.fold),
         "frames": stages.frames,
         "frame_ms": ms(stages.frame_time),
+        "fold_work": work(&stages.fold_work),
+        "frame_work": work(&stages.frame_work),
     })
     .to_string())
+}
+
+/// The work counts as one JSON object, by name: the last batch's fold
+/// work and the last frame's work, since nothing accumulates them.
+fn work(work: &tui::work::Work) -> serde_json::Value {
+    serde_json::json!({
+        "reply_renders": work.reply_renders,
+        "turn_rows": work.turn_rows,
+        "page_counts": work.page_counts,
+        "index_pages": work.index_pages,
+        "usage_summaries": work.usage_summaries,
+    })
 }
 
 fn main() -> ExitCode {

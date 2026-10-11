@@ -245,6 +245,7 @@ impl Index {
 
     /// Every row the conversation draws.
     pub(crate) fn total(&self) -> usize {
+        crate::work::add(|work| work.index_pages += self.pages.len());
         self.pages
             .iter()
             .fold(0usize, |sum, page| sum.saturating_add(page.rows))
@@ -252,6 +253,7 @@ impl Index {
 
     /// Page `at`'s first row: the rows of the pages before it.
     pub(crate) fn start(&self, at: usize) -> usize {
+        crate::work::add(|work| work.index_pages += at.min(self.pages.len()));
         self.pages
             .iter()
             .take(at)
@@ -310,6 +312,7 @@ impl Index {
         let mut last = self.pages.len();
         let mut start = 0usize;
         for (at, page) in self.pages.iter().enumerate() {
+            crate::work::add(|work| work.index_pages += 1);
             let end = start.saturating_add(page.rows);
             if first == self.pages.len() && end > from {
                 first = at;

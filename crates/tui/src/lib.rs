@@ -81,6 +81,8 @@ mod usage_view;
 mod view;
 mod viewer;
 mod window;
+#[doc(hidden)]
+pub mod work;
 mod working;
 
 use std::io;
