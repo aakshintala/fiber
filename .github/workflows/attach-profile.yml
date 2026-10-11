@@ -115,9 +115,10 @@ jobs:
           # Stacks of every process, then of the fiber processes alone with all their
           # threads: --comm matches thread names (hub-relay, writer, tui-hub, ...), so
           # select the process ids of any sample whose thread is named fiber (the main thread).
+          # perf prints the comm before the pid whatever the -F order.
           perf script -i "$out/perf.data" | inferno-collapse-perf > "$out/folded.txt"
-          pids=$(perf script -i "$out/perf.data" -F pid,tid,comm |
-            awk '$3 == "fiber" { print $1 }' | sort -u | paste -sd, -)
+          pids=$(perf script -i "$out/perf.data" -F comm,pid |
+            awk '$1 == "fiber" { print $2 }' | sort -u | paste -sd, -)
           test -n "$pids"
           perf script -i "$out/perf.data" --pid "$pids" | inferno-collapse-perf > "$out/fiber-folded.txt"
           inferno-flamegraph < "$out/folded.txt" > "$out/flamegraph.svg"
