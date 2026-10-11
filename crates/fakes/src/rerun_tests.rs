@@ -3,6 +3,8 @@ use super::*;
 const CHILD: &str = "FIBER_FAKES_RERUN_CHILD";
 const PROBE: &str = "FIBER_FAKES_RERUN_PROBE";
 const HANG: &str = "FIBER_FAKES_RERUN_HANG";
+const DIR: &str = "FIBER_FAKES_RERUN_DIR";
+const PID_FILE: &str = "FIBER_FAKES_RERUN_PID_FILE";
 
 #[test]
 #[allow(
@@ -81,6 +83,101 @@ fn rerun_within_kills_a_child_that_outlives_the_callers_bound() {
     assert!(
         message.contains("waited 300ms") && message.contains("reaped: true"),
         "the panic names the caller's bound and the reaped child: {message}"
+    );
+}
+
+#[test]
+#[allow(
+    clippy::print_stdout,
+    reason = "the parent test reads this line from the child's output"
+)]
+fn a_prepared_rerun_child_leads_its_own_group_in_the_prepared_directory() {
+    const TEST: &str =
+        "rerun::tests::a_prepared_rerun_child_leads_its_own_group_in_the_prepared_directory";
+    if std::env::var_os(CHILD).is_some() {
+        let pid = rustix::process::getpid();
+        assert_eq!(
+            rustix::process::getpgrp(),
+            pid,
+            "the child leads its own process group"
+        );
+        let dir = std::env::var(DIR).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(std::env::current_dir().unwrap()).unwrap(),
+            std::fs::canonicalize(&dir).unwrap(),
+            "the child runs in the prepared directory"
+        );
+        println!("prepared rerun child ran");
+        return;
+    }
+    let dir = crate::TempDir::new("fiber-rerun-prepared");
+    let output = rerun_prepared(
+        TEST,
+        &[(CHILD, "1"), (DIR, dir.path().to_str().unwrap())],
+        Duration::from_secs(10),
+        |command| {
+            command.current_dir(dir.path());
+            command.process_group(rustix::process::getpgrp().as_raw_pid());
+        },
+    );
+    assert!(
+        output.status.success(),
+        "the prepared child ran in its directory and group:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("prepared rerun child ran"),
+        "the child's output comes back"
+    );
+}
+
+#[test]
+fn a_prepared_rerun_child_that_leaves_its_group_occupied_fails_and_the_group_is_killed() {
+    const TEST: &str = "rerun::tests::a_prepared_rerun_child_that_leaves_its_group_occupied_fails_and_the_group_is_killed";
+    if std::env::var_os(CHILD).is_some() {
+        let mut sleeper = std::process::Command::new("sleep");
+        sleeper
+            .arg("3600")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = sleeper.spawn().unwrap();
+        std::fs::write(std::env::var(PID_FILE).unwrap(), child.id().to_string()).unwrap();
+        // The sleeper outlives this child on purpose: the rerun core kills
+        // and reaps the group, so no handle here ever waits on it.
+        std::mem::forget(child);
+        return;
+    }
+    let dir = crate::TempDir::new("fiber-rerun-leftover");
+    let pid_file = dir.path().join("sleeper.pid");
+    let outcome = std::panic::catch_unwind(|| {
+        rerun_prepared(
+            TEST,
+            &[(CHILD, "1"), (PID_FILE, pid_file.to_str().unwrap())],
+            Duration::from_secs(10),
+            |_| {},
+        )
+    });
+    let payload =
+        outcome.expect_err("a child that leaves its group occupied panics the caller");
+    let message = payload
+        .downcast_ref::<String>()
+        .expect("the panic carries a formatted message");
+    assert!(
+        message.contains("left processes in its group") && message.contains(TEST),
+        "the panic names the leftover group and the test: {message}"
+    );
+    let pid: u32 = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // A zombie reparented to init reads alive until init reaps it, so the
+    // bound absorbs the reap; an unkilled sleeper (3600 s) still fails it.
+    assert!(
+        crate::pids_exit(&[pid], crate::MUST_SUCCEED_WITHIN),
+        "the group was killed before the panic"
     );
 }
 
