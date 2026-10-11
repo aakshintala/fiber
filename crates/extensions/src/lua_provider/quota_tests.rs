@@ -6,7 +6,9 @@ use std::fs;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, UNIX_EPOCH};
 
+use contract::GenerationId;
 use contract::clock::Clock;
+use contract::provider::CostLookup;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 
@@ -636,6 +638,53 @@ fn an_unreachable_last_value_maps_a_passed_reset_time() {
     );
 }
 
+#[test]
+fn a_reader_reports_its_own_flight_when_the_flight_is_replaced() {
+    let root = fakes::TempDir::new("fiber-quota-replaced-flight");
+    let (provider, clock) = quota_provider(&root, "nil");
+    let pair = pair();
+    let t0 = clock.now();
+    let value = percent("primary", 42.5, None);
+    seed(
+        &provider,
+        Some((Some(value.clone()), t0)),
+        Some(Flight { id: 7, started: t0 }),
+    );
+    let (tx, rx) = mpsc::channel();
+    {
+        let provider = Arc::clone(&provider);
+        let pair = pair.clone();
+        std::thread::spawn(move || tx.send(provider.quota(&pair)));
+    }
+    assert!(
+        clock.await_parked(t0 + Duration::from_secs(8), WAIT),
+        "the reader never parked on flight 7"
+    );
+    // Hold the cache while the clock passes flight 7's deadline, so the reader
+    // wakes only after flight 7 has expired and flight 8 is in the slot: the
+    // reader must report on flight 7, not wait on flight 8.
+    {
+        let mut states = lock(&provider.quotas.state);
+        clock.advance(Duration::from_secs(8));
+        let now = clock.now();
+        let cache = states.get_mut(&pair).unwrap();
+        assert!(expire_overdue(cache, now, &provider.quotas.parker));
+        let id = cache.next_id;
+        cache.next_id = id.wrapping_add(1);
+        cache.flight = Some(Flight { id, started: now });
+    }
+    match Deadline::after(WAIT).recv(&rx) {
+        Ok(found) => assert_eq!(
+            found,
+            QuotaEntry::Unreachable {
+                last: Some((value, Duration::from_secs(8))),
+            },
+            "the reader did not report on its own flight"
+        ),
+        Err(_) => panic!("the reader waited on the replacement flight past {WAIT:?}"),
+    }
+}
+
 /// A provider `p` whose `quota()` asks `<server>/<label>` and whose `sign()`
 /// returns no headers, for the off-the-request-path test.
 fn http_quota_sign_provider(root: &fakes::TempDir, server: &str) -> Arc<LuaProvider> {
@@ -756,17 +805,53 @@ fn a_model_call_refetches_only_past_five_minutes() {
     );
 }
 
+/// The lookup `Priced` returns: one fixed cost, so a test can tell it arrived
+/// through the wrapper.
+struct FixedCost;
+
+impl CostLookup for FixedCost {
+    fn cost(&self, _generation_id: &GenerationId) -> Option<f64> {
+        Some(0.25)
+    }
+}
+
+/// `Inner` with a `cost_lookup`. `Inner` has none, so a forwarded `None`
+/// would look the same as the wrapper's own default.
+struct Priced(Arc<crate::test_support::Inner>);
+
+impl Provider for Priced {
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        self.0.call(request)
+    }
+
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        self.0.wire_tools(tools)
+    }
+
+    fn warms(&self, request: &ModelRequest) -> bool {
+        self.0.warms(request)
+    }
+
+    fn cost_lookup(&self) -> Option<Arc<dyn CostLookup>> {
+        Some(Arc::new(FixedCost))
+    }
+}
+
 #[test]
 fn quoted_forwards_calls_tools_warms_and_cost_lookup() {
     let root = fakes::TempDir::new("fiber-quota-forward");
     let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
     let lua = http_quota_provider(&root, &server.url(), FakeClock::new());
-    let inner = Arc::new(crate::test_support::Inner {
-        calls: std::sync::atomic::AtomicUsize::new(0),
-        warms: true,
-    });
-    let wrapped = quoted(&lua, Arc::clone(&inner));
-    let tools = [contract::provider::ToolDefinition {
+    // `Inner::default()` warms `false`, while `Provider::warms` defaults to
+    // `true`, so a wrapper that answered its own default would show.
+    let inner = Arc::new(crate::test_support::Inner::default());
+    let priced: Arc<dyn Provider> = Arc::new(Priced(Arc::clone(&inner)));
+    let wrapped = {
+        let lua = Arc::clone(&lua);
+        let pair = pair();
+        within(move || lua.with_quota(priced, pair)).unwrap()
+    };
+    let tools = [ToolDefinition {
         name: "b".into(),
         description: String::new(),
         input_schema: serde_json::json!({"type": "object"}),
@@ -774,8 +859,18 @@ fn quoted_forwards_calls_tools_warms_and_cost_lookup() {
         hosted: None,
     }];
     assert_eq!(wrapped.wire_tools(&tools), inner.wire_tools(&tools));
-    assert!(wrapped.warms(&crate::test_support::request()));
-    assert!(wrapped.cost_lookup().is_none());
+    assert!(
+        !wrapped.warms(&crate::test_support::request()),
+        "warms was not forwarded"
+    );
+    let lookup = wrapped
+        .cost_lookup()
+        .expect("cost_lookup was not forwarded");
+    assert_eq!(
+        lookup.cost(&GenerationId("gen".to_owned())),
+        Some(0.25),
+        "cost_lookup was not forwarded"
+    );
     let _call = wrapped.call(&crate::test_support::request());
     assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
