@@ -676,14 +676,15 @@ impl contract::files::PathLock for NoLock {
     }
 }
 
-/// The session's extensions, loaded on a thread under `WAIT`.
+/// The session's extensions with these config overrides, loaded on a
+/// thread under `WAIT`.
 #[track_caller]
-fn session(setup: &Setup) -> Arc<SessionExtensions> {
+fn session_with(setup: &Setup, overrides: &[&str]) -> Arc<SessionExtensions> {
     let config = Config::load(Sources {
         home: setup.home(),
         workspace: setup.workspace(),
         project: ProjectKey::new("p").unwrap(),
-        overrides: Vec::new(),
+        overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
     })
     .unwrap();
     let home = setup.home();
@@ -692,6 +693,12 @@ fn session(setup: &Setup) -> Arc<SessionExtensions> {
         SessionExtensions::load(&home, &config, FakeClock::new(), locks, None)
     });
     Arc::new(loaded)
+}
+
+/// The session's extensions, loaded on a thread under `WAIT`.
+#[track_caller]
+fn session(setup: &Setup) -> Arc<SessionExtensions> {
+    session_with(setup, &[])
 }
 
 /// Each declared tool as `(extension, tool)`.
@@ -792,6 +799,26 @@ fn two_extensions_registering_one_tool_lose_it_and_keep_their_others() {
         "Extensions `fiber.test/a` and `fiber.test/b` both register the tool `dup`, so neither gets it."
     );
     assert_eq!(notices[0].extension, None);
+}
+
+#[test]
+fn a_disabled_tool_is_not_declared() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["one"]"#],
+    );
+    assert_eq!(
+        declared(&session),
+        [("fiber.test/a".to_owned(), "two".to_owned())]
+    );
+    assert_eq!(session.notices(), []);
 }
 
 #[test]
