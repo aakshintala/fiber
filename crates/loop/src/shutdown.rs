@@ -102,22 +102,16 @@ impl Loop {
             }
             // Written like any line still written; unlike a monitor batch,
             // it is not dropped.
-            Delivery::ExtensionExec(exec) => {
-                self.log.append(&Event::ExtensionExec(exec), None, None)?;
-            }
+            Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
-            Delivery::Prompt(_, ack) | Delivery::Steer(_, ack) | Delivery::Handoff(_, _, ack) => {
-                reject(ack, ErrorCode::Closing, CLOSING);
-            }
-            Delivery::Rewind(_, ack) => {
-                reject(ack, ErrorCode::Closing, CLOSING);
-            }
-            Delivery::Model(_, ack) => {
-                reject(ack, ErrorCode::Closing, CLOSING);
-            }
-            Delivery::Credential(_, ack) => {
+            Delivery::Prompt(_, ack)
+            | Delivery::Steer(_, ack)
+            | Delivery::Handoff(_, _, ack)
+            | Delivery::Rewind(_, ack)
+            | Delivery::Model(_, ack)
+            | Delivery::Credential(_, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);
             }
             Delivery::SteerDrop(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_STEER),
