@@ -189,7 +189,7 @@ mod browser {
     use std::net::{Ipv4Addr, TcpListener, TcpStream};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
-    use std::sync::{Arc, mpsc};
+    use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
 
@@ -197,27 +197,57 @@ mod browser {
     use fakes::clock::FakeClock;
     use fakes::{OauthReply, OauthServer, jwt};
     use serde_json::{Value, json};
-    use tui::{BrowserLogin, Configure, LoginShow};
+    use tui::BrowserLogin;
 
-    use super::super::super::Seam;
+    use extensions::Browser;
 
     const WAIT: Duration = Duration::from_secs(10);
     const BROWSER_WAIT: Duration = Duration::from_secs(4);
     const ACCOUNT: &str = "acct_1";
     const EMAIL: &str = "alice@example.com";
 
-    struct Show {
+    /// A browser holding a listener it bound at port 0 and never released,
+    /// handed to the package through `callback_listener`: choosing and
+    /// binding leave no gap for another listener. It records the authorize
+    /// URL the way `ShownBrowser` shows it through its show.
+    struct HeldBrowser {
         notify: mpsc::Sender<String>,
+        listener: Mutex<Option<TcpListener>>,
+        port: u16,
+        taken: Mutex<Option<mpsc::Sender<()>>>,
     }
 
-    impl Show {
+    impl HeldBrowser {
         fn recording() -> (Arc<Self>, mpsc::Receiver<String>) {
             let (notify, opened) = mpsc::channel();
-            (Arc::new(Self { notify }), opened)
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            (
+                Arc::new(Self {
+                    notify,
+                    listener: Mutex::new(Some(listener)),
+                    port,
+                    taken: Mutex::new(None),
+                }),
+                opened,
+            )
+        }
+
+        /// The held callback port: the package's port once installed with it.
+        fn port(&self) -> u16 {
+            self.port
+        }
+
+        /// Reports when the package takes the held listener: waiting on it
+        /// proves `listen` bound before a cancel lands.
+        fn take_signal(&self) -> mpsc::Receiver<()> {
+            let (tx, rx) = mpsc::channel();
+            *self.taken.lock().unwrap() = Some(tx);
+            rx
         }
     }
 
-    impl LoginShow for Show {
+    impl Browser for HeldBrowser {
         fn open(&self, url: &str) {
             match self.notify.send(url.to_owned()) {
                 Ok(()) | Err(_) => {}
@@ -225,14 +255,22 @@ mod browser {
         }
 
         fn show(&self, _url: &str, _code: &str) {}
-    }
 
-    fn free_port() -> u16 {
-        TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port()
+        fn attended(&self) -> bool {
+            true
+        }
+
+        fn callback_listener(&self, port: u16) -> std::io::Result<TcpListener> {
+            if let Some(taken) = self.taken.lock().unwrap().take() {
+                match taken.send(()) {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+            if let Some(listener) = self.listener.lock().unwrap().take() {
+                return Ok(listener);
+            }
+            TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+        }
     }
 
     fn copy_package(dest: &Path, replacements: &[(&str, &str)]) {
@@ -353,15 +391,29 @@ mod browser {
         let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
         let (access, id) = tokens(EMAIL);
         let server = OauthServer::start(vec![exchange(&access, &id)]);
-        install_codex(&home, &server, free_port());
-        let seam = Seam::new(home.clone());
-        let (shown, opened) = Show::recording();
-        let login: Arc<dyn BrowserLogin> = seam.browser_login("codex", shown, Arc::clone(&clock));
+        let (browser, opened) = HeldBrowser::recording();
+        install_codex(&home, &server, browser.port());
+        // A `SeamLogin` with a test-local browser: `login::browser_login`
+        // builds `ShownBrowser` itself, which cannot hold the listener the
+        // package binds through. The run below still covers the seam's
+        // wiring into `cli::browser_login` and the store.
+        let login: Arc<dyn BrowserLogin> = Arc::new(super::super::SeamLogin {
+            home: home.clone(),
+            name: "codex".to_owned(),
+            browser: Arc::clone(&browser) as Arc<dyn Browser>,
+            clock: Arc::clone(&clock),
+            cancel: cli::LoginCancel::default(),
+        });
         let (done, finished) = mpsc::channel();
         thread::spawn(move || match done.send(login.run()) {
             Ok(()) | Err(_) => {}
         });
         let url = await_opened(&opened, &Deadline::after(BROWSER_WAIT));
+        assert_eq!(
+            port_of(&url),
+            browser.port(),
+            "the package was installed with the held port"
+        );
         redirect(
             port_of(&url),
             &format!("/auth/callback?code=authcode-1&state={}", state_of(&url)),
@@ -408,10 +460,17 @@ mod browser {
         let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
         let (access, id) = tokens(EMAIL);
         let server = OauthServer::start(vec![exchange(&access, &id)]);
-        install_codex(&home, &server, free_port());
-        let seam = Seam::new(home.clone());
-        let (shown, opened) = Show::recording();
-        let login: Arc<dyn BrowserLogin> = seam.browser_login("codex", shown, Arc::clone(&clock));
+        let (browser, opened) = HeldBrowser::recording();
+        let taken = browser.take_signal();
+        install_codex(&home, &server, browser.port());
+        // A `SeamLogin` with a test-local browser, as above.
+        let login: Arc<dyn BrowserLogin> = Arc::new(super::super::SeamLogin {
+            home: home.clone(),
+            name: "codex".to_owned(),
+            browser: Arc::clone(&browser) as Arc<dyn Browser>,
+            clock: Arc::clone(&clock),
+            cancel: cli::LoginCancel::default(),
+        });
         let (done, finished) = mpsc::channel();
         let running = Arc::clone(&login);
         thread::spawn(move || match done.send(running.run()) {
@@ -419,6 +478,15 @@ mod browser {
         });
         let url = await_opened(&opened, &Deadline::after(BROWSER_WAIT));
         let callback_port = port_of(&url);
+        assert_eq!(
+            callback_port,
+            browser.port(),
+            "the package was installed with the held port"
+        );
+        // Taken, so `listen` bound: cancelling now ends the wait instead
+        // of racing its start, which would leave the held listener behind.
+        Deadline::after(BROWSER_WAIT)
+            .recv_or_fail(&taken, "the package to take the callback listener");
         login.cancel();
         let result = Deadline::after(WAIT)
             .recv(&finished)
@@ -436,5 +504,75 @@ mod browser {
                 thread::yield_now();
             }
         });
+    }
+
+    /// A `LoginShow` that records each `open` through the production
+    /// `ShownBrowser`.
+    struct OpenShow {
+        notify: mpsc::Sender<String>,
+    }
+
+    impl tui::LoginShow for OpenShow {
+        fn open(&self, url: &str) {
+            match self.notify.send(url.to_owned()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+
+        fn show(&self, _url: &str, _code: &str) {}
+    }
+
+    #[test]
+    fn browser_login_through_the_production_entry_point_opens_the_authorize_url() {
+        // Through `Configure::browser_login` (its factory and
+        // `ShownBrowser`): the held port stays bound, so the production
+        // browser's bind fails, but the authorize URL still reaches the
+        // `LoginShow` through `ShownBrowser::open`. Broken factory wiring
+        // or URL forwarding fails this test; the held-listener tests above
+        // cover the success path through `cli::browser_login`.
+        let root = fakes::TempDir::new("fiber-configure-login-factory");
+        let home = root.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+        let (access, id) = tokens(EMAIL);
+        let server = OauthServer::start(vec![exchange(&access, &id)]);
+        // Held, never released: choosing and binding leave no gap. The
+        // production browser cannot take it, so the callback fails, but
+        // the open proves the factory and the show.
+        let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = held.local_addr().unwrap().port();
+        install_codex(&home, &server, port);
+        let seam = crate::configure::Seam::new(home.clone());
+        let (tx, opened) = mpsc::channel();
+        let login: Arc<dyn BrowserLogin> = tui::Configure::browser_login(
+            &seam,
+            "codex",
+            Arc::new(OpenShow { notify: tx }),
+            Arc::clone(&clock),
+        );
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || match done.send(login.run()) {
+            Ok(()) | Err(_) => {}
+        });
+        let url = await_opened(&opened, &Deadline::after(BROWSER_WAIT));
+        assert_eq!(
+            port_of(&url),
+            port,
+            "the package was installed with the held port"
+        );
+        // The callback fails on the held port, naming it and the
+        // device-login way out; the held listener outlives the whole run.
+        let result = Deadline::after(WAIT)
+            .recv(&finished)
+            .unwrap_or_else(|_| panic!("the login did not return within {WAIT:?}"));
+        let error = result.expect_err("the production bind on the held port fails");
+        assert!(
+            error.message.contains(&format!("port {port}")),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("is in use"), "{}", error.message);
+        drop(held);
+        drop(server);
     }
 }

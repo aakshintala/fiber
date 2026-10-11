@@ -66,6 +66,12 @@ pub trait Browser: Send + Sync {
     /// Whether a person is attached to answer a login now. Read before each
     /// interactive step.
     fn attended(&self) -> bool;
+    /// Binds the OAuth callback listener on `port`, loopback only. A test
+    /// hands over a listener it bound at port 0 and never released, so no
+    /// other process can take the port between choosing and binding it.
+    fn callback_listener(&self, port: u16) -> io::Result<TcpListener> {
+        TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+    }
 }
 
 /// The system's browser: the URL goes to stderr to copy, then `open` (macOS)
@@ -490,18 +496,15 @@ fn challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, verifier.as_bytes()))
 }
 
-/// Binds the callback listener: loopback only.
-fn bind(port: u16) -> io::Result<TcpListener> {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, port))
-}
-
-/// Binds `port` and serves one request off the thread, delivering its query.
+/// Binds `port` through the browser and serves one request off the thread,
+/// delivering its query.
 /// Ok: the cancel handle; dropping it ends the listener and frees the port.
 /// Err: nothing listens and nothing was delivered; the caller delivers it.
 pub(crate) fn listen(
     port: u16,
     path: Option<String>,
     deliver: &Deliver,
+    browser: &dyn Browser,
 ) -> Result<Sender<()>, Reply> {
     // A port that cannot be bound is `io_failed`; a request whose query
     // cannot be read is `unreadable_reply`, both raised as `{ code,
@@ -512,7 +515,10 @@ pub(crate) fn listen(
             format!("host.oauth.callback: port {port}: {why}"),
         )))
     };
-    let listener = match bind(port).and_then(|l| l.set_nonblocking(true).map(|()| l)) {
+    let listener = match browser
+        .callback_listener(port)
+        .and_then(|l| l.set_nonblocking(true).map(|()| l))
+    {
         Ok(listener) => listener,
         Err(e) => {
             return Err(fail(&e));

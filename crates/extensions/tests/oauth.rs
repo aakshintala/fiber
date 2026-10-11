@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use common::{Setup, free_port, write};
+use common::{Setup, write};
 use config::{CredentialFile, Secret, store_secret};
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -302,6 +302,17 @@ impl Env {
         self.extension_with(INIT, "fixture")
     }
 
+    /// An extension of the fixture's `init.lua` opening URLs with `browser`.
+    fn extension_opening(&self, browser: Arc<dyn Browser>) -> Arc<LuaExtension> {
+        let dir = self.setup.root().join("extensions").join("fixture");
+        write(&dir.join("init.lua"), INIT);
+        Arc::new(
+            LuaExtension::new("fixture", dir, self.home(), self.clock.clone())
+                .with_browser(browser)
+                .with_secrets(secrets(&["mode", "url", "dead"])),
+        )
+    }
+
     fn extension_with(&self, init: &str, name: &str) -> Arc<LuaExtension> {
         Arc::new(self.bare(init, name))
     }
@@ -461,6 +472,10 @@ struct Recording {
     opened: Mutex<Vec<String>>,
     shown: Mutex<Vec<(String, String)>>,
     attended: AtomicUsize,
+    /// A listener bound at port 0 and never released, handed to the package
+    /// through `callback_listener`: choosing and binding leave no gap for
+    /// another listener. Empty unless `holding` bound one.
+    listener: Mutex<Option<TcpListener>>,
 }
 
 impl Recording {
@@ -480,7 +495,25 @@ impl Recording {
             opened: Mutex::new(Vec::new()),
             shown: Mutex::new(Vec::new()),
             attended: AtomicUsize::new(n),
+            listener: Mutex::new(None),
         }
+    }
+
+    /// A browser with a person attached, holding a listener it bound at
+    /// port 0 and never released, and that listener's port: the package's
+    /// port once installed with it.
+    fn holding() -> (Arc<Self>, u16) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        (
+            Arc::new(Self {
+                opened: Mutex::new(Vec::new()),
+                shown: Mutex::new(Vec::new()),
+                attended: AtomicUsize::new(usize::MAX),
+                listener: Mutex::new(Some(listener)),
+            }),
+            port,
+        )
     }
 
     fn opened(&self) -> Vec<String> {
@@ -508,6 +541,13 @@ impl Browser for Recording {
         self.attended
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
+    }
+
+    fn callback_listener(&self, port: u16) -> std::io::Result<TcpListener> {
+        if let Some(listener) = self.listener.lock().unwrap().take() {
+            return Ok(listener);
+        }
+        TcpListener::bind((Ipv4Addr::LOCALHOST, port))
     }
 }
 
@@ -557,8 +597,8 @@ fn pkce_returns_a_verifier_and_its_challenge() {
 #[test]
 fn callback_serves_one_request_and_returns_its_query() {
     let env = Env::new();
-    let ext = env.extension();
-    let port = free_port();
+    let (browser, port) = Recording::holding();
+    let ext = env.extension_opening(browser);
     let rx = listening(&env, &ext, port);
     let reply = get(
         port,
@@ -573,8 +613,8 @@ fn callback_serves_one_request_and_returns_its_query() {
 #[test]
 fn callback_with_no_query_returns_an_empty_table() {
     let env = Env::new();
-    let ext = env.extension();
-    let port = free_port();
+    let (browser, port) = Recording::holding();
+    let ext = env.extension_opening(browser);
     let rx = listening(&env, &ext, port);
     get(port, "GET /cb? HTTP/1.1\r\n\r\n");
     assert_eq!(finish(&rx, &Deadline::after(WAIT)).unwrap(), "{}");
@@ -583,8 +623,8 @@ fn callback_with_no_query_returns_an_empty_table() {
 #[test]
 fn callback_with_a_repeated_key_keeps_the_last_value() {
     let env = Env::new();
-    let ext = env.extension();
-    let port = free_port();
+    let (browser, port) = Recording::holding();
+    let ext = env.extension_opening(browser);
     let rx = listening(&env, &ext, port);
     get(port, "GET /?a=1&a=2 HTTP/1.1\r\n\r\n");
     let query: Value = serde_json::from_str(&finish(&rx, &Deadline::after(WAIT)).unwrap()).unwrap();
@@ -594,8 +634,8 @@ fn callback_with_a_repeated_key_keeps_the_last_value() {
 #[test]
 fn callback_with_an_invalid_escape_is_a_lua_error_and_the_client_gets_a_400() {
     let env = Env::new();
-    let ext = env.extension();
-    let port = free_port();
+    let (browser, port) = Recording::holding();
+    let ext = env.extension_opening(browser);
     let rx = listening(&env, &ext, port);
     let reply = get(port, "GET /?code=SECRETCODE%zz HTTP/1.1\r\n\r\n");
     assert!(reply.starts_with("HTTP/1.1 400"), "{reply}");
@@ -610,8 +650,8 @@ fn callback_with_an_invalid_escape_is_a_lua_error_and_the_client_gets_a_400() {
 #[test]
 fn callback_skips_a_connection_that_is_not_a_request_and_a_head_that_is_too_large() {
     let env = Env::new();
-    let ext = env.extension();
-    let port = free_port();
+    let (browser, port) = Recording::holding();
+    let ext = env.extension_opening(browser);
     let rx = listening(&env, &ext, port);
     let junk = get(port, "not http\r\n\r\n");
     assert!(junk.starts_with("HTTP/1.1 400"), "{junk}");
@@ -642,8 +682,8 @@ fn callback_skips_a_connection_that_is_not_a_request_and_a_head_that_is_too_larg
 #[test]
 fn callback_serves_the_next_connection_after_dropping_a_silent_one() {
     let env = Env::new();
-    let ext = env.extension();
-    let port = free_port();
+    let (browser, port) = Recording::holding();
+    let ext = env.extension_opening(browser);
     let rx = listening(&env, &ext, port);
     // Queued first, never sends: the listener waits SILENT_POLLS on it, drops
     // it, and goes on to the request queued behind it.
@@ -658,8 +698,8 @@ fn callback_serves_the_next_connection_after_dropping_a_silent_one() {
 #[test]
 fn callback_serves_a_2000_byte_head() {
     let env = Env::new();
-    let ext = env.extension();
-    let port = free_port();
+    let (browser, port) = Recording::holding();
+    let ext = env.extension_opening(browser);
     let rx = listening(&env, &ext, port);
     let request = format!("GET /?code=ok HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(2000));
     let reply = get(port, &request);
@@ -692,8 +732,8 @@ fn callback_on_a_taken_port_is_an_error_naming_it() {
 #[test]
 fn callback_dropped_at_its_timeout_frees_the_port() {
     let env = Env::new();
-    let ext = env.extension();
-    let port = free_port();
+    let (browser, port) = Recording::holding();
+    let ext = env.extension_opening(browser);
     let rx = listening(&env, &ext, port);
     env.clock.advance(TIMEOUT);
     assert!(matches!(
@@ -715,8 +755,8 @@ fn callback_dropped_at_its_timeout_frees_the_port() {
 #[test]
 fn callback_dropped_at_its_timeout_frees_the_port_from_a_client_that_keeps_sending() {
     let env = Env::new();
-    let ext = env.extension();
-    let port = free_port();
+    let (browser, port) = Recording::holding();
+    let ext = env.extension_opening(browser);
     let rx = listening(&env, &ext, port);
     // The listener accepts in the order clients connect. `first` is queued
     // before `client`, so once `first` has its answer the listener takes
@@ -1263,11 +1303,15 @@ fn callback_with_nobody_attached_is_authentication_failed_and_listens_on_nothing
     let ext = login_with(&env, browser.clone());
     let server = OauthServer::start(vec![]);
     let provider = env.provider(&ext, &server, "callback");
-    let port = free_port();
+    // Held, never released: the unattended callback fails before the
+    // package binds anything, so the port only names it.
+    let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = held.local_addr().unwrap().port();
     env.secret("port", &port.to_string());
     let error = finish(&start_token(&provider), &Deadline::after(WAIT)).unwrap_err();
     assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
     assert!(error.to_string().contains("host.oauth.callback"), "{error}");
+    drop(held);
     TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
 }
 
@@ -1538,9 +1582,17 @@ fn an_unattended_open_callback_and_poll_are_authentication_failed_for_pcall() {
         let env = Env::new();
         let ext = caught(&env, Arc::new(Recording::never()));
         let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
-        if mode == "callback" {
-            env.secret("port", &free_port().to_string());
-        }
+        // Held in the iteration's scope until the callback assertion
+        // completes, so no gap remains between choosing and binding the
+        // port: the unattended callback fails before the package binds
+        // anything.
+        let _held = if mode == "callback" {
+            let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            env.secret("port", &held.local_addr().unwrap().port().to_string());
+            Some(held)
+        } else {
+            None
+        };
         assert_eq!(
             caught_token(&env, &ext, &server, mode),
             "caught:authentication_failed",
@@ -1777,8 +1829,8 @@ fn poll_pending_at_the_status_boundaries_passes_validation() {
 #[test]
 fn callback_with_a_path_ignores_other_paths_and_serves_its_own() {
     let env = Env::new();
-    let ext = env.extension();
-    let port = free_port();
+    let (browser, port) = Recording::holding();
+    let ext = env.extension_opening(browser);
     let deadline = env.clock.now() + TIMEOUT;
     let rx = start(
         &ext,
@@ -1806,7 +1858,12 @@ fn callback_path_must_be_a_string_starting_with_a_slash() {
     let env = Env::new();
     let ext = env.extension();
     for path in ["\"auth/callback\"", "\"\"", "5"] {
-        let opts = format!("{{ port = {}, path = {path} }}", free_port());
+        // Held for the check: the bad path fails before the package binds.
+        let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let opts = format!(
+            "{{ port = {}, path = {path} }}",
+            held.local_addr().unwrap().port()
+        );
         let message =
             lua_message(&run(&ext, "callback_opts", &opts, &Deadline::after(WAIT)).unwrap_err());
         assert!(message.contains("`path` must be"), "{path}: {message}");

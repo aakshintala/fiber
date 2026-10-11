@@ -599,7 +599,7 @@ fn settle(
                     });
                 Err(Reply::Query(result))
             } else {
-                oauth::listen(port, path.clone(), &deliver)
+                oauth::listen(port, path.clone(), &deliver, start.browser.as_ref())
             };
             drop(shared);
             let cancel = match started {
