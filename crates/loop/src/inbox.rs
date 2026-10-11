@@ -200,7 +200,7 @@ impl Loop {
         self.start_unattended();
         // A switch applied at the last turn's top cleared the last
         // request: warming is over and the idle clock starts there.
-        if let Some(at) = self.warm_stopped.take() {
+        if let Some(at) = self.warming.take_stopped() {
             warming = None;
             deadline = self.idle_from(at);
         }
@@ -238,7 +238,7 @@ impl Loop {
                 for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
                     self.admit_idle(delivery, &mut input)?;
                 }
-                if let Some(at) = self.warm_stopped.take() {
+                if let Some(at) = self.warming.take_stopped() {
                     warming = None;
                     deadline = self.idle_from(at);
                 }
@@ -255,7 +255,7 @@ impl Loop {
                         for delivery in batch {
                             self.admit_idle(delivery, &mut input)?;
                         }
-                        if let Some(at) = self.warm_stopped.take() {
+                        if let Some(at) = self.warming.take_stopped() {
                             warming = None;
                             deadline = self.idle_from(at);
                         }

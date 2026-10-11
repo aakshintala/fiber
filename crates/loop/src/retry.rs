@@ -136,9 +136,7 @@ impl crate::Loop {
     pub(crate) fn attempt(&mut self, request: &ModelRequest, turn: &TurnId) -> Result<Step, Error> {
         // Stamped once per step: a retry's backoff only delays the real
         // send, so a refresh counted from here comes early, never late.
-        if self.warm.is_some() {
-            self.last_request = Some((request.clone(), self.log.clock().now()));
-        }
+        self.warming.record(request, self.log.clock().now());
         Ok(match self.call_with_retries(request, turn)? {
             Attempted::Replied {
                 reply,
