@@ -309,7 +309,9 @@ pub(crate) fn pass_on(
 
 /// The thread's end: unanswered commands the session never answered are
 /// dropped, as when a live relay's socket closes, and everything queued is
-/// passed on. Drops the entry only in the hold that saw the queue empty.
+/// passed on, except a command written to a session that exited cleanly
+/// without answering it, which is routed again to the resumed session.
+/// Drops the entry only in the hold that saw the queue empty.
 /// A `closing` read after the client disconnected finds no entry: the queue
 /// is cleared and nothing is passed on.
 pub(crate) fn drain(
@@ -328,18 +330,49 @@ pub(crate) fn drain(
     // Under the relays lock, which `route` holds from keeping a command as
     // sent until its write's outcome: a command whose write failed is
     // never dropped as sent.
-    let dropped: Vec<(String, String)> = {
+    let dropped: Vec<(String, Map<String, Value>)> = {
         let _held = lock(relays);
         let mut kept = lock(kept);
         let dropped = kept
             .iter()
             .filter(|(_, _, sent)| *sent)
-            .map(|(id, _, _)| (session.to_owned(), id.clone()))
+            .map(|(id, line, _)| (id.clone(), line.clone()))
             .collect();
         kept.retain(|(_, _, sent)| !sent);
         dropped
     };
-    order.drop_ids(&dropped);
+    // A command the write reached but the session never answered, while
+    // its log ends in `fiber_exited`: the write landed after the session
+    // stopped reading and before its socket closed, so no `closing`
+    // answer re-routed it. It is routed again to the resumed session, as
+    // that answer would have (`docs/invocation.md`, "What the hub
+    // speaks"): dropping it answers the client with nothing, and the
+    // wait outlives every deadline. Anything else is dropped, as before:
+    // the re-route below answers the client refused when no session
+    // resumes, and a resumed run appends to the log, so a later end of
+    // its own relay drops rather than re-routes again.
+    let ended = crate::resume::exited(&hub.home, &SessionId(session.to_owned()));
+    if ended {
+        for (id, line) in &dropped {
+            crate::relay::route(
+                &CommandId(id.clone()),
+                session,
+                line.clone(),
+                hub,
+                writer,
+                relays,
+                Some(epoch),
+                true,
+            );
+        }
+    } else {
+        order.drop_ids(
+            &dropped
+                .iter()
+                .map(|(id, _)| (session.to_owned(), id.clone()))
+                .collect::<Vec<_>>(),
+        );
+    }
     pump(session, epoch, kept, hub, writer, relays, true);
 }
 
