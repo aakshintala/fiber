@@ -64,32 +64,32 @@ pub(crate) struct Gate {
     pub(crate) tools: Mutex<Vec<ToolInfo>>,
     /// What the `commands` command answers with, set by
     /// [`Session::commands`]; empty until then.
-    commands: Mutex<Vec<CommandInfo>>,
+    commands: OnceLock<Vec<CommandInfo>>,
     /// What the `skills` command answers with, set by [`Session::skills`];
     /// empty until then.
-    skills: Mutex<Vec<SkillInfo>>,
+    skills: OnceLock<Vec<SkillInfo>>,
     pub(crate) accepted: Accepted,
     inbox: Mutex<Option<Sender<Delivery>>>,
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.
-    cancel: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
+    cancel: OnceLock<Arc<dyn Fn() -> bool + Send + Sync>>,
     /// What a `close` with `now` starts (`docs/invocation.md`, "Shutdown"),
     /// wired by the session process. Unset, `now` is an ordinary close.
-    close_now: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    close_now: OnceLock<Arc<dyn Fn() + Send + Sync>>,
     /// The tool a driver `shell` runs. None leaves `shell` unknown.
-    driver_shell: Mutex<Option<Arc<dyn Tool>>>,
+    driver_shell: OnceLock<Arc<dyn Tool>>,
     /// The session's jobs, which `job_stop` and `background` reach. None
     /// leaves both with nothing to act on.
-    jobs: Mutex<Option<Arc<dyn contract::jobs::Jobs>>>,
+    jobs: OnceLock<Arc<dyn contract::jobs::Jobs>>,
     /// The session's hooks, which receive the loop's inbox so an extension's
     /// program run can be logged as `extension_exec`.
-    hooks: Mutex<Option<Arc<dyn contract::hook::Hooks>>>,
+    hooks: OnceLock<Arc<dyn contract::hook::Hooks>>,
     /// The session's extensions as the door reaches them, for the `command`
     /// driver command.
-    door: Mutex<Option<Arc<dyn contract::extension::ExtensionDoor>>>,
+    door: OnceLock<Arc<dyn contract::extension::ExtensionDoor>>,
     /// The image child's driver, which pasted images are processed through.
     /// None leaves image parts rejected: this Fiber processes no images yet.
-    images: Mutex<Option<Arc<dyn contract::images::Images>>>,
+    images: OnceLock<Arc<dyn contract::images::Images>>,
     /// The cancel a pasted image in flight sees: one per session, cancelled
     /// by shutdown alongside the driver shells, and never by `cancel`.
     pub(crate) pasting: Arc<crate::shell::ShellCancel>,
@@ -165,14 +165,15 @@ impl Session {
         }
         // A job's end wakes the loop through the same inbox
         // (`docs/tools.md`, "Background jobs").
-        if let Some(jobs) = lock(&self.gate.jobs).as_ref() {
+        if let Some(jobs) = self.gate.jobs.get() {
             jobs.deliver_to(inbox.clone());
         }
-        if let Some(hooks) = lock(&self.gate.hooks).as_ref() {
+        if let Some(hooks) = self.gate.hooks.get() {
             hooks.deliver_to(inbox.clone());
         }
         *lock(&self.gate.inbox) = Some(inbox);
-        *lock(&self.gate.cancel) = Some(cancel);
+        let stored = self.gate.cancel.set(cancel);
+        debug_assert!(stored.is_ok(), "cancel is wired once");
         self.start_accept()?;
         run(waiting)
     }
@@ -236,7 +237,8 @@ impl Session {
     /// The tool a driver `shell` runs (`docs/invocation.md`, "Shell").
     /// With none set, `shell` stays an unknown command.
     pub fn shell(&self, tool: Arc<dyn Tool>) {
-        *lock(&self.gate.driver_shell) = Some(tool);
+        let stored = self.gate.driver_shell.set(tool);
+        debug_assert!(stored.is_ok(), "driver_shell is wired once");
     }
 
     /// Every `/name` the session runs, which the `commands` driver command
@@ -244,7 +246,8 @@ impl Session {
     /// does"). Set before [`Session::run`]; with none set, the answer is an
     /// empty list.
     pub fn commands(&self, commands: Vec<CommandInfo>) {
-        *lock(&self.gate.commands) = commands;
+        let stored = self.gate.commands.set(commands);
+        debug_assert!(stored.is_ok(), "commands is wired once");
     }
 
     /// Every skill discovery read, switched-off and shadowed ones included
@@ -253,24 +256,28 @@ impl Session {
     /// before [`Session::run`]; with none set, the answer is an empty
     /// list.
     pub fn skills(&self, skills: Vec<SkillInfo>) {
-        *lock(&self.gate.skills) = skills;
+        let stored = self.gate.skills.set(skills);
+        debug_assert!(stored.is_ok(), "skills is wired once");
     }
 
     /// The session's jobs, which the `job_stop` and `background` driver
     /// commands act on (`docs/invocation.md`, "Driver commands"). With none
     /// set, both are rejected `stale_request`: no job or call is running.
     pub fn jobs(&self, jobs: Arc<dyn contract::jobs::Jobs>) {
-        *lock(&self.gate.jobs) = Some(jobs);
+        let stored = self.gate.jobs.set(jobs);
+        debug_assert!(stored.is_ok(), "jobs is wired once");
     }
 
     /// The session's hooks, which receive the loop's inbox beside the jobs.
     pub fn hooks(&self, hooks: Arc<dyn contract::hook::Hooks>) {
-        *lock(&self.gate.hooks) = Some(hooks);
+        let stored = self.gate.hooks.set(hooks);
+        debug_assert!(stored.is_ok(), "hooks is wired once");
     }
 
     /// The session's extensions as the `command` driver command reaches them.
     pub fn extensions(&self, door: Arc<dyn contract::extension::ExtensionDoor>) {
-        *lock(&self.gate.door) = Some(door);
+        let stored = self.gate.door.set(door);
+        debug_assert!(stored.is_ok(), "door is wired once");
     }
 
     /// The in-process driver `host.drive` sends through (`docs/extensions.md`,
@@ -284,7 +291,8 @@ impl Session {
     /// (`docs/architecture.md`, "The call rules"). With none set, an image
     /// part is rejected: this Fiber processes no images yet.
     pub fn images(&self, images: Arc<dyn contract::images::Images>) {
-        *lock(&self.gate.images) = Some(images);
+        let stored = self.gate.images.set(images);
+        debug_assert!(stored.is_ok(), "images is wired once");
     }
 
     /// What changes one entry of the `tools` answer when a `model` switch
@@ -324,7 +332,8 @@ impl Session {
 
     /// What `close` with `now` starts; unset, `now` is an ordinary close.
     pub fn close_now(&self, start: Arc<dyn Fn() + Send + Sync>) {
-        *lock(&self.gate.close_now) = Some(start);
+        let stored = self.gate.close_now.set(start);
+        debug_assert!(stored.is_ok(), "close_now is wired once");
     }
 
     /// What a shutdown calls to stop the door side's work
@@ -355,7 +364,7 @@ impl Session {
     pub fn quiesce(&self) {
         // An emission holds this lock, so one in flight finishes first.
         self.gate.clients.seal();
-        if let Some(door) = lock(&self.gate.door).clone() {
+        if let Some(door) = self.gate.door() {
             door.seal();
         }
         self.gate.cancel_shells();
@@ -430,7 +439,7 @@ impl Session {
 impl Gate {
     /// Stops a running turn and every driver shell.
     pub(crate) fn stop_running(&self) -> Stopped {
-        let turn = lock(&self.cancel).as_ref().is_some_and(|cancel| cancel());
+        let turn = self.cancel.get().is_some_and(|cancel| cancel());
         let shell = self.shells.stop_all();
         Stopped { turn, shell }
     }
@@ -479,35 +488,35 @@ impl Gate {
     }
 
     pub(crate) fn commands(&self) -> Vec<CommandInfo> {
-        lock(&self.commands).clone()
+        self.commands.get().cloned().unwrap_or_default()
     }
 
     pub(crate) fn skills(&self) -> Vec<SkillInfo> {
-        lock(&self.skills).clone()
+        self.skills.get().cloned().unwrap_or_default()
     }
 
     pub(crate) fn door(&self) -> Option<Arc<dyn contract::extension::ExtensionDoor>> {
-        lock(&self.door).clone()
+        self.door.get().cloned()
     }
 
     pub(crate) fn jobs(&self) -> Option<Arc<dyn contract::jobs::Jobs>> {
-        lock(&self.jobs).clone()
+        self.jobs.get().cloned()
     }
 
     pub(crate) fn driver_shell(&self) -> Option<Arc<dyn Tool>> {
-        lock(&self.driver_shell).clone()
+        self.driver_shell.get().cloned()
     }
 
-    /// What a `close` with `now` starts, cloned out of the lock so the
+    /// What a `close` with `now` starts, cloned out of the slot so the
     /// shutdown runs with no gate lock held.
     pub(crate) fn close_now(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
-        lock(&self.close_now).clone()
+        self.close_now.get().cloned()
     }
 
-    /// The image child's driver, cloned out of the lock so no child run
+    /// The image child's driver, cloned out of the slot so no child run
     /// holds it.
     pub(crate) fn images(&self) -> Option<Arc<dyn contract::images::Images>> {
-        lock(&self.images).clone()
+        self.images.get().cloned()
     }
 
     pub(crate) fn deliver(&self, delivery: Delivery) {
@@ -563,17 +572,17 @@ fn open_in(
         clock: Arc::clone(&clock),
         session_id,
         tools: Mutex::new(tools),
-        commands: Mutex::new(Vec::new()),
-        skills: Mutex::new(Vec::new()),
+        commands: OnceLock::new(),
+        skills: OnceLock::new(),
         accepted: Accepted::new(),
         inbox: Mutex::new(None),
-        cancel: Mutex::new(None),
-        close_now: Mutex::new(None),
-        driver_shell: Mutex::new(None),
-        jobs: Mutex::new(None),
-        hooks: Mutex::new(None),
-        door: Mutex::new(None),
-        images: Mutex::new(None),
+        cancel: OnceLock::new(),
+        close_now: OnceLock::new(),
+        driver_shell: OnceLock::new(),
+        jobs: OnceLock::new(),
+        hooks: OnceLock::new(),
+        door: OnceLock::new(),
+        images: OnceLock::new(),
         pasting: Arc::new(crate::shell::ShellCancel::new()),
         history: OnceLock::new(),
         shells: Shells::new(),
