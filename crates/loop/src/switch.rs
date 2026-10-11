@@ -218,11 +218,7 @@ impl Loop {
             return Ok(());
         }
         let after = self.settings();
-        crate::util::write(
-            &self.log,
-            &mut self.conversation,
-            &mut self.reviewed,
-            &self.model.reference,
+        self.write(
             &Event::ModelChanged(ModelChanged {
                 before: recorded,
                 after,
@@ -230,8 +226,6 @@ impl Loop {
             }),
             None,
             None,
-            &mut self.changes.had,
-            &mut self.handoff.carry,
         )?;
         Ok(())
     }
@@ -253,11 +247,7 @@ impl Loop {
                 self.chosen = prepared.chosen;
                 continue;
             }
-            crate::util::write(
-                &self.log,
-                &mut self.conversation,
-                &mut self.reviewed,
-                &self.model.reference,
+            self.write(
                 &Event::ModelChanged(contract::events::ModelChanged {
                     before,
                     after,
@@ -265,21 +255,9 @@ impl Loop {
                 }),
                 None,
                 None,
-                &mut self.changes.had,
-                &mut self.handoff.carry,
             )?;
             if let Some(notice) = prepared.notice {
-                crate::util::write(
-                    &self.log,
-                    &mut self.conversation,
-                    &mut self.reviewed,
-                    &self.model.reference,
-                    &Event::Notice(notice),
-                    None,
-                    None,
-                    &mut self.changes.had,
-                    &mut self.handoff.carry,
-                )?;
+                self.write(&Event::Notice(notice), None, None)?;
             }
             self.provider = prepared.provider;
             self.model = prepared.model;

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use contract::TurnId;
 use contract::events::{Event, TurnOutcome, TurnStarted};
 
-use crate::{Error, Loop, Preamble, cancel, inbox, mint, prompt, status, util};
+use crate::{Error, Loop, Preamble, cancel, inbox, mint, prompt, status};
 
 impl Loop {
     /// Runs turns until `close` is taken or every sender of the inbox is
@@ -170,16 +170,6 @@ impl Loop {
 
     /// Writes `event` before its turn started, when there is no turn id yet.
     fn append_early(&mut self, event: &Event) -> Result<(), Error> {
-        util::write(
-            &self.log,
-            &mut self.conversation,
-            &mut self.reviewed,
-            &self.model.reference,
-            event,
-            None,
-            None,
-            &mut self.changes.had,
-            &mut self.handoff.carry,
-        )
+        self.write(event, None, None)
     }
 }
