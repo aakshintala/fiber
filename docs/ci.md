@@ -283,7 +283,8 @@ pull requests shows in a crate that depends on what the later one changed,
 and the selection includes that crate. The release job runs on every push
 and stores that commit's stripped binary in the build cache and its
 benchmark results, the full suite at 5 runs, as the `benchmarks-<sha>`
-artifact, both for a later pull request's base.
+artifact, both for a later pull request's base. The results file records the
+stripped binary's size in bytes, so a size history is one artifact per commit.
 
 One backstop runs and one waits. All pushes to `main` share a concurrency group
 that cancels nothing, so the running backstop finishes, which lets `main` record

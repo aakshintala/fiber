@@ -36,6 +36,11 @@ not repeat a branch case that a lower-level test pins with the same event
 kinds and fields. A private-function test is deleted when a public-API test
 kills the same mutants.
 
+CI wiring has no Rust test of its own: a workflow step, or a script only CI
+runs, is proven by the pull request's own CI run exercising it, and the pull
+request links the job log that shows it working. Logic that wiring calls lives
+in `xtask` or a crate, and is tested there like any other code.
+
 A binary-level test needs no test-only switch in the shipped binary. It sets
 `FIBER_HOME` to its own temporary directory, which holds an ordinary provider
 definition whose base URL points at a local fake server, or it names the
@@ -373,7 +378,10 @@ A test that passes with its feature removed proves nothing. CI checks this on
 every pull request with mutation testing: `cargo-mutants --in-diff` makes small
 breaking edits to the code the diff changed, such as replacing a function body
 with a default or flipping a comparison, and runs the mutated crate's tests
-against each one. An edit that no test notices fails CI. Selection writes the
+against each one. An edit that no test notices fails CI. Only the mutated
+crate's own tests run, so a test in another crate, the binary's included,
+kills none of its mutants: each behaviour a crate exposes is tested in
+that crate. Selection writes the
 diff's full mutant list to its job summary on every pull request event, drafts
 included, and prints it to the job's log
 (readable as soon as Selection finishes, before the run ends):
