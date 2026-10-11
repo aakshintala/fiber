@@ -51,6 +51,7 @@ pub(crate) struct Fold {
     /// The first prompt, once the first `turn_started` was seen.
     first_prompt: Option<String>,
     /// Whether a turn has started: only the first turn locks the name.
+    turn_seen: bool,
     workspace: String,
     project: String,
     parent: Option<SessionId>,
