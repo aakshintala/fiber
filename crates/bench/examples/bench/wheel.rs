@@ -708,6 +708,9 @@ fn open_read_call(
     spawned: Instant,
 ) -> Result<(), String> {
     terminal.wait_for(clock, spawned + READY, "Read 1 file")?;
+    // A running group's line names the call too ("· read notes.txt"), and
+    // a click on it would close the ledger: wait for the finished turn.
+    terminal.wait_for(clock, spawned + READY, "completed")?;
     terminal.write(b"\x0f")?;
     let until = clock.now() + READY;
     let (row, col) = wait_text(clock, terminal, until, "the read's ledger row", "notes.txt")?;
