@@ -701,6 +701,39 @@ fn assemble_of_a_spilled_output_has_no_text_and_names_the_file() {
 }
 
 #[test]
+fn assemble_of_a_failed_spilled_output_keeps_its_error_and_process() {
+    let dir = fakes::TempDir::new("fiber-shell-assemble-failed");
+    std::fs::create_dir(dir.path().join("artifacts")).unwrap();
+    let spill = Spill::start(artifacts(&dir), b"partial".to_vec());
+    let status = Command::new("sh").args(["-c", "exit 3"]).status().unwrap();
+    let output = super::assemble(
+        super::Limit {
+            ms: 1,
+            monitor: false,
+        },
+        Finished {
+            output: Kept::Spilled(Box::new(spill)),
+            status: Some(status),
+            stop: None,
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: false,
+            flooded: false,
+        },
+        None,
+    );
+    assert!(output.content.is_empty());
+    assert_eq!(code(&output), Some(ErrorCode::NonzeroExit));
+    let process = output.process.expect("a spilled output names its process");
+    assert_eq!(process.exit_code, Some(3));
+    assert_eq!(process.signal, None);
+    assert!(!process.timed_out);
+    let spilled = output.spilled.expect("spilled is set");
+    assert!(spilled.head.ends_with("Exit code 3.\n"));
+}
+
+#[test]
 fn assemble_hands_the_open_failure_line_to_both_kinds_of_output() {
     let dir = fakes::TempDir::new("fiber-shell-open-line");
     std::fs::create_dir(dir.path().join("artifacts")).unwrap();

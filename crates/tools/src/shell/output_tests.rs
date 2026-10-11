@@ -683,6 +683,27 @@ fn check_start_arms_nothing_without_a_configuration() {
 }
 
 #[test]
+fn check_start_keeps_a_spill_already_in_progress() {
+    let artifacts = TempDir::new("fiber-spill-keep");
+    let shared = Shared::default();
+    arm(&shared, &artifacts);
+    let owned = pieces(SPILL_AT + 100);
+    let refs: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+    feed(&shared, &refs);
+    let total = lock(&shared.inner).spill.as_ref().unwrap().total;
+    {
+        let mut inner = lock(&shared.inner);
+        // Bytes buffered behind the spill start no second one.
+        inner.output = vec![b'z'; SPILL_AT + 1];
+        check_start(&mut inner, 0);
+        let spill = inner.spill.as_ref().unwrap();
+        assert_eq!(spill.total, total);
+        assert_eq!(spill.head[..100], [b'y'; 100]);
+        assert_eq!(inner.output.len(), SPILL_AT + 1);
+    }
+}
+
+#[test]
 fn attach_without_a_spill_copies_whole_and_returns_no_line() {
     let artifacts = TempDir::new("fiber-spill-attach-artifacts");
     let shared = Shared::default();
@@ -735,4 +756,24 @@ fn attach_after_a_spill_with_a_cap_below_its_size_fires_at_once() {
     let inner = lock(&shared.inner);
     assert_eq!(inner.written, 100);
     assert!(inner.cap_fired);
+}
+
+#[test]
+fn attach_after_a_spill_at_the_cap_boundaries() {
+    for (cap, fired) in [(99_u64, true), (100_u64, false), (101_u64, false)] {
+        let artifacts = TempDir::new(&format!("fiber-spill-attach-exact-{cap}"));
+        let shared = Shared::default();
+        arm(&shared, &artifacts);
+        // A spill started directly, holding exactly 100 bytes.
+        {
+            let mut inner = lock(&shared.inner);
+            let config = inner.spill_config.clone().unwrap();
+            inner.spill = Some(super::super::spill::Spill::start(config, vec![b'y'; 100]));
+        }
+        let job = artifacts.path().join("j_1.log");
+        lock(&shared.inner).attach(std::fs::File::create(&job).unwrap(), &job, cap);
+        let inner = lock(&shared.inner);
+        assert_eq!(inner.written, 100);
+        assert_eq!(inner.cap_fired, fired, "cap = {cap}");
+    }
 }

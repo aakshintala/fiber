@@ -603,7 +603,6 @@ fn end(
         command::Kept::Spilled(spill) => {
             let spilled = spill.close(extra, line);
             Output {
-                content: Vec::new(),
                 error,
                 process: Some(process),
                 spilled: Some(spilled),

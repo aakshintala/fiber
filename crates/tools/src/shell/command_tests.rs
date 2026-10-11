@@ -1210,6 +1210,43 @@ fn a_command_moved_at_once_never_spills() {
 }
 
 #[test]
+fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
+    let dir = fakes::TempDir::new("fiber-shell-resume-filed");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let clock = FakeClock::new();
+    let cancel = CancelToken::new();
+    let ran = super::execute(
+        std::path::Path::new("/bin/sh"),
+        "exit 0",
+        dir.path(),
+        Duration::from_secs(60),
+        clock.as_ref(),
+        &cancel,
+        &Recorder::default(),
+        MovePolicy::Background,
+        None,
+        Some(spill_config(&artifacts)),
+    )
+    .unwrap();
+    let super::Ran::Moved(moved) = ran else {
+        panic!("a background command did not move");
+    };
+    // The job's file arrived first: the resume must not arm the spill
+    // over it, so the buffered output stays whole.
+    {
+        let mut inner = super::super::output::lock(&moved.progress.shared.inner);
+        inner.output = vec![b'y'; super::super::spill::SPILL_AT + 1];
+        inner.file = Some(std::fs::File::create(dir.path().join("j_1.log")).unwrap());
+    }
+    let finished = moved.resume(clock.as_ref(), &cancel, &Recorder::default());
+    assert!(
+        matches!(finished.output, super::Kept::Whole(_)),
+        "a resumed command with a file stays whole"
+    );
+}
+
+#[test]
 fn a_resumed_command_arms_the_spill() {
     let dir = fakes::TempDir::new("fiber-shell-resume-spill");
     let artifacts = dir.path().join("artifacts");

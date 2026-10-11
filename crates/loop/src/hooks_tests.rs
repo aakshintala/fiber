@@ -1509,6 +1509,28 @@ fn a_hooks_content_over_the_cap_is_cut_naming_the_spilled_file() {
 }
 
 #[test]
+fn a_hooks_content_at_the_cap_is_not_cut_and_leaves_the_spilled_file() {
+    let home = fakes::TempDir::new("fiber-spilled-hook-at-cap");
+    let hooks = FakeHooks::new(changed(Some("rrrr"), None, None), &["acme"], Vec::new());
+    let tool = spilling(
+        &home,
+        vec![b'a'; 100],
+        "HHHH",
+        "TTTT",
+        92,
+        Bound { start: 4, end: 0 },
+    );
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    assert_eq!(completed.payload["content"][0]["text"], "rrrr");
+    assert_eq!(completed.payload["artifact"], "artifacts/s_spill.txt");
+    assert_eq!(completed.payload["changed_by"], json!(["acme"]));
+    // Nothing is cut for it: the file stays the artifact, alone.
+    let path = ran.session.join("artifacts").join(SPILL_NAME);
+    assert_eq!(std::fs::read(&path).unwrap(), vec![b'a'; 100]);
+}
+
+#[test]
 fn a_withheld_spill_replaces_the_file_and_names_no_artifact() {
     let home = fakes::TempDir::new("fiber-spilled-withheld");
     let hooks = FakeHooks::new(
@@ -1629,6 +1651,7 @@ fn a_spill_that_was_not_kept_names_no_artifact_and_shows_no_file() {
         json!([{"type": "text", "text": format!("HHHH\n{notice}\nTTTT")}])
     );
     assert!(completed.payload.get("artifact").is_none());
+    assert!(completed.payload.get("changed_by").is_none());
     let seen = hooks.seen();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].spilled, None);
@@ -1645,10 +1668,40 @@ fn a_hooks_artifact_text_on_an_unsaved_spill_goes_to_the_action_file() {
     let artifact = completed.payload["artifact"].as_str().unwrap();
     assert!(artifact.ends_with(".txt"), "{artifact}");
     assert_ne!(artifact, "artifacts/s_spill.txt");
+    assert_eq!(completed.payload["changed_by"], json!(["acme"]));
     assert_eq!(
         std::fs::read_to_string(ran.session.join(artifact)).unwrap(),
         "replaced"
     );
+}
+
+#[test]
+fn replaced_content_on_an_unsaved_spill_is_sent_with_who_changed_it() {
+    let home = fakes::TempDir::new("fiber-spilled-unsaved-changed");
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let hooks = FakeHooks::new(changed(Some("new"), None, None), &["acme"], Vec::new());
+    let tool = unsaved("HHHH", "TTTT", 92, message, None);
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "new"}])
+    );
+    assert!(completed.payload.get("artifact").is_none());
+    assert_eq!(completed.payload["changed_by"], json!(["acme"]));
+}
+
+#[test]
+fn empty_replaced_content_on_an_unsaved_spill_sends_no_text_part() {
+    let home = fakes::TempDir::new("fiber-spilled-unsaved-empty");
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let hooks = FakeHooks::new(changed(Some(""), None, None), &["acme"], Vec::new());
+    let tool = unsaved("HHHH", "TTTT", 92, message, None);
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    assert_eq!(completed.payload["content"], json!([]));
+    assert!(completed.payload.get("artifact").is_none());
+    assert_eq!(completed.payload["changed_by"], json!(["acme"]));
 }
 
 #[test]

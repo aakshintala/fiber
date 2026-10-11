@@ -538,6 +538,50 @@ fn a_left_file_is_retried_at_the_move() {
 }
 
 #[test]
+fn close_of_an_empty_spill_adds_no_leading_newline() {
+    let dir = TempDir::new("fiber-spill-empty");
+    let spill = Spill::start(config(&dir, 8192, 8192), Vec::new());
+    let spilled = spill.close(None, "Exit code 0.");
+    let file = std::fs::read(dir.path().join("s_test.txt")).unwrap();
+    assert_bytes_eq(&file, b"Exit code 0.\n");
+    assert_eq!(spilled.head, "Exit code 0.\n");
+    assert_eq!(spilled.tail, "");
+    assert_eq!(spilled.removed, 0);
+}
+
+#[test]
+fn ends_that_meet_exactly_count_a_split_character_once() {
+    let dir = TempDir::new("fiber-spill-meet");
+    // 16,370 output bytes plus the 14 closing bytes meet 8,192 + 8,192
+    // exactly. A four-byte character straddles the head's end, so the
+    // ring starts on its last byte: the head holds the replacement
+    // character for its part, and the ring drops that byte.
+    let mut buffer = vec![b'a'; 16_370];
+    buffer[8189] = 0xF0;
+    buffer[8190] = 0x9D;
+    buffer[8191] = 0x84;
+    buffer[8192] = 0x9E;
+    let spill = Spill::start(config(&dir, 8192, 8192), buffer);
+    let spilled = spill.close(None, "Exit code 0.");
+    let file = std::fs::read(dir.path().join("s_test.txt")).unwrap();
+    assert_eq!(file.len(), 16_384);
+    assert_eq!(spilled.head.len(), 8192);
+    assert_eq!(&spilled.head.as_bytes()[..100], &[b'a'; 100][..]);
+    assert!(spilled.head.ends_with('\u{fffd}'));
+    assert_eq!(spilled.tail.len(), 8191);
+    assert!(spilled.tail.ends_with("\nExit code 0.\n"));
+    assert_eq!(spilled.removed, 1);
+}
+
+#[test]
+fn decode_prefix_stops_when_a_valid_run_is_cut_short() {
+    let bytes = [b"ab".to_vec(), vec![0xF0, 0x9D, 0x84, 0x9E, 0xFF]].concat();
+    let (text, used) = decode_prefix(&bytes, 5);
+    assert_eq!(text, "ab");
+    assert_eq!(used, 2);
+}
+
+#[test]
 fn decode_prefix_counts_an_invalid_byte_as_three() {
     let (text, used) = decode_prefix(b"ab\xFFcd", 6);
     assert_eq!(text, "ab\u{fffd}c");

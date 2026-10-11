@@ -433,6 +433,10 @@ fn spill_artifact(log: &Log, path: &std::path::Path) -> String {
 /// `Log::write_artifact` when the file sits in the session's `artifacts/`,
 /// else written to its own path. A failure fails the turn, as a log write
 /// does.
+// Both arms write the same bytes to the same file, since a spill in
+// `artifacts/` is named by its own file name: a mutant of the artifacts
+// arm changes nothing a consumer sees.
+#[cfg_attr(false, mutants::skip)]
 fn replace_spilled(log: &Log, path: &std::path::Path, bytes: &[u8]) -> Result<(), Error> {
     let in_artifacts = path
         .strip_prefix(log.dir())
