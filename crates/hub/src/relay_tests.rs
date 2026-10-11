@@ -13,6 +13,7 @@ use std::os::unix::net::UnixStream;
 
 use serde_json::{Value, json};
 
+use super::ack::Verdict;
 use super::*;
 use fakes::Deadline;
 
