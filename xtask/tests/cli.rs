@@ -287,8 +287,7 @@ fn plan_selects_release(dir: &TempDir, base: &str) -> bool {
     let jobs = out
         .lines()
         .find(|line| line.starts_with("jobs="))
-        .unwrap_or_default()
-        .to_owned();
+        .unwrap_or_default();
     assert!(!jobs.is_empty(), "{out}");
     jobs.contains("\"release\":true")
 }
