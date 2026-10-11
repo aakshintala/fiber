@@ -7118,7 +7118,7 @@ mod tests {
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
                 "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills",
                 "--offer-case offer, confirm, select, multi_select, text_input",
-                "--image-case tool_image, fallback",
+                "--image-case tool_image, fallback, pasted, links, screen_reader, title_approval, title_question, title_waiting, title_finished",
             ]
         );
         let h = cases::help(SURFACES);

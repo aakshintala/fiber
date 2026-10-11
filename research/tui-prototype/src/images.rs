@@ -10,7 +10,7 @@
 
 use super::input::{Ev, Key};
 use super::{Args, Term};
-use super::{BLUE, CYAN, dim, fg, paint, row, sp, view_header};
+use super::{BLUE, BU, CYAN, SEL, bold, dim, fg, lift, paint, row, slab, sp, t, view_header};
 use crate::cases::{Case, Surface};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
@@ -34,6 +34,58 @@ const CASES: &[Case<Look>] = &[
             kind: Kind::Fallback,
         },
     },
+    Case {
+        name: "pasted",
+        help: "a pasted image in the prompt bubble, inline through kitty placeholders or as its one line",
+        check: "the prompt bubble with [Image #1] and the image through kitty placeholders where the terminal speaks the protocol and its one line everywhere else.",
+        build: || Look { kind: Kind::Pasted },
+    },
+    Case {
+        name: "links",
+        help: "a reply with a focused and a hovered link, and a table with a focused and a hovered link cell",
+        check: "the reply with its focused and hovered links, the table with its focused and hovered link cells, the focused link on the selection tint with the Enter-opens hint.",
+        build: || Look { kind: Kind::Links },
+    },
+    Case {
+        name: "screen_reader",
+        help: "the fixture drawn flat: one line per item in reading order, state in words",
+        check: "the flat frame with no tints, edges, stripes or animation: one line per item in reading order, state in words not glyphs, the image as its one line.",
+        build: || Look {
+            kind: Kind::ScreenReader,
+        },
+    },
+    Case {
+        name: "title_approval",
+        help: "the terminal title while an approval waits",
+        check: "the labelled OSC 2 row for `! fiber · approval`, written to the terminal and restored to `fiber` on exit.",
+        build: || Look {
+            kind: Kind::Title(TitleKind::Approval),
+        },
+    },
+    Case {
+        name: "title_question",
+        help: "the terminal title while a question waits",
+        check: "the labelled OSC 2 row for `! fiber · question`, written to the terminal and restored to `fiber` on exit.",
+        build: || Look {
+            kind: Kind::Title(TitleKind::Question),
+        },
+    },
+    Case {
+        name: "title_waiting",
+        help: "the terminal title while the session waits",
+        check: "the labelled OSC 2 row for `! fiber · waiting`, written to the terminal and restored to `fiber` on exit.",
+        build: || Look {
+            kind: Kind::Title(TitleKind::Waiting),
+        },
+    },
+    Case {
+        name: "title_finished",
+        help: "the terminal title after a finished turn",
+        check: "the labelled OSC 2 row for `✓ fiber · finished`, written to the terminal and restored to `fiber` on exit.",
+        build: || Look {
+            kind: Kind::Title(TitleKind::Finished),
+        },
+    },
 ];
 
 /// `--image-case`, for `--help` and `check/images.md`.
@@ -48,6 +100,37 @@ pub(crate) const SURFACE: Surface = Surface {
 enum Kind {
     ToolImage,
     Fallback,
+    Pasted,
+    Links,
+    ScreenReader,
+    Title(TitleKind),
+}
+
+/// One attention state, naming the terminal title docs/tui.md lists.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum TitleKind {
+    Approval,
+    Question,
+    Waiting,
+    Finished,
+}
+
+/// The exact title string docs/tui.md, "attention", gives each state.
+fn title_of(k: TitleKind) -> &'static str {
+    match k {
+        TitleKind::Approval => "! fiber · approval",
+        TitleKind::Question => "! fiber · question",
+        TitleKind::Waiting => "! fiber · waiting",
+        TitleKind::Finished => "✓ fiber · finished",
+    }
+}
+
+/// The title on the way out: a normal title again.
+const NORMAL_TITLE: &str = "fiber";
+
+/// Sets the terminal title through OSC 2.
+fn title_esc(title: &str) -> String {
+    format!("\x1b]2;{title}\x1b\\")
 }
 
 #[derive(Debug)]
@@ -225,6 +308,104 @@ fn prefixed_one_line(r: super::Row) -> super::Row {
     super::Row { spans, ..r }
 }
 
+/// A pasted image in the prompt bubble: `[Image #1]` with the image
+/// through placeholders where the terminal speaks kitty graphics, its
+/// one line everywhere else.
+fn pasted_rows(inline: bool, conv_w: usize) -> Vec<super::Row> {
+    let mut inner = vec![row(vec![sp("[Image #1]", bold())])];
+    if inline {
+        let (cols, rows) = fit(conv_w);
+        inner.extend(grid(cols, rows, IMG_ID).into_iter().map(row));
+    } else {
+        inner.push(one_line("pasted.png", "1280×800"));
+    }
+    slab(inner, BU, None, conv_w)
+}
+
+/// The focused link: the link look on the selection tint.
+fn focused_link(text: &str) -> Span<'static> {
+    sp(
+        text.to_string(),
+        fg(BLUE).add_modifier(Modifier::UNDERLINED).bg(SEL),
+    )
+}
+
+/// The hovered link: the link look brightened the way `--hover` lifts
+/// the cells under the pointer.
+fn hovered_link(text: &str) -> Span<'static> {
+    sp(
+        text.to_string(),
+        fg(BLUE)
+            .add_modifier(Modifier::UNDERLINED)
+            .bg(lift(Color::Reset)),
+    )
+}
+
+/// A reply with a focused link and a hovered link, then a table with a
+/// focused and a hovered link cell, each link in the clickable look.
+fn links_rows() -> Vec<super::Row> {
+    vec![
+        row(vec![
+            sp("The new spec lives at ", Style::new()),
+            focused_link("https://example.com/spec"),
+            sp(",", Style::new()),
+        ]),
+        row(vec![
+            sp("and the fix touches ", Style::new()),
+            hovered_link("crates/log/tests/lock.rs"),
+            sp(".", Style::new()),
+        ]),
+        row(vec![sp("Enter opens · y copies", dim())]),
+        super::Row::default(),
+        row(vec![sp("name  link", bold())]),
+        row(vec![sp("────  ──────────────────────────", fg(SEL))]),
+        row(vec![
+            sp("spec  ", Style::new()),
+            focused_link("https://example.com/spec"),
+        ]),
+        row(vec![
+            sp("fix   ", Style::new()),
+            hovered_link("crates/log/tests/lock.rs"),
+        ]),
+    ]
+}
+
+/// The fixture drawn flat, as docs/tui.md, "Screen readers", describes:
+/// no tints, half-block edges, stripes or animation; one line per item
+/// in reading order; state in words, never glyphs; images as their one
+/// line. Every span keeps the default style, so no cell carries a
+/// foreground, a background or a modifier.
+fn screen_reader_rows() -> Vec<super::Row> {
+    let line = |s: &str| row(vec![sp(s.to_string(), Style::new())]);
+    vec![
+        row(vec![
+            sp("Screen reader", bold()),
+            t(),
+            sp("flat", Style::new()),
+        ]),
+        super::Row::default(),
+        line("you 14:03: Sweep the flaky lock tests before review."),
+        line("reply: The lock helper now retries three times."),
+        line("thought: check the flaky test first"),
+        line("tool read src/main.rs: 120 lines"),
+        line("image: ▣ screenshot.png · 1280×800"),
+        line("tool shell: exit 0, 5 lines"),
+        line("waiting: approval for shell rm -rf /tmp/x"),
+        line("running: shell, elapsed 12s"),
+        line("done: completed, 2 tool calls"),
+    ]
+}
+
+/// One attention state's title: the header with a small labelled row
+/// carrying the exact OSC 2 string the run writes.
+fn title_rows(k: TitleKind) -> Vec<super::Row> {
+    vec![
+        view_header("Title", "attention"),
+        super::Row::default(),
+        row(vec![sp("OSC 2: ", dim()), sp(title_of(k), bold())]),
+    ]
+}
+
 /// The fallback rows: one image's one line, then an image that cannot
 /// show with the notice saying why.
 fn fallback_rows() -> Vec<super::Row> {
@@ -252,6 +433,18 @@ fn body_rows(c: &Look, cols: usize, inline: bool) -> Vec<super::Row> {
             out.extend(fallback_rows());
             out
         }
+        Kind::Pasted => {
+            let mut out = vec![view_header("Images", "pasted"), super::Row::default()];
+            out.extend(pasted_rows(inline, cols));
+            out
+        }
+        Kind::Links => {
+            let mut out = vec![view_header("Links", "reply"), super::Row::default()];
+            out.extend(links_rows());
+            out
+        }
+        Kind::ScreenReader => screen_reader_rows(),
+        Kind::Title(k) => title_rows(k),
     }
 }
 
@@ -304,7 +497,7 @@ fn draw(term: &mut Term, c: &Look, inline: bool) -> io::Result<()> {
     let be = term.backend_mut();
     // The placeholders are text, so a redraw moves the image; only the
     // bytes go out of band, sized to this draw.
-    if inline && c.kind == Kind::ToolImage {
+    if inline && matches!(c.kind, Kind::ToolImage | Kind::Pasted) {
         let (gw, gh) = fit(cols as usize);
         be.write_all(transmit(gw, gh).as_bytes())?;
     }
@@ -333,23 +526,46 @@ pub(crate) fn run_images(a: &Args, term: &mut Term) -> io::Result<String> {
     let c = find(&name)?;
     let show = inline(a.screen_reader);
     draw(term, &c, show)?;
+    // A title case owns the terminal title while it is up, and leaves a
+    // normal title behind.
+    let title = match c.kind {
+        Kind::Title(k) => Some(title_of(k)),
+        _ => None,
+    };
+    if let Some(t) = title {
+        let be = term.backend_mut();
+        be.write_all(title_esc(t).as_bytes())?;
+        be.flush()?;
+    }
     let mut rd = super::input::Reader::new()?;
-    loop {
+    let done = 'run: loop {
         let (evs, resized) = rd.wait(None)?;
         if resized {
             draw(term, &c, show)?;
+            if let Some(t) = title {
+                // A redraw clears nothing, but the title stays owned.
+                let be = term.backend_mut();
+                be.write_all(title_esc(t).as_bytes())?;
+                be.flush()?;
+            }
         }
         for ev in evs {
             match ev {
-                Ev::Key(Key::Char('c'), m) if m.ctrl => return Ok(format!("image {name}\n")),
-                Ev::Key(Key::Esc, _) => return Ok(format!("image {name}\n")),
+                Ev::Key(Key::Char('c'), m) if m.ctrl => break 'run format!("image {name}\n"),
+                Ev::Key(Key::Esc, _) => break 'run format!("image {name}\n"),
                 Ev::Key(Key::Char('q'), m) if !m.ctrl && !m.alt && !m.sup => {
-                    return Ok(format!("image {name}\n"));
+                    break 'run format!("image {name}\n");
                 }
                 _ => {}
             }
         }
+    };
+    if title.is_some() {
+        let be = term.backend_mut();
+        be.write_all(title_esc(NORMAL_TITLE).as_bytes())?;
+        be.flush()?;
     }
+    Ok(done)
 }
 
 #[cfg(test)]
@@ -418,7 +634,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 2);
+        assert_eq!(CASES.len(), 9);
         assert!(parse("nope").is_none());
     }
 
@@ -434,8 +650,8 @@ mod tests {
 
     #[test]
     fn frame_is_exactly_rows_high() {
-        for name in ["tool_image", "fallback"] {
-            let c = parse_case(name);
+        for c in CASES {
+            let c = parse_case(c.name);
             for inline in [false, true] {
                 let n = body_rows(&c, 160, inline).len();
                 for rows in [n - 1, n, n + 1] {
@@ -580,11 +796,202 @@ mod tests {
 
     #[test]
     fn headers_carry_the_surface_tint() {
-        for name in ["tool_image", "fallback"] {
+        for name in [
+            "tool_image",
+            "fallback",
+            "pasted",
+            "links",
+            "title_approval",
+            "title_question",
+            "title_waiting",
+            "title_finished",
+        ] {
             let c = parse_case(name);
             let buf = buffer(&c, 160, 48, false);
             for x in [0, 79, 159] {
                 assert_eq!(buf[(x, 0)].bg, BI, "no surface tint at {x} in {name}");
+            }
+        }
+        // The screen reader draws flat: no tint anywhere, not even a header.
+        let c = parse_case("screen_reader");
+        let buf = buffer(&c, 160, 48, false);
+        for y in 0..48 {
+            for x in [0, 79, 159] {
+                assert_eq!(buf[(x, y)].bg, Color::Reset, "a tint at ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn pasted_sits_in_the_prompt_bubble() {
+        for (cols, rows) in [(160, 48), (100, 40)] {
+            let c = parse_case("pasted");
+            let t = text(&c, cols, rows, true);
+            assert!(t.contains("[Image #1]"), "no pasted mark");
+            assert_eq!(t.matches(PH).count(), 32 * 12, "no 32-by-12 grid at {cols}");
+            // The bubble tints the whole grid width.
+            let buf = buffer(&c, cols, rows, true);
+            let painted = buf_text(&buf, cols, rows);
+            let y = painted.lines().position(|l| l.contains(PH)).unwrap() as u16;
+            assert_eq!(buf[(0, y)].bg, BU, "no bubble tint");
+            assert_eq!(buf[(0, y)].fg, Color::Indexed(IMG_ID as u8), "no image id");
+            let t = text(&c, cols, rows, false);
+            assert!(t.contains("[Image #1]"), "no pasted mark");
+            assert!(t.contains("▣ pasted.png · 1280×800"), "no fallback line");
+            assert_eq!(t.matches(PH).count(), 0, "placeholders without kitty");
+        }
+    }
+
+    #[test]
+    fn links_focus_and_hover() {
+        for (cols, rows) in [(160, 48), (100, 40)] {
+            let c = parse_case("links");
+            // The test reads the rendered buffer, not the intended case.
+            let buf = buffer(&c, cols, rows, false);
+            let painted = buf_text(&buf, cols, rows);
+            for url in ["https://example.com/spec", "crates/log/tests/lock.rs"] {
+                assert!(painted.contains(url), "no {url}");
+            }
+            assert!(
+                painted.contains("Enter opens · y copies"),
+                "no focused hint"
+            );
+            // The focused link sits on the selection tint, underlined;
+            // the hovered one wears the hover brighten, underlined.
+            let reply_y = painted
+                .lines()
+                .position(|l| l.contains("lives at"))
+                .unwrap() as u16;
+            let fx = painted
+                .lines()
+                .nth(reply_y as usize)
+                .unwrap()
+                .find("https://")
+                .unwrap() as u16;
+            assert_eq!(buf[(fx, reply_y)].bg, SEL, "no selection tint");
+            assert_eq!(buf[(fx, reply_y)].fg, BLUE, "no link colour");
+            assert!(
+                buf[(fx, reply_y)].modifier.contains(Modifier::UNDERLINED),
+                "the focused link is not underlined"
+            );
+            let hover_y = painted.lines().position(|l| l.contains("touches")).unwrap() as u16;
+            let hx = painted
+                .lines()
+                .nth(hover_y as usize)
+                .unwrap()
+                .find("crates/")
+                .unwrap() as u16;
+            assert_eq!(
+                buf[(hx, hover_y)].bg,
+                lift(Color::Reset),
+                "no hover brighten"
+            );
+            assert_eq!(buf[(hx, hover_y)].fg, BLUE, "no link colour");
+            assert!(
+                buf[(hx, hover_y)].modifier.contains(Modifier::UNDERLINED),
+                "the hovered link is not underlined"
+            );
+            // The table carries one focused and one hovered link cell.
+            let table_y = painted
+                .lines()
+                .position(|l| l.contains("spec  https://"))
+                .unwrap() as u16;
+            let tx = painted
+                .lines()
+                .nth(table_y as usize)
+                .unwrap()
+                .find("https://")
+                .unwrap() as u16;
+            assert_eq!(buf[(tx, table_y)].bg, SEL, "no focused table cell");
+            let table_hy = painted
+                .lines()
+                .position(|l| l.contains("fix   crates/"))
+                .unwrap() as u16;
+            let thx = painted
+                .lines()
+                .nth(table_hy as usize)
+                .unwrap()
+                .find("crates/")
+                .unwrap() as u16;
+            assert_eq!(
+                buf[(thx, table_hy)].bg,
+                lift(Color::Reset),
+                "no hovered table cell"
+            );
+        }
+    }
+
+    #[test]
+    fn screen_reader_is_flat_words_in_order() {
+        for (cols, rows) in [(160, 48), (100, 40)] {
+            let c = parse_case("screen_reader");
+            let buf = buffer(&c, cols, rows, false);
+            // No tints: every cell keeps the default colours.
+            for y in 0..rows as u16 {
+                for x in 0..cols as u16 {
+                    assert_eq!(buf[(x, y)].bg, Color::Reset, "a tint at ({x}, {y})");
+                    assert_eq!(buf[(x, y)].fg, Color::Reset, "a tint at ({x}, {y})");
+                }
+            }
+            let painted = buf_text(&buf, cols, rows);
+            // No half-block edges, stripes or animation glyphs, and state
+            // reads in words, never glyphs.
+            for g in ['▄', '▀', '█', '▌', '▐', '✓', '✗', '○', '●', '▸', '▾', '⠋']
+            {
+                assert!(!painted.contains(g), "a {g} in the flat frame");
+            }
+            // One line per item, in reading order, the image as its one line.
+            let first = painted.lines().find(|l| !l.trim().is_empty()).unwrap();
+            assert!(first.contains("Screen reader"), "no flat header");
+            for item in [
+                "you 14:03:",
+                "reply:",
+                "thought:",
+                "tool read src/main.rs: 120 lines",
+                "image: ▣ screenshot.png · 1280×800",
+                "tool shell: exit 0, 5 lines",
+                "waiting:",
+                "running:",
+                "done:",
+            ] {
+                assert!(painted.contains(item), "no {item}");
+            }
+            let order = |mark: &str| painted.find(mark).unwrap();
+            assert!(order("you 14:03:") < order("reply:"));
+            assert!(order("reply:") < order("image: ▣"));
+            assert!(order("image: ▣") < order("waiting:"));
+            assert!(order("waiting:") < order("done:"));
+        }
+    }
+
+    #[test]
+    fn title_strings_are_exact() {
+        assert_eq!(title_of(TitleKind::Approval), "! fiber · approval");
+        assert_eq!(title_of(TitleKind::Question), "! fiber · question");
+        assert_eq!(title_of(TitleKind::Waiting), "! fiber · waiting");
+        assert_eq!(title_of(TitleKind::Finished), "✓ fiber · finished");
+        assert_eq!(
+            title_esc("! fiber · approval"),
+            "\x1b]2;! fiber · approval\x1b\\"
+        );
+        assert_eq!(title_esc(NORMAL_TITLE), "\x1b]2;fiber\x1b\\");
+    }
+
+    #[test]
+    fn title_cases_label_their_osc2_row() {
+        for (name, title) in [
+            ("title_approval", "! fiber · approval"),
+            ("title_question", "! fiber · question"),
+            ("title_waiting", "! fiber · waiting"),
+            ("title_finished", "✓ fiber · finished"),
+        ] {
+            for (cols, rows) in [(160, 48), (100, 40)] {
+                let c = parse_case(name);
+                let t = text(&c, cols, rows, false);
+                assert!(
+                    t.contains(&format!("OSC 2: {title}")),
+                    "no labelled row in {name}"
+                );
             }
         }
     }
