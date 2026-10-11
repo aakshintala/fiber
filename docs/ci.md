@@ -194,8 +194,8 @@ On Linux x86_64 alone:
   one test hang until its deadline is then caught by a faster test, not
   reported as a timeout.
 - for a pull request where any issue its body resolves is labelled
-  `bug`, its new and changed tests run at its first commit, the red commit,
-  and at its head: the red commit must build and at least one of them must
+  `bug`, the red commit's own new and changed tests run at its first commit, the red commit,
+  and every new and changed test runs at its head: the red commit must build and at least one of its own tests must
   fail there, and all must pass at the head (`docs/workflow.md`, "The pull
   request"). A pull request whose every changed file is a docs file, as
   "Selection" defines it, passes the check with a message saying so: the
