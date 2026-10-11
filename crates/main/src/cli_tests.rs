@@ -1855,3 +1855,15 @@ fn ask_help_shows_credential() {
     let rendered = super::render_help(&["ask"]).unwrap();
     assert!(rendered.contains("--credential <label>"), "{rendered}");
 }
+
+#[test]
+fn the_menu_fiber_and_ask_rows_show_c() {
+    let menu = menu();
+    for name in ["fiber", "ask"] {
+        let row = menu
+            .lines()
+            .find(|l| l.starts_with(&format!("  {name} ")))
+            .unwrap_or_else(|| panic!("menu has a `{name}` row"));
+        assert!(row.contains("[-c <key>=<value>]..."), "menu row: {row}");
+    }
+}
