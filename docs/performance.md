@@ -64,9 +64,9 @@ a 20-thousand-token one fit the same ceiling.
 | Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked |
 | Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |
-| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked |
-| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked |
-| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked |
+| Terminal, attaching a 10 MiB session | 81,392 KiB peak RSS | Linux x86_64 | measured |
+| Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured |
+| Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |
 | `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |
 | `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured |
