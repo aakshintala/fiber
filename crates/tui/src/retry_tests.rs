@@ -111,6 +111,16 @@ fn quit_during_the_timed_wait_returns_false_without_advancing() {
     assert_eq!(clock.now(), clock.origin());
 }
 
+/// A stop whose reader is already gone: only the permit's bookkeeping
+/// is under test.
+fn stop() -> support::stoppable::Stop {
+    let (ours, _theirs) =
+        std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let (_read, stop) =
+        support::stoppable::reader(ours).unwrap_or_else(|err| panic!("reader: {err}"));
+    stop
+}
+
 #[test]
 fn track_succeeds_until_quit_then_refuses() {
     let (_clock, retry) = permit();
@@ -118,7 +128,7 @@ fn track_succeeds_until_quit_then_refuses() {
         std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     assert!(
         retry
-            .track(&ours)
+            .track(&ours, stop())
             .unwrap_or_else(|err| panic!("track: {err}"))
     );
     retry.untrack();
@@ -126,7 +136,7 @@ fn track_succeeds_until_quit_then_refuses() {
     retry.quit();
     assert!(
         !retry
-            .track(&ours)
+            .track(&ours, stop())
             .unwrap_or_else(|err| panic!("track: {err}"))
     );
 }
@@ -136,7 +146,7 @@ fn track_reports_the_clone_failure_and_watches_nothing() {
     let (clock, retry) = permit();
     // Inject the clone failure: exhausting descriptors would depend on
     // the fd limit, which exceeds the loop bound on some hosts.
-    let error = match retry.track_with(|| Err(std::io::Error::other("clone failed"))) {
+    let error = match retry.track_with(|| Err(std::io::Error::other("clone failed")), stop()) {
         Err(error) => error,
         Ok(_) => panic!("track reports the clone failure"),
     };
@@ -155,7 +165,7 @@ fn quit_shuts_down_the_watched_read() {
         std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     assert!(
         retry
-            .track(&ours)
+            .track(&ours, stop())
             .unwrap_or_else(|err| panic!("track: {err}"))
     );
     let (done, finished) = mpsc::channel();

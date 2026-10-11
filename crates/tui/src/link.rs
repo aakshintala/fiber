@@ -70,7 +70,7 @@ pub(crate) fn write_line(mut stream: &UnixStream, line: &str) -> std::io::Result
 
 /// Reads the hub stream, sending each line to the loop, then
 /// [`Input::Disconnected`] once the stream ends.
-pub(crate) fn read_lines(stream: UnixStream, tx: &Sender<Input>) {
+pub(crate) fn read_lines(stream: impl std::io::Read, tx: &Sender<Input>) {
     let mut read = BufReader::new(stream);
     let mut buf = String::new();
     loop {

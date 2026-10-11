@@ -298,7 +298,7 @@ fn dropping_the_loop_before_the_connect_is_stepped_ends_the_read() {
         Err(err) => panic!("waited {DEADLINE:?} for the connection: {err}"),
     }
     // The queued connection is never stepped, so the loop holds no
-    // stream: only the permit's shutdown of the watched read ends it.
+    // stream: only the permit's stop of the watched read ends it.
     // The hub's end stays open throughout.
     drop(lp);
     signalled(&gone, "the hub thread to end");
