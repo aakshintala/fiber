@@ -22,8 +22,8 @@ use std::thread;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, TOOL_NAMES, function_call, hello, is_status, read_kinds, spawn_watched,
-    stream, tool_names,
+    Deadline, KillGroup, Run, TOOL_NAMES, function_call, hello, is_status, read_kinds,
+    spawn_watched, stream, tool_names,
 };
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
@@ -169,14 +169,6 @@ fn write(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-/// One finished run: its exit code, stdout's lines, as text and parsed, and
-/// stderr.
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
-    stderr: String,
-}
-
 impl Run {
     fn new(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
@@ -194,17 +186,6 @@ impl Run {
 }
 
 impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn session_id(&self) -> &str {
-        self.lines[0]["session_id"].as_str().unwrap()
-    }
-
     /// The session's directory, from its id.
     fn session_dir(&self, setup: &Setup) -> PathBuf {
         let workspace = fs::canonicalize(setup.workspace()).unwrap();
