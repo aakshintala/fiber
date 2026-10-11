@@ -20,7 +20,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use super::{CAPTURE_DEADLINE, Cancel, Failed, capture, parse, shell_command};
+use super::{CAPTURE_DEADLINE, Cancel, Failed, OUTPUT_CAP, capture, parse, shell_command};
 use fakes::Deadline;
 
 /// How long a wait that must succeed holds, on the wall clock.
@@ -311,6 +311,19 @@ fn outcome_of(
 fn get(vars: &[(OsString, OsString)], name: &str) -> Option<String> {
     vars.iter()
         .find_map(|(n, v)| (n == name).then(|| v.to_string_lossy().into_owned()))
+}
+
+/// The whole process group is dead, then the watchdog stands down: the
+/// capture kills only the shell pid, so a `sleep 600 &` descendant
+/// outlives it carrying the check-run nonce. Standing down with the group
+/// alive would leak it past the test into the leak scan.
+fn reap_group(pid: u32, watchdog: fakes::Watchdog) {
+    fakes::kill_group(pid, "KILL").unwrap();
+    assert!(
+        fakes::group_empties(pid, WITHIN),
+        "the held group is reaped"
+    );
+    watchdog.stand_down(WITHIN);
 }
 
 #[test]
@@ -638,7 +651,7 @@ fn cancelling_with_a_held_output_still_returns() {
         Err(Failed::Cancelled)
     );
     assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
-    watchdog.stand_down(WITHIN);
+    reap_group(pid, watchdog);
 }
 
 #[test]
@@ -658,11 +671,9 @@ fn a_timeout_with_a_held_output_still_returns() {
         outcome_of(&done, "the hanging capture"),
         Err(Failed::TimedOut)
     );
-    assert!(
-        fakes::pids_exit(&[fake.pid()], WITHIN),
-        "the shell is reaped"
-    );
-    watchdog.stand_down(WITHIN);
+    let pid = fake.pid();
+    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    reap_group(pid, watchdog);
 }
 
 #[test]
@@ -675,9 +686,95 @@ fn a_success_with_a_held_output_still_returns() {
     let done = capture_on_thread(fake.inherited(), Arc::clone(&clock), Arc::clone(&cancel));
     let watchdog = fake.watchdog();
     outcome_of(&done, "the succeeding capture").expect("the capture succeeds");
+    let pid = fake.pid();
+    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    reap_group(pid, watchdog);
+}
+
+#[test]
+fn an_already_cancelled_capture_fails_without_spawning() {
+    let fake = Shell::new("exit 0");
+    let clock = fakes::clock::FakeClock::new();
+    let cancel = Cancel::new();
+    cancel.cancel();
+    let done = capture_on_thread(fake.inherited(), Arc::clone(&clock), Arc::clone(&cancel));
+    assert_eq!(
+        outcome_of(&done, "the cancelled capture"),
+        Err(Failed::Cancelled)
+    );
+    assert!(!fake.dir.join("pid").exists(), "no shell spawned");
+}
+
+/// A megabyte-scale environment under the cap: one hundred 16 KiB values,
+/// past every shrunk cap arithmetic and under the 4 MiB one. Single values
+/// stay small because one environment string past 128 KiB cannot cross
+/// `execve` on Linux. Linux only: macOS `ARG_MAX` is 1 MiB, which cannot
+/// hold this environment at all.
+#[cfg(target_os = "linux")]
+const PAD_VARS: usize = 100;
+#[cfg(target_os = "linux")]
+const PAD_LEN: usize = 16_384;
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_large_environment_under_the_cap_succeeds() {
+    let fake = Shell::new(&format!(
+        "i=0\nwhile [ $i -lt {PAD_VARS} ]; do eval \"export PAD_$i=\\\"$(printf '%{PAD_LEN}s' ' ')\\\"\"; i=$((i+1)); done\nexec /bin/sh -c \"$4\""
+    ));
+    let clock = fakes::clock::FakeClock::new();
+    let cancel = Cancel::new();
+    let done = capture_on_thread(fake.inherited(), Arc::clone(&clock), Arc::clone(&cancel));
+    let watchdog = fake.watchdog();
+    let vars = outcome_of(&done, "the large capture").expect("the capture succeeds");
     assert!(
         fakes::pids_exit(&[fake.pid()], WITHIN),
         "the shell is reaped"
     );
+    let pads: Vec<&(OsString, OsString)> = vars
+        .iter()
+        .filter(|(name, _)| name.to_string_lossy().starts_with("PAD_"))
+        .collect();
+    assert_eq!(pads.len(), PAD_VARS, "every pad value captured");
+    for (_, value) in pads {
+        assert_eq!(value.to_string_lossy().len(), PAD_LEN);
+    }
     watchdog.stand_down(WITHIN);
+}
+
+#[test]
+fn a_cap_sized_output_without_a_marker_parks() {
+    // Exactly `OUTPUT_CAP` bytes, no markers, then a hang: at the cap the
+    // wait parks (past the cap is `TooLarge`), so this pins the edge's
+    // exact side, which `==` or `>=` would report as `TooLarge` here. The
+    // side file proves delivery before the park is asserted, so the wait
+    // cannot pass for still transferring.
+    let fake = Shell::new(&format!(
+        "printf '%{OUTPUT_CAP}s' ' '; echo printed > \"$FAKE_DIR/printed\"\nexec sleep 600"
+    ));
+    let clock = fakes::clock::FakeClock::new();
+    let cancel = Cancel::new();
+    let done = capture_on_thread(fake.inherited(), Arc::clone(&clock), Arc::clone(&cancel));
+    let watchdog = fake.watchdog();
+    let delivering = Deadline::after(WITHIN);
+    loop {
+        if fake.dir.join("printed").exists() {
+            break;
+        }
+        if delivering.left().is_zero() {
+            panic!("waited for the shell to print the cap");
+        }
+        thread::yield_now();
+    }
+    assert!(
+        Deadline::after(Duration::from_secs(2)).recv(&done).is_err(),
+        "no result at exactly the cap"
+    );
+    cancel.cancel();
+    assert_eq!(
+        outcome_of(&done, "the cancelled capture"),
+        Err(Failed::Cancelled)
+    );
+    let pid = fake.pid();
+    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    reap_group(pid, watchdog);
 }

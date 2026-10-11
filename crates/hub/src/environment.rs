@@ -135,7 +135,6 @@ impl Environments {
         };
         let _serial = lock(&self.capture_lock);
         if self.is_closed() {
-            self.end(&cancel);
             return;
         }
         let outcome = capture::capture(&self.inherited, clock, &cancel);
@@ -242,12 +241,6 @@ impl Environments {
         state.running = state.running.saturating_sub(1);
         state.cancels.retain(|held| !Arc::ptr_eq(held, cancel));
         self.changed.notify_all();
-    }
-
-    /// Ends one capture's admission after an early return.
-    fn end(&self, cancel: &Arc<capture::Cancel>) {
-        let mut state = lock(&self.state);
-        self.end_locked(&mut state, cancel);
     }
 
     /// Runs the test-only pause between a capture's end and its publish.

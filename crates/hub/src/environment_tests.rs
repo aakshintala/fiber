@@ -338,3 +338,127 @@ fn a_capture_queued_on_the_lock_spawns_nothing_after_close() {
     );
     watchdog.stand_down(WITHIN);
 }
+
+#[test]
+fn first_publishes_the_fallback_synchronously() {
+    // No `SHELL`: the capture fails without spawning, publishing the
+    // fallback and writing its line before `first` returns, so the
+    // assertions below fail at once when a mutant breaks the publish
+    // instead of hanging in `get`.
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let inherited = vec![(OsString::from("HOME"), temp.dir.as_os_str().to_owned())];
+    let environments = Environments::new(inherited, &temp.home);
+    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    let lines = temp.log_lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["level"], "warn");
+    assert_eq!(lines[0]["code"], "environment_built");
+    assert_eq!(
+        lines[0]["message"],
+        "The login-shell capture failed because SHELL is not set, so sessions start with the hub's inherited environment."
+    );
+    let environment = environments.get();
+    assert_eq!(environment.source, VariablesSource::Inherited);
+    assert_eq!(
+        get(&environment.vars, "FIBER_HOME").as_deref(),
+        Some(temp.home.to_string_lossy().as_ref())
+    );
+}
+
+#[test]
+fn close_waits_for_a_running_capture() {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
+    let clock = fakes::clock::FakeClock::new();
+    let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
+    // Hold the capture between its end and its publish: the close below
+    // cannot return until the hook is released.
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    *support::lock(&environments.before_publish) = Some(Box::new(move || {
+        held_tx.send(()).unwrap_or(());
+        Deadline::after(WITHIN).recv(&release_rx).unwrap_or(());
+    }));
+    let first = Arc::clone(&environments);
+    let first_clock = Arc::clone(&clock);
+    let first_diag = temp.diag(Arc::clone(&clock));
+    let first_done = thread::spawn(move || first.first(&*first_clock, &first_diag));
+    Deadline::after(WITHIN)
+        .recv(&held_rx)
+        .expect("the capture holds before publishing");
+    let closing = Arc::clone(&environments);
+    let (close_tx, close_rx) = mpsc::channel();
+    thread::spawn(move || {
+        closing.close();
+        close_tx.send(()).unwrap_or(());
+    });
+    assert!(
+        Deadline::after(Duration::from_millis(300))
+            .recv(&close_rx)
+            .is_err(),
+        "close waits for the running capture"
+    );
+    release_tx.send(()).unwrap_or(());
+    Deadline::after(WITHIN)
+        .recv(&close_rx)
+        .expect("close returns once the capture ends");
+    first_done.join().expect("the first capture ends");
+    // The close published the fallback first, so the released capture
+    // publishes silently.
+    let environment = environments.get();
+    assert_eq!(environment.source, VariablesSource::Inherited);
+    assert!(
+        temp.log_lines()
+            .iter()
+            .all(|line| line["code"] != "environment_built"),
+        "a cancelled capture writes no line"
+    );
+}
+
+#[test]
+fn first_failed_after_a_completed_first_is_ignored() {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
+    let clock = fakes::clock::FakeClock::new();
+    let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
+    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    let published = environments.get();
+    assert_eq!(published.source, VariablesSource::LoginShell);
+    assert_eq!(get(&published.vars, "MARK").as_deref(), Some("1"));
+    // The completed capture ended its admission, so a late failure for the
+    // admitted first capture publishes nothing and writes no line.
+    environments.first_failed(
+        Failed::Spawn(std::io::ErrorKind::NotFound),
+        &temp.diag(Arc::clone(&clock)),
+    );
+    let kept = environments.get();
+    assert_eq!(kept.source, VariablesSource::LoginShell);
+    assert_eq!(get(&kept.vars, "MARK").as_deref(), Some("1"));
+    let lines = temp.log_lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["level"], "info");
+    assert_eq!(lines[0]["code"], "environment_built");
+}
+
+#[test]
+fn first_failed_publishes_the_fallback_synchronously() {
+    // The publish happens before `first_failed` returns: a bounded `get`
+    // proves it without hanging when a mutant breaks the publish.
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let environments = Environments::new(Vec::new(), &temp.home);
+    environments.first_failed(
+        Failed::Spawn(std::io::ErrorKind::NotFound),
+        &temp.diag(Arc::clone(&clock)),
+    );
+    let waiting = Arc::clone(&environments);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        done_tx.send(waiting.get()).unwrap_or(());
+    });
+    let environment = Deadline::after(Duration::from_millis(300))
+        .recv(&done_rx)
+        .expect("first_failed publishes before it returns");
+    assert_eq!(environment.source, VariablesSource::Inherited);
+}

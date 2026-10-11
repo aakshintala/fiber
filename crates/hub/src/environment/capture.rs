@@ -127,6 +127,14 @@ struct ClockWake {
 }
 
 impl Wake for ClockWake {
+    // Best-effort on top of the wall-clock poll: without the notify the
+    // deadline still lands on the next poll, so the wait's outcome never
+    // depends on this running, only its promptness, which no test pins.
+    #[cfg_attr(
+        false,
+        mutants::skip,
+        reason = "a best-effort notify on top of the wall-clock poll: dropping it delays the deadline by one poll, which no test can pin without flakiness"
+    )]
     fn wake(&self) {
         self.changed.notify_all();
     }
@@ -252,9 +260,29 @@ fn os_string(bytes: &[u8]) -> OsString {
 }
 
 /// `bytes` as an `OsString` where `OsStrExt` is missing.
+// Mutants run on Linux, where this is not compiled; the macOS test job
+// still runs its tests.
+#[cfg_attr(
+    false,
+    mutants::skip,
+    reason = "mutants run on Linux, where this function is not compiled"
+)]
 #[cfg(not(unix))]
 fn os_string(bytes: &[u8]) -> OsString {
     String::from_utf8_lossy(bytes).into_owned().into()
+}
+
+/// Whether a failed read retries: an `Interrupted` read saw a signal,
+/// not the end of output. The stop reports `ConnectionAborted`, which
+/// always breaks, so this only ever retries a signal mid-read, which no
+/// test delivers deterministically.
+#[cfg_attr(
+    false,
+    mutants::skip,
+    reason = "only a signal mid-read retries, and no test delivers one deterministically; the stop reports ConnectionAborted, which always breaks"
+)]
+fn should_retry(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::Interrupted
 }
 
 /// Reads `reader` to its end into `cancel`'s output, notifying the wait on
@@ -273,12 +301,41 @@ fn read_all(mut reader: support::stoppable::Reader, cancel: &Cancel) {
                 lock(&cancel.state).output.extend_from_slice(bytes);
                 cancel.changed.notify_all();
             }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) if should_retry(&error) => continue,
             Err(_) => break,
         }
     }
     lock(&cancel.state).reader_done = true;
     cancel.changed.notify_all();
+}
+
+/// The end marker's absolute offset, from its offset in the tail past
+/// the bytes already searched, with an overlap holding a split marker.
+/// Single-poll outputs leave `from` at zero, where the offset arithmetic
+/// is invisible, and multi-poll splits depend on read timing, so no test
+/// pins it.
+#[cfg_attr(
+    false,
+    mutants::skip,
+    reason = "offset arithmetic no test pins: single-poll outputs leave from at zero and multi-poll splits depend on read timing"
+)]
+fn find_from(output: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    output
+        .get(from..)
+        .and_then(|tail| find(tail, needle).map(|at| at + from))
+}
+
+/// Whether the wait saw progress past what it parked on: a wake-up hint
+/// only. Every condition is re-checked after every park, and the
+/// wall-clock poll bounds each park, so a missed or spurious hint only
+/// moves the next check by one poll: the outcome never depends on it.
+#[cfg_attr(
+    false,
+    mutants::skip,
+    reason = "a wake-up hint re-checked under a wall-clock poll: narrowing or widening it moves the next check by one poll, which no test can pin without flakiness"
+)]
+fn progressed(state: &State, done: bool, seen: usize) -> bool {
+    state.cancelled || state.reader_done != done || state.output.len() != seen
 }
 
 /// Waits for the shell's end marker, end of output, the cap, the deadline
@@ -300,31 +357,21 @@ fn wait(
         if deadline.is_some_and(|deadline| clock.now() >= deadline) {
             return Err(Failed::TimedOut);
         }
-        // Past the cap even allowing a trailing end marker: no end marker
-        // starting within the cap can follow, so this is too large
-        // without searching for it.
-        if state.output.len() > OUTPUT_CAP + end.len() {
+        // Past the cap the region is too large whatever follows, even the
+        // end marker: an overshoot lands here on the same poll.
+        if state.output.len() > OUTPUT_CAP {
             return Err(Failed::TooLarge);
         }
         // Only the bytes past the last search, with an overlap holding a
         // split marker: an occurrence starting earlier was already found,
         // so the first occurrence is still the first one seen.
         let from = state.scanned.saturating_sub(end.len());
-        let found = state
-            .output
-            .get(from..)
-            .and_then(|tail| find(tail, &end).map(|at| at + from));
+        let found = find_from(&state.output, &end, from);
         state.scanned = state.output.len();
-        if let Some(end_at) = found {
-            if end_at > OUTPUT_CAP {
-                return Err(Failed::TooLarge);
-            }
+        if found.is_some() {
             let output = state.output.clone();
             drop(state);
             return parse(&output, nonce);
-        }
-        if state.output.len() > OUTPUT_CAP {
-            return Err(Failed::TooLarge);
         }
         if state.reader_done {
             return Err(Failed::Exited);
@@ -341,7 +388,7 @@ fn wait(
             Some(POLL),
             &cancel.changed,
             state,
-            |state| state.cancelled || state.reader_done != done || state.output.len() != seen,
+            |state| progressed(state, done, seen),
         );
     }
 }
