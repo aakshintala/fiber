@@ -632,9 +632,11 @@ fn a_message_sent_just_after_the_last_idle_check_is_refused() {
         "the loop parked in its idle wait: {:?}",
         world.clock.parked()
     );
-    // The wake lands first, so the exit check finds an empty inbox.
-    world.send(Delivery::Cancelled);
+    // The clock moves first, then the wake lands, so the exit check
+    // finds an empty inbox: a wake taken before the advance would park
+    // again with no later wake.
     world.clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
     let (looped, outcome) = finished.recv_timeout(DEADLINE).expect("the turn ended");
     assert!(outcome.unwrap().is_none());
     assert!(refused.load(Ordering::SeqCst));

@@ -140,7 +140,7 @@ fn walk_back<T>(mut file: File, len: u64, found: &mut impl FnMut(&[u8]) -> Optio
     // the torn tail, then each earlier window's partial head fused to it.
     let mut carry: Vec<u8> = Vec::new();
     let mut end = len;
-    while end > 0 {
+    while end != 0 {
         let start = end.saturating_sub(STEP);
         file.seek(SeekFrom::Start(start)).ok()?;
         let size = usize::try_from(end - start).ok()?;

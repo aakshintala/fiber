@@ -1929,6 +1929,10 @@ fn a_session_message_while_idle_does_not_arm_the_check_again() {
     );
     (job.end.0)(failed(&id));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
+    // The final wait's deadline is set when it parks: await it before
+    // moving the clock, or a wake taken early parks again with no later
+    // wake and `run` never returns.
+    assert!(clock.await_parked(origin + IDLE * 3, DEADLINE));
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
     ran(&finished);
@@ -1984,6 +1988,10 @@ fn a_session_message_in_the_check_turn_does_not_arm_the_check_again() {
     );
     (job.end.0)(failed(&id));
     assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
+    // The final wait's deadline is set when it parks: await it before
+    // moving the clock, or a wake taken early parks again with no later
+    // wake and `run` never returns.
+    assert!(clock.await_parked(origin + IDLE * 3, DEADLINE));
     clock.advance(IDLE);
     world.send(Delivery::Cancelled);
     ran(&finished);
