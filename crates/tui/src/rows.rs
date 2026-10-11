@@ -132,12 +132,9 @@ impl Rows {
     /// [`Rows::on_surface`], whose edge rows are never padded.
     pub(crate) fn pad(&mut self, from: usize, pad: u16, inner: u16) {
         let mut at = from;
-        loop {
-            let (Some((line, target)), Some(text)) =
-                (self.rows.get(at).cloned(), self.texts.get(at).cloned())
-            else {
-                break;
-            };
+        while let (Some((line, target)), Some(text)) =
+            (self.rows.get(at).cloned(), self.texts.get(at).cloned())
+        {
             let cells = cells_of(&line);
             let off = offsets(&cells);
             let total = off.last().copied().unwrap_or(0);
