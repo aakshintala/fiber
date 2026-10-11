@@ -39,6 +39,7 @@ pub(crate) fn left(clock: &dyn Clock, until: Instant, what: &str) -> Result<Dura
 }
 
 /// Polls `ready` until it holds or `within` passes, naming `what` on expiry.
+#[track_caller]
 pub(crate) fn poll(
     clock: &dyn Clock,
     within: Duration,
@@ -115,6 +116,7 @@ impl Proc {
     /// system clock's however fast `clock` advances; each probe still waits
     /// on `clock`, which is where a test's clock hears that the wait is
     /// under way.
+    #[track_caller]
     pub(crate) fn exits(&mut self, clock: &dyn Clock, within: Duration) -> Result<bool, String> {
         let until = System.now() + within;
         loop {
@@ -135,6 +137,7 @@ impl Proc {
 
     /// Ends the process: SIGTERM, then SIGKILL after [`STOP`], then waits
     /// for its group to empty and stands the watchdog down.
+    #[track_caller]
     pub(crate) fn stop(mut self, clock: &dyn Clock) -> Result<(), String> {
         if !self.exits(clock, Duration::ZERO)? {
             signal(self.group, "TERM")?;
@@ -180,6 +183,7 @@ pub(crate) struct Finished {
 /// group's cleanup error if there was one. Output still open
 /// [`STOP`] after the group is gone, held by a process that left the group,
 /// is an error rather than a wait.
+#[track_caller]
 pub(crate) fn run_to_end(
     command: &mut Command,
     clock: &dyn Clock,
@@ -215,8 +219,12 @@ pub(crate) fn run_to_end(
     };
     stopped?;
     let closed = |text: &mpsc::Receiver<String>| {
-        text.recv_timeout(STOP)
-            .map_err(|_| format!("the output of {what} stayed open"))
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the bench's real-time bound on a stopped process's output closing, timed like its signals"
+        )]
+        let text = text.recv_timeout(STOP);
+        text.map_err(|_| format!("the output of {what} stayed open"))
     };
     Ok(Finished {
         status,
@@ -231,6 +239,7 @@ pub(crate) fn run_to_end(
 /// timed. Past `within` it errs naming `what`. Output still open [`STOP`]
 /// after the group is gone, held by a process that left the group, is an
 /// error rather than a wait.
+#[track_caller]
 pub(crate) fn timed_to_end(
     command: &mut Command,
     clock: &dyn Clock,
@@ -263,9 +272,12 @@ pub(crate) fn timed_to_end(
         }
     };
     stopped?;
-    let stderr = stderr
-        .recv_timeout(STOP)
-        .map_err(|_| format!("the output of {what} stayed open"))?;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the bench's real-time bound on a stopped process's output closing, timed like its signals"
+    )]
+    let stderr = stderr.recv_timeout(STOP);
+    let stderr = stderr.map_err(|_| format!("the output of {what} stayed open"))?;
     Ok((
         Finished {
             status,
@@ -278,6 +290,7 @@ pub(crate) fn timed_to_end(
 
 /// The stdout text with its closing time, the exit status and the
 /// spawn-to-EOF duration: EOF ends the timing, the exit only ends the run.
+#[track_caller]
 fn eof_once(
     proc: &mut Proc,
     eof: mpsc::Receiver<String>,
@@ -286,9 +299,12 @@ fn eof_once(
     what: &str,
 ) -> Result<(ExitStatus, String, Duration), String> {
     let wait = left(clock, proc.spawned + within, what)?;
-    let stdout = eof
-        .recv_timeout(wait)
-        .map_err(|_| format!("timed out waiting for {what}"))?;
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "the bench's wait, computed from its injected clock"
+    )]
+    let stdout = eof.recv_timeout(wait);
+    let stdout = stdout.map_err(|_| format!("timed out waiting for {what}"))?;
     let took = clock.now().saturating_duration_since(proc.spawned);
     // The exit poll only runs after EOF was read.
     proc.exits(clock, within)?;
@@ -422,7 +438,12 @@ impl Session {
         what: &str,
     ) -> Result<Value, String> {
         let wait = left(clock, until, what)?;
-        match self.lines.recv_timeout(wait) {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the bench's wait, computed from its injected clock"
+        )]
+        let line = self.lines.recv_timeout(wait);
+        match line {
             Ok(line) => parse_line(&line),
             Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("timed out waiting for {what}")),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(format!(

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 use fakes::children::{Ready, leaves_descendants};
-use fakes::{TempDir, Watchdog};
+use fakes::{Deadline, TempDir, Watchdog};
 
 use super::{Proc, Startup, System, command, parse_line, run_to_end};
 
@@ -178,6 +178,7 @@ impl Clock for AfterReady {
     fn wall(&self) -> std::time::SystemTime {
         self.inner.wall()
     }
+    #[track_caller]
     fn sleep(&self, d: Duration) {
         let ready = self
             .ready
@@ -187,19 +188,19 @@ impl Clock for AfterReady {
         if let Some(ready) = ready {
             // One deadline for both lines: a scoped thread reads them.
             let (tx, rx) = std::sync::mpsc::channel();
+            let deadline = Deadline::after(READY);
             std::thread::scope(|scope| {
+                let deadline = &deadline;
                 scope.spawn(move || {
-                    ready.wait(READY);
-                    ready.wait(READY);
+                    ready.wait(deadline.left());
+                    ready.wait(deadline.left());
                     match tx.send(()) {
                         Ok(()) | Err(_) => {}
                     }
                 });
-                assert!(
-                    rx.recv_timeout(READY).is_ok(),
-                    "the child's two ready lines"
-                );
             });
+            // Outside the scope closure, which `#[track_caller]` does not cross.
+            assert!(deadline.recv(&rx).is_ok(), "the child's two ready lines");
         }
         self.inner.sleep(d);
     }
@@ -347,6 +348,7 @@ impl Clock for AfterEof {
     fn wall(&self) -> std::time::SystemTime {
         self.inner.wall()
     }
+    #[track_caller]
     fn sleep(&self, d: Duration) {
         if let Some(marker) = self.marker.lock().unwrap().take() {
             std::fs::remove_file(&marker).unwrap();
@@ -477,6 +479,7 @@ impl Clock for ReleaseAfterBound {
     fn wall(&self) -> std::time::SystemTime {
         self.inner.wall()
     }
+    #[track_caller]
     fn sleep(&self, d: Duration) {
         self.inner.sleep(d);
         let slept = self
