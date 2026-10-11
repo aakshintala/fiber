@@ -1209,13 +1209,15 @@ impl Resumed {
 
     fn start(&self, inbox: mpsc::Receiver<Delivery>) -> Loop {
         Loop::start(
-            Arc::clone(&self.log),
-            Arc::clone(&self.provider) as Arc<dyn Provider>,
-            Self::model(),
-            self.prompt(),
-            inbox,
-            Vec::new(),
-            self.permissions(),
+            r#loop::Session {
+                log: Arc::clone(&self.log),
+                provider: Arc::clone(&self.provider) as Arc<dyn Provider>,
+                model: Self::model(),
+                prompt: self.prompt(),
+                inbox,
+                tools: Vec::new(),
+                permissions: self.permissions(),
+            },
             None,
         )
         .unwrap()
@@ -1224,14 +1226,16 @@ impl Resumed {
     fn resume(&mut self, inbox: mpsc::Receiver<Delivery>) -> Loop {
         self.history_len = self.lines().len();
         Loop::resume(
-            Arc::clone(&self.log),
+            r#loop::Session {
+                log: Arc::clone(&self.log),
+                provider: Arc::clone(&self.provider) as Arc<dyn Provider>,
+                model: Self::model(),
+                prompt: self.prompt(),
+                inbox,
+                tools: Vec::new(),
+                permissions: self.permissions(),
+            },
             r#loop::resumed(&self.dir).unwrap(),
-            Arc::clone(&self.provider) as Arc<dyn Provider>,
-            Self::model(),
-            self.prompt(),
-            inbox,
-            Vec::new(),
-            self.permissions(),
         )
         .unwrap()
     }

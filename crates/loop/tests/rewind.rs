@@ -142,26 +142,28 @@ fn start_b(
     ];
     let rules: Arc<dyn contract::rules::Rules> = session.rules.clone();
     let b = Loop::rewound(
-        log,
+        r#loop::Session {
+            log,
+            provider: provider.clone(),
+            model: Model {
+                reference: MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools,
+            permissions: Permissions {
+                workspace: session.workspace.display().to_string(),
+                credentials: session.credentials.clone(),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
         Rewound {
             from,
             note,
             worktree,
-        },
-        provider.clone(),
-        Model {
-            reference: MODEL.into(),
-            cost: None,
-            subscription: false,
-        },
-        prompt,
-        rx,
-        tools,
-        Permissions {
-            workspace: session.workspace.display().to_string(),
-            credentials: session.credentials.clone(),
-            credential_files: Vec::new(),
-            rules,
         },
     )
     .unwrap();
@@ -448,32 +450,34 @@ fn a_resumed_rewound_session_keeps_its_history_note_and_key() {
     prompt.credential = Some("work".into());
     let rules: Arc<dyn contract::rules::Rules> = session.rules.clone();
     let b = Loop::resume(
-        log,
+        r#loop::Session {
+            log,
+            provider: next_provider.clone(),
+            model: Model {
+                reference: MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: vec![
+                (
+                    "builtin".to_owned(),
+                    Arc::clone(&write_tool()) as Arc<dyn Tool>,
+                ),
+                (
+                    "builtin".to_owned(),
+                    Arc::clone(&exec_tool()) as Arc<dyn Tool>,
+                ),
+            ],
+            permissions: Permissions {
+                workspace: session.workspace.display().to_string(),
+                credentials: session.credentials.clone(),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
         folded,
-        next_provider.clone(),
-        Model {
-            reference: MODEL.into(),
-            cost: None,
-            subscription: false,
-        },
-        prompt,
-        rx,
-        vec![
-            (
-                "builtin".to_owned(),
-                Arc::clone(&write_tool()) as Arc<dyn Tool>,
-            ),
-            (
-                "builtin".to_owned(),
-                Arc::clone(&exec_tool()) as Arc<dyn Tool>,
-            ),
-        ],
-        Permissions {
-            workspace: session.workspace.display().to_string(),
-            credentials: session.credentials.clone(),
-            credential_files: Vec::new(),
-            rules,
-        },
     )
     .unwrap();
     let _b = run_turn(b, &tx, "four");
@@ -860,7 +864,24 @@ fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
     prompt.credential = Some("work".into());
     let rules: Arc<dyn contract::rules::Rules> = Arc::new(support::FakeRules::empty());
     let b = Loop::rewound(
-        b_log,
+        r#loop::Session {
+            log: b_log,
+            provider: provider.clone(),
+            model: Model {
+                reference: "fake/model-9".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: Permissions {
+                workspace: "/w".into(),
+                credentials: home.clone(),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
         Rewound {
             from: Point {
                 session_id: SessionId("s_model00000001".into()),
@@ -868,21 +889,6 @@ fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
             },
             note: String::new(),
             worktree: None,
-        },
-        provider.clone(),
-        Model {
-            reference: "fake/model-9".into(),
-            cost: None,
-            subscription: false,
-        },
-        prompt,
-        rx,
-        Vec::new(),
-        Permissions {
-            workspace: "/w".into(),
-            credentials: home.clone(),
-            credential_files: Vec::new(),
-            rules,
         },
     )
     .unwrap();
@@ -1065,23 +1071,25 @@ fn resume_b(
     prompt.credential = Some("work".into());
     let rules: Arc<dyn contract::rules::Rules> = session.rules.clone();
     let looped = Loop::resume(
-        log,
+        r#loop::Session {
+            log,
+            provider: Arc::new(ScriptedProvider::new(Vec::new())),
+            model: Model {
+                reference: MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: Permissions {
+                workspace: session.workspace.display().to_string(),
+                credentials: session.credentials.clone(),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
         folded,
-        Arc::new(ScriptedProvider::new(Vec::new())),
-        Model {
-            reference: MODEL.into(),
-            cost: None,
-            subscription: false,
-        },
-        prompt,
-        rx,
-        Vec::new(),
-        Permissions {
-            workspace: session.workspace.display().to_string(),
-            credentials: session.credentials.clone(),
-            credential_files: Vec::new(),
-            rules,
-        },
     )
     .unwrap();
     (looped, tx, dir)

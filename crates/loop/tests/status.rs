@@ -157,29 +157,31 @@ fn a_resumed_session_writes_one_status_for_its_history() {
     let (inbox, rx) = mpsc::channel::<Delivery>();
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let resumed = Loop::resume(
-        Arc::clone(&session.log),
+        r#loop::Session {
+            log: Arc::clone(&session.log),
+            provider: Arc::clone(&session.provider) as Arc<dyn Provider>,
+            model: Model {
+                reference: MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: r#loop::PromptInputs::new(
+                session.dir.clone(),
+                "/bin/sh".into(),
+                session.dir.join("events.jsonl").display().to_string(),
+                clock,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: r#loop::Permissions {
+                workspace: session.workspace.display().to_string(),
+                credentials: session.credentials.clone(),
+                credential_files: Vec::new(),
+                rules: session.rules.clone(),
+            },
+        },
         r#loop::resumed(&session.dir).unwrap(),
-        Arc::clone(&session.provider) as Arc<dyn Provider>,
-        Model {
-            reference: MODEL.into(),
-            cost: None,
-            subscription: false,
-        },
-        r#loop::PromptInputs::new(
-            session.dir.clone(),
-            "/bin/sh".into(),
-            session.dir.join("events.jsonl").display().to_string(),
-            clock,
-            fakes::CONTEXT_WINDOW,
-        ),
-        rx,
-        Vec::new(),
-        r#loop::Permissions {
-            workspace: session.workspace.display().to_string(),
-            credentials: session.credentials.clone(),
-            credential_files: Vec::new(),
-            rules: session.rules.clone(),
-        },
     )
     .unwrap();
     let finished = run(resumed);

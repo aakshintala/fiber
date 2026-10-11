@@ -4,18 +4,15 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 
 use contract::events::{Event, Rewind, SessionStarted, ToolCallRequested};
 use contract::provider::{Input, ToolDefinition};
 use contract::shapes::{Effect, Point, Worktree};
 use contract::{ActionId, Seq};
-use log::Log;
 use serde_json::Value;
 
 use crate::prompt::{fill, message};
-use crate::{Error, Loop, Model, Permissions, Preamble, PromptInputs, variables};
+use crate::{Error, Loop, Preamble, Session, variables};
 
 pub(crate) mod command;
 
@@ -40,25 +37,12 @@ impl Loop {
     /// log's history to the point. The new session adopts no job, so it
     /// clears its orphans, then builds through [`Loop::resume`], sending
     /// the fold's latest `preamble_built` verbatim as its first request.
-    /// It writes no `preamble_built`: nothing was built.
-    /// `Loop::start`'s arguments otherwise.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the session's whole start: what it continues from rides first"
-    )]
-    pub fn rewound(
-        log: Arc<Log>,
-        start: Rewound,
-        provider: Arc<dyn contract::provider::Provider>,
-        model: Model,
-        prompt: PromptInputs,
-        inbox: Receiver<contract::inbox::Delivery>,
-        tools: Vec<(String, Arc<dyn contract::tool::Tool>)>,
-        permissions: Permissions,
-    ) -> Result<Self, Error> {
-        log.append(
+    /// It writes no `preamble_built`: nothing was built. Everything a new
+    /// loop runs on rides [`crate::Session`].
+    pub fn rewound(session: Session, start: Rewound) -> Result<Self, Error> {
+        session.log.append(
             &Event::SessionStarted(SessionStarted {
-                workspace: permissions.workspace.clone(),
+                workspace: session.permissions.workspace.clone(),
                 variables: variables(),
                 parent: None,
                 forked_from: Some(start.from),
@@ -72,7 +56,7 @@ impl Loop {
             None,
             None,
         )?;
-        let mut folded = crate::resume::resumed(log.dir())?;
+        let mut folded = crate::resume::resumed(session.log.dir())?;
         let logged = folded.preamble.clone();
         // The new session adopts no job: nothing it folds can orphan. It
         // continues the logged build verbatim, so it writes no
@@ -80,16 +64,7 @@ impl Loop {
         // (`docs/events.md`, "Rewind").
         folded.orphans = Vec::new();
         folded.settings = None;
-        let mut rewound = Loop::resume(
-            log,
-            folded,
-            provider,
-            model,
-            prompt,
-            inbox,
-            tools,
-            permissions,
-        )?;
+        let mut rewound = Loop::resume(session, folded)?;
         if let Some(built) = logged {
             let tools = rewound
                 .tools

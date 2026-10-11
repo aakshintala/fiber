@@ -191,17 +191,7 @@ impl crate::Loop {
         turn: Option<&TurnId>,
         action: Option<&ActionId>,
     ) -> Result<(), crate::Error> {
-        crate::util::write(
-            &self.log,
-            &mut self.conversation,
-            &mut self.reviewed,
-            &self.model.reference,
-            &Event::UsageRecorded(recorded.clone()),
-            turn,
-            action,
-            &mut self.changes.had,
-            &mut self.handoff.carry,
-        )?;
+        self.write(&Event::UsageRecorded(recorded.clone()), turn, action)?;
         self.ledger.record(recorded);
         Ok(())
     }

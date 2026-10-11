@@ -1966,19 +1966,22 @@ fn resume_interleaving_holds_arrival_order() {
     let rules = Arc::new(support::FakeRules::empty());
     let tool = Arc::new(support::TestTool::reads("read", "ok"));
     let mut looped = r#loop::Loop::resume(
-        Arc::clone(&log),
-        r#loop::resumed(&dir).unwrap(),
-        Arc::new(ScriptedProvider::new(vec![Scripted::text("Fin.")])) as Arc<dyn Provider>,
-        model_of(MODEL),
-        prompt,
-        inbox_rx,
-        vec![("builtin".into(), tool as Arc<dyn contract::tool::Tool>)],
-        r#loop::Permissions {
-            workspace: workspace_dir.display().to_string(),
-            credentials,
-            credential_files: Vec::new(),
-            rules,
+        r#loop::Session {
+            log: Arc::clone(&log),
+            provider: Arc::new(ScriptedProvider::new(vec![Scripted::text("Fin.")]))
+                as Arc<dyn Provider>,
+            model: model_of(MODEL),
+            prompt,
+            inbox: inbox_rx,
+            tools: vec![("builtin".into(), tool as Arc<dyn contract::tool::Tool>)],
+            permissions: r#loop::Permissions {
+                workspace: workspace_dir.display().to_string(),
+                credentials,
+                credential_files: Vec::new(),
+                rules,
+            },
         },
+        r#loop::resumed(&dir).unwrap(),
     )
     .unwrap()
     .switcher(prepare, switchable());
@@ -2589,19 +2592,21 @@ fn run_deferred_case(case: &DeferredCase) {
     let rules = Arc::new(support::FakeRules::empty());
     let tool = Arc::new(support::TestTool::reads("read", "ok"));
     let mut looped = r#loop::Loop::resume(
-        Arc::clone(&log),
-        r#loop::resumed(&dir).unwrap(),
-        Arc::clone(&finishing) as Arc<dyn Provider>,
-        model_of(MODEL),
-        prompt,
-        inbox_rx,
-        vec![("builtin".into(), tool as Arc<dyn contract::tool::Tool>)],
-        r#loop::Permissions {
-            workspace: workspace_dir.display().to_string(),
-            credentials,
-            credential_files: Vec::new(),
-            rules,
+        r#loop::Session {
+            log: Arc::clone(&log),
+            provider: Arc::clone(&finishing) as Arc<dyn Provider>,
+            model: model_of(MODEL),
+            prompt,
+            inbox: inbox_rx,
+            tools: vec![("builtin".into(), tool as Arc<dyn contract::tool::Tool>)],
+            permissions: r#loop::Permissions {
+                workspace: workspace_dir.display().to_string(),
+                credentials,
+                credential_files: Vec::new(),
+                rules,
+            },
         },
+        r#loop::resumed(&dir).unwrap(),
     )
     .unwrap()
     .switcher(prepare, switchable());

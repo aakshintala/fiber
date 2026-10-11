@@ -262,30 +262,32 @@ fn live_reviewer() {
         .unwrap();
     drop(inbox);
     let looped = r#loop::Loop::start(
-        Arc::clone(&log),
-        session,
-        r#loop::Model {
-            reference: "fake/model-1".into(),
-            cost: None,
-            subscription: false,
-        },
-        r#loop::PromptInputs::new(
-            home.path().to_path_buf(),
-            "/bin/sh".into(),
-            home.path()
-                .join("s_live/events.jsonl")
-                .display()
-                .to_string(),
-            clock,
-            fakes::CONTEXT_WINDOW,
-        ),
-        rx,
-        vec![("builtin".to_owned(), Arc::new(Shell) as Arc<dyn Tool>)],
-        r#loop::Permissions {
-            workspace: workspace.display().to_string(),
-            credentials,
-            credential_files: Vec::new(),
-            rules: Arc::new(EmptyRules),
+        r#loop::Session {
+            log: Arc::clone(&log),
+            provider: session,
+            model: r#loop::Model {
+                reference: "fake/model-1".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: r#loop::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_live/events.jsonl")
+                    .display()
+                    .to_string(),
+                clock,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: vec![("builtin".to_owned(), Arc::new(Shell) as Arc<dyn Tool>)],
+            permissions: r#loop::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials,
+                credential_files: Vec::new(),
+                rules: Arc::new(EmptyRules),
+            },
         },
         None,
     )

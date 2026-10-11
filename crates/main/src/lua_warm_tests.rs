@@ -188,13 +188,15 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
     );
     let (inbox, deliveries) = mpsc::channel();
     let looped = Loop::start(
-        log,
-        parts.provider,
-        parts.model,
-        parts.prompt,
-        deliveries,
-        Vec::new(),
-        permissions,
+        r#loop::Session {
+            log,
+            provider: parts.provider,
+            model: parts.model,
+            prompt: parts.prompt,
+            inbox: deliveries,
+            tools: Vec::new(),
+            permissions,
+        },
         None,
     )
     .unwrap()

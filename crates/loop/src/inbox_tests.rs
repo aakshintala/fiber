@@ -71,30 +71,32 @@ fn started_with(worktree: Option<Worktree>) -> (Loop, Arc<Log>, log::Watcher, fa
         Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
     let (_inbox, rx) = mpsc::channel::<Delivery>();
     let looped = Loop::start(
-        Arc::clone(&log),
-        Arc::new(fakes::ScriptedProvider::new(Vec::new())),
-        Model {
-            reference: "fake/model".into(),
-            cost: None,
-            subscription: false,
-        },
-        crate::prompt::PromptInputs::new(
-            home.path().to_path_buf(),
-            "/bin/sh".into(),
-            home.path()
-                .join("s_test/events.jsonl")
-                .display()
-                .to_string(),
-            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
-            fakes::CONTEXT_WINDOW,
-        ),
-        rx,
-        Vec::new(),
-        crate::Permissions {
-            workspace: workspace.display().to_string(),
-            credentials,
-            credential_files: Vec::new(),
-            rules: Arc::new(NoRules),
+        crate::Session {
+            log: Arc::clone(&log),
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials,
+                credential_files: Vec::new(),
+                rules: Arc::new(NoRules),
+            },
         },
         worktree,
     )

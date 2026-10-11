@@ -371,33 +371,35 @@ impl World {
             by_call: Mutex::new(by_call.into()),
         };
         let looped = Loop::start(
-            Arc::clone(&log),
-            Arc::new(during),
-            Model {
-                reference: "fake/model".into(),
-                cost: None,
-                subscription: false,
-            },
-            crate::prompt::PromptInputs::new(
-                home.path().to_path_buf(),
-                "/bin/sh".into(),
-                home.path()
-                    .join("s_test/events.jsonl")
-                    .display()
-                    .to_string(),
-                clock,
-                fakes::CONTEXT_WINDOW,
-            ),
-            rx,
-            tools(&inbox)
-                .into_iter()
-                .map(|tool| ("builtin".to_owned(), tool))
-                .collect(),
-            crate::Permissions {
-                workspace: workspace.display().to_string(),
-                credentials,
-                credential_files: Vec::new(),
-                rules: Arc::new(AskGated),
+            crate::Session {
+                log: Arc::clone(&log),
+                provider: Arc::new(during),
+                model: Model {
+                    reference: "fake/model".into(),
+                    cost: None,
+                    subscription: false,
+                },
+                prompt: crate::prompt::PromptInputs::new(
+                    home.path().to_path_buf(),
+                    "/bin/sh".into(),
+                    home.path()
+                        .join("s_test/events.jsonl")
+                        .display()
+                        .to_string(),
+                    clock,
+                    fakes::CONTEXT_WINDOW,
+                ),
+                inbox: rx,
+                tools: tools(&inbox)
+                    .into_iter()
+                    .map(|tool| ("builtin".to_owned(), tool))
+                    .collect(),
+                permissions: crate::Permissions {
+                    workspace: workspace.display().to_string(),
+                    credentials,
+                    credential_files: Vec::new(),
+                    rules: Arc::new(AskGated),
+                },
             },
             None,
         )
@@ -647,23 +649,27 @@ fn delegate_mode_writes_its_parent_and_no_worktree() {
         };
         match parent {
             Some(parent) => Loop::delegate(
-                log,
-                Arc::new(ScriptedProvider::new(Vec::new())),
-                model,
-                prompt,
-                rx,
-                Vec::new(),
-                permissions,
+                crate::Session {
+                    log,
+                    provider: Arc::new(ScriptedProvider::new(Vec::new())),
+                    model,
+                    prompt,
+                    inbox: rx,
+                    tools: Vec::new(),
+                    permissions,
+                },
                 parent,
             ),
             None => Loop::start(
-                log,
-                Arc::new(ScriptedProvider::new(Vec::new())),
-                model,
-                prompt,
-                rx,
-                Vec::new(),
-                permissions,
+                crate::Session {
+                    log,
+                    provider: Arc::new(ScriptedProvider::new(Vec::new())),
+                    model,
+                    prompt,
+                    inbox: rx,
+                    tools: Vec::new(),
+                    permissions,
+                },
                 None,
             ),
         }

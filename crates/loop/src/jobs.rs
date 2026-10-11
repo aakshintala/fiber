@@ -314,17 +314,7 @@ impl Loop {
                 });
                 continue;
             }
-            crate::util::write(
-                &self.log,
-                &mut self.conversation,
-                &mut self.reviewed,
-                &self.model.reference,
-                &Event::JobCompleted(completed),
-                None,
-                None,
-                &mut self.changes.had,
-                &mut self.handoff.carry,
-            )?;
+            self.write(&Event::JobCompleted(completed), None, None)?;
         }
         Ok(())
     }

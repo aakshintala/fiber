@@ -106,18 +106,14 @@ impl Loop {
             handoff,
             ..
         } = self;
+        let mut transcript = util::Transcript {
+            conversation,
+            reviewed,
+            had: &mut changes.had,
+            carry: &mut handoff.carry,
+        };
         let mut emit = |event: &Event, action: &ActionId| {
-            util::write(
-                log,
-                conversation,
-                reviewed,
-                &model.reference,
-                event,
-                Some(turn),
-                Some(action),
-                &mut changes.had,
-                &mut handoff.carry,
-            )
+            transcript.write(log, &model.reference, event, Some(turn), Some(action))
         };
         // debt: a reasoning fragment does not say which reasoning item it
         // belongs to, so a run of reasoning fragments with nothing between is

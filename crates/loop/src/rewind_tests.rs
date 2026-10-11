@@ -372,7 +372,24 @@ fn a_rewound_loop_takes_its_thinking_and_its_trigger_from_the_logged_build() {
     let _tx = tx;
     let rules: std::sync::Arc<dyn contract::rules::Rules> = std::sync::Arc::new(NoRules);
     let looped = Loop::rewound(
-        log,
+        crate::Session {
+            log,
+            provider: std::sync::Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: crate::Model {
+                reference: "fake/model-1".to_owned(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: home.display().to_string(),
+                credentials: home.clone(),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
         Rewound {
             from: contract::shapes::Point {
                 session_id: SessionId("s_parent00000001".to_owned()),
@@ -380,21 +397,6 @@ fn a_rewound_loop_takes_its_thinking_and_its_trigger_from_the_logged_build() {
             },
             note: String::new(),
             worktree: None,
-        },
-        std::sync::Arc::new(fakes::ScriptedProvider::new(Vec::new())),
-        crate::Model {
-            reference: "fake/model-1".to_owned(),
-            cost: None,
-            subscription: false,
-        },
-        prompt,
-        rx,
-        Vec::new(),
-        crate::Permissions {
-            workspace: home.display().to_string(),
-            credentials: home.clone(),
-            credential_files: Vec::new(),
-            rules,
         },
     )
     .unwrap();
@@ -497,7 +499,24 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
     let _tx = tx;
     let rules: std::sync::Arc<dyn contract::rules::Rules> = std::sync::Arc::new(NoRules);
     Loop::rewound(
-        log,
+        crate::Session {
+            log,
+            provider: std::sync::Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: crate::Model {
+                reference: "fake/model-1".to_owned(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: home.display().to_string(),
+                credentials: home.clone(),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
         Rewound {
             from: contract::shapes::Point {
                 session_id: SessionId("s_parent00000001".to_owned()),
@@ -505,21 +524,6 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
             },
             note: String::new(),
             worktree: None,
-        },
-        std::sync::Arc::new(fakes::ScriptedProvider::new(Vec::new())),
-        crate::Model {
-            reference: "fake/model-1".to_owned(),
-            cost: None,
-            subscription: false,
-        },
-        prompt,
-        rx,
-        Vec::new(),
-        crate::Permissions {
-            workspace: home.display().to_string(),
-            credentials: home.clone(),
-            credential_files: Vec::new(),
-            rules,
         },
     )
     .unwrap();

@@ -397,17 +397,7 @@ impl Loop {
         for event in std::iter::once(Event::OpeningMessage(message))
             .chain(notices.into_iter().map(Event::Notice))
         {
-            crate::util::write(
-                &self.log,
-                &mut self.conversation,
-                &mut self.reviewed,
-                &self.model.reference,
-                &event,
-                turn,
-                None,
-                &mut self.changes.had,
-                &mut self.handoff.carry,
-            )?;
+            self.write(&event, turn, None)?;
         }
         Ok(())
     }

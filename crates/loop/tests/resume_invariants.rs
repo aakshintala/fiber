@@ -95,29 +95,31 @@ impl support::History {
     fn resume(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> r#loop::Loop {
         let root = self.root.path().to_path_buf();
         r#loop::Loop::resume(
-            Arc::clone(&self.log),
+            r#loop::Session {
+                log: Arc::clone(&self.log),
+                provider: Arc::clone(&self.provider) as Arc<dyn Provider>,
+                model: r#loop::Model {
+                    reference: support::MODEL.into(),
+                    cost: None,
+                    subscription: false,
+                },
+                prompt: r#loop::PromptInputs::new(
+                    root.clone(),
+                    "/bin/sh".into(),
+                    root.join("events.jsonl").display().to_string(),
+                    Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
+                    fakes::CONTEXT_WINDOW,
+                ),
+                inbox: self.inbox_rx.take().unwrap(),
+                tools,
+                permissions: r#loop::Permissions {
+                    workspace: self.workspace.clone(),
+                    credentials: self.credentials.clone(),
+                    credential_files: Vec::new(),
+                    rules: self.rules.clone(),
+                },
+            },
             r#loop::resumed(&self.dir).unwrap(),
-            Arc::clone(&self.provider) as Arc<dyn Provider>,
-            r#loop::Model {
-                reference: support::MODEL.into(),
-                cost: None,
-                subscription: false,
-            },
-            r#loop::PromptInputs::new(
-                root.clone(),
-                "/bin/sh".into(),
-                root.join("events.jsonl").display().to_string(),
-                Arc::clone(&self.clock) as Arc<dyn contract::clock::Clock>,
-                fakes::CONTEXT_WINDOW,
-            ),
-            self.inbox_rx.take().unwrap(),
-            tools,
-            r#loop::Permissions {
-                workspace: self.workspace.clone(),
-                credentials: self.credentials.clone(),
-                credential_files: Vec::new(),
-                rules: self.rules.clone(),
-            },
         )
         .unwrap()
         .answerable(false)

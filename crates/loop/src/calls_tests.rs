@@ -376,30 +376,32 @@ fn start(rules: Arc<FakeRules>) -> (Loop, fakes::TempDir, PathBuf, PathBuf) {
     let rules: Arc<dyn Rules> = rules;
     let prompt_clock: Arc<dyn contract::clock::Clock> = clock;
     let looped = Loop::start(
-        log,
-        Arc::new(fakes::ScriptedProvider::new(Vec::new())),
-        Model {
-            reference: "fake/model".into(),
-            cost: None,
-            subscription: false,
-        },
-        crate::prompt::PromptInputs::new(
-            home.path().to_path_buf(),
-            "/bin/sh".into(),
-            home.path()
-                .join("s_test/events.jsonl")
-                .display()
-                .to_string(),
-            prompt_clock,
-            fakes::CONTEXT_WINDOW,
-        ),
-        rx,
-        Vec::new(),
-        crate::Permissions {
-            workspace: workspace.display().to_string(),
-            credentials: credentials.clone(),
-            credential_files: Vec::new(),
-            rules,
+        crate::Session {
+            log,
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                prompt_clock,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: credentials.clone(),
+                credential_files: Vec::new(),
+                rules,
+            },
         },
         None,
     )
@@ -816,33 +818,35 @@ fn run_turn(
         .unwrap();
     let rules: Arc<dyn Rules> = Arc::new(FakeRules::default());
     let mut looped = Loop::start(
-        log,
-        Arc::clone(&provider) as Arc<dyn Provider>,
-        Model {
-            reference: "fake/model".into(),
-            cost: None,
-            subscription: false,
-        },
-        crate::prompt::PromptInputs::new(
-            home.path().to_path_buf(),
-            "/bin/sh".into(),
-            home.path()
-                .join("s_test/events.jsonl")
-                .display()
-                .to_string(),
-            Arc::clone(&clock),
-            fakes::CONTEXT_WINDOW,
-        ),
-        rx,
-        tools
-            .into_iter()
-            .map(|tool| ("builtin".to_owned(), tool))
-            .collect(),
-        crate::Permissions {
-            workspace: workspace.display().to_string(),
-            credentials,
-            credential_files: Vec::new(),
-            rules,
+        crate::Session {
+            log,
+            provider: Arc::clone(&provider) as Arc<dyn Provider>,
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: tools
+                .into_iter()
+                .map(|tool| ("builtin".to_owned(), tool))
+                .collect(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials,
+                credential_files: Vec::new(),
+                rules,
+            },
         },
         None,
     )
