@@ -27,7 +27,7 @@ use contract::events::{
 };
 use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::provider::{
-    CallError, Delta, ModelCall, ModelRequest, Provider, Reply, ReplyAction, ToolDefinition,
+    CallError, Delta, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction, ToolDefinition,
 };
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
@@ -1320,6 +1320,25 @@ impl Session {
         .cancelled_by(Arc::clone(&self.cancel))
         .inbox_wake(wake);
         self.looped = Some(looped);
+    }
+
+    /// Resumes the session's log and runs one `again` turn, returning
+    /// what the resumed request was built from without the prompt: what
+    /// `rebuild` over the whole log returned. The last thing a test does
+    /// with the session: the provider's script holds one more reply.
+    pub(crate) fn rebuilt(&mut self) -> Vec<Input> {
+        self.resume(Vec::new());
+        self.inbox.send(delivery("again")).unwrap();
+        assert_eq!(self.turn(), Some(TurnOutcome::Completed));
+        let mut conversation = self.requests().pop().unwrap().conversation;
+        assert_eq!(
+            conversation.pop(),
+            Some(Input::User {
+                text: "again".into(),
+                images: Vec::new(),
+            })
+        );
+        conversation
     }
 
     /// Whether a person can answer an approval.

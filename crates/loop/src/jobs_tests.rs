@@ -1419,7 +1419,8 @@ fn close_with_a_job_running_gives_the_ending_notice_then_waits_for_the_job() {
     let requests = world.requests();
     assert_eq!(requests.len(), 3);
     // A resume renders the notice from the log as the loop sent it.
-    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let rebuilt =
+        crate::conversation::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
     let sent = &requests[2].conversation;
     assert_eq!(rebuilt[..sent.len()], sent[..]);
     assert_eq!(
@@ -2287,7 +2288,8 @@ fn a_batch_while_idle_starts_a_turn_named_by_its_monitor() {
         })
     );
     // A resume renders the batch from the log as the loop sent it.
-    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let rebuilt =
+        crate::conversation::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
     let sent = &requests[0].conversation;
     assert_eq!(rebuilt[..sent.len()], sent[..]);
 }
@@ -2325,7 +2327,8 @@ fn a_monitors_batches_and_its_end_are_one_jobs_item_naming_it_once() {
             rendered(JOB),
         ]
     );
-    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let rebuilt =
+        crate::conversation::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
     let sent = &world.requests()[0].conversation;
     assert_eq!(rebuilt[..sent.len()], sent[..]);
 }
@@ -2377,7 +2380,8 @@ fn a_batch_while_a_call_runs_is_written_at_the_next_step_boundary() {
         users.contains(&format!("Fiber: monitor {JOB} printed:\nready")),
         "{users:?}"
     );
-    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let rebuilt =
+        crate::conversation::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
     let sent = &requests[1].conversation;
     assert_eq!(rebuilt[..sent.len()], sent[..]);
 }

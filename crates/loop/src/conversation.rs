@@ -32,8 +32,11 @@ const NEVER_RAN: &str = "It never ran.";
 const OUTCOME_UNKNOWN: &str = "Its outcome is unknown: it may have run.";
 
 /// The conversation `lines` render, for a session whose model reference is
-/// `model`. Lines of kinds this build does not know are skipped.
-pub fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
+/// `model`. Lines of kinds this build does not know are skipped. Only tests
+/// rebuild a whole log directly; production resumes through
+/// [`rebuild_and_sent`].
+#[cfg(test)]
+pub(crate) fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
     let (mut conversation, _, mut held, _) =
         rebuild_and_sent(lines, model, &HashSet::new(), Carry::default())?;
     conversation.append(&mut held);

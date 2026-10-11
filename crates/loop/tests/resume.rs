@@ -1250,6 +1250,29 @@ fn is_accepted(seen: &Arc<Mutex<Option<Answer>>>) -> bool {
 }
 
 impl support::History {
+    /// Renews the inbox, resumes headless and runs one `again` turn,
+    /// returning what the resumed request was built from without the
+    /// prompt: what `rebuild` over the whole log returned. The last thing
+    /// a test does with the history: the provider's script holds one more
+    /// reply.
+    fn rebuilt(&mut self) -> Vec<Input> {
+        let (tx, rx) = mpsc::channel();
+        self.inbox_tx = tx;
+        self.inbox_rx = Some(rx);
+        let looped = self.resume_headless(Vec::new());
+        let outcome = self.run(looped, "again");
+        assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+        let mut conversation = self.provider.requests().pop().unwrap().conversation;
+        assert_eq!(
+            conversation.pop(),
+            Some(Input::User {
+                text: "again".into(),
+                images: Vec::new(),
+            })
+        );
+        conversation
+    }
+
     /// Resumes with `tools` as an unattended session answers: no person
     /// can answer an approval.
     fn resume_headless(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
@@ -2928,7 +2951,7 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
     // The orphan line is written on open, as on every resume; the notice
     // joins the conversation after the open batch's results, live and on
     // rebuild alike, so no message separates a call from its result.
-    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Again.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_9"));
     history.write(requested("shell", "Paris"), Some("a_0"));
@@ -2980,7 +3003,7 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
         })
     );
     // A later resume renders the same conversation from the log.
-    let rebuilt = r#loop::rebuild(&history.lines(), MODEL).unwrap();
+    let rebuilt = history.rebuilt();
     assert_eq!(&rebuilt[..conversation.len()], conversation.as_slice());
 }
 
@@ -2989,7 +3012,7 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
     // The first resume logs the orphan and the process exits again on the
     // same request; the second resume reads the orphan from the log and
     // still sends it after the open batch's results.
-    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Again.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_9"));
     history.write(requested("shell", "Paris"), Some("a_0"));
@@ -3022,7 +3045,7 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
     let conversation = &requests[0].conversation;
-    let rebuilt = r#loop::rebuild(&lines, MODEL).unwrap();
+    let rebuilt = history.rebuilt();
     assert_eq!(&rebuilt[..conversation.len()], conversation.as_slice());
     // The rebuild puts the opening message at index 0, so the a_1 call is
     // followed directly by its result, and the notice follows the result.
