@@ -665,6 +665,9 @@ The kinds are `docs/events.md`.
   `read` tool ("Bounded results"). There is no output action.
 - Its optional properties and the `minimum` limit put its schema outside the
   strict subset, so it is sent with `strict: false`.
+- `delegate_spawn`'s `model` is neither required nor typed in its schema, because
+  the tool checks it and lists the valid roles and references (`docs/delegates.md`,
+  "Choosing a model"), so `delegate_spawn` is sent with `strict: false`.
 - The model-facing tool is one `jobs` tool with actions `list`, `wait`,
   `stop` and `write`. `wait` blocks up to a timeout. Cancelling a wait (for
   example because the turn is cancelled) stops only the wait and leaves the

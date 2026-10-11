@@ -33,7 +33,8 @@ pub(crate) struct Delegates {
     jobs: Arc<jobs::Registry>,
     /// The session clock.
     clock: Arc<dyn Clock>,
-    /// Resolves a `fiber:` reference, or lists the valid ones.
+    /// Resolves a `delegate_spawn` `model` argument, and lists the
+    /// catalogue every refusal carries.
     resolve: jobs::Resolve,
     /// Builds the child's command.
     launch: jobs::Launch,
@@ -86,55 +87,93 @@ impl Delegates {
             // "Shutdown").
             bound: doors::SHUTDOWN_BOUND,
             cap: OUTPUT_CAP,
-            resolve: Arc::clone(&self.resolve),
+            resolve: self.resolve.clone(),
             launch: Arc::clone(&self.launch),
             watch: Arc::clone(&self.watch),
         }
     }
+
+    /// The `delegate_models` tool this session declares: the catalogue
+    /// built with the session's resolver.
+    pub(crate) fn models(&self) -> jobs::DelegateModels {
+        jobs::DelegateModels {
+            catalogue: Arc::clone(&self.resolve.catalogue),
+        }
+    }
 }
 
-/// Resolves a delegate's model through the installed providers: only full
-/// `fiber:<provider>/<model>[:<level>]` references are accepted, and an
-/// explicit level must be one the model takes, checked with the same rule
-/// `--model` uses (`docs/delegates.md`, "Choosing a model"). Anything else
-/// fails with the valid references, `fiber:<provider>/<model>` one per line.
+/// Resolves a delegate's model through the installed providers and the
+/// configured roles: an argument that equals a role name is that role,
+/// anything else is a full `fiber:<provider>/<model>[:<level>]` reference
+/// (`docs/delegates.md`, "Choosing a model"). An explicit level must be
+/// one the model takes, checked with the same rule `--model` uses. A
+/// role's target is resolved as a reference only: roles never chain. Both
+/// the lookup and the catalogue are built from one providers and
+/// configuration snapshot, so they never disagree within a session.
 pub(crate) fn resolver(
     providers: &extensions::Providers,
     config: &config::Config,
 ) -> jobs::Resolve {
     let providers = providers.clone();
     let config = config.clone();
-    Arc::new(move |reference| resolve(&providers, &config, reference))
-}
-
-/// The valid references: every installed model as `fiber:<provider>/<model>`.
-fn valid(providers: &extensions::Providers) -> Vec<String> {
-    let mut references = Vec::new();
-    for name in providers.names() {
-        if let Some(provider) = providers.get(name) {
-            for model in &provider.models {
-                references.push(format!("fiber:{name}/{}", model.id));
-            }
-        }
+    let listed = providers.clone();
+    let read = config.clone();
+    jobs::Resolve {
+        lookup: Arc::new(move |argument| lookup(&providers, &config, argument)),
+        catalogue: Arc::from(catalogue(&listed, &read)),
     }
-    references
 }
 
-fn resolve(
+/// Resolves one `delegate_spawn` `model` argument to the
+/// `provider/model[:level]` the child is started with, or refuses it with
+/// one reason sentence.
+fn lookup(
+    providers: &extensions::Providers,
+    config: &config::Config,
+    argument: &str,
+) -> Result<String, String> {
+    if let Some(target) = role_target(config, argument) {
+        return resolve_reference(providers, config, &target)
+            .map_err(|reason| format!("Role {argument:?} maps to {target:?}: {reason}"));
+    }
+    resolve_reference(providers, config, argument)
+}
+
+/// A role's target reference as configured now: a string value is the
+/// target, and an object's string `model` is the target while its
+/// `credential` is ignored. Any other shape was already rejected when
+/// configuration loaded (`crates/config/src/keys.rs`, `Kind::Role`), so it
+/// resolves as no role.
+fn role_target(config: &config::Config, name: &str) -> Option<String> {
+    let merged = config.merged(None);
+    let roles = merged.get("roles")?;
+    let value = roles.get(name)?;
+    if let Some(target) = value.as_str() {
+        return Some(target.to_owned());
+    }
+    value.get("model")?.as_str().map(str::to_owned)
+}
+
+/// Resolves a full `fiber:<provider>/<model>[:<level>]` reference to the
+/// `provider/model[:level]` the child is started with, or refuses it with
+/// one reason sentence: `Unknown delegate model "<arg>".` for anything
+/// not naming an installed model, or the thinking rule's message for a
+/// level the model does not take. Without the prefix the reference is
+/// refused even when the plain lookup would take it, and a bare id
+/// without a provider is refused too.
+fn resolve_reference(
     providers: &extensions::Providers,
     config: &config::Config,
     reference: &str,
-) -> Result<String, Vec<String>> {
-    // Roles and other harnesses are later tickets: without the prefix the
-    // reference is refused even when the plain lookup would take it, and a
-    // bare id without a provider is refused too.
+) -> Result<String, String> {
+    let unknown = || format!("Unknown delegate model {reference:?}.");
     let Some(rest) = reference.strip_prefix("fiber:") else {
-        return Err(valid(providers));
+        return Err(unknown());
     };
     if !rest.contains('/') {
-        return Err(valid(providers));
+        return Err(unknown());
     }
-    let resolved = providers.resolve(rest).map_err(|_| valid(providers))?;
+    let resolved = providers.resolve(rest).map_err(|_| unknown())?;
     if let Some(level) = resolved.thinking {
         let reference = resolved.reference();
         let mut notices = Vec::new();
@@ -146,11 +185,81 @@ fn resolve(
             &reference,
             &mut notices,
         ) {
-            return Err(vec![failure.message]);
+            return Err(failure.message);
         }
         return Ok(format!("{reference}:{level}"));
     }
     Ok(resolved.reference())
+}
+
+/// The catalogue text `delegate_models` returns and every model refusal
+/// lists: the configured roles, what each maps to now, and the full
+/// references available. Roles and references are each sorted by name. A
+/// role whose target is not a usable reference is marked ` (unavailable)`.
+fn catalogue(providers: &extensions::Providers, config: &config::Config) -> String {
+    let mut roles: Vec<(String, String)> = config
+        .merged(None)
+        .get("roles")
+        .and_then(|roles| roles.as_object())
+        .map(|roles| {
+            roles
+                .iter()
+                .filter_map(|(name, value)| {
+                    let target = if let Some(target) = value.as_str() {
+                        target.to_owned()
+                    } else {
+                        value.get("model")?.as_str()?.to_owned()
+                    };
+                    Some((name.clone(), target))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    roles.sort();
+    let mut references: Vec<String> = Vec::new();
+    for name in providers.names() {
+        if let Some(provider) = providers.get(name) {
+            for model in &provider.models {
+                let reference = format!("fiber:{name}/{}", model.id);
+                if model.thinking_levels.is_empty() {
+                    references.push(reference);
+                } else {
+                    let levels = model
+                        .thinking_levels
+                        .iter()
+                        .map(|level| level.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    references.push(format!("{reference} (thinking: {levels})"));
+                }
+            }
+        }
+    }
+    references.sort();
+    let roles_text = if roles.is_empty() {
+        String::from("Roles: none")
+    } else {
+        let mut text = String::from("Roles:");
+        for (name, target) in &roles {
+            let marker = if resolve_reference(providers, config, target).is_ok() {
+                ""
+            } else {
+                " (unavailable)"
+            };
+            text.push_str(&format!("\n{name}: {target}{marker}"));
+        }
+        text
+    };
+    let references_text = if references.is_empty() {
+        String::from("References: none")
+    } else {
+        let mut text = String::from("References:");
+        for reference in &references {
+            text.push_str(&format!("\n{reference}"));
+        }
+        text
+    };
+    format!("{roles_text}\n{references_text}")
 }
 
 /// Builds the child's command from its launch: the running binary
