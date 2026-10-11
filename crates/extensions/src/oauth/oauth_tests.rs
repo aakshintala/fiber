@@ -345,6 +345,95 @@ fn failed(reply: Reply) -> (contract::ErrorCode, String) {
 }
 
 #[test]
+fn a_released_port_lets_a_foreign_listener_reset_the_redirect() {
+    // The bind-and-release pattern this removes: the port number outlives
+    // the listener that chose it, so another process can bind it first.
+    let released = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    // A foreign listener takes the released port before the package binds
+    // it. It accepts, waits for the request bytes, then drops the
+    // connection with them unread, which resets it: the ticket's
+    // `ConnectionReset` in the redirect's `read_to_string`.
+    let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, released))
+        .expect("the released port stayed free for the foreign listener");
+    let reset = thread::spawn(move || {
+        let (stream, _) = foreign.accept().expect("the redirect connects");
+        stream
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        let mut probe = [0_u8; 1];
+        // Bounded: the redirect writes its request next, so its bytes
+        // arrive; anything else fails the test instead of hanging it.
+        for _ in 0..500 {
+            if stream.peek(&mut probe).is_ok() {
+                break;
+            }
+        }
+        drop(stream);
+    });
+    let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, released)).unwrap();
+    stream.set_read_timeout(Some(WAIT)).unwrap();
+    std::io::Write::write_all(
+        &mut stream,
+        b"GET /cb?code=1 HTTP/1.1\r\nHost: x\r\n\r\n",
+    )
+    .unwrap();
+    let mut reply = String::new();
+    let err = stream.read_to_string(&mut reply).unwrap_err();
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::ConnectionReset,
+        "a reset foreign listener fails the redirect"
+    );
+    reset.join().unwrap();
+}
+
+#[test]
+fn a_held_listener_serves_the_redirect_with_no_gap_for_a_foreign_listener() {
+    // Bound at port 0 and never released, so choosing the port and binding
+    // it leave no gap: no other process can take the port in between.
+    let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = held.local_addr().unwrap().port();
+    assert!(
+        TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err(),
+        "no foreign listener takes the held port"
+    );
+    let (tx, rx) = mpsc::channel();
+    let deliver: Deliver = Arc::new(move |reply| match tx.send(reply) {
+        Ok(()) | Err(_) => {}
+    });
+    let Ok(cancel) = listen(port, None, &deliver) else {
+        panic!("the callback serves the redirect on the held port");
+    };
+    let mut stream = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    stream.set_read_timeout(Some(WAIT)).unwrap();
+    std::io::Write::write_all(
+        &mut stream,
+        b"GET /?code=abc&state=s HTTP/1.1\r\nHost: x\r\n\r\n",
+    )
+    .unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).unwrap();
+    assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
+    let Reply::Query(Ok(pairs)) = Deadline::after(WAIT).recv(&rx).expect("the reply arrives")
+    else {
+        panic!("the callback delivered its query");
+    };
+    assert_eq!(
+        pairs,
+        [
+            ("code".to_owned(), "abc".to_owned()),
+            ("state".to_owned(), "s".to_owned())
+        ]
+    );
+    drop(held);
+    drop(cancel);
+}
+
+#[test]
 fn a_request_whose_query_cannot_be_read_is_unreadable_reply() {
     let port = bind(0).unwrap().local_addr().unwrap().port();
     let (tx, rx) = mpsc::channel();
