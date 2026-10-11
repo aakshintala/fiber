@@ -6,22 +6,17 @@
 //! the stop reason (`research/anthropic-messages-probe`).
 
 use std::collections::BTreeMap;
-use std::io::{BufReader, Read};
 use std::path::Path;
-use std::sync::Arc;
 
 use contract::ActionId;
 use contract::events::CacheLifetime;
-use contract::provider::{
-    CallError, Delta, Input, InputSize, ModelCall, ModelRequest, Provider, Reply, ToolDefinition,
-};
+use contract::provider::{Input, ModelCall, ModelRequest, Provider, ToolDefinition};
 use serde_json::{Map, Value, json};
 
 pub use crate::anthropic_messages_decode::decode;
 use crate::anthropic_messages_decode::decode_tracked;
-use crate::http::{self, Cancel};
-use crate::redact::Secrets;
-use crate::{Endpoint, Error, strict};
+pub use crate::call::Call;
+use crate::{Endpoint, strict};
 
 /// The wire version every request declares (`research/anthropic-messages-probe`).
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -53,36 +48,31 @@ impl Messages {
 
     /// Builds the call for `request`. Two calls built from the same inputs
     /// send the same bytes (`docs/prompt-cache.md`, "Bytes").
+    #[allow(
+        clippy::result_large_err,
+        reason = "the decode carries its partial alongside the error for the call's usage"
+    )]
     pub fn request(&self, request: &ModelRequest) -> Call {
         let endpoint = &self.endpoint;
-        let mut headers = vec![
-            ("content-type".to_owned(), "application/json".to_owned()),
-            ("accept".to_owned(), "text/event-stream".to_owned()),
-            ("anthropic-version".to_owned(), ANTHROPIC_VERSION.to_owned()),
-            (
-                "user-agent".to_owned(),
-                concat!("fiber/", env!("CARGO_PKG_VERSION")).to_owned(),
-            ),
-        ];
-        if let Some(key) = &endpoint.key {
-            headers.push(("x-api-key".to_owned(), key.expose().to_owned()));
-        }
-        headers.extend(endpoint.headers.iter().cloned());
-        if let Some(name) = &self.cache_key_header {
-            headers.push((name.clone(), request.cache_key.clone()));
-        }
+        let headers = crate::call::base_headers(
+            endpoint,
+            &[("anthropic-version", ANTHROPIC_VERSION)],
+            endpoint
+                .key
+                .as_ref()
+                .map(|key| ("x-api-key", key.expose().to_owned())),
+            self.cache_key_header.as_deref(),
+            &request.cache_key,
+        );
         let body = body(endpoint, request);
-        Call {
-            url: format!("{}/messages", endpoint.base_url.trim_end_matches('/')),
+        Call::new(
+            endpoint,
+            request,
+            format!("{}/messages", endpoint.base_url.trim_end_matches('/')),
             headers,
-            input_size: crate::images::input_size(&body, request, endpoint.text_only),
             body,
-            provider: endpoint.provider.clone(),
-            signer: endpoint.signer.clone(),
-            route: http::Route::of(endpoint),
-            cancel: Arc::default(),
-            secrets: endpoint.secrets(),
-        }
+            |stream, _, sink| decode_tracked(stream, sink),
+        )
     }
 }
 
@@ -104,81 +94,6 @@ impl Provider for Messages {
                 request.thinking,
                 Some(level) if level != contract::ThinkingLevel::Off
             ))
-    }
-}
-
-/// One `anthropic-messages` call, ready to send.
-pub struct Call {
-    url: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-    input_size: InputSize,
-    provider: String,
-    signer: Option<Arc<dyn contract::signing::Signer>>,
-    route: http::Route,
-    cancel: Arc<Cancel>,
-    secrets: Secrets,
-}
-
-impl Call {
-    /// Sends the request and returns the reply's bytes, unread.
-    pub fn open(&self) -> Result<impl Read + use<>, Error> {
-        let mut secrets = self.secrets.clone();
-        http::post_signed(
-            &self.url,
-            &self.headers,
-            &self.body,
-            self.signer.as_deref(),
-            &self.route,
-            &self.cancel,
-            &mut secrets,
-        )
-        .map(|(body, _)| body)
-    }
-}
-
-impl ModelCall for Call {
-    fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let mut secrets = self.secrets.clone();
-        let (decoded, should_retry) = match http::post_signed(
-            &self.url,
-            &self.headers,
-            &self.body,
-            self.signer.as_deref(),
-            &self.route,
-            &self.cancel,
-            &mut secrets,
-        ) {
-            Ok((stream, should_retry)) => {
-                (decode_tracked(BufReader::new(stream), sink), should_retry)
-            }
-            Err(e) => {
-                let should_retry = e.should_retry();
-                (Err((e, None)), should_retry)
-            }
-        };
-        // Whatever a cancelled call returns, the cancel ended it.
-        if self.cancel.is_cancelled() {
-            return Err(CallError::Cancelled {
-                usage: crate::unfinished::carried(&decoded, self.input_size),
-            });
-        }
-        let usage = crate::unfinished::carried(&decoded, self.input_size);
-        match decoded {
-            Ok(mut reply) => {
-                reply.input_size = self.input_size;
-                Ok(reply)
-            }
-            Err((error, _)) => Err(CallError::Failed {
-                failure: error.failure(&self.provider, &secrets),
-                should_retry,
-                usage,
-            }),
-        }
-    }
-
-    fn cancel(&self) {
-        self.cancel.cancel();
     }
 }
 
