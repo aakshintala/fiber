@@ -131,7 +131,7 @@ fn rules(app: &App) -> Vec<Vec<String>> {
     texts
         .iter()
         .enumerate()
-        .filter(|(_, text)| *text == "you answered")
+        .filter(|(_, text)| *text == " you answered")
         .map(|(at, _)| {
             texts
                 .iter()
@@ -147,7 +147,7 @@ fn rules(app: &App) -> Vec<Vec<String>> {
 fn ledger(app: &App) -> String {
     texts(app)
         .into_iter()
-        .find(|text| !text.starts_with('•') && text.contains(" ask_user "))
+        .find(|text| !text.trim_start().starts_with('•') && text.contains(" ask_user "))
         .unwrap_or_default()
 }
 
@@ -174,10 +174,10 @@ fn an_answered_form_adds_the_rule_and_reads_answered() {
     assert_eq!(
         rules(&app),
         vec![vec![
-            "you answered",
-            "Base: main (Recommended), dev, \"and tags\"",
-            "Name: skipped",
-            "note: \"by friday\"",
+            " you answered",
+            " Base: main (Recommended), dev, \"and tags\"",
+            " Name: skipped",
+            " note: \"by friday\"",
         ]]
     );
     assert!(ledger(&app).ends_with(" · answered"), "{}", ledger(&app));
@@ -397,7 +397,7 @@ fn a_new_request_id_on_the_same_call_replaces_asked() {
     feed(&mut app, lines);
     assert_eq!(
         rules(&app),
-        vec![vec!["you answered", "Name: \"fiber-cli\""]]
+        vec![vec![" you answered", " Name: \"fiber-cli\""]]
     );
     assert!(ledger(&app).ends_with(" · answered"), "{}", ledger(&app));
 }
@@ -414,7 +414,7 @@ fn answers_shorter_than_fields_draw_only_answered_rows() {
             json!({"answers": [{"labels": ["dev"]}]}),
         )],
     );
-    assert_eq!(rules(&app), vec![vec!["you answered", "Base: dev"]]);
+    assert_eq!(rules(&app), vec![vec![" you answered", " Base: dev"]]);
 }
 
 #[test]
@@ -431,7 +431,7 @@ fn answers_longer_than_fields_drop_the_extra() {
     );
     assert_eq!(
         rules(&app),
-        vec![vec!["you answered", "Base: skipped", "Name: skipped"]]
+        vec![vec![" you answered", " Base: skipped", " Name: skipped"]]
     );
 }
 
@@ -459,8 +459,8 @@ fn the_rule_escapes_newlines_and_quotes() {
     assert_eq!(
         rules(&app),
         vec![vec![
-            "you answered",
-            "Pick\\nnow: a\\tb \\\"c\\\", \"x\\ny\"",
+            " you answered",
+            " Pick\\nnow: a\\tb \\\"c\\\", \"x\\ny\"",
         ]]
     );
 }
@@ -485,9 +485,9 @@ fn the_rule_sits_where_the_answer_landed_and_the_group_stays_open() {
     );
     let texts = texts(&app);
     let read = texts.iter().position(|text| text.ends_with("read a.rs"));
-    let rule = texts.iter().position(|text| text == "you answered");
+    let rule = texts.iter().position(|text| text == " you answered");
     assert!(read.is_some() && read < rule, "{texts:#?}");
-    let groups = texts.iter().filter(|text| text.starts_with("• ")).count();
+    let groups = texts.iter().filter(|text| text.starts_with(" • ")).count();
     assert_eq!(groups, 1, "{texts:#?}");
 }
 
@@ -529,7 +529,7 @@ fn a_page_loaded_from_history_draws_the_same_card() {
     let live = pages.rows();
     assert!(
         live.iter()
-            .any(|(line, _)| line.to_string() == "you answered"),
+            .any(|(line, _)| line.to_string() == " you answered"),
         "the rule is drawn live"
     );
     assert_eq!(pages.page_count(), 2);
@@ -629,7 +629,7 @@ fn the_group_line_counts_the_questions_asked() {
     );
     let texts = texts(&app);
     assert!(
-        texts.contains(&"• Asked 4 questions, 1 other call".to_owned()),
+        texts.contains(&" • Asked 4 questions, 1 other call".to_owned()),
         "{texts:#?}"
     );
 }

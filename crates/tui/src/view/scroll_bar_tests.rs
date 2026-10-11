@@ -1,7 +1,7 @@
 //! The scroll bar's geometry: its thumb rows, its column split and the
 //! width the conversation's rows wrap at.
 
-use super::{THUMB, TRACK, split, text_width, thumb};
+use super::{THUMB, split, text_width, thumb};
 use crate::app::App;
 use crate::link::Line;
 use crate::markdown::Role;
@@ -125,7 +125,8 @@ fn a_full_row_leaves_the_bar_column_blank() {
         .map(|y| (0..WIDTH).filter(|x| buf[(*x, y)].symbol() == "w").count())
         .max()
         .unwrap_or(0);
-    assert_eq!(widest, 59);
+    // The reply wraps at the card's inner width of 57.
+    assert_eq!(widest, 57);
 }
 
 /// Fourteen done turns: a history taller than the screen.
@@ -220,11 +221,10 @@ fn scroll_bar_at_the_end() {
 fn no_scroll_bar_when_everything_fits() {
     let app = replied("hi");
     let buf = rendered(&app, WIDTH, HEIGHT);
-    // Neither glyph in the bar's column.
+    // No thumb in the bar's column while everything fits.
     let conversation = app.conversation_area();
     for y in conversation.top()..conversation.bottom() {
         assert_ne!(buf[(WIDTH - 1, y)].symbol(), THUMB, "row {y}");
-        assert_ne!(buf[(WIDTH - 1, y)].symbol(), TRACK, "row {y}");
     }
     insta::assert_snapshot!(
         "no_scroll_bar_when_everything_fits",
@@ -233,10 +233,10 @@ fn no_scroll_bar_when_everything_fits() {
 }
 
 #[test]
-fn the_bar_is_muted_and_its_glyphs_differ() {
-    // The bar is a rule with a grip: both glyphs share the muted role,
-    // and differ by glyph, so no colour keeps them apart.
-    assert_ne!(THUMB, TRACK);
+fn the_thumb_is_heavy_in_scroll_and_there_is_no_track() {
+    // The thumb is a heavy vertical bar in the scroll tint; the cells
+    // off it stay blank, with the background the buffer already has
+    // (`docs/tui.md`, "Turns").
     let app = tall();
     let buf = rendered(&app, WIDTH, HEIGHT);
     let conversation = app.conversation_area();
@@ -245,16 +245,15 @@ fn the_bar_is_muted_and_its_glyphs_differ() {
     let empty = Buffer::empty(Rect::new(0, 0, WIDTH, HEIGHT));
     for y in conversation.top()..conversation.bottom() {
         let cell = &buf[(WIDTH - 1, y)];
-        assert_eq!(cell.fg, Role::Muted.color(), "row {y}");
+        if covered.contains(&(y - conversation.y)) {
+            assert_eq!(cell.symbol(), THUMB, "row {y}");
+            assert_eq!(cell.fg, Role::Scroll.color(), "row {y}");
+        } else {
+            assert_eq!(cell.symbol(), " ", "row {y}");
+        }
         // The bar sets the foreground and the symbol only: its cells
         // keep the background the buffer already has.
         assert_eq!(cell.bg, empty[(WIDTH - 1, y)].bg, "row {y}");
-        let want = if covered.contains(&(y - conversation.y)) {
-            THUMB
-        } else {
-            TRACK
-        };
-        assert_eq!(cell.symbol(), want, "row {y}");
     }
 }
 
@@ -267,7 +266,6 @@ fn no_bar_at_one_column() {
     let buf = rendered(&app, 1, HEIGHT);
     for y in 0..HEIGHT {
         assert_ne!(buf[(0, y)].symbol(), THUMB, "row {y}");
-        assert_ne!(buf[(0, y)].symbol(), TRACK, "row {y}");
     }
     // A direct draw into the zero-width bar rect touches nothing.
     let (_, bar) = split(Rect::new(0, 0, 1, HEIGHT));
@@ -288,7 +286,6 @@ fn a_notice_draws_over_the_bar() {
     let cell = &buf[(WIDTH - 1, app.conversation_area().y)];
     assert_eq!(cell.symbol(), "✕");
     assert_ne!(cell.symbol(), THUMB);
-    assert_ne!(cell.symbol(), TRACK);
 }
 
 #[test]
@@ -315,13 +312,7 @@ fn a_bar_below_the_top_row_draws_its_thumb_on_its_own_rows() {
     let covered = thumb(top, total, bar.height).expect("a thumb while taller");
     for y in 0..10u16 {
         let want = match y.checked_sub(bar.y) {
-            Some(at) if at < bar.height => {
-                if covered.contains(&at) {
-                    THUMB
-                } else {
-                    TRACK
-                }
-            }
+            Some(at) if at < bar.height && covered.contains(&at) => THUMB,
             _ => " ",
         };
         assert_eq!(buf[(bar.x, y)].symbol(), want, "row {y}");

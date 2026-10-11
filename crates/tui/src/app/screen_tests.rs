@@ -197,21 +197,18 @@ fn reveal_scrolls_up_to_a_row_above_the_top_and_follows_at_the_bottom() {
     let total = total(&screen);
     let mut items = screen.pages().focus_items();
     items.sort_by_key(|(row, _, _)| *row);
-    let (tall, rows, _) = items
-        .iter()
-        .copied()
-        .find(|(_, rows, _)| *rows > 2)
-        .expect("a wrapped item");
-    // An item taller than the height shows its first rows.
-    screen.reveal(tall, 2);
-    assert_eq!(screen.top(), Some(tall), "{rows} rows");
+    // Every focus stop is one row: each card row draws whole.
+    assert!(!items.is_empty());
+    assert!(items.iter().all(|(_, rows, _)| *rows == 1));
+    let (above, _, _) = items[4];
+    let (below, _, _) = items[items.len() - 2];
+    // An item above the top shows its row.
+    screen.jump(100);
+    assert_eq!(screen.top(), Some(100));
+    screen.reveal(above, 2);
+    assert_eq!(screen.top(), Some(above));
     // An item below the screen scrolls down just far enough.
-    let (below, below_rows, _) = items
-        .iter()
-        .copied()
-        .find(|(row, _, _)| *row > tall + 4)
-        .expect("an item below");
-    let end = below + below_rows.min(2);
+    let end = below + 1;
     assert!(end - 2 < total - 2, "{items:?}");
     screen.reveal(below, 2);
     assert_eq!(screen.top(), Some(end - 2));

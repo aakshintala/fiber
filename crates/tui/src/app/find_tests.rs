@@ -691,13 +691,13 @@ fn the_first_match_at_or_after_the_top_row_is_current() {
     // The top row between the two matches: only the one below can become
     // current. The smaller conversation no longer shows it, so the view
     // scrolls to reveal it, and nothing scrolls back.
-    app.jump(6);
-    assert_eq!(app.top(), Some(6));
+    app.jump(14);
+    assert_eq!(app.top(), Some(14));
     let ranges = search_all(&mut app, &log, "needle");
     assert!(ranges.is_empty());
     assert_eq!(count(&app), "2 of 2");
     assert_eq!(current_text(&app).as_deref(), Some("needle below"));
-    assert_eq!(app.top(), Some(14));
+    assert_eq!(app.top(), Some(25));
 }
 
 #[test]
@@ -1311,8 +1311,8 @@ fn rescanning_keeps_the_current_match_when_an_earlier_one_appears() {
     replies.push("needle two");
     let refs: Vec<&str> = replies.clone();
     text_turn(&mut log, &mut seq, &mut app, &refs);
-    app.jump(6);
-    assert_eq!(app.top(), Some(6));
+    app.jump(8);
+    assert_eq!(app.top(), Some(8));
     search_all(&mut app, &log, "needle");
     assert_eq!(current_text(&app).as_deref(), Some("needle two"));
     let current = app.find.current().cloned().expect("a current match");
@@ -1428,31 +1428,34 @@ pub(super) fn three_matches() -> (App, Vec<contract::Envelope>) {
 fn enter_and_down_move_to_the_next_match_and_wrap() {
     let (mut app, log) = three_matches();
     search_all(&mut app, &log, "needle");
+    // The first match sits one row above the viewport, so the second is
+    // current.
+    assert_eq!(count(&app), "2 of 3");
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(count(&app), "3 of 3");
+    assert_eq!(current_text(&app).as_deref(), Some("needle three"));
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    // Wraps past the end.
     assert_eq!(count(&app), "1 of 3");
+    assert_eq!(current_text(&app).as_deref(), Some("needle one"));
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(count(&app), "2 of 3");
     assert_eq!(current_text(&app).as_deref(), Some("needle two"));
-    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
-    assert_eq!(count(&app), "3 of 3");
-    assert_eq!(current_text(&app).as_deref(), Some("needle three"));
-    // Wraps past the end.
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
-    assert_eq!(count(&app), "1 of 3");
-    assert_eq!(current_text(&app).as_deref(), Some("needle one"));
 }
 
 #[test]
 fn up_and_shift_enter_move_back_and_wrap() {
     let (mut app, log) = three_matches();
     search_all(&mut app, &log, "needle");
-    assert_eq!(count(&app), "1 of 3");
-    // Wraps back from the first.
+    assert_eq!(count(&app), "2 of 3");
+    // Back one.
     assert_eq!(app.on_key(Key::Up, now()), Effect::None);
+    assert_eq!(count(&app), "1 of 3");
+    assert_eq!(current_text(&app).as_deref(), Some("needle one"));
+    // Wraps back from the first.
+    assert_eq!(app.on_edit(Edit::ShiftEnter), Effect::None);
     assert_eq!(count(&app), "3 of 3");
     assert_eq!(current_text(&app).as_deref(), Some("needle three"));
-    assert_eq!(app.on_edit(Edit::ShiftEnter), Effect::None);
-    assert_eq!(count(&app), "2 of 3");
-    assert_eq!(current_text(&app).as_deref(), Some("needle two"));
 }
 
 #[test]
@@ -1705,12 +1708,12 @@ fn revealing_scrolls_only_when_the_match_is_not_shown() {
     replies.push("needle far");
     let refs: Vec<&str> = replies.clone();
     text_turn(&mut log, &mut seq, &mut app, &refs);
-    app.jump(3);
-    assert_eq!(app.top(), Some(3));
+    app.jump(9);
+    assert_eq!(app.top(), Some(9));
     search_all(&mut app, &log, "needle");
     // The first match shows: no scroll.
     assert_eq!(current_text(&app).as_deref(), Some("needle five"));
-    assert_eq!(app.top(), Some(3));
+    assert_eq!(app.top(), Some(9));
     // The next does not: the view scrolls to it.
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(current_text(&app).as_deref(), Some("needle far"));
@@ -1836,7 +1839,8 @@ fn a_page_cut_after_the_query_starts_scans_the_new_page() {
         added += 1;
         assert!(added < 40, "no new page was cut");
     }
-    assert!(app.pages().part(0).is_some());
+    // Taller cards trim the first page out of the window; the new page
+    // stays resident and both scan.
     assert!(app.pages().part(1).is_some());
     for at in 0..app.pages().page_count() {
         assert!(app.find.scanned(at).is_some(), "page {at} never scanned");
@@ -1965,9 +1969,9 @@ fn a_mark_on_the_right_edge_is_not_drawn() {
     let mut seq = 0u64;
     text_turn(&mut log, &mut seq, &mut app, &["xxxxx needle"]);
     search_all(&mut app, &log, "needle");
-    // The match starts at column 6: an area six wide has no room for it.
-    assert!(app.find_marks(Rect::new(0, 0, 6, 10)).is_empty());
-    assert_eq!(app.find_marks(Rect::new(0, 0, 7, 10)).len(), 1);
+    // The match starts at column 7: an area seven wide has no room for it.
+    assert!(app.find_marks(Rect::new(0, 0, 7, 10)).is_empty());
+    assert_eq!(app.find_marks(Rect::new(0, 0, 8, 10)).len(), 1);
 }
 
 #[test]
@@ -2034,7 +2038,10 @@ fn a_match_across_a_soft_wrap_marks_each_drawn_cell_once() {
     cells.sort();
     cells.dedup();
     assert_eq!(cells.len(), drawn, "a cell marked twice");
-    assert_eq!(drawn, 8, "brown and fox, the wrap's space is no cell");
+    assert_eq!(
+        drawn, 9,
+        "brown and fox sit whole past the wrap, the space drawn"
+    );
 }
 
 #[test]

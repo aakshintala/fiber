@@ -84,7 +84,7 @@ fn a_steer_keeps_its_images() {
     let (rows, _) = out.into_parts();
     let shown: Vec<String> = rows.into_iter().map(|(line, _)| line.to_string()).collect();
     assert!(shown.iter().any(|line| line.contains("wait")));
-    assert!(shown.contains(&"▣ s.png · 1280×800".to_owned()));
+    assert!(shown.contains(&" ▣ s.png · 1280×800".to_owned()));
 }
 
 #[test]

@@ -41,7 +41,7 @@ mod working_line;
 pub(crate) use home::max_question_scroll;
 
 /// The overlay shown while scrolled up once new output arrives.
-const NEW_BELOW: &str = "↓ New messages below";
+const NEW_BELOW: &str = " ↓ New messages below · End ";
 
 /// Shown on the conversation's top row after a copy.
 const COPIED: &str = "Copied";
@@ -544,22 +544,39 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         start = next;
     }
     if overlay {
+        // The pill over the conversation's bottom row: its ends and its
+        // label reset the cells they cover, keeping the background under
+        // them, so no modifier from the row below survives
+        // (`docs/tui.md`, "Turns"). The row is never blanked.
         let row = area.bottom().saturating_sub(1);
-        let blank = " ".repeat(usize::from(area.width));
-        buf.set_stringn(
-            area.x,
-            row,
-            blank,
-            usize::from(area.width),
-            Style::default(),
+        let mut cells: Vec<(String, bool)> = Vec::with_capacity(30);
+        cells.push(("▐".to_owned(), false));
+        cells.extend(
+            Line::raw(NEW_BELOW)
+                .styled_graphemes(Style::default())
+                .map(|grapheme| (grapheme.symbol.to_owned(), true)),
         );
-        let width = to_u16(NEW_BELOW.chars().count());
-        let x = area.x.saturating_add(area.width.saturating_sub(width) / 2);
-        let (end, _) =
-            buf.set_stringn(x, row, NEW_BELOW, usize::from(area.width), Style::default());
+        cells.push(("▌".to_owned(), false));
+        let start = area
+            .x
+            .saturating_add(area.width.saturating_sub(to_u16(cells.len())) / 2);
+        let end = start.saturating_add(to_u16(cells.len())).min(area.right());
+        for (x, (symbol, is_label)) in (start..end).zip(cells) {
+            let cell = &mut buf[(x, row)];
+            let bg = cell.bg;
+            cell.reset();
+            cell.bg = bg;
+            cell.set_symbol(&symbol);
+            if is_label {
+                cell.set_fg(Role::Attention.color());
+                cell.set_bg(Role::Rule.color());
+            } else {
+                cell.set_fg(Role::Rule.color());
+            }
+        }
         targets.push(Target {
             id: TargetId::NewBelow,
-            rect: Rect::new(x, row, end.saturating_sub(x), 1),
+            rect: Rect::new(start, row, end.saturating_sub(start), 1),
         });
     }
     if app.copied() && area.height > 0 {

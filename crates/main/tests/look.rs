@@ -23,9 +23,9 @@ use std::time::Duration;
 
 use fakes::clock::FakeClock;
 use support::pty::{
-    Colour, FINISHED_TITLE, Grid, HOME_TITLE, MOTION, Reader, Run, Shared, Writer, contains,
-    exact_end, hub_gone, hub_pids, list_processes, query_replies, sgr_params, until_hub_exits,
-    until_hub_exits_with,
+    Colour, FINISHED_TITLE, Grid, HOME_TITLE, MOTION, Reader, Run, Shared, WAITING_TITLE, Writer,
+    contains, exact_end, hub_gone, hub_pids, list_processes, query_replies, sgr_params,
+    until_hub_exits, until_hub_exits_with,
 };
 use support::{Deadline, Setup, TRUECOLOUR};
 
@@ -726,7 +726,7 @@ fn truecolour_draws_the_input_box_as_a_striped_surface() {
             assert_eq!(screen.cell(x, y).bg, Colour::Default);
         }
     }
-    // The reply draws in the default colour, not dim, on a surface card.
+    // The reply draws in the default colour, not dim, on a turn card.
     let mut reply = false;
     for y in 0..48 {
         for x in 0..158 {
@@ -736,13 +736,13 @@ fn truecolour_draws_the_input_box_as_a_striped_surface() {
                     let cell = screen.cell(x + dx, y);
                     assert_eq!(cell.fg, Colour::Default);
                     assert!(!cell.dim);
-                    assert_eq!(cell.bg, SURFACE_RGB);
+                    assert_eq!(cell.bg, TURN_RGB);
                 }
                 reply = true;
             }
         }
     }
-    assert!(reply, "the reply on a surface card");
+    assert!(reply, "the reply on a turn card");
 }
 
 #[test]
@@ -1014,4 +1014,517 @@ fn inside_tmux_no_stripe_draws_and_its_cell_keeps_the_tint() {
     assert_eq!(stripe.symbol.as_str(), " ");
     assert_eq!(stripe.bg, SURFACE_RGB);
     assert_eq!(screen.cell(BOX_LEFT + 2, INPUT_ROW).symbol.as_str(), "›");
+}
+
+/// The dark theme's turn card, prompt bubble, attention and scroll bar in
+/// truecolour (`docs/tui.md`, "Themes").
+const TURN_RGB: Colour = Colour::Rgb(16, 16, 23);
+const PROMPT_RGB: Colour = Colour::Rgb(52, 53, 65);
+const ATTENTION_RGB: Colour = Colour::Rgb(255, 159, 67);
+const SCROLL_RGB: Colour = Colour::Rgb(128, 128, 128);
+
+/// Escape and Alt+A as the kitty keyboard protocol encodes them
+/// (`crates/tui/src/keys.rs`).
+const ESC: &[u8] = b"\x1b[27u";
+const ALT_A: &[u8] = b"\x1b[97;3u";
+
+/// The pill's row on `grid`, if it draws with its ends and label.
+fn pill_at(grid: &Grid) -> Option<u16> {
+    (0..48).find(|y| {
+        let pill: String = (48..=77).map(|x| grid.cell(x, *y).symbol).collect();
+        pill == "▐ ↓ New messages below · End ▌"
+    })
+}
+
+/// The pill and scroll bar have every cell property checked below.
+fn pill_is_complete(grid: &Grid) -> bool {
+    let Some(row) = pill_at(grid) else {
+        return false;
+    };
+    if !(48..=77).all(|x| {
+        let cell = grid.cell(x, row);
+        !cell.dim
+            && !cell.bold
+            && !cell
+                .symbol
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_digit)
+    }) {
+        return false;
+    }
+    if grid.cell(48, row).fg != RULE_RGB || grid.cell(77, row).fg != RULE_RGB {
+        return false;
+    }
+    if !(49..=76).all(|x| {
+        let cell = grid.cell(x, row);
+        cell.fg == ATTENTION_RGB && cell.bg == RULE_RGB
+    }) {
+        return false;
+    }
+    let mut thumbs = 0;
+    for y in 0..=row {
+        let cell = grid.cell(125, y);
+        if cell.symbol == "┃" {
+            if cell.fg != SCROLL_RGB {
+                return false;
+            }
+            thumbs += 1;
+        } else if cell.symbol != " " {
+            return false;
+        }
+    }
+    thumbs > 0
+        && (0..48).all(|y| {
+            let symbol = grid.cell(125, y).symbol;
+            symbol != "│" && symbol != "█"
+        })
+}
+
+/// Whether the followed frame has every cell property asserted below.
+fn followed_end_is_complete(grid: &Grid) -> bool {
+    if grid.contents.contains("New messages below")
+        || !grid.contents.contains("Done.")
+        || grid
+            .rows
+            .iter()
+            .filter(|row| row.contains("▣ completed"))
+            .count()
+            != 2
+    {
+        return false;
+    }
+    let bubble: Vec<u16> = (0..48)
+        .filter(|y| {
+            (36..=124).all(|x| grid.cell(x, *y).bg == PROMPT_RGB)
+                && grid.cell(124, *y).symbol == "▐"
+        })
+        .collect();
+    if bubble.len() != 2 || bubble[0] < 2 || bubble[1] + 4 >= 48 {
+        return false;
+    }
+    let first = bubble[0];
+    let second = bubble[1];
+    if !bubble
+        .iter()
+        .all(|y| grid.cell(35, *y).bg == Colour::Default && grid.cell(124, *y).fg == ACCENT_RGB)
+    {
+        return false;
+    }
+    if grid.cell(36, first).symbol != " "
+        || grid.cell(37, first).symbol != "a"
+        || grid.cell(123, first).symbol != " "
+    {
+        return false;
+    }
+    for (y, edge) in [(first - 1, "▄"), (second + 1, "▀")] {
+        if !(36..=124).all(|x| {
+            let cell = grid.cell(x, y);
+            cell.symbol == edge && cell.fg == PROMPT_RGB && cell.bg == Colour::Default
+        }) {
+            return false;
+        }
+    }
+    if !(1..=124).all(|x| {
+        let cell = grid.cell(x, first - 2);
+        cell.symbol == " " && cell.bg == Colour::Default
+    }) {
+        return false;
+    }
+    let time_row = second + 2;
+    let time: String = (0..160).map(|x| grid.cell(x, time_row).symbol).collect();
+    if !is_time_row(time.trim())
+        || (0..125).rfind(|x| grid.cell(*x, time_row).symbol != " ") != Some(123)
+        || !(0..125).all(|x| {
+            let cell = grid.cell(x, time_row);
+            cell.symbol == " " || cell.dim
+        })
+        || grid.cell(124, time_row).symbol != " "
+    {
+        return false;
+    }
+    if !(1..=124).all(|x| grid.cell(x, second + 3).symbol == " ") {
+        return false;
+    }
+    let card_top = second + 4;
+    if !(1..=124).all(|x| {
+        let cell = grid.cell(x, card_top);
+        cell.symbol == "▄" && cell.fg == TURN_RGB && cell.bg == Colour::Default
+    }) {
+        return false;
+    }
+    let Some(card_bottom) = (card_top..48).find(|y| {
+        (1..=124).all(|x| grid.cell(x, *y).symbol == "▀" && grid.cell(x, *y).fg == TURN_RGB)
+    }) else {
+        return false;
+    };
+    if !(card_top + 1..card_bottom).all(|y| {
+        (1..=124).all(|x| grid.cell(x, y).bg == TURN_RGB)
+            && grid.cell(1, y).symbol == " "
+            && grid.cell(124, y).symbol == " "
+    }) {
+        return false;
+    }
+    let row_with = |needle: &str| {
+        (card_top + 1..card_bottom).find(|y| {
+            (0..160)
+                .map(|x| grid.cell(x, *y).symbol)
+                .collect::<String>()
+                .contains(needle)
+        })
+    };
+    let (Some(group), Some(steer), Some(said), Some(done)) = (
+        row_with("Ran 1 command"),
+        row_with("steer"),
+        row_with("use x"),
+        row_with("Done."),
+    ) else {
+        return false;
+    };
+    if ![(group, '•'), (steer, 's'), (said, 'u'), (done, 'D')]
+        .into_iter()
+        .all(|(y, first)| {
+            grid.cell(1, y).symbol == " " && grid.cell(2, y).symbol == first.to_string()
+        })
+        || said != steer + 1
+        || [(group, steer), (said, done)]
+            .into_iter()
+            .any(|(first, second)| {
+                second != first + 2 || !(1..=124).all(|x| grid.cell(x, first + 1).symbol == " ")
+            })
+    {
+        return false;
+    }
+    if (2..=6)
+        .map(|x| grid.cell(x, steer).symbol)
+        .collect::<String>()
+        != "steer"
+        || !(2..=6).all(|x| {
+            let cell = grid.cell(x, steer);
+            cell.fg == ATTENTION_RGB && cell.bold
+        })
+        || !(7..=15).all(|x| grid.cell(x, steer).dim)
+        || !(16..=123).all(|x| {
+            let cell = grid.cell(x, steer);
+            cell.symbol == "─" && cell.fg == RULE_RGB
+        })
+        || !(2..=6).all(|x| grid.cell(x, said).bold)
+    {
+        return false;
+    }
+    let Some(closing) = (card_top + 1..card_bottom).find(|y| {
+        (0..160)
+            .map(|x| grid.cell(x, *y).symbol)
+            .collect::<String>()
+            .contains("1 call")
+    }) else {
+        return false;
+    };
+    let closed: String = (0..160).map(|x| grid.cell(x, closing).symbol).collect();
+    closing == done + 2
+        && (0..125).all(|x| {
+            let cell = grid.cell(x, closing);
+            cell.symbol == " " || cell.dim
+        })
+        && !closed.contains("token")
+        && !closed.contains('$')
+}
+
+/// Whether `text` matches `you HH:MM`.
+fn is_time_row(text: &str) -> bool {
+    let cells = text.as_bytes();
+    cells.len() >= 9
+        && cells[..4] == *b"you "
+        && cells[4].is_ascii_digit()
+        && cells[5].is_ascii_digit()
+        && cells[6] == b':'
+        && cells[7].is_ascii_digit()
+        && cells[8].is_ascii_digit()
+}
+
+#[test]
+fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
+    let setup = Setup::new();
+    let items: Vec<String> = (1..=60).map(|n| format!("- item {n:02}")).collect();
+    support::write_json(
+        &setup.workspace().join("s.json"),
+        &serde_json::json!({"steps": [
+            {"text": [items.join("\n")]},
+            {"tool_calls": [{"name": "shell", "arguments": {"command": "echo hi"}}]},
+            {"text": ["Done."]},
+        ]}),
+    );
+    fs::write(
+        setup.home().join("rules"),
+        serde_json::json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"}).to_string()
+            + "\n",
+    )
+    .unwrap();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &serde_json::json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 1000}}),
+    );
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    let from = run.output().len();
+    run.write(b"say hi\r");
+    run.turn_finished(from);
+    // A prompt whose first bubble row is exactly 86 cells: 42 a's, a
+    // space, 43 b's, then a second row of c's.
+    let long = format!("{} {} {}", "a".repeat(42), "b".repeat(43), "c".repeat(20));
+    let from2 = run.output().len();
+    run.write(long.as_bytes());
+    run.write(b"\r");
+    // The shell call waits on a standing-ask approval.
+    run.wait_screen("the approval panel", |grid| {
+        grid.contents.contains("allow once")
+    });
+    run.wait_bytes(from2, WAITING_TITLE, "the waiting turn");
+    // Esc puts the request aside; the input box comes back.
+    run.write(ESC);
+    run.wait_screen("the input box", |grid| {
+        !grid.contents.contains("allow once") && grid.contents.contains("›")
+    });
+    // A steer typed into the input box queues visibly.
+    run.write(b"use x\r");
+    run.wait_screen("the steering queue", |grid| {
+        grid.contents.contains("↳ use x")
+    });
+    // Alt+A reopens the request; the wheel needs motion reports first.
+    run.write(ALT_A);
+    run.wait_screen("the reopened approval", |grid| {
+        grid.contents.contains("allow once")
+    });
+    run.wait_bytes(0, MOTION, "mouse motion enabled");
+    let mut wheels = Vec::new();
+    for _ in 0..20 {
+        wheels.extend_from_slice(b"\x1b[<64;21;11M");
+    }
+    run.write(&wheels);
+    run.wait_screen("scrolled to item 05", |grid| {
+        grid.contents.contains("item 05")
+    });
+    // Enter allows once; the call runs, the reply lands, the turn ends.
+    run.write(b"\r");
+    run.wait_bytes(from2, FINISHED_TITLE, "the finished second turn");
+    // New output while scrolled up raises the pill.
+    let pill = run.wait_screen("the pill", pill_is_complete);
+    let row = pill_at(&pill).expect("the pill's row");
+    // The pill is centred on the conversation's bottom row: ▐ at 48 and
+    // ▌ at 77, both in rule, the label between them in attention on rule.
+    assert_eq!(pill.cell(48, row).symbol.as_str(), "▐");
+    assert_eq!(pill.cell(48, row).fg, RULE_RGB);
+    assert_eq!(pill.cell(77, row).symbol.as_str(), "▌");
+    assert_eq!(pill.cell(77, row).fg, RULE_RGB);
+    for x in 49..=76 {
+        let cell = pill.cell(x, row);
+        assert_eq!(cell.fg, ATTENTION_RGB, "pill cell ({x}, {row})");
+        assert_eq!(cell.bg, RULE_RGB, "pill cell ({x}, {row})");
+    }
+    let label: String = (49..=76).map(|x| pill.cell(x, row).symbol).collect();
+    assert_eq!(label, " ↓ New messages below · End ");
+    // The pill gives no count.
+    for x in 48..=77 {
+        assert!(
+            !pill
+                .cell(x, row)
+                .symbol
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_digit),
+            "pill cell ({x}, {row})"
+        );
+    }
+    // The bar column holds the thumb or nothing, never a track.
+    let mut thumbs = 0;
+    for y in 0..=row {
+        let cell = pill.cell(125, y);
+        if cell.symbol.as_str() == "┃" {
+            assert_eq!(cell.fg, SCROLL_RGB, "bar cell (125, {y})");
+            thumbs += 1;
+        } else {
+            assert_eq!(cell.symbol.as_str(), " ", "bar cell (125, {y})");
+        }
+    }
+    assert!(thumbs > 0, "a thumb shows");
+    for y in 0..48 {
+        let symbol = pill.cell(125, y).symbol;
+        assert_ne!(symbol.as_str(), "│", "bar cell (125, {y})");
+        assert_ne!(symbol.as_str(), "█", "bar cell (125, {y})");
+    }
+    // End follows again: the pill goes, "Done." shows, both turns closed.
+    run.write(b"\x1b[F");
+    let end = run.wait_screen("the followed end", followed_end_is_complete);
+    assert!(!end.contents.contains("New messages below"));
+    // The long prompt's bubble is 89 cells wide: floor(124 × 72 / 100).
+    let bubble: Vec<u16> = (0..48)
+        .filter(|y| {
+            (36..=124).all(|x| end.cell(x, *y).bg == PROMPT_RGB)
+                && end.cell(124, *y).symbol.as_str() == "▐"
+        })
+        .collect();
+    assert_eq!(bubble.len(), 2, "two bubble text rows");
+    for y in &bubble {
+        for x in 36..=124 {
+            assert_eq!(end.cell(x, *y).bg, PROMPT_RGB, "bubble cell ({x}, {y})");
+        }
+        assert_eq!(end.cell(35, *y).bg, Colour::Default);
+        assert_eq!(end.cell(124, *y).fg, ACCENT_RGB);
+    }
+    let first = bubble[0];
+    assert_eq!(end.cell(36, first).symbol.as_str(), " ");
+    assert_eq!(end.cell(37, first).symbol.as_str(), "a");
+    assert_eq!(end.cell(123, first).symbol.as_str(), " ");
+    // Half-block edges above and below, on the terminal background.
+    for (y, edge) in [(first - 1, "▄"), (bubble[1] + 1, "▀")] {
+        for x in 36..=124 {
+            let cell = end.cell(x, y);
+            assert_eq!(cell.symbol.as_str(), edge, "edge cell ({x}, {y})");
+            assert_eq!(cell.fg, PROMPT_RGB, "edge cell ({x}, {y})");
+            assert_eq!(cell.bg, Colour::Default, "edge cell ({x}, {y})");
+        }
+    }
+    // A blank row above the top edge.
+    for x in 1..=124 {
+        let cell = end.cell(x, first - 2);
+        assert_eq!(cell.symbol.as_str(), " ", "blank cell ({x}, {})", first - 2);
+        assert_eq!(cell.bg, Colour::Default, "blank cell ({x}, {})", first - 2);
+    }
+    // The time row ends one column before the stripe, dim.
+    let time: String = (0..160)
+        .map(|x| end.cell(x, bubble[1] + 2).symbol)
+        .collect();
+    assert!(is_time_row(time.trim()), "{time:?}");
+    // Without the bar column the row ends at column 123.
+    assert_eq!(
+        (0..125).rfind(|x| end.cell(*x, bubble[1] + 2).symbol != " "),
+        Some(123),
+        "the time ends at column 123: {time:?}"
+    );
+    for x in 0..125 {
+        if end.cell(x, bubble[1] + 2).symbol.as_str() != " " {
+            assert!(
+                end.cell(x, bubble[1] + 2).dim,
+                "time cell ({x}, {})",
+                bubble[1] + 2
+            );
+        }
+    }
+    assert_eq!(end.cell(124, bubble[1] + 2).symbol.as_str(), " ");
+    // A blank row, then the card's top edge across the conversation.
+    for x in 1..=124 {
+        assert_eq!(end.cell(x, bubble[1] + 3).symbol.as_str(), " ");
+    }
+    for x in 1..=124 {
+        let cell = end.cell(x, bubble[1] + 4);
+        assert_eq!(
+            cell.symbol.as_str(),
+            "▄",
+            "card edge ({x}, {})",
+            bubble[1] + 4
+        );
+        assert_eq!(cell.fg, TURN_RGB, "card edge ({x}, {})", bubble[1] + 4);
+        assert_eq!(
+            cell.bg,
+            Colour::Default,
+            "card edge ({x}, {})",
+            bubble[1] + 4
+        );
+    }
+    // Every card row up to the card's bottom edge sits on the turn tint
+    // with a blank column on each side.
+    let card_top = bubble[1] + 4;
+    let card_bottom = (card_top..48)
+        .find(|y| {
+            (1..=124)
+                .all(|x| end.cell(x, *y).symbol.as_str() == "▀" && end.cell(x, *y).fg == TURN_RGB)
+        })
+        .expect("the card's bottom edge");
+    for y in card_top + 1..card_bottom {
+        for x in 1..=124 {
+            assert_eq!(end.cell(x, y).bg, TURN_RGB, "card cell ({x}, {y})");
+        }
+        assert_eq!(end.cell(1, y).symbol.as_str(), " ");
+        assert_eq!(end.cell(124, y).symbol.as_str(), " ");
+    }
+    // Each block starts at column 2 with one blank card row between.
+    let row_with = |needle: &str| {
+        (card_top + 1..card_bottom)
+            .find(|y| {
+                (0..160)
+                    .map(|x| end.cell(x, *y).symbol)
+                    .collect::<String>()
+                    .contains(needle)
+            })
+            .unwrap_or_else(|| panic!("{needle} draws in the card"))
+    };
+    let group = row_with("Ran 1 command");
+    let steer = row_with("steer");
+    let said = row_with("use x");
+    let done = row_with("Done.");
+    for (y, first) in [(group, '•'), (steer, 's'), (said, 'u'), (done, 'D')] {
+        assert_eq!(end.cell(1, y).symbol.as_str(), " ");
+        assert_eq!(end.cell(2, y).symbol.as_str(), &first.to_string());
+    }
+    // The steered text sits directly under its rule; one blank card
+    // row separates every other pair of blocks.
+    assert_eq!(said, steer + 1);
+    for (first, second) in [(group, steer), (said, done)] {
+        assert_eq!(second - first, 2);
+        for y in first + 1..second {
+            assert!(
+                (1..=124).all(|x| end.cell(x, y).symbol.as_str() == " "),
+                "one blank card row between blocks"
+            );
+        }
+    }
+    // The steer rule: the label bold in attention, the time dim, the
+    // dashes in rule to column 123.
+    assert_eq!(
+        (2..=6)
+            .map(|x| end.cell(x, steer).symbol)
+            .collect::<String>(),
+        "steer"
+    );
+    for x in 2..=6 {
+        let cell = end.cell(x, steer);
+        assert_eq!(cell.fg, ATTENTION_RGB, "steer cell ({x}, {steer})");
+        assert!(cell.bold, "steer cell ({x}, {steer})");
+    }
+    for x in 7..=15 {
+        assert!(end.cell(x, steer).dim, "steer time cell ({x}, {steer})");
+    }
+    for x in 16..=123 {
+        let cell = end.cell(x, steer);
+        assert_eq!(cell.symbol.as_str(), "─", "steer cell ({x}, {steer})");
+        assert_eq!(cell.fg, RULE_RGB, "steer cell ({x}, {steer})");
+    }
+    // The steered text is bold.
+    for x in 2..=6 {
+        assert!(end.cell(x, said).bold, "steered cell ({x}, {said})");
+    }
+    // The ▣ line is dim, counts the one call, and leaves out zero
+    // figures.
+    let closing = (card_top + 1..card_bottom)
+        .find(|y| {
+            (0..160)
+                .map(|x| end.cell(x, *y).symbol)
+                .collect::<String>()
+                .contains("1 call")
+        })
+        .expect("the closing line counts one call");
+    assert_eq!(
+        closing,
+        done + 2,
+        "one blank card row before the closing line"
+    );
+    for x in 0..125 {
+        if end.cell(x, closing).symbol.as_str() != " " {
+            assert!(end.cell(x, closing).dim, "closing cell ({x}, {closing})");
+        }
+    }
+    let closed: String = (0..160).map(|x| end.cell(x, closing).symbol).collect();
+    assert!(!closed.contains("token"), "{closed:?}");
+    assert!(!closed.contains('$'), "{closed:?}");
+    quit(run);
 }

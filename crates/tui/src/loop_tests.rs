@@ -277,15 +277,15 @@ fn a_frame_fetches_a_dropped_page_in_answers_of_256_and_draws_it() {
     }
     let screen = shown(&lp);
     let rows: Vec<&str> = screen.lines().collect();
-    // To the top: the first turn's bubble starts the screen, its text
-    // on the next row.
+    // To the top: the first turn's bubble starts the screen after its
+    // blank row, its text on the row after its edge.
     assert!(
-        rows.first()
+        rows.get(1)
             .is_some_and(|row| row.trim_start().starts_with('▄')),
         "{screen}"
     );
     assert!(
-        rows.get(1).is_some_and(|row| row.contains("first")),
+        rows.get(2).is_some_and(|row| row.contains("first")),
         "{screen}"
     );
     assert_eq!(lp.app.scroll().0, 0);
@@ -528,9 +528,9 @@ fn the_paging_report_counts_every_loaded_line() {
     let report = crate::measure_paging(&events(&session()), 60, 12, fakes::clock::FakeClock::new())
         .unwrap_or_else(|error| panic!("{error}"));
     // Every page loaded while paging up keeps its first line: dropping one
-    // draws fewer rows. Six turns draw one time row, two bubble edges and
-    // two card edges each.
-    assert!(report.contains("rows: 343\n"), "{report}");
+    // draws fewer rows. Six turns draw a blank row, two bubble edges, a
+    // time row and two card edges each, with their blocks between.
+    assert!(report.contains("rows: 536\n"), "{report}");
 }
 
 #[test]
@@ -676,13 +676,14 @@ fn a_selection_waiting_on_a_page_copies_in_the_same_step() {
     let path = dir.path().join("tty");
     lp.tty = Some(std::fs::File::create(&path).unwrap_or_else(|err| panic!("tty: {err}")));
     let seen = serve(theirs, tx.clone(), answers_all());
-    // At the top, page 0 loads; a drag over its first rows, then End, which
-    // drops it, then the release: the copy waits on page 0, which the same
-    // step fetches, and copies.
+    // At the top, page 0 loads; a drag over its first rows, past the
+    // right-aligned bubble text, then End, which drops it, then the
+    // release: the copy waits on page 0, which the same step fetches,
+    // and copies.
     let mut inputs = to_the_top();
-    inputs.push(Input::Bytes(b"\x1b[<0;1;1M\x1b[<32;40;3M".to_vec()));
+    inputs.push(Input::Bytes(b"\x1b[<0;1;1M\x1b[<32;60;3M".to_vec()));
     inputs.push(Input::Bytes(b"\x1b[F".to_vec()));
-    inputs.push(Input::Bytes(b"\x1b[<0;40;3m".to_vec()));
+    inputs.push(Input::Bytes(b"\x1b[<0;60;3m".to_vec()));
     let lp = run(lp, rx, &tx, inputs);
     assert_eq!(lp.app.pages().pinned(), 0, "its pages stay pinned");
     let before = ranges(&seen).iter().filter(|range| range.0 == 0).count();

@@ -3,11 +3,11 @@ source: crates/tui/src/view_tests.rs
 expression: wide(&mut app).0
 ---
 
-
                                                                       ▄▄▄▄▄▄▄▄▄
                                                                        run it ▐
                                                                       ▀▀▀▀▀▀▀▀▀
-                                                                          00:00
+                                                                     you 00:00
+
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ approval · s_aaaaaaaaaaaaaaaa · 1 of 1 · irreversible
 ▌ asked by a project rule: git push

@@ -156,7 +156,9 @@ fn a_late_usage_line_on_a_held_page_counts_its_rows_exactly() {
     assert!(!pages.closed.is_empty(), "the first page closed");
     assert!(pages.part(0).is_some(), "the first page holds its cards");
     // A correction for the first turn as large as its ▣ line can grow:
-    // the line wraps onto more rows, and the page is counted again.
+    // at the card's inner width the line already took two padded rows,
+    // and still takes two, so no page is counted again yet every row is
+    // where a fresh fold puts it (`docs/tui.md`, "Turns").
     let before = pages.recounts;
     log.usage("g0", 987_654_321, json!(12.5));
     let late = log
@@ -165,7 +167,7 @@ fn a_late_usage_line_on_a_held_page_counts_its_rows_exactly() {
         .cloned()
         .unwrap_or_else(|| panic!("a line was logged"));
     pages.apply(&late);
-    assert_eq!(pages.recounts - before, 1);
+    assert_eq!(pages.recounts, before);
     let fresh = folded(&log.lines, 30);
     assert_eq!(rows(&pages), rows(&fresh));
     assert_eq!(pages.rows(), fresh.rows());
@@ -209,4 +211,92 @@ fn folding_one_turn_counts_each_step_once() {
     assert_eq!(work.index_pages, 3, "{case}");
     // The usage line looks its turn up once.
     assert_eq!(work.usage_summaries, 1, "{case}");
+}
+
+#[test]
+fn a_late_usage_line_on_a_dropped_page_counts_the_padded_closing_rows() {
+    // At W = 20 the card draws its ▣ line at the inner width of 18:
+    // "▣ completed · 1 call" is 20 cells, one row at W but two padded
+    // rows. A late `usage_recorded` grows it further, and the dropped
+    // page holding it adds exactly the padded difference
+    // (`docs/tui.md`, "Turns", "History and paging").
+    let mut lines = Vec::new();
+    let mut seq = 0u64;
+    {
+        let mut line = |kind: &str, action: Option<&str>, payload: Value| {
+            lines.push(Envelope {
+                kind: kind.to_owned(),
+                session_id: SessionId(SESSION.to_owned()),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                turn_id: None,
+                action_id: action.map(|id| ActionId(id.to_owned())),
+                seq: Some(Seq(seq)),
+                payload: payload.as_object().cloned().unwrap_or_default(),
+            });
+            seq += 1;
+        };
+        for turn in 0..16 {
+            line(
+                "turn_started",
+                None,
+                json!({"input": [{"type": "message", "source": "driver",
+                    "content": [{"type": "text", "text": format!("turn {turn}")}]}]}),
+            );
+            let call = format!("a_c{turn}");
+            line(
+                "tool_call_requested",
+                Some(&call),
+                json!({"name": "read", "arguments": {"path": "src/a.rs"}}),
+            );
+            line(
+                "tool_call_completed",
+                Some(&call),
+                json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+            );
+            // No tokens and no cost: the ▣ line is the head and the call
+            // count alone, while the generation still names its turn.
+            line(
+                "usage_recorded",
+                Some(&call),
+                json!({"generation_id": format!("g{turn}"), "model": "fake/m",
+                    "tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+                    "input_bytes": 0, "cost": Value::Null}),
+            );
+            line("turn_completed", None, json!({"outcome": "completed"}));
+        }
+    }
+    let mut pages = folded(&lines, 20);
+    assert!(!pages.closed.is_empty(), "the first page closed");
+    let head = pages.summaries.first().expect("the first turn's totals");
+    let closing = head.closing().expect("a closing line");
+    assert_eq!(closing.to_string(), "▣ completed · 1 call");
+    assert_eq!(crate::view::rows(closing.clone(), 20), 1);
+    assert_eq!(crate::rows::fitted(&closing, crate::surface::inset(20)), 2);
+    pages.closed[0] = None;
+    lines.push(Envelope {
+        kind: "usage_recorded".to_owned(),
+        session_id: SessionId(SESSION.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(ActionId("a_c0".to_owned())),
+        seq: Some(Seq(seq)),
+        payload: json!({"generation_id": "g0", "model": "fake/m",
+            "tokens": {"input": 987_654_321, "cache_read": 0, "cache_write": {}, "output": 40},
+            "input_bytes": 0, "cost": 12.5})
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    });
+    let late = lines
+        .last()
+        .cloned()
+        .unwrap_or_else(|| panic!("a line was logged"));
+    pages.apply(&late);
+    let grown = pages.summaries.first().expect("the first turn's totals");
+    let closing = grown.closing().expect("a closing line");
+    assert!(crate::rows::fitted(&closing, crate::surface::inset(20)) > 2);
+    let fresh = folded(&lines, 20);
+    assert_eq!(rows(&pages), rows(&fresh));
 }

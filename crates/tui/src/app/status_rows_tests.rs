@@ -17,6 +17,12 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quota"];
 
+/// Whether `row` is blank once the bar's glyph is trimmed: a gap row in
+/// the card (`docs/tui.md`, "Turns").
+fn blank_gap(row: &str) -> bool {
+    row.trim_end_matches([' ', '█', '│', '┃']).is_empty()
+}
+
 /// Whether `row` is a right-aligned prompt bubble edge inside the column:
 /// the bar's glyph may end it.
 fn prompt_edge(row: &str, app: &App) -> bool {
@@ -24,7 +30,7 @@ fn prompt_edge(row: &str, app: &App) -> bool {
         .chrome()
         .layout()
         .map_or(0, |layout| usize::from(layout.column.x));
-    let row = row.trim_end_matches(['█', '│']);
+    let row = row.trim_end_matches(['█', '│', '┃']);
     row.chars()
         .position(|cell| cell != ' ')
         .is_some_and(|first| first > left)
@@ -203,11 +209,18 @@ fn conversation_height_equals_the_drawn_rows_in_the_narrow_layout() {
             let area = ratatui::layout::Rect::new(0, 0, 100, height);
             let mut buf = ratatui::buffer::Buffer::empty(area);
             crate::view::render(&app, area, &mut buf, None);
-            let drawn = crate::view::text(&buf)
-                .lines()
+            let text = crate::view::text(&buf);
+            let shown: Vec<&str> = text.lines().take(app.conversation_height()).collect();
+            let drawn = shown
+                .iter()
                 .filter(|row| row.contains("ww") || row.contains("00:00") || prompt_edge(row, &app))
                 .count();
-            assert_eq!(drawn, app.conversation_height(), "{name} at 100x{height}");
+            let blank = shown.iter().filter(|row| blank_gap(row)).count();
+            assert_eq!(
+                drawn + blank,
+                app.conversation_height(),
+                "{name} at 100x{height}"
+            );
         }
     }
 }
@@ -246,11 +259,18 @@ fn conversation_height_equals_the_drawn_rows_with_delegates() {
             let area = ratatui::layout::Rect::new(0, 0, 100, height);
             let mut buf = ratatui::buffer::Buffer::empty(area);
             crate::view::render(&app, area, &mut buf, None);
-            let drawn = crate::view::text(&buf)
-                .lines()
+            let text = crate::view::text(&buf);
+            let shown: Vec<&str> = text.lines().take(app.conversation_height()).collect();
+            let drawn = shown
+                .iter()
                 .filter(|row| row.contains("ww") || row.contains("00:00") || prompt_edge(row, &app))
                 .count();
-            assert_eq!(drawn, app.conversation_height(), "{name} at 100x{height}");
+            let blank = shown.iter().filter(|row| blank_gap(row)).count();
+            assert_eq!(
+                drawn + blank,
+                app.conversation_height(),
+                "{name} at 100x{height}"
+            );
         }
     }
 }

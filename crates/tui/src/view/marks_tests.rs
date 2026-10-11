@@ -104,7 +104,7 @@ fn selection_over_three_rows_80x24() {
     let text = super::super::text(&draw(&app, 80, 24).0);
     let first = text
         .lines()
-        .position(|row| row.starts_with("Selection"))
+        .position(|row| row.trim_start().starts_with("Selection"))
         .expect("the reply's first row");
     let first = u16::try_from(first).expect("a row");
     assert!(matches!(

@@ -20,7 +20,7 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 /// Whether `row` is a right-aligned prompt bubble edge: the bar's glyph
 /// may end it.
 fn prompt_edge(row: &str) -> bool {
-    let row = row.trim_end_matches(['█', '│']);
+    let row = row.trim_end_matches(['█', '│', '┃']);
     row.chars()
         .position(|cell| cell != ' ')
         .is_some_and(|first| {

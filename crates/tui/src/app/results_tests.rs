@@ -154,13 +154,15 @@ fn each_entry_is_its_line_with_one_line_either_side() {
     open(&mut app);
     let view = app.find_results().expect("open");
     assert_eq!(view.header, "1 matches for “needle”");
+    // Each text is its own block, so the match sits between the blank
+    // separator rows.
     assert_eq!(
         view.entries,
         vec![Snippet {
-            before: "before".to_owned(),
+            before: "".to_owned(),
             line: "needle".to_owned(),
             at: 0..6,
-            after: "after".to_owned(),
+            after: "".to_owned(),
         }]
     );
 }
@@ -374,7 +376,9 @@ fn no_selection_starts_over_the_view() {
 fn the_view_opens_on_the_current_match_by_its_place() {
     let mut app = turned(40, 10, &["needle one", "needle two", "needle three"]);
     scan(&mut app, "needle");
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    // The first match sits one row above the viewport, so the second is
+    // current and one Enter moves to the third.
+    assert_eq!(count(&app), "2 of 3");
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(count(&app), "3 of 3");
     assert_eq!(app.find.current_index(), Some(2));

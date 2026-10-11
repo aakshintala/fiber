@@ -3,9 +3,9 @@ source: crates/tui/src/view/banner_tests.rs
 expression: "screen(&app, 60)"
 ---
                                     Connection lost.       ✕
-                                                       hi ▐
                                                       ▀▀▀▀▀
-                                                      00:00
+                                                 you 00:00 ┃
+                                                           ┃
 Connection lost · reconnecting (attempt 1)…
   • Steering, joins the turn at the next step
   ↳ use the parser  ✕

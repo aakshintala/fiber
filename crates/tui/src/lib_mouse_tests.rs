@@ -149,11 +149,11 @@ fn wheeling_down_three_rows_from_three_above_the_bottom_follows_again() {
 #[test]
 fn wheeling_up_pages_history_like_page_up() {
     let mut wheeled = following();
-    // Each turn's card edges add two rows per turn, so reaching the top
-    // takes more wheel-ups than before.
+    // Each turn's card has two more rows than before, so reaching the top
+    // takes more wheel-ups and page-ups than before.
     feed(&mut wheeled, (0..300).map(|_| wheel_up(10, 5)).collect());
     let mut paged = following();
-    feed(&mut paged, (0..80).map(|_| page_up()).collect());
+    feed(&mut paged, (0..110).map(|_| page_up()).collect());
     assert_eq!(wheeled.app.top(), Some(0));
     assert_eq!(paged.app.top(), Some(0));
     // Past the top both ask history for the same dropped pages
@@ -476,8 +476,8 @@ fn a_click_on_new_messages_below_jumps_to_the_end() {
         ],
     );
     assert!(lp.app.has_new());
-    // The overlay's 20 cells are centred on row 8: columns 19 to 38.
-    feed(&mut lp, vec![click(18, 8)]);
+    // The overlay's 30 cells are centred on row 8: columns 14 to 43.
+    feed(&mut lp, vec![click(13, 8)]);
     assert!(lp.app.has_new());
     feed(&mut lp, vec![click(38, 8)]);
     assert!(!lp.app.has_new());
@@ -1248,26 +1248,30 @@ fn a_click_queued_after_wheel_ups_opens_the_scrolled_group() {
     feed(&mut lp, reads(3));
     // Queued with the wheels, so the click must hit the group the wheels
     // drew: the scroll clamps at the top, leaving turn 0's group at grid
-    // row 5, holding a group line the bottom never shows.
+    // row 7, holding a group line the bottom never shows.
     let mut inputs: Vec<Input> = (0..30).map(|_| wheel_up(10, 5)).collect();
-    inputs.push(click(40, 5));
+    inputs.push(click(40, 7));
     feed(&mut lp, inputs);
+    // Move the opened ledger row above the pill so the screen shows it.
+    feed(&mut lp, vec![wheel_down(10, 5)]);
     assert!(shown(&lp).contains("read src/a0.rs"), "{}", shown(&lp));
 }
 
 #[test]
 fn queued_page_ups_keep_their_frames_and_fresh_targets() {
-    // Queued together: the click hits turn 0's group at grid row 5,
+    // Queued together: the click hits turn 1's group at grid row 7,
     // drawn after the third PageUp.
-    let queued = || vec![page_up(), page_up(), page_up(), click(40, 5)];
+    let queued = || vec![page_up(), page_up(), page_up(), click(40, 7)];
     let (mut shown_lp, _) = new_loop(TestBackend::new(60, 12), None);
     shown_lp
         .app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut shown_lp, reads(4));
     feed(&mut shown_lp, queued());
+    // Move the opened ledger row above the pill so the screen shows it.
+    feed(&mut shown_lp, vec![wheel_down(10, 5)]);
     assert!(
-        shown(&shown_lp).contains("read src/a0.rs"),
+        shown(&shown_lp).contains("read src/a1.rs"),
         "{}",
         shown(&shown_lp)
     );
@@ -1296,7 +1300,7 @@ fn queued_motions_keep_their_frames() {
     // The hover tint toggles between turn 2's group row and the row above
     // it, so every report changes the frame, as one batch each does today.
     let inputs: Vec<Input> = (0..10)
-        .map(|i| motion(5, if i % 2 == 0 { 6 } else { 0 }))
+        .map(|i| motion(5, if i % 2 == 0 { 5 } else { 4 }))
         .collect();
     feed(&mut lp, inputs);
     assert_eq!(blocks(&sink.bytes()) - drawn, 10);
