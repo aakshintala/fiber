@@ -42,7 +42,10 @@ fn shared(name: &str, stored: &str, credential: Option<CredentialSource>) -> Pro
 }
 
 fn default_key(config: &Config, provider: &ProviderData) -> Result<Secret, ConfigError> {
-    config.credentials().credential(provider, "default")
+    config
+        .credentials()
+        .credential_with(provider, "default", &fakes::children::grouped_output)
+        .map(|read| read.secret)
 }
 
 fn command(argv: &[&str]) -> Option<CredentialSource> {
@@ -397,7 +400,8 @@ fn the_label_the_configuration_names_picks_the_stored_credential() {
     assert_eq!(
         config
             .credentials()
-            .credential(&acme(None), &label)
+            .credential_with(&acme(None), &label, &fakes::children::grouped_output)
+            .map(|read| read.secret)
             .unwrap()
             .expose(),
         "w"
@@ -405,7 +409,8 @@ fn the_label_the_configuration_names_picks_the_stored_credential() {
     assert_eq!(
         config
             .credentials()
-            .credential(&acme(None), "default")
+            .credential_with(&acme(None), "default", &fakes::children::grouped_output)
+            .map(|read| read.secret)
             .unwrap()
             .expose(),
         "d"
@@ -426,7 +431,8 @@ fn an_unset_label_is_default_and_a_repository_cannot_set_it() {
     );
     let err = config
         .credentials()
-        .credential(&acme(None), "evil")
+        .credential_with(&acme(None), "evil", &fakes::children::grouped_output)
+        .map(|read| read.secret)
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialMissing);
 }
@@ -440,12 +446,17 @@ fn a_shared_credential_name_holds_the_labels() {
     assert_eq!(
         config
             .credentials()
-            .credential(&go, "work")
+            .credential_with(&go, "work", &fakes::children::grouped_output)
+            .map(|read| read.secret)
             .unwrap()
             .expose(),
         "shared-work"
     );
-    let err = config.credentials().credential(&go, "other").unwrap_err();
+    let err = config
+        .credentials()
+        .credential_with(&go, "other", &fakes::children::grouped_output)
+        .map(|read| read.secret)
+        .unwrap_err();
     assert!(
         err.to_string()
             .contains("credentials/opencode/other, and no source"),
@@ -470,7 +481,13 @@ fn a_configured_label_reads_an_environment_variable_file_or_command() {
         ),
     );
     let config = setup.load(&[]).unwrap();
-    let read = |label| config.credentials().credential(&acme(None), label).unwrap();
+    let read = |label| {
+        config
+            .credentials()
+            .credential_with(&acme(None), label, &fakes::children::grouped_output)
+            .map(|read| read.secret)
+            .unwrap()
+    };
     assert_eq!(read("e").expose(), env!("CARGO_MANIFEST_DIR"));
     assert_eq!(read("f").expose(), "from-file");
     assert_eq!(read("c").expose(), "from-command");
@@ -484,14 +501,16 @@ fn the_providers_own_source_is_the_default_label_only() {
     assert_eq!(
         config
             .credentials()
-            .credential(&provider, "default")
+            .credential_with(&provider, "default", &fakes::children::grouped_output)
+            .map(|read| read.secret)
             .unwrap()
             .expose(),
         "declared"
     );
     let err = config
         .credentials()
-        .credential(&provider, "work")
+        .credential_with(&provider, "work", &fakes::children::grouped_output)
+        .map(|read| read.secret)
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialMissing);
     assert!(err.to_string().contains("are: default."), "{err}");
@@ -508,7 +527,8 @@ fn a_stored_label_owns_it_and_a_configured_source_is_not_tried() {
     let config = setup.load(&[]).unwrap();
     let err = config
         .credentials()
-        .credential(&acme(None), "work")
+        .credential_with(&acme(None), "work", &fakes::children::grouped_output)
+        .map(|read| read.secret)
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialFailed);
     assert!(
@@ -534,7 +554,12 @@ fn a_label_that_names_nothing_lists_the_labels_there_are() {
     let config = setup.load(&[]).unwrap();
     let err = config
         .credentials()
-        .credential(&acme(command(&["printf", "d"])), "personal")
+        .credential_with(
+            &acme(command(&["printf", "d"])),
+            "personal",
+            &fakes::children::grouped_output,
+        )
+        .map(|read| read.secret)
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialMissing);
     assert_eq!(
@@ -543,7 +568,8 @@ fn a_label_that_names_nothing_lists_the_labels_there_are() {
     );
     let err = config
         .credentials()
-        .credential(&acme(None), "personal")
+        .credential_with(&acme(None), "personal", &fakes::children::grouped_output)
+        .map(|read| read.secret)
         .unwrap_err();
     assert!(
         err.to_string().contains("are: a-configured, work."),
@@ -562,7 +588,8 @@ fn a_label_named_in_configuration_with_no_source_is_the_same_error() {
     let label = config.credentials().credential_label(&acme(None));
     let err = config
         .credentials()
-        .credential(&acme(None), &label)
+        .credential_with(&acme(None), &label, &fakes::children::grouped_output)
+        .map(|read| read.secret)
         .unwrap_err();
     assert_eq!(
         err.to_string(),
@@ -578,7 +605,12 @@ fn a_bare_secret_named_like_the_provider_is_not_read_as_a_key() {
     let config = setup.load(&[]).unwrap();
     let err = config
         .credentials()
-        .credential(&acme(command(&["printf", "declared"])), "default")
+        .credential_with(
+            &acme(command(&["printf", "declared"])),
+            "default",
+            &fakes::children::grouped_output,
+        )
+        .map(|read| read.secret)
         .unwrap_err();
     assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }
@@ -675,7 +707,7 @@ fn the_runner_gets_the_built_command_with_stdin_and_stderr_null() {
     let read = read_with(
         &config,
         &acme(command(&["sh", "-c", script])),
-        &|command: &mut std::process::Command| {
+        &|command: &mut std::process::Command, timeout: Duration| {
             seen.borrow_mut().push((
                 command.get_program().to_owned(),
                 command
@@ -683,7 +715,7 @@ fn the_runner_gets_the_built_command_with_stdin_and_stderr_null() {
                     .map(ToOwned::to_owned)
                     .collect::<Vec<_>>(),
             ));
-            let output = command.output()?;
+            let output = fakes::children::grouped_output(command, timeout)?;
             // A null stderr collects nothing; an inherited or piped one would.
             assert!(output.stderr.is_empty());
             Ok(output)
@@ -709,7 +741,7 @@ fn the_runners_output_is_read_as_a_command_source() {
         let err = read_with(
             &config,
             &acme(command(argv)),
-            &|command: &mut std::process::Command| command.output(),
+            &fakes::children::grouped_output,
         )
         .unwrap_err();
         assert_eq!(err.code(), ErrorCode::CredentialMissing);
@@ -717,7 +749,7 @@ fn the_runners_output_is_read_as_a_command_source() {
         assert!(message.contains(why), "{message}");
         assert!(!message.contains("sk-in-argument"), "{message}");
     }
-    let err = read_with(&config, &acme(command(&["printf", "k"])), &|_| {
+    let err = read_with(&config, &acme(command(&["printf", "k"])), &|_, _| {
         Err(std::io::Error::other("refused"))
     })
     .unwrap_err();
@@ -735,9 +767,10 @@ fn a_file_source_behind_a_symlink_names_its_canonical_target() {
     setup.write(&target, "from-target\n");
     let link = setup.root().join("link");
     symlink(&target, &link).unwrap();
-    let never = &|_: &mut std::process::Command| -> std::io::Result<std::process::Output> {
-        panic!("no command runs for a file source")
-    };
+    let never =
+        &|_: &mut std::process::Command, _: Duration| -> std::io::Result<std::process::Output> {
+            panic!("no command runs for a file source")
+        };
     let read = read_with(&config, &acme(Some(CredentialSource::File(link))), never).unwrap();
     assert_eq!(read.secret.expose(), "from-target");
     assert_eq!(read.file, Some(std::fs::canonicalize(&target).unwrap()));
@@ -748,7 +781,7 @@ fn an_env_or_command_source_names_no_file() {
     let setup = Setup::new();
     store_credential(&setup.home(), "stored", "default", &Secret::new("s".into())).unwrap();
     let config = setup.load(&[]).unwrap();
-    let output = &|command: &mut std::process::Command| command.output();
+    let output = &fakes::children::grouped_output;
     for provider in [
         acme(Some(CredentialSource::Env("CARGO_MANIFEST_DIR".into()))),
         acme(command(&["printf", "k"])),
@@ -845,7 +878,8 @@ fn labels_of_an_absent_directory_is_what_the_message_lists() {
     );
     let err = config
         .credentials()
-        .credential(&acme(None), "personal")
+        .credential_with(&acme(None), "personal", &fakes::children::grouped_output)
+        .map(|read| read.secret)
         .unwrap_err();
     assert!(err.to_string().contains("are: a-configured."), "{err}");
 }
@@ -888,4 +922,75 @@ fn listed_names_the_labels_or_none() {
         config::Credentials::listed(&["default".into(), "work".into()]),
         "default, work"
     );
+}
+
+#[test]
+fn the_runner_gets_the_sources_timeout() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme": {"credentials": {
+            "plain": {"command": ["printf", "k"]},
+            "timed": {"command": ["printf", "k"], "timeout": "1s"}
+        }}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let seen = std::cell::RefCell::new(Vec::new());
+    let run = &|command: &mut std::process::Command, timeout: Duration| {
+        seen.borrow_mut().push(timeout);
+        fakes::children::grouped_output(command, timeout)
+    };
+    let read = |label| {
+        config
+            .credentials()
+            .credential_with(&acme(None), label, run)
+            .unwrap()
+    };
+    assert_eq!(read("plain").secret.expose(), "k");
+    assert_eq!(read("timed").secret.expose(), "k");
+    assert_eq!(
+        seen.into_inner(),
+        [Duration::from_secs(30), Duration::from_secs(1)]
+    );
+}
+
+#[test]
+fn a_command_still_running_at_its_timeout_is_credential_missing_and_runs_again() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"acme": {"credentials": {
+            "default": {"command": ["sh", "-c", "printf sk-marker-arg"], "timeout": "1s"}
+        }}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let runs = std::cell::Cell::new(0);
+    let run = &|command: &mut std::process::Command, timeout: Duration| {
+        runs.set(runs.get() + 1);
+        if runs.get() == 1 {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "still running",
+            ))
+        } else {
+            fakes::children::grouped_output(command, timeout)
+        }
+    };
+    let err = config
+        .credentials()
+        .credential_with(&acme(None), "default", run)
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::CredentialMissing);
+    let message = err.to_string();
+    assert!(
+        message.contains("`sh` was still running after 1s"),
+        "{message}"
+    );
+    assert!(!message.contains("sk-marker-arg"), "{message}");
+    let read = config
+        .credentials()
+        .credential_with(&acme(None), "default", run)
+        .unwrap();
+    assert_eq!(read.secret.expose(), "sk-marker-arg");
+    assert_eq!(runs.get(), 2);
 }
