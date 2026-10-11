@@ -63,6 +63,53 @@ pub(crate) fn openrouter_quota() -> Vec<u8> {
         .to_vec()
 }
 
+/// The recorded Codex usage reply `quota()` serves in the `codex` tests:
+/// the reply body of `quota-two-windows.json`'s scripted request.
+pub(crate) fn codex_quota() -> Vec<u8> {
+    let case: Value = serde_json::from_str(include_str!(
+        "../../../../providers/codex/tests/quota-two-windows.json"
+    ))
+    .expect("the quota case reads");
+    case["host"]["http"][0]["reply"]["body"]
+        .as_str()
+        .expect("the quota case holds one body")
+        .as_bytes()
+        .to_vec()
+}
+
+/// A fake Codex server answering by path, for the `codex` tests: the
+/// background `quota()` fetch races the turn's own requests, so serving
+/// by order would hand the quota request a queued reply meant for another
+/// path. `/backend-api/wham/usage` always answers the recorded quota
+/// reply, and `/backend-api/codex/responses` answers `responses` in
+/// order, counting the hits in the closure. Anything else gets the
+/// fake's scripted-response 500, as an unrouted request would.
+pub(crate) fn codex_ask_server(responses: Vec<Response>) -> ProviderServer {
+    let quota = codex_quota();
+    let responses = Arc::new(responses);
+    let next = Arc::new(AtomicUsize::new(0));
+    ProviderServer::start_responding(move |request| {
+        let target = request.path.split('?').next().unwrap_or_default();
+        match target {
+            "/backend-api/wham/usage" => Response::status(200, quota.clone()),
+            "/backend-api/codex/responses" => {
+                let index = next.fetch_add(1, Ordering::SeqCst);
+                responses.get(index).cloned().unwrap_or_else(|| {
+                    Response::status(
+                        500,
+                        r#"{"error":"fakes: no scripted response left for this request"}"#,
+                    )
+                })
+            }
+            _ => Response::status(
+                500,
+                r#"{"error":"fakes: no scripted response left for this request"}"#,
+            ),
+        }
+    })
+    .unwrap()
+}
+
 /// A fake OpenRouter server answering by path, for the `ask` tests: the
 /// background `quota()` fetch races the turn's own requests, so serving
 /// by order would hand the quota request a queued reply meant for another

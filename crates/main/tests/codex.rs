@@ -157,7 +157,7 @@ fn token(account: &str) -> String {
 #[test]
 fn a_codex_turn_sends_the_codex_wire_shape() {
     let setup = Setup::new_with_fx_root();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = support::package::codex_ask_server(vec![hello()]);
     setup.install(&server);
     let access = token("acct_secret");
     setup.store(&access, "acct_secret");
@@ -167,8 +167,14 @@ fn a_codex_turn_sends_the_codex_wire_shape() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    let request: &Request = &requests[0];
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path != "/backend-api/wham/usage")
+        .collect();
+    assert_eq!(calls.len(), 1);
+    let request: &Request = calls[0];
     assert_eq!(request.path, "/backend-api/codex/responses");
     let bearer = fingerprint(&format!("Bearer {access}"));
     assert_eq!(request.header("authorization"), Some(bearer.as_str()));
@@ -196,12 +202,11 @@ fn a_codex_turn_sends_the_codex_wire_shape() {
 #[test]
 fn a_codex_usage_limit_is_quota_exceeded_with_its_wait_and_not_retried() {
     let setup = Setup::new_with_fx_root();
-    let server = ProviderServer::start([Response::status(
+    let server = support::package::codex_ask_server(vec![Response::status(
         429,
         r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus","resets_at":1791396000}}"#,
     )
-    .header("date", "Wed, 07 Oct 2026 16:00:00 GMT")])
-    .unwrap();
+    .header("date", "Wed, 07 Oct 2026 16:00:00 GMT")]);
     setup.install(&server);
     setup.store(&token("acct_secret"), "acct_secret");
 
@@ -218,13 +223,20 @@ fn a_codex_usage_limit_is_quota_exceeded_with_its_wait_and_not_retried() {
             .contains("2026-10-07 18:00 UTC"),
         "{error}"
     );
-    assert_eq!(server.requests().len(), 1);
+    let requests = server.requests();
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path != "/backend-api/wham/usage")
+        .collect();
+    assert_eq!(calls.len(), 1);
 }
 
 #[test]
 fn a_thinking_suffix_is_sent_and_an_undeclared_level_is_invalid_arguments() {
     let setup = Setup::new_with_fx_root();
-    let server = ProviderServer::start([hello()]).unwrap();
+    let server = support::package::codex_ask_server(vec![hello()]);
     setup.install(&server);
     setup.store(&token("acct_secret"), "acct_secret");
 
@@ -232,14 +244,27 @@ fn a_thinking_suffix_is_sent_and_an_undeclared_level_is_invalid_arguments() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     let requests = server.requests();
-    assert_eq!(requests.len(), 1);
-    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path != "/backend-api/wham/usage")
+        .collect();
+    assert_eq!(calls.len(), 1);
+    let body: Value = serde_json::from_slice(&calls[0].body).unwrap();
     assert_eq!(body["reasoning"], json!({"effort": "xhigh"}));
 
     let bad = setup.run_with_input(&["ask", "--model", "codex/gpt-6-luna:minimal", "hi"], "");
     assert_eq!(bad.code, Some(1), "{}", bad.stderr);
     assert_eq!(bad.last()["payload"]["error"]["code"], "invalid_arguments");
-    assert_eq!(server.requests().len(), 1, "no second request is sent");
+    let requests = server.requests();
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path != "/backend-api/wham/usage")
+        .collect();
+    assert_eq!(calls.len(), 1, "no second request is sent");
 }
 
 #[test]
