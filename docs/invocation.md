@@ -782,8 +782,9 @@ request, as it does when the idle delay passes ("Lifecycle"), and resuming
 raises the request again.
 
 A signal that arrives before `fiber_started` is written exits with the code
-and writes nothing. Once `fiber_started` is written, `fiber_exited` always
-is, unless the process dies or passes the bound.
+and writes no durable event; an ephemeral `clients` line already sent to a
+client that attached stays sent. Once `fiber_started` is written,
+`fiber_exited` always is, unless the process dies or passes the bound.
 
 **The bound is 5 seconds** from the signal to exit, per process. The
 command stage is at most 2.8 s (800 ms grace plus 2 s drain), the levels of
