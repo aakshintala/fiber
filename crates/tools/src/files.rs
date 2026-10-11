@@ -421,8 +421,8 @@ impl Files {
         Arc::clone(&self.shared.locks)
     }
 
-    /// Clears what the session has seen. A handoff does this; nothing calls
-    /// it from here yet.
+    /// Clears what the session has seen. The session's built-in list hands
+    /// it to the handoff (`crates/main/src/builtin.rs`, `forget`).
     pub fn forget(&self) {
         session(&self.shared.state).seen.clear();
     }

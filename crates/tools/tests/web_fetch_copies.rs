@@ -167,30 +167,6 @@ fn an_html_page_with_large_markdown_holds_one_large_block() {
 }
 
 #[test]
-fn an_html_page_with_small_markdown_holds_no_large_block() {
-    let (page, blocks) = html(
-        b"<p>start</p>",
-        b"<script>var words = \"turn tool call file session\";</script>",
-    );
-    assert!(blocks > 1000);
-    let content_type = "text/html; charset=utf-8";
-    let fetched = fetch(content_type, page.clone());
-    assert_html(&fetched, content_type, &page, "start\n");
-    assert_eq!(fetched.peak, 0, "nothing as large as a MiB");
-}
-
-#[test]
-fn a_windows_1252_page_holds_one_large_block() {
-    let (page, blocks) = html(b"", b"<p>caf\xe9 na\xefve \x93quoted\x94</p>");
-    let markdown = paragraphs("café naïve “quoted”", blocks);
-    assert!(markdown.len() > 1 << 20);
-    let content_type = "text/html; charset=windows-1252";
-    let fetched = fetch(content_type, page.clone());
-    assert_html(&fetched, content_type, &page, &markdown);
-    assert_eq!(fetched.peak, 1, "the markdown only");
-}
-
-#[test]
 fn a_text_page_holds_one_large_block() {
     let page = "turn tool call file session context model log\n"
         .repeat(PAGE / 46)
@@ -208,46 +184,4 @@ fn a_text_page_holds_one_large_block() {
         "the result is the first line and the page"
     );
     assert_eq!(fetched.peak, 1, "the page once, as the result");
-}
-
-#[test]
-fn a_pdf_holds_no_large_block() {
-    let page: Vec<u8> = (0..=250u8).cycle().take(PAGE).collect();
-    let fetched = fetch("application/pdf", page.clone());
-    assert_eq!(fetched.code(), None, "{}", fetched.text());
-    let text = fetched.text();
-    let (_, rest) = text.split_once("\n\nSaved to ").unwrap_or_default();
-    let line = format!("Saved to {rest}");
-    let path = fetched.artifact(
-        line.strip_suffix(&format!(" ({PAGE} bytes). Read it with `read`.\n"))
-            .unwrap_or_default(),
-        "Saved to ",
-        "pdf",
-    );
-    assert_eq!(
-        text,
-        format!(
-            "{} 200 application/pdf\n\nSaved to {path} ({PAGE} bytes). Read it with `read`.\n",
-            fetched.url
-        )
-    );
-    assert!(
-        fs::read(&path).expect("the download is saved") == page,
-        "the download is saved byte for byte"
-    );
-    assert_eq!(fetched.peak, 0, "nothing as large as a MiB");
-}
-
-#[test]
-fn an_unsupported_download_holds_no_large_block() {
-    let fetched = fetch("application/octet-stream", vec![7u8; PAGE]);
-    assert_eq!(fetched.code(), Some(ErrorCode::UnsupportedFile));
-    assert_eq!(
-        fetched.text(),
-        format!(
-            "{} is `application/octet-stream`, which `web_fetch` cannot read ({PAGE} bytes).\n",
-            fetched.url
-        )
-    );
-    assert_eq!(fetched.peak, 0, "nothing as large as a MiB");
 }

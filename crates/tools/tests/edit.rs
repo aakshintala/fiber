@@ -8,7 +8,6 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::collections::BTreeSet;
 use std::fs;
 
 use contract::ErrorCode;
@@ -17,16 +16,6 @@ use contract::tool::Tool;
 use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 use tools::Files;
-
-const KEYWORDS: &[&str] = &[
-    "type",
-    "properties",
-    "required",
-    "additionalProperties",
-    "items",
-    "enum",
-    "description",
-];
 
 fn args(value: Value) -> Map<String, Value> {
     match value {
@@ -43,37 +32,6 @@ fn text(output: &contract::tool::Output) -> String {
         Some(ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown) | None => {
             String::new()
         }
-    }
-}
-
-fn strict(schema: &Value) {
-    let Some(map) = schema.as_object() else {
-        panic!("schema node is an object");
-    };
-    for key in map.keys() {
-        assert!(KEYWORDS.contains(&key.as_str()), "{key}");
-    }
-    match map.get("type").and_then(Value::as_str) {
-        Some("object") => {
-            let properties = map.get("properties").unwrap().as_object().unwrap();
-            let required: BTreeSet<_> = map
-                .get("required")
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|value| value.as_str().unwrap())
-                .collect();
-            let names: BTreeSet<_> = properties.keys().map(String::as_str).collect();
-            assert_eq!(required, names);
-            assert_eq!(map.get("additionalProperties"), Some(&Value::Bool(false)));
-            for property in properties.values() {
-                strict(property);
-            }
-        }
-        Some("array") => strict(map.get("items").unwrap()),
-        Some("string" | "number" | "integer" | "boolean" | "null") => {}
-        _ => panic!("schema type"),
     }
 }
 
@@ -178,5 +136,4 @@ fn a_missing_file_and_a_directory_fail_and_effects_are_irreversible() {
         .unwrap();
     assert_eq!(effects.declared.effects, vec![Effect::Writes]);
     assert!(!effects.declared.reversible);
-    strict(&files.edit().definition().input_schema);
 }

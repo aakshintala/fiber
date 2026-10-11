@@ -11,11 +11,13 @@ use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 ///
 /// An extension's tool takes the same lock. Waiting is not cancelled: the
 /// holder's write is bounded.
+#[derive(Default)]
 pub struct PathLocks {
     state: Mutex<State>,
     changed: Condvar,
 }
 
+#[derive(Default)]
 struct State {
     held: BTreeSet<PathBuf>,
     /// Callers blocked in [`PathLocks::lock`], raised before they wait.
@@ -24,18 +26,13 @@ struct State {
 
 impl PathLocks {
     /// No path is held.
-    #[allow(
-        clippy::new_without_default,
-        reason = "extensions construct the lock with PathLocks::new"
+    #[cfg_attr(
+        false,
+        mutants::skip,
+        reason = "`new` and `default` build the same empty lock, so replacing either body with the other changes nothing"
     )]
     pub fn new() -> Self {
-        Self {
-            state: Mutex::new(State {
-                held: BTreeSet::new(),
-                waiting: 0,
-            }),
-            changed: Condvar::new(),
-        }
+        Self::default()
     }
 
     /// Blocks until `path` is free, then holds it until the guard drops.

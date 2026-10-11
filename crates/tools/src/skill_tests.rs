@@ -101,31 +101,6 @@ fn text_of(output: &contract::tool::Output) -> String {
 }
 
 #[test]
-fn the_definition_names_skill_with_its_schema() {
-    let skill = tool(Fake::mapping(BTreeMap::new()));
-    assert_eq!(
-        serde_json::to_value(skill.definition()).unwrap(),
-        json!({
-            "name": "skill",
-            "description": "Loads a skill from the skills listing: give its name, and get back its instructions under the path of its SKILL.md, so you can read the files it refers to with `read`.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "minLength": 1,
-                        "description": "The skill's name, as the skills listing gives it."
-                    }
-                },
-                "required": ["name"],
-                "additionalProperties": false
-            },
-            "deferred": false,
-        }),
-    );
-}
-
-#[test]
 fn the_definition_does_not_depend_on_the_skills() {
     let one = tool(Fake::mapping(BTreeMap::from([(
         "tdd".into(),

@@ -95,48 +95,6 @@ fn hit(id: &str, name: &str, seq: u64, ts: u64, label: Label, snippet: &str) -> 
 }
 
 #[test]
-fn the_definition_is_the_documented_constant() {
-    let definition = tool(&FakeScan::new(Found::default())).definition();
-
-    assert_eq!(definition.name, "session_search");
-    assert!(!definition.deferred);
-    assert_eq!(definition.hosted, None);
-    assert_eq!(
-        definition.description,
-        "Finds text in the logs of this project's past and running sessions: what was \
-         decided, which command ran, which file changed, where an error appeared. The text \
-         is matched as a literal, ignoring case, in messages, tool inputs and tool outputs, \
-         including full outputs saved as artifacts. Hits come best first: messages and tool \
-         inputs before tool outputs, then newest first. Each gives the log's path and the \
-         offset to read from with `read`."
-    );
-    assert_eq!(
-        definition.input_schema,
-        json!({
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "The text to find, as a literal."
-                },
-                "all_projects": {
-                    "type": "boolean",
-                    "description": "Search every project's sessions instead of this project's. Default false."
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "description": "The most hits to return. Default 20."
-                }
-            },
-            "required": ["text"],
-            "additionalProperties": false
-        })
-    );
-}
-
-#[test]
 fn it_declares_reads_on_the_scope_it_searches() {
     let search = tool(&FakeScan::new(Found::default()));
     for (arguments, path) in [

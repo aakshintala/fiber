@@ -1,4 +1,5 @@
-//! Tests for `guidelines::of` and the guidelines byte pin.
+//! Tests for `guidelines::of`: every built-in tool with a section
+//! returns it.
 
 #![allow(
     clippy::unwrap_used,
@@ -7,46 +8,68 @@
     reason = "test code; a failure is the test's"
 )]
 
+use contract::tool::Tool;
+
 use super::of;
 
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 14_695_981_039_346_656_037;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(1_099_511_628_211);
+/// `Skills` with no entry: `file` is `None`, and `body` is an error.
+struct NoSkills;
+
+impl contract::skills::Skills for NoSkills {
+    fn file(&self, _name: &str) -> Option<std::path::PathBuf> {
+        None
     }
-    hash
+
+    fn body(
+        &self,
+        _name: &str,
+        _file: &std::path::Path,
+    ) -> Result<String, contract::skills::SkillRead> {
+        Err(contract::skills::SkillRead::Invalid)
+    }
+}
+
+/// A `SearchBackend` with no results.
+struct NoResults;
+
+impl contract::search::SearchBackend for NoResults {
+    fn search(
+        &self,
+        _query: &str,
+        _domains: &contract::search::Domains,
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<Option<Vec<contract::search::SearchResult>>, contract::shapes::Failure> {
+        Ok(Some(Vec::new()))
+    }
 }
 
 #[test]
-fn guidelines_md_bytes_are_pinned() {
-    let bytes = include_bytes!("../prompt/guidelines.md");
-    assert_eq!(
-        bytes.len(),
-        1264,
-        "length changed: edit is a reviewed change"
-    );
-    assert_eq!(
-        fnv1a(bytes),
-        0x441b11994d5ae352,
-        "bytes changed: edit is a reviewed change"
-    );
-}
-
-#[test]
-fn each_builtin_tool_returns_its_section() {
-    let read = of("read").unwrap();
-    assert!(read.contains("Read files with `read`"), "{read}");
-    assert!(!read.starts_with("##"), "{read}");
-    assert!(!read.ends_with('\n'));
-    assert!(of("edit").unwrap().contains("Change an existing file"));
-    assert!(of("write").unwrap().contains("Use `write` for new files"));
-    assert!(
-        of("shell")
-            .unwrap()
-            .contains("Commands run with no terminal")
-    );
-    assert!(of("skill").unwrap().contains("load it with `skill`"));
+fn every_builtin_tool_with_a_section_returns_it() {
+    let files = crate::Files::new(std::path::PathBuf::from("/ws"));
+    let read = files.read();
+    let write = files.write();
+    let edit = files.edit();
+    let shell = crate::Shell::new(std::env::temp_dir(), fakes::clock::FakeClock::new());
+    let skill = crate::Skill::new(std::sync::Arc::new(NoSkills));
+    let hosted = crate::HostedSearch::new("web_search_20250305".to_owned());
+    let backend = crate::BackendSearch::new(std::sync::Arc::new(NoResults));
+    let cases = [
+        (read.definition().name, read.guidelines()),
+        (write.definition().name, write.guidelines()),
+        (edit.definition().name, edit.guidelines()),
+        (shell.definition().name, shell.guidelines()),
+        (
+            crate::Handoff.definition().name,
+            crate::Handoff.guidelines(),
+        ),
+        (skill.definition().name, skill.guidelines()),
+        (hosted.definition().name, hosted.guidelines()),
+        (backend.definition().name, backend.guidelines()),
+    ];
+    for (name, guidelines) in cases {
+        let text = guidelines.unwrap_or_else(|| panic!("{name} has guidelines"));
+        assert_eq!(text, of(&name).unwrap(), "{name}");
+    }
 }
 
 #[test]

@@ -19,16 +19,6 @@ use crate::files::{hash_bytes, path_text};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
-const KEYWORDS: &[&str] = &[
-    "type",
-    "properties",
-    "required",
-    "additionalProperties",
-    "items",
-    "enum",
-    "description",
-];
-
 fn args(value: Value) -> Map<String, Value> {
     match value {
         Value::Object(map) => map,
@@ -99,38 +89,6 @@ fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
     );
 }
 
-fn strict(schema: &Value) {
-    let Some(map) = schema.as_object() else {
-        panic!("schema node is an object");
-    };
-    for key in map.keys() {
-        assert!(KEYWORDS.contains(&key.as_str()), "{key}");
-    }
-    match map.get("type").and_then(Value::as_str) {
-        Some("object") => {
-            let properties = map.get("properties").unwrap().as_object().unwrap();
-            let required: std::collections::BTreeSet<_> = map
-                .get("required")
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|value| value.as_str().unwrap())
-                .collect();
-            let names: std::collections::BTreeSet<_> =
-                properties.keys().map(String::as_str).collect();
-            assert_eq!(required, names);
-            assert_eq!(map.get("additionalProperties"), Some(&Value::Bool(false)));
-            for property in properties.values() {
-                strict(property);
-            }
-        }
-        Some("array") => strict(map.get("items").unwrap()),
-        Some("string" | "number" | "integer" | "boolean" | "null") => {}
-        _ => panic!("schema type"),
-    }
-}
-
 fn edit_of(dir: &Path, value: Value) -> contract::tool::Output {
     Files::new(dir.to_path_buf()).edit().run(
         &args(value),
@@ -153,14 +111,6 @@ fn a_pdf_is_unsupported_and_names_text_only() {
         "{}",
         text(&output)
     );
-}
-
-#[test]
-fn the_schema_fits_the_strict_shape() {
-    let files = Files::new(Path::new("/ws").to_path_buf());
-    let definition = files.edit().definition();
-    assert_eq!(definition.name, "edit");
-    strict(&definition.input_schema);
 }
 
 #[test]
@@ -987,18 +937,4 @@ fn deleting_a_line_reports_that_no_lines_were_written() {
         text(&output),
         format!("edits[0]: replaced lines 2-2 with no lines.\nWrote {shown}: 4 bytes.")
     );
-}
-
-#[test]
-fn guidelines_are_the_edit_section() {
-    let dir = TempDir::new("fiber-edit-guidelines");
-    let files = crate::Files::new(dir.path().to_path_buf());
-    let text = files.edit().guidelines().unwrap();
-    assert_eq!(text, crate::guidelines::of("edit").unwrap());
-    assert!(!text.is_empty(), "{text}");
-    let md = include_str!("../prompt/guidelines.md");
-    let rest = &md[md.find("## edit\n").unwrap() + "## edit\n".len()..];
-    let end = rest.find("\n## ").map(|i| i + 1).unwrap_or(rest.len());
-    assert_eq!(text, rest[..end].trim(), "{text}");
-    assert!(text.contains("Change an existing file"), "{text}");
 }

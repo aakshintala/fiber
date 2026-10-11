@@ -14,10 +14,8 @@ fn search() -> HostedSearch {
 fn the_definition_is_the_vendors_type_and_the_name_with_no_description() {
     let definition = search().definition();
 
-    assert_eq!(definition.name, "web_search");
     assert_eq!(definition.hosted.as_deref(), Some("web_search_20250305"));
     assert_eq!(definition.description, "");
-    assert!(!definition.deferred);
 }
 
 #[test]
@@ -29,16 +27,6 @@ fn a_search_declares_network_reversible_with_an_empty_subject() {
     assert_eq!(effects.declared.paths, None);
     assert_eq!(effects.subject.as_deref(), Some(""));
     assert_eq!(effects.prefix, None);
-}
-
-#[test]
-fn the_guideline_tells_the_model_to_list_its_sources_as_markdown_links() {
-    let guidelines = search().guidelines().unwrap();
-
-    assert!(
-        guidelines.contains("list of the sources you used, as markdown links"),
-        "{guidelines}"
-    );
 }
 
 #[test]

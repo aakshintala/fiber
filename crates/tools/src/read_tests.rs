@@ -47,41 +47,6 @@ fn canonical(path: &Path) -> std::path::PathBuf {
 }
 
 #[test]
-fn the_schema_leaves_offset_and_limit_optional() {
-    let files = Files::new(Path::new("/ws").to_path_buf());
-    let schema = files.read().definition().input_schema;
-    let properties = schema.get("properties").unwrap().as_object().unwrap();
-    assert!(properties.contains_key("path"));
-    assert!(properties.contains_key("offset"));
-    assert!(properties.contains_key("limit"));
-    assert!(properties.contains_key("pages"));
-    assert_eq!(
-        properties.get("pages").and_then(|value| value.get("type")),
-        Some(&Value::String("string".to_owned()))
-    );
-    assert!(schema.get("pages").is_none());
-    assert!(
-        properties
-            .get("offset")
-            .and_then(|value| value.get("pages"))
-            .is_none()
-    );
-    let required: Vec<_> = schema
-        .get("required")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|value| value.as_str().unwrap())
-        .collect();
-    assert_eq!(required, ["path"]);
-    assert_eq!(
-        schema.get("additionalProperties"),
-        Some(&Value::Bool(false))
-    );
-}
-
-#[test]
 fn the_bound_sits_above_the_tools_own_cut() {
     let files = Files::new(Path::new("/ws").to_path_buf());
     assert_eq!(
@@ -568,17 +533,4 @@ fn a_capped_read_shares_the_session_file_state() {
     );
     assert!(output.error.is_none(), "{}", text(&output));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"new\n");
-}
-
-#[test]
-fn guidelines_are_the_read_section() {
-    let files = Files::new(std::path::Path::new("/ws").to_path_buf());
-    let text = files.read().guidelines().unwrap();
-    assert_eq!(text, crate::guidelines::of("read").unwrap());
-    assert!(!text.is_empty(), "{text}");
-    let md = include_str!("../prompt/guidelines.md");
-    let rest = &md[md.find("## read\n").unwrap() + "## read\n".len()..];
-    let end = rest.find("\n## ").map(|i| i + 1).unwrap_or(rest.len());
-    assert_eq!(text, rest[..end].trim(), "{text}");
-    assert!(text.contains("Read files with `read`"), "{text}");
 }

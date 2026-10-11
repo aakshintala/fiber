@@ -16,7 +16,6 @@ use contract::shapes::{ContentPart, Failure, Process};
 use contract::tool::{Bound, Cancel, Effects, Output, Tool};
 use serde_json::{Map, Value, json};
 
-#[path = "shell/background.rs"]
 mod background;
 
 mod command;
@@ -25,22 +24,16 @@ mod moved;
 mod process_group;
 mod spawn;
 
-#[path = "shell/monitor.rs"]
 mod monitor;
 
-#[path = "shell/output.rs"]
 mod output;
 
-#[path = "shell/prelude.rs"]
 mod prelude;
 
-#[path = "shell/tty.rs"]
 mod tty;
 
-#[path = "shell/read_only.rs"]
 mod read_only;
 
-#[path = "shell/classify.rs"]
 mod classify;
 
 mod sed;

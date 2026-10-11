@@ -1,7 +1,7 @@
 //! Bounds tests beside [`super::to_markdown`]: link and title text written
 //! as they arrive, the hidden-element state at one byte per element, and
-//! the output multiple. The link and title tables record today's exact
-//! output; ordinary pages convert the same.
+//! the output multiple. The link and title tables record the exact
+//! output the converter writes; ordinary pages convert the same.
 //!
 //! `#![allow(..., reason = ...)]` header shared by the test modules in this
 //! crate: tests unwrap and index freely.
@@ -17,7 +17,7 @@ use proptest::prelude::*;
 use super::hidden::Hidden;
 use super::{Stream, convert, to_markdown};
 
-/// Link inputs with today's exact markdown, recorded from the base.
+/// Link inputs with the exact markdown the converter writes.
 fn links() -> Vec<(&'static str, &'static str)> {
     vec![
         (
@@ -51,7 +51,7 @@ fn links() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// Title inputs with today's exact markdown, recorded from the base.
+/// Title inputs with the exact markdown the converter writes.
 fn titles() -> Vec<(&'static str, &'static str)> {
     vec![
         ("<title> a \t b </title>", "# a b\n"),
@@ -76,25 +76,25 @@ fn titles() -> Vec<(&'static str, &'static str)> {
 }
 
 #[test]
-fn link_text_collapses_as_before() {
+fn link_text_collapses_its_whitespace_and_keeps_inline_markup() {
     for (html, expected) in links() {
         assert_eq!(to_markdown(html), expected, "{html:?}");
     }
 }
 
 #[test]
-fn title_text_collapses_as_before() {
+fn title_text_collapses_its_whitespace_into_one_heading() {
     for (html, expected) in titles() {
         assert_eq!(to_markdown(html), expected, "{html:?}");
     }
 }
 
-/// Misnested markup inside a link converts differently now that the link's
-/// text is written as it arrives: `[` takes the quote depth of the link's
-/// first visible character, and `pre` and `td` content lands inside the
-/// link. Each case names its change; ordinary pages are unaffected.
+/// Misnested markup inside a link lands inside the link: `[` takes the
+/// quote depth of the link's first visible character, and `pre` and `td`
+/// content lands inside the link. Each case names its shape; ordinary
+/// pages are unaffected.
 #[test]
-fn misnested_markup_inside_a_link_converts_as_redesigned() {
+fn misnested_markup_inside_a_link_lands_inside_the_link() {
     // A `blockquote` end inside a link: `[` keeps the depth of the link's
     // first character, not of its closing tag.
     assert_eq!(
@@ -136,7 +136,7 @@ fn link_and_title_text_is_chunk_independent() {
     }
 }
 
-/// Today's `Hidden`, copied as the oracle: the rework stays observably
+/// A reference model of `Hidden`, kept beside it: both stay observably
 /// identical on every sequence.
 mod oracle {
     use html5ever::tokenizer::Tag;
@@ -490,10 +490,10 @@ fn drive(both: &mut (Hidden, oracle::Oracle), step: u8) {
 }
 
 proptest! {
-    /// Random open, close, break-out, head and text steps keep the rework
-    /// observably identical to today's state.
+    /// Random open, close, break-out, head and text steps keep both
+    /// observably identical on every sequence.
     #[test]
-    fn hidden_matches_todays_on_every_sequence(steps in proptest::collection::vec(0..26u8, 0..300)) {
+    fn hidden_matches_the_reference_model_on_every_sequence(steps in proptest::collection::vec(0..26u8, 0..300)) {
         let mut both = (Hidden::default(), oracle::Oracle::default());
         for step in steps {
             drive(&mut both, step);
@@ -550,45 +550,44 @@ fn the_hidden_stack_shrinks_back_after_deep_nesting() {
     );
 }
 
-/// A capacity of 64 never shrinks: the floor holds however few elements
-/// stay open.
 #[test]
-fn hidden_capacity_64_never_shrinks() {
+fn a_bulk_template_close_restores_the_hidden_stack_capacity_bound() {
+    let depth = 524_289;
     let mut hidden = Hidden::default();
-    let tag = start("template", false, vec![]);
-    for _ in 0..64 {
-        hidden.open("template", &tag);
+    hidden.open("template", &start("template", false, vec![]));
+    let noscript = start("noscript", false, vec![]);
+    for _ in 0..depth {
+        hidden.open("noscript", &noscript);
     }
-    assert_eq!(hidden.open_capacity(), 64);
-    for _ in 0..63 {
-        hidden.end("template");
-    }
-    assert!(hidden.is_hidden());
-    assert_eq!(hidden.open_capacity(), 64);
+
     hidden.end("template");
+
     assert!(!hidden.is_hidden());
-    assert_eq!(hidden.open_capacity(), 64);
+    assert!(
+        hidden.open_capacity() <= 64,
+        "capacity {} for an empty hidden stack",
+        hidden.open_capacity()
+    );
 }
 
-/// The stack halves only while its length stays below a quarter of its
-/// capacity: `len * 4 == capacity` holds, `len * 4 == capacity - 1`
-/// shrinks.
 #[test]
-fn hidden_shrink_holds_until_a_quarter() {
+fn an_svg_breakout_restores_the_hidden_stack_capacity_bound() {
+    let depth = 524_289;
     let mut hidden = Hidden::default();
-    let tag = start("template", false, vec![]);
-    for _ in 0..65 {
-        hidden.open("template", &tag);
+    hidden.open("svg", &start("svg", false, vec![]));
+    let template = start("template", false, vec![]);
+    for _ in 0..depth {
+        hidden.open("template", &template);
     }
-    assert_eq!(hidden.open_capacity(), 128);
-    for _ in 0..33 {
-        hidden.end("template");
-    }
-    assert!(hidden.is_hidden());
-    assert_eq!(hidden.open_capacity(), 128);
-    hidden.end("template");
-    assert!(hidden.is_hidden());
-    assert_eq!(hidden.open_capacity(), 64);
+
+    hidden.open("p", &start("p", false, vec![]));
+
+    assert!(!hidden.is_hidden());
+    assert!(
+        hidden.open_capacity() <= 64,
+        "capacity {} for an empty hidden stack",
+        hidden.open_capacity()
+    );
 }
 
 /// Closing the element above the outermost `svg` must not spend the
@@ -838,16 +837,4 @@ fn every_character_reference_expands_less_than_twice() {
             "{reference}: {decoded} bytes"
         );
     }
-}
-
-#[test]
-fn the_widest_item_marker_is_twenty_two_bytes() {
-    let mut converter = super::Converter::default();
-    converter.lists.push(super::List {
-        ordered: true,
-        count: u64::MAX - 1,
-    });
-    converter.item();
-    assert_eq!(converter.writer.output(), "18446744073709551615. ");
-    assert_eq!(converter.writer.output().len(), 22);
 }

@@ -327,15 +327,17 @@ impl Hidden {
         self.pop();
     }
 
-    /// Halves the stack's capacity while its length stays below a quarter
-    /// of it, floor 64 bytes: the capacity is at most `max(64, 4 × open)`
-    /// however elements opened and closed, and every close stays amortised
-    /// O(1).
+    /// Keeps the stack's memory bounded: at most `max(64, 4 × open)`.
+    /// Compare against the final length after a close, then retain at most
+    /// `max(64, 2 × open)` bytes so later closes do not reallocate each time.
     fn shrink(&mut self) {
-        while self.stack.capacity() > 64 && self.stack.len() * 4 < self.stack.capacity() {
-            let mut smaller = Vec::with_capacity(self.stack.capacity() / 2);
-            smaller.extend(self.stack.iter().copied());
-            self.stack = smaller;
+        let open = self.stack.len();
+        let bound = open.saturating_mul(4).max(64);
+        if matches!(
+            self.stack.capacity().cmp(&bound),
+            std::cmp::Ordering::Greater
+        ) {
+            self.stack.shrink_to(open.saturating_mul(2).max(64));
         }
     }
 }

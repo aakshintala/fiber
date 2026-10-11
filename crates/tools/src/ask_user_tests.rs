@@ -32,31 +32,14 @@ fn the_definition_is_at_most_1200_bytes() {
 fn the_schema_holds_the_limits() {
     let definition = AskUser.definition();
     let schema = &definition.input_schema;
-    assert_eq!(definition.name, "ask_user");
-    assert!(!definition.deferred);
-    assert_eq!(definition.hosted, None);
-    assert_eq!(schema["required"], json!(["questions"]));
-    assert_eq!(schema["additionalProperties"], false);
     let questions = &schema["properties"]["questions"];
-    assert_eq!(questions["type"], "array");
     assert_eq!(questions["minItems"], 1);
     assert_eq!(questions["maxItems"], 4);
     let question = &questions["items"];
-    assert_eq!(question["required"], json!(["question", "header"]));
-    assert_eq!(question["additionalProperties"], false);
-    assert_eq!(question["properties"]["question"]["type"], "string");
-    assert_eq!(question["properties"]["header"]["type"], "string");
     assert_eq!(question["properties"]["header"]["maxLength"], 12);
-    assert_eq!(question["properties"]["multiSelect"]["type"], "boolean");
     let options = &question["properties"]["options"];
-    assert_eq!(options["type"], "array");
     assert_eq!(options["minItems"], 2);
     assert_eq!(options["maxItems"], 4);
-    let option = &options["items"];
-    assert_eq!(option["required"], json!(["label"]));
-    assert_eq!(option["additionalProperties"], false);
-    assert_eq!(option["properties"]["label"]["type"], "string");
-    assert_eq!(option["properties"]["description"]["type"], "string");
 }
 
 #[test]

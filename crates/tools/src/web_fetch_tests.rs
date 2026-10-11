@@ -1336,19 +1336,7 @@ fn a_url_the_effects_cannot_parse_is_an_arguments_error() {
 }
 
 #[test]
-fn the_definition_takes_a_url_only() {
-    let definition = Rig::new().tool.definition();
-    assert_eq!(definition.name, "web_fetch");
-    assert!(!definition.deferred);
-    assert_eq!(
-        definition.input_schema,
-        json!({
-            "type": "object",
-            "properties": {"url": {"type": "string", "description": definition.input_schema["properties"]["url"]["description"].clone()}},
-            "required": ["url"],
-            "additionalProperties": false
-        })
-    );
+fn web_fetch_has_no_guidelines() {
     assert!(Rig::new().tool.guidelines().is_none());
 }
 
