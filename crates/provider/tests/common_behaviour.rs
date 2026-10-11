@@ -13,16 +13,21 @@
 #[path = "support/harness.rs"]
 mod harness;
 
+#[path = "support/wire_tools.rs"]
+mod wire_tools;
+
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
 use contract::events::TextDelta;
-use contract::provider::{CallError, CallUsage, Delta, InputSize, ModelCall};
+use contract::provider::{
+    CallError, CallUsage, Delta, ImageRef, Input, InputSize, ModelCall, ModelRequest,
+};
 use contract::shapes::Tokens;
 use contract::{ErrorCode, GenerationId};
-use fakes::{Deadline, ProviderServer, Response};
+use fakes::{Deadline, ProviderServer, Response, TempDir};
 use provider::Endpoint;
 use serde_json::{Value, json};
 
@@ -41,6 +46,22 @@ struct Wire {
     cut: Vec<u8>,
     cut_generation: GenerationId,
     error_first: Vec<u8>,
+    /// The call built after declaring `header` as the cache-key header.
+    keyed: fn(&Endpoint, &ModelRequest, &str) -> Box<dyn ModelCall>,
+    /// The sent tool list in a request body.
+    tools: fn(&Value) -> Value,
+    /// Two tool definitions in the protocol's own shape, `b_tool` then
+    /// `a_tool`.
+    sent_tools: Vec<Value>,
+    /// What the protocol sends for a request limit of 1.
+    limit_one: u64,
+    /// The request's output limit in a body.
+    output_limit: fn(&Value) -> Value,
+    /// The first user message's text parts and image-part count in a body.
+    user: fn(&Value) -> (Vec<String>, usize),
+    /// A reply the protocol decodes into `Ok`, for rows that assert on the
+    /// request they sent.
+    completed: fn() -> Response,
 }
 
 fn named(id: &str) -> Option<GenerationId> {
@@ -154,6 +175,18 @@ fn wires() -> [Wire; 4] {
             cut_generation: GenerationId("msg_1".into()),
             error_first: harness::anthropic_sse(&[json!({"type": "error",
                 "error": {"type": "invalid_request_error", "message": "bad"}})]),
+            keyed: anthropic_keyed,
+            tools: body_tools,
+            sent_tools: vec![
+                json!({"name": "b_tool", "description": "Second.",
+                    "input_schema": {"type": "object"}, "strict": true}),
+                json!({"name": "a_tool", "description": "First.",
+                    "input_schema": {"type": "object"}, "strict": false}),
+            ],
+            limit_one: 1,
+            output_limit: anthropic_limit,
+            user: anthropic_user,
+            completed: harness::anthropic_completed,
         },
         Wire {
             protocol: responses,
@@ -165,6 +198,18 @@ fn wires() -> [Wire; 4] {
             cut_generation: GenerationId("resp_1".into()),
             error_first: harness::responses_sse(&[json!({"type": "error",
                 "code": "server_error", "message": "boom"})]),
+            keyed: responses_keyed,
+            tools: body_tools,
+            sent_tools: vec![
+                json!({"type": "function", "name": "b_tool", "description": "Second.",
+                    "parameters": {"type": "object"}, "strict": true}),
+                json!({"type": "function", "name": "a_tool", "description": "First.",
+                    "parameters": {"type": "object"}, "strict": false}),
+            ],
+            limit_one: 16,
+            output_limit: responses_limit,
+            user: responses_user,
+            completed: responses_completed,
         },
         Wire {
             protocol: completions,
@@ -179,6 +224,20 @@ fn wires() -> [Wire; 4] {
                 json!({"error": {"message": "boom", "code": "server_error"}})
             )
             .into_bytes(),
+            keyed: completions_keyed,
+            tools: body_tools,
+            sent_tools: vec![
+                json!({"type": "function", "function": {"name": "b_tool",
+                    "description": "Second.", "parameters": {"type": "object"},
+                    "strict": true}}),
+                json!({"type": "function", "function": {"name": "a_tool",
+                    "description": "First.", "parameters": {"type": "object"},
+                    "strict": false}}),
+            ],
+            limit_one: 1,
+            output_limit: completions_limit,
+            user: completions_user,
+            completed: harness::completions_completed,
         },
         Wire {
             protocol: gemini,
@@ -191,8 +250,253 @@ fn wires() -> [Wire; 4] {
             error_first: harness::gemini_sse(&[
                 json!({"error": {"message": "boom", "status": "INVALID_ARGUMENT"}}),
             ]),
+            keyed: gemini_keyed,
+            tools: gemini_tools,
+            sent_tools: vec![
+                json!({"name": "b_tool", "description": "Sent.",
+                    "parametersJsonSchema": {"type": "object"}}),
+                json!({"name": "a_tool", "description": "Sent.",
+                    "parametersJsonSchema": {"type": "object"}}),
+            ],
+            limit_one: 1,
+            output_limit: gemini_limit,
+            user: gemini_user,
+            completed: harness::gemini_completed,
         },
     ]
+}
+
+/// The call built after declaring `header` as the cache-key header.
+fn anthropic_keyed(
+    endpoint: &Endpoint,
+    request: &ModelRequest,
+    header: &str,
+) -> Box<dyn ModelCall> {
+    Box::new(
+        provider::anthropic_messages::Messages::new(endpoint.clone())
+            .cache_key_header(header)
+            .request(request),
+    )
+}
+
+/// The call built after declaring `header` as the cache-key header.
+fn responses_keyed(
+    endpoint: &Endpoint,
+    request: &ModelRequest,
+    header: &str,
+) -> Box<dyn ModelCall> {
+    Box::new(
+        provider::openai_responses::Responses::new(endpoint.clone())
+            .cache_key_header(header)
+            .request(request),
+    )
+}
+
+/// The call built after declaring `header` as the cache-key header.
+fn completions_keyed(
+    endpoint: &Endpoint,
+    request: &ModelRequest,
+    header: &str,
+) -> Box<dyn ModelCall> {
+    Box::new(
+        provider::openai_completions::Completions::new(endpoint.clone())
+            .cache_key_header(header)
+            .request(request),
+    )
+}
+
+/// The call built after declaring `header` as the cache-key header.
+fn gemini_keyed(endpoint: &Endpoint, request: &ModelRequest, header: &str) -> Box<dyn ModelCall> {
+    Box::new(
+        provider::google_generative_ai::Gemini::new(endpoint.clone())
+            .cache_key_header(header)
+            .request(request),
+    )
+}
+
+/// A reply the Responses protocol decodes into `Ok`.
+fn responses_completed() -> Response {
+    Response::stream(harness::responses_sse(&[
+        json!({"type": "response.completed",
+        "response": {"id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10,
+                "input_tokens_details": {"cached_tokens": 4},
+                "output_tokens": 3}}} ),
+    ]))
+}
+
+/// The sent tool list in a request body, except Gemini's, which nests its
+/// declarations under one entry per tool kind.
+fn body_tools(body: &Value) -> Value {
+    body["tools"].clone()
+}
+
+/// The sent declarations in a Gemini body.
+fn gemini_tools(body: &Value) -> Value {
+    body["tools"][0]["functionDeclarations"].clone()
+}
+
+/// The request's output limit in an Anthropic body.
+fn anthropic_limit(body: &Value) -> Value {
+    body["max_tokens"].clone()
+}
+
+/// The request's output limit in a Responses body.
+fn responses_limit(body: &Value) -> Value {
+    body["max_output_tokens"].clone()
+}
+
+/// The request's output limit in a Completions body.
+fn completions_limit(body: &Value) -> Value {
+    body["max_completion_tokens"].clone()
+}
+
+/// The request's output limit in a Gemini body.
+fn gemini_limit(body: &Value) -> Value {
+    body["generationConfig"]["maxOutputTokens"].clone()
+}
+
+/// The first user message's text parts and image-part count. `content` is a
+/// plain string when the message carries no parts, otherwise blocks whose
+/// text `text_of` finds and whose images `is_image` names.
+fn user_parts(
+    content: &Value,
+    text_of: fn(&Value) -> Option<String>,
+    is_image: fn(&Value) -> bool,
+) -> (Vec<String>, usize) {
+    match content {
+        Value::String(text) => (vec![text.clone()], 0),
+        Value::Array(blocks) => {
+            let mut texts = Vec::new();
+            let mut images = 0;
+            for block in blocks {
+                if is_image(block) {
+                    images += 1;
+                } else if let Some(text) = text_of(block) {
+                    texts.push(text);
+                }
+            }
+            (texts, images)
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_) => {
+            panic!("a user message is a string or blocks, got {content}")
+        }
+    }
+}
+
+/// The text of an Anthropic block, when it carries text.
+fn anthropic_text(block: &Value) -> Option<String> {
+    (block["type"] == "text").then(|| block["text"].as_str().unwrap().to_owned())
+}
+
+/// Whether an Anthropic block is an image.
+fn anthropic_image(block: &Value) -> bool {
+    block["type"] == "image"
+}
+
+/// The first user message's text parts and image-part count in an
+/// Anthropic body.
+fn anthropic_user(body: &Value) -> (Vec<String>, usize) {
+    let content = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "user")
+        .unwrap()["content"]
+        .clone();
+    user_parts(&content, anthropic_text, anthropic_image)
+}
+
+/// The text of a Responses block, when it carries text.
+fn responses_text(block: &Value) -> Option<String> {
+    (block["type"] == "input_text").then(|| block["text"].as_str().unwrap().to_owned())
+}
+
+/// Whether a Responses block is an image.
+fn responses_image(block: &Value) -> bool {
+    block["type"] == "input_image"
+}
+
+/// The first user message's text parts and image-part count in a Responses
+/// body.
+fn responses_user(body: &Value) -> (Vec<String>, usize) {
+    let content = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["role"] == "user")
+        .unwrap()["content"]
+        .clone();
+    user_parts(&content, responses_text, responses_image)
+}
+
+/// The text of a Completions block, when it carries text.
+fn completions_text(block: &Value) -> Option<String> {
+    (block["type"] == "text").then(|| block["text"].as_str().unwrap().to_owned())
+}
+
+/// Whether a Completions block is an image.
+fn completions_image(block: &Value) -> bool {
+    block["type"] == "image_url"
+}
+
+/// The first user message's text parts and image-part count in a
+/// Completions body. The first message is the system one, so the user
+/// message is found, not assumed first.
+fn completions_user(body: &Value) -> (Vec<String>, usize) {
+    let content = body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "user")
+        .unwrap()["content"]
+        .clone();
+    user_parts(&content, completions_text, completions_image)
+}
+
+/// The text of a Gemini part, when it carries text.
+fn gemini_text(block: &Value) -> Option<String> {
+    block.get("text")?.as_str().map(str::to_owned)
+}
+
+/// Whether a Gemini part is inline image data.
+fn gemini_image(block: &Value) -> bool {
+    block.get("inlineData").is_some()
+}
+
+/// The first user message's text parts and image-part count in a Gemini
+/// body.
+fn gemini_user(body: &Value) -> (Vec<String>, usize) {
+    let content = body["contents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|message| message["role"] == "user")
+        .unwrap()["parts"]
+        .clone();
+    user_parts(&content, gemini_text, gemini_image)
+}
+
+/// A session dir holding `artifacts/i_1.png` (`b"abcd"`), with a request
+/// whose one user message carries `text` with that image.
+fn imaged_user_request(text: &str) -> (TempDir, ModelRequest) {
+    let session = TempDir::new("fiber-common-request-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: vec![Input::User {
+            text: text.into(),
+            images: vec![ImageRef {
+                path: "artifacts/i_1.png".into(),
+                mime_type: "image/png".into(),
+                width: 2,
+                height: 1,
+            }],
+        }],
+        session_dir: session.path().to_path_buf(),
+        ..harness::request()
+    };
+    (session, request)
 }
 
 fn body_len(server: &ProviderServer) -> u64 {
@@ -688,5 +992,250 @@ fn a_call_cancelled_before_its_generation_carries_an_unnamed_usage() {
             panic!("{}: {result:?}", wire.protocol.name);
         };
         assert_eq!(*usage, unnamed(&server), "{}", wire.protocol.name);
+    }
+}
+
+#[test]
+fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
+    for wire in wires() {
+        let mut request = harness::request();
+        request.tools = wire_tools::wire_tools_fixture();
+        let mut reordered = request.clone();
+        reordered.tools.reverse();
+        let server =
+            ProviderServer::start([(wire.completed)(), (wire.completed)(), (wire.completed)()])
+                .unwrap();
+        let endpoint = harness::endpoint(wire.protocol.name, &server);
+        for request in [&request, &request, &reordered] {
+            harness::run((wire.protocol.call)(&endpoint, request))
+                .0
+                .unwrap();
+        }
+        let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+        assert_eq!(bodies.len(), 3, "{}", wire.protocol.name);
+        assert_eq!(bodies[0], bodies[1], "{}", wire.protocol.name);
+        assert_eq!(
+            bodies[0], bodies[2],
+            "{}: tools go in one list sorted by name",
+            wire.protocol.name
+        );
+    }
+}
+
+#[test]
+fn a_reply_carries_the_size_of_the_body_it_sent() {
+    for wire in wires() {
+        let (_session, request) = imaged_user_request("look");
+        let server = ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
+        let endpoint = harness::endpoint(wire.protocol.name, &server);
+        let reply = harness::run((wire.protocol.call)(&endpoint, &request))
+            .0
+            .unwrap();
+        assert_eq!(
+            reply.input_size,
+            InputSize {
+                bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
+                media: true,
+            },
+            "{}",
+            wire.protocol.name
+        );
+        let endpoint = Endpoint {
+            text_only: true,
+            ..harness::endpoint(wire.protocol.name, &server)
+        };
+        let reply = harness::run((wire.protocol.call)(&endpoint, &request))
+            .0
+            .unwrap();
+        assert_eq!(
+            reply.input_size,
+            InputSize {
+                bytes: u64::try_from(server.requests()[1].body.len()).unwrap(),
+                media: false,
+            },
+            "{}",
+            wire.protocol.name
+        );
+    }
+}
+
+#[test]
+fn sent_tools_are_sent_verbatim_in_order() {
+    // A rewound session's first request carries its parent's logged build,
+    // not what its own tools would wire (`docs/events.md`, "Rewind").
+    for wire in wires() {
+        let server = ProviderServer::start([(wire.completed)()]).unwrap();
+        let endpoint = harness::endpoint(wire.protocol.name, &server);
+        let mut request = harness::request();
+        request.sent_tools = Some(
+            wire.sent_tools
+                .iter()
+                .map(|tool| tool.as_object().unwrap().clone())
+                .collect(),
+        );
+        harness::run((wire.protocol.call)(&endpoint, &request))
+            .0
+            .unwrap();
+        assert_eq!(
+            (wire.tools)(&harness::sent_body(&server, 0)),
+            Value::Array(wire.sent_tools.clone()),
+            "{}",
+            wire.protocol.name
+        );
+    }
+}
+
+#[test]
+fn a_users_empty_text_sends_no_text_part() {
+    for wire in wires() {
+        let (_session, request) = imaged_user_request("");
+        let server = ProviderServer::start([(wire.completed)()]).unwrap();
+        let endpoint = harness::endpoint(wire.protocol.name, &server);
+        harness::run((wire.protocol.call)(&endpoint, &request))
+            .0
+            .unwrap();
+        assert_eq!(
+            (wire.user)(&harness::sent_body(&server, 0)),
+            (Vec::<String>::new(), 1),
+            "{}",
+            wire.protocol.name
+        );
+    }
+}
+
+#[test]
+fn a_users_image_is_left_out_for_a_text_only_model() {
+    for wire in wires() {
+        let (_session, request) = imaged_user_request("look");
+        let server = ProviderServer::start([(wire.completed)()]).unwrap();
+        let endpoint = Endpoint {
+            text_only: true,
+            ..harness::endpoint(wire.protocol.name, &server)
+        };
+        harness::run((wire.protocol.call)(&endpoint, &request))
+            .0
+            .unwrap();
+        assert_eq!(
+            (wire.user)(&harness::sent_body(&server, 0)),
+            (
+                vec![
+                    "look\n[Image artifacts/i_1.png left out: this model does not take images.]"
+                        .to_owned()
+                ],
+                0
+            ),
+            "{}",
+            wire.protocol.name
+        );
+    }
+}
+
+#[test]
+fn a_users_unreadable_image_is_named_in_the_text_and_not_sent() {
+    for wire in wires() {
+        // No file is written: the image cannot be read.
+        let session = TempDir::new("fiber-common-request-image");
+        let imaged = |text: &str| ModelRequest {
+            conversation: vec![Input::User {
+                text: text.into(),
+                images: vec![ImageRef {
+                    path: "artifacts/gone.png".into(),
+                    mime_type: "image/png".into(),
+                    width: 2,
+                    height: 1,
+                }],
+            }],
+            session_dir: session.path().to_path_buf(),
+            ..harness::request()
+        };
+        let server = ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
+        let endpoint = harness::endpoint(wire.protocol.name, &server);
+        for text in ["look", "Image: 2x1 image/png.\n"] {
+            let request = imaged(text);
+            harness::run((wire.protocol.call)(&endpoint, &request))
+                .0
+                .unwrap();
+        }
+        assert_eq!(
+            (wire.user)(&harness::sent_body(&server, 0)),
+            (
+                vec!["look\n[Image artifacts/gone.png could not be read.]".to_owned()],
+                0
+            ),
+            "{}",
+            wire.protocol.name
+        );
+        assert_eq!(
+            (wire.user)(&harness::sent_body(&server, 1)),
+            (
+                vec![
+                    "Image: 2x1 image/png.\n[Image artifacts/gone.png could not be read.]"
+                        .to_owned()
+                ],
+                0
+            ),
+            "{}",
+            wire.protocol.name
+        );
+    }
+}
+
+#[test]
+fn the_requests_own_output_limit_is_capped_by_the_models() {
+    for wire in wires() {
+        let server = ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
+        let endpoint = Endpoint {
+            max_output_tokens: Some(4096),
+            ..harness::endpoint(wire.protocol.name, &server)
+        };
+        for limit in [Some(1), Some(9000)] {
+            let request = ModelRequest {
+                max_output_tokens: limit,
+                ..harness::request()
+            };
+            harness::run((wire.protocol.call)(&endpoint, &request))
+                .0
+                .unwrap();
+        }
+        assert_eq!(
+            (wire.output_limit)(&harness::sent_body(&server, 0)),
+            json!(wire.limit_one),
+            "{}",
+            wire.protocol.name
+        );
+        assert_eq!(
+            (wire.output_limit)(&harness::sent_body(&server, 1)),
+            json!(4096),
+            "{}",
+            wire.protocol.name
+        );
+    }
+}
+
+#[test]
+fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
+    for wire in wires() {
+        let server = ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
+        let endpoint = harness::endpoint(wire.protocol.name, &server);
+        let request = harness::request();
+        harness::run((wire.protocol.call)(&endpoint, &request))
+            .0
+            .unwrap();
+        harness::run((wire.keyed)(&endpoint, &request, "x-opencode-session"))
+            .0
+            .unwrap();
+        let sent = server.requests();
+        assert_eq!(
+            sent[0].header("x-opencode-session"),
+            None,
+            "{}",
+            wire.protocol.name
+        );
+        assert_eq!(
+            sent[1].header("x-opencode-session"),
+            Some("session_1"),
+            "{}",
+            wire.protocol.name
+        );
     }
 }

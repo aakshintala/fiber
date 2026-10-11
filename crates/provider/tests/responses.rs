@@ -398,42 +398,11 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
 }
 
 #[test]
-fn the_requests_own_output_limit_is_sent_and_capped_by_the_models() {
+fn a_request_body_has_the_responses_shape() {
     let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
-    let server = ProviderServer::start([reply(), reply()]).unwrap();
-    let limited = Endpoint {
-        max_output_tokens: Some(4096),
-        ..endpoint(&server)
-    };
-    let responses = Responses::new(limited);
-    let low = ModelRequest {
-        max_output_tokens: Some(1),
-        ..request()
-    };
-    let high = ModelRequest {
-        max_output_tokens: Some(9000),
-        ..request()
-    };
-    run(Box::new(responses.request(&low))).0.unwrap();
-    run(Box::new(responses.request(&high))).0.unwrap();
-    assert_eq!(sent_body(&server, 0)["max_output_tokens"], 16);
-    assert_eq!(sent_body(&server, 1)["max_output_tokens"], 4096);
-}
-
-#[test]
-fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
-    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
-    let server = ProviderServer::start([reply(), reply(), reply()]).unwrap();
+    let server = ProviderServer::start([reply()]).unwrap();
     let responses = Responses::new(endpoint(&server));
-    let mut reordered = request();
-    reordered.tools.reverse();
-    for request in [request(), request(), reordered] {
-        run(Box::new(responses.request(&request))).0.unwrap();
-    }
-    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
-    assert_eq!(bodies.len(), 3);
-    assert_eq!(bodies[0], bodies[1]);
-    assert_eq!(bodies[0], bodies[2], "tools are sent sorted by name");
+    run(Box::new(responses.request(&request()))).0.unwrap();
     let body = sent_body(&server, 0);
     assert_eq!(body["model"], "muse-spark-1.3-contributor");
     assert_eq!(body["instructions"], "You are terse.");
@@ -1275,135 +1244,6 @@ fn a_users_image_is_sent_as_input_image_parts_after_the_text() {
             {"type": "input_image", "image_url": "data:image/png;base64,YWJjZA=="},
         ]})
     );
-}
-
-#[test]
-fn a_users_empty_text_sends_no_input_text_part() {
-    let session = fakes::TempDir::new("fiber-responses-user-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
-    let request = ModelRequest {
-        conversation: user_conversation("", vec![png_ref("artifacts/i_1.png")]),
-        session_dir: session.path().to_path_buf(),
-        ..request()
-    };
-    let server = ProviderServer::start([Response::stream(stream(&[completed(
-        "completed",
-        json!({}),
-    )]))])
-    .unwrap();
-    run(Box::new(
-        Responses::new(endpoint(&server)).request(&request),
-    ))
-    .0
-    .unwrap();
-    assert_eq!(
-        user_item(&server),
-        json!({"role": "user", "content": [
-            {"type": "input_image", "image_url": "data:image/png;base64,YWJjZA=="},
-        ]})
-    );
-}
-
-#[test]
-fn a_users_image_is_left_out_for_a_text_only_model() {
-    let session = fakes::TempDir::new("fiber-responses-user-image");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
-    let request = ModelRequest {
-        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
-        session_dir: session.path().to_path_buf(),
-        ..request()
-    };
-    let server = ProviderServer::start([Response::stream(stream(&[completed(
-        "completed",
-        json!({}),
-    )]))])
-    .unwrap();
-    let endpoint = Endpoint {
-        text_only: true,
-        ..endpoint(&server)
-    };
-    run(Box::new(Responses::new(endpoint).request(&request)))
-        .0
-        .unwrap();
-    assert_eq!(
-        user_item(&server),
-        json!({"role": "user",
-            "content": "look\n[Image artifacts/i_1.png left out: this model does not take images.]"})
-    );
-}
-
-#[test]
-fn a_reply_carries_the_size_of_the_body_it_sent() {
-    let session = fakes::TempDir::new("fiber-responses-request-size");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
-    let request = ModelRequest {
-        conversation: image_conversation(
-            "Image: 2x1 image/png.\n",
-            vec![png_ref("artifacts/i_1.png")],
-        ),
-        session_dir: session.path().to_path_buf(),
-        ..request()
-    };
-    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
-    let server = ProviderServer::start([reply(), reply()]).unwrap();
-    let reply = run(Box::new(
-        Responses::new(endpoint(&server)).request(&request),
-    ))
-    .0
-    .unwrap();
-    assert_eq!(
-        reply.input_size,
-        InputSize {
-            bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
-            media: true,
-        }
-    );
-    let endpoint = Endpoint {
-        text_only: true,
-        ..endpoint(&server)
-    };
-    let reply = run(Box::new(Responses::new(endpoint).request(&request)))
-        .0
-        .unwrap();
-    assert_eq!(
-        reply.input_size,
-        InputSize {
-            bytes: u64::try_from(server.requests()[1].body.len()).unwrap(),
-            media: false,
-        }
-    );
-}
-
-#[test]
-fn sent_tools_are_sent_verbatim_in_order() {
-    // A rewound session's first request carries its parent's logged build,
-    // not what its own tools would wire (`docs/events.md`, "Rewind").
-    let server = ProviderServer::start([Response::stream(stream(&[completed(
-        "completed",
-        json!({}),
-    )]))])
-    .unwrap();
-    let sent = vec![
-        json!({"type": "function", "name": "b_tool", "description": "Second.",
-               "parameters": {"type": "object"}, "strict": true}),
-        json!({"type": "function", "name": "a_tool", "description": "First.",
-               "parameters": {"type": "object"}, "strict": false}),
-    ];
-    let mut request = request();
-    request.sent_tools = Some(
-        sent.iter()
-            .map(|tool| tool.as_object().unwrap().clone())
-            .collect(),
-    );
-    run(Box::new(
-        Responses::new(endpoint(&server)).request(&request),
-    ))
-    .0
-    .unwrap();
-    assert_eq!(sent_body(&server, 0)["tools"], Value::Array(sent));
 }
 
 /// Adds the account-id header a codex `credential()` returns.

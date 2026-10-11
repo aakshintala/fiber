@@ -359,17 +359,9 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
 }
 
 #[test]
-fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
-    let server =
-        ProviderServer::start([completed_reply(), completed_reply(), completed_reply()]).unwrap();
-    let mut reordered = request();
-    reordered.tools.reverse();
-    for request in [request(), request(), reordered] {
-        send(endpoint(&server), &request);
-    }
-    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
-    assert_eq!(bodies[0], bodies[1]);
-    assert_eq!(bodies[0], bodies[2], "tools are sorted by name");
+fn a_request_body_has_the_chat_completions_shape() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    send(endpoint(&server), &request());
     let body = sent_body(&server, 0);
     assert_eq!(
         body,
@@ -487,27 +479,6 @@ fn the_output_limit_never_exceeds_the_models_limit() {
         .map(|n| sent_body(&server, n)["max_completion_tokens"].clone())
         .collect();
     assert_eq!(sent, [json!(64_000), json!(1024), json!(64_000)]);
-}
-
-#[test]
-fn the_requests_own_output_limit_is_capped_by_the_models() {
-    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
-    let limited = Endpoint {
-        max_output_tokens: Some(4096),
-        ..endpoint(&server)
-    };
-    let low = ModelRequest {
-        max_output_tokens: Some(1),
-        ..request()
-    };
-    let high = ModelRequest {
-        max_output_tokens: Some(9000),
-        ..request()
-    };
-    send(limited.clone(), &low);
-    send(limited, &high);
-    assert_eq!(sent_body(&server, 0)["max_completion_tokens"], 1);
-    assert_eq!(sent_body(&server, 1)["max_completion_tokens"], 4096);
 }
 
 /// Four turns: user, assistant tool call, tool result, user.
@@ -1856,27 +1827,6 @@ fn thinking_levels_map_to_either_reasoning_field() {
     );
 }
 
-#[test]
-fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
-    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
-    let endpoint = endpoint(&server);
-    run(Box::new(
-        Completions::new(endpoint.clone()).request(&request()),
-    ))
-    .0
-    .unwrap();
-    run(Box::new(
-        Completions::new(endpoint)
-            .cache_key_header("x-opencode-session")
-            .request(&request()),
-    ))
-    .0
-    .unwrap();
-    let sent = server.requests();
-    assert_eq!(sent[0].header("x-opencode-session"), None);
-    assert_eq!(sent[1].header("x-opencode-session"), Some("s_root"));
-}
-
 /// A conversation whose one user message carries `images`.
 fn user_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
     vec![Input::User {
@@ -1916,103 +1866,4 @@ fn a_users_image_is_sent_as_image_url_parts_after_the_text() {
             image_url("YWJjZA=="),
         ]})
     );
-}
-
-#[test]
-fn a_users_empty_text_sends_no_text_part() {
-    let session = image_session();
-    let request = ModelRequest {
-        conversation: user_conversation("", vec![png_ref("artifacts/i_1.png")]),
-        session_dir: session.path().to_path_buf(),
-        ..request()
-    };
-    let server = ProviderServer::start([completed_reply()]).unwrap();
-    send(endpoint(&server), &request);
-    assert_eq!(
-        user_message(&server),
-        json!({"role": "user", "content": [image_url("YWJjZA==")]})
-    );
-}
-
-#[test]
-fn a_users_image_is_left_out_for_a_text_only_model() {
-    let session = image_session();
-    let request = ModelRequest {
-        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
-        session_dir: session.path().to_path_buf(),
-        ..request()
-    };
-    let server = ProviderServer::start([completed_reply()]).unwrap();
-    let endpoint = Endpoint {
-        text_only: true,
-        ..endpoint(&server)
-    };
-    send(endpoint, &request);
-    assert_eq!(
-        user_message(&server),
-        json!({"role": "user",
-            "content": "look\n[Image artifacts/i_1.png left out: this model does not take images.]"})
-    );
-}
-
-#[test]
-fn a_reply_carries_the_size_of_the_body_it_sent() {
-    let session = fakes::TempDir::new("fiber-completions-request-size");
-    std::fs::create_dir(session.path().join("artifacts")).unwrap();
-    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
-    let request = ModelRequest {
-        conversation: user_conversation("look", vec![png_ref("artifacts/i_1.png")]),
-        session_dir: session.path().to_path_buf(),
-        ..request()
-    };
-    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
-    let reply = run(Box::new(
-        Completions::new(endpoint(&server)).request(&request),
-    ))
-    .0
-    .unwrap();
-    assert_eq!(
-        reply.input_size,
-        InputSize {
-            bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
-            media: true,
-        }
-    );
-    let endpoint = Endpoint {
-        text_only: true,
-        ..endpoint(&server)
-    };
-    let reply = run(Box::new(Completions::new(endpoint).request(&request)))
-        .0
-        .unwrap();
-    assert_eq!(
-        reply.input_size,
-        InputSize {
-            bytes: u64::try_from(server.requests()[1].body.len()).unwrap(),
-            media: false,
-        }
-    );
-}
-
-#[test]
-fn sent_tools_are_sent_verbatim_in_order() {
-    // A rewound session's first request carries its parent's logged build,
-    // not what its own tools would wire (`docs/events.md`, "Rewind").
-    let server = ProviderServer::start([completed_reply()]).unwrap();
-    let sent = vec![
-        json!({"type": "function", "function": {"name": "b_tool",
-               "description": "Second.", "parameters": {"type": "object"},
-               "strict": true}}),
-        json!({"type": "function", "function": {"name": "a_tool",
-               "description": "First.", "parameters": {"type": "object"},
-               "strict": false}}),
-    ];
-    let mut request = request();
-    request.sent_tools = Some(
-        sent.iter()
-            .map(|tool| tool.as_object().unwrap().clone())
-            .collect(),
-    );
-    send(endpoint(&server), &request);
-    assert_eq!(sent_body(&server, 0)["tools"], Value::Array(sent));
 }

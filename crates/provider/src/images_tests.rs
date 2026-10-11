@@ -69,32 +69,6 @@ fn a_stored_image_follows_the_text_as_a_base64_block() {
 }
 
 #[test]
-fn empty_text_sends_no_text_block() {
-    let dir = fakes::TempDir::new("fiber-anthropic-image");
-    std::fs::write(dir.path().join("i.png"), b"abcd").unwrap();
-    let value = content("", &[image("i.png")], dir.path());
-    assert_eq!(value.as_array().map(Vec::len), Some(1));
-    assert_eq!(value[0]["type"], "image");
-}
-
-#[test]
-fn a_missing_file_is_named_in_the_text_and_not_sent() {
-    let dir = fakes::TempDir::new("fiber-anthropic-image");
-    assert_eq!(
-        content(
-            "Image: 2x1 image/png.\n",
-            &[image("artifacts/gone.png")],
-            dir.path()
-        ),
-        json!("Image: 2x1 image/png.\n[Image artifacts/gone.png could not be read.]")
-    );
-    assert_eq!(
-        content("no newline", &[image("artifacts/gone.png")], dir.path()),
-        json!("no newline\n[Image artifacts/gone.png could not be read.]")
-    );
-}
-
-#[test]
 fn a_readable_image_is_sent_beside_one_that_is_missing() {
     let dir = fakes::TempDir::new("fiber-anthropic-image");
     std::fs::write(dir.path().join("ok.png"), b"abcd").unwrap();
