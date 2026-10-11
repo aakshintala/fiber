@@ -569,11 +569,8 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     let setup = Setup::new();
     // A call that ignores time spent registering runs `work` and gets an
     // answer at once, so the timeout assertion fails.
-    let work = ProviderServer::start([
-        Response::status(200, "ok"),
-        Response::status(200, "ok"),
-    ])
-    .unwrap();
+    let work =
+        ProviderServer::start([Response::status(200, "ok"), Response::status(200, "ok")]).unwrap();
     let work_url = work.url();
     let dir = setup.home().join("ext");
     write(

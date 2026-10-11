@@ -535,10 +535,7 @@ fiber.tool("fetch", {
     );
     let tools = by_name(&ext);
     let first = run(&tools["fetch"], json!({ "url": one.url() }));
-    assert!(
-        one.await_requests(1, WAIT),
-        "waited for the first request"
-    );
+    assert!(one.await_requests(1, WAIT), "waited for the first request");
     let second = run(&tools["fetch"], json!({ "url": two.url() }));
     assert!(
         two.await_requests(1, WAIT),
