@@ -16,7 +16,7 @@ mod support;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::Child;
+use std::process::{Child, Command};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
@@ -344,7 +344,7 @@ fn a_person_name_pins_the_session_after_a_resume() {
     .unwrap();
     setup.provider(&server);
     server.hold();
-    let running = start(&setup, &["ask", "go"]);
+    let running = start(setup.fiber(&["ask", "go"]), setup.deadline);
     let first_raw: String = setup
         .deadline
         .recv(&running.stdout)
@@ -426,6 +426,13 @@ fn a_person_name_pins_the_session_after_a_resume() {
         })
         .unwrap();
     expected.insert(at_step + 1, "session_named");
+    // Only the subscribe's attach writes `clients`: one line, with count 1.
+    let clients: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "clients")
+        .collect();
+    assert_eq!(clients.len(), 1, "{lines:?}");
+    assert_eq!(clients[0]["payload"]["count"], 1);
     let kinds: Vec<&str> = lines
         .iter()
         .filter(|line| line["kind"] != "session_status" && line["kind"] != "clients")
@@ -517,10 +524,10 @@ struct Running {
 }
 
 #[track_caller]
-fn start(setup: &Setup, args: &[&str]) -> Running {
-    // Like `ask_with`, the session runs with the setup root as its working
-    // directory, so `fiber ask --resume` later finds it there.
-    let mut command = setup.fiber(args);
+fn start(mut command: Command, deadline: Deadline) -> Running {
+    // The caller builds the command with `setup.fiber(..)`, which runs with
+    // the setup root as its working directory (like `ask_with`), so
+    // `fiber ask --resume` later finds it there.
     let mut child = command.spawn().unwrap();
     let group = child.id();
     let watchdog = Watchdog::group(group);
@@ -551,7 +558,7 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
         group,
         stdout: stdout_rx,
         stderr: stderr_text,
-        deadline: setup.deadline,
+        deadline,
     }
 }
 
@@ -597,7 +604,7 @@ fn the_person_name_pins_refuses_the_model_and_clears() {
     .unwrap();
     setup.provider(&server);
     server.hold();
-    let running = start(&setup, &["ask", "go"]);
+    let running = start(setup.fiber(&["ask", "go"]), setup.deadline);
     // The first stdout line names the session. It is read as raw text: the
     // byte-for-byte check below needs every durable line's exact bytes, and
     // parsing the first line away would lose them.
