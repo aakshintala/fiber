@@ -37,11 +37,11 @@ impl Steered {
         steered
     }
 
-    /// A labelled rule (`steer · HH:MM`) over the message's bold text: the
-    /// rule fills the width with dashes past one space, and the text wraps
-    /// with its joins. A blank message draws the rule alone
-    /// (`docs/tui.md`, "Turns"). Each image draws as its one clickable
-    /// line under the text (`docs/tui.md`, "Images").
+    /// A labelled rule (`steer · HH:MM`) over the message's bold text:
+    /// "steer" in the attention tint and bold, the time dim, and the rule
+    /// in the rule tint filling the width past one space. A blank message
+    /// draws the rule alone (`docs/tui.md`, "Turns"). Each image draws
+    /// as its one clickable line under the text (`docs/tui.md`, "Images").
     pub(super) fn rows(
         &self,
         width: u16,
@@ -49,30 +49,26 @@ impl Steered {
         layout: &crate::image::Layout,
         out: &mut Rows,
     ) {
-        let label = match time_of_day(self.ts, zone) {
-            Some(time) => format!("steer · {time}"),
-            None => "steer".to_owned(),
+        let middle = match time_of_day(self.ts, zone) {
+            Some(time) => format!(" · {time} "),
+            None => " ".to_owned(),
         };
         let columns = usize::from(width);
-        let dashes = columns.saturating_sub(crate::format::width(&label).saturating_add(1));
-        let line = if dashes > 0 {
-            Line::from(vec![
-                Span::styled(label, Style::default().add_modifier(Modifier::DIM)),
-                Span::styled(format!(" {}", "─".repeat(dashes)), style(Role::Muted)),
-            ])
-        } else {
-            Line::from(Span::styled(
-                label,
-                Style::default().add_modifier(Modifier::DIM),
-            ))
-        };
+        let dashes = columns.saturating_sub(5 + crate::format::width(&middle));
+        let mut spans = vec![
+            Span::styled("steer", style(Role::Attention).add_modifier(Modifier::BOLD)),
+            Span::styled(middle, Style::default().add_modifier(Modifier::DIM)),
+        ];
+        if dashes > 0 {
+            spans.push(Span::styled("─".repeat(dashes), style(Role::Rule)));
+        }
         let tail = if dashes > 0 {
             dashes.saturating_add(1)
         } else {
             0
         };
         out.push_text(
-            (line, None),
+            (Line::from(spans), None),
             RowText {
                 tail: u16::try_from(tail).unwrap_or(u16::MAX),
                 ..RowText::plain()

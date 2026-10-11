@@ -773,8 +773,8 @@ fn steering_applied_is_a_line() {
         serde_json::json!({"content": [{"type": "text", "text": "use x"}], "source": "driver"}),
         None,
     ));
-    assert!(texts(&app).contains(&format!("steer · 00:00 {}", "─".repeat(65))));
-    assert!(texts(&app).contains(&"use x".to_owned()));
+    assert!(texts(&app).contains(&format!(" steer · 00:00 {}", "─".repeat(63))));
+    assert!(texts(&app).contains(&" use x".to_owned()));
 }
 
 #[test]

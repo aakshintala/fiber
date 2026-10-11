@@ -19,7 +19,36 @@ fn drawn(text: &str, ts: u64, width: u16, zone: &TimeZone) -> Vec<String> {
 #[test]
 fn the_rule_reads_steer_and_the_time() {
     // 1_760_000_000_000 is 08:53 UTC, 04:53 in New York: the label's time
-    // is the zone's (`docs/tui.md`, "Turns").
+    // is the zone's. "steer" is bold in the attention tint, the time dim,
+    // and the dashes fill the width in the rule tint
+    // (`docs/tui.md`, "Turns").
+    for (zone, time) in [(TimeZone::UTC, "08:53"), (new_york(), "04:53")] {
+        let mut out = Rows::default();
+        Steered::new("use x".to_owned(), 1_760_000_000_000).rows(
+            40,
+            &zone,
+            &crate::image::Layout::default(),
+            &mut out,
+        );
+        let (lines, _) = out.into_parts();
+        let (rule, _) = &lines[0];
+        assert_eq!(rule.spans.len(), 3);
+        assert_eq!(rule.spans[0].content, "steer");
+        assert!(rule.spans[0].style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(
+            rule.spans[0].style.fg,
+            Some(crate::theme::Role::Attention.color())
+        );
+        assert_eq!(rule.spans[1].content, format!(" · {time} "));
+        assert!(rule.spans[1].style.add_modifier.contains(Modifier::DIM));
+        // The label is 5 + 9 cells; past one space the rule fills the
+        // width: exactly 26 dashes at width 40.
+        assert_eq!(rule.spans[2].content, "─".repeat(26));
+        assert_eq!(
+            rule.spans[2].style.fg,
+            Some(crate::theme::Role::Rule.color())
+        );
+    }
     let utc = drawn("use x", 1_760_000_000_000, 40, &TimeZone::UTC);
     assert!(utc[0].starts_with("steer · 08:53 "), "{}", &utc[0]);
     assert_eq!(utc[1], "use x");
@@ -30,10 +59,9 @@ fn the_rule_reads_steer_and_the_time() {
 
 #[test]
 fn the_rule_fills_the_width_after_one_space() {
-    // The label is 13 cells; past one space the rule fills the width
-    // (`docs/tui.md`, "Turns").
-    assert_eq!(drawn("use x", 0, 13, &TimeZone::UTC)[0], "steer · 00:00");
-    assert_eq!(drawn("use x", 0, 14, &TimeZone::UTC)[0], "steer · 00:00");
+    // The label is 14 cells; past it the rule fills the width, and with
+    // no room left no rule span draws (`docs/tui.md`, "Turns").
+    assert_eq!(drawn("use x", 0, 14, &TimeZone::UTC)[0], "steer · 00:00 ");
     assert_eq!(drawn("use x", 0, 15, &TimeZone::UTC)[0], "steer · 00:00 ─");
     assert_eq!(
         drawn("use x", 0, 17, &TimeZone::UTC)[0],
@@ -52,33 +80,22 @@ fn the_rule_fills_the_width_after_one_space() {
             assert!(line.width() <= usize::from(width), "width {width}: {line}");
         }
     }
-}
-
-#[test]
-fn the_rule_is_dim_and_its_dashes_muted() {
-    // The label is dim, the dashes muted (`docs/tui.md`, "Turns").
+    // A width that leaves no dash draws the label alone, with no rule span.
     let mut out = Rows::default();
     Steered::new("use x".to_owned(), 0).rows(
-        20,
+        14,
         &TimeZone::UTC,
         &crate::image::Layout::default(),
         &mut out,
     );
     let (lines, _) = out.into_parts();
-    let (rule, _) = &lines[0];
-    assert_eq!(rule.spans.len(), 2);
-    assert!(rule.spans[0].style.add_modifier.contains(Modifier::DIM));
-    assert_eq!(rule.spans[0].content, "steer · 00:00");
-    assert_eq!(
-        rule.spans[1].style.fg,
-        Some(crate::theme::Role::Muted.color())
-    );
+    assert_eq!(lines[0].0.spans.len(), 2);
 }
 
 #[test]
-fn a_time_jiff_cannot_hold_leaves_the_label_bare() {
-    // Past jiff's range the label is bare `steer`, then dashes
-    // (`docs/tui.md`, "Turns").
+fn a_time_jiff_cannot_hold_leaves_steer_and_the_rule() {
+    // Past jiff's range the label is bare `steer`, then one space and the
+    // dashes (`docs/tui.md`, "Turns").
     let rows = drawn("use x", u64::MAX, 20, &TimeZone::UTC);
     assert_eq!(rows[0], format!("steer {}", "─".repeat(14)));
     assert_eq!(rows[1], "use x");
@@ -157,8 +174,9 @@ fn the_rule_copies_without_its_dashes() {
 }
 
 #[test]
-fn nothing_is_indented_and_nothing_is_striped() {
-    // No stripe, no indent (`docs/tui.md`, "Turns").
+fn the_rule_ends_at_the_width_it_is_given() {
+    // No stripe, no indent past the card's padding: the rule's dashes run
+    // to the given width (`docs/tui.md`, "Turns").
     let mut out = Rows::default();
     Steered::new("use x".to_owned(), 0).rows(
         20,
@@ -167,6 +185,7 @@ fn nothing_is_indented_and_nothing_is_striped() {
         &mut out,
     );
     let (lines, _) = out.into_parts();
+    assert_eq!(lines[0].0.width(), 20);
     for (line, _) in &lines {
         let shown = line.to_string();
         assert!(!shown.starts_with(' '), "{shown:?}");
@@ -178,7 +197,7 @@ fn nothing_is_indented_and_nothing_is_striped() {
 fn a_rule_with_no_dashes_has_no_tail() {
     // The label alone has nothing to leave out of a copy; past it the tail
     // is the space and the dashes (`docs/tui.md`, "Selection and copy").
-    for (width, tail) in [(13, 0), (14, 0), (15, 2), (20, 7)] {
+    for (width, tail) in [(14, 0), (15, 2), (20, 7)] {
         let mut out = Rows::default();
         Steered::new("use x".to_owned(), 0).rows(
             width,
