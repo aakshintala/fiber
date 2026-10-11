@@ -21,6 +21,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--hover` | also turns on mode 1003, every mouse motion, and tints the click target under the pointer; see "Hover's cost" |
 | `--home [CASE]` | draws the home screen case instead of the conversation, or the live home with no case; see "Home (#1628, #1657)" |
 | `--overlay CASE` | draws one overlay case over a dimmed conversation; see "Overlays (#1630)" |
+| `--rail-case CASE` | draws one rail-cards case instead of the conversation; see "The rail (#692)" |
 | `--rail A\|B\|C` | the session rail design at start: list, cards, or tabs; the default is B; F2 cycles; see "The rail (#692)" |
 | `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
 | `--panel-share P` | the panel's width at start, as a percent of the window; the default is 21 (34 columns at 160), clamped to [30, 60] columns |
@@ -255,6 +256,26 @@ Stage 2 covers selection and copy, search, keyboard protocol detection, the appr
 ## The rail (#692)
 
 Eight fake sessions stand in for the hub's feed, so the owner can judge the rail's look in Ghostty. Session 1 is the replayed fixture (WORKING, NEEDS INPUT once it waits on its approval or question); its model, branch, spend and context % are the fixture's real numbers. The other seven are hard-coded: "docs: rail spec" WORKING, "review #688" NEEDS INPUT on an approval, "bump ratatui" NEEDS INPUT on a question, "lsp probe" CRASHED, "migrate every provider adapter to the new streaming contract" WORKING and "backfill embeddings" RETRYING in the `pi-rig` project, and "rewrite onboarding tour" READY in a third project, `beacon`. Sessions stay in start order, so ⌥N numbers never move; a waiting session draws attention by glyph, stripe, tint and pulse only. Clicking a card or pressing ⌥N moves the on-screen marker only; the conversation stays the replayed session, as the dim "click moves marker" line says.
+
+Rail cards (#1632): five still frames from the fixtures in `src/rail.rs`,
+each reusing the rail builders above, at 160 by 48:
+
+```sh
+cargo run --release -- fixtures/session.jsonl --static --rail-case all-states
+cargo run --release -- fixtures/session.jsonl --static --rail-case hovered
+cargo run --release -- fixtures/session.jsonl --static --rail-case context-bars
+cargo run --release -- fixtures/session.jsonl --static --rail-case floor-ceiling
+cargo run --release -- fixtures/session.jsonl --static --rail-case hidden
+```
+
+`all-states` is the rail at 15% of 160 (24 columns) with two projects and
+six sessions in every state; `hovered` forces the `--hover` tint onto the
+needs-input card with no mouse; `context-bars` draws 30%, 65% and 90% twice,
+once with the panel's ▆ track and once with the ░ track, so the owner picks;
+`floor-ceiling` puts the 22-column floor beside the 48-column ceiling;
+`hidden` shows the hidden rail's 1-column grip with "N waiting" on the
+Session card. IDLE (`○` dim) exists only in this fixture: the live rail never
+draws it, and docs/tui.md maps the hub's `idle` status to READY.
 
 | Flag / key | What it does |
 |---|---|

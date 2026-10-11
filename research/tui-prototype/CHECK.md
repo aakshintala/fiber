@@ -59,3 +59,4 @@ Each surface's cases are in `check/`, one file per surface, built from the cases
 - [check/home.md](check/home.md)
 - [check/overlays.md](check/overlays.md)
 - [check/completions.md](check/completions.md)
+- [check/rail.md](check/rail.md)
