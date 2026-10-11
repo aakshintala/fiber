@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::fake::{FakeSession, status, status_line};
 use crate::recent::{Left, RecentRow, session_dir};
+use crate::testkit::{args, id};
 
 /// One named deadline per wait: the hub answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -36,9 +37,7 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hl");
-        let dir = held.path().join("h");
-        fs::create_dir_all(dir.join("run")).unwrap();
+        let (held, dir) = crate::testkit::with_run("hl");
         Self {
             dir,
             held,
@@ -81,19 +80,11 @@ impl Temp {
     }
 }
 
-fn id(n: u64) -> String {
-    format!("s_{n:016x}")
-}
-
 /// An idle `session_status` payload in `project`.
 fn payload(project: &str, parent: Option<&str>) -> Value {
     let mut payload = status("n", "/w", "idle", parent);
     payload["project"] = json!(project);
     payload
-}
-
-fn args(value: Value) -> Map<String, Value> {
-    value.as_object().unwrap().clone()
 }
 
 /// `sessions` answered on a thread under [`DEADLINE`], then the feed

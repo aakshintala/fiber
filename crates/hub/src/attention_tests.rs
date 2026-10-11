@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::fake;
+use crate::testkit::await_true;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -595,26 +596,6 @@ fn read_line(read: &mut BufReader<UnixStream>, what: &str) -> Value {
         .unwrap_or_else(|_| panic!("never received {what}"));
     assert!(!text.is_empty(), "attention closed before {what}");
     serde_json::from_str(&text).unwrap()
-}
-
-/// Waits under [`DEADLINE`] until `done` holds, naming `what` on expiry.
-#[track_caller]
-fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
-    let (tx, rx) = mpsc::channel();
-    let (cancel_tx, cancel_rx) = mpsc::channel();
-    thread::spawn(move || {
-        while !done() {
-            if cancel_rx.try_recv().is_ok() {
-                return;
-            }
-            thread::yield_now();
-        }
-        tx.send(()).unwrap_or(());
-    });
-    if Deadline::after(DEADLINE).recv(&rx).is_err() {
-        cancel_tx.send(()).unwrap_or(());
-        panic!("waited for {what}");
-    }
 }
 
 /// Drops listener `id` on a thread and receives its return under

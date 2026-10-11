@@ -322,12 +322,10 @@ fn hub(held: &fakes::TempDir) -> crate::connection::Hub {
     std::fs::create_dir_all(&dir).unwrap();
     let clock = fakes::clock::FakeClock::new();
     let timed: std::sync::Arc<dyn contract::clock::Clock> = clock;
-    crate::connection::Hub::new(
+    crate::testkit::hub(
         &dir,
-        "0.0.0",
         std::sync::Arc::new(crate::fake::FakeStarter::hang(&dir)),
-        std::sync::Arc::clone(&timed),
-        crate::diag::Diag::open(&dir, timed),
+        timed,
     )
 }
 
@@ -499,13 +497,7 @@ fn a_relay_without_a_thread_is_recovered_with_its_queue_first() {
         let clock = fakes::clock::FakeClock::new();
         let timed: Arc<dyn contract::clock::Clock> = clock;
         let starter = crate::fake::FakeStarter::bind_and_hold(&dir);
-        let hub = Arc::new(crate::connection::Hub::new(
-            &dir,
-            "0.0.0",
-            Arc::new(starter.clone()),
-            Arc::clone(&timed),
-            crate::diag::Diag::open(&dir, timed),
-        ));
+        let hub = Arc::new(crate::testkit::hub(&dir, Arc::new(starter.clone()), timed));
         let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
         let epoch = crate::connection::lock(&relays).mint();
         let (writer, _peer) = UnixStream::pair().unwrap();
@@ -750,13 +742,7 @@ fn a_failed_transfer_leaves_a_dead_relay_that_a_route_recovers() {
     let clock = fakes::clock::FakeClock::new();
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let starter = crate::fake::FakeStarter::bind_and_hold(&dir);
-    let hub = Arc::new(crate::connection::Hub::new(
-        &dir,
-        "0.0.0",
-        Arc::new(starter.clone()),
-        Arc::clone(&timed),
-        crate::diag::Diag::open(&dir, timed),
-    ));
+    let hub = Arc::new(crate::testkit::hub(&dir, Arc::new(starter.clone()), timed));
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     let line = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
         .as_object()
@@ -855,13 +841,7 @@ fn a_recovered_command_never_queues_behind_an_older_relay() {
     let clock = fakes::clock::FakeClock::new();
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let starter = crate::fake::FakeStarter::bind_and_hold(&dir);
-    let hub = Arc::new(crate::connection::Hub::new(
-        &dir,
-        "0.0.0",
-        Arc::new(starter.clone()),
-        Arc::clone(&timed),
-        crate::diag::Diag::open(&dir, timed),
-    ));
+    let hub = Arc::new(crate::testkit::hub(&dir, Arc::new(starter.clone()), timed));
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     let command = |id: &str, command: &str| {
         let mut stripped = serde_json::Map::new();

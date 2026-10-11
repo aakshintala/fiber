@@ -20,12 +20,12 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
 use contract::clock::Clock;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::*;
 use crate::connection::{Hub, serve_connection};
-use crate::diag::Diag;
 use crate::fake::FakeStarter;
+use crate::testkit::{args, id};
 use fakes::Deadline;
 
 /// One named deadline per receive: the hub answers before it.
@@ -41,22 +41,14 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hr");
-        let dir = held.path().join("h");
-        fs::create_dir_all(&dir).unwrap();
+        let (held, dir) = crate::testkit::home("hr");
         Self { dir, held }
     }
 
     fn hub_with(&self) -> (Arc<Hub>, Arc<FakeStarter>) {
         let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
         let starter = Arc::new(FakeStarter::bind_and_hold(&self.dir));
-        let hub = Arc::new(Hub::new(
-            &self.dir,
-            "0.0.0",
-            starter.clone(),
-            Arc::clone(&timed),
-            Diag::open(&self.dir, timed),
-        ));
+        let hub = Arc::new(crate::testkit::hub(&self.dir, starter.clone(), timed));
         (hub, starter)
     }
 
@@ -93,14 +85,6 @@ impl Temp {
         fs::write(&file, bytes).unwrap();
         file
     }
-}
-
-fn id(n: u64) -> String {
-    format!("s_{n:016x}")
-}
-
-fn args(value: Value) -> Map<String, Value> {
-    value.as_object().unwrap().clone()
 }
 
 fn refused(home: &Path, value: Value) -> Refusal {

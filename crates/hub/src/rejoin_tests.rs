@@ -19,16 +19,16 @@ use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::clock::{Clock, Wake};
+use contract::clock::Wake;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::*;
 use crate::connection::{Hub, lock, serve_connection};
-use crate::diag::Diag;
 use crate::fake::FakeStarter;
 use crate::feed::RUN_SCAN;
+use crate::testkit::{await_scanner, id, start, write_log};
 
 /// One named deadline per wait: every rejoin lands before it.
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -50,12 +50,11 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hj");
-        let dir = held.path().join("h");
-        fs::create_dir_all(dir.join("run")).unwrap();
+        let (held, dir) = crate::testkit::with_run("hj");
         Self { dir, held }
     }
 
+    // Keeps its own hub: it returns the fresh clock it builds on, which testkit::hub cannot.
     fn hub(&self, starter: impl crate::Starter + 'static) -> (Arc<Hub>, Arc<FakeClock>) {
         let clock = FakeClock::new();
         let timed: Arc<dyn contract::clock::Clock> =
@@ -65,7 +64,7 @@ impl Temp {
             "0.0.0",
             Arc::new(starter),
             Arc::clone(&timed),
-            Diag::open(&self.dir, timed),
+            crate::diag::open(&self.dir, timed),
         ));
         (hub, clock)
     }
@@ -84,17 +83,6 @@ impl Temp {
             .join(id)
     }
 
-    /// Writes `id`'s log: a `session_started` recording `workspace`, then
-    /// each of `last` in order.
-    fn write_log(&self, id: &str, workspace: &str, parent: Option<&str>, last: &[Value]) {
-        fs::create_dir_all(self.log_dir(id)).unwrap();
-        let mut text = format!("{}\n", started_line(id, workspace, parent));
-        for line in last {
-            text.push_str(&format!("{}\n", serde_json::to_string(line).unwrap()));
-        }
-        fs::write(self.log_dir(id).join("events.jsonl"), text).unwrap();
-    }
-
     fn append(&self, id: &str, line: &Value) {
         let mut text = fs::read_to_string(self.log_dir(id).join("events.jsonl")).unwrap();
         text.push_str(&format!("{}\n", serde_json::to_string(line).unwrap()));
@@ -107,22 +95,6 @@ impl Temp {
         log.extend_from_slice(text.as_bytes());
         fs::write(self.log_dir(id).join("events.jsonl"), log).unwrap();
     }
-}
-
-fn id(n: u64) -> String {
-    format!("s_{n:016x}")
-}
-
-fn started_line(id: &str, workspace: &str, parent: Option<&str>) -> String {
-    let mut payload = json!({"workspace": workspace});
-    if let Some(parent) = parent {
-        payload["parent"] = Value::String(parent.to_owned());
-    }
-    serde_json::to_string(&json!({
-        "kind": "session_started", "session_id": id, "ts": 1, "schema_version": 1,
-        "payload": payload,
-    }))
-    .unwrap()
 }
 
 fn fiber_started(id: &str) -> Value {
@@ -604,20 +576,6 @@ fn serve(stream: UnixStream, shared: &Arc<FakeShared>) {
         }
         shared.changed.notify_all();
     }
-}
-
-/// Waits until the scanner parks for the scan after now.
-fn await_scanner(clock: &FakeClock) {
-    assert!(
-        clock.await_parked(clock.now() + RUN_SCAN, DEADLINE),
-        "the scanner parks until the next scan"
-    );
-}
-
-/// Starts `feed`, and waits until its scanner parks for the next scan.
-fn start(feed: &Arc<crate::feed::Feed>, clock: &FakeClock) {
-    feed.start();
-    await_scanner(clock);
 }
 
 /// Arms the worker's pass-done notice; the caller waits on `done`.
@@ -1299,7 +1257,7 @@ fn a_mark_sits_on_the_last_complete_line() {
     let temp = Temp::new();
     let workspace = temp.workspace();
     let sid = id(1);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     temp.append_raw(&sid, "{\"kind\":\"session_status\",\"ts\":1");
     let mark = Mark::now(&temp.dir, &sid);
     let log = fs::read(temp.log_dir(&sid).join("events.jsonl")).unwrap();
@@ -1345,7 +1303,7 @@ fn a_summary_subscription_through_the_hub_follows_a_session_into_its_later_run()
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(1);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1394,7 +1352,7 @@ fn the_rejoin_replays_the_last_held_level() {
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(2);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1440,7 +1398,7 @@ fn a_socket_that_accepts_without_a_new_start_gets_no_rejoin() {
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(3);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1475,7 +1433,7 @@ fn a_running_session_without_a_new_start_gets_no_rejoin() {
     let sid = id(4);
     // A start before the mark: with a mark at the raw length it would
     // rejoin here, so the mark must sit on the last complete line.
-    temp.write_log(&sid, &workspace, None, &[fiber_started(&sid)]);
+    write_log(&temp.dir, &sid, &workspace, None, &[fiber_started(&sid)]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1522,7 +1480,7 @@ fn a_run_shorter_than_one_rescan_is_not_rejoined() {
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(5);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1569,7 +1527,7 @@ fn a_connection_without_a_kept_level_gets_no_rejoin() {
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(6);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1585,7 +1543,7 @@ fn a_connection_without_a_kept_level_gets_no_rejoin() {
     assert_eq!(quiet.next("hub_hello")["kind"], "hub_hello");
     // A connection whose subscribe the session rejected keeps nothing.
     let other = id(7);
-    temp.write_log(&other, &workspace, None, &[]);
+    write_log(&temp.dir, &other, &workspace, None, &[]);
     let rejecting = Fake::bind_rejecting(&temp.dir, &other, true);
     let mut refused = Client::connect(&hub);
     assert_eq!(refused.next("hub_hello")["kind"], "hub_hello");
@@ -1643,7 +1601,7 @@ fn a_session_with_a_live_relay_is_not_connected_again() {
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(8);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1668,7 +1626,7 @@ fn a_disconnected_connection_gets_no_rejoin() {
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(9);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1703,7 +1661,7 @@ fn a_delegates_later_run_is_rejoined_without_the_starter() {
     start(&hub.feed, &clock);
     let parent = id(10);
     let sid = id(11);
-    temp.write_log(&sid, &workspace, Some(&parent), &[]);
+    write_log(&temp.dir, &sid, &workspace, Some(&parent), &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1747,7 +1705,7 @@ fn a_rewound_last_line_never_rejoins_the_old_session() {
     start(&hub.feed, &clock);
     let sid = id(12);
     let next = id(13);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1781,7 +1739,7 @@ fn a_stale_socket_is_skipped_until_a_session_binds() {
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(14);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -1877,8 +1835,8 @@ fn route_and_the_sweep_open_only_one_relay() {
     start(&hub.feed, &clock);
     let sid = id(20);
     let peer = id(22);
-    temp.write_log(&sid, &workspace, None, &[]);
-    temp.write_log(&peer, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
+    write_log(&temp.dir, &peer, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let fake_peer = Fake::bind(&temp.dir, &peer);
     let mut client = Client::connect(&hub);
@@ -1957,7 +1915,7 @@ fn route_and_the_sweep_open_only_one_relay() {
     // Reverse: the worker pauses before its connect while the client's
     // command opens through route.
     let other = id(21);
-    temp.write_log(&other, &workspace, None, &[]);
+    write_log(&temp.dir, &other, &workspace, None, &[]);
     let old = Fake::bind(&temp.dir, &other);
     client.send(&json!({
         "id": "c_sub2", "session_id": other, "command": "subscribe", "args": {"level": "summary"},
@@ -2020,7 +1978,7 @@ fn a_level_changed_while_the_worker_waits_is_the_one_rejoined() {
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(40);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -2116,8 +2074,8 @@ fn follow_and_the_sweep_open_only_one_relay() {
     // relay to the next one left a mark but no kept level. A peer session
     // resumes alongside, to drive the worker's pass.
     let peer = id(32);
-    temp.write_log(&old, &workspace, None, &[]);
-    temp.write_log(&peer, &workspace, None, &[]);
+    write_log(&temp.dir, &old, &workspace, None, &[]);
+    write_log(&temp.dir, &peer, &workspace, None, &[]);
     let old_fake = Fake::bind(&temp.dir, &old);
     let peer_fake = Fake::bind(&temp.dir, &peer);
     let mut client = Client::connect(&hub);
@@ -2131,7 +2089,7 @@ fn follow_and_the_sweep_open_only_one_relay() {
             "command_accepted"
         );
     }
-    temp.write_log(&next, &workspace, None, &[]);
+    write_log(&temp.dir, &next, &workspace, None, &[]);
     fs::remove_file(temp.log_dir(&next).join("events.jsonl")).unwrap();
     let next_fake = Fake::bind_rejecting(&temp.dir, &next, true);
     client.send(&json!({
@@ -2165,7 +2123,7 @@ fn follow_and_the_sweep_open_only_one_relay() {
     );
     // The next session binds meanwhile: the sweep skips it while the
     // opening holds, and rejoins the peer on the same pass.
-    temp.write_log(&next, &workspace, None, &[fiber_started(&next)]);
+    write_log(&temp.dir, &next, &workspace, None, &[fiber_started(&next)]);
     let rebound = Fake::bind(&temp.dir, &next);
     let done = arm_pass(&hub);
     clock.advance(RUN_SCAN);
@@ -2201,7 +2159,7 @@ fn a_paused_worker_blocks_no_scan_and_starts_no_second_worker() {
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(40);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -2284,7 +2242,7 @@ fn a_session_with_no_log_at_attach_rejoins_from_its_discovered_start() {
     fake.await_closed();
     // The later run writes the log the attach never saw, then binds and
     // streams. Discovery starts it at offset 0, so its start counts.
-    temp.write_log(&sid, &workspace, None, &[fiber_started(&sid)]);
+    write_log(&temp.dir, &sid, &workspace, None, &[fiber_started(&sid)]);
     let resumed = Fake::bind(&temp.dir, &sid);
     resumed.say(&status_line(&sid, "streaming", None));
     let done = arm_pass(&hub);
@@ -2315,7 +2273,7 @@ fn a_long_consumed_prefix_still_rejoins_from_the_offset() {
                 "payload": payload("idle", None)})
         })
         .collect();
-    temp.write_log(&sid, &workspace, None, &prefix);
+    write_log(&temp.dir, &sid, &workspace, None, &prefix);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
@@ -2354,7 +2312,7 @@ fn a_scan_during_a_pass_queues_none_and_the_notice_follows_busy_clearing() {
     wire(&hub);
     start(&hub.feed, &clock);
     let sid = id(15);
-    temp.write_log(&sid, &workspace, None, &[]);
+    write_log(&temp.dir, &sid, &workspace, None, &[]);
     let fake = Fake::bind(&temp.dir, &sid);
     let mut client = Client::connect(&hub);
     assert_eq!(client.next("hub_hello")["kind"], "hub_hello");

@@ -23,7 +23,6 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::connection::Hub;
-use crate::diag::Diag;
 use crate::fake::{FakeStarter, Handshake, failure};
 use fakes::Deadline;
 
@@ -44,9 +43,7 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hs");
-        let dir = held.path().join("h");
-        fs::create_dir_all(&dir).unwrap();
+        let (held, dir) = crate::testkit::home("hs");
         Self {
             dir,
             held,
@@ -61,13 +58,7 @@ impl Temp {
     fn hub_with(&self, starter: impl crate::Starter + 'static) -> Hub {
         let clock = Arc::clone(&self.clock);
         let timed: Arc<dyn Clock> = clock;
-        Hub::new(
-            &self.dir,
-            "0.0.0",
-            Arc::new(starter),
-            Arc::clone(&timed),
-            Diag::open(&self.dir, timed),
-        )
+        crate::testkit::hub(&self.dir, Arc::new(starter), timed)
     }
 
     fn workspace(&self) -> String {

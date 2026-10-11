@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, SystemTime};
 
 use contract::SessionId;
+use log::diag::Severity;
 
 use super::*;
 
@@ -34,14 +35,12 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hg");
-        let dir = held.path().join("h");
-        fs::create_dir_all(&dir).unwrap();
+        let (held, dir) = crate::testkit::home("hg");
         Self { dir, held }
     }
 
-    fn diag(&self) -> Diag {
-        Diag::open(&self.dir, fakes::clock::FakeClock::new())
+    fn diag(&self) -> log::diag::Diag {
+        crate::diag::open(&self.dir, fakes::clock::FakeClock::new())
     }
 
     fn log(&self) -> PathBuf {
@@ -57,7 +56,7 @@ impl Temp {
 fn a_line_carries_ts_level_process_code_and_message_in_order() {
     let temp = Temp::new();
     let diag = temp.diag();
-    diag.info("hub_started", "The hub started.");
+    diag.line(Severity::Info, None, "hub_started", "The hub started.");
     assert_eq!(
         temp.text(),
         "{\"ts\":1700000000000,\"level\":\"info\",\"process\":\"hub\",\
@@ -69,8 +68,9 @@ fn a_line_carries_ts_level_process_code_and_message_in_order() {
 fn a_line_naming_a_session_carries_session_id_after_process() {
     let temp = Temp::new();
     let diag = temp.diag();
-    diag.info_session(
-        &SessionId("s_0123456789abcdef".into()),
+    diag.line(
+        Severity::Info,
+        Some(&SessionId("s_0123456789abcdef".into())),
         "session_started",
         "Session started for local.",
     );
@@ -86,8 +86,9 @@ fn a_line_naming_a_session_carries_session_id_after_process() {
 fn a_failure_is_a_warn_line_with_the_rejection_code() {
     let temp = Temp::new();
     let diag = temp.diag();
-    diag.warn_session(
-        &SessionId("s_0123456789abcdef".into()),
+    diag.line(
+        Severity::Warn,
+        Some(&SessionId("s_0123456789abcdef".into())),
         "io_failed",
         "Session s_0123456789abcdef could not start: refused.",
     );
@@ -102,7 +103,12 @@ fn a_failure_is_a_warn_line_with_the_rejection_code() {
 fn a_startup_failure_is_an_error_line_with_no_session() {
     let temp = Temp::new();
     let diag = temp.diag();
-    diag.error("config_invalid", "config.json is not valid JSON.");
+    diag.line(
+        Severity::Error,
+        None,
+        "config_invalid",
+        "config.json is not valid JSON.",
+    );
     assert_eq!(
         temp.text(),
         "{\"ts\":1700000000000,\"level\":\"error\",\"process\":\"hub\",\
@@ -115,7 +121,8 @@ fn a_log_of_exactly_10_mib_is_not_rotated() {
     let temp = Temp::new();
     fs::create_dir_all(temp.dir.join("logs")).unwrap();
     fs::write(temp.log(), vec![b'x'; 10 * 1024 * 1024]).unwrap();
-    temp.diag().info("hub_started", "The hub started.");
+    temp.diag()
+        .line(Severity::Info, None, "hub_started", "The hub started.");
     assert!(!temp.dir.join("logs").join("hub.log.1").exists());
     assert!(fs::metadata(temp.log()).unwrap().len() > 10 * 1024 * 1024);
 }
@@ -126,7 +133,8 @@ fn a_log_over_10_mib_is_renamed_before_the_next_write() {
     fs::create_dir_all(temp.dir.join("logs")).unwrap();
     let old = vec![b'x'; 10 * 1024 * 1024 + 1];
     fs::write(temp.log(), &old).unwrap();
-    temp.diag().info("hub_started", "The hub started.");
+    temp.diag()
+        .line(Severity::Info, None, "hub_started", "The hub started.");
     let previous = temp.dir.join("logs").join("hub.log.1");
     assert_eq!(fs::read(&previous).unwrap(), old);
     assert!(temp.text().ends_with("The hub started.\"}\n"));
@@ -191,7 +199,7 @@ fn concurrent_writes_past_the_limit_lose_no_records() {
                 .spawn(move || {
                     barrier.wait();
                     for _ in 0..EACH {
-                        diag.info("hub_started", "The hub started.");
+                        diag.line(Severity::Info, None, "hub_started", "The hub started.");
                     }
                 })
                 .unwrap(),
@@ -259,7 +267,7 @@ fn prune_keeps_100_files_and_leaves_subdirectories_alone() {
 fn a_debug_hub_writes_peak_memory_as_a_hub_line() {
     let temp = Temp::new();
     let diag = temp.diag().with_level(log::diag::Level::Debug);
-    diag.stopped("The hub stopped: idle.");
+    diag.peak_memory_then_info("hub_stopped", "The hub stopped: idle.");
     let text = temp.text();
     let mut lines = text.lines();
     let line: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
@@ -275,7 +283,8 @@ fn a_debug_hub_writes_peak_memory_as_a_hub_line() {
 #[test]
 fn at_the_default_level_the_stop_comes_without_peak_memory() {
     let temp = Temp::new();
-    temp.diag().stopped("The hub stopped: idle.");
+    temp.diag()
+        .peak_memory_then_info("hub_stopped", "The hub stopped: idle.");
     let line: serde_json::Value = serde_json::from_str(temp.text().trim_end()).unwrap();
     assert_eq!(line["code"], "hub_stopped");
 }

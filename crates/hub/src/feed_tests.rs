@@ -26,6 +26,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::fake::{FakeSession, status, status_line};
+use crate::testkit::{args, await_scanner, await_true, id, new_feed, start, stop_within};
 
 /// One named deadline per wait: the feed answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -41,9 +42,7 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hf");
-        let dir = held.path().join("h");
-        fs::create_dir_all(dir.join("run")).unwrap();
+        let (held, dir) = crate::testkit::with_run("hf");
         Self { dir, held }
     }
 
@@ -71,10 +70,6 @@ impl Temp {
     }
 }
 
-fn id(n: u64) -> String {
-    format!("s_{n:016x}")
-}
-
 /// A row for session `n` as JSON.
 fn row(n: u64, project: &str, how: &str, state: Option<&str>) -> Value {
     let mut row = json!({
@@ -85,39 +80,6 @@ fn row(n: u64, project: &str, how: &str, state: Option<&str>) -> Value {
         row["status"] = status("n", "/w", state, None);
     }
     row
-}
-
-/// A feed over `temp` on a fake clock, not yet started.
-fn new_feed(temp: &Temp) -> (Arc<Feed>, Arc<FakeClock>) {
-    let clock = FakeClock::new();
-    let timed: Arc<dyn Clock> = Arc::clone(&clock) as Arc<dyn Clock>;
-    (Arc::new(Feed::new(&temp.dir, timed)), clock)
-}
-
-/// Waits until the scanner parks for the scan after now.
-fn await_scanner(clock: &FakeClock) {
-    assert!(
-        clock.await_parked(clock.now() + RUN_SCAN, DEADLINE),
-        "the scanner parks until the next scan"
-    );
-}
-
-/// Starts `feed`, and waits until its scanner parks for the next scan.
-fn start(feed: &Arc<Feed>, clock: &FakeClock) {
-    feed.start();
-    await_scanner(clock);
-}
-
-/// Stops `feed` under [`DEADLINE`]: a stop that hangs fails the test.
-#[track_caller]
-fn stop_within(feed: &Arc<Feed>) {
-    let (tx, rx) = mpsc::channel();
-    let stopping = Arc::clone(feed);
-    thread::spawn(move || {
-        stopping.stop();
-        tx.send(()).unwrap_or(());
-    });
-    assert!(Deadline::after(DEADLINE).recv(&rx).is_ok(), "stop returns");
 }
 
 /// A feed subscriber's far end: lines read under [`DEADLINE`].
@@ -161,22 +123,6 @@ impl Sub {
     }
 }
 
-/// Waits under [`DEADLINE`] until `done` holds, naming `what` on expiry.
-#[track_caller]
-fn await_true(what: &str, done: impl Fn() -> bool + Send + 'static) {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        while !done() {
-            thread::yield_now();
-        }
-        tx.send(()).unwrap_or(());
-    });
-    assert!(
-        Deadline::after(DEADLINE).recv(&rx).is_ok(),
-        "waited for {what}"
-    );
-}
-
 /// Drops attention listener `id` on a thread and receives its return
 /// under [`DEADLINE`]: joining its writer blocks.
 #[track_caller]
@@ -209,16 +155,12 @@ fn running(temp: &Temp, id: &str, state: &str) -> (FakeSession, String) {
     (session, line)
 }
 
-fn args(value: Value) -> Map<String, Value> {
-    value.as_object().unwrap().clone()
-}
-
 #[test]
 fn the_summary_subscribe_is_the_documented_line() {
     use std::os::unix::net::UnixListener;
 
     let temp = Temp::new();
-    let (feed, _) = new_feed(&temp);
+    let (feed, _) = new_feed(&temp.dir);
     let socket = temp.dir.join("run").join(id(1));
     let listener = UnixListener::bind(&socket).unwrap();
     // The receive runs on a thread: a follow that never connects or
@@ -261,7 +203,7 @@ fn the_summary_subscribe_is_the_documented_line() {
 #[test]
 fn a_running_session_is_found_at_start_and_its_status_relayed_byte_for_byte() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let id = temp.session(1, "p", "turn_completed");
     let (session, line) = running(&temp, &id, "idle");
     let mut sub = Sub::new(&feed);
@@ -275,7 +217,7 @@ fn a_running_session_is_found_at_start_and_its_status_relayed_byte_for_byte() {
 #[test]
 fn a_socket_that_appears_after_start_is_found_after_one_scan() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     start(&feed, &clock);
     let id = temp.session(1, "p", "turn_completed");
     let (session, line) = running(&temp, &id, "idle");
@@ -290,7 +232,7 @@ fn a_socket_that_appears_after_start_is_found_after_one_scan() {
 #[test]
 fn a_name_that_is_not_a_session_id_is_never_connected() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let hub = FakeSession::bind(&temp.dir, "hub");
     let id = temp.session(1, "p", "turn_completed");
     let (session, _) = running(&temp, &id, "idle");
@@ -305,7 +247,7 @@ fn a_name_that_is_not_a_session_id_is_never_connected() {
 #[test]
 fn a_delegate_never_reaches_a_subscriber_and_is_not_connected_again() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let delegate = id(9);
     let child = FakeSession::bind(&temp.dir, &delegate);
     child.say(&status_line(
@@ -342,7 +284,7 @@ fn leave(
     state: &str,
     killed: bool,
 ) -> (Arc<Feed>, Arc<FakeClock>, Sub, String) {
-    let (feed, clock) = new_feed(temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let id = temp.session(1, "p", last);
     let (session, line) = running(temp, &id, state);
     let mut sub = Sub::new(&feed);
@@ -419,7 +361,7 @@ fn a_session_that_exits_waiting_stays_in_the_feed() {
 #[test]
 fn a_session_whose_directory_is_gone_exited_and_leaves_nothing() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let id = id(1);
     let (session, line) = running(&temp, &id, "waiting");
     let mut sub = Sub::new(&feed);
@@ -435,7 +377,7 @@ fn a_session_whose_directory_is_gone_exited_and_leaves_nothing() {
 #[test]
 fn a_session_that_never_sent_a_status_gets_no_session_left() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let quiet = temp.session(1, "p", "fiber_exited");
     let silent = FakeSession::bind(&temp.dir, &quiet);
     let mut sub = Sub::new(&feed);
@@ -476,7 +418,7 @@ fn a_crashed_session_that_comes_back_is_running_again() {
 #[test]
 fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let id = temp.session(1, "p", "turn_completed");
     let session = FakeSession::bind(&temp.dir, &id);
     // Never read: its socket buffer fills and its writer blocks.
@@ -528,7 +470,7 @@ fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
 #[test]
 fn each_subscriber_gets_its_own_id_and_unsubscribe_ends_only_that_one() {
     let temp = Temp::new();
-    let (feed, _) = new_feed(&temp);
+    let (feed, _) = new_feed(&temp.dir);
     let first = Sub::new(&feed);
     let second = Sub::new(&feed);
     assert_eq!((first.id, second.id), (1, 2));
@@ -551,7 +493,7 @@ fn each_subscriber_gets_its_own_id_and_unsubscribe_ends_only_that_one() {
 #[test]
 fn a_scan_skips_followed_sessions_and_delegates() {
     let temp = Temp::new();
-    let (feed, _) = new_feed(&temp);
+    let (feed, _) = new_feed(&temp.dir);
     let names = BTreeSet::from([id(1), id(2), id(3)]);
     let mut state = lock(&feed.state);
     let (followed, _far) = UnixStream::pair().unwrap();
@@ -574,7 +516,7 @@ fn a_snapshot_sends_left_sessions_before_running_ones() {
     let live = temp.session(1, "p", "turn_completed");
     let crashed = temp.session(2, "p", "turn_completed");
     temp.append(&row(2, "p", "crashed", Some("idle")));
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let (_session, line) = running(&temp, &live, "idle");
     start(&feed, &clock);
     let watched = Arc::clone(&feed);
@@ -606,7 +548,7 @@ fn start_seeds_crashed_and_waiting_sessions_but_not_running_or_gone_ones() {
     temp.append(&row(5, "p", "exited", Some("idle")));
     temp.session(6, "p", "turn_completed");
     temp.append(&row(6, "p", "crashed", None));
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     // Running: its socket accepts, so it is not seeded.
     let alive = FakeSession::bind(&temp.dir, &id(4));
     feed.start();
@@ -635,7 +577,7 @@ fn dismiss_drops_only_a_crashed_session() {
     let crashed = id(1);
     let waiting = temp.session(2, "p", "fiber_exited");
     temp.append(&row(2, "p", "exited", Some("waiting")));
-    let (seeded, _) = new_feed(&temp);
+    let (seeded, _) = new_feed(&temp.dir);
     seeded.start();
     assert_eq!(entry_of(&seeded, &waiting), Some("exited"));
     let stale = |feed: &Feed, session: &str| {
@@ -656,7 +598,7 @@ fn dismiss_drops_only_a_crashed_session() {
 #[test]
 fn dismiss_and_recent_refuse_arguments_that_do_not_fit() {
     let temp = Temp::new();
-    let (feed, _) = new_feed(&temp);
+    let (feed, _) = new_feed(&temp.dir);
     for bad in [
         json!({}),
         json!({"session": 1}),
@@ -680,7 +622,7 @@ fn dismiss_and_recent_refuse_arguments_that_do_not_fit() {
 #[test]
 fn recent_answers_a_page_without_running_sessions() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     for n in 1..=3 {
         let project = if n == 2 { "q" } else { "p" };
         temp.session(n, project, "fiber_exited");
@@ -714,7 +656,7 @@ fn recent_answers_a_page_without_running_sessions() {
 #[test]
 fn stop_waits_for_a_writer_still_draining_its_backlog() {
     let temp = Temp::new();
-    let (feed, _) = new_feed(&temp);
+    let (feed, _) = new_feed(&temp.dir);
     let (writer, mut far) = UnixStream::pair().unwrap();
     far.set_read_timeout(Some(DEADLINE)).unwrap();
     let kept = Arc::new(Mutex::new(writer));
@@ -759,7 +701,7 @@ fn stop_waits_for_a_writer_still_draining_its_backlog() {
 #[test]
 fn stop_ends_every_thread_and_records_no_crash() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let id = temp.session(1, "p", "turn_completed");
     let (_session, line) = running(&temp, &id, "idle");
     let mut sub = Sub::new(&feed);
@@ -794,7 +736,7 @@ fn stop_ends_every_thread_and_records_no_crash() {
 #[test]
 fn stop_returns_when_a_silent_session_stays_open() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let id = temp.session(1, "p", "turn_completed");
     let (_session, line) = running(&temp, &id, "idle");
     let mut sub = Sub::new(&feed);
@@ -875,7 +817,7 @@ fn how_left_names_both_exit_lines() {
 #[test]
 fn a_session_resumed_before_its_end_is_read_is_not_crashed() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let id = temp.session(1, "p", "fiber_started");
     let (session, line) = running(&temp, &id, "idle");
     let mut sub = Sub::new(&feed);
@@ -900,7 +842,7 @@ fn a_session_resumed_before_its_end_is_read_is_not_crashed() {
 #[test]
 fn an_exit_line_from_before_the_follow_is_not_the_followed_runs() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let id = temp.session(1, "p", "fiber_started");
     // The earlier run's exit line is already in the log when the hub
     // follows: only an exit line written after that point ends this run.
@@ -1002,7 +944,7 @@ impl Temp {
 #[test]
 fn waiting_then_a_finished_turn_each_send_one_attention() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(1, "p", "turn_completed");
     let heard = Heard::new(&feed);
     let mut heard = heard;
@@ -1039,7 +981,7 @@ fn waiting_then_a_finished_turn_each_send_one_attention() {
 #[test]
 fn idle_without_a_turn_sends_nothing() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(1, "p", "turn_completed");
     let mut heard = Heard::new(&feed);
     let session = FakeSession::bind(&temp.dir, &id(1));
@@ -1062,7 +1004,7 @@ fn idle_without_a_turn_sends_nothing() {
 #[test]
 fn a_late_reader_still_sends_one_finished_per_turn() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(1, "p", "turn_completed");
     let session = FakeSession::bind(&temp.dir, &id(1));
     let say = |state: &str, request: &str, since: u64| {
@@ -1094,7 +1036,7 @@ fn a_late_reader_still_sends_one_finished_per_turn() {
 #[test]
 fn a_turn_that_ended_before_the_hub_followed_is_announced() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(1, "p", "session_started");
     temp.log(1, "p", &turned(WALL + 5));
     let mut heard = Heard::new(&feed);
@@ -1112,7 +1054,7 @@ fn a_turn_that_ended_before_the_hub_followed_is_announced() {
 #[test]
 fn a_turn_that_ended_before_the_hub_started_is_not() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(1, "p", "session_started");
     temp.log(1, "p", &turned(WALL - 1));
     let mut heard = Heard::new(&feed);
@@ -1131,7 +1073,7 @@ fn a_turn_that_ended_before_the_hub_started_is_not() {
 #[test]
 fn a_delegate_never_sends_attention() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(9, "p", "session_started");
     temp.log(9, "p", &turned(WALL + 5));
     temp.session(1, "p", "turn_completed");
@@ -1159,7 +1101,7 @@ fn a_delegate_never_sends_attention() {
 #[test]
 fn a_resumed_session_raising_its_request_again_is_not_announced_but_its_turn_end_is() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(1, "p", "fiber_exited");
     let mut heard = Heard::new(&feed);
     let session = FakeSession::bind(&temp.dir, &id(1));
@@ -1193,7 +1135,7 @@ fn a_resumed_run_that_starts_idle_is_not_announced() {
     let temp = Temp::new();
     temp.session(1, "p", "turn_completed");
     temp.append(&row(1, "p", "crashed", Some("streaming")));
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let mut heard = Heard::new(&feed);
     let session = FakeSession::bind(&temp.dir, &id(1));
     session.say(&status_line(&id(1), &state_of("idle", "r1", WALL + 7)));
@@ -1211,7 +1153,7 @@ fn a_resumed_run_that_starts_idle_is_not_announced() {
 #[test]
 fn a_listener_added_later_gets_no_replay() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(1, "p", "turn_completed");
     let mut first = Heard::new(&feed);
     let session = FakeSession::bind(&temp.dir, &id(1));
@@ -1241,7 +1183,7 @@ fn a_listener_added_later_gets_no_replay() {
 #[test]
 fn older_lines_after_a_snapshot_are_not_announced_twice() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(1, "p", "session_started");
     temp.log(1, "p", &turned(WALL + 5));
     let session = FakeSession::bind(&temp.dir, &id(1));
@@ -1274,7 +1216,7 @@ fn older_lines_after_a_snapshot_are_not_announced_twice() {
 #[test]
 fn a_resume_that_starts_idle_does_not_announce_a_turn_again() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(1, "p", "session_started");
     temp.log(1, "p", &turned(WALL + 5));
     let mut heard = Heard::new(&feed);
@@ -1308,7 +1250,7 @@ fn a_resume_that_starts_idle_does_not_announce_a_turn_again() {
 #[test]
 fn a_feed_subscriber_alone_gets_no_attention() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     temp.session(1, "p", "turn_completed");
     let session = FakeSession::bind(&temp.dir, &id(1));
     let mut sub = Sub::new(&feed);
@@ -1355,7 +1297,7 @@ fn rewound_last(old: &str, next: &str) -> Value {
 #[test]
 fn on_rewound_fires_once_for_a_rewound_last_line() {
     let temp = Temp::new();
-    let (feed, _clock) = new_feed(&temp);
+    let (feed, _clock) = new_feed(&temp.dir);
     let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
     assert!(
         feed.on_rewound
@@ -1381,7 +1323,7 @@ fn on_rewound_fires_once_for_a_rewound_last_line() {
 #[test]
 fn on_rewound_ignores_anything_but_a_rewound_last_line() {
     let temp = Temp::new();
-    let (feed, _clock) = new_feed(&temp);
+    let (feed, _clock) = new_feed(&temp.dir);
     let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
     assert!(
         feed.on_rewound
@@ -1558,7 +1500,7 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
         );
     };
 
-    let (first, first_clock) = new_feed(&temp);
+    let (first, first_clock) = new_feed(&temp.dir);
     let mut first_sub = Sub::new(&first);
     start(&first, &first_clock);
     await_subscribed(1);
@@ -1567,7 +1509,7 @@ fn a_second_hub_lists_a_session_the_first_hub_already_followed() {
     assert_eq!(first_sub.raw("the session's status"), line);
     assert_eq!(entry_of(&first, &id), Some("running"));
 
-    let (second, second_clock) = new_feed(&temp);
+    let (second, second_clock) = new_feed(&temp.dir);
     let mut second_sub = Sub::new(&second);
     start(&second, &second_clock);
     await_received(2);

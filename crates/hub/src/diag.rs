@@ -15,9 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use contract::SessionId;
 use contract::clock::Clock;
-use log::diag::{Level, Process, Severity};
 
 /// Past this size `hub.log` is renamed to `hub.log.1` before the next write
 /// (`docs/state.md`, "Bounds").
@@ -31,85 +29,21 @@ const PRUNE_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// (`docs/state.md`, "Bounds").
 const PRUNE_KEEP: usize = 100;
 
-/// The hub's diagnostic log, over the shared writer: one lock serializes
-/// rotation and append, so concurrent connections never lose records to two
-/// rotations.
-pub(crate) struct Diag {
-    log: log::diag::Diag,
-}
+use log::diag::{Level, Process};
 
-impl Diag {
-    /// Opens the log in `home`: creates `logs/` mode 0700, prunes `logs/`
-    /// and `crashes/`, before the caller writes `hub_started`. The level is
-    /// `info` until [`Diag::with_level`].
-    pub(crate) fn open(home: &Path, clock: Arc<dyn Clock>) -> Self {
-        let logs = home.join("logs");
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&logs)
-            .unwrap_or(());
-        prune(&logs, clock.wall());
-        prune(&home.join("crashes"), clock.wall());
-        Self {
-            log: log::diag::Diag::new(home, Process::Hub, Level::Info, clock).rotating(ROTATE_AT),
-        }
-    }
-
-    /// Sets the level the configuration names, before the hub shares the log.
-    pub(crate) fn with_level(self, level: Level) -> Self {
-        Self {
-            log: self.log.with_level(level),
-        }
-    }
-
-    /// Reads the peak memory with `read` instead of the process's own,
-    /// before the hub shares the log. Tests use it for a deterministic
-    /// `peak_memory` value.
-    #[cfg(test)]
-    pub(crate) fn with_peak(self, read: fn() -> Option<u64>) -> Self {
-        Self {
-            log: self.log.with_peak(read),
-        }
-    }
-
-    /// Runs `between` between the stop lines' two appends, telling it
-    /// whether the log's lock is still held, before the hub shares the
-    /// log. Test-only: it forces the race the pair closes.
-    #[cfg(test)]
-    pub(crate) fn with_between(self, between: Arc<dyn Fn(bool) + Send + Sync>) -> Self {
-        Self {
-            log: self.log.with_between(between),
-        }
-    }
-
-    /// Writes an `info` line for one of the hub's operations.
-    pub(crate) fn info(&self, code: &str, message: &str) {
-        self.log.line(Severity::Info, None, code, message);
-    }
-
-    /// Writes an `error` line for a failure with no session to hold it,
-    /// such as a startup error: `code` is its code from `docs/errors.md`.
-    pub(crate) fn error(&self, code: &str, message: &str) {
-        self.log.line(Severity::Error, None, code, message);
-    }
-
-    /// Writes an `info` line naming the session, such as `session_started`.
-    pub(crate) fn info_session(&self, session: &SessionId, code: &str, message: &str) {
-        self.log.line(Severity::Info, Some(session), code, message);
-    }
-
-    /// Writes a `warn` line naming the session it concerns.
-    pub(crate) fn warn_session(&self, session: &SessionId, code: &str, message: &str) {
-        self.log.line(Severity::Warn, Some(session), code, message);
-    }
-
-    /// Writes `peak_memory` at the debug level immediately followed by
-    /// `hub_stopped`, under one lock: a departing client's
-    /// `client_disconnected` line cannot come between the pair.
-    pub(crate) fn stopped(&self, message: &str) {
-        self.log.peak_memory_then_info("hub_stopped", message);
-    }
+/// Opens the log in `home`: creates `logs/` mode 0700, prunes `logs/`
+/// and `crashes/`, before the caller writes `hub_started`. The level is
+/// `info` until `with_level`.
+pub(crate) fn open(home: &Path, clock: Arc<dyn Clock>) -> log::diag::Diag {
+    let logs = home.join("logs");
+    DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&logs)
+        .unwrap_or(());
+    prune(&logs, clock.wall());
+    prune(&home.join("crashes"), clock.wall());
+    log::diag::Diag::new(home, Process::Hub, Level::Info, clock).rotating(ROTATE_AT)
 }
 
 /// Deletes the files in `dir` older than 30 days, then all but its newest

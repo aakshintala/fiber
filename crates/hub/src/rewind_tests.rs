@@ -25,8 +25,8 @@ use super::*;
 use crate::Started;
 use crate::Starter;
 use crate::connection::serve_connection;
-use crate::diag::Diag;
 use crate::fake::{FakeStarter, Handshake};
+use crate::testkit::{id, write_log};
 use fakes::Deadline;
 
 /// One named deadline per wait: every start and acknowledgement lands
@@ -45,21 +45,13 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hr");
-        let dir = held.path().join("h");
-        fs::create_dir_all(&dir).unwrap();
+        let (held, dir) = crate::testkit::home("hr");
         Self { dir, held }
     }
 
     fn hub(&self, starter: impl Starter + 'static) -> Arc<Hub> {
         let timed: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-        Arc::new(Hub::new(
-            &self.dir,
-            "0.0.0",
-            Arc::new(starter),
-            Arc::clone(&timed),
-            Diag::open(&self.dir, timed),
-        ))
+        Arc::new(crate::testkit::hub(&self.dir, Arc::new(starter), timed))
     }
 
     fn workspace(&self) -> String {
@@ -68,38 +60,9 @@ impl Temp {
         workspace.to_string_lossy().into_owned()
     }
 
-    /// Writes `id`'s log: a `session_started` recording `workspace`,
-    /// then `last` as the final line.
-    fn write_log(&self, id: &str, workspace: &str, last: &Value) {
-        let dir = self
-            .dir
-            .join("projects")
-            .join("-w")
-            .join("sessions")
-            .join(id);
-        fs::create_dir_all(&dir).unwrap();
-        let first = json!({
-            "kind": "session_started", "session_id": id, "ts": 1, "schema_version": 1,
-            "payload": {"workspace": workspace},
-        });
-        fs::write(
-            dir.join("events.jsonl"),
-            format!(
-                "{first}\n{last}\n",
-                first = serde_json::to_string(&first).unwrap(),
-                last = serde_json::to_string(last).unwrap(),
-            ),
-        )
-        .unwrap();
-    }
-
     fn hub_log(&self) -> String {
         fs::read_to_string(self.dir.join("logs").join("hub.log")).unwrap_or_default()
     }
-}
-
-fn id(n: u64) -> String {
-    format!("s_{n:016x}")
 }
 
 fn rewound_line(old: &str, next: &str) -> Value {
@@ -133,7 +96,13 @@ fn continued_names_the_rewound_session() {
     let workspace = temp.workspace();
     let old = id(1);
     let next = id(2);
-    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
     assert_eq!(continued(&temp.dir, &SessionId(old)), Some(SessionId(next)));
 }
 
@@ -143,19 +112,27 @@ fn continued_ignores_anything_but_a_well_formed_rewound() {
     let workspace = temp.workspace();
     // An exit starts nothing.
     let exited = id(1);
-    temp.write_log(&exited, &workspace, &exited_line(&exited));
+    write_log(
+        &temp.dir,
+        &exited,
+        &workspace,
+        None,
+        &[exited_line(&exited)],
+    );
     assert_eq!(continued(&temp.dir, &SessionId(exited)), None);
     // A missing log starts nothing.
     assert_eq!(continued(&temp.dir, &SessionId(id(2))), None);
     // A `rewound` naming no minted session starts nothing.
     let odd = id(3);
-    temp.write_log(
+    write_log(
+        &temp.dir,
         &odd,
         &workspace,
-        &json!({
+        None,
+        &[json!({
             "kind": "rewound", "session_id": odd.clone(), "ts": 2, "schema_version": 1, "seq": 5,
             "payload": {"new_session_id": "nope", "seq": 3, "jobs": []},
-        }),
+        })],
     );
     assert_eq!(continued(&temp.dir, &SessionId(odd)), None);
 }
@@ -191,8 +168,8 @@ fn start_resumes_a_next_session_with_a_log() {
     let hub = temp.hub(starter.clone());
     let from = id(1);
     let next = id(2);
-    temp.write_log(&from, &workspace, &exited_line(&from));
-    temp.write_log(&next, &workspace, &exited_line(&next));
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
+    write_log(&temp.dir, &next, &workspace, None, &[exited_line(&next)]);
     assert!(reach(&hub, &SessionId(from), &SessionId(next.clone())).is_some());
     assert!(starter.rewound().is_empty(), "a logged session is resumed");
     assert_eq!(
@@ -210,7 +187,7 @@ fn start_starts_a_next_session_without_a_log() {
     let hub = temp.hub(starter.clone());
     let from = id(1);
     let next = id(2);
-    temp.write_log(&from, &workspace, &exited_line(&from));
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
     assert!(reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).is_some());
     assert_eq!(
         starter.rewound(),
@@ -235,7 +212,7 @@ fn two_starts_of_one_session_start_once() {
     let hub = temp.hub(starter.clone());
     let from = id(1);
     let next = id(2);
-    temp.write_log(&from, &workspace, &exited_line(&from));
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
     let other = thread::Builder::new()
         .name("second-start".to_owned())
         .spawn({
@@ -301,7 +278,7 @@ fn a_slow_start_of_one_session_does_not_block_another() {
     let from = id(1);
     let held = id(2);
     let other = id(3);
-    temp.write_log(&from, &workspace, &exited_line(&from));
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
     let (entered_tx, entered) = mpsc::channel();
     let (release_tx, release) = mpsc::channel::<()>();
     let starter = GateStarter {
@@ -396,7 +373,7 @@ fn a_failed_start_writes_a_diagnostic_without_the_detail() {
         message: format!("starter blew up on {SECRET}."),
     });
     let from = id(1);
-    temp.write_log(&from, &workspace, &exited_line(&from));
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
     assert!(reach(&hub, &SessionId(from), &SessionId(id(2))).is_none());
     let log = temp.hub_log();
     assert!(log.contains("\"code\":\"io_failed\""), "{log}");
@@ -510,7 +487,13 @@ fn a_relayed_rewind_starts_and_redirects_before_the_next_command() {
     let next = id(2);
     // The old session's log already ends `rewound`: the redirect reads it
     // once the old socket closes.
-    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
     fs::create_dir_all(temp.dir.join("run")).unwrap();
     let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
     let (release_tx, release) = mpsc::channel::<()>();
@@ -561,7 +544,13 @@ fn a_command_for_the_new_session_first_still_gets_its_level() {
     let hub = temp.hub(starter.clone());
     let old = id(1);
     let next = id(2);
-    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
     fs::create_dir_all(temp.dir.join("run")).unwrap();
     let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
     let (release_tx, release) = mpsc::channel::<()>();
@@ -643,7 +632,13 @@ fn follow_leaves_a_relay_already_holding_the_level_alone() {
     let hub = temp.hub(starter.clone());
     let old = id(1);
     let next = id(2);
-    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
     let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
         .as_object()
         .unwrap()
@@ -686,7 +681,7 @@ fn follow_ignores_a_log_that_continues_nowhere() {
     let starter = FakeStarter::bind_and_hold(&temp.dir);
     let hub = temp.hub(starter.clone());
     let old = id(1);
-    temp.write_log(&old, &workspace, &exited_line(&old));
+    write_log(&temp.dir, &old, &workspace, None, &[exited_line(&old)]);
     let relays: Arc<Mutex<crate::relay::Relays>> =
         Arc::new(Mutex::new(crate::relay::Relays::default()));
     lock(&relays).subscribed.push((
@@ -710,7 +705,13 @@ fn follow_without_a_kept_level_starts_nothing() {
     let hub = temp.hub(starter.clone());
     let old = id(1);
     let next = id(2);
-    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
     let relays: Arc<Mutex<crate::relay::Relays>> =
         Arc::new(Mutex::new(crate::relay::Relays::default()));
     let (write, _) = UnixStream::pair().unwrap();
@@ -727,7 +728,13 @@ fn follow_transfers_the_kept_level_onto_an_unsubscribed_relay() {
     let hub = temp.hub(starter.clone());
     let old = id(1);
     let next = id(2);
-    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
     // The new session's socket, bound before the test: the transfer
     // writes to the relay's connection, never the starter.
     fs::create_dir_all(temp.dir.join("run")).unwrap();
@@ -1205,7 +1212,13 @@ fn route_paused_in_before_open_shares_one_relay_with_follow() {
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
     let old = id(1);
     let next = id(2);
-    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
     let session = OpenSession::bind(&temp.dir, &next);
     let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
         .as_object()
@@ -1232,7 +1245,13 @@ fn follow_paused_in_before_open_shares_one_relay_with_route() {
     let hub = temp.hub(FakeStarter::bind_and_hold(&temp.dir));
     let old = id(1);
     let next = id(2);
-    temp.write_log(&old, &workspace, &rewound_line(&old, &next));
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
     let session = OpenSession::bind(&temp.dir, &next);
     let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
         .as_object()

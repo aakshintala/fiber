@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use crate::connection::{Accept, Hub, Idle, serve_counted};
 use crate::listen::Held;
+use log::diag::Severity;
 
 /// How the hub stopped.
 pub(crate) enum Exit {
@@ -113,11 +114,13 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
             Idle::Signal(signal) => {
                 stop.store(true, Ordering::SeqCst);
                 hub.shutdown_clients();
-                hub.diag.stopped("The hub stopped: signal.");
+                hub.diag
+                    .peak_memory_then_info("hub_stopped", "The hub stopped: signal.");
                 return Exit::Signal(signal);
             }
             Idle::Expired => {
-                hub.diag.stopped("The hub stopped: idle.");
+                hub.diag
+                    .peak_memory_then_info("hub_stopped", "The hub stopped: idle.");
                 return Exit::Idle;
             }
             Idle::Woken => {}
@@ -127,7 +130,9 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
 
 /// Writes an `error` line naming what kept the hub from accepting.
 fn failed(hub: &Hub, what: &str) -> Exit {
-    hub.diag.error(
+    hub.diag.line(
+        Severity::Error,
+        None,
         "io_failed",
         &format!("The hub cannot accept connections: {what}"),
     );

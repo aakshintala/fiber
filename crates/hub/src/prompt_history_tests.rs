@@ -28,9 +28,7 @@ struct Home {
 
 impl Home {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hp");
-        let dir = held.path().join("h");
-        fs::create_dir_all(&dir).unwrap();
+        let (held, dir) = crate::testkit::home("hp");
         Self { dir, held }
     }
 

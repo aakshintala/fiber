@@ -24,7 +24,6 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::connection::serve_connection;
-use crate::diag::Diag;
 use crate::fake::{FakeStarter, Handshake, failure};
 use crate::start::START_DEADLINE;
 use fakes::Deadline;
@@ -46,9 +45,7 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hr");
-        let dir = held.path().join("h");
-        fs::create_dir_all(&dir).unwrap();
+        let (held, dir) = crate::testkit::home("hr");
         Self {
             dir,
             held,
@@ -59,13 +56,7 @@ impl Temp {
     fn hub(&self, starter: FakeStarter) -> Arc<Hub> {
         let clock = Arc::clone(&self.clock);
         let timed: Arc<dyn Clock> = clock;
-        Arc::new(Hub::new(
-            &self.dir,
-            "0.0.0",
-            Arc::new(starter),
-            Arc::clone(&timed),
-            Diag::open(&self.dir, timed),
-        ))
+        Arc::new(crate::testkit::hub(&self.dir, Arc::new(starter), timed))
     }
 
     /// The workspace a session's log records: its name holds [`SECRET`].

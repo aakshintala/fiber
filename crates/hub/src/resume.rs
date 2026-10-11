@@ -28,6 +28,7 @@ use std::sync::PoisonError;
 use std::time::Duration;
 
 use contract::{ErrorCode, SessionId};
+use log::diag::Severity;
 use serde_json::Value;
 
 use crate::connection::Hub;
@@ -149,8 +150,9 @@ fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step
         // its first line is still being written.
         FirstLine::Incomplete => return Step::Done(Err(not_found(session))),
         FirstLine::Corrupt => {
-            hub.diag.warn_session(
-                session,
+            hub.diag.line(
+                Severity::Warn,
+                Some(session),
                 "log_corrupt",
                 &format!("Session {} has an unreadable log.", session.0),
             );
@@ -172,8 +174,12 @@ fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step
     };
     Step::Done(match start::await_bind(hub, socket, started.as_ref()) {
         Bind::Connected(stream) => {
-            hub.diag
-                .info_session(session, "session_resumed", "Session resumed for local.");
+            hub.diag.line(
+                Severity::Info,
+                Some(session),
+                "session_resumed",
+                "Session resumed for local.",
+            );
             Ok(stream)
         }
         Bind::Exited => {
@@ -192,8 +198,9 @@ fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step
                 Ok(stream) => Ok(stream),
                 Err(_) => Err(match failure {
                     Some(failure) => {
-                        hub.diag.warn_session(
-                            session,
+                        hub.diag.line(
+                            Severity::Warn,
+                            Some(session),
                             &start::code_name(&failure.code),
                             &format!("Session {} exited before it resumed.", session.0),
                         );
@@ -324,8 +331,9 @@ pub(crate) fn recorded(log: &Path) -> Option<Recorded> {
 fn io_failed(hub: &Hub, session: &SessionId, detail: &str) -> Refused {
     // The log keeps the code and a fixed sentence: `detail` may hold an io
     // error or a path. The rejection keeps what happened.
-    hub.diag.warn_session(
-        session,
+    hub.diag.line(
+        Severity::Warn,
+        Some(session),
         "io_failed",
         &format!("Session {} could not resume.", session.0),
     );
