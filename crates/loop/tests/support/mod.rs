@@ -33,6 +33,7 @@ use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, CommandId, Envelope, ErrorCode, RequestId, SessionId, TurnId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{BlockingProvider, Scripted, ScriptedProvider, reply};
 use log::{Log, Watcher};
@@ -53,6 +54,7 @@ pub(crate) const DEADLINE: Duration = Duration::from_secs(5);
 /// Reads `watcher` on its own thread with blocking `recv` until `done`
 /// accepts a line, under one [`DEADLINE`] naming `what`. Returns the
 /// watcher and every line read, the accepted one last.
+#[track_caller]
 pub(crate) fn read_until(
     watcher: Watcher,
     what: &str,
@@ -89,6 +91,7 @@ pub(crate) const REVIEWER_MODEL: &str = "fake/reviewer-1";
 /// is one [`DEADLINE`]: a turn that never asks fails naming the
 /// missing `permission_requested`, and the thread's end drops its inbox
 /// sender, releasing a loop still waiting for a reply.
+#[track_caller]
 pub(crate) fn on_request(
     session: &Session,
     send: impl FnOnce(RequestId) + Send + 'static,
@@ -324,6 +327,7 @@ impl Tool for TestTool {
         })
     }
 
+    #[track_caller]
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
         self.note("run");
         self.cancelled.lock().unwrap().push(cancel.is_cancelled());
@@ -1342,6 +1346,7 @@ impl Session {
     /// what the resumed request was built from without the prompt: what
     /// `rebuild` over the whole log returned. The last thing a test does
     /// with the session: the provider's script holds one more reply.
+    #[track_caller]
     pub(crate) fn rebuilt(&mut self) -> Vec<Input> {
         self.resume(Vec::new());
         self.inbox.send(delivery("again")).unwrap();
@@ -1544,6 +1549,7 @@ impl Session {
 
     /// Runs one turn on its own thread, failing the test if it outlives
     /// [`DEADLINE`].
+    #[track_caller]
     pub(crate) fn turn(&mut self) -> Option<TurnOutcome> {
         let mut looped = self.looped.take().unwrap();
         let (done, finished) = mpsc::channel();
@@ -1552,8 +1558,8 @@ impl Session {
             done.send((looped, outcome)).unwrap();
         });
         self.turn_thread = Some(turn.thread().id());
-        let (looped, outcome) = finished
-            .recv_timeout(DEADLINE)
+        let (looped, outcome) = Deadline::after(DEADLINE)
+            .recv(&finished)
             .expect("the turn ended in time");
         self.looped = Some(looped);
         outcome
@@ -1566,6 +1572,7 @@ impl Session {
 
     /// Every line emitted since the last call, ephemeral ones included,
     /// through the next `turn_completed`.
+    #[track_caller]
     pub(crate) fn lines(&mut self) -> Vec<Envelope> {
         self.events_until("a turn_completed line", |line| {
             line.kind == "turn_completed"
@@ -1573,6 +1580,7 @@ impl Session {
     }
 
     /// Every line emitted through the first one matching `done`.
+    #[track_caller]
     pub(crate) fn events_until(
         &mut self,
         what: &str,
@@ -1733,6 +1741,7 @@ pub(crate) fn reply_delivery(request_id: RequestId, answer: ReplyAnswer) -> Deli
 
 /// Sends `answer` to `request` and returns how the command was answered,
 /// waiting one [`DEADLINE`] instead of hanging.
+#[track_caller]
 pub(crate) fn answer(session: &Session, request: &str, answer: ReplyAnswer) -> Answer {
     let (tx, rx) = mpsc::channel();
     let ack = Ack(Box::new(move |answer| {
@@ -1748,11 +1757,14 @@ pub(crate) fn answer(session: &Session, request: &str, answer: ReplyAnswer) -> A
             ack,
         ))
         .unwrap();
-    rx.recv_timeout(DEADLINE).expect("the reply is answered")
+    Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the reply is answered")
 }
 
 /// Sends the JSON `answer` to `request` and returns how the command was
 /// answered, waiting one [`DEADLINE`] instead of hanging.
+#[track_caller]
 pub(crate) fn answer_value(session: &Session, request: &str, value: Value) -> Answer {
     answer(
         session,
@@ -1979,6 +1991,7 @@ impl Tap {
 
     /// The next line of `kind`, buffering the rest for later calls, and
     /// failing the test at [`DEADLINE`].
+    #[track_caller]
     pub(crate) fn wait_for(&self, kind: &str) -> Envelope {
         let owned = kind.to_owned();
         let what = format!("a {kind} line");
@@ -1987,6 +2000,7 @@ impl Tap {
 
     /// The next `tool_call_delta` whose text is `text`, buffering the
     /// rest, and failing the test at [`DEADLINE`].
+    #[track_caller]
     pub(crate) fn wait_for_delta(&self, text: &str) -> Envelope {
         let owned = text.to_owned();
         let what = format!("a tool_call_delta with {text:?}");
@@ -1997,6 +2011,7 @@ impl Tap {
     /// test at [`DEADLINE`]. Takes the watcher lock and the buffer lock one
     /// at a time, never nested, and never holds the buffer lock across the
     /// wait.
+    #[track_caller]
     fn wait_until(
         &self,
         matches: impl Fn(&Envelope) -> bool + Send + 'static,
