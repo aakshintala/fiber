@@ -71,7 +71,7 @@ Clicking it opens a picker of recent workspaces, from `recent.jsonl`
 (`docs/state.md`). A remote client has no launch directory, so it always
 shows the picker. The picker is an overlay centred over home ("Look",
 "Overlays"): the title "Workspaces", one row per recent workspace with the
-first focused, and the footer "↑↓ move · enter open · esc closes".
+first focused, and the footer "↑↓ move · Enter open · Esc closes".
 
 The picker also takes a typed path, so a workspace never used before can be
 picked:
@@ -470,8 +470,8 @@ a click on it returns too. The views are:
   "ⓢ this session only · nothing saved" dim. While a query is typed, the
   characters of each id it matched are underlined and bold; a query that
   matches nothing shows one line, "No models match" dim, and no provider
-  sections. The footer is "↑↓ move · ←→ levels · enter choose · tab all ·
-  ctrl+s session · ctrl+r refresh · esc close", keys bold.
+  sections. The footer is "↑↓ move · ←→ levels · Enter choose · Tab all ·
+  Ctrl+S session · Ctrl+R refresh · Esc close", keys bold.
 - **The usage view,** `/usage`: the session's `usage` (`docs/events.md`) broken
   down by turn, by model and by delegate, each with tokens by kind, cost billed
   and cost on subscription, and the budget left when `budget.usd` is set.
@@ -1233,7 +1233,7 @@ after it, and the keys dim, alternatives comma-separated and other paths
 after " · ". Each column wraps inside its own width. The first row is
 focused. When rows hide below, a dim ↓ takes the last shown row's gutter; a
 screen too short for them scrolls, and its last line reads "↑ 4 more · ↓ 12
-more" dim. The footer is "↑↓ move · ←→ tabs · esc closes".
+more" dim. The footer is "↑↓ move · ←→ tabs · Esc closes".
 
 Hints that name a key, on home and on the approval badge, name the action's
 bound key from this table, leaving the key out when the action is unbound.
@@ -1340,7 +1340,7 @@ later release still applies.
 | `/model` | Opens the model picker. |
 | `/thinking [<level>]` | Sets the thinking level for the session's model, saving `models."<model>".thinking`; the default model is unchanged. With no level, opens the model picker on the model's chips: Enter saves the level, Ctrl+S applies it to this session only. |
 | `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
-| `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. Each row carries its mark between the gutter and the id: `[x]` marked, `[ ]` not, bold on the focused row and dim when unmarked. The count row reads ` {m} of {n} marked ` unfiltered and ` {v} of {n} models · {m} marked ` filtered, with no show-all toggle and no refresh button. The row below each model is its thinking row, dim with nothing to choose. Ctrl+S saves and closes. The footer is "↑↓ move · enter toggle · ctrl+s save · esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
+| `/scoped-models` | Opens the model picker as a checklist over every installed model: each row starts marked from `scoped_models`. Typing filters the list as it does in the picker, Space included in the query. Enter or a click on the mark toggles the focused row's mark, and Ctrl+S, `session_only`'s key, saves the marked list as `scoped_models` instead. Esc clears the query first and closes on the next press, saving nothing. Marks survive a query change. Each row carries its mark between the gutter and the id: `[x]` marked, `[ ]` not, bold on the focused row and dim when unmarked. The count row reads ` {m} of {n} marked ` unfiltered and ` {v} of {n} models · {m} marked ` filtered, with no show-all toggle and no refresh button. The row below each model is its thinking row, dim with nothing to choose. Ctrl+S saves and closes. The footer is "↑↓ move · Enter toggle · Ctrl+S save · Esc close", keys bold. Marking none saves `[]`, which means every model; a saved entry that is not installed is kept. |
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |
 | `/tools` | Opens the tools view. |

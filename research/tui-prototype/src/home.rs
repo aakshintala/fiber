@@ -755,15 +755,15 @@ fn picker(p: Picker, wsel: usize, cols: usize) -> Vec<super::Row> {
         .max()
         .unwrap_or(0)
         .max(TITLE.width())
-        .max("↑↓ move · enter open · esc closes".width());
+        .max("↑↓ move · Enter open · Esc closes".width());
     let w = super::panel::fit_width(natural, 55, cols);
     super::panel::frame(
         Some(super::panel::title_row(TITLE, None)),
         body,
         Some(super::panel::footer_legend(&[
             ("↑↓", "move"),
-            ("enter", "open"),
-            ("esc", "closes"),
+            ("Enter", "open"),
+            ("Esc", "closes"),
         ])),
         w,
     )
@@ -2383,7 +2383,7 @@ mod tests {
         assert!(t.contains("Workspaces"));
         assert!(t.contains("› "));
         assert!(t.contains("~/work/fiber-worktrees"));
-        assert!(t.contains("↑↓ move · enter open · esc closes"));
+        assert!(t.contains("↑↓ move · Enter open · Esc closes"));
         // Centred: the picker's edges sit inside the margins, not full width.
         let fr = frame(&c, 160, 48, false);
         let edge = fr

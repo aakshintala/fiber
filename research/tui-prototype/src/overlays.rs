@@ -608,7 +608,7 @@ fn keymap_panel(c: &Look, cols: usize, rows: usize) -> Vec<super::Row> {
     chrome.push(panel::footer_legend(&[
         ("↑↓", "move"),
         ("←→", "tabs"),
-        ("esc", "closes"),
+        ("Esc", "closes"),
     ]));
     chrome.push(row(vec![]));
     panel::slab_rows(chrome, cols)
@@ -756,17 +756,17 @@ fn small_content(kind: Kind, inner: usize) -> (&'static str, Vec<super::Row>, su
         Kind::Delete => (
             "Delete session",
             delete_body(inner),
-            panel::footer_legend(&[("enter", "deletes"), ("esc", "keeps it")]),
+            panel::footer_legend(&[("Enter", "deletes"), ("Esc", "keeps it")]),
         ),
         Kind::History => (
             "Prompt history",
             history_body(inner),
-            panel::footer_legend(&[("enter", "recalls"), ("esc", "closes")]),
+            panel::footer_legend(&[("Enter", "recalls"), ("Esc", "closes")]),
         ),
         Kind::Notice => (
             "Notice · key_clash",
             notice_body(inner),
-            panel::footer_legend(&[("esc", "closes")]),
+            panel::footer_legend(&[("Esc", "closes")]),
         ),
         Kind::CloseMouse => (
             "Key map",
@@ -1136,7 +1136,7 @@ mod tests {
         assert!(t.contains("Type to search shortcuts"));
         assert!(t.contains("\u{203a} "));
         // The foot is a bold-key legend, and no pair repeats the body.
-        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} tabs · esc closes"));
+        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} tabs · Esc closes"));
         // Docked full width: the edges span the screen.
         assert!(t.contains("\u{2584}".repeat(160).as_str()));
     }
@@ -1455,7 +1455,7 @@ mod tests {
         assert!(t.contains("docs: rail spec"));
         assert!(t.contains("$1.10"));
         assert!(t.contains("--cascade"));
-        assert!(t.contains("enter deletes · esc keeps it"));
+        assert!(t.contains("Enter deletes · Esc keeps it"));
     }
 
     #[test]
@@ -1465,7 +1465,7 @@ mod tests {
         assert!(t.contains("\u{258c}"));
         assert!(t.contains("\u{203a} "));
         assert!(t.contains("3 matches"));
-        assert!(t.contains("enter recalls · esc closes"));
+        assert!(t.contains("Enter recalls · Esc closes"));
     }
 
     #[test]

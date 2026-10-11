@@ -440,11 +440,11 @@ mod tests {
 
     #[test]
     fn the_legend_pairs_bold_keys_with_muted_labels() {
-        let f = footer_legend(&[("↑↓", "move"), ("esc", "closes")]);
+        let f = footer_legend(&[("↑↓", "move"), ("Esc", "closes")]);
         let keys: Vec<&Span> = f
             .spans
             .iter()
-            .filter(|s| s.content == "↑↓" || s.content == "esc")
+            .filter(|s| s.content == "↑↓" || s.content == "Esc")
             .collect();
         assert_eq!(keys.len(), 2);
         assert!(
