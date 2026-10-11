@@ -2,18 +2,15 @@
 //! the lock, read the file, change one key, and rename a temporary file over
 //! it (`docs/state.md`, "Concurrent access").
 
-use std::fs::{self, DirBuilder, File, OpenOptions};
-use std::io::{ErrorKind, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Map, Value};
 
 use contract::events::Notice;
 
+use self::atomic::locked;
 use crate::error::ConfigError;
 use crate::home::{ProjectKey, plain, read};
 use crate::{Source, keys, path};
@@ -445,74 +442,6 @@ pub(crate) fn settings_file(dir: &Path, extension: &str) -> PathBuf {
         .join(format!("{}.json", crate::names::dir_name(extension)))
 }
 
-/// Appends `line` to a line-based file under its lock, creating the
-/// directory: reads the file, adds the line, and renames a temporary file
-/// over it, so a reader sees the old file or the new one, never half
-/// (`docs/state.md`, "Concurrent access").
-pub(crate) fn append_line(file: &Path, line: &str) -> Result<(), ConfigError> {
-    let io = |source| ConfigError::Io {
-        file: file.to_path_buf(),
-        source,
-    };
-    let _lock = locked(file)?;
-    let mut current = match fs::read(file) {
-        Ok(bytes) => bytes,
-        Err(e) if e.kind() == ErrorKind::NotFound => Vec::new(),
-        Err(source) => return Err(io(source)),
-    };
-    if !current.is_empty() && !current.ends_with(b"\n") {
-        current.push(b'\n');
-    }
-    current.extend_from_slice(line.as_bytes());
-    current.push(b'\n');
-    write_atomic(file, &current, 0o666)
-}
-
-/// Deletes physical line `line` of `file`, counted from 1, when it still
-/// reads `text`: `true` when it removed. Every other byte is kept,
-/// including blank lines, unknown keys, CRLF endings and a final line
-/// with no newline. A line is cut as `str::lines` cuts it. A missing
-/// file, a line number of 0 or past the end, or a line whose text
-/// changed removes nothing and answers `false`, writing nothing; a
-/// missing file gets no directory or lock file. The lock is held from
-/// the read to the rename (`docs/state.md`, "Concurrent access").
-pub(crate) fn remove_line(file: &Path, line: usize, text: &str) -> Result<bool, ConfigError> {
-    let io = |source| ConfigError::Io {
-        file: file.to_path_buf(),
-        source,
-    };
-    if !plain(file, false)? {
-        return Ok(false);
-    }
-    let _lock = locked(file)?;
-    // A file deleted after the check above reports the missing read as an I/O error.
-    let current = fs::read(file).map_err(io)?;
-    let segments: Vec<&[u8]> = current.split_inclusive(|b| *b == b'\n').collect();
-    let Some(segment) = line.checked_sub(1).and_then(|index| segments.get(index)) else {
-        return Ok(false);
-    };
-    let mut held = *segment;
-    let mut newline = false;
-    if let Some(rest) = held.strip_suffix(b"\n") {
-        held = rest;
-        newline = true;
-    }
-    if newline {
-        held = held.strip_suffix(b"\r").unwrap_or(held);
-    }
-    if held != text.as_bytes() {
-        return Ok(false);
-    }
-    let mut rest = Vec::new();
-    for (index, other) in segments.iter().enumerate() {
-        if index + 1 != line {
-            rest.extend_from_slice(other);
-        }
-    }
-    write_atomic(file, &rest, 0o666)?;
-    Ok(true)
-}
-
 /// Reads `file` under its lock, sets one key and writes the whole file back,
 /// keys sorted with a 2-space indent. With `only_if_unset`, a file that
 /// already holds a value at `key` is left alone. `true` when it wrote.
@@ -543,305 +472,18 @@ fn write_root(file: &Path, root: &Value) -> Result<(), ConfigError> {
     write_atomic(file, text.as_bytes(), 0o666)
 }
 
-/// Callers blocked in [`locked`], raised before they wait, so a test can
-/// observe that a second write is blocked rather than sleeping.
-#[cfg(test)]
-static WAITING: AtomicUsize = AtomicUsize::new(0);
-
-/// How many callers are blocked in [`locked`].
-///
-/// Raised before the wait, so a test can observe that a second write is
-/// blocked rather than sleeping.
-#[cfg(test)]
-fn waiting() -> usize {
-    WAITING.load(Ordering::SeqCst)
-}
-
-/// Takes the lock for a whole-file write to `file`: creates the parent
-/// directory, then holds `file.lock` until the caller renames over `file`
-/// (`docs/state.md`, "Concurrent access").
-pub(crate) fn locked(file: &Path) -> Result<File, ConfigError> {
-    let lock = open_lock(file, 0o666)?;
-    #[cfg(test)]
-    WAITING.fetch_add(1, Ordering::SeqCst);
-    let outcome = lock.lock().map_err(|source| ConfigError::Io {
-        file: file.to_path_buf(),
-        source,
-    });
-    #[cfg(test)]
-    WAITING.fetch_sub(1, Ordering::SeqCst);
-    outcome?;
-    Ok(lock)
-}
-
-/// Creates the parent directory and opens `file.lock` with `mode`, without
-/// locking it, so a caller chooses to wait or to try.
-pub(crate) fn open_lock(file: &Path, mode: u32) -> Result<File, ConfigError> {
-    let io = |source| ConfigError::Io {
-        file: file.to_path_buf(),
-        source,
-    };
-    let mut lock_name = file.as_os_str().to_owned();
-    lock_name.push(".lock");
-    make_parent(file)?;
-    OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .mode(mode)
-        .open(&lock_name)
-        .map_err(io)
-}
-
-fn make_parent(file: &Path) -> Result<(), ConfigError> {
-    let Some(dir) = file.parent() else {
-        return Ok(());
-    };
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
-        .map_err(|source| ConfigError::Io {
-            file: dir.to_path_buf(),
-            source,
-        })
-}
-
-static NEXT: AtomicU64 = AtomicU64::new(0);
-
-// Pause point between creating the temporary file and renaming it over the
-// destination (`docs/testing.md`, "Waits and timeouts"): the
-// credential-mode test installs a hook to hold the writer there, so the race
-// between the temporary file being visible and the rename happens on every
-// run instead of being waited for. Test-only; non-test builds never call it.
-#[cfg(test)]
-thread_local! {
-    static BEFORE_RENAME: std::cell::RefCell<Option<Box<dyn Fn()>>> =
-        std::cell::RefCell::new(None);
-}
-
-/// Installs the pause-point hook run between creating the temporary file and
-/// renaming it (`docs/testing.md`, "Waits and timeouts"), on the current
-/// thread. The credential-mode test uses it to hold the writer with the
-/// temporary file visible, so the race happens on every run.
-#[cfg(test)]
-pub(crate) fn before_rename(hook: impl Fn() + 'static) {
-    BEFORE_RENAME.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
-}
-
-/// Where [`fail_at`] injects a write failure in `write_atomic`.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Stage {
-    /// Before the rename: the file is left unchanged.
-    BeforeRename,
-    /// After the rename, syncing the directory: the new content is in place.
-    AfterRename,
-}
-
-#[cfg(test)]
-thread_local! {
-    static FAIL_AT: std::cell::Cell<Option<Stage>> = const { std::cell::Cell::new(None) };
-}
-
-/// Injects an I/O failure at `stage` in `write_atomic` on this thread;
-/// `None` clears it. Test-only; non-test builds never fail.
-#[cfg(test)]
-pub(crate) fn fail_at(stage: Option<Stage>) {
-    FAIL_AT.with(|cell| cell.set(stage));
-}
-
-#[cfg(test)]
-fn fail_stage() -> Option<Stage> {
-    FAIL_AT.with(|cell| cell.get())
-}
-
-/// Writes `bytes` to a temporary file created with `mode` beside `file`,
-/// syncs it, and renames it over `file`, so a reader sees the old file or the
-/// new one, never half.
-pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigError> {
-    let io = |source| ConfigError::Io {
-        file: file.to_path_buf(),
-        source,
-    };
-    make_parent(file)?;
-    let mut tmp_name = file.as_os_str().to_owned();
-    tmp_name.push(format!(
-        ".{}-{}.tmp",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    let tmp = PathBuf::from(tmp_name);
-    let dir = file.parent().unwrap_or(Path::new("."));
-    // Syncing the directory makes the rename itself survive a crash.
-    let written = write_synced(&tmp, bytes, mode)
-        .and_then(|()| {
-            #[cfg(test)]
-            BEFORE_RENAME.with(|cell| {
-                if let Some(hook) = cell.borrow().as_ref() {
-                    hook();
-                }
-            });
-            #[cfg(test)]
-            if fail_stage() == Some(Stage::BeforeRename) {
-                return Err(std::io::Error::other("injected"));
-            }
-            fs::rename(&tmp, file)
-        })
-        .and_then(|()| {
-            #[cfg(test)]
-            if fail_stage() == Some(Stage::AfterRename) {
-                return Err(std::io::Error::other("injected"));
-            }
-            File::open(dir)?.sync_all()
-        });
-    if written.is_err() {
-        fs::remove_file(&tmp).unwrap_or(());
-    }
-    written.map_err(io)
-}
-
-fn write_synced(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
-    let mut out: File = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(mode)
-        .open(path)?;
-    out.write_all(bytes)?;
-    out.sync_all()
-}
-
 #[cfg(test)]
 #[path = "write_lock_tests.rs"]
 mod lock_tests;
 
+pub(crate) mod atomic;
+pub(crate) mod lines;
+
 mod entries;
 
+pub use atomic::write_atomic;
 pub use entries::update_global_entries;
 
 #[cfg(test)]
-mod tests {
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
-
-    use fakes::Deadline;
-    use fakes::TempDir;
-    use serde_json::json;
-
-    use super::*;
-
-    /// How long the test waits for a thread before failing.
-    const DEADLINE: Duration = Duration::from_secs(10);
-
-    #[track_caller]
-    fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || {
-            while !pred() {
-                thread::yield_now();
-            }
-            done.send(()).unwrap();
-        });
-        assert!(
-            Deadline::after(DEADLINE).recv(&finished).is_ok(),
-            "waited {DEADLINE:?} for {what}"
-        );
-    }
-
-    /// Runs `f`, which may block, on a worker and returns its result,
-    /// failing the test after [`DEADLINE`] with `what` named.
-    #[track_caller]
-    fn within<T: Send + 'static>(what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || {
-            let _sent = done.send(f());
-        });
-        match Deadline::after(DEADLINE).recv(&finished) {
-            Ok(value) => value,
-            Err(_) => panic!("waited {DEADLINE:?} for {what}"),
-        }
-    }
-
-    #[test]
-    fn a_second_update_waits_for_the_files_lock_then_keeps_both_writes() {
-        let dir = TempDir::new("fiber-write-lock");
-        let file = dir.path().join("fiber-acme.json");
-        let setup = file.clone();
-        within("the first update", move || {
-            update(&setup, &["a".to_owned()], Value::from(1), false)
-        })
-        .unwrap();
-        let setup = file.clone();
-        let held = within("the test to take the file's lock", move || locked(&setup)).unwrap();
-        let (started, started_rx) = mpsc::channel();
-        let (done, done_rx) = mpsc::channel();
-        let worker_file = file.clone();
-        let worker = thread::spawn(move || {
-            started.send(()).unwrap();
-            update(&worker_file, &["b".to_owned()], Value::from(2), false).unwrap();
-            done.send(()).unwrap();
-        });
-        assert!(
-            Deadline::after(DEADLINE).recv(&started_rx).is_ok(),
-            "waited {DEADLINE:?} for the second update to reach the file's lock"
-        );
-        wait_until("the second update to be waiting on the file's lock", || {
-            waiting() == 1
-        });
-        assert!(
-            done_rx.try_recv().is_err(),
-            "the second update finished while the file was locked"
-        );
-        // Another session's write lands while the second update waits:
-        // the lock serializes whole-file writes, it does not hide them.
-        fs::write(&file, "{\"a\": 1, \"c\": 3}\n").unwrap();
-        drop(held);
-        assert!(
-            Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
-            "waited {DEADLINE:?} for the second update to finish after the release"
-        );
-        worker.join().unwrap();
-        let written: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(written, json!({"a": 1, "b": 2, "c": 3}));
-    }
-
-    #[test]
-    fn a_remove_waits_for_the_files_lock_then_keeps_the_other_write() {
-        let dir = TempDir::new("fiber-write-lock");
-        let file = dir.path().join("rules");
-        fs::write(&file, "{\"gone\": 1}\n").unwrap();
-        let setup = file.clone();
-        let held = within("the test to take the file's lock", move || locked(&setup)).unwrap();
-        let (started, started_rx) = mpsc::channel();
-        let (done, done_rx) = mpsc::channel();
-        let worker_file = file.clone();
-        let worker = thread::spawn(move || {
-            started.send(()).unwrap();
-            let removed = remove_line(&worker_file, 1, "{\"gone\": 1}").unwrap();
-            done.send(removed).unwrap();
-        });
-        assert!(
-            Deadline::after(DEADLINE).recv(&started_rx).is_ok(),
-            "waited {DEADLINE:?} for the remove to reach the file's lock"
-        );
-        wait_until("the remove to be waiting on the file's lock", || {
-            waiting() == 1
-        });
-        assert!(
-            done_rx.try_recv().is_err(),
-            "the remove finished while the file was locked"
-        );
-        // Another session's line lands while the remove waits: the lock
-        // serializes whole-file writes, it does not hide them.
-        fs::write(&file, "{\"gone\": 1}\n{\"late\": 3}\n").unwrap();
-        drop(held);
-        let removed = match Deadline::after(DEADLINE).recv(&done_rx) {
-            Ok(removed) => removed,
-            Err(_) => panic!("waited {DEADLINE:?} for the remove to finish after the release"),
-        };
-        worker.join().unwrap();
-        assert!(removed, "the held line is still there");
-        assert_eq!(fs::read(&file).unwrap(), "{\"late\": 3}\n".as_bytes());
-    }
-}
+#[path = "write_tests.rs"]
+mod tests;

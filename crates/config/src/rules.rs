@@ -75,7 +75,7 @@ impl Rules for RulesFiles {
             session_id: Some(session.clone()),
         })
         .map_err(|e| RulesError(format!("{}: {e}", self.project.display())))?;
-        write::append_line(&self.project, &line).map_err(rules_error)
+        write::lines::append_line(&self.project, &line).map_err(rules_error)
     }
 }
 
@@ -152,7 +152,7 @@ pub fn remove_rule(
         RulesScope::Global => &global,
         RulesScope::Project => &project_file,
     };
-    write::remove_line(file, line, text)
+    write::lines::remove_line(file, line, text)
 }
 
 /// One rules file's lines, in order, each with its physical number and

@@ -11,7 +11,8 @@ use crate::Source;
 use crate::error::ConfigError;
 use crate::home::read;
 
-use super::{checked, locked, write_root};
+use super::atomic::locked;
+use super::{checked, write_root};
 
 /// Sets each `Some` entry and removes each `None` entry of the object at
 /// `key` in Fiber home's `config.json`: one lock, one read, one write. An

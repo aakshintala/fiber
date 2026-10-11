@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::json;
 
-use super::super::before_rename;
+use super::super::atomic::before_rename;
 use super::update_global_entries;
 
 #[test]
