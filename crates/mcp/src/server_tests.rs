@@ -939,11 +939,10 @@ fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
     let opened = lingering(&setup, "exit 0");
     let server = std::sync::Arc::new(opened.server);
     let shared = std::sync::Arc::clone(&server.inner.shared);
-    let pid = super::lock(&server.inner.child)
-        .as_ref()
-        .expect("unreaped")
-        .0
-        .id();
+    let pid = match &server.inner.peer {
+        super::Peer::Child(child) => super::lock(child).as_ref().expect("unreaped").0.id(),
+        super::Peer::Remote(_) => panic!("a stdio-only test met a remote server"),
+    };
     let (entered, go) = pause_signallers();
     let stopping = std::sync::Arc::clone(&server);
     let (stopped_tx, stopped) = mpsc::channel();
@@ -1191,8 +1190,8 @@ fn a_server_that_stops_reading_stdin_ends_every_call_gone() {
         .expect("mkfifo runs");
     assert!(status.success(), "mkfifo creates hold");
     let mut spec = setup.spec("fx");
-    spec.command = "/bin/bash".to_owned();
-    spec.args = vec![
+    spec.stdio_mut().command = "/bin/bash".to_owned();
+    spec.stdio_mut().args = vec![
         "-c".to_owned(),
         script.to_owned(),
         "wedged".to_owned(),

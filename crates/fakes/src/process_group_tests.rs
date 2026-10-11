@@ -1020,3 +1020,30 @@ fn listed_exit_is_true_when_the_second_listing_is_empty() {
         "waited {DEADLINE:?} for the listed pid to exit"
     );
 }
+
+/// A child of the test that has exited but is not yet reaped is a zombie:
+/// kill(pid, 0) still succeeds on it, but it is gone for the wait (#2048).
+#[test]
+fn listed_exit_counts_an_unreaped_child_as_exited() {
+    let mut child = held();
+    let pid = child.id();
+    let mut calls = 0;
+    // The child exits once its stdin closes, which happens only after the
+    // first listing named it; the test reaps it after the wait.
+    let stdin = child.stdin.take().unwrap();
+    let mut stdin = Some(stdin);
+    let result = listed_exit(
+        move || {
+            calls += 1;
+            if calls == 1 {
+                drop(stdin.take());
+                Ok(vec![pid])
+            } else {
+                Ok(Vec::new())
+            }
+        },
+        DEADLINE,
+    );
+    reaped(child, "the held child to exit once its stdin closed");
+    result.unwrap();
+}

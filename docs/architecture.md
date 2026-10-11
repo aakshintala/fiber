@@ -93,7 +93,7 @@ log and opening a file by path stay in `log`), and never on `loop`, `provider`, 
 `extensions`. `cli` depends on `contract`, `log`, `config`, `doors` and
 `extensions`, and never on `loop`. `worktree` depends only on `contract`, and
 `jobs`, `doors` and `cli` may depend on it. `net` depends only on `contract`
-and ureq's TLS stack, and `provider`, `tools` and `extensions` may depend on it,
+and ureq's TLS stack, and `provider`, `tools`, `mcp` and `extensions` may depend on it,
 so `hub` and `tui` still do no TLS. `routing` depends on `contract`,
 `config`, `extensions` and `provider`, and is the only crate that depends on
 both `extensions` and `provider`; only `main` depends on it. `main` depends on

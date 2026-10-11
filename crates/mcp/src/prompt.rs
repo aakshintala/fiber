@@ -372,6 +372,14 @@ fn output(
             out.servers = servers;
             out
         }
+        Err(Fault::Expired) => {
+            let mut out = fail::failed(
+                ErrorCode::McpPromptFailed,
+                not_run(server, prompt, &slot::expired(server)),
+            );
+            out.servers = servers;
+            out
+        }
     }
 }
 

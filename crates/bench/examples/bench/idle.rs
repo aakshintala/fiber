@@ -33,7 +33,7 @@ pub(crate) struct Ctx<'a> {
     pub(crate) clock: &'a dyn Clock,
     pub(crate) idle: Duration,
     pub(crate) path: Option<OsString>,
-    /// Timed samples each sampled workload takes per fixture.
+    /// Timed samples a sampled workload takes per fixture: its run count from `selected`.
     pub(crate) runs: u32,
     /// The `paging` jig, when the harness was given one.
     pub(crate) paging: Option<&'a Path>,

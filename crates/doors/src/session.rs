@@ -100,6 +100,10 @@ pub(crate) struct Gate {
     /// The project's `history.jsonl`, set by [`Session::serve`] alone, so
     /// `fiber ask` and a bare [`Session::run`] append no prompt.
     pub(crate) history: OnceLock<Option<PathBuf>>,
+    /// The prompts waiting for their acknowledgement, by command id: the
+    /// loop's `on_rewrite` replaces a replaced prompt's content before it
+    /// is accepted (`docs/state.md`, "Prompt history").
+    pub(crate) prompts: crate::prompt_history::Pending,
     /// Fiber home: what the sender-name lookup reads (`docs/tools.md`,
     /// "Messaging other sessions").
     pub(crate) home: PathBuf,
@@ -370,6 +374,28 @@ impl Session {
         })
     }
 
+    /// Reports a replaced prompt's replacement, to record in the prompt
+    /// history before the prompt's acceptance (`docs/state.md`, "Prompt
+    /// history"): what the loop's `on_rewrite` calls with the command id
+    /// and the replacement as the hook returned it. It holds the gate
+    /// weakly and does nothing once [`Session::close`] has begun.
+    #[allow(
+        clippy::type_complexity,
+        reason = "the loop's `on_rewrite` takes the same shape; naming it twice keeps both readable"
+    )]
+    pub fn rewrites(&self) -> Arc<dyn Fn(&CommandId, &[ContentPart]) + Send + Sync> {
+        let gate = Arc::downgrade(&self.gate);
+        Arc::new(move |id, content| {
+            let Some(gate) = gate.upgrade() else {
+                return;
+            };
+            if gate.conns.stopped() {
+                return;
+            }
+            gate.prompts.replace(id, content.to_vec());
+        })
+    }
+
     /// The wake a running tool call's interaction reaches the loop through
     /// (`docs/architecture.md`, "One inbox"): each wake puts
     /// `Delivery::Cancelled` in the inbox. It holds the gate weakly, so the
@@ -616,6 +642,7 @@ fn open_in(
         images: OnceLock::new(),
         pasting: Arc::new(crate::shell::ShellCancel::new()),
         history: OnceLock::new(),
+        prompts: crate::prompt_history::Pending::new(),
         home: home.to_owned(),
         admission: Arc::new(support::admission::Admission::default()),
         shells: Shells::new(),

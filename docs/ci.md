@@ -106,6 +106,10 @@ A pull request runs only what its diff can affect.
   for every first-party package that has cases, not only the changed ones
   ("Testing an extension"). A change to Fiber's own code can break a package
   that did not change.
+- A diff that touches the code the release job runs, `crates/bench`,
+  `xtask/src/bench*`, `scripts/release-size` or `scripts/stored-results`,
+  also runs `release`, so a broken harness or judge fails its own pull request
+  rather than the backstop.
 
 The selector has its own tests.
 
@@ -209,7 +213,7 @@ binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
 under 24 MiB and runs the benchmarks that gate each pull request
-(`docs/performance.md`), timings at 3 runs and memory at 5. The base binary
+(`docs/performance.md`), timing-only workloads at 3 runs and the rest at 5. The base binary
 runs the timing benchmarks only, in the same job on the same runner, so a
 timing comparison never crosses runners. Memory and exact rows compare
 against the backstop's stored results for the base commit, the
@@ -230,7 +234,11 @@ with none among the 9 ancestors, memory and exact rows are judged against
 the table alone, and the comment says so.
 
 The release profile sets `lto = "fat"` and `codegen-units = 1`, which
-shrinks the binary and lengthens the release build.
+shrinks the binary and lengthens the release build. Fiber's own crates, except
+`tui` and `picture`, build at `opt-level = "s"`: they are the largest share of
+the binary's code, and drawing and image resizing, which stay at the default
+`opt-level = 3`, are the paths where the smaller code costs measurable time.
+Third-party crates stay at 3 (#2042).
 
 Nothing in CI writes a snapshot, calls a live provider or reaches the public
 network (`docs/testing.md`).
@@ -405,8 +413,10 @@ Node.js version GitHub currently supports. An action still on a deprecated
 Node.js version is moved to its newest major before it is pinned.
 
 No job polls the Actions API in a loop. The backstop's one lookup of the
-last passing `main` commit is the only Actions API call a workflow makes to
-find a run; the backstop's cache pruning also lists and deletes cache entries.
+last passing `main` commit and the release job's stored-results lookup (one
+artifact listing per commit, at most 10, and one download) are the only
+Actions API calls a workflow makes to find a run; the backstop's cache pruning
+also lists and deletes cache entries.
 Agents wait on the `CI` check with `gh-ci`, never with a `gh run watch`
 loop, because such loops have tripped GitHub's Actions rate limit. `gh-ci` is
 a small `gh` wrapper that waits with few API calls; it lives in the owner's

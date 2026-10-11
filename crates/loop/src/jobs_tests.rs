@@ -2409,9 +2409,10 @@ fn after_close_a_kept_notice_starts_a_turn_and_a_kept_steer_does_not() {
         // What a turn cut short before `close` left queued.
         let looped = world.looped.as_mut().unwrap();
         looped.closing = true;
-        looped
-            .queued
-            .push_back(crate::jobs::Queued::Steer(message("Kept.", "c_kept")));
+        looped.queued.push_back(crate::jobs::Queued::Steer(
+            message("Kept.", "c_kept"),
+            crate::before_message::Hooked::default(),
+        ));
         looped
             .queued
             .push_back(crate::jobs::Queued::Job(failed(JOB), None));

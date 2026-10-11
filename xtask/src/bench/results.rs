@@ -1,13 +1,13 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value};
 
 pub(super) const SCHEMA: u64 = 1;
-/// Each number is the median of this many runs ("Measuring").
-pub(super) const RUNS: usize = 5;
 
-/// The median of exactly `RUNS` values.
-pub(super) fn median(values: &[f64]) -> Result<f64, String> {
-    if values.len() != RUNS {
-        return Err(format!("{} runs, expected {RUNS}", values.len()));
+/// The median of exactly `runs` values: the run count a metric declares.
+pub(super) fn median(values: &[f64], runs: usize) -> Result<f64, String> {
+    if values.len() != runs {
+        return Err(format!("{} runs, expected {runs}", values.len()));
     }
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
@@ -20,8 +20,36 @@ pub(super) fn median(values: &[f64]) -> Result<f64, String> {
 /// A parsed result file.
 pub(super) struct Results {
     pub(super) idle_secs: u64,
+    /// The run count every metric without its own entry declares.
+    pub(super) runs: usize,
+    /// The pull request's timing count; the full count elsewhere.
+    pub(super) timing_runs: usize,
+    /// Each recorded metric id's run count, when the file declares one.
+    pub(super) metric_runs: BTreeMap<String, usize>,
+    /// The runner's CPU model; files the backstop wrote before it carry none.
+    pub(super) cpu: Option<String>,
+    /// The stripped binary's size in bytes; files written before it carry none.
+    pub(super) binary_size_bytes: Option<u64>,
     pub(super) metrics: Map<String, Value>,
     pub(super) failures: Vec<String>,
+}
+
+impl Results {
+    /// The run count `id`'s median is taken over: its declared count, else
+    /// the file's.
+    pub(super) fn runs_of(&self, id: &str) -> usize {
+        self.metric_runs.get(id).copied().unwrap_or(self.runs)
+    }
+}
+
+/// A whole number of at least 1 in `value`, for a run count.
+fn count(value: &Value, what: &str) -> Result<usize, String> {
+    match value.as_u64() {
+        Some(n) if n >= 1 => {
+            usize::try_from(n).map_err(|_| format!("{what} is not a positive whole number"))
+        }
+        Some(_) | None => Err(format!("{what} is not a positive whole number")),
+    }
 }
 
 pub(super) fn parse_results(text: &str) -> Result<Results, String> {
@@ -30,6 +58,33 @@ pub(super) fn parse_results(text: &str) -> Result<Results, String> {
     if schema != Some(SCHEMA) {
         return Err(format!("schema is {schema:?}, expected {SCHEMA}"));
     }
+    let runs = match value.get("runs") {
+        None => return Err("no runs".to_owned()),
+        Some(value) => count(value, "runs")?,
+    };
+    let timing_runs = match value.get("timing_runs") {
+        None => runs,
+        Some(value) => count(value, "timing_runs")?,
+    };
+    let mut metric_runs = BTreeMap::new();
+    if let Some(declared) = value.get("metric_runs") {
+        let declared = declared.as_object().ok_or("metric_runs is not an object")?;
+        for (id, value) in declared {
+            metric_runs.insert(id.clone(), count(value, &format!("metric_runs.{id}"))?);
+        }
+    }
+    let cpu = match value.get("cpu") {
+        None => None,
+        Some(Value::String(model)) => Some(model.clone()),
+        Some(_) => return Err("cpu is not a string".to_owned()),
+    };
+    let binary_size_bytes = match value.get("binary_size_bytes") {
+        None => None,
+        Some(size) => Some(
+            size.as_u64()
+                .ok_or("binary_size_bytes is not a whole number of bytes")?,
+        ),
+    };
     let idle_secs = value
         .get("idle_secs")
         .and_then(Value::as_u64)
@@ -52,6 +107,11 @@ pub(super) fn parse_results(text: &str) -> Result<Results, String> {
         .collect::<Result<_, _>>()?;
     Ok(Results {
         idle_secs,
+        runs,
+        timing_runs,
+        metric_runs,
+        cpu,
+        binary_size_bytes,
         metrics,
         failures,
     })
@@ -75,16 +135,24 @@ pub(super) fn run_median(results: Option<&Results>, id: &str) -> Result<f64, Str
                 .ok_or_else(|| format!("{id}: {v} is not a number"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    median(&values).map_err(|e| format!("{id}: {e}"))
+    // `metric` fails on `None`, so results exists past here.
+    let runs = results.map(|results| results.runs_of(id)).unwrap_or(0);
+    median(&values, runs).map_err(|e| format!("{id}: {e}"))
 }
 
-/// The per-run arrays of an exact metric: exactly `RUNS`, none empty.
+/// The per-run arrays of an exact metric: one entry per declared run, none
+/// empty.
 pub(super) fn runs<'a>(results: Option<&'a Results>, id: &str) -> Result<Vec<&'a [Value]>, String> {
-    let all = metric(results, id)?
+    let results = results.ok_or("no results")?;
+    let runs = results.runs_of(id);
+    let all = results
+        .metrics
+        .get(id)
+        .ok_or_else(|| format!("{id}: missing"))?
         .as_array()
         .ok_or_else(|| format!("{id}: not an array"))?;
-    if all.len() != RUNS {
-        return Err(format!("{id}: {} runs, expected {RUNS}", all.len()));
+    if all.len() != runs {
+        return Err(format!("{id}: {} runs, expected {runs}", all.len()));
     }
     all.iter()
         .enumerate()

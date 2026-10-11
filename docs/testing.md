@@ -406,7 +406,10 @@ it, so its tests must reach it.
 
 Code is written so a mutant fails fast. A loop that steps an index by hand can
 spin forever when a mutant breaks the arithmetic, and a hung mutant fails CI as
-a timeout; walk with an iterator instead. A test reaches the code under test
+a timeout; walk with an iterator instead. Code also avoids forms that leave a mutant no
+test can catch. Disjoint flags are combined with a method such as `union`,
+not `|`: cargo-mutants swaps `|` for `^`, which gives the same value when no
+bit overlaps. A test reaches the code under test
 from outside, through a test seam such as a fake writer or the injected clock. A
 `#[cfg(test)]` hook inside a production function is used only where no outside
 seam can reach the behaviour, such as a race's pause point ("Waits and

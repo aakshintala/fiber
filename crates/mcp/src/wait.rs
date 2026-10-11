@@ -17,6 +17,8 @@ use crate::rpc::Outcome;
 pub(crate) struct View {
     pub(crate) response: Option<Outcome>,
     pub(crate) gone: bool,
+    /// Whether the remote server ended its session under this wait.
+    pub(crate) expired: bool,
     pub(crate) cancelled: bool,
     pub(crate) seq: u64,
 }
@@ -27,6 +29,9 @@ pub(crate) struct SharedState {
     next_id: u64,
     pending: BTreeMap<u64, Option<Outcome>>,
     pub(crate) gone: bool,
+    /// Whether the remote server ended its session: set with `gone` by
+    /// [`Shared::expire_if_awaiting`], never alone.
+    pub(crate) expired: bool,
 }
 
 #[derive(Default)]
@@ -69,6 +74,7 @@ impl Shared {
         View {
             response: state.pending.get(&id).and_then(|slot| slot.clone()),
             gone: state.gone,
+            expired: state.expired,
             cancelled: cancel.is_cancelled(),
             seq: state.seq,
         }
@@ -93,6 +99,51 @@ impl Shared {
         state.seq = state.seq.wrapping_add(1);
         drop(state);
         self.cv.notify_all();
+    }
+
+    /// Whether `id` still waits for its answer (its slot exists and holds none).
+    pub(crate) fn awaiting(&self, id: u64) -> bool {
+        lock(&self.inner)
+            .pending
+            .get(&id)
+            .is_some_and(|slot| slot.is_none())
+    }
+
+    /// Marks the server gone only when `id` still waits, in one step under
+    /// the lock; returns whether it did. A response that already delivered
+    /// its answer, or a wait that already ended and removed its slot,
+    /// never marks the server gone (`docs/mcp.md`, "When a server dies").
+    pub(crate) fn gone_if_awaiting(&self, id: u64) -> bool {
+        let mut state = lock(&self.inner);
+        let awaiting = state.pending.get(&id).is_some_and(|slot| slot.is_none());
+        if awaiting {
+            state.gone = true;
+            state.seq = state.seq.wrapping_add(1);
+        }
+        drop(state);
+        if awaiting {
+            self.cv.notify_all();
+        }
+        awaiting
+    }
+
+    /// Marks the session expired (and so gone) only when `id` still waits
+    /// and the server is not already gone, in one step under the lock;
+    /// returns whether it did. A `404` read after its call ended never
+    /// expires the server: precedence is the waiter's, exactly as for a
+    /// death (`docs/mcp.md`, "When a server dies").
+    pub(crate) fn expire_if_awaiting(&self, id: u64) -> bool {
+        let mut state = lock(&self.inner);
+        let awaiting = state.pending.get(&id).is_some_and(|slot| slot.is_none());
+        let live = !state.gone;
+        if awaiting && live {
+            state.gone = true;
+            state.expired = true;
+            state.seq = state.seq.wrapping_add(1);
+        }
+        drop(state);
+        self.cv.notify_all();
+        awaiting && live
     }
 }
 

@@ -154,15 +154,15 @@ fn each_entry_is_its_line_with_one_line_either_side() {
     open(&mut app);
     let view = app.find_results().expect("open");
     assert_eq!(view.header, "1 matches for “needle”");
-    // Each text is its own block, so the match sits between the blank
-    // separator rows.
+    // Each text is its own block, so the match sits between blank
+    // separator rows: the context skips them to the nearest text.
     assert_eq!(
         view.entries,
         vec![Snippet {
-            before: "".to_owned(),
+            before: "before".to_owned(),
             line: "needle".to_owned(),
             at: 0..6,
-            after: "".to_owned(),
+            after: "after".to_owned(),
         }]
     );
 }

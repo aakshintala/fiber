@@ -41,6 +41,7 @@ const fn rgb(v: u32) -> Color {
 }
 const RED: Color = rgb(0xff5d73);
 const BLUE: Color = rgb(0x6eaafe);
+const GREEN: Color = rgb(0x73c991); // the added role
 const ORANGE: Color = rgb(0xff9f43);
 const PURPLE: Color = rgb(0xb39ddb);
 const CYAN: Color = rgb(0x7dd3fc);
@@ -272,9 +273,23 @@ fn edge_for(look: theme::Look, ch: &str, inner: Color, outer: Option<Color>, w: 
         ..Default::default()
     }
 }
-/// A surface: a tinted block with half-block edges and no border.
+/// A surface: a tinted block with half-block edges and no border. With
+/// colour off there is no tint to show the block, so it is boxed instead.
 fn slab(rows: Vec<Row>, bg: Color, outer: Option<Color>, w: usize) -> Vec<Row> {
-    let mut out = vec![edge("▄", bg, outer, w)];
+    slab_for(theme::get(), rows, bg, outer, w)
+}
+/// [`slab`] for a look, so tests can pass theirs directly.
+fn slab_for(
+    look: theme::Look,
+    rows: Vec<Row>,
+    bg: Color,
+    outer: Option<Color>,
+    w: usize,
+) -> Vec<Row> {
+    if look.depth == theme::Depth::None {
+        return boxed(rows, outer, w);
+    }
+    let mut out = vec![edge_for(look, "▄", bg, outer, w)];
     for r in rows {
         let inner_bg = r.bg.unwrap_or(bg);
         out.push(Row {
@@ -283,7 +298,44 @@ fn slab(rows: Vec<Row>, bg: Color, outer: Option<Color>, w: usize) -> Vec<Row> {
             ..r
         });
     }
-    out.push(edge("▀", bg, outer, w));
+    out.push(edge_for(look, "▀", bg, outer, w));
+    out
+}
+/// A thin dim box of box-drawing characters around `rows`, `w` cells wide
+/// in all: the surface's edge where no tint draws it. Click targets and
+/// the copy offset move in with the left side.
+fn boxed(rows: Vec<Row>, outer: Option<Color>, w: usize) -> Vec<Row> {
+    let inner = w.saturating_sub(2);
+    let side = || sp("│", dim());
+    let rule = |l: &str, r: &str| Row {
+        spans: vec![sp(format!("{l}{}{r}", "─".repeat(inner)), dim())],
+        bg: outer,
+        ..Default::default()
+    };
+    let mut out = vec![rule("┌", "┐")];
+    for r in rows {
+        // The fill a surface pads its rows with would overflow the narrower
+        // inside and force an ellipsis, so it goes before the fit.
+        let mut text = r.spans.clone();
+        while let Some(last) = text.last_mut() {
+            let kept = last.content.trim_end().to_string();
+            if !kept.is_empty() {
+                last.content = kept.into();
+                break;
+            }
+            text.pop();
+        }
+        let mut spans = vec![side()];
+        spans.extend(fit(&text, inner));
+        spans.push(side());
+        out.push(Row {
+            spans,
+            hot: r.hot.iter().map(|&(a, b, k)| (a + 1, b + 1, k)).collect(),
+            pre: r.pre + 1,
+            ..r
+        });
+    }
+    out.push(rule("└", "┘"));
     out
 }
 
@@ -1723,7 +1775,7 @@ fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
         vec![sp(" ", Style::new())],
         vec![sp(" ", Style::new())],
     );
-    let bw = body.iter().map(|l| width(l)).max().unwrap_or(0) + 3;
+    let bw = body.iter().map(|l| width(l)).max().unwrap_or(0) + 2;
     let pad = w.saturating_sub(bw);
     let mut out = vec![];
     let e = |ch: &str| {
@@ -1734,8 +1786,7 @@ fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
     out.push(e("▄"));
     for (i, l) in body.into_iter().enumerate() {
         let mut s = vec![sp(" ".repeat(pad), Style::new())];
-        let mut inner = fit(&l, bw - 2);
-        inner.push(sp(" ", Style::new()));
+        let mut inner = fit(&l, bw - 1);
         inner.push(sp("▐", fg(BLUE)));
         s.extend(tint(inner, BU));
         out.push(Row {
@@ -4181,7 +4232,7 @@ fn selection_text(rows: &[Row], a: (usize, usize), b: (usize, usize)) -> String 
     {
         let t = plain(row);
         let tt = t.trim();
-        if !tt.is_empty() && tt.chars().all(|c| c == '▄' || c == '▀') {
+        if !tt.is_empty() && tt.chars().all(|c| "▄▀┌┐└┘─".contains(c)) {
             continue;
         }
         let from = if r == a.0 { a.1 } else { 0 }.max(row.pre as usize);
@@ -4191,7 +4242,7 @@ fn selection_text(rows: &[Row], a: (usize, usize), b: (usize, usize)) -> String 
             out.push(if row.cont { ' ' } else { '\n' });
         }
         first = false;
-        out.push_str(piece.trim_end_matches([' ', '▐', '▌']));
+        out.push_str(piece.trim_end_matches([' ', '▐', '▌', '│']));
     }
     out
 }
@@ -7102,6 +7153,21 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bubble_has_one_blank_column_before_its_stripe() {
+        let rows = bubble("go", 0, 40);
+        let text = |r: &Row| {
+            r.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        };
+        let lines: Vec<String> = rows.iter().map(text).collect();
+        assert!(lines[1].ends_with(" go ▐"), "{:?}", lines[1]);
+        assert_eq!(lines[0], format!("{}▄▄▄▄▄", " ".repeat(35)));
+        assert!(lines[2].ends_with("▀▀▀▀▀"));
+    }
 
     #[test]
     fn home_case_parsing() {

@@ -150,9 +150,38 @@ fn judge_doc(doc: &str, head: &Value, base: Option<&Value>, event: Event) -> Rep
         doc,
         &head.to_string(),
         base.map(|b| Ok(b.to_string())),
+        None,
         event,
         "base0000",
     )
+}
+
+/// `judge_doc` with the backstop's stored results standing in for the base:
+/// the stored commit is `stored0000`.
+fn judge_stored(head: &Value, base: &Value, stored: Option<&Value>, event: Event) -> Report {
+    report(
+        DOC,
+        &head.to_string(),
+        Some(Ok(base.to_string())),
+        stored.map(|s| Stored {
+            commit: "stored0000".to_owned(),
+            text: Ok(s.to_string()),
+        }),
+        event,
+        "base0000",
+    )
+}
+
+/// `results` with its `cpu` field set to `model`.
+fn with_cpu(mut results: Value, model: &str) -> Value {
+    results["cpu"] = json!(model);
+    results
+}
+
+/// `results` with its `binary_size_bytes` field set to `bytes`.
+fn with_size(mut results: Value, bytes: u64) -> Value {
+    results["binary_size_bytes"] = json!(bytes);
+    results
 }
 
 fn judge(head: &Value, base: Option<&Value>, event: Event) -> Report {
@@ -192,9 +221,9 @@ fn a_ceiling_with_no_number_fails() {
 
 #[test]
 fn medians_take_the_middle_of_five_runs() {
-    assert_eq!(median(&[5.0, 1.0, 3.0, 2.0, 4.0]), Ok(3.0));
-    assert!(median(&[1.0, 2.0, 3.0, 4.0]).is_err());
-    assert!(median(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).is_err());
+    assert_eq!(median(&[5.0, 1.0, 3.0, 2.0, 4.0], 5), Ok(3.0));
+    assert!(median(&[1.0, 2.0, 3.0, 4.0], 5).is_err());
+    assert!(median(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 5).is_err());
 }
 
 #[test]
@@ -481,6 +510,7 @@ fn malformed_head_json_fails_and_still_writes_the_comment() {
         DOC,
         "{not json",
         Some(Ok(base().to_string())),
+        None,
         Event::PullRequest,
         "base0000",
     );
@@ -533,6 +563,7 @@ fn a_failed_base_passes_and_shows_why() {
         DOC,
         &head().to_string(),
         Some(Err("base.json: no such file".to_owned())),
+        None,
         Event::PullRequest,
         "base0000",
     );
@@ -1191,17 +1222,17 @@ fn a_budget_over_at_base_and_head_passes_marked_with_the_base() {
         noisy_run()
     ]);
     let over_head = with_metric(head(), "session_idle_switches", over.clone());
-    let over_base = with_metric(full_base(), "session_idle_switches", over);
-    let out = judge(&over_head, Some(&over_base), Event::PullRequest);
+    let over_stored = with_metric(full_base(), "session_idle_switches", over);
+    let out = judge_stored(&over_head, &base(), Some(&over_stored), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
     let line = row(&out.comment, "Idle CPU");
-    assert!(line.contains("over at base base0000"), "{line}");
+    assert!(line.contains("over at base stored0000"), "{line}");
     assert!(line.ends_with("| over at base |"), "{line}");
 
     let kib = json!([30000, 30000, 30000, 30000, 30000]);
     let over_head = with_metric(head(), "session_idle_rss_kib", kib.clone());
-    let over_base = with_metric(full_base(), "session_idle_rss_kib", kib);
-    let out = judge(&over_head, Some(&over_base), Event::PullRequest);
+    let over_stored = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = judge_stored(&over_head, &base(), Some(&over_stored), Event::PullRequest);
     assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
 }
 
@@ -1215,12 +1246,12 @@ fn a_budget_over_at_head_and_met_at_base_fails() {
         noisy_run()
     ]);
     let over_head = with_metric(head(), "session_idle_switches", over);
-    let out = judge(&over_head, Some(&full_base()), Event::PullRequest);
+    let out = judge_stored(&over_head, &base(), Some(&full_base()), Event::PullRequest);
     assert!(has(&out.failures, "4102"), "{:?}", out.failures);
 
     let kib = json!([30000, 30000, 30000, 30000, 30000]);
     let over_head = with_metric(head(), "session_idle_rss_kib", kib);
-    let out = judge(&over_head, Some(&full_base()), Event::PullRequest);
+    let out = judge_stored(&over_head, &base(), Some(&full_base()), Event::PullRequest);
     assert!(
         has(&out.failures, "session_idle_rss_kib"),
         "{:?}",
@@ -1232,7 +1263,14 @@ fn a_budget_over_at_head_and_met_at_base_fails() {
 fn a_head_over_budget_with_no_base_binary_is_judged_alone() {
     let kib = json!([30000, 30000, 30000, 30000, 30000]);
     let over_head = with_metric(head(), "session_idle_rss_kib", kib);
-    let out = report(DOC, &over_head.to_string(), None, Event::PullRequest, "");
+    let out = report(
+        DOC,
+        &over_head.to_string(),
+        None,
+        None,
+        Event::PullRequest,
+        "",
+    );
     assert!(
         has(&out.failures, "session_idle_rss_kib"),
         "{:?}",
@@ -1242,6 +1280,7 @@ fn a_head_over_budget_with_no_base_binary_is_judged_alone() {
         DOC,
         &over_head.to_string(),
         Some(Err("base.json: no such file".to_owned())),
+        None,
         Event::PullRequest,
         "",
     );
@@ -1260,6 +1299,10 @@ fn the_backstop_has_no_base_column_and_fails_on_any_budget() {
         DOC,
         &over.to_string(),
         Some(Ok(over.to_string())),
+        Some(Stored {
+            commit: "stored0000".to_owned(),
+            text: Ok(over.to_string()),
+        }),
         Event::Push,
         "base0000",
     );
@@ -1275,24 +1318,24 @@ fn the_backstop_has_no_base_column_and_fails_on_any_budget() {
 fn a_malformed_base_or_head_metric_excuses_nothing() {
     let kib = json!([30000, 30000, 30000, 30000, 30000]);
     let over_head = with_metric(head(), "session_idle_rss_kib", kib.clone());
-    // A base metric that is not an array, or has too few samples, proves nothing.
+    // A stored metric that is not an array, or has too few samples, proves nothing.
     for bad in [json!("x"), json!([1, 2])] {
-        let base = with_metric(full_base(), "session_idle_rss_kib", bad);
-        let out = judge(&over_head, Some(&base), Event::PullRequest);
+        let stored = with_metric(full_base(), "session_idle_rss_kib", bad);
+        let out = judge_stored(&over_head, &base(), Some(&stored), Event::PullRequest);
         assert!(
             has(&out.failures, "session_idle_rss_kib"),
             "{:?}",
             out.failures
         );
     }
-    // A head metric that is missing still fails when the base is over.
+    // A head metric that is missing still fails when the stored results are over.
     let mut missing = head();
     missing["metrics"]
         .as_object_mut()
         .unwrap()
         .remove("session_idle_rss_kib");
-    let over_base = with_metric(full_base(), "session_idle_rss_kib", kib);
-    let out = judge(&missing, Some(&over_base), Event::PullRequest);
+    let over_stored = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = judge_stored(&missing, &base(), Some(&over_stored), Event::PullRequest);
     assert!(
         has(&out.failures, "session_idle_rss_kib"),
         "{:?}",
@@ -1304,9 +1347,9 @@ fn a_malformed_base_or_head_metric_excuses_nothing() {
 fn a_self_check_the_base_fails_too_still_fails_the_head() {
     let mut both = head();
     both["failures"] = json!(["hub did not exit"]);
-    let mut base = full_base();
-    base["failures"] = json!(["hub did not exit"]);
-    let out = judge(&both, Some(&base), Event::PullRequest);
+    let mut failed = full_base();
+    failed["failures"] = json!(["hub did not exit"]);
+    let out = judge_stored(&both, &failed, Some(&full_base()), Event::PullRequest);
     assert!(has(&out.failures, "hub did not exit"), "{:?}", out.failures);
 }
 
@@ -1314,16 +1357,609 @@ fn a_self_check_the_base_fails_too_still_fails_the_head() {
 fn a_wrong_unit_ceiling_fails_even_when_the_base_is_over() {
     let kib = json!([30000, 30000, 30000, 30000, 30000]);
     let over_head = with_metric(head(), "session_idle_rss_kib", kib.clone());
-    let over_base = with_metric(full_base(), "session_idle_rss_kib", kib);
-    let out = judge_doc(
+    let over_stored = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = report(
         &doc_with("12 MiB peak RSS", "12 ms"),
-        &over_head,
-        Some(&over_base),
+        &over_head.to_string(),
+        Some(Ok(base().to_string())),
+        Some(Stored {
+            commit: "stored0000".to_owned(),
+            text: Ok(over_stored.to_string()),
+        }),
         Event::PullRequest,
+        "base0000",
     );
     assert!(
         has(&out.failures, "not a memory ceiling"),
         "{:?}",
         out.failures
     );
+}
+
+/// `results` with `runs` and `timing_runs` set.
+fn with_counts(mut results: Value, runs: u64, timing_runs: u64) -> Value {
+    results["runs"] = json!(runs);
+    results["timing_runs"] = json!(timing_runs);
+    results
+}
+
+/// `results` with `metric_runs` declaring each of `counts`.
+fn with_metric_runs(mut results: Value, counts: &[(&str, u64)]) -> Value {
+    let mut declared = serde_json::Map::new();
+    for (id, runs) in counts {
+        declared.insert((*id).to_owned(), json!(runs));
+    }
+    results["metric_runs"] = Value::Object(declared);
+    results
+}
+
+/// `results` with metric `id`'s array cut to its first `n` entries.
+fn trim_metric(results: &Value, id: &str, n: usize) -> Value {
+    let mut out = results.clone();
+    let entries = out["metrics"][id].as_array().unwrap()[..n].to_vec();
+    out["metrics"][id] = Value::Array(entries);
+    out
+}
+
+/// `results` with each `terminal_attach_ms` fixture cut to its first `n`
+/// entries.
+fn trim_attach(results: &Value, n: usize) -> Value {
+    let mut out = results.clone();
+    let mut kept: Vec<Value> = Vec::new();
+    for fixture in ["1 MiB", "10 MiB"] {
+        kept.extend(
+            out["metrics"]["terminal_attach_ms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["fixture"] == fixture)
+                .take(n)
+                .cloned(),
+        );
+    }
+    out["metrics"]["terminal_attach_ms"] = Value::Array(kept);
+    out
+}
+
+#[test]
+fn a_pull_request_file_with_three_timing_runs_passes() {
+    let mut three = with_counts(head(), 5, 3);
+    three = with_metric_runs(
+        three,
+        &[
+            ("session_start_ms", 3),
+            ("terminal_first_frame_ms", 3),
+            ("sessions_list_ms", 3),
+            ("wheel_paging_ms", 3),
+            ("wheel_read_ms", 3),
+        ],
+    );
+    // Three medians no five-run median of the fixture equals.
+    three = with_metric(three, "session_start_ms", json!([9.0, 9.4, 9.2]));
+    three = with_metric(three, "terminal_first_frame_ms", json!([19.0, 19.4, 19.2]));
+    three = with_metric(three, "sessions_list_ms", json!([13.0, 13.4, 13.2]));
+    three = with_metric(three, "wheel_paging_ms", json!([4.9, 5.3, 5.1]));
+    three = with_metric(three, "wheel_read_ms", json!([2.9, 3.3, 3.1]));
+    let out = judge(&three, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+    let line = row(&out.comment, "Session start, the internal session command");
+    assert!(line.contains("9.2 ms"), "{line}");
+}
+
+#[test]
+fn a_metric_whose_count_differs_from_its_declared_runs_fails() {
+    let declared = with_metric_runs(head(), &[("session_start_ms", 3)]);
+    for (values, runs) in [(json!([6.0, 6.1]), 2), (json!([6.0, 6.1, 6.2, 6.3]), 4)] {
+        let out = judge(
+            &with_metric(declared.clone(), "session_start_ms", values),
+            Some(&base()),
+            Event::PullRequest,
+        );
+        assert!(
+            out.failures
+                .iter()
+                .any(|f| f.contains("session_start_ms") && f.contains("expected 3")),
+            "{runs}: {:?}",
+            out.failures
+        );
+    }
+    let out = judge(
+        &with_metric(declared.clone(), "session_start_ms", json!([6.0, 6.1, 6.2])),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+    assert_eq!(median(&[3.0, 1.0, 2.0], 3), Ok(2.0));
+    assert!(median(&[1.0, 2.0], 3).is_err());
+}
+
+#[test]
+fn a_file_without_metric_runs_expects_runs_for_every_metric() {
+    // Every array cut to its first 3 entries, the attach fixtures to 3
+    // each; `fsyncs` keeps its one pass.
+    let mut three = with_counts(head(), 3, 3);
+    for id in [
+        "session_idle_rss_kib",
+        "terminal_idle_rss_kib",
+        "session_idle_switches",
+        "terminal_idle_switches",
+        "session_threads",
+        "session_start_ms",
+        "terminal_first_frame_ms",
+        "sessions_list_ms",
+        "terminal_attach_rss_kib",
+        "terminal_attach_retained_kib",
+        "busy_turn_retained_kib",
+        "busy_turn_rss_kib",
+        "resume_20k_rss_kib",
+        "resume_2m_rss_kib",
+        "web_fetch_rss_kib",
+        "paging_rss_kib",
+        "paging_open_ms",
+        "paging_load_ms",
+        "paging_jump_ms",
+        "paging_width_ms",
+        "paging_append_ms",
+        "wheel_paging_ms",
+        "wheel_read_ms",
+        "paging_counts",
+    ] {
+        three = trim_metric(&three, id, 3);
+    }
+    three = trim_metric(&three, "turn_log_bytes", 3);
+    three = trim_attach(&three, 3);
+    let out = judge(&three, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+
+    // A declared count overrides the file's for its own metric.
+    let five = with_metric_runs(head(), &[("turn_log_bytes", 3)]);
+    let out = judge(
+        &trim_metric(&five, "turn_log_bytes", 3),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+    let out = judge(&five, Some(&base()), Event::PullRequest);
+    assert!(has(&out.failures, "turn_log_bytes"), "{:?}", out.failures);
+    let attach = with_metric_runs(head(), &[("terminal_attach_ms", 3)]);
+    let out = judge(&trim_attach(&attach, 3), Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+    let out = judge(&attach, Some(&base()), Event::PullRequest);
+    assert!(
+        has(&out.failures, "terminal_attach_ms"),
+        "{:?}",
+        out.failures
+    );
+}
+
+#[test]
+fn the_results_file_declares_valid_counts() {
+    let mut no_runs = head();
+    no_runs.as_object_mut().unwrap().remove("runs");
+    let out = report(
+        DOC,
+        &no_runs.to_string(),
+        Some(Ok(base().to_string())),
+        None,
+        Event::PullRequest,
+        "base0000",
+    );
+    assert!(has(&out.failures, "no runs"), "{:?}", out.failures);
+
+    let out = report(
+        DOC,
+        &with_counts(head(), 0, 0).to_string(),
+        Some(Ok(base().to_string())),
+        None,
+        Event::PullRequest,
+        "base0000",
+    );
+    assert!(!out.failures.is_empty(), "{:?}", out.failures);
+
+    // Each malformed `metric_runs` value names it.
+    for bad in [json!(0), json!("3"), json!(-1)] {
+        let mut malformed = with_metric_runs(head(), &[("session_start_ms", 1)]);
+        malformed["metric_runs"]["session_start_ms"] = bad;
+        let out = report(
+            DOC,
+            &malformed.to_string(),
+            Some(Ok(base().to_string())),
+            None,
+            Event::PullRequest,
+            "base0000",
+        );
+        assert!(has(&out.failures, "metric_runs"), "{:?}", out.failures);
+    }
+
+    let one = with_metric_runs(head(), &[("session_start_ms", 1)]);
+    let one = with_metric(one, "session_start_ms", json!([6.0]));
+    let out = judge(&one, Some(&base()), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+}
+
+#[test]
+fn a_memory_or_exact_budget_the_stored_results_fail_too_passes_naming_their_commit() {
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_metric(head(), "session_idle_rss_kib", kib.clone());
+    let over_stored = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = judge_stored(&over_head, &base(), Some(&over_stored), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+    let line = row(&out.comment, "Session, idle, headless");
+    assert!(line.contains("over at base stored0000"), "{line}");
+    assert!(line.ends_with("| over at base |"), "{line}");
+    assert!(
+        out.comment.contains(
+            "Memory and exact rows compare against the backstop's stored results for stored0000."
+        ),
+        "{}",
+        out.comment
+    );
+
+    let over = json!([
+        quiet_run(),
+        quiet_run(),
+        quiet_run(),
+        quiet_run(),
+        noisy_run()
+    ]);
+    let over_head = with_metric(head(), "session_idle_switches", over.clone());
+    let over_stored = with_metric(full_base(), "session_idle_switches", over);
+    let out = judge_stored(&over_head, &base(), Some(&over_stored), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+    let line = row(&out.comment, "Idle CPU");
+    assert!(line.contains("over at base stored0000"), "{line}");
+}
+
+#[test]
+fn a_live_base_over_budget_excuses_nothing() {
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_metric(head(), "session_idle_rss_kib", kib.clone());
+    let over_base = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = judge(&over_head, Some(&over_base), Event::PullRequest);
+    assert!(
+        has(&out.failures, "session_idle_rss_kib"),
+        "{:?}",
+        out.failures
+    );
+    assert!(
+        out.comment.contains(
+            "No stored results for the base or its 9 nearest first-parent ancestors: \
+             memory and exact rows are judged against the table alone."
+        ),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
+fn unreadable_stored_results_are_reported_and_excuse_nothing() {
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_metric(head(), "session_idle_rss_kib", kib);
+    for text in [
+        Err("head.json: no such file".to_owned()),
+        Ok("not json".to_owned()),
+    ] {
+        let out = report(
+            DOC,
+            &over_head.to_string(),
+            Some(Ok(base().to_string())),
+            Some(Stored {
+                commit: "stored0000".to_owned(),
+                text,
+            }),
+            Event::PullRequest,
+            "base0000",
+        );
+        assert!(
+            has(&out.failures, "session_idle_rss_kib"),
+            "{:?}",
+            out.failures
+        );
+        assert!(
+            out.comment
+                .contains("The stored results for stored0000 could not be read ("),
+            "{}",
+            out.comment
+        );
+    }
+}
+
+#[test]
+fn the_comment_lists_each_files_cpu() {
+    let headed = with_cpu(head(), "CPU-H");
+    let based = with_cpu(base(), "CPU-B");
+    let stored = with_cpu(full_base(), "CPU-S");
+    let out = report(
+        DOC,
+        &headed.to_string(),
+        Some(Ok(based.to_string())),
+        Some(Stored {
+            commit: "stored0000".to_owned(),
+            text: Ok(stored.to_string()),
+        }),
+        Event::PullRequest,
+        "base0000",
+    );
+    assert!(out.comment.contains("- Head CPU: CPU-H"), "{}", out.comment);
+    assert!(
+        out.comment.contains("- Base CPU (base0000): CPU-B"),
+        "{}",
+        out.comment
+    );
+    assert!(
+        out.comment
+            .contains("- Stored results CPU (stored0000): CPU-S"),
+        "{}",
+        out.comment
+    );
+
+    // A file without a `cpu` field shows `not recorded`.
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert!(
+        out.comment.contains("- Head CPU: not recorded"),
+        "{}",
+        out.comment
+    );
+
+    // With no live base there is no base line.
+    let out = report(
+        DOC,
+        &headed.to_string(),
+        Some(Err("base.json: no such file".to_owned())),
+        Some(Stored {
+            commit: "stored0000".to_owned(),
+            text: Ok(stored.to_string()),
+        }),
+        Event::PullRequest,
+        "base0000",
+    );
+    assert!(!out.comment.contains("Base CPU"), "{}", out.comment);
+}
+
+#[test]
+fn a_push_shows_the_head_cpu_and_ignores_stored_results() {
+    let kib = json!([30000, 30000, 30000, 30000, 30000]);
+    let over_head = with_cpu(
+        with_metric(head(), "session_idle_rss_kib", kib.clone()),
+        "CPU-H",
+    );
+    let over_stored = with_metric(full_base(), "session_idle_rss_kib", kib);
+    let out = report(
+        DOC,
+        &over_head.to_string(),
+        Some(Ok(base().to_string())),
+        Some(Stored {
+            commit: "stored0000".to_owned(),
+            text: Ok(over_stored.to_string()),
+        }),
+        Event::Push,
+        "base0000",
+    );
+    assert!(
+        has(&out.failures, "session_idle_rss_kib"),
+        "{:?}",
+        out.failures
+    );
+    assert!(out.comment.contains("- Head CPU:"), "{}", out.comment);
+    assert!(!out.comment.contains("Base CPU"), "{}", out.comment);
+    assert!(!out.comment.contains("Stored results"), "{}", out.comment);
+    assert!(!out.comment.contains("stored0000"), "{}", out.comment);
+}
+
+#[test]
+fn timings_compare_against_the_live_base_not_the_stored_results() {
+    let stored = with_metric(
+        full_base(),
+        "session_start_ms",
+        json!([9.9, 9.9, 9.9, 9.9, 9.9]),
+    );
+    let out = judge_stored(&head(), &base(), Some(&stored), Event::PullRequest);
+    assert_eq!(out.failures, Vec::<String>::new(), "{}", out.comment);
+    let line = row(&out.comment, "Session start, the internal session command");
+    assert!(line.contains("0.6 ms"), "{line}");
+    assert!(!line.contains("9.9 ms"), "{line}");
+}
+
+#[test]
+fn the_run_count_sentence_follows_the_head_file() {
+    let out = judge(
+        &with_counts(head(), 5, 3),
+        Some(&base()),
+        Event::PullRequest,
+    );
+    assert!(
+        out.comment.contains(
+            "Each number is the median of 5 runs on Linux x86_64, \
+             a timing-only workload's of 3 (`docs/performance.md`)."
+        ),
+        "{}",
+        out.comment
+    );
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert!(
+        out.comment.contains(
+            "Each number is the median of 5 runs on Linux x86_64 (`docs/performance.md`)."
+        ),
+        "{}",
+        out.comment
+    );
+    let out = report(
+        DOC,
+        "{not json",
+        Some(Ok(base().to_string())),
+        None,
+        Event::PullRequest,
+        "base0000",
+    );
+    assert!(
+        out.comment.contains(
+            "Each number is the median of its runs on Linux x86_64 (`docs/performance.md`)."
+        ),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
+fn the_comment_shows_head_and_base_size_and_the_change() {
+    let out = report(
+        DOC,
+        &with_size(head(), 1000).to_string(),
+        Some(Ok(with_size(base(), 900).to_string())),
+        None,
+        Event::PullRequest,
+        "anc0000",
+    );
+    assert!(
+        out.comment.contains("- Head size: 1000 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(
+        out.comment.contains("- Base size (anc0000): 900 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(
+        out.comment
+            .contains("- Size change, head - base: +100 bytes"),
+        "{}",
+        out.comment
+    );
+    assert_eq!(out.failures, Vec::<String>::new());
+
+    let out = report(
+        DOC,
+        &with_size(head(), 900).to_string(),
+        Some(Ok(with_size(base(), 1000).to_string())),
+        None,
+        Event::PullRequest,
+        "anc0000",
+    );
+    assert!(
+        out.comment
+            .contains("- Size change, head - base: -100 bytes"),
+        "{}",
+        out.comment
+    );
+
+    let out = report(
+        DOC,
+        &with_size(head(), 1000).to_string(),
+        Some(Ok(with_size(base(), 1000).to_string())),
+        None,
+        Event::PullRequest,
+        "anc0000",
+    );
+    assert!(
+        out.comment.contains("- Size change, head - base: +0 bytes"),
+        "{}",
+        out.comment
+    );
+}
+
+#[test]
+fn a_file_without_a_size_shows_not_recorded() {
+    let out = judge(&head(), Some(&base()), Event::PullRequest);
+    assert!(
+        out.comment.contains("- Head size: not recorded"),
+        "{}",
+        out.comment
+    );
+    assert!(out.comment.contains("- Base size ("), "{}", out.comment);
+    assert!(out.comment.contains(": not recorded"), "{}", out.comment);
+    assert!(!out.comment.contains("Size change"), "{}", out.comment);
+    assert!(
+        !out.failures.iter().any(|f| f.contains("binary_size")),
+        "{:?}",
+        out.failures
+    );
+
+    let out = judge(&with_size(head(), 1000), Some(&base()), Event::PullRequest);
+    assert!(
+        out.comment.contains("- Head size: 1000 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("Size change"), "{}", out.comment);
+
+    let out = judge(&head(), Some(&with_size(base(), 900)), Event::PullRequest);
+    assert!(
+        out.comment.contains("- Head size: not recorded"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("Size change"), "{}", out.comment);
+}
+
+#[test]
+fn the_base_size_line_names_no_commit_when_none_is_given() {
+    let out = report(
+        DOC,
+        &with_size(head(), 1000).to_string(),
+        Some(Ok(with_size(base(), 900).to_string())),
+        None,
+        Event::PullRequest,
+        "",
+    );
+    assert!(
+        out.comment.contains("- Base size: 900 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("- Base size ("), "{}", out.comment);
+}
+
+#[test]
+fn a_push_or_a_failed_base_shows_the_head_size_alone() {
+    let headed = with_size(head(), 1000);
+    let based = with_size(base(), 900);
+    let out = report(
+        DOC,
+        &headed.to_string(),
+        Some(Ok(based.to_string())),
+        None,
+        Event::Push,
+        "base0000",
+    );
+    assert!(
+        out.comment.contains("- Head size: 1000 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("Base size"), "{}", out.comment);
+    assert!(!out.comment.contains("Size change"), "{}", out.comment);
+
+    let out = report(
+        DOC,
+        &headed.to_string(),
+        Some(Err("base.json: no such file".to_owned())),
+        None,
+        Event::PullRequest,
+        "base0000",
+    );
+    assert!(
+        out.comment.contains("- Head size: 1000 bytes"),
+        "{}",
+        out.comment
+    );
+    assert!(!out.comment.contains("Base size"), "{}", out.comment);
+    assert!(!out.comment.contains("Size change"), "{}", out.comment);
+}
+
+#[test]
+fn a_malformed_binary_size_fails_the_head() {
+    for size in [json!("1000"), json!(-1), json!(1.5), Value::Null] {
+        let mut headed = head();
+        headed["binary_size_bytes"] = size;
+        let out = judge(&headed, None, Event::Push);
+        assert!(
+            has(
+                &out.failures,
+                "head results: binary_size_bytes is not a whole number of bytes"
+            ),
+            "{:?}",
+            out.failures
+        );
+    }
 }

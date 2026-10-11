@@ -27,11 +27,22 @@ use crate::server_json::{ListedPrompt, ListedTool};
 use crate::slot::Slot;
 use crate::tool::McpTool;
 
-/// One configured stdio server: what [`start`] spawns.
+/// How Fiber reaches a server (`docs/mcp.md`, "What Fiber does with MCP").
 #[derive(Clone)]
-pub struct ServerSpec {
-    /// The configured name: the middle of every qualified tool name.
-    pub name: String,
+pub enum Transport {
+    /// A child process Fiber starts.
+    Stdio(StdioSpec),
+    /// A remote server over streamable HTTP.
+    Http {
+        /// The server's URL.
+        url: String,
+    },
+}
+
+/// A stdio server's declaration, and with `run` the pinned copy that runs
+/// instead.
+#[derive(Clone)]
+pub struct StdioSpec {
     /// The program.
     pub command: String,
     /// Its arguments.
@@ -42,6 +53,26 @@ pub struct ServerSpec {
     /// repository server's pinned copy. `command`/`args`/`env` stay the
     /// declaration, the only cache-key input.
     pub run: Option<Program>,
+}
+
+impl StdioSpec {
+    /// What spawns: the program that runs when one is set, else the
+    /// declared command and arguments.
+    pub fn program(&self) -> (&str, &[String]) {
+        match self.run.as_ref() {
+            Some(run) => (&run.command, &run.args),
+            None => (&self.command, &self.args),
+        }
+    }
+}
+
+/// One configured server: what [`launch`] starts.
+#[derive(Clone)]
+pub struct ServerSpec {
+    /// The configured name: the middle of every qualified tool name.
+    pub name: String,
+    /// How Fiber reaches it.
+    pub transport: Transport,
     /// The startup deadline.
     pub startup_timeout: Duration,
     /// Each call's timeout.
@@ -60,25 +91,34 @@ pub struct ServerSpec {
 // counts print (`docs/code-quality.md`, "Errors").
 impl std::fmt::Debug for ServerSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServerSpec")
-            .field("name", &self.name)
-            .field("command", &self.command)
-            .field("args", &self.args.len())
-            .field(
-                "env",
-                &self
-                    .env
-                    .keys()
-                    .map(|name| (name, "redacted"))
-                    .collect::<BTreeMap<_, _>>(),
-            )
+        let mut debug = f.debug_struct("ServerSpec");
+        debug.field("name", &self.name);
+        match &self.transport {
+            Transport::Stdio(stdio) => {
+                debug
+                    .field("command", &stdio.command)
+                    .field("args", &stdio.args.len())
+                    .field(
+                        "env",
+                        &stdio
+                            .env
+                            .keys()
+                            .map(|name| (name, "redacted"))
+                            .collect::<BTreeMap<_, _>>(),
+                    )
+                    .field("run", &stdio.run);
+            }
+            Transport::Http { url } => {
+                debug.field("url", &redacted_url(url));
+            }
+        }
+        debug
             .field("startup_timeout", &self.startup_timeout)
             .field("call_timeout", &self.call_timeout)
             .field("enabled", &self.enabled)
             .field("disabled", &self.disabled)
             .field("hints", &self.hints)
             .field("required", &self.required)
-            .field("run", &self.run)
             .finish()
     }
 }
@@ -118,43 +158,94 @@ impl std::fmt::Debug for Program {
     }
 }
 
+/// The URL as it prints: with its userinfo and query removed, since a
+/// token can ride in either; unparsable as `"<unparsed>"`
+/// (`docs/code-quality.md`, "Errors").
+pub(crate) fn redacted_url(url: &str) -> String {
+    let uri: Result<ureq::http::Uri, _> = url.parse();
+    let Ok(uri) = uri else {
+        return "<unparsed>".to_owned();
+    };
+    let (Some(scheme), Some(host)) = (uri.scheme_str(), uri.host()) else {
+        return "<unparsed>".to_owned();
+    };
+    let port = uri
+        .port_u16()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    format!("{scheme}://{host}{port}{}", uri.path())
+}
+
 impl ServerSpec {
-    /// What spawns: the program that runs when one is set, else the
-    /// declared command and arguments.
-    pub fn program(&self) -> (&str, &[String]) {
-        match self.run.as_ref() {
-            Some(run) => (&run.command, &run.args),
-            None => (&self.command, &self.args),
+    /// The cache key of the declaration (`docs/mcp.md`, "Starting
+    /// servers").
+    pub(crate) fn key(&self) -> String {
+        match &self.transport {
+            Transport::Stdio(stdio) => cache::key(&stdio.command, &stdio.args, &stdio.env),
+            Transport::Http { url } => cache::url_key(url),
+        }
+    }
+
+    /// Whether it is a remote server.
+    pub(crate) fn remote(&self) -> bool {
+        match &self.transport {
+            Transport::Stdio(_) => false,
+            Transport::Http { .. } => true,
         }
     }
 }
 
-/// Starts one spec: runs its guard, then [`Server::start`] with what
-/// [`ServerSpec::program`] gives. The only production caller of
-/// [`Server::start`]: session start ([`open`]) and every lazy first
-/// start and restart ([`Slot::serve`]) both go through here, so the guard
-/// runs immediately before each spawn.
-pub(crate) fn spawn(
+/// The socket limits of a remote server: the idle bound is never shorter
+/// than its own deadlines, so the kernel never fires before Fiber's own
+/// deadline on a long silent call, while a pump `POST` that never
+/// answers is still bounded.
+fn limits(spec: &ServerSpec) -> net::Limits {
+    net::Limits::new(
+        net::LIMITS.connect(),
+        spec.call_timeout
+            .max(spec.startup_timeout)
+            .max(net::LIMITS.idle()),
+    )
+    .unwrap_or(net::LIMITS)
+}
+
+/// Starts one spec on its transport and runs the handshake: the only
+/// production caller of [`Server::start`]. Session start ([`open`]) and
+/// every lazy first start and restart ([`Slot::serve`]) both go through
+/// here, so the guard runs immediately before each spawn.
+pub(crate) fn launch(
     spec: &ServerSpec,
     workspace: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
 ) -> Result<crate::server::OpenServer, crate::server::StartError> {
-    if let Some(run) = spec.run.as_ref()
-        && let Err(message) = (run.guard)()
-    {
-        return Err(crate::server::StartError::StartFailed(message));
+    match &spec.transport {
+        Transport::Stdio(stdio) => {
+            if let Some(run) = stdio.run.as_ref()
+                && let Err(message) = (run.guard)()
+            {
+                return Err(crate::server::StartError::StartFailed(message));
+            }
+            let (command, args) = stdio.program();
+            Server::start(
+                command,
+                args,
+                &stdio.env,
+                workspace,
+                clock,
+                spec.startup_timeout,
+                version,
+            )
+        }
+        Transport::Http { url } => crate::http::start(
+            url,
+            ureq::Proxy::try_from_env(),
+            limits(spec),
+            clock,
+            spec.startup_timeout,
+            version,
+        ),
     }
-    let (command, args) = spec.program();
-    Server::start(
-        command,
-        args,
-        &spec.env,
-        workspace,
-        clock,
-        spec.startup_timeout,
-        version,
-    )
 }
 
 /// What [`start`] started: the tools for the loop, their infos, the
@@ -250,11 +341,7 @@ pub fn start(
         let hit = if spec.required {
             None
         } else {
-            cache::read(
-                cache,
-                &spec.name,
-                &cache::key(&spec.command, &spec.args, &spec.env),
-            )
+            cache::read(cache, &spec.name, &spec.key())
         };
         match hit {
             Some(cached) => lazy.push((index, spec, cached)),
@@ -367,29 +454,25 @@ pub(crate) fn open(
     let name = spec.name.clone();
     let required = spec.required;
     let timeout = spec.startup_timeout;
-    let open = match spawn(&spec, workspace, clock, version) {
+    let remote = spec.remote();
+    let open = match launch(&spec, workspace, clock, version) {
         Ok(open) => open,
         Err(error) => {
             return if required {
                 Opened::Down {
-                    failure: not_started(&name, &error, timeout, true),
+                    failure: not_started(&name, &error, timeout, true, remote),
                     required: true,
                 }
             } else {
                 Opened::Down {
-                    failure: not_started(&name, &error, timeout, false),
+                    failure: not_started(&name, &error, timeout, false, remote),
                     required: false,
                 }
             };
         }
     };
     let live = open.listed;
-    cache::write(
-        cache,
-        &name,
-        &cache::key(&spec.command, &spec.args, &spec.env),
-        &live,
-    );
+    cache::write(cache, &name, &spec.key(), &live);
     let listed_prompts = live.prompts.clone();
     let tools = live.tools.clone();
     let slot = Slot::running(
@@ -478,6 +561,7 @@ pub(crate) fn declare(
             tool.description.clone(),
             tool.schema.clone(),
             &hints,
+            spec.remote(),
             crate::tool::Target {
                 timeout: spec.call_timeout,
                 artifacts: artifacts.to_path_buf(),
@@ -502,8 +586,9 @@ pub(crate) fn not_started(
     error: &crate::server::StartError,
     startup: Duration,
     required: bool,
+    remote: bool,
 ) -> McpServerFailed {
-    let (reason, message) = fail_parts(server, error, startup, required);
+    let (reason, message) = fail_parts(server, error, startup, required, remote);
     McpServerFailed {
         server: server.to_owned(),
         reason,
@@ -517,18 +602,23 @@ fn fail_parts(
     error: &crate::server::StartError,
     startup: Duration,
     required: bool,
+    remote: bool,
 ) -> (ServerFailure, String) {
     let subject = if required {
         format!("The required MCP server `{server}`")
     } else {
         format!("The MCP server `{server}`")
     };
+    // A remote server has no `command` to check: its advice names its `url`.
+    let advice = if remote {
+        "Check its `url` under `mcp.servers` in your configuration."
+    } else {
+        "Check its `command` and `args` under `mcp.servers` in your configuration."
+    };
     match error {
         crate::server::StartError::StartFailed(detail) => (
             ServerFailure::StartFailed,
-            format!(
-                "{subject} failed to start: {detail} Check its `command` and `args` under `mcp.servers` in your configuration.",
-            ),
+            format!("{subject} failed to start: {detail} {advice}",),
         ),
         crate::server::StartError::Deadline => (
             ServerFailure::Deadline,
