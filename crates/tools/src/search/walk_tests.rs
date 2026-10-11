@@ -81,7 +81,8 @@ fn entries_come_sorted_with_the_root_first() {
             show: PathBuf::from("."),
         },
         None,
-    ).collect::<Vec<_>>();
+    )
+    .collect::<Vec<_>>();
     let entries = found(&results);
     assert_eq!(
         entries
@@ -463,8 +464,5 @@ fn the_walk_yields_its_first_entry_before_it_reads_the_root() {
         .filter_map(|result| result.as_ref().ok())
         .map(|found| found.display.clone())
         .collect();
-    assert!(
-        names.contains(&dir.path().join("b/new.txt")),
-        "{names:?}"
-    );
+    assert!(names.contains(&dir.path().join("b/new.txt")), "{names:?}");
 }

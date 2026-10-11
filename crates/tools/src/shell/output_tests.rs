@@ -137,7 +137,8 @@ fn the_first_change_goes_out_at_once_and_later_ones_collapse() {
 }
 
 #[test]
-fn a_large_delta_pushes_the_next_one_out_by_its_size() {    let (clock, deltas, mut stream, shared) = stream();
+fn a_large_delta_pushes_the_next_one_out_by_its_size() {
+    let (clock, deltas, mut stream, shared) = stream();
     // About 20 KiB encoded: 200 ms at 100 KiB/s, past the 100 ms floor.
     queue(&shared, &vec![b'a'; 20_480]);
     stream.pass(&shared, clock.as_ref());

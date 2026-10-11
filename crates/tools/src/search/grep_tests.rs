@@ -1630,8 +1630,7 @@ impl Write for PlantOnFirstWrite {
 fn grep_r_writes_its_first_match_before_the_walk_ends() {
     let dir = text_tree(&BTreeMap::from([("a/x.txt", "needle\n")]));
     fs::create_dir_all(dir.path().join("b")).unwrap();
-    let owned: Vec<OsString> =
-        ["-r", "needle", "."].iter().map(OsString::from).collect();
+    let owned: Vec<OsString> = ["-r", "needle", "."].iter().map(OsString::from).collect();
     let mut input = Cursor::new(Vec::new());
     let mut stdout = PlantOnFirstWrite {
         out: Vec::new(),

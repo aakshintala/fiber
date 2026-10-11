@@ -511,7 +511,10 @@ enum Token {
     /// One literal byte: an ordinary byte or an escaped one.
     Literal(u8),
     /// A `[...]` class: negation and member ranges.
-    Class { negated: bool, members: Vec<(u8, u8)> },
+    Class {
+        negated: bool,
+        members: Vec<(u8, u8)>,
+    },
 }
 
 /// Reads the matchable step at `at`: the token with the offset where the
