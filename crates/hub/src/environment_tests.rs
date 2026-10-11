@@ -832,10 +832,7 @@ fn user_home_answers_the_first_home_when_inherited_twice() {
     let environments = Environments::new(
         vec![
             (OsString::from("HOME"), first.as_os_str().to_owned()),
-            (
-                OsString::from("HOME"),
-                OsString::from("/second"),
-            ),
+            (OsString::from("HOME"), OsString::from("/second")),
         ],
         Path::new("/tmp/hub-home"),
     );

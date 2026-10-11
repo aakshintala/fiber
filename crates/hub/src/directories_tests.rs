@@ -16,9 +16,9 @@ use contract::ErrorCode;
 use serde_json::{Value, json};
 
 use super::*;
+use crate::fake::FakeStarter;
 use crate::testkit::args;
 use crate::{Environments, Mode, Settings};
-use crate::fake::FakeStarter;
 use contract::clock::Clock;
 use fakes::Deadline;
 use std::ffi::OsString;
@@ -185,11 +185,7 @@ fn a_non_utf8_name_is_skipped() {
 
     let temp = Temp::new();
     temp.dir("a");
-    fs::create_dir_all(
-        temp.dir
-            .join(std::ffi::OsStr::from_bytes(b"bad\xffname")),
-    )
-    .unwrap();
+    fs::create_dir_all(temp.dir.join(std::ffi::OsStr::from_bytes(b"bad\xffname"))).unwrap();
     let arg = temp.text();
     assert_eq!(
         listed(None, json!({"path": arg})),
@@ -242,11 +238,7 @@ fn tilde_without_a_usable_home_is_invalid() {
     use std::os::unix::ffi::OsStrExt as _;
 
     let non_utf8 = Path::new(std::ffi::OsStr::from_bytes(b"/\xff"));
-    for home in [
-        None,
-        Some(Path::new("rel")),
-        Some(non_utf8),
-    ] {
+    for home in [None, Some(Path::new("rel")), Some(non_utf8)] {
         let (code, _) = refused(home, json!({"path": "~/sub"}));
         assert_eq!(code, ErrorCode::InvalidArguments);
     }
@@ -385,8 +377,7 @@ fn directories_over_serve_accepts_home_and_rejects_relative() {
             .as_bytes(),
         )
         .unwrap();
-    let rejected =
-        Deadline::after(WITHIN).recv_or_fail(&line_rx, "the directories rejection");
+    let rejected = Deadline::after(WITHIN).recv_or_fail(&line_rx, "the directories rejection");
     assert_eq!(rejected["kind"], "command_rejected");
     assert_eq!(rejected["payload"]["command_id"], "c_2");
     assert_eq!(rejected["payload"]["code"], "invalid_arguments");
