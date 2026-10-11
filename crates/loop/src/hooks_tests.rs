@@ -1086,6 +1086,36 @@ fn a_naming_call_writes_its_name_after_the_hook_notices() {
         false,
     );
     let at = |kind: &str| ran.streamed.iter().position(|l| l.kind == kind).unwrap();
+    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "notice",
+            "session_named",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert!(at("notice") < at("session_named"));
     assert!(at("session_named") < at("tool_call_completed"));
     let named = &ran.streamed[at("session_named")];
@@ -1107,6 +1137,34 @@ fn a_pinned_call_reaches_the_hook_as_failed_with_the_pin_message() {
         true,
     );
     assert_eq!(hooks.seen()[0].status, CallStatus::Failed);
+    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(hooks.seen()[0].content, crate::naming::PINNED.to_owned());
     let completed = ran.completed();
     assert_eq!(completed.payload["status"], "failed");
@@ -1131,6 +1189,34 @@ fn a_pinned_call_replaced_by_a_hook_keeps_the_pin_error() {
         true,
     );
     let completed = ran.completed();
+    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "name_pinned");
     assert_eq!(completed.payload["error"]["message"], crate::naming::PINNED);
@@ -1156,6 +1242,34 @@ fn a_pinned_call_withheld_by_a_hook_keeps_the_pin_error() {
         true,
     );
     let completed = ran.completed();
+    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "name_pinned");
     assert_eq!(
@@ -1178,6 +1292,34 @@ fn a_pinned_call_is_cut_to_its_bound() {
         true,
     );
     let completed = ran.completed();
+    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "name_pinned");
     let content = completed.payload["content"][0]["text"].as_str().unwrap();

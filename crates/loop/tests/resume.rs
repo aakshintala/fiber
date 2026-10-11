@@ -4556,11 +4556,27 @@ fn a_pinned_history_fails_the_naming_call() {
     let outcome = history.run(looped, "hi");
     assert_eq!(outcome, contract::events::TurnOutcome::Completed);
     let kinds = history.new_kinds();
-    assert!(
-        kinds.contains(&"tool_call_completed".to_owned()),
-        "{kinds:?}"
+    assert_eq!(
+        kinds,
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
-    assert!(!kinds.contains(&"session_named".to_owned()), "{kinds:?}");
     let done = new_of(&history, "tool_call_completed");
     assert_eq!(done.len(), 1, "{kinds:?}");
     assert_eq!(done[0].payload["status"], "failed");
@@ -4603,6 +4619,28 @@ fn a_cleared_person_name_unpins_the_session() {
     let looped = history.resume(tools_of(&[&tool]));
     let outcome = history.run(looped, "hi");
     assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "session_named",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let named_lines = new_of(&history, "session_named");
     assert_eq!(named_lines.len(), 1, "{:?}", history.new_kinds());
     assert_eq!(named_lines[0].payload["name"], "Theirs");
@@ -4621,6 +4659,28 @@ fn a_model_name_never_pins_the_session() {
     let looped = history.resume(tools_of(&[&tool]));
     let outcome = history.run(looped, "hi");
     assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "session_named",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let named_lines = new_of(&history, "session_named");
     assert_eq!(named_lines.len(), 1, "{:?}", history.new_kinds());
     assert_eq!(named_lines[0].payload["name"], "Theirs");
@@ -4640,10 +4700,26 @@ fn a_person_name_before_a_handoff_still_pins_the_session() {
     let looped = history.resume(tools_of(&[&tool]));
     let outcome = history.run(looped, "hi");
     assert_eq!(outcome, contract::events::TurnOutcome::Completed);
-    assert!(
-        !history.new_kinds().contains(&"session_named".to_owned()),
-        "{:?}",
-        history.new_kinds()
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
     let done = new_of(&history, "tool_call_completed");
     assert_eq!(done.len(), 1, "{:?}", history.new_kinds());

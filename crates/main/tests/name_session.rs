@@ -23,7 +23,6 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{
     Setup, SystemClock, function_call, hello, is_status, read_kinds, run_to_exit, stream,
-    tool_names,
 };
 
 /// A finished `function_call` for `name_session` with `arguments`.
@@ -44,7 +43,10 @@ fn ask_with(setup: &Setup, prompt: &str) -> Vec<Value> {
         .collect()
 }
 
-/// The session's directory: whichever project holds `id`.
+/// The session's directory: whichever project holds `id` (`fiber ask`
+/// runs with the setup root as its working directory, so the session's
+/// project is the root, not the workspace, and no workspace-keyed path
+/// finds it).
 fn session_dir(setup: &Setup, id: &str) -> std::path::PathBuf {
     let projects = setup.home().join("projects");
     let mut stack = vec![projects];
@@ -140,7 +142,6 @@ fn naming_writes_session_named_before_the_completion() {
             .contains("when the work's topic changes, a handoff included"),
         "{tool}"
     );
-    assert!(tool_names(body).contains(&"name_session".to_owned()));
 }
 
 #[test]
@@ -169,6 +170,40 @@ fn length_limits_fail_invalid_arguments_and_write_no_name() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
         .collect();
+    assert_eq!(
+        support::kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            // The two invalid calls fail before starting; only the valid
+            // call writes `tool_call_started`.
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "session_named",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let id = session_id(&lines).to_owned();
     let log = read_lines(&session_dir(&setup, &id).join("events.jsonl"));
     let completed: Vec<&Value> = log
@@ -207,6 +242,39 @@ fn the_latest_name_is_the_session_name_after_a_resume() {
     .unwrap();
     setup.provider(&server);
     let lines = ask_with(&setup, "go");
+    // Two naming steps, then the closing text step.
+    let step = [
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "session_named",
+        "tool_call_completed",
+    ];
+    let mut expected = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step);
+    expected.extend(step);
+    expected.extend([
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    assert_eq!(support::kinds(&lines), expected);
     let id = session_id(&lines).to_owned();
     let log = read_lines(&session_dir(&setup, &id).join("events.jsonl"));
     let named: Vec<&Value> = log
@@ -229,6 +297,30 @@ fn the_latest_name_is_the_session_name_after_a_resume() {
         .lines()
         .map(str::to_owned)
         .collect();
+    let resumed_lines: Vec<Value> = resumed
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
+        .collect();
+    assert_eq!(
+        support::kinds(&resumed_lines),
+        [
+            // A resume writes no `session_started`, and the log already
+            // holds an opening message, so none is written either.
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let status = resumed
         .iter()
         .filter(|line| is_status(line))
@@ -250,6 +342,13 @@ fn a_person_name_pins_the_session_after_a_resume() {
     .unwrap();
     setup.provider(&server);
     let lines = ask_with(&setup, "go");
+    let mut expected = read_kinds();
+    let at = expected
+        .iter()
+        .position(|k| *k == "tool_call_completed")
+        .unwrap();
+    expected.insert(at, "session_named");
+    assert_eq!(support::kinds(&lines), expected);
     let id = session_id(&lines).to_owned();
     {
         let dir = session_dir(&setup, &id);
@@ -277,6 +376,39 @@ fn a_person_name_pins_the_session_after_a_resume() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    let resumed_stdout = String::from_utf8(output.stdout).unwrap();
+    let resumed_lines: Vec<Value> = resumed_stdout
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
+        .collect();
+    assert_eq!(
+        support::kinds(&resumed_lines),
+        [
+            // A resume writes no `session_started`, and the log already
+            // holds an opening message, so none is written either. The
+            // pinned call starts, then fails with `name_pinned`.
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let log = read_lines(&session_dir(&setup, &id).join("events.jsonl"));
     let named: Vec<&Value> = log
         .iter()
@@ -295,8 +427,7 @@ fn a_person_name_pins_the_session_after_a_resume() {
         last["payload"]["error"]["message"],
         "the person named this session"
     );
-    let status = String::from_utf8(output.stdout)
-        .unwrap()
+    let status = resumed_stdout
         .lines()
         .filter(|line| is_status(line))
         .map(|line| serde_json::from_str::<Value>(line).unwrap())

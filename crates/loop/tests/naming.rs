@@ -214,6 +214,13 @@ fn two_steps_name_twice_in_order() {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    let mut expected = head();
+    expected.extend(step_of(1));
+    expected.extend(["tool_call_started", "session_named", "tool_call_completed"]);
+    expected.extend(step_of(1));
+    expected.extend(["tool_call_started", "session_named", "tool_call_completed"]);
+    expected.extend(tail());
+    assert_eq!(kinds(&lines), expected);
     let named: Vec<&Envelope> = lines.iter().filter(|l| l.kind == "session_named").collect();
     assert_eq!(named.len(), 2);
 }
@@ -272,7 +279,10 @@ fn a_cancelled_call_names_nothing() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
     });
     let lines = session.lines();
-    assert!(!kinds(&lines).contains(&"session_named"));
+    let mut expected = head();
+    expected.extend(step_of(1));
+    expected.extend(["tool_call_started", "tool_call_completed", "turn_completed"]);
+    assert_eq!(kinds(&lines), expected);
     let completed = lines
         .iter()
         .find(|l| l.kind == "tool_call_completed")
