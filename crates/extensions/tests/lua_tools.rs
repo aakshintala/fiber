@@ -873,10 +873,7 @@ fn an_empty_enabled_list_declares_no_tool() {
         &json!({"replaces": []}),
         &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
     );
-    let session = session_with(
-        &setup,
-        &[r#"extensions."fiber.test/a".tools.enabled=[]"#],
-    );
+    let session = session_with(&setup, &[r#"extensions."fiber.test/a".tools.enabled=[]"#]);
     assert!(declared(&session).is_empty());
     assert_eq!(session.notices(), []);
 }
