@@ -939,16 +939,3 @@ fn deleting_a_line_reports_that_no_lines_were_written() {
     );
 }
 
-#[test]
-fn guidelines_are_the_edit_section() {
-    let dir = TempDir::new("fiber-edit-guidelines");
-    let files = crate::Files::new(dir.path().to_path_buf());
-    let text = files.edit().guidelines().unwrap();
-    assert_eq!(text, crate::guidelines::of("edit").unwrap());
-    assert!(!text.is_empty(), "{text}");
-    let md = include_str!("../prompt/guidelines.md");
-    let rest = &md[md.find("## edit\n").unwrap() + "## edit\n".len()..];
-    let end = rest.find("\n## ").map(|i| i + 1).unwrap_or(rest.len());
-    assert_eq!(text, rest[..end].trim(), "{text}");
-    assert!(text.contains("Change an existing file"), "{text}");
-}

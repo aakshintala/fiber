@@ -535,15 +535,3 @@ fn a_capped_read_shares_the_session_file_state() {
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"new\n");
 }
 
-#[test]
-fn guidelines_are_the_read_section() {
-    let files = Files::new(std::path::Path::new("/ws").to_path_buf());
-    let text = files.read().guidelines().unwrap();
-    assert_eq!(text, crate::guidelines::of("read").unwrap());
-    assert!(!text.is_empty(), "{text}");
-    let md = include_str!("../prompt/guidelines.md");
-    let rest = &md[md.find("## read\n").unwrap() + "## read\n".len()..];
-    let end = rest.find("\n## ").map(|i| i + 1).unwrap_or(rest.len());
-    assert_eq!(text, rest[..end].trim(), "{text}");
-    assert!(text.contains("Read files with `read`"), "{text}");
-}

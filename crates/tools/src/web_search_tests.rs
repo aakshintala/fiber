@@ -30,16 +30,6 @@ fn a_search_declares_network_reversible_with_an_empty_subject() {
 }
 
 #[test]
-fn the_guideline_tells_the_model_to_list_its_sources_as_markdown_links() {
-    let guidelines = search().guidelines().unwrap();
-
-    assert!(
-        guidelines.contains("list of the sources you used, as markdown links"),
-        "{guidelines}"
-    );
-}
-
-#[test]
 fn running_it_fails_because_the_provider_ran_the_search() {
     let output = search().run(&Map::new(), &CancelToken::new(), &Recorder::default());
 

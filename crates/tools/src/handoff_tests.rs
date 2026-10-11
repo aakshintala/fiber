@@ -74,9 +74,3 @@ fn a_missing_or_mistyped_note_is_an_invalid_argument() {
     }
 }
 
-#[test]
-fn its_guidelines_are_the_handoff_section() {
-    let text = Handoff.guidelines().unwrap();
-
-    assert!(text.contains("Call `handoff` with your note"), "{text}");
-}

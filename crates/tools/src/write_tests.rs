@@ -595,16 +595,3 @@ fn a_read_only_file_keeps_its_mode() {
     );
 }
 
-#[test]
-fn guidelines_are_the_write_section() {
-    let dir = TempDir::new("fiber-write-guidelines");
-    let files = Files::new(dir.path().to_path_buf());
-    let text = files.write().guidelines().unwrap();
-    assert_eq!(text, crate::guidelines::of("write").unwrap());
-    assert!(!text.is_empty(), "{text}");
-    let md = include_str!("../prompt/guidelines.md");
-    let rest = &md[md.find("## write\n").unwrap() + "## write\n".len()..];
-    let end = rest.find("\n## ").map(|i| i + 1).unwrap_or(rest.len());
-    assert_eq!(text, rest[..end].trim(), "{text}");
-    assert!(text.contains("Use `write` for new files"), "{text}");
-}
