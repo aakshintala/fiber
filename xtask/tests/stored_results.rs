@@ -163,12 +163,26 @@ fn listing(artifacts: &str) -> String {
     format!("{{\"total_count\":1,\"artifacts\":[{artifacts}]}}")
 }
 
-/// One usable artifact: not expired, from a `main` run in this repository.
+/// One artifact: `expired`, from branch `branch`, in repository `repo` with
+/// head repository `head_repo`.
 fn good(sha: &str) -> String {
+    artifact(1, 700, false, "main", 1, 1, sha)
+}
+
+fn artifact(
+    id: u64,
+    run: u64,
+    expired: bool,
+    branch: &str,
+    repo: u64,
+    head_repo: u64,
+    sha: &str,
+) -> String {
     format!(
-        "{{\"id\":1,\"name\":\"benchmarks-{sha}\",\"expired\":false,\
-         \"workflow_run\":{{\"id\":700,\"repository_id\":1,\"head_repository_id\":1,\
-         \"head_branch\":\"main\",\"head_sha\":\"{sha}\"}}}}"
+        "{{\"id\":{id},\"name\":\"x\",\"expired\":{expired},\
+         \"workflow_run\":{{\"id\":{run},\"repository_id\":{repo},\
+         \"head_repository_id\":{head_repo},\"head_branch\":\"{branch}\",\
+         \"head_sha\":\"{sha}\"}}}}"
     )
 }
 
@@ -234,20 +248,12 @@ fn an_expired_branch_or_fork_artifact_is_skipped() {
     let repo = Repo::new();
     let base = repo.rev("HEAD");
     let first = repo.rev("HEAD~1");
-    let stale = format!(
-        "{},\
-         {{\"id\":2,\"name\":\"x\",\"expired\":false,\
-         \"workflow_run\":{{\"id\":701,\"repository_id\":1,\"head_repository_id\":1,\
-         \"head_branch\":\"feature\",\"head_sha\":\"{base}\"}}}} ,\
-         {{\"id\":3,\"name\":\"x\",\"expired\":false,\
-         \"workflow_run\":{{\"id\":702,\"repository_id\":1,\"head_repository_id\":2,\
-         \"head_branch\":\"main\",\"head_sha\":\"{base}\"}}}}",
-        format!(
-            "{{\"id\":4,\"name\":\"x\",\"expired\":true,\
-             \"workflow_run\":{{\"id\":703,\"repository_id\":1,\"head_repository_id\":1,\
-             \"head_branch\":\"main\",\"head_sha\":\"{base}\"}}}}"
-        )
-    );
+    let stale = [
+        artifact(4, 703, true, "main", 1, 1, &base),
+        artifact(2, 701, false, "feature", 1, 1, &base),
+        artifact(3, 702, false, "main", 1, 2, &base),
+    ]
+    .join(",");
     repo.listing("HEAD", &listing(&stale));
     repo.listing("HEAD~1", &listing(&good(&first)));
     let (code, out) = repo.stored_results(Some(&base), &[]);
