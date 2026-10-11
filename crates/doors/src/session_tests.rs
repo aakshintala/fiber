@@ -37,7 +37,14 @@ use serde_json::{Map, Value};
 
 use super::{Gate, Session};
 
-const DEADLINE: Duration = Duration::from_secs(5);
+#[allow(
+    clippy::duplicate_mod,
+    reason = "each unit-test file includes the shared support itself"
+)]
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+use support::{DEADLINE, Opened, close_within, subscribe_line};
 
 /// How long a held writer stays blocked in `write`: far past the test's own
 /// waits, so when close never releases it the test's deadline names the hang
@@ -156,48 +163,6 @@ impl Drop for Release {
     }
 }
 
-struct Opened {
-    _temp: fakes::TempDir,
-    clock: Arc<FakeClock>,
-    log: Arc<Log>,
-    session: Session,
-    socket: std::path::PathBuf,
-}
-
-fn open() -> Opened {
-    open_with(Vec::new())
-}
-
-fn open_with(tools: Vec<contract::events::ToolInfo>) -> Opened {
-    let temp = fakes::TempDir::new("fd");
-    let home = temp.path().join("h");
-    let sessions = home.join("projects/p/sessions");
-    let id = contract::SessionId(crate::mint("s_"));
-    let dir = sessions.join(&id.0);
-    let clock = FakeClock::new();
-    let timed = Arc::clone(&clock);
-    let timed: Arc<dyn Clock> = timed;
-    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
-    let session = Session::open(&home, &dir, &log, timed, tools, Box::new(io::sink())).unwrap();
-    Opened {
-        _temp: temp,
-        clock,
-        log,
-        session,
-        socket: home.join("run").join(&id.0),
-    }
-}
-
-#[track_caller]
-fn close_within(session: Session, log: Arc<Log>) {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        session.close(log);
-        if let Ok(()) = tx.send(()) {}
-    });
-    Deadline::after(DEADLINE).recv(&rx).expect("close returned");
-}
-
 fn notice() -> Event {
     Event::Notice(Notice {
         code: ErrorCode::IoFailed,
@@ -213,14 +178,6 @@ fn extensions() -> Event {
             version: "1".into(),
         }],
     })
-}
-
-fn subscribe(client: &Client, id: &str, level: &str) {
-    client
-        .send(&format!(
-            r#"{{"id":"{id}","command":"subscribe","args":{{"level":"{level}"}}}}"#
-        ))
-        .unwrap();
 }
 
 fn recv(client: &Client) -> serde_json::Value {
@@ -268,7 +225,7 @@ fn wait_released(gate: &Gate, before: usize) {
 #[test]
 fn many_connections_leave_nothing_held() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     let gate = Arc::clone(&opened.session.gate);
     opened
@@ -276,7 +233,7 @@ fn many_connections_leave_nothing_held() {
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let before = descriptors();
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_live", "full");
+            client.send(&subscribe_line("c_live", "full")).unwrap();
             let _ack = recv(&client);
             {
                 let conns = super::lock(&gate.conns);
@@ -302,7 +259,7 @@ fn many_connections_leave_nothing_held() {
             fakes::within("forty connections", DEADLINE, move || {
                 for i in 0..40 {
                     let client = Client::connect(&socket).unwrap();
-                    subscribe(&client, &format!("c_{i}"), "full");
+                    client.send(&subscribe_line(&format!("c_{i}"), "full")).unwrap();
                     let _ack = recv(&client);
                     drop(client);
                 }
@@ -318,14 +275,14 @@ fn many_connections_leave_nothing_held() {
 fn close_joins_a_reader_that_is_still_connected() {
     reset();
     let _release = Release;
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     let (tx, rx) = mpsc::channel();
     opened
         .session
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "full");
+            client.send(&subscribe_line("c_sub", "full")).unwrap();
             let _ack = recv(&client);
             tx.send(client).unwrap();
             Ok(())
@@ -373,7 +330,7 @@ fn close_joins_a_reader_that_is_still_connected() {
 #[test]
 fn close_returns_while_a_silent_client_stays_open() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     let gate = Arc::clone(&opened.session.gate);
     let (tx, rx) = mpsc::channel();
@@ -417,7 +374,7 @@ fn close_returns_while_a_silent_client_stays_open() {
 #[test]
 fn a_lagging_connection_does_not_hide_the_latest_from_a_subscriber() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     let gate = Arc::clone(&opened.session.gate);
     let log = Arc::clone(&opened.log);
@@ -436,7 +393,7 @@ fn a_lagging_connection_does_not_hide_the_latest_from_a_subscriber() {
             log.append(&status("newest"), None, None).unwrap();
             log.append(&extensions(), None, None).unwrap();
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sum", "summary");
+            client.send(&subscribe_line("c_sum", "summary")).unwrap();
             assert_eq!(recv(&client)["payload"]["command_id"], "c_sum");
             let status_line = recv(&client);
             assert_eq!(status_line["kind"], "session_status");
@@ -719,7 +676,7 @@ fn an_acknowledgement_survives_a_lagged_queue() {
 #[test]
 fn a_blocked_writer_holds_close_until_the_grace_passes() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let clock = Arc::clone(&opened.clock);
     let gate = Arc::clone(&opened.session.gate);
     let watcher = opened.log.watch();
@@ -792,7 +749,7 @@ fn wait_writers_returns_at_once_without_writers_and_at_the_grace() {
 #[test]
 fn a_published_reader_is_shut_down_before_it_is_joined() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
     let (peer, mut stream) = UnixStream::pair().unwrap();
     let peer = Mutex::new(Some(peer));
@@ -830,11 +787,11 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
 #[test]
 fn a_reader_that_reaps_itself_finishes() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
     let (peer, stream) = UnixStream::pair().unwrap();
     let shutdown = stream.try_clone().unwrap();
-    let (read, stop) = support::stoppable::reader(stream).unwrap();
+    let (read, stop) = ::support::stoppable::reader(stream).unwrap();
     let (id_tx, id_rx) = mpsc::channel();
     let (done_tx, done_rx) = mpsc::channel();
     let child = Arc::clone(&gate);
@@ -859,7 +816,7 @@ fn a_reader_that_reaps_itself_finishes() {
 #[test]
 fn a_reading_writer_records_fiber_exited_before_it_ends() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
     let watcher = opened.log.watch();
     opened.log.append(&exited(), None, None).unwrap();
@@ -882,7 +839,7 @@ fn a_reading_writer_records_fiber_exited_before_it_ends() {
 #[test]
 fn a_slow_writer_keeps_durable_lines_in_seq_order() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
     let watcher = opened.log.watch();
     opened.log.append(&notice(), None, None).unwrap();
@@ -929,7 +886,7 @@ fn a_slow_writer_keeps_durable_lines_in_seq_order() {
 #[test]
 fn accept_waits_after_an_error_until_a_connection_ends() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
     let waiter = Arc::clone(&gate);
     let (tx, rx) = mpsc::channel();
@@ -1094,12 +1051,12 @@ fn resume_replaces_a_stale_socket_file() {
 #[test]
 fn open_refuses_a_socket_a_live_session_holds() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     // The same id in another project: its own new directory, the shared
     // socket the live session owns.
     let id = contract::SessionId(socket.file_name().unwrap().to_string_lossy().into_owned());
-    let home = opened._temp.path().join("h");
+    let home = opened.home.clone();
     let sessions = home.join("projects/q/sessions");
     let clock = FakeClock::new();
     let timed = Arc::clone(&clock);
@@ -1137,7 +1094,7 @@ fn assert_connect_denied(socket: &std::path::Path) {
 #[test]
 fn open_leaves_a_live_socket_it_cannot_connect_to() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     // A live listener whose mode hides it: connect fails, but a session is
     // still behind the path, so `open` must fail and leave the path alone.
@@ -1146,7 +1103,7 @@ fn open_leaves_a_live_socket_it_cannot_connect_to() {
     // The same id in another project: its own new directory, the hidden
     // socket the live session owns.
     let id = contract::SessionId(socket.file_name().unwrap().to_string_lossy().into_owned());
-    let home = opened._temp.path().join("h");
+    let home = opened.home.clone();
     let sessions = home.join("projects/q/sessions");
     let clock = FakeClock::new();
     let timed = Arc::clone(&clock);
@@ -1181,13 +1138,13 @@ fn open_leaves_a_live_socket_it_cannot_connect_to() {
 #[test]
 fn open_leaves_a_symlink_to_a_live_socket_it_cannot_connect_to() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let live = opened.socket.clone();
     fs::set_permissions(&live, fs::Permissions::from_mode(0o000)).unwrap();
     assert_connect_denied(&live);
     // Another session's path is a symlink to the hidden live socket: it is
     // no regular file, so nothing proves it stale.
-    let home = opened._temp.path().join("h");
+    let home = opened.home.clone();
     let id = contract::SessionId(crate::mint("s_"));
     let link = home.join("run").join(&id.0);
     std::os::unix::fs::symlink(&live, &link).unwrap();
@@ -1260,7 +1217,7 @@ fn close_after_resume_keeps_a_session_that_has_turns() {
 
 #[test]
 fn a_clock_move_delivers_cancelled_and_nothing_before() {
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let clock = Arc::clone(&opened.clock);
     let (entered, entered_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -1362,7 +1319,7 @@ impl Tool for LateShell {
 
 #[test]
 fn a_shell_registered_after_close_is_cancelled() {
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let clock = Arc::clone(&opened.clock);
     let gate = Arc::clone(&opened.session.gate);
     let socket = opened.socket.clone();
@@ -1377,7 +1334,7 @@ fn a_shell_registered_after_close_is_cancelled() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_late", "full");
+            client.send(&subscribe_line("c_late", "full")).unwrap();
             let _ack = recv(&client);
             client_tx.send(client).unwrap();
             Ok(())
@@ -1421,7 +1378,7 @@ fn a_shell_registered_after_close_is_cancelled() {
 #[test]
 fn run_sends_the_jobs_ends_to_the_loops_inbox() {
     use contract::jobs::{Jobs as _, Opening, Stop};
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let dir = fakes::TempDir::new("fd-jobs");
     let jobs = fakes::jobs::FakeJobs::new(dir.path());
     opened.session.jobs(jobs.clone());
@@ -1476,7 +1433,7 @@ impl contract::hook::Hooks for InboxHooks {
 
 #[test]
 fn run_hands_the_hooks_the_loops_inbox() {
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let (given_tx, given_rx) = mpsc::channel();
     opened
         .session
@@ -1605,7 +1562,7 @@ fn no_check(_: &mpsc::Receiver<Delivery>, _: &Session) -> Result<(), &'static st
 fn running_shell(
     check: fn(&mpsc::Receiver<Delivery>, &Session) -> Result<(), &'static str>,
 ) -> Running {
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let (entered_tx, entered_rx) = mpsc::channel();
     let (cancelled_tx, cancelled) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
@@ -1621,7 +1578,7 @@ fn running_shell(
     session
         .run(Vec::new(), Arc::new(|| false), |inbox| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_full", "full");
+            client.send(&subscribe_line("c_full", "full")).unwrap();
             let _ack = recv(&client);
             client
                 .send(r#"{"id":"c_shell","command":"shell","args":{"command":"sleep 60"}}"#)
@@ -1658,7 +1615,7 @@ fn the_stopper_cancels_a_running_driver_shell_and_wakes_the_loop() {
 
 #[test]
 fn the_stopper_after_the_inbox_is_gone_still_cancels_later_shells() {
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     (opened.session.stopper())();
     assert!(super::lock(&opened.session.gate.shells).stopped);
     close_within(opened.session, opened.log);
@@ -1666,7 +1623,7 @@ fn the_stopper_after_the_inbox_is_gone_still_cancels_later_shells() {
 
 #[test]
 fn abandon_unregisters_a_driver_shell_that_never_ran() {
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     opened.session.shell(Arc::new(HeldShell {
         entered: Mutex::new(None),
         cancelled: Mutex::new(None),
@@ -1757,7 +1714,7 @@ fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
 
 #[test]
 fn a_driver_shell_started_after_the_stopper_is_cancelled_and_waited_for() {
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let (entered_tx, entered) = mpsc::channel();
     let (cancelled_tx, cancelled) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
@@ -1774,7 +1731,7 @@ fn a_driver_shell_started_after_the_stopper_is_cancelled_and_waited_for() {
         .run(Vec::new(), Arc::new(|| false), |_| {
             (opened.session.stopper())();
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_full", "full");
+            client.send(&subscribe_line("c_full", "full")).unwrap();
             let _ack = recv(&client);
             client
                 .send(r#"{"id":"c_shell","command":"shell","args":{"command":"sleep 60"}}"#)
@@ -1799,7 +1756,7 @@ fn a_driver_shell_started_after_the_stopper_is_cancelled_and_waited_for() {
 
 #[test]
 fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let (entered_tx, entered) = mpsc::channel();
     let (cancelled_tx, cancelled) = mpsc::channel();
     let (release, release_rx) = mpsc::channel();
@@ -1827,7 +1784,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
         .session
         .run(Vec::new(), Arc::new(|| false), |_| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_full", "full");
+            client.send(&subscribe_line("c_full", "full")).unwrap();
             let _ack = recv(&client);
             connected = Some(client);
             Ok(())
@@ -1871,7 +1828,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
 
 #[test]
 fn after_quiesce_a_client_leaving_writes_no_clients_line() {
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     let gate = Arc::clone(&opened.session.gate);
     // The watcher blocks without a deadline, so its lines cross a channel
@@ -1891,7 +1848,7 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
         .session
         .run(Vec::new(), Arc::new(|| false), |_| {
             let client = Client::connect(&first).unwrap();
-            subscribe(&client, "c_full", "full");
+            client.send(&subscribe_line("c_full", "full")).unwrap();
             let _ack = recv(&client);
             connected = Some(client);
             Ok(())
@@ -1917,7 +1874,7 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
     wait_idle(&gate);
     // A client attaching after quiesce writes none either.
     let late = Client::connect(&socket).unwrap();
-    subscribe(&late, "c_late", "full");
+    late.send(&subscribe_line("c_late", "full")).unwrap();
     let _ack = recv(&late);
     opened.log.append(&notice(), None, None).unwrap();
     let _lines = fakes::within("the notice", DEADLINE, move || {
@@ -1938,7 +1895,7 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
 #[test]
 fn serve_with_a_prompt_delivers_exactly_that_prompt_and_no_close() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let ran = Arc::new(AtomicBool::new(false));
     let seen = Arc::clone(&ran);
     opened
@@ -1973,7 +1930,7 @@ fn serve_with_a_prompt_delivers_exactly_that_prompt_and_no_close() {
 #[test]
 fn serve_without_a_prompt_delivers_nothing_until_a_client_sends() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     opened
         .session
         .serve(None, Arc::new(|| false), |inbox| {
@@ -2046,7 +2003,7 @@ fn busy() -> contract::inbox::Rejection {
 #[test]
 fn a_served_session_appends_each_accepted_prompt_in_order() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     let file = history_file(&opened);
     let session_id = opened.session.gate.session_id.0.clone();
@@ -2056,7 +2013,7 @@ fn a_served_session_appends_each_accepted_prompt_in_order() {
         .session
         .serve(None, Arc::new(|| false), move |inbox| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "summary");
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
             let _ack = answer_of(&client, "c_sub");
             send_text(&client, "c_1", "prompt", "one");
             (next_prompt(&inbox).0)(Ok(None));
@@ -2090,7 +2047,7 @@ fn a_served_session_appends_each_accepted_prompt_in_order() {
 #[test]
 fn a_served_session_appends_no_rejected_dropped_steered_or_own_prompt() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     let file = history_file(&opened);
     opened
@@ -2098,7 +2055,7 @@ fn a_served_session_appends_no_rejected_dropped_steered_or_own_prompt() {
         .serve(Some("own".into()), Arc::new(|| false), |inbox| {
             (next_prompt(&inbox).0)(Ok(None));
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "summary");
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
             let _ack = answer_of(&client, "c_sub");
             send_text(&client, "c_busy", "prompt", "rejected");
             (next_prompt(&inbox).0)(Err(busy()));
@@ -2124,7 +2081,7 @@ fn a_served_session_appends_no_rejected_dropped_steered_or_own_prompt() {
 #[test]
 fn an_ask_session_appends_no_prompt_even_one_a_client_sends() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     let file = history_file(&opened);
     opened
@@ -2136,7 +2093,7 @@ fn an_ask_session_appends_no_prompt_even_one_a_client_sends() {
             };
             (close.0)(Ok(None));
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "summary");
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
             let _ack = answer_of(&client, "c_sub");
             send_text(&client, "c_1", "prompt", "attached");
             (next_prompt(&inbox).0)(Ok(None));
@@ -2167,7 +2124,7 @@ fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
     // snapshot read and the injection, so B is queued live before A is
     // injected and the client reads B then A.
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     opened
         .log
         .append(&ui_status("fiber.test/a", "A"), None, None)
@@ -2189,7 +2146,7 @@ fn a_full_subscriber_sees_the_kept_ui_line_before_a_later_one() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |_| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_full", "full");
+            client.send(&subscribe_line("c_full", "full")).unwrap();
             // The reader parks at the probe; it holds no test assertion yet.
             Deadline::after(DEADLINE)
                 .recv(&parked)
@@ -2225,7 +2182,7 @@ fn a_full_subscribe_is_counted_before_its_acknowledgement() {
     // A client that reads its acknowledgement is counted in `clients`, so a
     // prompt sent once the acknowledgement arrives finds it connected.
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
     // Held weakly: the gate keeps the probe, and `close` must drop the log's
     // last handle to end the writer.
@@ -2247,7 +2204,7 @@ fn a_full_subscribe_is_counted_before_its_acknowledgement() {
         .session
         .run(Vec::new(), Arc::new(|| false), move |_| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_full", "full");
+            client.send(&subscribe_line("c_full", "full")).unwrap();
             let counted = Deadline::after(DEADLINE)
                 .recv(&count)
                 .expect("the subscribe was acknowledged");
@@ -2272,66 +2229,15 @@ fn send_bare(client: &Client, id: &str, command: &str) {
 }
 
 #[test]
-fn a_repeated_prompt_id_is_rejected_on_another_connection_before_dispatch() {
-    reset();
-    let opened = open();
-    let socket = opened.socket.clone();
-    opened
-        .session
-        .serve(None, Arc::new(|| false), move |inbox| {
-            let first = Client::connect(&socket).unwrap();
-            subscribe(&first, "c_sub", "summary");
-            let _ack = answer_of(&first, "c_sub");
-            send_text(&first, "c_1", "prompt", "one");
-            (next_prompt(&inbox).0)(Ok(None));
-            assert_eq!(answer_of(&first, "c_1")["kind"], "command_accepted");
-            drop(first);
-            let second = Client::connect(&socket).unwrap();
-            subscribe(&second, "c_sub2", "summary");
-            let _ack = answer_of(&second, "c_sub2");
-            send_text(&second, "c_1", "prompt", "again");
-            let repeat = answer_of(&second, "c_1");
-            assert_eq!(repeat["kind"], "command_rejected");
-            assert_eq!(repeat["payload"]["code"], "duplicate_command");
-            assert!(inbox.try_recv().is_err(), "the repeat was not dispatched");
-            Ok(())
-        })
-        .unwrap();
-    close_within(opened.session, opened.log);
-}
-
-#[test]
-fn a_repeated_answered_command_id_is_rejected() {
-    reset();
-    let opened = open();
-    let socket = opened.socket.clone();
-    opened
-        .session
-        .serve(None, Arc::new(|| false), move |_inbox| {
-            let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "summary");
-            let _ack = answer_of(&client, "c_sub");
-            send_bare(&client, "c_t", "tools");
-            assert_eq!(answer_of(&client, "c_t")["kind"], "command_accepted");
-            send_bare(&client, "c_t", "tools");
-            let repeat = answer_of(&client, "c_t");
-            assert_eq!(repeat["payload"]["code"], "duplicate_command");
-            Ok(())
-        })
-        .unwrap();
-    close_within(opened.session, opened.log);
-}
-
-#[test]
 fn a_rejected_command_id_may_be_sent_again() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     opened
         .session
         .serve(None, Arc::new(|| false), move |inbox| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "summary");
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
             let _ack = answer_of(&client, "c_sub");
             send_text(&client, "c_r", "prompt", "one");
             (next_prompt(&inbox).0)(Err(busy()));
@@ -2348,15 +2254,15 @@ fn a_rejected_command_id_may_be_sent_again() {
 #[test]
 fn a_repeated_subscribe_id_is_a_duplicate_not_an_invalid_argument() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     opened
         .session
         .serve(None, Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "summary");
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
             let _ack = answer_of(&client, "c_sub");
-            subscribe(&client, "c_sub", "summary");
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
             let repeat = answer_of(&client, "c_sub");
             assert_eq!(repeat["payload"]["code"], "duplicate_command");
             Ok(())
@@ -2368,13 +2274,13 @@ fn a_repeated_subscribe_id_is_a_duplicate_not_an_invalid_argument() {
 #[test]
 fn a_prompt_id_sent_again_while_the_first_is_unanswered_is_not_applied_twice() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     opened
         .session
         .serve(None, Arc::new(|| false), move |inbox| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "summary");
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
             let _ack = answer_of(&client, "c_sub");
             send_text(&client, "c_1", "prompt", "one");
             let held = next_prompt(&inbox);
@@ -2393,13 +2299,13 @@ fn a_prompt_id_sent_again_while_the_first_is_unanswered_is_not_applied_twice() {
 #[test]
 fn a_malformed_line_does_not_free_an_accepted_id() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let socket = opened.socket.clone();
     opened
         .session
         .serve(None, Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "summary");
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
             let _ack = answer_of(&client, "c_sub");
             send_bare(&client, "c_t", "tools");
             assert_eq!(answer_of(&client, "c_t")["kind"], "command_accepted");
@@ -2497,14 +2403,14 @@ fn named(entries: &[(&str, u64)]) -> Vec<(String, u64)> {
 #[test]
 fn the_declarer_changes_the_tools_answer() {
     reset();
-    let opened = open_with(vec![tool_info("edit", 1), tool_info("write", 2)]);
+    let opened = Opened::open(vec![tool_info("edit", 1), tool_info("write", 2)]);
     let socket = opened.socket.clone();
     let declare = opened.session.declarer();
     opened
         .session
         .serve(None, Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "summary");
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
             let _ack = answer_of(&client, "c_sub");
             declare("web_search", Some(tool_info("web_search", 52)));
             assert_eq!(
@@ -2556,7 +2462,7 @@ fn the_declarer_changes_the_tools_answer() {
 #[test]
 fn the_declarer_does_nothing_once_the_session_closes() {
     reset();
-    let opened = open_with(vec![tool_info("edit", 1)]);
+    let opened = Opened::open(vec![tool_info("edit", 1)]);
     let declare = opened.session.declarer();
     let gate = Arc::clone(&opened.session.gate);
     close_within(opened.session, opened.log);
@@ -2576,7 +2482,7 @@ fn the_declarer_does_nothing_once_the_session_closes() {
 
 #[test]
 fn the_inbox_wake_wakes_the_loop_and_never_keeps_the_inbox_open() {
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let wake = opened.session.inbox_wake();
     let mut kept = None;
     opened
@@ -2739,7 +2645,7 @@ fn print_ends_at_rewound_while_the_log_is_held() {
 #[test]
 fn ask_returns_the_first_prompts_rejection_as_its_failure() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let failure = opened
         .session
         .ask("asked".into(), Arc::new(|| false), |inbox| {
@@ -2767,7 +2673,7 @@ fn ask_returns_the_first_prompts_rejection_as_its_failure() {
 #[test]
 fn ask_whose_first_prompt_is_accepted_returns_what_run_returned() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     opened
         .session
         .ask("asked".into(), Arc::new(|| false), |inbox| {
@@ -2782,7 +2688,7 @@ fn ask_whose_first_prompt_is_accepted_returns_what_run_returned() {
     close_within(opened.session, opened.log);
 
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let failure = opened
         .session
         .ask("asked".into(), Arc::new(|| false), |inbox| {
@@ -2831,7 +2737,7 @@ fn assert_lock_released(dir: &std::path::Path) {
 #[test]
 fn close_returns_after_the_socket_path_was_removed() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     keep_dir(&opened.log);
     opened
         .session
@@ -2846,7 +2752,7 @@ fn close_returns_after_the_socket_path_was_removed() {
 #[test]
 fn close_returns_when_the_socket_path_was_rebound() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     keep_dir(&opened.log);
     opened
         .session
@@ -2864,7 +2770,7 @@ fn close_returns_when_the_socket_path_was_rebound() {
 #[test]
 fn a_reader_published_after_stop_is_rejected_not_leaked() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
     // The acceptor passed its stopped check before close began.
     assert!(!gate.stopped());
@@ -2887,7 +2793,7 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
     // publication is rejected, its stream shut, its thread ended.
     let (_peer, stream) = UnixStream::pair().unwrap();
     let shutdown = stream.try_clone().unwrap();
-    let (_read, stop) = support::stoppable::reader(stream).unwrap();
+    let (_read, stop) = ::support::stoppable::reader(stream).unwrap();
     let shut = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&shut);
     let both = crate::client::ender(shutdown, stop);
@@ -2928,7 +2834,7 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
 #[test]
 fn close_connects_nowhere_through_the_socket_path() {
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     keep_dir(&opened.log);
     opened
         .session
@@ -2958,7 +2864,7 @@ fn close_with_nothing_written_and_the_log_held_returns() {
     // (the jobs' emit) still holds the log: the printer's watcher never sees
     // the log dropped, so `close` must still return (#830).
     reset();
-    let opened = open();
+    let opened = Opened::open(Vec::new());
     let _held = Arc::clone(&opened.log);
     close_within(opened.session, opened.log);
 }

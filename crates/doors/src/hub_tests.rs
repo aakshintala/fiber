@@ -20,6 +20,10 @@ use std::time::Duration;
 use super::*;
 use fakes::Deadline;
 
+#[allow(
+    clippy::duplicate_mod,
+    reason = "each unit-test file includes the shared support itself"
+)]
 #[path = "../tests/support/mod.rs"]
 mod support;
 

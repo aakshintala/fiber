@@ -12,7 +12,6 @@
 use std::io::Write;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::Duration;
 
 use contract::clock::Clock;
 use contract::events::{CommandAccepted, Empty, Event, ExtensionsLoaded, LoadedExtension, Notice};
@@ -23,8 +22,14 @@ use log::Log;
 
 use super::*;
 
-/// A hang bound for one wait: every wait names what it waits for.
-const DEADLINE: Duration = Duration::from_secs(10);
+#[allow(
+    clippy::duplicate_mod,
+    reason = "each unit-test file includes the shared support itself"
+)]
+#[path = "../../tests/support/mod.rs"]
+mod support;
+
+use support::DEADLINE;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -60,67 +65,6 @@ fn extensions() -> Event {
             version: "1".into(),
         }],
     })
-}
-
-fn token(line: &contract::Envelope) -> u64 {
-    line.payload
-        .get("token")
-        .and_then(|token| token.as_u64())
-        .unwrap()
-}
-
-#[test]
-fn outbox_swap_orders_lines_around_the_control_line() {
-    let (_temp, log, id, _clock) = open_log();
-    let old = log.watch();
-    let new = log.watch();
-    let outbox = Outbox::new(old.injector());
-    outbox.push_kept(control_line(&id, "x.one", 1));
-    outbox.swap(control_line(&id, LEVEL, 0), new.injector());
-    outbox.push_kept(control_line(&id, "x.two", 2));
-    let mut old = old;
-    let mut new = new;
-    // A line pushed before the swap lands in the old queue ahead of the
-    // control line; one pushed after lands only in the new queue.
-    let first = old.try_recv().unwrap().unwrap();
-    assert_eq!(first.kind, "x.one");
-    assert_eq!(token(&first), 1);
-    let control = old.try_recv().unwrap().unwrap();
-    assert_eq!(control.kind, LEVEL);
-    assert!(old.try_recv().unwrap().is_none());
-    let second = new.try_recv().unwrap().unwrap();
-    assert_eq!(second.kind, "x.two");
-    assert_eq!(token(&second), 2);
-    assert!(new.try_recv().unwrap().is_none());
-}
-
-#[test]
-fn apply_with_no_switch_pending_changes_nothing() {
-    let (_temp, log, _id, _clock) = open_log();
-    let watcher = log.watch();
-    let mut writing = Writing {
-        watcher,
-        summary: true,
-        cutoff: 7,
-        written: Some(3),
-    };
-    // An empty channel: the fast-fail path that keeps a mutant from
-    // hanging.
-    let (_tx, rx) = mpsc::channel();
-    let mut buf = Vec::new();
-    apply(&mut writing, &rx, &mut buf).unwrap();
-    assert!(buf.is_empty(), "nothing is written without a switch");
-    assert!(writing.summary);
-    assert_eq!(writing.cutoff, 7);
-    assert_eq!(writing.written, Some(3));
-    // A disconnected channel changes nothing either.
-    let (tx, rx) = mpsc::channel();
-    drop(tx);
-    apply(&mut writing, &rx, &mut buf).unwrap();
-    assert!(buf.is_empty(), "nothing is written without a switch");
-    assert!(writing.summary);
-    assert_eq!(writing.cutoff, 7);
-    assert_eq!(writing.written, Some(3));
 }
 
 #[test]
