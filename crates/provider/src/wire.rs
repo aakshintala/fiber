@@ -30,11 +30,9 @@ pub(crate) fn args_value(text: String) -> Value {
 pub(crate) fn object(value: Value) -> Map<String, Value> {
     match value {
         Value::Object(map) => map,
-        Value::Null
-        | Value::Bool(_)
-        | Value::Number(_)
-        | Value::String(_)
-        | Value::Array(_) => Map::new(),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            Map::new()
+        }
     }
 }
 

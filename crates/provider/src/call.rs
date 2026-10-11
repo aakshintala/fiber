@@ -18,8 +18,11 @@ use crate::{Endpoint, Error};
     clippy::result_large_err,
     reason = "the decode carries its partial alongside the error for the call's usage"
 )]
-pub(crate) type Decode =
-    fn(&mut dyn BufRead, CacheLifetime, &mut dyn FnMut(Delta)) -> Result<Reply, (Error, Option<CallUsage>)>;
+pub(crate) type Decode = fn(
+    &mut dyn BufRead,
+    CacheLifetime,
+    &mut dyn FnMut(Delta),
+) -> Result<Reply, (Error, Option<CallUsage>)>;
 
 /// One model call, ready to send.
 pub struct Call {

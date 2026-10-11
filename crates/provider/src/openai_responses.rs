@@ -59,9 +59,10 @@ impl Responses {
         let headers = crate::call::base_headers(
             endpoint,
             &[],
-            endpoint.key.as_ref().map(|key| {
-                ("authorization", format!("Bearer {}", key.expose()))
-            }),
+            endpoint
+                .key
+                .as_ref()
+                .map(|key| ("authorization", format!("Bearer {}", key.expose()))),
             self.cache_key_header.as_deref(),
             &request.cache_key,
         );
