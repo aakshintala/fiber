@@ -406,7 +406,7 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
         .collect();
     let done_ids: Vec<Option<contract::ActionId>> =
         done.iter().map(|line| line.action_id.clone()).collect();
-    prop_assert_eq!(done_ids, requested_ids.clone());
+    prop_assert_eq!(&done_ids, &requested_ids);
 
     for (index, kind) in plan.iter().enumerate() {
         let id = requested[index].action_id.clone();
