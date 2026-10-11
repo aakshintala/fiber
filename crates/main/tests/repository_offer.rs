@@ -302,7 +302,7 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
         .filter_map(|tool| tool["name"].as_str())
         .collect();
     assert!(
-        tools.iter().any(|name| *name == "mcp__db__echo"),
+        tools.contains(&"mcp__db__echo"),
         "{tools:?}"
     );
     // The complete, ordered durable kinds: the offer is raised and resolved

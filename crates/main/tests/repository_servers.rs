@@ -584,10 +584,10 @@ fn spawn_session(setup: &Setup, id: &str, extra: &[&str]) -> (HubProc, mpsc::Rec
 /// line is written and the socket is listening.
 fn started(deadline: Deadline, lines: &mpsc::Receiver<Value>) {
     while deadline.left() > std::time::Duration::ZERO {
-        match Deadline::after(std::time::Duration::from_secs(1)).recv(lines) {
-            Ok(line) if line["kind"] == "extensions_loaded" => return,
-            Ok(_) => {}
-            Err(_) => {}
+        if let Ok(line) = Deadline::after(std::time::Duration::from_secs(1)).recv(lines)
+            && line["kind"] == "extensions_loaded"
+        {
+            return;
         }
     }
     panic!("no extensions_loaded within the deadline");
@@ -660,23 +660,20 @@ fn a_file_created_after_gathering_is_refused_on_a_lazy_start() {
     prompt(&client);
     let mut lines = Vec::new();
     while setup.deadline.left() > std::time::Duration::ZERO {
-        match Deadline::after(std::time::Duration::from_secs(1)).recv(&stdout) {
-            Ok(line) => {
-                if line["kind"] == "repository_code_offered" {
-                    let request = line["payload"]["request_id"].as_str().unwrap().to_owned();
-                    client
-                        .send(&format!(
-                            "{{\"id\":\"c_skip\",\"command\":\"reply\",\"args\":{{\"request_id\":\"{request}\",\"decisions\":[\"skip\"]}}}}"
-                        ))
-                        .unwrap();
-                }
-                let done = line["kind"] == "turn_completed";
-                lines.push(line);
-                if done {
-                    break;
-                }
+        if let Ok(line) = Deadline::after(std::time::Duration::from_secs(1)).recv(&stdout) {
+            if line["kind"] == "repository_code_offered" {
+                let request = line["payload"]["request_id"].as_str().unwrap().to_owned();
+                client
+                    .send(&format!(
+                        "{{\"id\":\"c_skip\",\"command\":\"reply\",\"args\":{{\"request_id\":\"{request}\",\"decisions\":[\"skip\"]}}}}"
+                    ))
+                    .unwrap();
             }
-            Err(_) => {}
+            let done = line["kind"] == "turn_completed";
+            lines.push(line);
+            if done {
+                break;
+            }
         }
     }
     assert!(
