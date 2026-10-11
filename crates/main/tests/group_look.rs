@@ -28,7 +28,7 @@ use support::{Setup, TRUECOLOUR, write_json};
 const ATTENTION: Colour = Colour::Rgb(255, 159, 67);
 const INFO: Colour = Colour::Rgb(125, 211, 252);
 const SUCCESS: Colour = Colour::Rgb(110, 170, 254);
-const ADDED: Colour = Colour::Rgb(110, 170, 254);
+const ADDED: Colour = Colour::Rgb(115, 201, 145);
 const REMOVED: Colour = Colour::Rgb(255, 93, 115);
 /// A turn card's background in truecolour.
 const TURN: Colour = Colour::Rgb(16, 16, 23);
