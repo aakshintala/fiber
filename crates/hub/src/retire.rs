@@ -45,7 +45,7 @@ use contract::{CommandId, ErrorCode, SessionId};
 use serde_json::{Map, Value};
 
 use crate::connection::{Hub, lock};
-use crate::relay::{Kept, Relay, Relays, acknowledgement, relay_slot};
+use crate::relay::{Ack, Kept, Relay, Relays, relay_slot};
 
 /// Why a relay no longer takes writes: it saw the exited window, or a
 /// write to it failed.
@@ -246,14 +246,14 @@ pub(crate) fn refuse_not_found(
 /// recorded and in order.
 pub(crate) fn forward(
     buf: &[u8],
+    ack: Option<&Ack>,
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Relays>>,
     hub: &Hub,
     order: &Arc<AckOrder>,
     epoch: u64,
 ) -> std::io::Result<()> {
-    let ordered =
-        acknowledgement(buf).and_then(|(id, _)| order.session_for(&id).map(|at| (at, id)));
+    let ordered = ack.and_then(|ack| order.session_for(&ack.id).map(|at| (at, ack.id.clone())));
     if let Some((at, id)) = &ordered {
         let retiring = lock(relays)
             .entries

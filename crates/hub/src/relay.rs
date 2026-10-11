@@ -45,9 +45,11 @@ mod relays;
 use crate::connection::{Hub, lock, reject};
 use crate::retire::{AckOrder, Retire};
 
-pub(crate) use ack::acknowledgement;
+#[cfg(test)]
+pub(crate) use ack::ack_parses;
 #[cfg(test)]
 pub(crate) use ack::acknowledges;
+pub(crate) use ack::{Ack, acknowledgement};
 use ack::{Settled, kept_has, muted, settle};
 pub(crate) use relays::Relays;
 
@@ -605,7 +607,8 @@ fn relay(
                 break;
             }
             Ok(_) => {
-                let replayed_ack = muted(&buf, &replayed);
+                let ack = acknowledgement(&buf);
+                let replayed_ack = muted(ack.as_ref(), &replayed);
                 #[cfg(test)]
                 {
                     if let Some(after_filter) = lock(&hub.after_replay_filter).take() {
@@ -619,9 +622,9 @@ fn relay(
                 // keeps was passed on to the resumed session, which
                 // answers it there: it is not forwarded again. Read before
                 // `settle` removes the acknowledgement it consumes.
-                let answered = acknowledgement(&buf).map(|(id, _)| id);
+                let answered = ack.as_ref().map(|ack| ack.id.clone());
                 let known = answered.as_ref().is_some_and(|id| kept_has(&kept, id));
-                match settle(&buf, &kept, hub, session, exiting) {
+                match settle(ack.as_ref(), &kept, hub, session, exiting) {
                     Some(Settled::Reroute(id, line)) => {
                         exiting = true;
                         if crate::retire::hand_over(&order, relays, session, epoch, &id, &line) {
@@ -670,7 +673,9 @@ fn relay(
                         }
                     }
                 }
-                if crate::retire::forward(&buf, writer, relays, hub, &order, epoch).is_err() {
+                if crate::retire::forward(&buf, ack.as_ref(), writer, relays, hub, &order, epoch)
+                    .is_err()
+                {
                     break;
                 }
                 // An exiting relay passes its queue on once the
