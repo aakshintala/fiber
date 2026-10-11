@@ -394,31 +394,11 @@ fn await_partial_needs_every_counted_partial() {
     );
 }
 
-#[test]
-fn waits_started_before_the_event_return_true_once_it_happens() {
+/// Sends a GET, reads the head and the 7-byte prefix of a stall, and returns
+/// both halves of the connection still open: the client is blocked mid-body.
+fn stalled_client(addr: SocketAddr) -> (TcpStream, std::io::BufReader<TcpStream>) {
     use std::io::BufRead;
-    // Longer than the receive bound below, so a wait that never ends fails
-    // at the receive, not by returning false.
-    let event_within = Duration::from_secs(30);
-    let server =
-        Arc::new(ProviderServer::start([Response::stall(200, b"partial".to_vec(), 100)]).unwrap());
-    // Both waits start before the client connects.
-    let (partial_tx, partial_rx) = mpsc::channel();
-    let waiting = Arc::clone(&server);
-    thread::spawn(move || {
-        partial_tx
-            .send(waiting.await_partial(1, event_within))
-            .unwrap();
-    });
-    let (closed_tx, closed_rx) = mpsc::channel();
-    let waiting = Arc::clone(&server);
-    thread::spawn(move || {
-        closed_tx
-            .send(waiting.await_closed(1, event_within))
-            .unwrap();
-    });
-
-    let mut stream = TcpStream::connect(server.addr).unwrap();
+    let mut stream = TcpStream::connect(addr).unwrap();
     stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
     stream
         .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
@@ -437,18 +417,59 @@ fn waits_started_before_the_event_return_true_once_it_happens() {
     reader
         .read_exact(&mut prefix)
         .unwrap_or_else(|e| panic!("the stall's body prefix arrives within {READ_WITHIN:?}: {e}"));
+    (stream, reader)
+}
 
-    let partial = Deadline::after(READ_WITHIN)
-        .recv(&partial_rx)
-        .unwrap_or_else(|_| panic!("await_partial returns within {READ_WITHIN:?}"));
-    assert!(partial, "the wait returns true once the partial arrives");
+/// Runs one wait on its own thread and receives its answer within
+/// `READ_WITHIN`, so a wait that never ends fails the test instead of
+/// hanging it.
+fn answered_within(
+    server: &Arc<ProviderServer>,
+    wait: impl FnOnce(&ProviderServer) -> bool + Send + 'static,
+) -> bool {
+    let (tx, rx) = mpsc::channel();
+    let server = Arc::clone(server);
+    thread::spawn(move || tx.send(wait(&server)).unwrap());
+    Deadline::after(READ_WITHIN)
+        .recv(&rx)
+        .unwrap_or_else(|_| panic!("the wait returns within {READ_WITHIN:?}"))
+}
 
-    drop(reader);
-    drop(stream);
-    let closed = Deadline::after(READ_WITHIN)
-        .recv(&closed_rx)
-        .unwrap_or_else(|_| panic!("await_closed returns within {READ_WITHIN:?}"));
-    assert!(closed, "the wait returns true once the client closes");
+#[test]
+fn waits_count_stalls_already_past_their_event() {
+    // Every wait starts after its events have happened, so each answer is
+    // decided by its count and comparison alone, never by thread timing.
+    let event_within = Duration::from_secs(30);
+    let server = Arc::new(
+        ProviderServer::start([
+            Response::stall(200, b"partial".to_vec(), 100),
+            Response::stall(200, b"partial".to_vec(), 100),
+        ])
+        .unwrap(),
+    );
+
+    let (first_stream, first_reader) = stalled_client(server.addr);
+    assert!(server.await_partial(1, READ_WITHIN), "one partial arrived");
+    assert!(answered_within(&server, move |s| s.await_partial(1, event_within)));
+
+    let (second_stream, second_reader) = stalled_client(server.addr);
+    assert!(server.await_partial(2, READ_WITHIN), "two partials arrived");
+    assert!(answered_within(&server, move |s| s.await_partial(1, event_within)));
+    assert!(answered_within(&server, move |s| s.await_partial(2, event_within)));
+    assert!(
+        !server.await_partial(3, Duration::from_millis(50)),
+        "no third partial is coming"
+    );
+
+    drop(first_reader);
+    drop(first_stream);
+    assert!(server.await_closed(1, READ_WITHIN), "one client closed");
+    assert!(answered_within(&server, move |s| s.await_closed(1, event_within)));
+
+    drop(second_reader);
+    drop(second_stream);
+    assert!(server.await_closed(2, READ_WITHIN), "both clients closed");
+    assert!(answered_within(&server, move |s| s.await_closed(2, event_within)));
 }
 
 /// A thread that finishes only once the returned sender drops.
