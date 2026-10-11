@@ -167,7 +167,7 @@ by content.
 While a call runs, it may stream output and progress as `tool_call_delta`,
 which is ephemeral. Fiber paces updates to at most one every
 `max(100 ms, encoded bytes ÷ 100 KiB/s)`; the first change after idle goes out
-immediately, held changes collapse to the latest, and completion forces a final
+immediately, held changes collapse to the latest, held output is capped at its newest 64 KiB, and completion forces a final
 flush.
 
 ## Cancellation

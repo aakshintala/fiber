@@ -22,7 +22,13 @@ const MIN_INTERVAL: Duration = Duration::from_millis(100);
 /// (`docs/tools.md`, "Progress").
 const BYTES_PER_SECOND: u64 = 102_400;
 
+/// The most delta text a holder keeps: 64 KiB (`docs/events.md`,
+/// `tool_call_delta`). Past it the oldest bytes are dropped, so only the
+/// result and its artifact hold the whole output.
+const HELD_MAX: usize = 65_536;
+
 /// What one running call holds: its changes since the last written delta.
+/// Its text keeps at most the newest `HELD_MAX` bytes.
 #[derive(Debug, Default)]
 struct Held {
     /// Output added since the last delta, in arrival order.
@@ -34,7 +40,8 @@ struct Held {
 /// Paces one running call's `tool_call_delta` lines (`docs/tools.md`,
 /// "Progress"). Pure: every instant comes from the caller, which reads the
 /// loop's clock, so a test builds them from one origin and the pacer never
-/// reads a clock.
+/// reads a clock. Held text is capped at its newest `HELD_MAX` bytes
+/// (`docs/events.md`, `tool_call_delta`); `details` is never capped.
 #[derive(Debug, Default)]
 pub(crate) struct Pacer {
     held: Option<Held>,
@@ -44,9 +51,10 @@ pub(crate) struct Pacer {
 }
 
 impl Pacer {
-    /// Merges `delta` into the held change: texts concatenate in order, so
-    /// no output is lost, and `details` is the latest one a delta carried.
-    /// A delta with neither is ignored: it carries nothing.
+    /// Merges `delta` into the held change: texts concatenate in order and
+    /// keep at most the newest `HELD_MAX` bytes, dropping the oldest text
+    /// at a character boundary, and `details` is the latest one a delta
+    /// carried. A delta with neither is ignored: it carries nothing.
     pub(crate) fn hold(&mut self, delta: &Progress) {
         if delta.text.is_none() && delta.details.is_none() {
             return;
@@ -54,6 +62,7 @@ impl Pacer {
         let held = self.held.get_or_insert_with(Held::default);
         if let Some(text) = &delta.text {
             held.text.push_str(text);
+            cap_held(&mut held.text);
         }
         if delta.details.is_some() {
             held.details = delta.details.clone();
@@ -97,6 +106,13 @@ impl Pacer {
     pub(crate) fn deadline(&self) -> Option<Instant> {
         self.held.as_ref().and(self.next_due)
     }
+}
+
+/// Drops the oldest bytes past `HELD_MAX`, keeping the newest starting at
+/// a character boundary, so the text stays valid UTF-8.
+fn cap_held(text: &mut String) {
+    let cut = text.len().saturating_sub(HELD_MAX);
+    text.drain(..text.ceil_char_boundary(cut));
 }
 
 /// Wakes the loop thread waiting in `run_calls`: one flag under one mutex,

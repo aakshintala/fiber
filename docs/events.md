@@ -608,7 +608,7 @@ Ephemeral. Streamed output and progress, paced as `docs/tools.md`,
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `text` | string | no | output added since the last delta |
+| `text` | string | no | output added since the last delta, at most the newest 64 KiB of it, starting at a character boundary; after a burst, the older bytes are only in the result and its artifact |
 | `details` | any JSON | no | progress for clients, shaped as the tool chooses; a client that does not recognise it ignores it |
 
 #### `tool_call_completed`
@@ -1221,7 +1221,7 @@ Ephemeral. Progress for clients, paced as `tool_call_delta` is.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `job_id` | string | yes | the job |
-| `text` | string | no | output added since the last delta |
+| `text` | string | no | output added since the last delta, at most the newest 64 KiB of it, as on `tool_call_delta`; the older bytes are in the job's output file |
 | `details` | any JSON | no | progress, as on `tool_call_delta` |
 
 #### `job_line`
