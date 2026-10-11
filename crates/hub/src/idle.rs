@@ -11,7 +11,8 @@
 //! first SIGTERM, SIGINT or SIGHUP it shuts down every client connection and
 //! relay stream, writes `peak_memory` at the debug level, then
 //! `hub_stopped`, removes `run/hub` on the same condition, and returns 128
-//! plus the signal.
+//! plus the signal. Each websocket gets a close message saying the hub is
+//! stopping before its stream shuts down.
 //! Sessions are untouched either way. A hub that cannot start accepting
 //! writes an `error` line and returns 1: it never served, so it did not
 //! exit for idleness.
@@ -109,6 +110,21 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
         Ok(_) => {}
         Err(error) => return failed(hub, &format!("starting the accept thread: {error}")),
     };
+    if let Some(port) = held.port.as_ref() {
+        // The port acceptor shares `stop`: a spawn failure ends the hub
+        // through the existing failure, before any wait.
+        let tcp = match port.tcp.try_clone() {
+            Ok(tcp) => tcp,
+            Err(error) => return failed(hub, &format!("cloning the port listener: {error}")),
+        };
+        let listener = crate::port::Listener {
+            tcp,
+            origins: Arc::clone(&port.origins),
+        };
+        if let Err(error) = crate::port::spawn_acceptor(listener, hub, &stop) {
+            return failed(hub, &format!("starting the port accept thread: {error}"));
+        }
+    }
     loop {
         match hub.idle_wait(idle_exit, &stop, got) {
             Idle::Signal(signal) => {

@@ -35,6 +35,7 @@ const FOLDED: &[&str] = &[
     "reviewer_kept",
     "repository_code_offered",
     "repository_code_resolved",
+    "session_named",
 ];
 
 /// Folds `segments`, root first, in one pass, one line at a time, holding
@@ -71,6 +72,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         reviewed: Vec::new(),
         orphans: Vec::new(),
         offers: crate::offer::Folded::default(),
+        naming: crate::naming::Naming::default(),
         preamble: None,
     };
     let mut pass = Pass {
@@ -171,6 +173,11 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     );
     pass.orphans.fold(&event);
     resumed.offers.fold(&event);
+    // The pin is the own log's alone: a rewound or forked session starts
+    // unpinned, as the name every consumer shows is the own log's.
+    if pass.own_segment {
+        resumed.naming.fold(&event);
+    }
     pass.running.fold_jobs(&event);
     if let Event::SessionStarted(started) = &event
         && pass.own_segment

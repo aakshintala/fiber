@@ -61,6 +61,13 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             false,
         ),
         (
+            &["hub", "allowed_origins"],
+            json!(["https://a.example"]),
+            json!("https://a.example"),
+            LIST,
+            false,
+        ),
+        (
             &["reviewer", "context"],
             json!("Our org is acme."),
             json!(5),
@@ -353,7 +360,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
             "quota": {"notice_at": 80},
             "retry": {"attempts": 3, "initial_delay_ms": 2000, "max_delay_ms": 60000},
             "reviewer": {"block_limits": {"consecutive": 3, "session": 20}},
-            "hub": {"idle_exit_ms": 1800000},
+            "hub": {"allowed_origins": [], "idle_exit_ms": 1800000},
             "session": {"idle_exit_ms": 1800000},
             "skills": {"disabled": []},
             "tui": {

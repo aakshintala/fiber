@@ -28,7 +28,7 @@ use crate::slot::Slot;
 use crate::tool::McpTool;
 
 /// One configured stdio server: what [`start`] spawns.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct ServerSpec {
     /// The configured name: the middle of every qualified tool name.
     pub name: String,
@@ -38,6 +38,10 @@ pub struct ServerSpec {
     pub args: Vec<String>,
     /// Environment overrides, over Fiber's own environment.
     pub env: BTreeMap<String, String>,
+    /// The program that runs when it is not the declared one: a
+    /// repository server's pinned copy. `command`/`args`/`env` stay the
+    /// declaration, the only cache-key input.
+    pub run: Option<Program>,
     /// The startup deadline.
     pub startup_timeout: Duration,
     /// Each call's timeout.
@@ -52,14 +56,14 @@ pub struct ServerSpec {
     pub required: bool,
 }
 
-// An `env` value can hold a token, so only names print
-// (`docs/code-quality.md`, "Errors").
+// An `env` value or an argument can hold a token, so only names and
+// counts print (`docs/code-quality.md`, "Errors").
 impl std::fmt::Debug for ServerSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ServerSpec")
             .field("name", &self.name)
             .field("command", &self.command)
-            .field("args", &self.args)
+            .field("args", &self.args.len())
             .field(
                 "env",
                 &self
@@ -74,8 +78,83 @@ impl std::fmt::Debug for ServerSpec {
             .field("disabled", &self.disabled)
             .field("hints", &self.hints)
             .field("required", &self.required)
+            .field("run", &self.run)
             .finish()
     }
+}
+
+/// The program that runs when it is not the declared one: a repository
+/// server's pinned copy, with the guard that refuses an unapproved spawn.
+/// `command`/`args` hold what runs; the declaration stays on the spec.
+pub struct Program {
+    /// The program that runs.
+    pub command: String,
+    /// Its arguments.
+    pub args: Vec<String>,
+    /// Runs immediately before every spawn of this program: `Err` refuses
+    /// that spawn as `StartError::StartFailed`.
+    pub guard: Arc<dyn Fn() -> Result<(), String> + Send + Sync>,
+}
+
+impl Clone for Program {
+    fn clone(&self) -> Self {
+        Self {
+            command: self.command.clone(),
+            args: self.args.clone(),
+            guard: Arc::clone(&self.guard),
+        }
+    }
+}
+
+// The command and every argument can hold a token, so only their counts
+// print (`docs/code-quality.md`, "Errors").
+impl std::fmt::Debug for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Program")
+            .field("command", &"redacted")
+            .field("args", &self.args.len())
+            .field("guard", &"<guard>")
+            .finish()
+    }
+}
+
+impl ServerSpec {
+    /// What spawns: the program that runs when one is set, else the
+    /// declared command and arguments.
+    pub fn program(&self) -> (&str, &[String]) {
+        match self.run.as_ref() {
+            Some(run) => (&run.command, &run.args),
+            None => (&self.command, &self.args),
+        }
+    }
+}
+
+/// Starts one spec: runs its guard, then [`Server::start`] with what
+/// [`ServerSpec::program`] gives. The only production caller of
+/// [`Server::start`]: session start ([`open`]) and every lazy first
+/// start and restart ([`Slot::serve`]) both go through here, so the guard
+/// runs immediately before each spawn.
+pub(crate) fn spawn(
+    spec: &ServerSpec,
+    workspace: &Path,
+    clock: &Arc<dyn Clock>,
+    version: &str,
+) -> Result<crate::server::OpenServer, crate::server::StartError> {
+    if let Some(run) = spec.run.as_ref()
+        && let Err(message) = (run.guard)()
+    {
+        return Err(crate::server::StartError::StartFailed(message));
+    }
+    let (command, args) = spec.program();
+    Server::start(
+        command,
+        args,
+        &spec.env,
+        workspace,
+        clock,
+        spec.startup_timeout,
+        version,
+    )
 }
 
 /// What [`start`] started: the tools for the loop, their infos, the
@@ -106,7 +185,7 @@ pub struct Started {
 /// The servers: running ones and ones declared from the cache that start on
 /// their first call.
 pub struct Servers {
-    pub(crate) slots: Vec<Arc<Slot>>,
+    pub(crate) slots: std::sync::Mutex<Vec<Arc<Slot>>>,
 }
 
 impl Servers {
@@ -114,11 +193,31 @@ impl Servers {
     /// SIGTERM, the grace, then kill and reap. Never spawns: a slot locked
     /// by an in-flight start is stopped after that start returns.
     pub fn stop(&self) {
+        let slots = self
+            .slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         thread::scope(|scope| {
-            for slot in &self.slots {
+            for slot in &slots {
                 scope.spawn(|| slot.stop());
             }
         });
+    }
+
+    /// Takes in servers another start began: the adopted servers stop with
+    /// this stop, after the loop has returned, so nothing is adopted
+    /// after it.
+    pub fn adopt(&self, other: Servers) {
+        let mut slots = self
+            .slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut more = other
+            .slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slots.append(&mut more);
     }
 }
 
@@ -238,7 +337,9 @@ pub fn start(
         tools: pairs,
         infos,
         failed,
-        servers: Servers { slots },
+        servers: Servers {
+            slots: std::sync::Mutex::new(slots),
+        },
         prompts: Prompts::collect(sources),
         required_failed,
     }
@@ -266,15 +367,7 @@ pub(crate) fn open(
     let name = spec.name.clone();
     let required = spec.required;
     let timeout = spec.startup_timeout;
-    let open = match Server::start(
-        &spec.command,
-        &spec.args,
-        &spec.env,
-        workspace,
-        clock,
-        timeout,
-        version,
-    ) {
+    let open = match spawn(&spec, workspace, clock, version) {
         Ok(open) => open,
         Err(error) => {
             return if required {

@@ -47,6 +47,7 @@ mod inbox;
 mod interactions;
 mod jobs;
 mod late_cost;
+mod naming;
 mod offer;
 mod opening;
 mod permission;
@@ -80,6 +81,7 @@ pub use commands::{Commands, commands, skills};
 pub use error::Error;
 pub use handoff::HandoffSettings;
 pub use history::forked;
+pub use offer::{Approved, LoadApproved, OfferKey, OfferOutcome};
 pub use permission::Permissions;
 pub use process::{Exited, extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::{DisabledReader, PromptInputs};
@@ -212,6 +214,9 @@ pub struct Loop {
     server_prompts: Option<slash::ServerPrompts>,
     /// The offer of the repository's code before the first request.
     repository: offer::State,
+    /// Whether the person's name pins the session against the model's
+    /// `name_session` (`docs/tools.md`, "Naming the session").
+    naming: naming::Naming,
     /// Whether the opening message was already written: a resume over a
     /// log holding one writes none, the conversation rebuild renders it
     /// from the log.
@@ -318,6 +323,7 @@ struct Seed {
     reviewed: Vec<reviewer::Reviewed>,
     session_blocks: u64,
     repository: offer::State,
+    naming: naming::Naming,
     context: Option<Vec<contract::Envelope>>,
     ledger: usage::Ledger,
     carry: handoff::Carry,
@@ -395,6 +401,7 @@ impl Loop {
                 reviewed: Vec::new(),
                 session_blocks: 0,
                 repository: offer::State::default(),
+                naming: naming::Naming::default(),
                 context: None,
                 ledger: usage::Ledger::default(),
                 carry: handoff::Carry::default(),
@@ -432,6 +439,7 @@ impl Loop {
             reviewed,
             session_blocks,
             repository,
+            naming,
             context,
             ledger,
             carry,
@@ -505,6 +513,7 @@ impl Loop {
             answerable: true,
             server_prompts: None,
             repository,
+            naming,
             opened: context.is_some(),
             changes,
             cut_off: false,

@@ -46,6 +46,24 @@ fn mode(path: &Path) -> u32 {
 }
 
 #[test]
+fn bind_port_binds_loopback_only() {
+    let listener = bind_port(0).unwrap();
+    assert_eq!(
+        listener.local_addr().unwrap().ip(),
+        std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        "the port binds 127.0.0.1 and no other address"
+    );
+}
+
+#[test]
+fn bind_port_on_a_taken_port_is_addr_in_use() {
+    let held = bind_port(0).unwrap();
+    let port = held.local_addr().unwrap().port();
+    let error = bind_port(port).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AddrInUse, "{error}");
+}
+
+#[test]
 fn a_second_holder_gets_none_while_the_first_holds_the_lock() {
     let temp = Temp::new();
     let first = listen(&temp.dir).unwrap().expect("the first hub binds");

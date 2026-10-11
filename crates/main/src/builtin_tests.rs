@@ -278,6 +278,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "delegate_spawn",
             "edit",
             "handoff",
+            "name_session",
             "read",
             "session_search",
             "shell",
@@ -296,6 +297,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             "delegate_spawn",
             "edit",
             "handoff",
+            "name_session",
             "read",
             "session_search",
             "shell",
@@ -618,6 +620,7 @@ const NOT_STRICT: &[&str] = &[
     "ask_user",       // "Asking the person", "The call"
     "delegate_spawn", // "Background jobs"
     "jobs",           // "Background jobs"
+    "name_session",   // "Naming the session"
     "read",           // "File tools", "read"
     "session_search", // "Searching past sessions"
     "shell",          // "Shell", "Running a command"

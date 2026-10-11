@@ -263,6 +263,7 @@ fn resumed_session(
         Ok(web_search) => web_search,
         Err(e) => return ask_failed(e),
     };
+    let skipped = folded.skipped();
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
         fiber,
         &home,
@@ -271,7 +272,10 @@ fn resumed_session(
         &clock,
         &jobs,
         &locks,
+        &project,
         mcp.specs,
+        mcp.repository,
+        &skipped,
         web_search,
         &delegates,
         skills,
@@ -310,6 +314,11 @@ fn resumed_session(
             return ask_failed(e);
         }
     };
+    // What the session loads once its offer step has run, before its first
+    // preamble: the repository code approved since the process started.
+    let load = session_servers
+        .later
+        .into_load(session.declarer(), caps.clone());
     session.shell(driver);
     session.jobs(jobs.clone());
     session.images(Arc::clone(&session_servers.images));
@@ -399,6 +408,7 @@ fn resumed_session(
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)
                         .repository_code(offer)
+                        .approved_code(load)
                         .skill_set(skill_set)
                         .server_prompts(r#loop::ServerPrompts {
                             rows: prompt_rows,

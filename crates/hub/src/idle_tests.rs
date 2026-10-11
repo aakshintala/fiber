@@ -101,6 +101,7 @@ fn serve_mode(
                     Ok(crate::Settings {
                         idle_exit: idle,
                         level,
+                        port: None,
                     })
                 },
                 "0.0.0",

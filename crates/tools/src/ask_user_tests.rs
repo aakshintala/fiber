@@ -118,6 +118,7 @@ fn the_questions_go_to_the_driver() {
             handoff: None,
             questions: Some(asked),
             skill: None,
+            name: None,
         })
     );
 }

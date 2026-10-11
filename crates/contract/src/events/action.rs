@@ -325,6 +325,11 @@ pub struct Control {
     /// A skill the call loaded (`docs/tools.md`, "Skills").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill: Option<SkillLoad>,
+    /// A session name: the loop writes `session_named` just before the call's
+    /// `tool_call_completed`, or fails the call `name_pinned` while the
+    /// person's name pins the session (`docs/tools.md`, "What a result carries").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// One skill load: its name and its `SKILL.md` path as the listing prints it.

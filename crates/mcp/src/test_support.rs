@@ -126,6 +126,7 @@ impl Setup {
             command: fakes::mcp_fixture().display().to_string(),
             args: vec![self.dir.path().display().to_string()],
             env: BTreeMap::new(),
+            run: None,
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             call_timeout: DEFAULT_CALL_TIMEOUT,
             enabled: None,

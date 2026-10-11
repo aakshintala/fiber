@@ -275,13 +275,14 @@ fn run(
     hooks: Option<Arc<FakeHooks>>,
     cancel: Arc<TurnCancel>,
 ) -> Ran {
-    let ran = run_with(tool, script, hooks, cancel, false);
+    let ran = run_with(tool, script, hooks, cancel, false, false);
     assert!(ran.turn.is_ok(), "{:?}", ran.turn);
     ran
 }
 
 /// [`run`], with the session's `artifacts/` replaced by a file when
-/// `break_artifacts` is set, so no artifact can be written.
+/// `break_artifacts` is set, so no artifact can be written. When `pinned`
+/// is set, the person's name pins the session before the turn starts.
 #[track_caller]
 fn run_with(
     tool: Fixed,
@@ -289,6 +290,7 @@ fn run_with(
     hooks: Option<Arc<FakeHooks>>,
     cancel: Arc<TurnCancel>,
     break_artifacts: bool,
+    pinned: bool,
 ) -> Ran {
     let home = fakes::TempDir::new("fiber-hooks");
     let workspace = home.path().join("workspace");
@@ -351,6 +353,14 @@ fn run_with(
     .cancelled_by(cancel);
     if let Some(hooks) = hooks {
         looped = looped.hooks(hooks);
+    }
+    if pinned {
+        looped.naming.fold(&contract::events::Event::SessionNamed(
+            contract::events::SessionNamed {
+                name: Some("Mine".into()),
+                by: contract::events::NamedBy::Person,
+            },
+        ));
     }
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -833,6 +843,7 @@ fn a_hooks_artifact_that_cannot_be_written_fails_the_turn() {
         Some(hooks),
         Arc::new(TurnCancel::default()),
         true,
+        false,
     );
     let Err(crate::Error::Log(_)) = &ran.turn else {
         panic!("the turn went on: {:?}", ran.turn)
@@ -860,6 +871,7 @@ fn a_hooks_artifact_that_cannot_be_written_fails_the_turn_after_a_cut() {
         Some(hooks),
         Arc::new(TurnCancel::default()),
         true,
+        false,
     );
     let Err(crate::Error::Log(_)) = &ran.turn else {
         panic!("the turn went on: {:?}", ran.turn)
@@ -1032,4 +1044,287 @@ fn a_failed_call_shaped_under_a_shutdown_keeps_no_output() {
     assert_eq!(completed.payload["content"], json!([]));
     assert_eq!(completed.payload.get("artifact"), None);
     assert!(!ran.on_disk().contains("with a secret, long"));
+}
+
+fn naming_output() -> Output {
+    Output {
+        content: vec![
+            ContentPart::Text {
+                text: "named".into(),
+            },
+            ContentPart::Image {
+                path: "artifacts/shot.png".into(),
+                mime_type: "image/png".into(),
+                width: 1,
+                height: 1,
+            },
+        ],
+        control: Some(contract::events::Control {
+            handoff: None,
+            questions: None,
+            skill: None,
+            name: Some("Fix the parser".into()),
+        }),
+        ..Output::default()
+    }
+}
+
+#[test]
+fn a_naming_call_writes_its_name_after_the_hook_notices() {
+    let notice = Notice {
+        code: ErrorCode::HookFailed,
+        message: "The `after_tool` hook failed: boom.".into(),
+        extension: Some("acme".into()),
+    };
+    let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], vec![notice]);
+    let ran = run_with(
+        fixed(naming_output()),
+        script("probe", json!({})),
+        Some(hooks),
+        Arc::new(TurnCancel::default()),
+        false,
+        false,
+    );
+    let at = |kind: &str| ran.streamed.iter().position(|l| l.kind == kind).unwrap();
+    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "notice",
+            "session_named",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert!(at("notice") < at("session_named"));
+    assert!(at("session_named") < at("tool_call_completed"));
+    let named = &ran.streamed[at("session_named")];
+    assert_eq!(named.payload["name"], "Fix the parser");
+    assert_eq!(named.payload["by"], "model");
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "completed");
+}
+
+#[test]
+fn a_pinned_call_reaches_the_hook_as_failed_with_the_pin_message() {
+    let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    let ran = run_with(
+        fixed(naming_output()),
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        Arc::new(TurnCancel::default()),
+        false,
+        true,
+    );
+    assert_eq!(hooks.seen()[0].status, CallStatus::Failed);
+    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(hooks.seen()[0].content, crate::naming::PINNED.to_owned());
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "name_pinned");
+    assert_eq!(completed.payload["error"]["message"], crate::naming::PINNED);
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "the person named this session"}])
+    );
+    assert!(!ran.lines.iter().any(|line| line.kind == "session_named"));
+}
+
+#[test]
+fn a_pinned_call_replaced_by_a_hook_keeps_the_pin_error() {
+    let hooks = FakeHooks::new(changed(Some("redacted"), None, None), &["acme"], Vec::new());
+    let ran = run_with(
+        fixed(naming_output()),
+        script("probe", json!({})),
+        Some(hooks),
+        Arc::new(TurnCancel::default()),
+        false,
+        true,
+    );
+    let completed = ran.completed();
+    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "name_pinned");
+    assert_eq!(completed.payload["error"]["message"], crate::naming::PINNED);
+    assert_eq!(completed.payload["content"][0]["text"], "redacted");
+    assert_eq!(completed.payload["changed_by"], json!(["acme"]));
+}
+
+#[test]
+fn a_pinned_call_withheld_by_a_hook_keeps_the_pin_error() {
+    let hooks = FakeHooks::new(
+        AfterToolOutcome::Withheld {
+            extension: "acme".into(),
+        },
+        &["acme"],
+        Vec::new(),
+    );
+    let ran = run_with(
+        fixed(naming_output()),
+        script("probe", json!({})),
+        Some(hooks),
+        Arc::new(TurnCancel::default()),
+        false,
+        true,
+    );
+    let completed = ran.completed();
+    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "name_pinned");
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": "Output withheld: the `after_tool` hook of extension acme failed."}])
+    );
+}
+
+#[test]
+fn a_pinned_call_is_cut_to_its_bound() {
+    let ran = run_with(
+        Fixed {
+            bound: Bound { start: 10, end: 0 },
+            ..fixed(naming_output())
+        },
+        script("probe", json!({})),
+        None,
+        Arc::new(TurnCancel::default()),
+        false,
+        true,
+    );
+    let completed = ran.completed();
+    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "name_pinned");
+    let content = completed.payload["content"][0]["text"].as_str().unwrap();
+    assert!(
+        content.starts_with("the person\n[19 bytes cut"),
+        "{content}"
+    );
 }

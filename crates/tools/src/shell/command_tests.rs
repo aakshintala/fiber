@@ -313,6 +313,19 @@ fn run(dir: &std::path::Path, command: String) -> mpsc::Receiver<super::Finished
     rx
 }
 
+/// Whether `pgid` is listed within [`LIST_DEADLINE`]. The poll runs on its
+/// own thread, so a stuck listing fails the test instead of hanging it.
+fn wait_listed(pgid: u32) -> bool {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        while !support::group::live().contains(pgid) {
+            thread::yield_now();
+        }
+        let _sent = tx.send(());
+    });
+    Deadline::after(LIST_DEADLINE).recv(&rx).is_ok()
+}
+
 #[test]
 fn a_command_is_listed_while_it_runs_and_not_once_it_ends() {
     let dir = fakes::TempDir::new("fiber-groups-listed");
@@ -321,10 +334,9 @@ fn a_command_is_listed_while_it_runs_and_not_once_it_ends() {
     let pgid = ready.wait(LIST_DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
     let _own = ready.wait(LIST_DEADLINE);
-    assert!(
-        support::group::live().contains(pgid),
-        "the running group is listed"
-    );
+    // The child's ready files do not prove the listing: `spawn` lists the
+    // group only after `Command::spawn` returns.
+    assert!(wait_listed(pgid), "the running group is listed");
 
     support::group::kill_every_group();
     // The run ends on its own pass: no cancel, no clock move.

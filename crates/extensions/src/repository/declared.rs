@@ -29,8 +29,10 @@ pub(crate) struct PinnedFile {
 }
 
 /// An extension, hook or MCP server a repository declares, with what its
-/// hash covers.
-#[derive(Debug, Clone)]
+/// hash covers. The declaration and the strings it named can hold
+/// argument tokens, so they never print
+/// (`docs/code-quality.md`, "What a reviewer checks").
+#[derive(Clone)]
 pub struct RepoItem {
     /// What it is.
     pub kind: OfferedKind,
@@ -48,8 +50,63 @@ pub struct RepoItem {
     /// Existing files its declaration names that lie outside the repository,
     /// so are not pinned.
     pub(crate) outside: Vec<String>,
+    /// What each string the declaration named resolved to when gathered:
+    /// inside the repository (its `rel`, whose bytes the hash covers) or
+    /// to a file outside it (its canonical target). Empty for extensions.
+    /// The start uses these records, never a second resolution, so
+    /// retargeting a symbolic link after gathering cannot change what runs.
+    pub(crate) named: BTreeMap<String, Named>,
     /// An extension's package directory, resolved.
     pub(crate) dir: PathBuf,
+}
+
+impl std::fmt::Debug for RepoItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RepoItem")
+            .field("kind", &self.kind)
+            .field("name", &self.name)
+            .field("path", &self.path)
+            .field("required", &self.required)
+            .field(
+                "declaration",
+                &self.declaration.as_ref().map(|_| "redacted"),
+            )
+            .field("files", &self.files)
+            .field("outside", &self.outside.len())
+            .field("named", &self.named.len())
+            .field("dir", &self.dir)
+            .finish()
+    }
+}
+
+/// Where one string a declaration named resolved to when gathered.
+#[derive(Debug, Clone)]
+pub(crate) enum Named {
+    /// A file inside the repository: its `rel`, pinned by the hash.
+    Inside(String),
+    /// A file outside it: the canonical target path.
+    Outside(PathBuf),
+}
+
+/// The servers the workspace's `.fiber/` declares, by name, without
+/// running `git`: only `git_files` needs a clock, so gathering servers
+/// never blocks on it. `declared_items` returns extensions, hooks, then
+/// exactly these, so `fiber approve`, the offer and startup hash identically.
+pub(crate) fn declared_servers(workspace: &Path) -> Result<Vec<RepoItem>, Error> {
+    let declared = config::declared(workspace)?;
+    let root = workspace.canonicalize().map_err(io_error(workspace))?;
+    let mut items = Vec::new();
+    for (name, entry) in &declared.mcp_servers {
+        items.push(entry_item(
+            &root,
+            OfferedKind::McpServer,
+            name,
+            entry,
+            ".fiber/config.json",
+            required(entry),
+        )?);
+    }
+    Ok(items)
 }
 
 /// Everything the workspace's `.fiber/` declares, in offer order: extensions,
@@ -77,16 +134,9 @@ pub fn declared_items(workspace: &Path, clock: &dyn Clock) -> Result<Vec<RepoIte
             required(entry),
         )?);
     }
-    for (name, entry) in &declared.mcp_servers {
-        items.push(entry_item(
-            &root,
-            OfferedKind::McpServer,
-            name,
-            entry,
-            ".fiber/config.json",
-            required(entry),
-        )?);
-    }
+    // The same servers `declared_servers` gathers, so `fiber approve`,
+    // the offer and startup hash identically.
+    items.extend(declared_servers(workspace)?);
     Ok(items)
 }
 
@@ -128,7 +178,7 @@ fn extension(root: &Path, ext: &RepositoryExtension, clock: &dyn Clock) -> Resul
             Found::Inside(path) => {
                 files.insert(rel, path);
             }
-            Found::Outside => outside.push(rel),
+            Found::Outside(_) => outside.push(rel),
             Found::Nothing => {}
         }
     }
@@ -140,6 +190,7 @@ fn extension(root: &Path, ext: &RepositoryExtension, clock: &dyn Clock) -> Resul
         declaration: None,
         files: sorted(files),
         outside,
+        named: BTreeMap::new(),
         dir,
     })
 }
@@ -156,8 +207,9 @@ fn entry_item(
 ) -> Result<RepoItem, Error> {
     let mut files = BTreeMap::new();
     let mut outside = Vec::new();
-    for named in named_paths(entry) {
-        match resolve(root, name, &root.join(named))? {
+    let mut named = BTreeMap::new();
+    for given in named_paths(entry) {
+        match resolve(root, name, &root.join(given))? {
             Found::Inside(path) => {
                 let rel = path
                     .strip_prefix(root)
@@ -168,9 +220,13 @@ fn entry_item(
                         why: format!("{} is not a UTF-8 path", path.display()),
                     })?
                     .to_owned();
-                files.insert(rel, path);
+                files.insert(rel.clone(), path);
+                named.insert(given.to_owned(), Named::Inside(rel));
             }
-            Found::Outside => outside.push(named.to_owned()),
+            Found::Outside(target) => {
+                outside.push(given.to_owned());
+                named.insert(given.to_owned(), Named::Outside(target));
+            }
             Found::Nothing => {}
         }
     }
@@ -182,6 +238,7 @@ fn entry_item(
         declaration: Some(json!({"name": name, "entry": entry})),
         files: sorted(files),
         outside,
+        named,
         dir: PathBuf::new(),
     })
 }
@@ -214,8 +271,8 @@ fn sorted(files: BTreeMap<String, PathBuf>) -> Vec<PinnedFile> {
 enum Found {
     /// A regular file inside the repository, resolved.
     Inside(PathBuf),
-    /// A regular file outside it.
-    Outside,
+    /// A regular file outside it: its resolved path.
+    Outside(PathBuf),
     /// No file: missing, a directory, or a string that cannot be a path.
     Nothing,
 }
@@ -249,7 +306,7 @@ fn resolve(root: &Path, item: &str, candidate: &Path) -> Result<Found, Error> {
     Ok(if resolved.starts_with(root) {
         Found::Inside(resolved)
     } else {
-        Found::Outside
+        Found::Outside(resolved)
     })
 }
 

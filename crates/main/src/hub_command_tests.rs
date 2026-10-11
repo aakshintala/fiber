@@ -166,7 +166,64 @@ fn configure_reads_the_idle_exit() {
         hub::Settings {
             idle_exit: Duration::from_millis(200),
             level: log::diag::Level::Info,
+            port: None,
         }
+    );
+}
+
+#[test]
+fn configure_reads_a_global_port_with_its_origins() {
+    let root = fakes::TempDir::new("hport");
+    let (home, workspace) = home_and_workspace(&root);
+    std::fs::write(
+        home.join("config.json"),
+        r#"{"hub": {"port": 4040, "allowed_origins": ["https://a.example"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        configure(&home, Ok(workspace)).unwrap().port,
+        Some(hub::PortSettings {
+            number: 4040,
+            allowed_origins: vec!["https://a.example".to_owned()],
+        })
+    );
+}
+
+#[test]
+fn configure_without_a_global_port_has_no_port_even_with_origins() {
+    let root = fakes::TempDir::new("hport");
+    let (home, workspace) = home_and_workspace(&root);
+    std::fs::write(
+        home.join("config.json"),
+        r#"{"hub": {"allowed_origins": ["https://a.example"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(configure(&home, Ok(workspace)).unwrap().port, None);
+}
+
+#[test]
+fn configure_ignores_a_project_files_port() {
+    let root = fakes::TempDir::new("hport");
+    let (home, workspace) = home_and_workspace(&root);
+    let (sessions, _) =
+        ::cli::project_of(&home, &workspace).unwrap_or_else(|e| panic!("project: {}", e.message));
+    let dir = sessions.parent().unwrap();
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("config.json"), r#"{"hub": {"port": 5050}}"#).unwrap();
+    assert_eq!(configure(&home, Ok(workspace)).unwrap().port, None);
+}
+
+#[test]
+fn configure_reads_the_top_of_the_port_range() {
+    let root = fakes::TempDir::new("hport");
+    let (home, workspace) = home_and_workspace(&root);
+    std::fs::write(home.join("config.json"), r#"{"hub": {"port": 65535}}"#).unwrap();
+    assert_eq!(
+        configure(&home, Ok(workspace)).unwrap().port,
+        Some(hub::PortSettings {
+            number: 65535,
+            allowed_origins: Vec::new(),
+        })
     );
 }
 

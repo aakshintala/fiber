@@ -38,7 +38,8 @@ use crate::tick::Tick;
 pub(crate) struct Hub {
     /// Fiber home: `run/<session_id>` is resolved under it.
     pub(crate) home: PathBuf,
-    fiber_version: String,
+    /// The version `hub_hello` and `status` report.
+    pub(crate) fiber_version: String,
     /// How `start` runs the session command.
     pub(crate) starter: Arc<dyn Starter>,
     /// The injected clock, for `ts`, `start`'s deadline and the idle wait.
@@ -86,14 +87,25 @@ pub(crate) struct Hub {
     /// Tests only: runs handing a queued command over, or clearing it.
     #[cfg(test)]
     pub(crate) on_pass_on: PassOnHook,
+    /// Tests only: names `hub-ws-*` threads whose spawns fail, so the
+    /// port's spawn-failure paths run without an outside seam.
+    #[cfg(test)]
+    pub(crate) fail_spawn: Mutex<Option<&'static str>>,
 }
 
 /// The open connections and the idle timer. `zero_since` is `Some` exactly
 /// while `open` is empty: the instant the count last reached 0.
 struct Conns {
     /// Every connection the idle wait counts, and its shutdown handle.
-    open: Vec<(u64, UnixStream)>,
+    open: Vec<(u64, Closer)>,
     zero_since: Option<Instant>,
+}
+
+/// How one counted connection shuts down: a local socket, or a
+/// websocket's shared sink.
+pub(crate) enum Closer {
+    Local(UnixStream),
+    Web(Arc<crate::port::Web>),
 }
 
 /// What one pass of [`Hub::idle_wait`] found.
@@ -154,6 +166,8 @@ impl Hub {
             before_open: Mutex::new(None),
             #[cfg(test)]
             on_pass_on: Mutex::new(None),
+            #[cfg(test)]
+            fail_spawn: Mutex::new(None),
         }
     }
 
@@ -184,7 +198,7 @@ impl Hub {
         if stop.load(Ordering::SeqCst) {
             return Accept::Exiting;
         }
-        let counted = self.register_with(|| stream.try_clone(), &mut conns);
+        let counted = self.register_with(|| stream.try_clone().map(Closer::Local), &mut conns);
         drop(conns);
         // Woken after the connection lock is released: the idle wait takes
         // the tick lock before the connection lock.
@@ -200,15 +214,48 @@ impl Hub {
     #[cfg(test)]
     pub(crate) fn register(&self, stream: &UnixStream) -> Option<u64> {
         let mut conns = lock(&self.conns);
-        let counted = self.register_with(|| stream.try_clone(), &mut conns);
+        let counted = self.register_with(|| stream.try_clone().map(Closer::Local), &mut conns);
         drop(conns);
         self.tick.wake();
         counted
     }
 
+    /// Counts a websocket the port acceptor holds: under the connection
+    /// lock, so the idle exit's claim sees it. Exiting once the hub is
+    /// exiting: the caller shuts the stream down unanswered, EOF with no
+    /// `hub_hello`, and the client retries.
+    pub(crate) fn poll_accept_web(&self, web: &Arc<crate::port::Web>, stop: &AtomicBool) -> Accept {
+        let mut conns = lock(&self.conns);
+        if stop.load(Ordering::SeqCst) {
+            return Accept::Exiting;
+        }
+        let counted = self.register_with(|| Ok(Closer::Web(Arc::clone(web))), &mut conns);
+        drop(conns);
+        // Woken after the connection lock is released: the idle wait takes
+        // the tick lock before the connection lock.
+        self.tick.wake();
+        match counted {
+            Some(n) => Accept::Counted(n),
+            None => Accept::Dropped,
+        }
+    }
+
+    /// Tests only: every websocket's shared sink, oldest first.
+    #[cfg(test)]
+    pub(crate) fn webs(&self) -> Vec<Arc<crate::port::Web>> {
+        lock(&self.conns)
+            .open
+            .iter()
+            .filter_map(|(_, closer)| match closer {
+                Closer::Local(_) => None,
+                Closer::Web(web) => Some(Arc::clone(web)),
+            })
+            .collect()
+    }
+
     fn register_with(
         &self,
-        clone: impl FnOnce() -> std::io::Result<UnixStream>,
+        clone: impl FnOnce() -> std::io::Result<Closer>,
         conns: &mut Conns,
     ) -> Option<u64> {
         // Clone first: a failure counts nothing, serves nothing, and
@@ -283,14 +330,24 @@ impl Hub {
     }
 
     /// Shuts down every client connection: each session sees its clients
-    /// leave. Sessions are untouched.
+    /// leave. Local sockets shut down under the connection lock; each
+    /// websocket gets its stopping close once its sink is free, then every
+    /// stream is shut down, inside the 5 s bound. Sessions are untouched.
     pub(crate) fn shutdown_clients(&self) {
-        let conns = lock(&self.conns);
-        for (_, stream) in &conns.open {
-            match stream.shutdown(Shutdown::Both) {
-                Ok(()) | Err(_) => {}
+        let webs = {
+            let conns = lock(&self.conns);
+            let mut webs = Vec::new();
+            for (_, closer) in &conns.open {
+                match closer {
+                    Closer::Local(stream) => {
+                        stream.shutdown(Shutdown::Both).unwrap_or(());
+                    }
+                    Closer::Web(web) => webs.push(Arc::clone(web)),
+                }
             }
-        }
+            webs
+        };
+        crate::port::stop_all(self, webs);
     }
 }
 
@@ -331,6 +388,20 @@ pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
 
 /// Serves an accepted connection already counted by [`Hub::poll_accept`].
 pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
+    serve_from(stream, hub, n, true);
+}
+
+/// Serves an authenticated websocket's pair end, already counted by
+/// [`Hub::poll_accept_web`]: no second `hub_hello`, since the port sent
+/// one before authentication.
+pub(crate) fn serve_authenticated(stream: UnixStream, hub: Arc<Hub>, n: u64) {
+    serve_from(stream, hub, n, false);
+}
+
+/// Serves a counted connection: with `hello`, `hub_hello` first, then one
+/// acknowledgement per hub command and a relay thread per session
+/// commanded on it.
+fn serve_from(stream: UnixStream, hub: Arc<Hub>, n: u64, hello: bool) {
     hub.diag.line(
         Severity::Info,
         None,
@@ -344,19 +415,21 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
             return;
         }
     };
-    #[cfg(test)]
-    if let Some(pause) = lock(&hub.before_hello).take() {
-        pause();
+    if hello {
+        #[cfg(test)]
+        if let Some(pause) = lock(&hub.before_hello).take() {
+            pause();
+        }
+        send(
+            &writer,
+            &hub,
+            "hub_hello",
+            Map::from_iter([(
+                "fiber_version".to_owned(),
+                Value::String(hub.fiber_version.clone()),
+            )]),
+        );
     }
-    send(
-        &writer,
-        &hub,
-        "hub_hello",
-        Map::from_iter([(
-            "fiber_version".to_owned(),
-            Value::String(hub.fiber_version.clone()),
-        )]),
-    );
     let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     hub.rejoins.register(n, &writer, &relays);
     let heard = hub.feed.attention.listen(Arc::clone(&writer));
@@ -474,16 +547,16 @@ fn on_command(
     }
 }
 
-struct Classified {
-    id: CommandId,
-    command: String,
-    session_id: Option<String>,
-    value: Value,
-    args: Map<String, Value>,
+pub(crate) struct Classified {
+    pub(crate) id: CommandId,
+    pub(crate) command: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) value: Value,
+    pub(crate) args: Map<String, Value>,
 }
 
 /// `Err` carries `command_id` when the line had a string `id`.
-fn classify(bytes: &[u8]) -> Result<Classified, Option<CommandId>> {
+pub(crate) fn classify(bytes: &[u8]) -> Result<Classified, Option<CommandId>> {
     let text = std::str::from_utf8(bytes).map_err(|_| None)?;
     let value: Value = serde_json::from_str(text).map_err(|_| None)?;
     let Some(map) = value.as_object() else {
@@ -705,6 +778,21 @@ pub(crate) fn reject(
     code: &ErrorCode,
     message: &str,
 ) {
+    send(
+        writer,
+        hub,
+        "command_rejected",
+        rejection(id, code, message),
+    );
+}
+
+/// A `command_rejected` payload for `code` and `message`, with `id` when
+/// one was readable: the port answers refusals the same way.
+pub(crate) fn rejection(
+    id: Option<&CommandId>,
+    code: &ErrorCode,
+    message: &str,
+) -> Map<String, Value> {
     let mut payload = Map::new();
     payload.insert(
         "code".to_owned(),
@@ -714,7 +802,7 @@ pub(crate) fn reject(
         payload.insert("command_id".to_owned(), Value::String(id.0.clone()));
     }
     payload.insert("message".to_owned(), Value::String(message.to_owned()));
-    send(writer, hub, "command_rejected", payload);
+    payload
 }
 
 pub(crate) fn send(
@@ -723,19 +811,25 @@ pub(crate) fn send(
     kind: &str,
     payload: Map<String, Value>,
 ) {
-    let line = HubLine {
-        kind: kind.to_owned(),
-        ts: wall_ms(hub.clock.wall()),
-        schema_version: SCHEMA_VERSION,
-        payload,
-    };
-    let mut bytes = serde_json::to_vec(&line).unwrap_or_default();
+    let mut bytes = line(hub, kind, payload);
     bytes.push(b'\n');
     let mut writer = lock(writer);
     writer
         .write_all(&bytes)
         .and_then(|()| writer.flush())
         .unwrap_or(());
+}
+
+/// Serialises one hub line, without its trailing newline: the port sends
+/// it as one websocket text message.
+pub(crate) fn line(hub: &Hub, kind: &str, payload: Map<String, Value>) -> Vec<u8> {
+    let line = HubLine {
+        kind: kind.to_owned(),
+        ts: wall_ms(hub.clock.wall()),
+        schema_version: SCHEMA_VERSION,
+        payload,
+    };
+    serde_json::to_vec(&line).unwrap_or_default()
 }
 
 /// Whether `value` holds an explicit `null`: an optional key is absent,

@@ -112,27 +112,57 @@ fn a_persons_empty_env_does_not_mask_a_repositorys_entry() {
     let specs = setup.specs();
     assert!(specs.specs.is_empty());
     assert!(specs.notices.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    assert_eq!(gated.spec.name, "fx");
+    assert_eq!(gated.spec.command, "/bin/bash");
+    // Exactly the repository-supplied values: the person's command and
+    // empty `env` are the person's own.
+    assert_eq!(gated.fields.command, None);
+    assert_eq!(gated.fields.args, None);
+    assert_eq!(
+        gated.fields.env,
+        std::collections::BTreeMap::from([("BASH_ENV".to_owned(), json!("/tmp/evil"))])
+    );
 }
 
 #[test]
 fn a_repositorys_entry_wins_over_the_global_one() {
     // Layers merge lowest first with the repository above the global
-    // file, so the repository's value is the effective one: still skipped.
+    // file, so the repository's value is the effective one: still gated.
     let setup = Setup::new();
     setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash", "env": {"BASH_ENV": "/tmp/safe"}}}}}));
     setup.repository(&json!({"mcp": {"servers": {"fx": {"env": {"BASH_ENV": "/tmp/evil"}}}}}));
     let specs = setup.specs();
     assert!(specs.specs.is_empty());
     assert!(specs.notices.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    assert_eq!(gated.spec.name, "fx");
+    assert_eq!(
+        gated.fields.env,
+        std::collections::BTreeMap::from([("BASH_ENV".to_owned(), json!("/tmp/evil"))])
+    );
 }
 
 #[test]
-fn a_repositorys_server_is_skipped() {
+fn a_repositorys_server_is_repository_code() {
     let setup = Setup::new();
     setup.repository(&json!({"mcp": {"servers": {"repo": {"command": "/bin/bash"}}}}));
     let specs = setup.specs();
     assert!(specs.specs.is_empty());
     assert!(specs.notices.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    assert_eq!(gated.spec.name, "repo");
+    assert_eq!(gated.spec.command, "/bin/bash");
+    assert!(gated.spec.run.is_none());
+    assert_eq!(gated.fields.command, Some(json!("/bin/bash")));
+    assert_eq!(gated.fields.args, None);
+    assert!(gated.fields.env.is_empty());
 }
 
 #[test]
@@ -143,6 +173,14 @@ fn a_persons_command_with_a_repositorys_args_is_repository_code() {
     let specs = setup.specs();
     assert!(specs.specs.is_empty());
     assert!(specs.notices.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    assert_eq!(gated.spec.name, "fx");
+    assert_eq!(gated.spec.args, vec!["evil.sh".to_owned()]);
+    assert_eq!(gated.fields.command, None);
+    assert_eq!(gated.fields.args, Some(json!(["evil.sh"])));
+    assert!(gated.fields.env.is_empty());
 }
 
 #[test]
@@ -155,6 +193,64 @@ fn a_repositorys_hints_never_reach_the_spec() {
     let specs = setup.specs();
     assert_eq!(specs.specs.len(), 1);
     assert!(specs.specs[0].hints.is_empty());
+}
+
+#[test]
+fn a_declaration_removed_after_load_still_gates_through_command_provenance() {
+    // The declaration is removed between `Config::load` and `specs`:
+    // the merged `command` still comes from the repository's layer, so
+    // the fail-closed provenance fallback keeps the server the
+    // repository's even though the declaration read no longer names it.
+    let setup = Setup::new();
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    let config = setup.rig.config(Vec::<String>::new());
+    setup.repository(&json!({}));
+    let specs = specs(&config);
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's through provenance alone");
+    };
+    assert_eq!(gated.spec.name, "fx");
+}
+
+#[test]
+fn a_declaration_removed_after_load_still_gates_through_env_provenance() {
+    // As above, through one repository-supplied `env` entry: `env`
+    // merges key by key, so each entry's provenance is checked
+    // individually.
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"env": {"BASH_ENV": "/tmp/evil"}}}}}));
+    let config = setup.rig.config(Vec::<String>::new());
+    setup.repository(&json!({}));
+    let specs = specs(&config);
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's through provenance alone");
+    };
+    assert_eq!(gated.spec.name, "fx");
+    assert_eq!(
+        gated.fields.env,
+        std::collections::BTreeMap::from([("BASH_ENV".to_owned(), json!("/tmp/evil"))])
+    );
+}
+
+#[test]
+fn program_fields_debug_prints_no_token_or_env_value() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {
+        "args": ["--token=planted6a3f"],
+        "env": {"SECRET": "planted1c8b"},
+    }}}}));
+    let specs = setup.specs();
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    let printed = format!("{:?}", gated.fields);
+    assert!(printed.contains("SECRET"), "{printed}");
+    assert!(!printed.contains("planted6a3f"), "{printed}");
+    assert!(!printed.contains("planted1c8b"), "{printed}");
 }
 
 #[test]
@@ -270,5 +366,82 @@ fn extension_tools_follow_the_built_in_and_mcp_tools_and_replace_their_rows() {
             row("search", extension("fiber.test/mysearch")),
             row("write", ToolSource::Builtin),
         ]
+    );
+}
+
+#[test]
+fn a_declaration_error_keeps_a_persons_server_on_the_repository_side() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    std::fs::create_dir_all(setup.rig.workspace.join(".fiber/config")).unwrap();
+    std::fs::write(
+        setup.rig.workspace.join(".fiber/config/hooks.json"),
+        json!({"hooks": true}).to_string(),
+    )
+    .unwrap();
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("a declaration error keeps the server behind approval");
+    };
+    assert_eq!(gated.spec.name, "fx");
+}
+
+#[test]
+fn a_persons_server_the_repository_only_retimes_is_repository_code() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"timeout_ms": 1}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    assert_eq!(gated.spec.name, "fx");
+    // No `command`, `args` or `env` comes from the repository.
+    assert_eq!(gated.fields.command, None);
+    assert_eq!(gated.fields.args, None);
+    assert!(gated.fields.env.is_empty());
+}
+
+#[test]
+fn a_persons_server_the_repository_only_hints_stays_the_persons() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {
+        "tools": {"echo": {"hints": {"readOnlyHint": true}}},
+    }}}}));
+    let specs = setup.specs();
+    assert!(specs.repository.is_empty());
+    assert_eq!(specs.specs.len(), 1);
+    assert_eq!(specs.specs[0].name, "fx");
+}
+
+#[test]
+fn repository_fields_hold_exactly_what_the_repository_supplied() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {
+        "command": "/bin/bash",
+        "args": ["--safe"],
+        "env": {"SAFE": "1", "MODE": "slow"},
+    }}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {
+        "args": ["run.sh"],
+        "env": {"MODE": "fast"},
+    }}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    // The merged spec carries both layers; the fields carry only the
+    // repository's share.
+    assert_eq!(gated.spec.command, "/bin/bash");
+    assert_eq!(gated.spec.args, vec!["run.sh".to_owned()]);
+    assert_eq!(gated.fields.command, None);
+    assert_eq!(gated.fields.args, Some(json!(["run.sh"])));
+    assert_eq!(
+        gated.fields.env,
+        std::collections::BTreeMap::from([("MODE".to_owned(), json!("fast"))])
     );
 }
