@@ -16,6 +16,7 @@ mod test_filter;
 
 use compiled_in::{COMPILED_IN, PACKAGE_READERS};
 pub(crate) use compiled_in::{compiled_in_mismatches, package_reader_mismatches};
+use plan::BINARY_TESTS;
 pub(crate) use plan::{plan, shard_timeout_minutes, verdict};
 pub(crate) use test_filter::{is_test_file, test_filter};
 
@@ -84,9 +85,6 @@ const RUN_ALL_ROOTS: [&str; 4] = [
     "clippy.toml",
     "deny.toml",
 ];
-/// The package whose tests are the binary-level tests (`docs/ci.md`,
-/// "Selection"): the `fiber` binary.
-pub(super) const BINARY_TESTS: &str = "main";
 /// Whether `path` is a first-party package file: under `providers/` or
 /// `extensions/` at the repository root (`docs/ci.md`, "Selection").
 /// `crates/extensions/...` is not one.

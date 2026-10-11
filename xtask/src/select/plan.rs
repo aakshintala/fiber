@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use super::BINARY_TESTS;
-
+/// The package whose tests are the binary-level tests (`docs/ci.md`,
+/// "Selection"): the `fiber` binary.
+pub(super) const BINARY_TESTS: &str = "main";
 /// `docs/ci.md`: the most mutants one shard tests, measured from CI runs.
 const MUTANTS_PER_SHARD: u64 = 15;
 /// `docs/ci.md`: the most shards one run starts.
