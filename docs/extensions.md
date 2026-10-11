@@ -1445,6 +1445,9 @@ counts. A `summary` connection and the `fiber ask` door never are.
   `repository_code_skipped` names it and says to run `fiber approve`. An item
   the repository marks `required` fails the run instead, with
   `extension_unapproved`, `hook_unapproved` or `mcp_server_unapproved`.
+  An item this session already answered is not offered again, so a skip
+  holds: no second notice, and a skipped `required` item does not fail the
+  run.
 - **A delegate never asks.** It checks the same approvals and skips or fails
   in the same way.
 

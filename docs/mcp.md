@@ -329,7 +329,8 @@ repository, approves it outside a session.
 An approved server starts with the session as any server does. One approved
 in the session's own offer starts once the offer is answered, before the
 first model request; a `required` one that then fails ends the run with
-`mcp_required_server_failed`.
+`mcp_required_server_failed`. Its tools are declared then; its prompts join the `/` list at the next
+reload or process start.
 
 The approval covers the server's exact declaration and each file its
 `command` or `args` names inside the repository. Fiber copies those files into
