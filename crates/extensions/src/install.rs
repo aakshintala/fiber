@@ -224,8 +224,15 @@ pub(crate) fn commit_all(
             return rollback(&dir, staged, &steps, &rename, e);
         }
     }
-    write_journal(&dir, true, &steps)?;
-    recover(&dir)
+    if let Err(e) = write_journal(&dir, true, &steps) {
+        return rollback(&dir, staged, &steps, &rename, e);
+    }
+    // The committed journal is written, so the install has happened. A
+    // cleanup failure after it no longer fails the command: the next
+    // operation's lock finishes that cleanup, and a committed journal
+    // only ever deletes the `old` and `fresh` copies.
+    let _ = recover(&dir);
+    Ok(())
 }
 
 /// Finishes `dir/.commit` if a commit stopped halfway. An uncommitted
