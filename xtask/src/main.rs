@@ -12,7 +12,7 @@
 //!   `library_specs` are `name@version` (for `cargo -p`, which resolves a
 //!   bare name against the whole dependency graph and can be ambiguous), and
 //!   `extension_packages` are first-party package directories with cases
-//! - `plan --mode M --packages "A B" --event E --bug true|false --mutants true|false --mutant-count N`:
+//! - `plan --mode M --packages "A B" --event E --draft true|false --bug true|false --mutants true|false --mutant-count N`:
 //!   which CI jobs run, the mutant shards and each shard's time limit,
 //!   as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
@@ -113,6 +113,7 @@ fn run(args: &[String]) -> Result<bool, String> {
                 .split_whitespace()
                 .map(str::to_owned)
                 .collect();
+            let draft = flag(rest, "--draft")? == "true";
             let bug = flag(rest, "--bug")? == "true";
             let mutants = flag(rest, "--mutants")? == "true";
             let mutant_count: u64 = flag(rest, "--mutant-count")?
@@ -122,6 +123,7 @@ fn run(args: &[String]) -> Result<bool, String> {
                 &flag(rest, "--mode")?,
                 &packages,
                 &flag(rest, "--event")?,
+                draft,
                 bug,
                 mutants,
                 mutant_count,

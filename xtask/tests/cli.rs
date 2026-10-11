@@ -221,6 +221,8 @@ fn plan_prints_the_jobs_and_shards() {
         "a b",
         "--event",
         "pull_request",
+        "--draft",
+        "false",
         "--bug",
         "true",
         "--mutants",
@@ -242,6 +244,8 @@ fn plan_prints_the_jobs_and_shards() {
         "a b",
         "--event",
         "pull_request",
+        "--draft",
+        "false",
         "--bug",
         "false",
         "--mutants",
@@ -254,6 +258,27 @@ fn plan_prints_the_jobs_and_shards() {
     assert!(out.contains("\"mutants\":false"), "{out}");
     assert!(out.contains("shards=[]\nshard_total=0\n"), "{out}");
     assert!(out.contains("shard_timeout=20\n"), "{out}");
+    let draft = [
+        "plan",
+        "--mode",
+        "crates",
+        "--packages",
+        "a b",
+        "--event",
+        "pull_request",
+        "--draft",
+        "true",
+        "--bug",
+        "true",
+        "--mutants",
+        "true",
+        "--mutant-count",
+        "40",
+    ];
+    let (code, out) = xtask(&dir, &draft, &[], "");
+    assert_eq!(code, 0);
+    assert!(out.contains("\"test\":false"), "{out}");
+    assert!(out.contains("\"test_linux\":true"), "{out}");
     let bad = [
         "plan",
         "--mode",

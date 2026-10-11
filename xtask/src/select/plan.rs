@@ -45,6 +45,7 @@ pub(crate) fn plan(
     mode: &str,
     packages: &[String],
     event: &str,
+    draft: bool,
     bug: bool,
     mutants: bool,
     mutant_count: u64,
@@ -63,9 +64,10 @@ pub(crate) fn plan(
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
         // Linux x86_64 alone, so `mutants` can wait for it; `test` runs the
-        // other platforms and a draft skips it (`docs/ci.md`).
+        // other platforms.
         ("test_linux", test),
-        ("test", test),
+        // A draft skips it (`docs/ci.md`).
+        ("test", test && !draft),
         ("mutants", shards > 0),
         ("bug_red", pr && code && bug),
         // Runs with the binary-level tests, and on every push (`docs/ci.md`, "Selection").

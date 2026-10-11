@@ -137,6 +137,7 @@ jobs:
         env:
           MODE: ${{ steps.select.outputs.mode }}
           PACKAGES: ${{ steps.select.outputs.packages }}
+          DRAFT: ${{ github.event.pull_request.draft || 'false' }}
           BUG: ${{ steps.ticket.outputs.bug || 'false' }}
           BASE: ${{ steps.base.outputs.base }}
           # Mutants run on a ready pull request and on a draft labelled `mutants`,
@@ -149,7 +150,7 @@ jobs:
           count=0
           if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$MODE" != docs ]; then
             git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
-            cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --list >"$RUNNER_TEMP/mutants.txt"
+            cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --list --colors=never >"$RUNNER_TEMP/mutants.txt"
             {
               echo "### Mutants in the diff: $(wc -l <"$RUNNER_TEMP/mutants.txt")"
               echo '```'
@@ -164,7 +165,7 @@ jobs:
           fi
           echo "mutants in the diff: $count"
           cargo xtask plan --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
-            --bug "$BUG" --mutants "$MUTANTS" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
+            --draft "$DRAFT" --bug "$BUG" --mutants "$MUTANTS" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
 
   lint:
     name: Linux x86_64 checks
@@ -217,7 +218,7 @@ jobs:
   test_linux:
     name: Tests (${{ matrix.runner }})
     needs: select
-    if: fromJSON(needs.select.outputs.jobs).test
+    if: fromJSON(needs.select.outputs.jobs).test_linux
     strategy:
       matrix:
         runner: [ubuntu-24.04]
@@ -336,12 +337,13 @@ jobs:
           path: ${{ runner.temp }}/flaky-tests-${{ matrix.runner }}.txt
           if-no-files-found: ignore
 
-  # Linux arm64 and macOS. A draft skips it: a draft runs Linux x86_64 only,
-  # and marking it ready runs all three (docs/ci.md).
+  # Linux arm64 and macOS. The plan decides whether it runs: a draft skips
+  # it, so a draft runs Linux x86_64 only, and marking it ready runs all
+  # three (docs/ci.md).
   test:
     name: Tests (${{ matrix.runner }})
     needs: select
-    if: fromJSON(needs.select.outputs.jobs).test && !github.event.pull_request.draft
+    if: fromJSON(needs.select.outputs.jobs).test
     strategy:
       fail-fast: false
       matrix:
@@ -784,11 +786,4 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           JOBS: ${{ needs.select.outputs.jobs }}
-          DRAFT: ${{ github.event.pull_request.draft }}
-        run: |
-          # A draft skips the arm64 and macOS `test` job (docs/ci.md).
-          if [ "$DRAFT" = true ]; then
-            JOBS=$(jq -c '.test = false' <<<"$JOBS")
-            export JOBS
-          fi
-          cargo xtask verdict
+        run: cargo xtask verdict

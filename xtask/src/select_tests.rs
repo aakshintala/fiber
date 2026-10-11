@@ -204,6 +204,7 @@ fn a_prototype_diff_selects_lint_and_no_tests() {
             "pull_request",
             false,
             false,
+            false,
             0,
         );
         assert!(plan.jobs["lint"], "{files:?}");
@@ -219,6 +220,7 @@ fn another_research_path_stays_docs_only_and_skips_lint() {
         selection.mode(),
         selection.packages(),
         "pull_request",
+        false,
         false,
         false,
         0,
