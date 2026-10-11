@@ -108,6 +108,7 @@ pub(crate) fn session_tools(
     let started = mcp::start(
         specs,
         workspace,
+        artifacts,
         &home.join("cache").join("mcp"),
         clock,
         env!("CARGO_PKG_VERSION"),
