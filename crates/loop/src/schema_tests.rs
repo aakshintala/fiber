@@ -246,14 +246,8 @@ fn a_null_for_a_nullable_union_is_dropped() {
         "properties": {"n": {"type": ["integer", "null"]}},
         "required": ["n"]
     });
-    let made = repair(&required_schema, &json!({"n": null})).unwrap();
-    assert_eq!(Value::Object(made.repaired), json!({}));
-    let paths: Vec<_> = made
-        .repairs
-        .iter()
-        .map(|r| (r.path.as_str(), r.fix))
-        .collect();
-    assert_eq!(paths, [("/n", RepairFix::NullDropped)]);
+    // A required property keeps a null its type allows.
+    assert_eq!(repair(&required_schema, &json!({"n": null})), None);
     assert_eq!(repair(&schema, &json!({"n": "5"})), None);
     let one = object(json!({"n": {"type": ["integer"]}}));
     assert_eq!(repair(&one, &json!({"n": "5"})).unwrap().repaired["n"], 5);
