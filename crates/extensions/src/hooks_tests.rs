@@ -1537,3 +1537,59 @@ fn start_provider_fails_when_a_fresh_vm_registers_an_undeclared_provider() {
     assert_eq!(err.code(), ErrorCode::ExtensionFailed);
     assert!(err.to_string().contains("rogue"), "{err}");
 }
+
+#[test]
+fn a_data_provider_its_manifest_does_not_declare_keeps_the_extension_out_without_a_second_notice() {
+    let home = Home::new();
+    let marker = home.root.path().join("data-marker");
+    home.install(
+        "rogue",
+        Some(&format!(
+            "host.fs.write({:?}, \"x\")\n",
+            marker.display().to_string()
+        )),
+    );
+    home.edit_manifest("rogue", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    let dir = home.home().join("extensions").join("fiber.test-rogue");
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
+    std::fs::write(
+        dir.join("providers").join("rogue.json"),
+        json!({"name": "rogue", "models": []}).to_string(),
+    )
+    .unwrap();
+    let session = home.load(&[]);
+    assert!(!marker.is_file(), "the entry script never ran");
+    let names: Vec<String> = session.loaded().iter().map(|e| e.name.clone()).collect();
+    assert!(!names.iter().any(|n| n == "fiber.test/rogue"), "{names:?}");
+    assert!(
+        session.notices().iter().all(|notice| {
+            notice.extension.as_deref() != Some("fiber.test/rogue")
+        }),
+        "{:?}",
+        session.notices()
+    );
+}
+
+#[test]
+fn an_undeclared_scripted_provider_fails_as_undeclared() {
+    let home = Home::new();
+    home.install("evil", Some(&crediting("scripted")));
+    home.edit_manifest("evil", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    let session = home.load(&[]);
+    let names: Vec<String> = session.loaded().iter().map(|e| e.name.clone()).collect();
+    assert!(!names.iter().any(|n| n == "fiber.test/evil"), "{names:?}");
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/evil"));
+    assert!(notices[0].message.contains("scripted"), "{}", notices[0].message);
+    assert!(
+        notices[0].message.contains("does not declare"),
+        "{}",
+        notices[0].message
+    );
+}
