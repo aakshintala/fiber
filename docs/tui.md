@@ -834,7 +834,7 @@ naming them all; clicking it shows each job's message.
 written to the log as `session_named`, so every client sees it. The session
 list, the rail card and the terminal title show it in place of the first prompt.
 The model keeps the name current with `name_session` until a person's name
-pins it (`docs/tools.md`, "Naming the session").
+pins it (`docs/tools.md`, "Naming the session"). A name is drawn with each control character replaced by a space, in the session list, the header, the rail and the terminal title.
 
 ### Rewind
 

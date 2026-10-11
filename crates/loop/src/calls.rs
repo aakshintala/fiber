@@ -587,7 +587,7 @@ impl Loop {
             };
             self.append(&event, turn, Some(id))?;
         }
-        let (text, images): (Vec<ContentPart>, Vec<ContentPart>) = content
+        let (mut text, mut images): (Vec<ContentPart>, Vec<ContentPart>) = content
             .into_iter()
             .partition(|part| matches!(part, ContentPart::Text { .. }));
         // A running call keeps running until its tool returns, then
@@ -595,12 +595,31 @@ impl Loop {
         // `completed`. A tool that returned an error keeps `failed` with
         // that error: those outcomes are never `cancelled`. The hooks see
         // the status the completion carries.
-        let status = if error.is_some() {
+        let mut status = if error.is_some() {
             CallStatus::Failed
         } else if self.turn_cancelled() {
             CallStatus::Cancelled
         } else {
             CallStatus::Completed
+        };
+        let mut error = error;
+        // A completed call carrying `control.name` names the session, or
+        // fails `name_pinned` while the person's name pins it
+        // (`docs/tools.md`, "What a result carries"). The pin is judged
+        // before the hooks run, so they see the failed call; the name is
+        // written after, so it follows their notices.
+        let write = match self.naming.judge(status, control.as_ref()) {
+            crate::naming::Named::Nothing => None,
+            crate::naming::Named::Pinned(failure) => {
+                status = CallStatus::Failed;
+                error = Some(failure);
+                text = vec![ContentPart::Text {
+                    text: crate::naming::PINNED.to_owned(),
+                }];
+                images = Vec::new();
+                None
+            }
+            crate::naming::Named::Write(named) => Some(named),
         };
         let ran = super::hooks::Ran {
             tool,
@@ -613,6 +632,9 @@ impl Loop {
             rewritten,
         };
         let shaped = self.shape(ran, bound, id, turn)?;
+        if let Some(named) = write {
+            self.append(&Event::SessionNamed(named), turn, Some(id))?;
+        }
         Ok(ToolCallCompleted {
             status,
             error,

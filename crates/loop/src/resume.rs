@@ -90,6 +90,10 @@ pub struct Resumed {
     pub(crate) orphans: Vec<JobCompleted>,
     /// The repository's offers: the session's skips and the pending offer.
     pub(crate) offers: crate::offer::Folded,
+    /// Whether the person's name pins the session: the fold of every
+    /// `session_named` in the own log, in log order (`docs/tools.md`,
+    /// "Naming the session").
+    pub(crate) naming: crate::naming::Naming,
     /// The latest `preamble_built` in the chain: a rewound session sends
     /// it verbatim as its first request (`docs/events.md`, "Rewind").
     /// `None` when the chain holds none yet.
@@ -280,6 +284,7 @@ impl Loop {
             orphans,
             thinking,
             offers,
+            naming,
             settings,
             ..
         } = resumed;
@@ -350,6 +355,7 @@ impl Loop {
                 reviewed,
                 session_blocks,
                 repository: crate::offer::State::resumed(offers),
+                naming,
                 context,
                 ledger,
                 carry,

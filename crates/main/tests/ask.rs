@@ -3079,6 +3079,7 @@ fn two_runs_send_byte_identical_preambles() {
             "edit",
             "handoff",
             "jobs",
+            "name_session",
             "read",
             "session_search",
             "shell",

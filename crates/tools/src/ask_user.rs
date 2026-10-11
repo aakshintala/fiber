@@ -207,6 +207,7 @@ fn to_driver(questions: Vec<Question>) -> Output {
             handoff: None,
             questions: Some(questions),
             skill: None,
+            name: None,
         }),
         ..Output::default()
     }

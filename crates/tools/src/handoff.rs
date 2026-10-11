@@ -65,6 +65,7 @@ impl Tool for Handoff {
                     handoff: Some(note),
                     questions: None,
                     skill: None,
+                    name: None,
                 }),
                 ..Output::default()
             },

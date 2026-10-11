@@ -2255,6 +2255,7 @@ fn asking(name: &'static str) -> Arc<support::TestTool> {
             multi_select: None,
         }]),
         skill: None,
+        name: None,
     });
     Arc::new(tool)
 }
@@ -4515,4 +4516,212 @@ fn a_resume_switching_the_label_marks_orphans_first() {
             "turn_completed",
         ]
     );
+}
+
+fn naming_tool(name: &'static str, called: &str) -> Arc<support::TestTool> {
+    let mut tool = support::TestTool::reads(name, "Named.");
+    tool.output.control = Some(contract::events::Control {
+        handoff: None,
+        questions: None,
+        skill: None,
+        name: Some(called.into()),
+    });
+    Arc::new(tool)
+}
+
+fn named(name: Option<&str>, by: contract::events::NamedBy) -> Event {
+    Event::SessionNamed(contract::events::SessionNamed {
+        name: name.map(str::to_owned),
+        by,
+    })
+}
+
+fn naming_script() -> Vec<Scripted> {
+    vec![
+        support::calls_reply("", &[("name", json!({"city": "Paris"}))]),
+        Scripted::text("Done."),
+    ]
+}
+
+#[test]
+fn a_pinned_history_fails_the_naming_call() {
+    use contract::events::NamedBy;
+    let tool = naming_tool("name", "Theirs");
+    let mut history = History::new(naming_script());
+    history.write(user_turn("one"), None);
+    history.write(named(Some("Mine"), NamedBy::Person), Some("a_0"));
+    history.freeze();
+
+    let looped = history.resume(tools_of(&[&tool]));
+    let outcome = history.run(looped, "hi");
+    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    let kinds = history.new_kinds();
+    assert_eq!(
+        kinds,
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let done = new_of(&history, "tool_call_completed");
+    assert_eq!(done.len(), 1, "{kinds:?}");
+    assert_eq!(done[0].payload["status"], "failed");
+    assert_eq!(done[0].payload["error"]["code"], "name_pinned");
+    assert_eq!(
+        done[0].payload["error"]["message"],
+        "the person named this session"
+    );
+    assert_eq!(
+        done[0].payload["content"],
+        json!([{"type": "text", "text": "the person named this session"}])
+    );
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 2);
+    let result = requests[1]
+        .conversation
+        .iter()
+        .find_map(|input| match input {
+            Input::ToolResult { text, is_error, .. } if *is_error => Some(text.clone()),
+            Input::ToolResult { .. } => None,
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. } => None,
+        })
+        .expect("an error tool result");
+    assert_eq!(result, "the person named this session");
+}
+
+#[test]
+fn a_cleared_person_name_unpins_the_session() {
+    use contract::events::NamedBy;
+    let tool = naming_tool("name", "Theirs");
+    let mut history = History::new(naming_script());
+    history.write(user_turn("one"), None);
+    history.write(named(Some("Mine"), NamedBy::Person), Some("a_0"));
+    history.write(named(None, NamedBy::Person), Some("a_1"));
+    history.freeze();
+
+    let looped = history.resume(tools_of(&[&tool]));
+    let outcome = history.run(looped, "hi");
+    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "session_named",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let named_lines = new_of(&history, "session_named");
+    assert_eq!(named_lines.len(), 1, "{:?}", history.new_kinds());
+    assert_eq!(named_lines[0].payload["name"], "Theirs");
+    assert_eq!(named_lines[0].payload["by"], "model");
+}
+
+#[test]
+fn a_model_name_never_pins_the_session() {
+    use contract::events::NamedBy;
+    let tool = naming_tool("name", "Theirs");
+    let mut history = History::new(naming_script());
+    history.write(user_turn("one"), None);
+    history.write(named(Some("Old"), NamedBy::Model), Some("a_0"));
+    history.freeze();
+
+    let looped = history.resume(tools_of(&[&tool]));
+    let outcome = history.run(looped, "hi");
+    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "session_named",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let named_lines = new_of(&history, "session_named");
+    assert_eq!(named_lines.len(), 1, "{:?}", history.new_kinds());
+    assert_eq!(named_lines[0].payload["name"], "Theirs");
+}
+
+#[test]
+fn a_person_name_before_a_handoff_still_pins_the_session() {
+    use contract::events::{NamedBy, Outcome};
+    let tool = naming_tool("name", "Theirs");
+    let mut history = History::new(naming_script());
+    history.write(user_turn("one"), None);
+    history.write(named(Some("Mine"), NamedBy::Person), Some("a_0"));
+    history.write(support::handoff_started(), Some("a_1"));
+    history.write(support::handoff_done(Outcome::Completed, &[]), Some("a_1"));
+    history.freeze();
+
+    let looped = history.resume(tools_of(&[&tool]));
+    let outcome = history.run(looped, "hi");
+    assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let done = new_of(&history, "tool_call_completed");
+    assert_eq!(done.len(), 1, "{:?}", history.new_kinds());
+    assert_eq!(done[0].payload["error"]["code"], "name_pinned");
 }

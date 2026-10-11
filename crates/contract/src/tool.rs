@@ -27,6 +27,7 @@ pub const BUILT_IN_TOOLS: &[&str] = &[
     "edit",
     "handoff",
     "jobs",
+    "name_session",
     "read",
     "session_search",
     "shell",

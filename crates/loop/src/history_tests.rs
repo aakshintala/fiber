@@ -744,3 +744,111 @@ fn the_window_reader_leaves_image_shaped_tool_arguments_alone() {
         )
     );
 }
+
+fn named(name: Option<&str>, by: contract::events::NamedBy) -> Event {
+    Event::SessionNamed(contract::events::SessionNamed {
+        name: name.map(str::to_owned),
+        by,
+    })
+}
+
+#[test]
+fn a_person_name_in_the_parent_does_not_pin_the_child() {
+    use contract::events::NamedBy;
+    let (_home, sessions) = sessions("naming-parent");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, None, None, &named(Some("Mine"), NamedBy::Person)),
+            envelope(A, 2, Some("t_1"), None, &turn()),
+            envelope(A, 3, Some("t_1"), None, &handoff()),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started("/w", Some((A, 3)))),
+            envelope(B, 1, Some("t_2"), None, &turn()),
+        ],
+    );
+    let folded = fold(&log::history(&sessions.join(B)).unwrap()).unwrap();
+    let control = contract::events::Control {
+        handoff: None,
+        questions: None,
+        skill: None,
+        name: Some("x".into()),
+    };
+    assert!(matches!(
+        folded.naming.judge(CallStatus::Completed, Some(&control)),
+        crate::naming::Named::Write(_)
+    ));
+}
+
+#[test]
+fn a_person_name_in_the_own_log_pins_the_session() {
+    use contract::events::NamedBy;
+    let (_home, sessions) = sessions("naming-own");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), None, &turn()),
+            envelope(A, 2, Some("t_1"), None, &handoff()),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started("/w", Some((A, 2)))),
+            envelope(B, 1, None, None, &named(Some("Mine"), NamedBy::Person)),
+            envelope(B, 2, Some("t_2"), None, &turn()),
+        ],
+    );
+    let folded = fold(&log::history(&sessions.join(B)).unwrap()).unwrap();
+    let control = contract::events::Control {
+        handoff: None,
+        questions: None,
+        skill: None,
+        name: Some("x".into()),
+    };
+    assert!(matches!(
+        folded.naming.judge(CallStatus::Completed, Some(&control)),
+        crate::naming::Named::Pinned(_)
+    ));
+}
+
+#[test]
+fn an_unreadable_name_line_fails_the_resume() {
+    const C: &str = "s_cccccccccccccccc";
+    let (_home, sessions) = sessions("naming-unreadable");
+    let mut bad_payload = serde_json::Map::new();
+    bad_payload.insert("by".to_owned(), json!("person"));
+    let bad = Envelope {
+        kind: "session_named".to_owned(),
+        session_id: SessionId(C.to_owned()),
+        ts: 1_759_150_000_001,
+        schema_version: SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: Some(Seq(1)),
+        payload: bad_payload,
+    };
+    write_log(
+        &sessions,
+        C,
+        &[
+            envelope(C, 0, None, None, &started("/w", None)),
+            bad,
+            envelope(C, 2, Some("t_1"), None, &turn()),
+            envelope(C, 3, Some("t_1"), None, &handoff()),
+        ],
+    );
+    let Err(crate::Error::Unreadable(_)) = fold(&log::history(&sessions.join(C)).unwrap()) else {
+        panic!("the unreadable name line read");
+    };
+}

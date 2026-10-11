@@ -188,6 +188,7 @@ impl Tool for Skill {
                     name,
                     path: listing,
                 }),
+                name: None,
             }),
             ..Output::default()
         }
