@@ -146,12 +146,11 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   esac
   if [ -n "$extension_packages" ]; then
     echo "== fiber extension test"
-    target_directory=$(cargo metadata --format-version 1 --no-deps | sed -En 's/.*"target_directory":"(([^"\\]|\\.)*)".*/\1/p' | sed -E 's/\\(.)/\1/g')
-    cargo build -p main --bin fiber
-    fiber="$target_directory/debug/fiber"
+    # cargo run builds the binary and runs it from Cargo's own target
+    # directory, so no path is read back from cargo metadata.
     for package in $extension_packages; do
-      echo "== $fiber extension test $package"
-      "$fiber" extension test "$package"
+      echo "== fiber extension test $package"
+      cargo run -q -p main --bin fiber -- extension test "$package"
     done
   fi
   # A crate with no library has no doc-tests, and cargo refuses to look.
