@@ -1,8 +1,11 @@
 //! Binary-level wiring for wheel scrolling (`docs/testing.md`, "Levels"):
-//! the built `fiber` at 160x48 scrolls one turn with an opened 300-line
-//! `read` exactly 90 rows over 30 wheel-up reports, with every byte inside
-//! matched mode-2026 pairs. No frame count and no timing: at this level a
-//! single pty write may arrive in one read or several.
+//! the built `fiber` at 160x48 scrolls one turn with a 150-item reply
+//! and an opened 300-line `read` exactly 90 rows over 30 wheel-up
+//! reports, with every byte inside matched mode-2026 pairs. No frame
+//! count and no timing: at this level a single pty write may arrive in
+//! one read or several. The reply's items keep 90 rows to scroll above
+//! the bottom, since an opened call draws only its first 20 lines
+//! (`docs/tui.md`, "Tool groups and the ledger").
 
 #![allow(
     clippy::unwrap_used,
@@ -75,24 +78,31 @@ fn assert_synced(output: &[u8], from: usize) {
     assert!(depth == 0, "a synchronized block never closes");
 }
 
-/// The output line number in `row`: lines read `L` plus four digits.
+/// The reply's item number in `row`: items read `T` plus four digits.
 fn output_line(row: &str) -> usize {
     let at = row
-        .find('L')
-        .unwrap_or_else(|| panic!("no output line in {row:?}"));
+        .find('T')
+        .unwrap_or_else(|| panic!("no reply item in {row:?}"));
     row.get(at + 1..at + 5)
         .and_then(|digits| digits.parse().ok())
-        .unwrap_or_else(|| panic!("no output line in {row:?}"))
+        .unwrap_or_else(|| panic!("no reply item in {row:?}"))
 }
 
 #[test]
 fn thirty_wheel_ups_scroll_the_opened_read_ninety_rows() {
     let setup = Setup::new();
     fs::write(setup.workspace().join("notes.txt"), notes()).unwrap();
+    // The reply of 150 list items precedes the read call, so 90 rows
+    // stay above the bottom once the opened call draws only its first
+    // 20 lines.
+    let reply = (1..=150)
+        .map(|n| format!("- T{n:04}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     write_json(
         &setup.workspace().join("s.json"),
         &json!({"steps": [
-            {"text": ["Reading the notes."],
+            {"text": [reply],
              "tool_calls": [{"name": "read", "arguments": {"path": "notes.txt"}}]},
             {"text": ["Done."]},
         ]}),
@@ -111,15 +121,15 @@ fn thirty_wheel_ups_scroll_the_opened_read_ninety_rows() {
     // Open the ledger, then the read's call, then its output.
     run.write(b"\x0f");
     let ledger = run.wait_screen("the read's ledger row", |grid| {
-        grid.contents.contains("read notes.txt")
+        grid.contents.contains("notes.txt")
     });
     let row = ledger
         .rows
         .iter()
-        .position(|line| line.contains("read notes.txt"))
+        .position(|line| line.contains("notes.txt"))
         .unwrap_or_else(|| panic!("no ledger row in {:?}", ledger.rows));
     let col = ledger.rows[row]
-        .find("read notes.txt")
+        .find("notes.txt")
         .unwrap_or_else(|| panic!("no ledger row in {:?}", ledger.rows));
     run.write(
         format!(
@@ -131,15 +141,38 @@ fn thirty_wheel_ups_scroll_the_opened_read_ninety_rows() {
         )
         .as_bytes(),
     );
-    run.wait_screen("the read's last line", |grid| {
-        grid.contents.contains("L0300")
+    // The opened call draws its first 20 lines, then the more row.
+    let opened = run.wait_screen("the read's more row", |grid| {
+        grid.contents.contains("\u{2026} 280 more lines")
     });
-    // The top row's output line, then 30 wheel-ups in one write: 3 rows
+    assert!(
+        opened.rows.iter().any(|row| row.contains("L0020")),
+        "the first twenty lines draw"
+    );
+    assert!(
+        !opened.rows.iter().any(|row| row.contains("L0021")),
+        "only twenty lines draw"
+    );
+    let more = opened
+        .rows
+        .iter()
+        .position(|row| row.contains("\u{2026} 280 more lines"))
+        .expect("the more row");
+    // The more row's own cells are dim.
+    let row = &opened.rows[more];
+    let at = row.find("\u{2026} 280 more lines").expect("the more row");
+    let start = u16::try_from(row[..at].chars().count()).unwrap();
+    let end = start + u16::try_from("\u{2026} 280 more lines".chars().count()).unwrap();
+    let y = u16::try_from(more).unwrap();
+    for x in start..end {
+        assert!(opened.cell(x, y).dim, "the more row's cell {x} is dim");
+    }
+    // The top row's reply item, then 30 wheel-ups in one write: 3 rows
     // a step (`docs/tui.md`, "Turns").
     let top = run.screen();
     let first = output_line(&top.rows[0]);
-    assert!(first >= 90, "top row holds L{first:04}, too few rows above");
-    let target = format!("L{:04}", first - 90);
+    assert!(first >= 90, "top row holds T{first:04}, too few rows above");
+    let target = format!("T{:04}", first - 90);
     let offset = run.output().len();
     run.write("\x1b[<64;21;11M".repeat(30).as_bytes());
     run.wait_screen("the scrolled rows", |grid| {

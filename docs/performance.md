@@ -190,7 +190,8 @@ measures a `fiber` binary and writes its results to a file, and
 profile for the target that ships, and read its peak RSS from GNU time.
 The wheel rows burst 30 wheel-up reports, 8 ms apart, against `fiber resume`
 in a pseudo-terminal at 160 by 48, in the `paging` jig's session at scale 1
-and in one turn with an opened `read` of 300 lines, and time each report
+and in one turn with a reply of 150 list items preceding an opened `read`
+of 300 lines, of which Fiber draws the first 20 lines, and time each report
 from its write to the frame showing the scrolled rows; each row holds the
 slowest report's ms.
 
