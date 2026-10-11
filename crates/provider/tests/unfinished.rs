@@ -12,23 +12,15 @@
 #[path = "support/harness.rs"]
 mod harness;
 
-use std::sync::{Arc, mpsc};
-use std::thread;
-
 use contract::GenerationId;
-use contract::events::{CacheLifetime, TextDelta};
-use contract::provider::{
-    CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider,
-};
+use contract::events::CacheLifetime;
+use contract::provider::{CallError, ModelRequest, Provider};
 use contract::shapes::Tokens;
-use fakes::{Deadline, ProviderServer, Response};
+use fakes::{ProviderServer, Response};
 use provider::Endpoint;
 use serde_json::{Value, json};
 
-use harness::{
-    DEADLINE, anthropic_sse as anthropic_stream, gemini_sse as gemini_stream,
-    responses_sse as responses_stream, run,
-};
+use harness::{gemini_sse as gemini_stream, responses_sse as responses_stream, run};
 
 fn request() -> ModelRequest {
     ModelRequest {
@@ -71,202 +63,14 @@ fn tokens(input: u64, cache_read: u64, output: u64) -> Tokens {
 
 // Anthropic.
 
-fn anthropic_started(id: &str, usage: Option<Value>) -> Value {
-    let mut message = json!({"id": id});
-    if let Some(usage) = usage {
-        message["usage"] = usage;
-    }
-    json!({"type": "message_start", "message": message})
-}
-
-fn anthropic_usage(input: u64, output: u64) -> Value {
-    json!({"input_tokens": input, "output_tokens": output})
-}
-
-#[test]
-fn anthropic_failed_after_usage_carries_what_it_saw() {
-    let server = ProviderServer::start([Response::stream(anthropic_stream(&[
-        anthropic_started("msg_1", Some(anthropic_usage(7, 2))),
-        json!({"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}),
-    ]))])
-    .unwrap();
-    let call = provider::anthropic_messages::Messages::new(endpoint(
-        "anthropic",
-        "claude-sonnet-5-5",
-        &server,
-    ))
-    .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("msg_1"));
-    assert_eq!(usage.tokens, tokens(7, 0, 2));
-    assert_eq!(usage.web_searches, None);
-    assert_input_size(&usage, &server);
-}
-
-#[test]
-fn anthropic_closed_early_after_its_generation_carries_zero_counts() {
-    let server = ProviderServer::start([Response::stream(anthropic_stream(&[anthropic_started(
-        "msg_1", None,
-    )]))])
-    .unwrap();
-    let call = provider::anthropic_messages::Messages::new(endpoint(
-        "anthropic",
-        "claude-sonnet-5-5",
-        &server,
-    ))
-    .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("msg_1"));
-    assert_eq!(usage.tokens, tokens(0, 0, 0));
-    assert_input_size(&usage, &server);
-}
-
-#[test]
-fn anthropic_cancelled_after_usage_carries_what_it_saw() {
-    let open = format!(
-        "data: {}\n\n",
-        anthropic_started("msg_1", Some(anthropic_usage(7, 2)))
-    );
-    let start = format!(
-        "data: {}\n\n",
-        json!({"type": "content_block_start", "index": 0,
-            "content_block": {"type": "text", "text": ""}})
-    );
-    let delta = format!(
-        "data: {}\n\n",
-        json!({"type": "content_block_delta", "index": 0,
-            "delta": {"type": "text_delta", "text": "Hel"}})
-    );
-    let prefix = format!("{open}{start}{delta}").into_bytes();
-    let server = ProviderServer::start([Response::stall(200, prefix.clone(), prefix.len() + 1024)
-        .header("content-type", "text/event-stream")])
-    .unwrap();
-    let call: Arc<dyn ModelCall> = Arc::from(
-        provider::anthropic_messages::Messages::new(endpoint(
-            "anthropic",
-            "claude-sonnet-5-5",
-            &server,
-        ))
-        .call(&request()),
-    );
-    let (first, seen) = mpsc::channel();
-    let (done, finished) = mpsc::channel();
-    let runner = Arc::clone(&call);
-    thread::spawn(move || {
-        let result = runner.run(&mut |d| first.send(d).unwrap());
-        done.send(result).unwrap();
-    });
-    let delta = Deadline::after(DEADLINE)
-        .recv(&seen)
-        .expect("a delta in time");
-    assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
-    call.cancel();
-    let result = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("run returned");
-    let Err(CallError::Cancelled { usage }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("msg_1"));
-    assert_eq!(usage.tokens, tokens(7, 0, 2));
-    assert_eq!(usage.web_searches, None);
-    assert_input_size(&usage, &server);
-}
-
 // Responses.
 
 fn responses_created(id: &str) -> Value {
     json!({"type": "response.created", "response": {"id": id, "status": "in_progress"}})
 }
 
-fn responses_failed(id: &str, usage: Value) -> Value {
-    json!({"type": "response.failed", "response": {
-        "id": id, "status": "failed",
-        "error": {"code": "server_error", "message": "boom"},
-        "usage": usage,
-    }})
-}
-
 fn responses_usage() -> Value {
     json!({"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3})
-}
-
-#[test]
-fn responses_failed_after_usage_carries_what_it_saw() {
-    let server = ProviderServer::start([Response::stream(responses_stream(&[
-        responses_created("resp_1"),
-        responses_failed("resp_1", responses_usage()),
-    ]))])
-    .unwrap();
-    let call = provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("resp_1"));
-    assert_eq!(usage.tokens, tokens(6, 4, 3));
-    assert_input_size(&usage, &server);
-}
-
-#[test]
-fn responses_closed_early_after_its_generation_carries_zero_counts() {
-    let server = ProviderServer::start([Response::stream(responses_stream(&[responses_created(
-        "resp_1",
-    )]))])
-    .unwrap();
-    let call = provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("resp_1"));
-    assert_eq!(usage.tokens, tokens(0, 0, 0));
-    assert_input_size(&usage, &server);
-}
-
-#[test]
-fn responses_cancelled_after_its_generation_carries_zero_counts() {
-    let prefix = responses_stream(&[
-        responses_created("resp_1"),
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-    ]);
-    let server = ProviderServer::start([Response::stall(200, prefix.clone(), prefix.len() + 1024)
-        .header("content-type", "text/event-stream")])
-    .unwrap();
-    let call: Arc<dyn ModelCall> = Arc::from(
-        provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", &server))
-            .call(&request()),
-    );
-    let (first, seen) = mpsc::channel();
-    let (done, finished) = mpsc::channel();
-    let runner = Arc::clone(&call);
-    thread::spawn(move || {
-        let result = runner.run(&mut |d| first.send(d).unwrap());
-        done.send(result).unwrap();
-    });
-    let delta = Deadline::after(DEADLINE)
-        .recv(&seen)
-        .expect("a delta in time");
-    assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
-    call.cancel();
-    let result = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("run returned");
-    let Err(CallError::Cancelled { usage }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("resp_1"));
-    assert_eq!(usage.tokens, tokens(0, 0, 0));
-    assert_eq!(usage.web_searches, None);
-    assert_input_size(&usage, &server);
 }
 
 // Completions.
@@ -276,41 +80,10 @@ fn completions_chunk(content: &str) -> Value {
         "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": null}]})
 }
 
-fn completions_usage() -> Value {
-    json!({"id": "gen-1", "choices": [], "usage": {"prompt_tokens": 10,
-        "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 4}}})
-}
-
 fn completions_usage_with_write() -> Value {
     json!({"id": "gen-1", "choices": [], "usage": {"prompt_tokens": 18,
         "completion_tokens": 3, "prompt_tokens_details": {"cached_tokens": 4,
             "cache_write_tokens": 8}}})
-}
-
-#[test]
-fn completions_failed_after_usage_carries_what_it_saw() {
-    let body = {
-        let mut out = format!(
-            "data: {}\n\ndata: {}\n\n",
-            completions_chunk("Hi"),
-            completions_usage()
-        );
-        out.push_str(&format!(
-            "data: {}\n\ndata: [DONE]\n\n",
-            json!({"error": {"message": "boom", "code": "server_error"}})
-        ));
-        out.into_bytes()
-    };
-    let server = ProviderServer::start([Response::stream(body)]).unwrap();
-    let call = provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("gen-1"));
-    assert_eq!(usage.tokens, tokens(6, 4, 3));
-    assert_input_size(&usage, &server);
 }
 
 #[test]
@@ -351,60 +124,6 @@ fn completions_failed_after_cache_write_carries_it_under_the_hour_lifetime() {
     assert_input_size(&usage, &server);
 }
 
-#[test]
-fn completions_closed_early_after_its_generation_carries_zero_counts() {
-    let out = format!("data: {}\n\n", completions_chunk("Hi")).into_bytes();
-    // No `[DONE]`: the stream ends early.
-    let server = ProviderServer::start([Response::stream(out)]).unwrap();
-    let call = provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("gen-1"));
-    assert_eq!(usage.tokens, tokens(0, 0, 0));
-    assert_input_size(&usage, &server);
-}
-
-#[test]
-fn completions_cancelled_after_usage_carries_what_it_saw() {
-    let chunk = json!({"id": "gen-1", "object": "chat.completion.chunk",
-        "choices": [{"index": 0, "delta": {"content": "Hel"}, "finish_reason": null}],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 3,
-            "prompt_tokens_details": {"cached_tokens": 4}}});
-    let prefix = format!("data: {chunk}\n\n").into_bytes();
-    let server = ProviderServer::start([Response::stall(200, prefix.clone(), prefix.len() + 1024)
-        .header("content-type", "text/event-stream")])
-    .unwrap();
-    let call: Arc<dyn ModelCall> = Arc::from(
-        provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", &server))
-            .call(&request()),
-    );
-    let (first, seen) = mpsc::channel();
-    let (done, finished) = mpsc::channel();
-    let runner = Arc::clone(&call);
-    thread::spawn(move || {
-        let result = runner.run(&mut |d| first.send(d).unwrap());
-        done.send(result).unwrap();
-    });
-    let delta = Deadline::after(DEADLINE)
-        .recv(&seen)
-        .expect("a delta in time");
-    assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
-    call.cancel();
-    let result = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("run returned");
-    let Err(CallError::Cancelled { usage }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("gen-1"));
-    assert_eq!(usage.tokens, tokens(6, 4, 3));
-    assert_eq!(usage.web_searches, None);
-    assert_input_size(&usage, &server);
-}
-
 // Gemini.
 
 fn gemini_chunk(text: &str, usage: Option<Value>) -> Value {
@@ -415,78 +134,6 @@ fn gemini_chunk(text: &str, usage: Option<Value>) -> Value {
         chunk["usageMetadata"] = usage;
     }
     chunk
-}
-
-fn gemini_usage() -> Value {
-    json!({"promptTokenCount": 10, "candidatesTokenCount": 3})
-}
-
-#[test]
-fn gemini_failed_after_usage_carries_what_it_saw() {
-    let server = ProviderServer::start([Response::stream(gemini_stream(&[
-        gemini_chunk("Hi", Some(gemini_usage())),
-        json!({"error": {"message": "boom", "status": "UNAVAILABLE"}}),
-    ]))])
-    .unwrap();
-    let call = provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("r1"));
-    assert_eq!(usage.tokens, tokens(10, 0, 3));
-    assert_input_size(&usage, &server);
-}
-
-#[test]
-fn gemini_closed_early_after_its_generation_carries_zero_counts() {
-    let server =
-        ProviderServer::start([Response::stream(gemini_stream(&[gemini_chunk("Hi", None)]))])
-            .unwrap();
-    let call = provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", &server))
-        .call(&request());
-    let (result, _) = run(call);
-    let Err(CallError::Failed { usage, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("r1"));
-    assert_eq!(usage.tokens, tokens(0, 0, 0));
-    assert_input_size(&usage, &server);
-}
-
-#[test]
-fn gemini_cancelled_after_usage_carries_what_it_saw() {
-    let prefix = gemini_stream(&[gemini_chunk("Hel", Some(gemini_usage()))]);
-    let server = ProviderServer::start([Response::stall(200, prefix.clone(), prefix.len() + 1024)
-        .header("content-type", "text/event-stream")])
-    .unwrap();
-    let call: Arc<dyn ModelCall> = Arc::from(
-        provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", &server))
-            .call(&request()),
-    );
-    let (first, seen) = mpsc::channel();
-    let (done, finished) = mpsc::channel();
-    let runner = Arc::clone(&call);
-    thread::spawn(move || {
-        let result = runner.run(&mut |d| first.send(d).unwrap());
-        done.send(result).unwrap();
-    });
-    let delta = Deadline::after(DEADLINE)
-        .recv(&seen)
-        .expect("a delta in time");
-    assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
-    call.cancel();
-    let result = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("run returned");
-    let Err(CallError::Cancelled { usage }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, named("r1"));
-    assert_eq!(usage.tokens, tokens(10, 0, 3));
-    assert_eq!(usage.web_searches, None);
-    assert_input_size(&usage, &server);
 }
 
 #[test]
@@ -508,117 +155,6 @@ fn gemini_an_unrepresentable_output_count_is_zero_and_keeps_the_rest() {
     assert_eq!(usage.tokens.cache_read, 20);
     assert_eq!(usage.tokens.output, 0);
     assert_input_size(&usage, &server);
-}
-
-// Every protocol.
-
-/// A call on one protocol against `server`.
-type Calling = fn(&ProviderServer) -> Box<dyn ModelCall>;
-
-/// Each protocol, its call, and a stream whose first event is an error.
-fn protocols() -> [(&'static str, Calling, Vec<u8>); 4] {
-    [
-        (
-            "anthropic",
-            |server| {
-                provider::anthropic_messages::Messages::new(endpoint(
-                    "anthropic",
-                    "claude-sonnet-5-5",
-                    server,
-                ))
-                .call(&request())
-            },
-            anthropic_stream(&[
-                json!({"type": "error", "error": {"type": "invalid_request_error", "message": "bad"}}),
-            ]),
-        ),
-        (
-            "responses",
-            |server| {
-                provider::openai_responses::Responses::new(endpoint("openai", "gpt-5", server))
-                    .call(&request())
-            },
-            responses_stream(&[
-                json!({"type": "error", "code": "server_error", "message": "boom"}),
-            ]),
-        ),
-        (
-            "completions",
-            |server| {
-                provider::openai_completions::Completions::new(endpoint("openai", "gpt-5", server))
-                    .call(&request())
-            },
-            format!(
-                "data: {}\n\ndata: [DONE]\n\n",
-                json!({"error": {"message": "boom", "code": "server_error"}})
-            )
-            .into_bytes(),
-        ),
-        (
-            "gemini",
-            |server| {
-                provider::google_generative_ai::Gemini::new(endpoint("google", "gemini-3", server))
-                    .call(&request())
-            },
-            gemini_stream(&[json!({"error": {"message": "boom", "status": "INVALID_ARGUMENT"}})]),
-        ),
-    ]
-}
-
-/// What a call that saw no generation and no usage carries: the body it
-/// sent, and nothing else.
-fn unnamed(server: &ProviderServer) -> CallUsage {
-    CallUsage::unnamed(InputSize {
-        bytes: body_len(server),
-        media: false,
-    })
-}
-
-#[test]
-fn an_http_error_carries_an_unnamed_usage_on_every_protocol() {
-    for (protocol, call, _) in protocols() {
-        let server = ProviderServer::start([Response::status(500, "boom")]).unwrap();
-        let (result, _) = run(call(&server));
-        let Err(CallError::Failed { usage, .. }) = result else {
-            panic!("{protocol}: {result:?}");
-        };
-        assert_eq!(*usage, unnamed(&server), "{protocol}");
-    }
-}
-
-#[test]
-fn an_error_before_any_generation_carries_an_unnamed_usage_on_every_protocol() {
-    for (protocol, call, stream) in protocols() {
-        let server = ProviderServer::start([Response::stream(stream)]).unwrap();
-        let (result, _) = run(call(&server));
-        let Err(CallError::Failed { usage, .. }) = result else {
-            panic!("{protocol}: {result:?}");
-        };
-        assert_eq!(*usage, unnamed(&server), "{protocol}");
-    }
-}
-
-#[test]
-fn a_call_cancelled_before_its_generation_carries_an_unnamed_usage_on_every_protocol() {
-    for (protocol, call, _) in protocols() {
-        let server =
-            ProviderServer::start([Response::stall(200, b": keep-alive\n\n".to_vec(), 1024)
-                .header("content-type", "text/event-stream")])
-            .unwrap();
-        let call: Arc<dyn ModelCall> = Arc::from(call(&server));
-        let (done, finished) = mpsc::channel();
-        let runner = Arc::clone(&call);
-        thread::spawn(move || done.send(runner.run(&mut |_| {})).unwrap());
-        assert!(server.await_partial(1, DEADLINE), "{protocol}");
-        call.cancel();
-        let result = Deadline::after(DEADLINE)
-            .recv(&finished)
-            .expect("run returned");
-        let Err(CallError::Cancelled { usage }) = result else {
-            panic!("{protocol}: {result:?}");
-        };
-        assert_eq!(*usage, unnamed(&server), "{protocol}");
-    }
 }
 
 #[test]

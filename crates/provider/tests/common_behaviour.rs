@@ -118,8 +118,8 @@ fn wires() -> [Wire; 4] {
         ));
         out.into_bytes()
     };
-    let completions_cut = format!("data: {}\n\n", completions_chunk(json!({"content": "Hi"})))
-        .into_bytes();
+    let completions_cut =
+        format!("data: {}\n\n", completions_chunk(json!({"content": "Hi"}))).into_bytes();
 
     let gemini_chunk = |text: &str, usage: Option<Value>| {
         let mut chunk = json!({"candidates": [{"content": {"role": "model",
@@ -189,7 +189,7 @@ fn wires() -> [Wire; 4] {
             cut: harness::gemini_sse(&[gemini_chunk("Hi", None)]),
             cut_generation: GenerationId("r1".into()),
             error_first: harness::gemini_sse(&[
-                json!({"error": {"message": "boom", "status": "INVALID_ARGUMENT"}})
+                json!({"error": {"message": "boom", "status": "INVALID_ARGUMENT"}}),
             ]),
         },
     ]
@@ -302,10 +302,19 @@ fn cancelling_from_another_thread_ends_a_blocked_read_and_carries_what_it_saw() 
         let Err(CallError::Cancelled { usage }) = result else {
             panic!("{}: {result:?}", wire.protocol.name);
         };
-        assert_eq!(usage.generation_id, wire.stalled_usage.0, "{}", wire.protocol.name);
+        assert_eq!(
+            usage.generation_id, wire.stalled_usage.0,
+            "{}",
+            wire.protocol.name
+        );
         assert_eq!(usage.tokens, wire.stalled_usage.1, "{}", wire.protocol.name);
         assert_eq!(usage.web_searches, None, "{}", wire.protocol.name);
-        assert_eq!(usage.input_size.bytes, body_len(&server), "{}", wire.protocol.name);
+        assert_eq!(
+            usage.input_size.bytes,
+            body_len(&server),
+            "{}",
+            wire.protocol.name
+        );
         assert!(!usage.input_size.media, "{}", wire.protocol.name);
         assert!(
             server.await_closed(1, DEADLINE),
@@ -335,12 +344,16 @@ fn a_connection_closed_before_any_response_fails_the_call() {
             direct: true,
             ..Endpoint::default()
         };
-        let (result, _) =
-            harness::run((wire.protocol.call)(&endpoint, &harness::request()));
+        let (result, _) = harness::run((wire.protocol.call)(&endpoint, &harness::request()));
         let Err(CallError::Failed { failure, .. }) = result else {
             panic!("{}: {result:?}", wire.protocol.name);
         };
-        assert_eq!(failure.code, ErrorCode::ConnectionFailed, "{}", wire.protocol.name);
+        assert_eq!(
+            failure.code,
+            ErrorCode::ConnectionFailed,
+            "{}",
+            wire.protocol.name
+        );
     }
 }
 
@@ -355,7 +368,10 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
                 .to_string(),
             )
             .header("retry-after", "7"),
-            Response::status(400, json!({"detail": "Unsupported parameter: temperature"}).to_string()),
+            Response::status(
+                400,
+                json!({"detail": "Unsupported parameter: temperature"}).to_string(),
+            ),
             Response::status(401, "nope"),
             Response::status(529, "{}").header("x-should-retry", "false"),
             Response::status(503, "{}"),
@@ -376,7 +392,12 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
             failures.push(failure);
             should_retry.push(header);
         }
-        assert_eq!(should_retry, [None, None, None, Some(false), None], "{}", wire.protocol.name);
+        assert_eq!(
+            should_retry,
+            [None, None, None, Some(false), None],
+            "{}",
+            wire.protocol.name
+        );
         assert_eq!(
             failures[0].message,
             format!("{} answered HTTP 429.", wire.protocol.name),
@@ -393,24 +414,54 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
             "{}",
             wire.protocol.name
         );
-        assert_eq!(failures[0].code, ErrorCode::RateLimited, "{}", wire.protocol.name);
-        assert_eq!(failures[0].retry_after_ms, Some(7000), "{}", wire.protocol.name);
+        assert_eq!(
+            failures[0].code,
+            ErrorCode::RateLimited,
+            "{}",
+            wire.protocol.name
+        );
+        assert_eq!(
+            failures[0].retry_after_ms,
+            Some(7000),
+            "{}",
+            wire.protocol.name
+        );
         assert_eq!(
             failures[0].provider.as_ref().unwrap().message,
             "Slow down.",
             "{}",
             wire.protocol.name
         );
-        assert_eq!(failures[1].code, ErrorCode::InvalidRequest, "{}", wire.protocol.name);
+        assert_eq!(
+            failures[1].code,
+            ErrorCode::InvalidRequest,
+            "{}",
+            wire.protocol.name
+        );
         assert_eq!(
             failures[1].provider.as_ref().unwrap().message,
             "Unsupported parameter: temperature",
             "{}",
             wire.protocol.name
         );
-        assert_eq!(failures[2].code, ErrorCode::AuthenticationFailed, "{}", wire.protocol.name);
-        assert_eq!(failures[3].code, ErrorCode::ProviderUnavailable, "{}", wire.protocol.name);
-        assert_eq!(failures[4].code, ErrorCode::ProviderUnavailable, "{}", wire.protocol.name);
+        assert_eq!(
+            failures[2].code,
+            ErrorCode::AuthenticationFailed,
+            "{}",
+            wire.protocol.name
+        );
+        assert_eq!(
+            failures[3].code,
+            ErrorCode::ProviderUnavailable,
+            "{}",
+            wire.protocol.name
+        );
+        assert_eq!(
+            failures[4].code,
+            ErrorCode::ProviderUnavailable,
+            "{}",
+            wire.protocol.name
+        );
     }
 }
 
@@ -475,7 +526,12 @@ fn a_429_with_retry_after_2_records_retry_after_ms_2000() {
         let endpoint = harness::endpoint(wire.protocol.name, &server);
         let got = failures(vec![(wire.protocol.call)(&endpoint, &harness::request())]);
         let (failure, _) = &got[0];
-        assert_eq!(failure.code, ErrorCode::RateLimited, "{}", wire.protocol.name);
+        assert_eq!(
+            failure.code,
+            ErrorCode::RateLimited,
+            "{}",
+            wire.protocol.name
+        );
         let value = serde_json::to_value(failure).unwrap();
         assert_eq!(
             value.get("retry_after_ms"),
@@ -507,10 +563,19 @@ fn a_stream_that_fails_after_its_usage_carries_what_it_saw() {
         let Err(CallError::Failed { usage, .. }) = result else {
             panic!("{}: {result:?}", wire.protocol.name);
         };
-        assert_eq!(usage.generation_id, wire.failed_usage.0, "{}", wire.protocol.name);
+        assert_eq!(
+            usage.generation_id, wire.failed_usage.0,
+            "{}",
+            wire.protocol.name
+        );
         assert_eq!(usage.tokens, wire.failed_usage.1, "{}", wire.protocol.name);
         assert_eq!(usage.web_searches, None, "{}", wire.protocol.name);
-        assert_eq!(usage.input_size.bytes, body_len(&server), "{}", wire.protocol.name);
+        assert_eq!(
+            usage.input_size.bytes,
+            body_len(&server),
+            "{}",
+            wire.protocol.name
+        );
         assert!(!usage.input_size.media, "{}", wire.protocol.name);
     }
 }
@@ -524,9 +589,19 @@ fn a_stream_closed_after_its_generation_carries_zero_counts() {
         let Err(CallError::Failed { usage, .. }) = result else {
             panic!("{}: {result:?}", wire.protocol.name);
         };
-        assert_eq!(usage.generation_id, Some(wire.cut_generation.clone()), "{}", wire.protocol.name);
+        assert_eq!(
+            usage.generation_id,
+            Some(wire.cut_generation.clone()),
+            "{}",
+            wire.protocol.name
+        );
         assert_eq!(usage.tokens, tokens(0, 0, 0), "{}", wire.protocol.name);
-        assert_eq!(usage.input_size.bytes, body_len(&server), "{}", wire.protocol.name);
+        assert_eq!(
+            usage.input_size.bytes,
+            body_len(&server),
+            "{}",
+            wire.protocol.name
+        );
         assert!(!usage.input_size.media, "{}", wire.protocol.name);
     }
 }

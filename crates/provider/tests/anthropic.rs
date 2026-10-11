@@ -21,29 +21,23 @@ mod wire_tools;
 mod harness;
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
-use std::thread;
 
 use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
-    CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
-    Reply, ReplyAction, ToolDefinition,
+    CallError, Delta, Finish, Input, InputSize, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
-use fakes::{Deadline, ProviderServer, Response};
+use fakes::{ProviderServer, Response};
 use provider::Endpoint;
 use provider::anthropic_messages::{Messages, decode};
 use serde_json::{Value, json};
 
 use probes::Recorded;
 
-use harness::{
-    DEADLINE, anthropic_completed as completed_reply, anthropic_sse as stream, run, sent_body,
-};
+use harness::{anthropic_completed as completed_reply, anthropic_sse as stream, run, sent_body};
 
 fn research(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1027,50 +1021,6 @@ fn each_stop_reason_maps_as_the_docs_say_and_an_unknown_one_fails() {
 }
 
 #[test]
-fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
-    let body = |t: &str, message: &str| {
-        json!({"type": "error", "error": {"type": t, "message": message}}).to_string()
-    };
-    let server = ProviderServer::start([
-        Response::status(429, body("rate_limit_error", "Slow down.")).header("retry-after", "7"),
-        Response::status(400, body("invalid_request_error", "Unsupported parameter.")),
-        Response::status(401, "nope"),
-        Response::status(529, "{}").header("x-should-retry", "false"),
-    ])
-    .unwrap();
-    let messages = Messages::new(endpoint(&server));
-    let mut failures = Vec::new();
-    let mut should_retry = Vec::new();
-    for _ in 0..4 {
-        let Err(CallError::Failed {
-            failure,
-            should_retry: header,
-            ..
-        }) = run(Box::new(messages.request(&request()))).0
-        else {
-            panic!("expected a failure");
-        };
-        failures.push(failure);
-        should_retry.push(header);
-    }
-    assert_eq!(should_retry, [None, None, None, Some(false)]);
-    assert_eq!(failures[0].message, "anthropic answered HTTP 429.");
-    assert_eq!(
-        failures[2].message,
-        "anthropic rejected the credential (HTTP 401). Check the key it is configured \
-         with, or log in again with `fiber login anthropic`."
-    );
-    assert_eq!(failures[0].code, ErrorCode::RateLimited);
-    assert_eq!(failures[0].retry_after_ms, Some(7000));
-    assert_eq!(failures[0].provider.as_ref().unwrap().message, "Slow down.");
-    assert_eq!(failures[1].code, ErrorCode::InvalidRequest);
-    assert_eq!(failures[2].code, ErrorCode::AuthenticationFailed);
-    // 529 is Anthropic's "overloaded", outside the mapped 4xx/5xx ranges the
-    // shared status table already covers as a 5xx server error.
-    assert_eq!(failures[3].code, ErrorCode::ProviderUnavailable);
-}
-
-#[test]
 fn a_context_overflow_is_recognised_only_in_its_seen_shape() {
     let body = |message: &str| {
         json!({"type": "error", "error": {"type": "invalid_request_error", "message": message}})
@@ -1095,104 +1045,6 @@ fn a_context_overflow_is_recognised_only_in_its_seen_shape() {
         codes,
         [ErrorCode::ContextOverflow, ErrorCode::InvalidRequest]
     );
-}
-
-#[test]
-fn a_call_cancelled_before_it_runs_returns_without_connecting() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let endpoint = Endpoint {
-        base_url: format!("http://{}", listener.local_addr().unwrap()),
-        direct: true,
-        ..Endpoint::default()
-    };
-    let call = Messages::new(endpoint).request(&request());
-    call.cancel();
-    let Err(CallError::Cancelled { usage }) = run(Box::new(call)).0 else {
-        panic!("a call cancelled before run returns cancelled");
-    };
-    // Nothing was read, so the call carries only the body it built.
-    assert!(usage.input_size.bytes > 0);
-    assert_eq!(*usage, CallUsage::unnamed(usage.input_size));
-    let accepted = listener.accept().map(|_| ()).unwrap_err();
-    assert_eq!(
-        accepted.kind(),
-        std::io::ErrorKind::WouldBlock,
-        "nothing connected"
-    );
-}
-
-#[test]
-fn cancelling_from_another_thread_ends_a_blocked_read() {
-    let open = format!("data: {}\n\n", text_block(0, "Hel")[0]);
-    let event = format!("data: {}\n\n", text_block(0, "Hel")[1]);
-    let payload = format!("{open}{event}").into_bytes();
-    let server =
-        ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
-            .header("content-type", "text/event-stream")])
-        .unwrap();
-    let endpoint = Endpoint {
-        base_url: server.url(),
-        direct: true,
-        ..Endpoint::default()
-    };
-    let call: Arc<dyn ModelCall> = Arc::from(Messages::new(endpoint).call(&request()));
-    let (first, first_seen) = mpsc::channel();
-    let (done, finished) = mpsc::channel();
-    let runner = Arc::clone(&call);
-    thread::spawn(move || {
-        let result = runner.run(&mut |delta| first.send(delta).unwrap());
-        done.send(result).unwrap();
-    });
-    let delta = Deadline::after(DEADLINE)
-        .recv(&first_seen)
-        .expect("waited for the first delta");
-    assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
-
-    // The reader is now blocked waiting for the next bytes.
-    call.cancel();
-    let result = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("waited for run to return after the cancel");
-    let sent = InputSize {
-        bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
-        media: false,
-    };
-    assert_eq!(
-        result,
-        Err(CallError::Cancelled {
-            usage: Box::new(CallUsage::unnamed(sent))
-        })
-    );
-    assert!(
-        server.await_closed(1, DEADLINE),
-        "waited for the server to see the client close"
-    );
-}
-
-#[test]
-fn a_connection_closed_before_any_response_fails_the_call() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    thread::spawn(move || {
-        // Accept, read the request, and close without answering.
-        let (socket, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(socket);
-        let mut line = String::new();
-        while reader.read_line(&mut line).unwrap() > 0 && line != "\r\n" {
-            line.clear();
-        }
-    });
-    let endpoint = Endpoint {
-        base_url: url,
-        direct: true,
-        ..Endpoint::default()
-    };
-    let (result, _) = run(Messages::new(endpoint).call(&request()));
-    let Err(CallError::Failed { failure, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(failure.code, ErrorCode::ConnectionFailed);
 }
 
 #[test]

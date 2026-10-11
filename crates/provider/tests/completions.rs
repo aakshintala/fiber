@@ -20,22 +20,18 @@ mod wire_tools;
 mod harness;
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
-use std::thread;
 
 use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
-    Reply, ReplyAction, ToolDefinition,
+    CallError, Delta, Finish, Input, InputSize, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::shapes::Tokens;
-use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
-use fakes::{Deadline, ProviderServer, Response};
+use contract::{ActionId, ErrorCode, ProviderCallId};
+use fakes::{ProviderServer, Response};
 use provider::openai_completions::{Completions, decode};
 use provider::{Compat, Endpoint};
 use serde_json::{Value, json};
@@ -43,7 +39,7 @@ use serde_json::{Value, json};
 use probes::Recorded;
 
 use harness::{
-    DEADLINE, completions_completed as completed_reply, completions_sse as stream, run, sent_body,
+    completions_completed as completed_reply, completions_sse as stream, run, sent_body,
 };
 
 fn research(path: &str) -> PathBuf {
@@ -791,7 +787,7 @@ fn an_error_chunk_mid_stream_fails_the_call_and_drops_what_it_streamed() {
 }
 
 #[test]
-fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
+fn an_overflow_status_is_told_apart_from_a_max_tokens_one() {
     let recorded = |name: &str| -> String {
         let path = research(&format!("provider-errors/raw/{name}.json"));
         let wrapper: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
@@ -829,108 +825,6 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
         ]
     );
     assert_eq!(failures[3].retry_after_ms, Some(7000));
-}
-
-#[test]
-fn a_call_cancelled_before_it_runs_returns_without_connecting() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let endpoint = Endpoint {
-        base_url: format!("http://{}", listener.local_addr().unwrap()),
-        direct: true,
-        ..Endpoint::default()
-    };
-    let call = Completions::new(endpoint).request(&request());
-    call.cancel();
-    let Err(CallError::Cancelled { usage }) = run(Box::new(call)).0 else {
-        panic!("a call cancelled before run returns cancelled");
-    };
-    // Nothing was read, so the call carries only the body it built.
-    assert!(usage.input_size.bytes > 0);
-    assert_eq!(*usage, CallUsage::unnamed(usage.input_size));
-    let accepted = listener.accept().map(|_| ()).unwrap_err();
-    assert_eq!(
-        accepted.kind(),
-        std::io::ErrorKind::WouldBlock,
-        "nothing connected"
-    );
-}
-
-#[test]
-fn cancelling_from_another_thread_ends_a_blocked_read() {
-    let payload = format!("data: {}\n\n", chunk(json!({"content": "Hel"}), None)).into_bytes();
-    let server =
-        ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
-            .header("content-type", "text/event-stream")])
-        .unwrap();
-    let endpoint = Endpoint {
-        base_url: server.url(),
-        direct: true,
-        ..Endpoint::default()
-    };
-    let call: Arc<dyn ModelCall> = Arc::from(Completions::new(endpoint).call(&request()));
-    let (first, first_seen) = mpsc::channel();
-    let (done, finished) = mpsc::channel();
-    let runner = Arc::clone(&call);
-    thread::spawn(move || {
-        let result = runner.run(&mut |delta| first.send(delta).unwrap());
-        done.send(result).unwrap();
-    });
-    let delta = Deadline::after(DEADLINE)
-        .recv(&first_seen)
-        .expect("waited for the first delta");
-    assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
-    call.cancel();
-    let result = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("waited for run to return after the cancel");
-    let Err(CallError::Cancelled { usage }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(usage.generation_id, Some(GenerationId("gen-1".into())));
-    assert_eq!(
-        usage.tokens,
-        Tokens {
-            input: 0,
-            cache_read: 0,
-            cache_write: Default::default(),
-            output: 0,
-        }
-    );
-    assert_eq!(usage.web_searches, None);
-    assert_eq!(
-        usage.input_size.bytes,
-        u64::try_from(server.requests()[0].body.len()).unwrap()
-    );
-    assert!(!usage.input_size.media);
-    assert!(
-        server.await_closed(1, DEADLINE),
-        "waited for the server to see the client close"
-    );
-}
-
-#[test]
-fn a_connection_closed_before_any_response_fails_the_call() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    thread::spawn(move || {
-        let (socket, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(socket);
-        let mut line = String::new();
-        while reader.read_line(&mut line).unwrap() > 0 && line != "\r\n" {
-            line.clear();
-        }
-    });
-    let endpoint = Endpoint {
-        base_url: url,
-        direct: true,
-        ..Endpoint::default()
-    };
-    let (result, _) = run(Completions::new(endpoint).call(&request()));
-    let Err(CallError::Failed { failure, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(failure.code, ErrorCode::ConnectionFailed);
 }
 
 #[test]

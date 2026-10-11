@@ -23,26 +23,23 @@ mod wire_tools;
 #[path = "support/harness.rs"]
 mod harness;
 
-use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
-use std::thread;
+use std::sync::Arc;
 
 use contract::events::{ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
-    CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
-    Reply, ReplyAction, ToolDefinition,
+    CallError, Delta, Finish, Input, InputSize, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
-use fakes::{Deadline, ProviderServer, Response};
+use fakes::{ProviderServer, Response};
 use provider::openai_responses::{Responses, decode};
 use provider::{Compat, Endpoint};
 use serde_json::{Value, json};
 
 use probes::Recorded;
 
-use harness::{DEADLINE, responses_sse as stream, run, sent_body};
+use harness::{responses_sse as stream, run, sent_body};
 
 fn research(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -741,74 +738,6 @@ fn each_terminal_status_maps_as_the_docs_say_and_an_unknown_one_fails() {
 }
 
 #[test]
-fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
-    let server = ProviderServer::start([
-        Response::status(429, r#"{"error":{"message":"Slow down."}}"#).header("retry-after", "7"),
-        Response::status(400, r#"{"detail":"Unsupported parameter: temperature"}"#),
-        Response::status(401, "nope"),
-        Response::status(503, "{}").header("x-should-retry", "false"),
-    ])
-    .unwrap();
-    let responses = Responses::new(endpoint(&server));
-    let mut failures = Vec::new();
-    let mut should_retry = Vec::new();
-    for _ in 0..4 {
-        let Err(CallError::Failed {
-            failure,
-            should_retry: header,
-            ..
-        }) = run(Box::new(responses.request(&request()))).0
-        else {
-            panic!("expected a failure");
-        };
-        failures.push(failure);
-        should_retry.push(header);
-    }
-    assert_eq!(should_retry, [None, None, None, Some(false)]);
-    assert_eq!(failures[0].message, "opencode answered HTTP 429.");
-    assert_eq!(
-        failures[2].message,
-        "opencode rejected the credential (HTTP 401). Check the key it is configured \
-         with, or log in again with `fiber login opencode`."
-    );
-    assert_eq!(failures[0].code, ErrorCode::RateLimited);
-    assert_eq!(failures[0].retry_after_ms, Some(7000));
-    assert_eq!(failures[0].provider.as_ref().unwrap().message, "Slow down.");
-    assert_eq!(failures[1].code, ErrorCode::InvalidRequest);
-    assert_eq!(
-        failures[1].provider.as_ref().unwrap().message,
-        "Unsupported parameter: temperature"
-    );
-    assert_eq!(failures[2].code, ErrorCode::AuthenticationFailed);
-    assert_eq!(failures[3].code, ErrorCode::ProviderUnavailable);
-}
-
-#[test]
-fn a_call_cancelled_before_it_runs_returns_without_connecting() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let endpoint = Endpoint {
-        base_url: format!("http://{}", listener.local_addr().unwrap()),
-        direct: true,
-        ..Endpoint::default()
-    };
-    let call = Responses::new(endpoint).request(&request());
-    call.cancel();
-    let Err(CallError::Cancelled { usage }) = run(Box::new(call)).0 else {
-        panic!("a call cancelled before run returns cancelled");
-    };
-    // Nothing was read, so the call carries only the body it built.
-    assert!(usage.input_size.bytes > 0);
-    assert_eq!(*usage, CallUsage::unnamed(usage.input_size));
-    let accepted = listener.accept().map(|_| ()).unwrap_err();
-    assert_eq!(
-        accepted.kind(),
-        std::io::ErrorKind::WouldBlock,
-        "nothing connected"
-    );
-}
-
-#[test]
 fn a_policy_refusal_fails_the_call_as_refused() {
     let refusal = json!({"type": "response.output_item.done", "item": {
         "type": "message", "role": "assistant",
@@ -818,52 +747,6 @@ fn a_policy_refusal_fails_the_call_as_refused() {
         error_code(decoded(&stream(&[refusal, completed("completed", json!({}))])).0);
     assert_eq!(code, ErrorCode::Refused);
     assert!(message.contains("I can't help with that."), "{message}");
-}
-
-#[test]
-fn cancelling_from_another_thread_ends_a_blocked_read() {
-    let payload = format!("data: {}\n\n", text_delta("Hel")).into_bytes();
-    let server =
-        ProviderServer::start([Response::stall(200, payload.clone(), payload.len() + 1024)
-            .header("content-type", "text/event-stream")])
-        .unwrap();
-    let endpoint = Endpoint {
-        base_url: server.url(),
-        direct: true,
-        ..Endpoint::default()
-    };
-    let call: Arc<dyn ModelCall> = Arc::from(Responses::new(endpoint).call(&request()));
-    let (first, first_seen) = mpsc::channel();
-    let (done, finished) = mpsc::channel();
-    let runner = Arc::clone(&call);
-    thread::spawn(move || {
-        let result = runner.run(&mut |delta| first.send(delta).unwrap());
-        done.send(result).unwrap();
-    });
-    let delta = Deadline::after(DEADLINE)
-        .recv(&first_seen)
-        .expect("waited for the first delta");
-    assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
-
-    // The reader is now blocked waiting for the next bytes.
-    call.cancel();
-    let result = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("waited for run to return after the cancel");
-    let sent = InputSize {
-        bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
-        media: false,
-    };
-    assert_eq!(
-        result,
-        Err(CallError::Cancelled {
-            usage: Box::new(CallUsage::unnamed(sent))
-        })
-    );
-    assert!(
-        server.await_closed(1, DEADLINE),
-        "waited for the server to see the client close"
-    );
 }
 
 #[test]
@@ -907,31 +790,6 @@ fn a_context_overflow_is_recognised_only_in_its_seen_shape() {
             ErrorCode::StreamIncomplete
         );
     }
-}
-
-#[test]
-fn a_connection_closed_before_any_response_fails_the_call() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    thread::spawn(move || {
-        // Accept, read the request, and close without answering.
-        let (socket, _) = listener.accept().unwrap();
-        let mut reader = BufReader::new(socket);
-        let mut line = String::new();
-        while reader.read_line(&mut line).unwrap() > 0 && line != "\r\n" {
-            line.clear();
-        }
-    });
-    let endpoint = Endpoint {
-        base_url: url,
-        direct: true,
-        ..Endpoint::default()
-    };
-    let (result, _) = run(Responses::new(endpoint).call(&request()));
-    let Err(CallError::Failed { failure, .. }) = result else {
-        panic!("{result:?}");
-    };
-    assert_eq!(failure.code, ErrorCode::ConnectionFailed);
 }
 
 #[test]
