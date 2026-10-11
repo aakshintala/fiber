@@ -208,7 +208,7 @@ request's head and at its base commit (`scripts/release-size`). The base
 binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
-under 20 MiB and runs the benchmarks that gate each pull request
+under 24 MiB and runs the benchmarks that gate each pull request
 (`docs/performance.md`), timings at 3 runs and memory at 5. The base binary
 runs the timing benchmarks only, in the same job on the same runner, so a
 timing comparison never crosses runners. Memory and exact rows compare
