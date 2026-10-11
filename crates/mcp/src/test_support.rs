@@ -80,6 +80,11 @@ impl Setup {
         self.dir.path().join("cache")
     }
 
+    /// The session artifacts directory for binary content.
+    pub(crate) fn artifacts(&self) -> std::path::PathBuf {
+        self.dir.path().join("artifacts")
+    }
+
     /// Writes `body` to `name` under the fixture directory.
     pub(crate) fn write(&self, name: &str, body: &str) {
         let path = self.dir.path().join(name);
@@ -134,10 +139,11 @@ impl Setup {
     #[track_caller]
     pub(crate) fn start(&self, specs: Vec<ServerSpec>) -> Started {
         let workspace = self.workspace();
+        let artifacts = self.artifacts();
         let cache = self.cache();
         let clock = self.clock();
         fakes::within("the start", WITHIN, move || {
-            crate::start::start(specs, &workspace, &cache, &clock, "0.0.0")
+            crate::start::start(specs, &workspace, &artifacts, &cache, &clock, "0.0.0")
         })
     }
 

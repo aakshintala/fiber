@@ -130,10 +130,12 @@ pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_millis(600_000);
 /// Starts the session-start specs in parallel in `workspace` and declares
 /// the tools of the servers that answered, declaring the rest from their
 /// cached lists in `cache` (`<home>/cache/mcp`) without spawning them.
-/// `version` is Fiber's own version, sent as `clientInfo`.
+/// `version` is Fiber's own version, sent as `clientInfo`. Binary content
+/// a tool answers is written to the session artifacts dir `artifacts`.
 pub fn start(
     specs: Vec<ServerSpec>,
     workspace: &Path,
+    artifacts: &Path,
     cache: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
@@ -161,12 +163,16 @@ pub fn start(
     for (index, spec) in session.into_iter() {
         let done = done.clone();
         let workspace = workspace.to_path_buf();
+        let artifacts = artifacts.to_path_buf();
         let cache = cache.to_path_buf();
         let clock = Arc::clone(clock);
         let version = version.to_owned();
         thread::spawn(move || {
-            done.send((index, open(spec, &workspace, &cache, &clock, &version)))
-                .unwrap_or(());
+            done.send((
+                index,
+                open(spec, &workspace, &artifacts, &cache, &clock, &version),
+            ))
+            .unwrap_or(());
         });
     }
     drop(done);
@@ -215,7 +221,7 @@ pub fn start(
             &link,
             spec.call_timeout,
         ));
-        tools.extend(declare(&spec, &cached.tools, &link));
+        tools.extend(declare(&spec, &cached.tools, &link, artifacts));
     }
     tools.sort_by(|left, right| left.1.definition().name.cmp(&right.1.definition().name));
     let (pairs, infos): (Vec<_>, Vec<_>) = tools
@@ -245,6 +251,7 @@ pub(crate) enum Opened {
 pub(crate) fn open(
     spec: ServerSpec,
     workspace: &Path,
+    artifacts: &Path,
     cache: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
@@ -296,7 +303,7 @@ pub(crate) fn open(
     );
     let link: Weak<Slot> = Arc::downgrade(&slot);
     let listed = sources_of(&name, &listed_prompts, &link, spec.call_timeout);
-    let declared = declare(&spec, &tools, &link);
+    let declared = declare(&spec, &tools, &link, artifacts);
     Opened::Up(slot, declared, listed)
 }
 
@@ -352,6 +359,7 @@ pub(crate) fn declare(
     spec: &ServerSpec,
     tools: &[ListedTool],
     link: &Weak<Slot>,
+    artifacts: &Path,
 ) -> Vec<Declaration> {
     let mut declared = Vec::new();
     for tool in tools {
@@ -369,8 +377,11 @@ pub(crate) fn declare(
             tool.description.clone(),
             tool.schema.clone(),
             &hints,
-            spec.call_timeout,
-            link.clone(),
+            crate::tool::Target {
+                timeout: spec.call_timeout,
+                artifacts: artifacts.to_path_buf(),
+                slot: link.clone(),
+            },
         );
         let registered = spec.name.clone();
         let details = info(&spec.name, &made);

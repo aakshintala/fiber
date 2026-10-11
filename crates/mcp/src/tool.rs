@@ -4,6 +4,7 @@
 //! spec's timeout. Definitions are never deferred. The loop applies the 16
 //! KiB cut and writes the artifact, so [`Tool::bound`] stays default.
 
+use std::path::PathBuf;
 use std::sync::Weak;
 use std::time::Duration;
 
@@ -35,8 +36,25 @@ struct Call {
     tool: String,
     /// The call timeout, from the spec.
     timeout: Duration,
+    /// The session artifacts dir: binary content is written here.
+    #[allow(
+        dead_code,
+        reason = "temporary: the per-part answer reads it in the next commit"
+    )]
+    artifacts: PathBuf,
     /// The server's slot. A dead link means the session is gone.
     slot: Weak<Slot>,
+}
+
+/// Where a declared tool's calls run: the call timeout, the session
+/// artifacts dir for binary content, and the server's slot.
+pub(crate) struct Target {
+    /// The call timeout, from the spec.
+    pub timeout: Duration,
+    /// The session artifacts dir: binary content is written here.
+    pub artifacts: PathBuf,
+    /// The server's slot. A dead link means the session is gone.
+    pub slot: Weak<Slot>,
 }
 
 impl McpTool {
@@ -48,15 +66,15 @@ impl McpTool {
     /// Declares `tool` of `server`: the qualified name, the server's
     /// description and schema, and `hints` already resolved (the person's
     /// override replaces the server's set as a whole). Calls run through
-    /// the server's slot, starting it on the first call.
+    /// the server's slot, starting it on the first call, and write binary
+    /// content to the session artifacts dir.
     pub(crate) fn declare(
         server: &str,
         tool: &str,
         description: String,
         schema: Value,
         hints: &Hints,
-        timeout: Duration,
-        slot: Weak<Slot>,
+        target: Target,
     ) -> Self {
         let name = qualified(server, tool);
         Self {
@@ -76,8 +94,9 @@ impl McpTool {
             call: Call {
                 server: server.to_owned(),
                 tool: tool.to_owned(),
-                timeout,
-                slot,
+                timeout: target.timeout,
+                artifacts: target.artifacts,
+                slot: target.slot,
             },
         }
     }

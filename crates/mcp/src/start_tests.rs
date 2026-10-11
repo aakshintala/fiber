@@ -224,13 +224,21 @@ fn a_server_that_misses_its_deadline_is_left_out() {
         .checked_add(DEFAULT_STARTUP_TIMEOUT)
         .expect("deadline");
     let workspace = setup.workspace();
+    let artifacts = setup.artifacts();
     let cache = workspace.join("cache");
     let clock = setup.clock();
     let (done, result) = std::sync::mpsc::channel();
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            done.send(start(vec![spec], &workspace, &cache, &clock, "0.0.0"))
-                .expect("collected");
+            done.send(start(
+                vec![spec],
+                &workspace,
+                &artifacts,
+                &cache,
+                &clock,
+                "0.0.0",
+            ))
+            .expect("collected");
         });
         assert!(
             setup.fake.await_parked(deadline, WITHIN),
@@ -291,11 +299,14 @@ fn servers_stop_at_once() {
         .collect();
     let clock = setups[0].clock();
     let workspace = setups[0].workspace();
+    let artifacts = setups[0].artifacts();
     let cache = workspace.join("cache");
     let (opened, started) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         opened
-            .send(start(specs, &workspace, &cache, &clock, "0.0.0"))
+            .send(start(
+                specs, &workspace, &artifacts, &cache, &clock, "0.0.0",
+            ))
             .expect("collected");
     });
     let started = Deadline::after(WITHIN)
@@ -445,14 +456,22 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
         .checked_add(DEFAULT_STARTUP_TIMEOUT)
         .expect("deadline");
     let workspace = setup.workspace();
+    let artifacts = setup.artifacts();
     let cache = workspace.join("cache");
     let clock = setup.clock();
     // Detached, not scoped: a scope joins its thread even after a
     // `recv_timeout` panic, so a hung start would hang the test.
     let (done, result) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        done.send(start(vec![spec], &workspace, &cache, &clock, "0.0.0"))
-            .expect("collected");
+        done.send(start(
+            vec![spec],
+            &workspace,
+            &artifacts,
+            &cache,
+            &clock,
+            "0.0.0",
+        ))
+        .expect("collected");
     });
     assert!(
         setup.fake.await_parked(deadline, WITHIN),

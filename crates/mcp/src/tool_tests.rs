@@ -23,6 +23,7 @@ fn declare(
     tool: &str,
     hints: Hints,
     slot: std::sync::Weak<crate::slot::Slot>,
+    artifacts: &std::path::Path,
 ) -> super::McpTool {
     super::McpTool::declare(
         server,
@@ -30,23 +31,47 @@ fn declare(
         "Echoes.".to_owned(),
         json!({"type": "object"}),
         &hints,
-        Duration::from_secs(30),
-        slot,
+        super::Target {
+            timeout: Duration::from_secs(30),
+            artifacts: artifacts.to_path_buf(),
+            slot,
+        },
     )
 }
 
-fn call() -> Call {
+fn call(artifacts: &std::path::Path) -> Call {
     Call {
         server: "fx".to_owned(),
         tool: "echo".to_owned(),
         timeout: Duration::from_secs(30),
+        artifacts: artifacts.to_path_buf(),
         slot: std::sync::Weak::new(),
     }
 }
 
 #[test]
+fn declared_tools_carry_the_artifacts_dir() {
+    let dir = fakes::TempDir::new("mcp-tool-artifacts");
+    let tool = declare(
+        "fx",
+        "echo",
+        Hints::default(),
+        std::sync::Weak::new(),
+        dir.path(),
+    );
+    assert_eq!(tool.call.artifacts, dir.path());
+}
+
+#[test]
 fn the_definition_carries_the_qualified_name_schema_and_no_deferral() {
-    let tool = declare("fx", "echo", Hints::default(), std::sync::Weak::new());
+    let dir = fakes::TempDir::new("mcp-tool-definition");
+    let tool = declare(
+        "fx",
+        "echo",
+        Hints::default(),
+        std::sync::Weak::new(),
+        dir.path(),
+    );
     let definition = tool.definition();
     assert_eq!(definition.name, "mcp__fx__echo");
     assert_eq!(definition.description, "Echoes.");
@@ -56,6 +81,7 @@ fn the_definition_carries_the_qualified_name_schema_and_no_deferral() {
 
 #[test]
 fn effects_come_from_the_resolved_hints_for_any_arguments() {
+    let dir = fakes::TempDir::new("mcp-tool-effects");
     let tool = declare(
         "fx",
         "echo",
@@ -65,6 +91,7 @@ fn effects_come_from_the_resolved_hints_for_any_arguments() {
             open_world: None,
         },
         std::sync::Weak::new(),
+        dir.path(),
     );
     let effects = tool.effects(&arguments()).expect("classifiable");
     assert_eq!(
@@ -82,7 +109,14 @@ fn effects_come_from_the_resolved_hints_for_any_arguments() {
 
 #[test]
 fn a_dead_link_is_unavailable() {
-    let tool = declare("fx", "echo", Hints::default(), std::sync::Weak::new());
+    let dir = fakes::TempDir::new("mcp-tool-dead-link");
+    let tool = declare(
+        "fx",
+        "echo",
+        Hints::default(),
+        std::sync::Weak::new(),
+        dir.path(),
+    );
     let output = fakes::within("the call to `echo` on a dead server", WITHIN, move || {
         tool.run(
             &arguments(),
@@ -238,10 +272,11 @@ fn died_record() -> McpServerFailed {
 #[test]
 #[allow(clippy::type_complexity, reason = "one table pins every outcome")]
 fn each_outcome_maps_to_its_code_sentence_and_servers() {
-    let base = call();
+    let dir = fakes::TempDir::new("mcp-tool-outcome");
+    let base = call(dir.path());
     let timeout_call = Call {
         timeout: Duration::from_secs(60),
-        ..call()
+        ..call(dir.path())
     };
     let ok: Value = json!({"content": [{"type": "text", "text": "hi"}]});
     let rows: Vec<(
