@@ -375,8 +375,9 @@ breaking edits to the code the diff changed, such as replacing a function body
 with a default or flipping a comparison, and runs the mutated crate's tests
 against each one. An edit that no test notices fails CI. Selection writes the
 diff's full mutant list to its job summary on every pull request event, drafts
-included (`gh run view <run> -R aakshintala/fiber`, or the run's summary page),
-so a lane maps each mutant to a test before CI runs the shards.
+included, and prints it to the job's log
+(`gh run view <run> -R aakshintala/fiber --log --job <Selection job id>`; the
+run's summary page shows it in a browser), so a lane maps each mutant to a test before CI runs the shards.
 
 A function is extracted and tested alone only where a surviving mutant would
 signal the wrong process or lose data, such as the `kill(-1)` refusal

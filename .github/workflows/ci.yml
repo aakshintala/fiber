@@ -156,6 +156,8 @@ jobs:
               cat "$RUNNER_TEMP/mutants.txt"
               echo '```'
             } >>"$GITHUB_STEP_SUMMARY"
+            # A lane on the command line reads the log: `gh run view` prints no summaries.
+            cat "$RUNNER_TEMP/mutants.txt"
             if [ "$MUTANTS" = true ]; then
               count=$(wc -l <"$RUNNER_TEMP/mutants.txt")
             fi
