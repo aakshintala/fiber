@@ -8,8 +8,8 @@
 //! placeholders where the terminal speaks the protocol, and as its one line
 //! everywhere else, as docs/tui.md, "Images", describes.
 
-use super::input::{Ev, Key};
-use super::{Args, Term};
+use super::input::{Ev, Key, Mouse};
+use super::{Args, Fold, Term};
 use super::{BLUE, BU, CYAN, SEL, bold, dim, fg, lift, paint, row, slab, sp, t, view_header};
 use crate::cases::{Case, Surface};
 use ratatui::style::{Color, Modifier, Style};
@@ -370,30 +370,190 @@ fn links_rows() -> Vec<super::Row> {
     ]
 }
 
-/// The fixture drawn flat, as docs/tui.md, "Screen readers", describes:
-/// no tints, half-block edges, stripes or animation; one line per item
-/// in reading order; state in words, never glyphs; images as their one
-/// line. Every span keeps the default style, so no cell carries a
-/// foreground, a background or a modifier.
+/// Collapses whitespace to single spaces, so one flat item reads as one line.
+fn one(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// One flat line: the default style on every span and no background. The
+/// canned `screen_reader` case and the `--screen-reader --static` replay
+/// share it, so both frames carry no tint on any cell.
+fn flat_line(s: String) -> super::Row {
+    row(vec![sp(s, Style::new())])
+}
+
+/// The canned flat frame, sharing `flat_line` with the replay.
 fn screen_reader_rows() -> Vec<super::Row> {
-    let line = |s: &str| row(vec![sp(s.to_string(), Style::new())]);
     vec![
         row(vec![
-            sp("Screen reader", bold()),
+            sp("Screen reader", Style::new()),
             t(),
             sp("flat", Style::new()),
         ]),
         super::Row::default(),
-        line("you 14:03: Sweep the flaky lock tests before review."),
-        line("reply: The lock helper now retries three times."),
-        line("thought: check the flaky test first"),
-        line("tool read src/main.rs: 120 lines"),
-        line("image: ▣ screenshot.png · 1280×800"),
-        line("tool shell: exit 0, 5 lines"),
-        line("waiting: approval for shell rm -rf /tmp/x"),
-        line("running: shell, elapsed 12s"),
-        line("done: completed, 2 tool calls"),
+        flat_line("you 14:03: Sweep the flaky lock tests before review.".into()),
+        flat_line("reply: The lock helper now retries three times.".into()),
+        flat_line("thought: check the flaky test first".into()),
+        flat_line("tool read src/main.rs: 120 lines".into()),
+        flat_line("image: ▣ screenshot.png · 1280×800".into()),
+        flat_line("tool shell: exit 0, 5 lines".into()),
+        flat_line("waiting: approval for shell rm -rf /tmp/x".into()),
+        flat_line("running: shell, elapsed 12s".into()),
+        flat_line("done: completed, 2 tool calls".into()),
     ]
+}
+
+/// A call's result in words, from the ledger's own result text.
+fn flat_result(c: &super::Call) -> String {
+    super::result_spans(c)
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect::<String>()
+}
+
+/// One flat line for a call: its kind, its target and its result in words.
+fn flat_call(c: &super::Call) -> String {
+    let kind = super::kind_of(c);
+    let tgt = super::target(c);
+    let what = if tgt.is_empty() {
+        kind.to_string()
+    } else {
+        format!("{kind} {tgt}")
+    };
+    format!("tool {what}: {}", one(&flat_result(c)))
+}
+
+/// The replayed fixture drawn flat, as docs/tui.md, "Screen readers",
+/// describes: one default-style line per item in reading order, state in
+/// words, never glyphs. The fixture carries no images; the canned
+/// `screen_reader` case covers the image's one line.
+pub(crate) fn flat_rows(f: &Fold) -> Vec<super::Row> {
+    let mut out = vec![
+        flat_line("Screen reader flat".into()),
+        super::Row::default(),
+    ];
+    for t in &f.turns {
+        out.push(flat_line(format!(
+            "you {}: {}",
+            super::clock(t.ts),
+            one(&t.prompt)
+        )));
+        for b in &t.blocks {
+            match b {
+                super::Block::Text(s) => {
+                    out.push(flat_line(format!("reply: {}", one(s))));
+                }
+                super::Block::Group(g) => {
+                    for i in &g.items {
+                        match i {
+                            super::Item::R(r) => {
+                                out.push(flat_line(format!("thought: {}", one(&r.text))))
+                            }
+                            super::Item::C(c) => out.push(flat_line(flat_call(c))),
+                        }
+                    }
+                }
+                super::Block::Steer(s, ts) => out.push(flat_line(format!(
+                    "steer {}: {}",
+                    super::clock(*ts),
+                    one(s)
+                ))),
+                super::Block::Mcp(m) => {
+                    out.push(flat_line(format!("notice: {}", one(m))));
+                }
+                super::Block::Done(s) => {
+                    out.push(flat_line(format!("done: {}", one(s))));
+                }
+                super::Block::Answer(rows, note, ts, declined) => {
+                    let when = super::clock(*ts);
+                    if *declined {
+                        out.push(flat_line(format!("you answered {when}: declined")));
+                    } else {
+                        let mut parts: Vec<String> = rows
+                            .iter()
+                            .map(|(h, a, skipped)| {
+                                if *skipped {
+                                    format!("{h} = skipped")
+                                } else {
+                                    format!("{h} = {a}")
+                                }
+                            })
+                            .collect();
+                        if let Some(n) = note {
+                            parts.push(format!("note = \u{201c}{n}\u{201d}"));
+                        }
+                        out.push(flat_line(format!(
+                            "you answered {when}: {}",
+                            parts.join("; ")
+                        )));
+                    }
+                }
+                super::Block::Handoff(h) => out.push(flat_line(format!(
+                    "handoff {}: {}",
+                    one(&h.trigger),
+                    h.outcome.as_deref().unwrap_or("running")
+                ))),
+            }
+        }
+    }
+    out
+}
+
+/// Moves a scroll offset by `d` rows over `len` rows in a view `h` high.
+fn scroll(top: usize, d: isize, len: usize, h: usize) -> usize {
+    let max = len.saturating_sub(h);
+    if d < 0 {
+        top.saturating_sub((-d) as usize)
+    } else {
+        (top + d as usize).min(max)
+    }
+}
+
+/// Paints the flat rows at a scroll offset, as `draw` does.
+fn draw_flat(term: &mut Term, rows: &[super::Row], top: usize) -> io::Result<()> {
+    let size = term.size()?;
+    let (cols, h) = (size.width.max(1), size.height.max(1));
+    term.backend_mut().write_all(b"\x1b[?2026h")?;
+    term.draw(|f| {
+        let buf = f.buffer_mut();
+        for y in 0..h {
+            let r = rows.get(top + y as usize).cloned().unwrap_or_default();
+            paint(buf, 0, y, cols, &r);
+        }
+    })?;
+    let be = term.backend_mut();
+    be.write_all(b"\x1b[?2026l")?;
+    be.flush()?;
+    Ok(())
+}
+
+/// Draws the `--screen-reader --static` replay: the folded fixture flat,
+/// scrolled with arrows or the wheel. Mutually exclusive with the
+/// conversation view, like the `--image-case` cases: the fixture replay
+/// never draws. Esc, q or Ctrl+C quits.
+pub(crate) fn run_flat(a: &Args, term: &mut Term, f: &Fold) -> io::Result<String> {
+    let rows = flat_rows(f);
+    let mut top = 0usize;
+    draw_flat(term, &rows, top)?;
+    let mut rd = super::input::Reader::new()?;
+    loop {
+        let (evs, resized) = rd.wait(None)?;
+        let h = term.size()?.height.max(1) as usize;
+        if resized {
+            top = scroll(top, 0, rows.len(), h);
+            draw_flat(term, &rows, top)?;
+        }
+        for ev in evs {
+            match flat_key(top, ev, a.wheel, rows.len(), h) {
+                None => return Ok("screen reader\n".into()),
+                Some(n) if n != top => {
+                    top = n;
+                    draw_flat(term, &rows, top)?;
+                }
+                Some(_) => {}
+            }
+        }
+    }
 }
 
 /// One attention state's title: the header with a small labelled row
@@ -467,7 +627,112 @@ fn placed(rows: Vec<super::Row>, w: u16) -> Vec<Placed> {
 }
 
 fn frame(c: &Look, cols: usize, rows: usize, inline: bool) -> Frame {
+    frame_with(c, cols, rows, inline, None)
+}
+
+/// What Enter opens, `y` copies and a click opens: the case's actionable
+/// targets in focus order. The image that cannot show has none: it is
+/// never asked for again.
+fn targets(c: &Look) -> Vec<&'static str> {
+    match c.kind {
+        Kind::ToolImage => vec!["screenshot.png"],
+        Kind::Fallback => vec!["screenshot.png"],
+        Kind::Pasted => vec!["pasted.png"],
+        Kind::Links => vec!["https://example.com/spec", "crates/log/tests/lock.rs"],
+        Kind::ScreenReader | Kind::Title(_) => vec![],
+    }
+}
+
+/// The target a body row's text shows, if it shows one.
+fn target_at(kind: Kind, text: &str) -> Option<&'static str> {
+    match kind {
+        Kind::ToolImage if text.contains("screenshot.png") || text.contains(PH) => {
+            Some("screenshot.png")
+        }
+        Kind::Fallback if text.contains("screenshot.png") => Some("screenshot.png"),
+        Kind::Pasted
+            if text.contains("pasted.png") || text.contains("[Image #1]") || text.contains(PH) =>
+        {
+            Some("pasted.png")
+        }
+        Kind::Links => {
+            if text.contains("https://example.com/spec") {
+                Some("https://example.com/spec")
+            } else if text.contains("crates/log/tests/lock.rs") {
+                Some("crates/log/tests/lock.rs")
+            } else {
+                None
+            }
+        }
+        Kind::ScreenReader | Kind::Title(_) => None,
+        _ => None,
+    }
+}
+
+/// The dim status row an open leaves: what would have happened, since the
+/// prototype spawns no process.
+fn open_status(t: &str) -> String {
+    format!("→ would open {t}")
+}
+
+/// The dim status row a copy leaves.
+fn copy_status(t: &str) -> String {
+    format!("→ copied {t}")
+}
+
+/// The status an Enter or `y` press leaves on this case: the focused
+/// target, if the case shows one.
+fn key_status(c: &Look, ev: Ev) -> Option<String> {
+    let first = *targets(c).first()?;
+    match ev {
+        Ev::Key(Key::Enter, _) => Some(open_status(first)),
+        Ev::Key(Key::Char('y'), m) if !m.ctrl && !m.alt && !m.sup => Some(copy_status(first)),
+        _ => None,
+    }
+}
+
+/// The status a click on a body row's text leaves, if the row shows a target.
+fn click_status(c: &Look, text: &str) -> Option<String> {
+    target_at(c.kind, text).map(open_status)
+}
+
+/// The status a click at body row `y` leaves, if the row shows a target.
+fn click_row(c: &Look, cols: usize, inline: bool, y: u16) -> Option<String> {
+    let text: String = body_rows(c, cols, inline)
+        .get(y as usize)
+        .map(|r| r.spans.iter().map(|s| s.content.as_ref()).collect())
+        .unwrap_or_default();
+    click_status(c, &text)
+}
+
+/// The flat view's answer to an event: a new scroll offset, `None` to quit.
+/// Any other event keeps the offset.
+fn flat_key(top: usize, ev: Ev, wheel: usize, len: usize, h: usize) -> Option<usize> {
+    match ev {
+        Ev::Key(Key::Char('c'), m) if m.ctrl => None,
+        Ev::Key(Key::Esc, _) => None,
+        Ev::Key(Key::Char('q'), m) if !m.ctrl && !m.alt && !m.sup => None,
+        Ev::Key(Key::Up, _) => Some(scroll(top, -1, len, h)),
+        Ev::Key(Key::Down, _) => Some(scroll(top, 1, len, h)),
+        Ev::Key(Key::PageUp, _) => Some(scroll(top, -(h as isize), len, h)),
+        Ev::Key(Key::PageDown, _) => Some(scroll(top, h as isize, len, h)),
+        Ev::Mouse(Mouse::WheelUp, _, _, _) => Some(scroll(top, -(wheel as isize), len, h)),
+        Ev::Mouse(Mouse::WheelDown, _, _, _) => Some(scroll(top, wheel as isize, len, h)),
+        _ => Some(top),
+    }
+}
+
+/// The frame with a dim status row under the body, like the rail's
+/// "would send" row: what Enter, `y` or a click would have done.
+fn frame_with(c: &Look, cols: usize, rows: usize, inline: bool, status: Option<&str>) -> Frame {
     let mut body = placed(body_rows(c, cols, inline), cols as u16);
+    if let Some(s) = status {
+        body.push(Placed {
+            x: 0,
+            w: cols as u16,
+            row: row(vec![sp(format!("  {s}"), dim())]),
+        });
+    }
     body.truncate(rows);
     while body.len() < rows {
         body.push(Placed {
@@ -481,10 +746,13 @@ fn frame(c: &Look, cols: usize, rows: usize, inline: bool) -> Frame {
     }
 }
 
-fn draw(term: &mut Term, c: &Look, inline: bool) -> io::Result<()> {
+fn draw(term: &mut Term, c: &Look, inline: bool, status: Option<&str>) -> io::Result<()> {
     let size = term.size()?;
     let (cols, rows) = (size.width.max(1), size.height.max(1));
-    let fr = frame(c, cols as usize, rows as usize, inline);
+    let fr = match status {
+        Some(s) => frame_with(c, cols as usize, rows as usize, inline, Some(s)),
+        None => frame(c, cols as usize, rows as usize, inline),
+    };
     term.backend_mut().write_all(b"\x1b[?2026h")?;
     term.draw(|f| {
         let buf = f.buffer_mut();
@@ -525,7 +793,8 @@ pub(crate) fn run_images(a: &Args, term: &mut Term) -> io::Result<String> {
     let name = a.image_case.clone().unwrap_or_default();
     let c = find(&name)?;
     let show = inline(a.screen_reader);
-    draw(term, &c, show)?;
+    let mut status: Option<String> = None;
+    draw(term, &c, show, status.as_deref())?;
     // A title case owns the terminal title while it is up, and leaves a
     // normal title behind.
     let title = match c.kind {
@@ -541,7 +810,7 @@ pub(crate) fn run_images(a: &Args, term: &mut Term) -> io::Result<String> {
     let done = 'run: loop {
         let (evs, resized) = rd.wait(None)?;
         if resized {
-            draw(term, &c, show)?;
+            draw(term, &c, show, status.as_deref())?;
             if let Some(t) = title {
                 // A redraw clears nothing, but the title stays owned.
                 let be = term.backend_mut();
@@ -556,7 +825,24 @@ pub(crate) fn run_images(a: &Args, term: &mut Term) -> io::Result<String> {
                 Ev::Key(Key::Char('q'), m) if !m.ctrl && !m.alt && !m.sup => {
                     break 'run format!("image {name}\n");
                 }
-                _ => {}
+                // A focused link opens with Enter and copies with `y`,
+                // as docs/tui.md, "Links", says; a click on a row that
+                // shows a target opens it. Nothing is spawned: the dim
+                // status row says what would have happened.
+                Ev::Mouse(Mouse::Down, _, y, _) => {
+                    let size = term.size()?;
+                    let cols = size.width.max(1) as usize;
+                    if let Some(s) = click_row(&c, cols, show, y) {
+                        status = Some(s);
+                        draw(term, &c, show, status.as_deref())?;
+                    }
+                }
+                ev => {
+                    if let Some(s) = key_status(&c, ev) {
+                        status = Some(s);
+                        draw(term, &c, show, status.as_deref())?;
+                    }
+                }
             }
         }
     };
@@ -975,6 +1261,426 @@ mod tests {
             "\x1b]2;! fiber · approval\x1b\\"
         );
         assert_eq!(title_esc(NORMAL_TITLE), "\x1b]2;fiber\x1b\\");
+    }
+
+    /// Paints a case with a status row into a buffer, as `draw` does.
+    fn buffer_with(
+        c: &Look,
+        cols: usize,
+        rows: usize,
+        inline: bool,
+        status: Option<&str>,
+    ) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, cols as u16, rows as u16));
+        let fr = frame_with(c, cols, rows, inline, status);
+        for (y, ps) in fr.screen.iter().enumerate() {
+            for p in ps {
+                crate::paint(&mut buf, p.x, y as u16, p.w, &p.row);
+            }
+        }
+        buf
+    }
+
+    /// Paints flat rows into a buffer, as `draw_flat` does.
+    fn flat_buffer(rows: &[crate::Row], cols: usize, h: usize) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, cols as u16, h as u16));
+        for y in 0..h as u16 {
+            let r = rows.get(y as usize).cloned().unwrap_or_default();
+            crate::paint(&mut buf, 0, y, cols as u16, &r);
+        }
+        buf
+    }
+
+    #[test]
+    fn screen_reader_spans_are_all_default() {
+        // The canned case shares `flat_line` with the replay: flipping any
+        // span back to a tint or an attribute fails here.
+        for r in screen_reader_rows() {
+            assert_eq!(r.bg, None, "a tint on {:?}", r.spans);
+            for s in &r.spans {
+                assert_eq!(s.style, Style::new(), "a style on {:?}", s.content);
+            }
+        }
+    }
+
+    /// A fold with one of every block, so the flat replay test reads every branch.
+    fn every_block_fold() -> Fold {
+        let ts = (14 * 3600 + 3 * 60) * 1000;
+        let mut f = Fold::default();
+        f.turns.push(crate::Turn {
+            prompt: "Sweep the flaky lock tests".into(),
+            ts,
+            blocks: vec![
+                crate::Block::Text("The lock helper\nnow retries.".into()),
+                crate::Block::Group(crate::Group {
+                    items: vec![
+                        crate::Item::R(crate::Reason {
+                            text: "check the flaky test first".into(),
+                            start: ts,
+                            end: None,
+                            step: 1,
+                        }),
+                        crate::Item::C(crate::Call {
+                            name: "read".into(),
+                            args: serde_json::json!({"path": "src/main.rs"}),
+                            st: crate::St::Completed,
+                            start: ts,
+                            end: Some(ts),
+                            err: None,
+                            lines: 120,
+                            exit: None,
+                            changes: vec![],
+                            content: String::new(),
+                            step: 1,
+                            asked: None,
+                        }),
+                        crate::Item::C(crate::Call {
+                            name: "jobs".into(),
+                            args: serde_json::json!({}),
+                            st: crate::St::Completed,
+                            start: ts,
+                            end: Some(ts),
+                            err: None,
+                            lines: 0,
+                            exit: None,
+                            changes: vec![],
+                            content: "3 jobs".into(),
+                            step: 1,
+                            asked: None,
+                        }),
+                        crate::Item::C(crate::Call {
+                            name: "shell".into(),
+                            args: serde_json::json!({"command": "cargo test"}),
+                            st: crate::St::Pending,
+                            start: ts,
+                            end: None,
+                            err: None,
+                            lines: 0,
+                            exit: None,
+                            changes: vec![],
+                            content: String::new(),
+                            step: 1,
+                            asked: None,
+                        }),
+                    ],
+                    steps: 1,
+                    step_closed: false,
+                    open: false,
+                    last_ts: ts,
+                }),
+                crate::Block::Steer("hold on".into(), ts),
+                crate::Block::Mcp("linear down".into()),
+                crate::Block::Done("completed · 1 · 2 tool calls".into()),
+                crate::Block::Answer(
+                    vec![
+                        ("scope".into(), "lock".into(), false),
+                        ("extra".into(), "skipped".into(), true),
+                    ],
+                    Some("ok".into()),
+                    ts,
+                    false,
+                ),
+                crate::Block::Answer(vec![], None, ts, true),
+                crate::Block::Handoff(crate::Handoff {
+                    trigger: "compact".into(),
+                    before: 0,
+                    after: None,
+                    ts,
+                    outcome: None,
+                }),
+                crate::Block::Handoff(crate::Handoff {
+                    trigger: "compact".into(),
+                    before: 0,
+                    after: Some(1),
+                    ts,
+                    outcome: Some("completed".into()),
+                }),
+            ],
+            ..Default::default()
+        });
+        f
+    }
+
+    #[test]
+    fn flat_rows_read_flat_in_order() {
+        let rows = flat_rows(&every_block_fold());
+        // Every span keeps the default style and no background.
+        for r in &rows {
+            assert_eq!(r.bg, None, "a tint on {:?}", r.spans);
+            for s in &r.spans {
+                assert_eq!(s.style, Style::new(), "a style on {:?}", s.content);
+            }
+        }
+        // The test reads the rendered buffer, not the intended case.
+        let buf = flat_buffer(&rows, 160, 48);
+        let painted = buf_text(&buf, 160, 48);
+        for y in 0..48u16 {
+            for x in [0, 79, 159] {
+                assert_eq!(buf[(x, y)].bg, Color::Reset, "a tint at ({x}, {y})");
+                assert_eq!(buf[(x, y)].fg, Color::Reset, "a tint at ({x}, {y})");
+            }
+        }
+        for g in ['▄', '▀', '█', '▌', '▐', '✓', '✗', '○', '●', '▸', '▾', '⠋']
+        {
+            assert!(!painted.contains(g), "a {g} in the flat replay");
+        }
+        // One line per item, in reading order, state in words.
+        let reply = painted.lines().find(|l| l.contains("reply:")).unwrap();
+        assert!(
+            reply.contains("The lock helper now retries."),
+            "the reply wraps instead of reading as one line"
+        );
+        for item in [
+            "Screen reader flat",
+            "you 14:03: Sweep the flaky lock tests",
+            "reply: The lock helper now retries.",
+            "thought: check the flaky test first",
+            "tool read src/main.rs: 120 lines",
+            "tool shell cargo test: running",
+            "tool jobs: 3 jobs",
+            "steer 14:03: hold on",
+            "notice: linear down",
+            "done: completed · 1 · 2 tool calls",
+            "you answered 14:03: scope = lock; extra = skipped",
+            "you answered 14:03: declined",
+            "handoff compact: running",
+            "handoff compact: completed",
+        ] {
+            assert!(painted.contains(item), "no {item}");
+        }
+        let order = |mark: &str| painted.find(mark).unwrap();
+        assert!(order("you 14:03:") < order("reply:"));
+        assert!(order("reply:") < order("thought:"));
+        assert!(order("thought:") < order("tool read"));
+        assert!(order("tool shell") < order("steer 14:03:"));
+        assert!(order("done:") < order("you answered"));
+        assert!(order("declined") < order("handoff compact: running"));
+    }
+
+    #[test]
+    fn flat_key_maps_every_event() {
+        // Ten rows in a four-high view: Down from 0 goes to 1, a page to 4.
+        let key = |ev| flat_key(0, ev, 1, 10, 4);
+        assert_eq!(
+            key(Ev::Key(
+                Key::Char('c'),
+                crate::input::Mods {
+                    ctrl: true,
+                    ..Default::default()
+                }
+            )),
+            None
+        );
+        assert_eq!(key(Ev::Key(Key::Esc, Default::default())), None);
+        assert_eq!(key(Ev::Key(Key::Char('q'), Default::default())), None);
+        // `q` with a modifier is not the quit key.
+        assert_eq!(
+            key(Ev::Key(
+                Key::Char('q'),
+                crate::input::Mods {
+                    ctrl: true,
+                    ..Default::default()
+                }
+            )),
+            Some(0)
+        );
+        assert_eq!(key(Ev::Key(Key::Up, Default::default())), Some(0));
+        assert_eq!(key(Ev::Key(Key::Down, Default::default())), Some(1));
+        assert_eq!(key(Ev::Key(Key::PageUp, Default::default())), Some(0));
+        assert_eq!(key(Ev::Key(Key::PageDown, Default::default())), Some(4));
+        assert_eq!(
+            key(Ev::Mouse(Mouse::WheelUp, 0, 0, Default::default())),
+            Some(0)
+        );
+        assert_eq!(
+            key(Ev::Mouse(Mouse::WheelDown, 0, 0, Default::default())),
+            Some(1)
+        );
+        // Any other event keeps the offset.
+        assert_eq!(
+            flat_key(3, Ev::Key(Key::Enter, Default::default()), 1, 10, 4),
+            Some(3)
+        );
+        assert_eq!(
+            flat_key(
+                3,
+                Ev::Mouse(Mouse::Move, 0, 0, Default::default()),
+                1,
+                10,
+                4
+            ),
+            Some(3)
+        );
+    }
+
+    #[test]
+    fn scroll_clamps_to_the_view() {
+        // Ten rows in a four-high view show 0 through 6.
+        assert_eq!(scroll(0, -1, 10, 4), 0);
+        assert_eq!(scroll(0, 3, 10, 4), 3);
+        assert_eq!(scroll(3, 10, 10, 4), 6);
+        assert_eq!(scroll(6, 1, 10, 4), 6);
+        assert_eq!(scroll(6, -6, 10, 4), 0);
+        // A short list never scrolls.
+        assert_eq!(scroll(0, 1, 3, 4), 0);
+        assert_eq!(scroll(0, -1, 3, 4), 0);
+    }
+
+    #[test]
+    fn enter_opens_and_y_copies_the_focused_link() {
+        let c = parse_case("links");
+        assert_eq!(
+            key_status(&c, Ev::Key(Key::Enter, Default::default())),
+            Some("→ would open https://example.com/spec".into())
+        );
+        assert_eq!(
+            key_status(&c, Ev::Key(Key::Char('y'), Default::default())),
+            Some("→ copied https://example.com/spec".into())
+        );
+        // The test reads the rendered buffer: the status row sits dim
+        // under the body, and the body above it does not move.
+        let status = "→ would open https://example.com/spec";
+        let buf = buffer_with(&c, 160, 48, false, Some(status));
+        let painted = buf_text(&buf, 160, 48);
+        let y = painted.lines().position(|l| l.contains(status)).unwrap() as u16;
+        assert_eq!(y, 10, "the status is not under the body");
+        let x = painted.lines().nth(y as usize).unwrap().find('→').unwrap() as u16;
+        assert!(
+            buf[(x, y)].modifier.contains(Modifier::DIM),
+            "the status row is not dim"
+        );
+        assert!(
+            painted.lines().next().unwrap().contains("Links"),
+            "the body moved"
+        );
+    }
+
+    #[test]
+    fn keys_without_targets_stay_quiet() {
+        let links = parse_case("links");
+        // `y` with a modifier is not the copy key.
+        assert_eq!(
+            key_status(
+                &links,
+                Ev::Key(
+                    Key::Char('y'),
+                    crate::input::Mods {
+                        ctrl: true,
+                        ..Default::default()
+                    }
+                )
+            ),
+            None
+        );
+        assert_eq!(
+            key_status(&links, Ev::Key(Key::Char('n'), Default::default())),
+            None
+        );
+        // The flat frame and the titles show no target.
+        for name in [
+            "screen_reader",
+            "title_approval",
+            "title_question",
+            "title_waiting",
+            "title_finished",
+        ] {
+            let c = parse_case(name);
+            assert_eq!(targets(&c), Vec::<&str>::new(), "a target in {name}");
+            assert_eq!(
+                key_status(&c, Ev::Key(Key::Enter, Default::default())),
+                None,
+                "Enter opens in {name}"
+            );
+            assert_eq!(
+                key_status(&c, Ev::Key(Key::Char('y'), Default::default())),
+                None,
+                "y copies in {name}"
+            );
+            assert_eq!(
+                click_status(&c, "OSC 2: title"),
+                None,
+                "a click opens in {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn clicks_open_the_row_they_land_on() {
+        // The fallback's first one line opens; the missing file's row and
+        // the notice never ask again.
+        let c = parse_case("fallback");
+        let buf = buffer(&c, 160, 48, false);
+        let painted = buf_text(&buf, 160, 48);
+        let lines: Vec<&str> = painted.lines().collect();
+        let shot = lines.iter().find(|l| l.contains("screenshot.png")).unwrap();
+        assert_eq!(
+            click_status(&c, shot),
+            Some("→ would open screenshot.png".into())
+        );
+        // The row wiring agrees with the text wiring, and rows past the
+        // body stay quiet.
+        let y = lines
+            .iter()
+            .position(|l| l.contains("screenshot.png"))
+            .unwrap() as u16;
+        assert_eq!(
+            click_row(&c, 160, false, y),
+            Some("→ would open screenshot.png".into())
+        );
+        assert_eq!(click_row(&c, 160, false, 47), None);
+        assert_eq!(click_row(&c, 160, false, 480), None);
+        let missing = lines.iter().find(|l| l.contains("avatar.png")).unwrap();
+        assert_eq!(click_status(&c, missing), None);
+        let notice = lines
+            .iter()
+            .find(|l| l.contains("image unavailable"))
+            .unwrap();
+        assert_eq!(click_status(&c, notice), None);
+        assert_eq!(click_status(&c, ""), None);
+        // The ledger row and the placeholders open the tool's image.
+        let c = parse_case("tool_image");
+        let buf = buffer(&c, 160, 48, true);
+        let painted = buf_text(&buf, 160, 48);
+        let grid = painted.lines().find(|l| l.contains(PH)).unwrap();
+        assert_eq!(
+            click_status(&c, grid),
+            Some("→ would open screenshot.png".into())
+        );
+        let buf = buffer(&c, 160, 48, false);
+        let painted = buf_text(&buf, 160, 48);
+        let line = painted.lines().find(|l| l.contains("▣")).unwrap();
+        assert_eq!(
+            click_status(&c, line),
+            Some("→ would open screenshot.png".into())
+        );
+        // The pasted mark and its image open the pasted file.
+        let c = parse_case("pasted");
+        let buf = buffer(&c, 160, 48, true);
+        let painted = buf_text(&buf, 160, 48);
+        let mark = painted.lines().find(|l| l.contains("[Image #1]")).unwrap();
+        assert_eq!(
+            click_status(&c, mark),
+            Some("→ would open pasted.png".into())
+        );
+        // Either table cell opens its own link.
+        let c = parse_case("links");
+        let buf = buffer(&c, 160, 48, false);
+        let painted = buf_text(&buf, 160, 48);
+        let spec = painted.lines().find(|l| l.contains("spec  https")).unwrap();
+        assert_eq!(
+            click_status(&c, spec),
+            Some("→ would open https://example.com/spec".into())
+        );
+        let fix = painted
+            .lines()
+            .find(|l| l.contains("fix   crates"))
+            .unwrap();
+        assert_eq!(
+            click_status(&c, fix),
+            Some("→ would open crates/log/tests/lock.rs".into())
+        );
+        let hint = painted.lines().find(|l| l.contains("Enter opens")).unwrap();
+        assert_eq!(click_status(&c, hint), None);
     }
 
     #[test]

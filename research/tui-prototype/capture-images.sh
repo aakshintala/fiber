@@ -39,4 +39,14 @@ for c in title_approval title_question title_waiting title_finished; do
   # shellcheck disable=SC2086
   printf 'q' | script -q "$OUT/osc/$c.raw" $BIN $FIX --static --image-case $c >/dev/null 2>&1 || true
 done
+# The flat replay: --screen-reader --static with no case draws the fixture
+# flat instead of the conversation.
+tmux kill-session -t im1637 2>/dev/null || true
+tmux new-session -d -x 160 -y 48 -s im1637 "$BIN $FIX --static --screen-reader"
+sleep 1
+tmux capture-pane -p -t im1637 >"$OUT/screen_reader_flat.txt"
+tmux capture-pane -e -p -t im1637 >"$OUT/sgr/screen_reader_flat.ansi"
+tmux send-keys -t im1637 q
+sleep 0.3
+tmux kill-session -t im1637 2>/dev/null || true
 echo "wrote $OUT"

@@ -5251,6 +5251,13 @@ fn main() -> io::Result<()> {
 
 type Term = Terminal<CrosstermBackend<Counting<BufWriter<io::Stdout>>>>;
 
+/// Whether the replay draws flat: `--screen-reader --static` with no case
+/// open over the conversation draws the folded fixture flat, as docs/tui.md,
+/// "Screen readers", describes.
+fn flat_replay(a: &Args) -> bool {
+    a.screen_reader && a.static_ && !a.paged && a.picker.is_none() && a.completions.is_none()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run(
     a: &Args,
@@ -5262,6 +5269,10 @@ fn run(
     mut pager: Option<paged::Pager>,
     open_index: Duration,
 ) -> io::Result<String> {
+    // `--screen-reader --static` with no case draws the folded fixture flat.
+    if flat_replay(a) {
+        return images::run_flat(a, term, f);
+    }
     let v0 = Instant::now();
     // paged: rows in the whole conversation; the scans (count or search passes) and their
     // times; frames that loaded pages, how long the loading took, and from the input event
@@ -7876,5 +7887,67 @@ mod tests {
         assert!(
             matches!(f.turns[0].blocks.last(), Some(Block::Done(s)) if s.starts_with("interrupted"))
         );
+    }
+
+    #[test]
+    fn flat_replay_needs_screen_reader_static_and_no_case() {
+        let base = || Args {
+            path: "fixtures/session.jsonl".into(),
+            speed: 12.0,
+            static_: true,
+            reduced: false,
+            stats: None,
+            exit_after: None,
+            warmup: 2.0,
+            audit: false,
+            commands: None,
+            log_input: None,
+            wheel: 1,
+            lua: None,
+            lua_uncached: false,
+            paged: false,
+            window: 1.0,
+            page_lines: 64,
+            verify_copy: false,
+            bench: false,
+            no_pending: false,
+            hover: false,
+            home: None,
+            overlay: None,
+            rail_case: None,
+            view_case: None,
+            offer_case: None,
+            image_case: None,
+            screen_reader: true,
+            rail: 1,
+            density: 2,
+            rail_share: 15.0,
+            panel_share: 21.0,
+            picker: None,
+            completions: None,
+            login: None,
+        };
+        assert!(flat_replay(&base()));
+        // Flipping any one condition replays the conversation instead.
+        assert!(!flat_replay(&Args {
+            screen_reader: false,
+            ..base()
+        }));
+        assert!(!flat_replay(&Args {
+            static_: false,
+            ..base()
+        }));
+        assert!(!flat_replay(&Args {
+            paged: true,
+            ..base()
+        }));
+        assert!(!flat_replay(&Args {
+            picker: Some("list".into()),
+            ..base()
+        }));
+        assert!(!flat_replay(&Args {
+            completions: Some("slash".into()),
+            ..base()
+        }));
     }
 }

@@ -59,7 +59,7 @@ Images and links (#1637), in Ghostty itself at 160 by 48 (each case also renders
 - fallback: the first row should read as a link (accent, underlined) and open `screenshot.png` on click; the second row carries the missing-file notice and should not be asked for again.
 - pasted: the prompt bubble should hold `[Image #1]` with the gradient image below it, or its one line without the protocol.
 - links: the focused link should sit on the selection tint with the dim `Enter opens · y copies` hint under it; the hovered link should brighten. Pressing Enter should open the focused link, `y` should copy it, and clicking either should open it.
-- screen_reader: run with `--screen-reader` too. The frame should read flat: one line per item in order, state in words, the image as its one line, with no animation elsewhere.
+- screen_reader: run with `--screen-reader` too. The frame should read flat: one line per item in order, state in words, the image as its one line, with no animation elsewhere. With no `--image-case`, `--static --screen-reader` should draw the replayed fixture flat instead of the conversation.
 - title_approval: the terminal title should read `! fiber · approval` while the case is up, and `fiber` after quitting with q.
 - title_question: the terminal title should read `! fiber · question` while the case is up, and `fiber` after quitting with q.
 - title_waiting: the terminal title should read `! fiber · waiting` while the case is up, and `fiber` after quitting with q.
