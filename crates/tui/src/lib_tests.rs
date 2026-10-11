@@ -1332,7 +1332,7 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
     let shown = crate::view::text(lp.screen.backend().buffer());
     let row = shown
         .lines()
-        .position(|line| line.ends_with("copy"))
+        .position(|line| line.contains("click to copy"))
         .and_then(|row| u16::try_from(row).ok())
         .unwrap_or_else(|| panic!("no copy target on\n{shown}"));
     // SGR reports are 1-based. A wheel, a right click, hover, a left click
@@ -1357,6 +1357,14 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
         !lp.app.copied(),
         "a report other than a click on copy copied"
     );
+    // The wheel above may have scrolled the taller reply: find the
+    // header's row again for the click.
+    let shown = crate::view::text(lp.screen.backend().buffer());
+    let row = shown
+        .lines()
+        .position(|line| line.contains("click to copy"))
+        .and_then(|row| u16::try_from(row).ok())
+        .unwrap_or_else(|| panic!("no copy target on\n{shown}"));
     feed(&mut lp, vec![at(0, 57, row, 'M'), at(0, 57, row, 'm')]);
     assert!(lp.app.copied());
     // A left click off any target, here on blank cells, clears "Copied".
@@ -1410,7 +1418,7 @@ fn a_non_left_press_keeps_copied_and_a_left_press_clears_it() {
     let shown = crate::view::text(lp.screen.backend().buffer());
     let row = shown
         .lines()
-        .position(|line| line.ends_with("copy"))
+        .position(|line| line.contains("click to copy"))
         .and_then(|row| u16::try_from(row).ok())
         .unwrap_or_else(|| panic!("no copy target on\n{shown}"));
     // SGR reports are 1-based.

@@ -70,9 +70,12 @@ fn each_row_reports_its_join_and_skip() {
             "```\nabcdefghij\n```",
             10,
             vec![
-                ("      copy", Break, 0, true),
-                ("1 │ abcdef", Break, 4, false),
-                ("  │ ghij  ", Wrap, 4, false),
+                ("▄▄▄▄▄▄▄▄▄▄", Break, 0, true),
+                ("          ", Break, 0, true),
+                ("   1  abcd", Break, 6, false),
+                ("      efgh", Wrap, 6, false),
+                ("      ij  ", Wrap, 6, false),
+                ("▀▀▀▀▀▀▀▀▀▀", Break, 0, true),
             ],
         ),
         (
@@ -93,6 +96,41 @@ fn each_row_reports_its_join_and_skip() {
             .collect();
         assert_eq!(rows(markdown, width), expected, "{name}");
     }
+}
+
+#[test]
+fn a_line_number_wider_than_four_columns_widens_its_gutter() {
+    let block = |lines: usize| {
+        let code: String = (1..=lines).map(|n| format!("l{n}\n")).collect();
+        super::super::render(&format!("```\n{code}```"), 24)
+    };
+    // An edge row, the header, one row per code line, then the edge.
+    let narrow = block(9_999);
+    assert_eq!(narrow.text.len(), narrow.lines.len());
+    assert_eq!(
+        narrow.lines[2 + 9998].to_string(),
+        format!("9999  l9999{}", " ".repeat(13))
+    );
+    assert_eq!(narrow.text[2 + 9998].skip, 6);
+    // Past four digits every row in the block widens, keeping the
+    // numbers aligned.
+    let wide = block(10_000);
+    assert_eq!(
+        wide.lines[2 + 9998].to_string(),
+        format!(" 9999  l9999{}", " ".repeat(12))
+    );
+    assert_eq!(
+        wide.lines[2 + 9999].to_string(),
+        format!("10000  l10000{}", " ".repeat(11))
+    );
+    assert_eq!(wide.text[2 + 9998].skip, 7);
+    assert_eq!(wide.text[2 + 9999].skip, 7);
+    let wider = block(100_000);
+    assert_eq!(
+        wider.lines[2 + 99999].to_string(),
+        format!("100000  l100000{}", " ".repeat(9))
+    );
+    assert_eq!(wider.text[2 + 99999].skip, 8);
 }
 
 #[test]

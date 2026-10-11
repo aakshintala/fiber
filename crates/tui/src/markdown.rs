@@ -18,6 +18,7 @@ pub(crate) use crate::theme::Role;
 
 use crate::highlight;
 use crate::rows::{Join, RowText};
+use crate::surface::edge_row;
 
 /// A reply rendered at one width.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -49,7 +50,7 @@ impl Rendered {
 }
 
 /// The copy target's label.
-const COPY: &str = "copy";
+const COPY: &str = "click to copy";
 /// Cells per tab stop in code.
 const TAB: usize = 4;
 
@@ -143,7 +144,7 @@ impl Writer {
                 Some((_, code)) => code.push_str(&text),
                 None => self.push(&text, self.style()),
             },
-            Event::Code(text) => self.push(&text, tinted(Role::CodeText)),
+            Event::Code(text) => self.push(&text, style(Role::Info)),
             Event::Html(text)
             | Event::InlineHtml(text)
             | Event::InlineMath(text)
@@ -443,8 +444,8 @@ impl Writer {
         }
     }
 
-    /// A code block: the header row with its label and `copy`, then each
-    /// line numbered, all on the tint across the width.
+    /// A code block: the edge rows, the header row with its label and
+    /// `copy`, then each line numbered, all on the tint across the width.
     fn code_block(&mut self, info: &str, code: &str) {
         let code = code.strip_suffix('\n').unwrap_or(code);
         let inner = self.inner_width();
@@ -456,38 +457,45 @@ impl Writer {
         if let Some(cols) = copy_cols(inner) {
             let bars = self.quote_width();
             self.out.targets.push(CopyTarget {
-                line: self.out.lines.len(),
+                line: self.out.lines.len().saturating_add(1),
                 cols: cols.start.saturating_add(bars)..cols.end.saturating_add(bars),
                 code: code.to_owned(),
             });
         }
+        self.put(edge_row(width, Role::Code, true), true);
         self.put(header(label, width), true);
         let runs = highlight::spans(info, code).unwrap_or_else(|| {
             code.split('\n')
                 .map(|line| vec![(Role::CodeText, line.to_owned())])
                 .collect()
         });
-        let digits = runs.len().to_string().len();
+        // The number's columns fit every line, four at minimum.
+        let digits = runs.len().to_string().len().max(NUMBER_WIDTH);
         for (at, line) in runs.iter().enumerate() {
             let mut cells = Vec::new();
             for (role, text) in line {
+                // A comment is italic as well as its colour.
+                let base = if *role == Role::Comment {
+                    tinted(*role).add_modifier(Modifier::ITALIC)
+                } else {
+                    tinted(*role)
+                };
                 for ch in text.chars() {
                     if ch == '\t' {
                         let stop = TAB.saturating_sub(cells.len() % TAB);
-                        cells.extend(std::iter::repeat_n((' ', tinted(*role)), stop));
+                        cells.extend(std::iter::repeat_n((' ', base), stop));
                     } else {
-                        cells.push((ch, tinted(*role)));
+                        cells.push((ch, base));
                     }
                 }
             }
-            let number = format!("{:>digits$} │ ", at.saturating_add(1));
-            let first = [Span::styled(number, tinted(Role::Muted))];
-            let rest = [Span::styled(
-                format!("{:digits$} │ ", ""),
-                tinted(Role::Muted),
-            )];
-            let gutter =
-                u16::try_from(cells_width(&format!("{:digits$} │ ", ""))).unwrap_or(u16::MAX);
+            // The number right-aligned in its columns, then two spaces;
+            // each row skips its own prefix.
+            let number = format!("{:>width$}  ", at.saturating_add(1), width = digits);
+            let first = [Span::styled(number.clone(), tinted(Role::Rule))];
+            let gutter_cells = cells_width(&number);
+            let rest = [Span::styled(" ".repeat(gutter_cells), tinted(Role::Rule))];
+            let gutter = u16::try_from(gutter_cells).unwrap_or(u16::MAX);
             let mut rows = wrap(&cells, width, &first, &rest, false);
             if rows.is_empty() {
                 rows.push((Line::from(first.to_vec()), Join::Break));
@@ -499,31 +507,38 @@ impl Writer {
                 self.put_row(row, join, gutter, false, Vec::new());
             }
         }
+        self.put(edge_row(width, Role::Code, false), true);
     }
 }
 
-/// The `copy` label's cells on a header row `width` wide: its last four,
-/// or none on a row narrower than four.
+/// The line number's minimum columns, without its two spaces.
+const NUMBER_WIDTH: usize = 4;
+
+/// The `copy` label's cells on a header row `width` wide: its last
+/// thirteen, or none on a narrower row.
 fn copy_cols(width: u16) -> Option<Range<u16>> {
-    let start = width.checked_sub(4)?;
+    let start = width.checked_sub(u16::try_from(COPY.len()).unwrap_or(u16::MAX))?;
     Some(start..width)
 }
 
-/// A code block's header row: the label left, truncated with `…` to fit,
-/// and `copy` right. Under 6 cells it has no label, and under 4 no `copy`.
+/// A code block's header row: one column in, the label left, truncated
+/// with `…` to fit, and `copy` right. Too narrow for the label it has
+/// none, and too narrow for `copy` it has neither.
 fn header(label: &str, width: usize) -> Line<'static> {
     let copy = if width >= COPY.len() { COPY } else { "" };
-    let room = if width >= 6 {
-        width.saturating_sub(COPY.len().saturating_add(1))
-    } else {
-        0
-    };
+    let room = width.saturating_sub(COPY.len().saturating_add(2));
     let shown = truncate(label, room);
-    let pad = width.saturating_sub(cells_width(&shown).saturating_add(copy.len()));
+    let lead = if width > COPY.len() { " " } else { "" };
+    let pad = width.saturating_sub(
+        cells_width(lead)
+            .saturating_add(cells_width(&shown))
+            .saturating_add(copy.len()),
+    );
     Line::from(vec![
+        Span::styled(lead, tinted(Role::Muted)),
         Span::styled(shown, tinted(Role::Muted)),
         Span::styled(" ".repeat(pad), tinted(Role::Muted)),
-        Span::styled(copy, tinted(Role::Accent)),
+        Span::styled(copy, tinted(Role::Muted)),
     ])
 }
 

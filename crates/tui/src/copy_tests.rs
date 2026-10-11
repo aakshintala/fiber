@@ -74,9 +74,9 @@ const TWO_BLOCKS: &str = "```rust\nlet a = 1;\n```\n\ntext\n\n```sh\necho b\n```
 
 #[test]
 fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
-    let mut app = with_reply(30, 12, TWO_BLOCKS);
-    let first = row_of(&app, 30, 12, "rust").expect("first header");
-    let second = row_of(&app, 30, 12, "sh  ").expect("second header");
+    let mut app = with_reply(30, 20, TWO_BLOCKS);
+    let first = row_of(&app, 30, 20, "rust").expect("first header");
+    let second = row_of(&app, 30, 20, "sh  ").expect("second header");
     assert_eq!(
         click(&mut app, 26, first),
         Effect::Copy("let a = 1;".to_owned())
@@ -88,7 +88,7 @@ fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
     );
     // The cells left of `copy` and the rows around it copy nothing, and a
     // click clears "Copied".
-    for (col, row) in [(24, first), (0, first), (26, first + 1), (26, first - 1)] {
+    for (col, row) in [(14, first), (0, first), (26, first + 1), (26, first - 1)] {
         click(&mut app, 28, second);
         assert_eq!(click(&mut app, col, row), Effect::None, "{col},{row}");
         assert!(!app.copied());
@@ -101,8 +101,8 @@ fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
 #[test]
 fn any_key_clears_copied() {
     let now = fakes::clock::FakeClock::new().now();
-    let mut app = with_reply(30, 12, TWO_BLOCKS);
-    let first = row_of(&app, 30, 12, "rust").expect("first header");
+    let mut app = with_reply(30, 20, TWO_BLOCKS);
+    let first = row_of(&app, 30, 20, "rust").expect("first header");
     click(&mut app, 27, first);
     assert!(app.copied());
     app.on_key(Key::Char('x'), now);
@@ -138,12 +138,12 @@ fn the_overlay_row_hides_a_copy_target_under_it() {
     let code = "1\n2\n3\n4";
     let mut app = with_reply(30, 8, &format!("{filler}```rust\n{code}\n```"));
     // Five conversation rows: one PageUp moves the top up four. Nudge
-    // one row back down so the code header sits on the bottom
-    // conversation row, where the overlay draws.
+    // back down so the code header sits on the bottom conversation
+    // row, where the overlay draws.
     assert_eq!(app.conversation_height(), 5);
     app.on_key(Key::PageUp, now);
     let top = app.top().expect("scrolled up");
-    app.jump(top.saturating_sub(1));
+    app.jump(top.saturating_sub(2));
     assert_eq!(row_of(&app, 30, 8, "rust"), Some(4));
     assert_eq!(click(&mut app, 27, 4), Effect::Copy(code.to_owned()));
     app.on_line(turn_started("more"));
@@ -168,8 +168,8 @@ fn a_click_below_the_conversation_or_on_a_plain_line_copies_nothing() {
 #[test]
 fn a_resize_moves_the_copy_target_with_the_new_width() {
     let mut app = with_reply(30, 12, TWO_BLOCKS);
-    app.set_size(20, 12);
-    let first = row_of(&app, 20, 12, "rust").expect("first header");
+    app.set_size(20, 20);
+    let first = row_of(&app, 20, 20, "rust").expect("first header");
     assert_eq!(click(&mut app, 26, first), Effect::None);
     assert_eq!(
         click(&mut app, 16, first),
@@ -179,15 +179,15 @@ fn a_resize_moves_the_copy_target_with_the_new_width() {
 
 #[test]
 fn a_click_maps_past_a_prompt_that_wraps() {
-    let mut app = attached(30, 12);
+    let mut app = attached(30, 14);
     app.on_line(turn_started(&"w".repeat(70)));
     app.on_line(session_line(
         "assistant_message_delta",
         serde_json::json!({ "text": "```rust\nlet a = 1;\n```" }),
         Some("a_1"),
     ));
-    let header = row_of(&app, 30, 12, "rust").expect("header");
-    assert_eq!(header, 6);
+    let header = row_of(&app, 30, 14, "rust").expect("header");
+    assert_eq!(header, 7);
     assert_eq!(
         click(&mut app, 27, header),
         Effect::Copy("let a = 1;".to_owned())
@@ -198,9 +198,9 @@ fn a_click_maps_past_a_prompt_that_wraps() {
 
 #[test]
 fn a_click_on_the_blank_rows_above_a_short_conversation_copies_nothing() {
-    let mut app = with_reply(30, 12, "```rust\nlet a = 1;\n```");
-    let header = row_of(&app, 30, 12, "rust").expect("header");
-    assert!(row_of(&app, 30, 12, " hi").is_some_and(|prompt| prompt > 0));
+    let mut app = with_reply(30, 16, "```rust\nlet a = 1;\n```");
+    let header = row_of(&app, 30, 16, "rust").expect("header");
+    assert!(row_of(&app, 30, 16, " hi").is_some_and(|prompt| prompt > 0));
     assert_eq!(click(&mut app, 27, 0), Effect::None);
     assert_eq!(
         click(&mut app, 27, header),
@@ -231,6 +231,6 @@ fn a_copy_target_in_a_quote_is_on_its_drawn_copy_cells() {
         click(&mut app, 26, header),
         Effect::Copy("let a = 1;".to_owned())
     );
-    assert_eq!(click(&mut app, 24, header), Effect::None);
+    assert_eq!(click(&mut app, 14, header), Effect::None);
     assert_eq!(click(&mut app, 0, header), Effect::None);
 }

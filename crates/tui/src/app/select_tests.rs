@@ -325,8 +325,8 @@ fn a_selection_over_a_list_copies_markers_without_hang_indent() {
 #[test]
 fn a_code_selection_copies_without_the_gutter() {
     let mut app = replied(30, 10, "```\nlet a = 1;\nlet b = 2;\n```");
-    let first = find(&app, "1 │");
-    let last = find(&app, "2 │");
+    let first = find(&app, "let a = 1;");
+    let last = find(&app, "let b = 2;");
     // Whole rows, the header's `copy` excluded: from the gutter of the
     // first line to the right edge of the second.
     let effect = select(&mut app, (0, first.1), (29, last.1));
