@@ -569,10 +569,41 @@ fn a_null_for_a_nullable_property_reaches_the_tool_as_absent() {
         ),
     );
     let run = ask(&setup, "check the tags");
+    // The optional call runs and sees no `tag`; the required call fails
+    // before it starts, its dropped null now missing. Had the null been
+    // kept, both calls would have run and answered `"present"`.
+    assert_eq!(
+        run.kinds(),
+        kinds(
+            &[],
+            2,
+            &[],
+            &[
+                "tool_call_started",
+                "tool_call_completed",
+                "tool_call_completed"
+            ]
+        )
+    );
     let completed = run.all("tool_call_completed");
-    assert_eq!(completed.len(), 2, "{:?}", run.kinds());
-    for done in &completed {
-        assert_eq!(done["payload"]["status"], "completed");
-    }
-    assert_eq!(outputs_sent(&server), ["absent", "absent"]);
+    assert_eq!(completed.len(), 2, "{completed:?}");
+    assert_eq!(completed[0]["payload"]["status"], "completed");
+    assert_eq!(
+        completed[0]["payload"]["content"],
+        json!([{"type": "text", "text": "absent"}])
+    );
+    assert_eq!(completed[1]["payload"]["status"], "failed");
+    assert_eq!(
+        completed[1]["payload"]["error"]["code"],
+        "invalid_arguments"
+    );
+    assert!(
+        completed[1]["payload"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`/tag`: missing"),
+        "{}",
+        completed[1]["payload"]["error"]["message"]
+    );
+    assert_eq!(outputs_sent(&server)[0], "absent");
 }

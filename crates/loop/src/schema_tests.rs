@@ -60,7 +60,7 @@ fn fixes(arguments: &Value) -> Option<(Value, Vec<(String, RepairFix)>)> {
 
 #[test]
 fn arguments_that_pass_need_no_repair() {
-    let good = json!({"path": "/a", "limit": 5, "all": true, "edits": [1], "note": null});
+    let good = json!({"path": "/a", "limit": 5, "all": true, "edits": [1], "note": "x"});
     assert!(check(&schema(), &good).is_empty());
     assert_eq!(fixes(&good), None);
 }
