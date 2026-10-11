@@ -26,6 +26,10 @@ pub struct Rewound {
     /// The old session's worktree, when it runs in one: the new session
     /// runs there too and never removes it (`docs/events.md`, "Rewind").
     pub worktree: Option<Worktree>,
+    /// The rewound session's latest `session_named`, from
+    /// [`latest_name`]: the new session writes a copy after
+    /// `session_started`, so the name and a pin carry over.
+    pub name: Option<SessionNamed>,
 }
 
 impl Loop {
@@ -59,7 +63,7 @@ impl Loop {
         // The name goes with the conversation: a copy of the parent's
         // latest `session_named`, `by` included, so a pin holds
         // (`docs/events.md`, "Rewind").
-        if let Some(named) = parent_name(session.log.dir()) {
+        if let Some(named) = start.name {
             session
                 .log
                 .append(&Event::SessionNamed(named), None, None)?;
@@ -87,13 +91,11 @@ impl Loop {
     }
 }
 
-/// The latest `session_named` in the log of the session the one in `dir`
-/// continues, read from the end backwards; `None` when the chain has no
-/// parent log, the parent never named itself, or its log cannot be read.
-fn parent_name(dir: &Path) -> Option<SessionNamed> {
-    let chain = log::history(dir).ok()?;
-    let parent = chain.iter().rev().nth(1)?;
-    log::last_line_where(&parent.dir, |line| {
+/// The latest `session_named` in the log in `dir`, read from the end
+/// backwards; `None` when the session never named itself or its log
+/// cannot be read.
+pub fn latest_name(dir: &Path) -> Option<SessionNamed> {
+    log::last_line_where(dir, |line| {
         let event: Value = serde_json::from_slice(line).ok()?;
         if event.get("kind")?.as_str()? != "session_named" {
             return None;

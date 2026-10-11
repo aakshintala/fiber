@@ -397,6 +397,7 @@ fn a_rewound_loop_takes_its_thinking_and_its_trigger_from_the_logged_build() {
             },
             note: String::new(),
             worktree: None,
+            name: None,
         },
     )
     .unwrap();
@@ -524,6 +525,7 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
             },
             note: String::new(),
             worktree: None,
+            name: None,
         },
     )
     .unwrap();
@@ -568,6 +570,8 @@ fn rewound_from_parent(
         text.push('\n');
     }
     std::fs::write(parent.join("events.jsonl"), text).unwrap();
+    // The copy under test: the parent's latest name rides the start.
+    let name = latest_name(&parent);
     let clock = fakes::clock::FakeClock::new();
     let log = std::sync::Arc::new(
         log::Log::create(home, SessionId(child_id.to_owned()), clock.clone()).unwrap(),
@@ -611,6 +615,7 @@ fn rewound_from_parent(
             },
             note: String::new(),
             worktree: None,
+            name,
         },
     )
     .unwrap();
@@ -753,4 +758,62 @@ fn a_rewound_loop_with_an_unnamed_parent_writes_no_session_named() {
     let kinds: Vec<String> = lines.iter().map(|line| line.kind.clone()).collect();
     assert_eq!(kinds, ["session_started"]);
     assert!(!pinned(&dir));
+}
+
+/// `latest_name` reads the latest `session_named` in the log in `dir`,
+/// past any other line: the last line here names nothing, but the latest
+/// name still wins, `by` included.
+#[test]
+fn latest_name_reads_the_latest_session_named_past_other_lines() {
+    use contract::events::NamedBy;
+    let root = fakes::TempDir::new("loop-latest-name");
+    let dir = root.path().join("s_1");
+    write_log(
+        &dir,
+        &[
+            envelope(0, "a_0", &parent_started()),
+            envelope(1, "a_1", &parent_named("First", NamedBy::Person)),
+            envelope(2, "a_2", &parent_built()),
+            envelope(3, "a_3", &parent_named("Second", NamedBy::Model)),
+            envelope(4, "a_4", &parent_built()),
+        ],
+    );
+    assert_eq!(
+        latest_name(&dir),
+        Some(contract::events::SessionNamed {
+            name: Some("Second".to_owned()),
+            by: NamedBy::Model,
+        })
+    );
+}
+
+/// `latest_name` is `None` when the log holds no `session_named`, or no
+/// lines at all.
+#[test]
+fn latest_name_is_none_without_a_session_named() {
+    let root = fakes::TempDir::new("loop-latest-no-name");
+    let dir = root.path().join("s_1");
+    write_log(
+        &dir,
+        &[
+            envelope(0, "a_0", &parent_started()),
+            envelope(1, "a_1", &parent_built()),
+        ],
+    );
+    assert!(latest_name(&dir).is_none());
+    let empty = root.path().join("s_empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    std::fs::write(empty.join("events.jsonl"), "").unwrap();
+    assert!(latest_name(&empty).is_none());
+}
+
+/// `latest_name` is `None` when the log cannot be read: no directory, or
+/// a file where the directory should be.
+#[test]
+fn latest_name_is_none_when_the_log_cannot_be_read() {
+    let root = fakes::TempDir::new("loop-latest-unreadable");
+    assert!(latest_name(&root.path().join("s_missing")).is_none());
+    let file = root.path().join("s_file");
+    std::fs::write(&file, "not a directory").unwrap();
+    assert!(latest_name(&file).is_none());
 }

@@ -167,6 +167,7 @@ fn start_b(
             from,
             note,
             worktree,
+            name: r#loop::latest_name(&session.dir),
         },
     )
     .unwrap();
@@ -893,6 +894,7 @@ fn a_rewind_before_the_first_request_keeps_the_logged_model_and_thinking() {
             },
             note: String::new(),
             worktree: None,
+            name: r#loop::latest_name(&a_dir),
         },
     )
     .unwrap();

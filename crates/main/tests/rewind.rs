@@ -626,6 +626,28 @@ fn named_lines(log: &[Value]) -> Vec<&Value> {
         .collect()
 }
 
+/// The `name` cell `fiber sessions --json` prints for `id`
+/// (`docs/invocation.md`, "`sessions [--all]`"): the session's latest
+/// name, live from the hub.
+fn listed_name(setup: &Setup, id: &str) -> String {
+    let command = setup.fiber(&["sessions", "--json", "--all"]);
+    let output = run_to_exit(setup.deadline, "fiber sessions --json --all", command);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "fiber sessions --json --all: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for line in stdout.lines() {
+        let row: Value = serde_json::from_str(line).unwrap();
+        if row["id"].as_str() == Some(id) {
+            return row["name"].as_str().unwrap().to_owned();
+        }
+    }
+    panic!("fiber sessions --json --all lists {id}: {stdout}");
+}
+
 #[test]
 fn a_rewind_keeps_the_person_name_and_its_pin() {
     let setup = Setup::new();
@@ -703,10 +725,7 @@ fn a_rewind_keeps_the_person_name_and_its_pin() {
         new_log[1]["payload"],
         json!({"name": "Mine", "by": "person"})
     );
-    assert_eq!(
-        log::session_name(&setup.home(), &SessionId(next.clone())),
-        Some("Mine".to_owned())
-    );
+    assert_eq!(listed_name(&setup, &next), "Mine");
 
     // The pin holds in the new session: its model's `name_session` fails
     // `name_pinned` and writes no further name.
@@ -722,12 +741,135 @@ fn a_rewind_keeps_the_person_name_and_its_pin() {
     let last = completed.last().unwrap();
     assert_eq!(last["payload"]["status"], "failed");
     assert_eq!(last["payload"]["error"]["code"], "name_pinned");
-    assert_eq!(
-        log::session_name(&setup.home(), &SessionId(next.clone())),
-        Some("Mine".to_owned())
-    );
+    assert_eq!(listed_name(&setup, &next), "Mine");
 
     hubbed.close("n1_close", &next);
+    hubbed.finish();
+}
+
+#[test]
+fn a_rewind_to_an_ancestor_point_keeps_the_rewound_sessions_person_name() {
+    // The name is the rewound session's, not the point's session's: the
+    // middle session is person-named "Mine" while the ancestor never
+    // is, and rewinding the middle to an ancestor point still carries
+    // "Mine" with its pin.
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        hello(),
+        hello(),
+        hello(),
+        stream(&[function_call(
+            "a1",
+            "name_session",
+            &json!({"name": "Theirs"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let hubbed = Hubbed::new(&setup);
+    let old = hubbed.start("a1_start", "a1_sub", "one");
+    let client = hubbed.client();
+    hubbed.prompt("a1_p2", &old, "two");
+    client.send(&rewind("a1_rw", &old, json!({})));
+    let ack = until_ack(client, "the rewind acknowledgement", "a1_rw");
+    let middle = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until(client, "the middle session's start", |line| {
+        line["session_id"] == middle && line["kind"] == "session_started"
+    });
+    until(client, "the middle session's fiber_started", |line| {
+        line["session_id"] == middle && line["kind"] == "fiber_started"
+    });
+    hubbed.prompt("a1_p3", &middle, "three");
+    hubbed.close("a1_close_middle", &middle);
+    fakes::try_matching_exits(&hubbed.workspace, setup.deadline.left()).unwrap_or_else(|err| {
+        panic!("waited until the deadline for the middle session process to exit: {err}")
+    });
+
+    // The person names the closed middle session, as `tests/name_session.rs`
+    // does; the ancestor stays unnamed.
+    {
+        let dir = session_log_path(&setup, &middle);
+        let sessions = dir.parent().unwrap().parent().unwrap();
+        let log =
+            log::Log::open(sessions, SessionId(middle.clone()), Arc::new(SystemClock)).unwrap();
+        log.append(
+            &Event::SessionNamed(SessionNamed {
+                name: Some("Mine".into()),
+                by: NamedBy::Person,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    }
+
+    // No process holds the middle session: the hub resumes it, and it
+    // rewinds to the ancestor's first turn boundary.
+    let old_log = session_log(&setup, &old);
+    let point = turn_starts(&old_log)[0] - 1;
+    client.send(&rewind(
+        "a1_rw_again",
+        &middle,
+        json!({"from_session_id": old, "seq": point}),
+    ));
+    let ack = until_ack(client, "the second rewind acknowledgement", "a1_rw_again");
+    let next = ack.last().unwrap()["payload"]["result"]["new_session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    until(client, "the third session's start", |line| {
+        line["session_id"] == next && line["kind"] == "session_started"
+    });
+    until(client, "the third session's fiber_started", |line| {
+        line["session_id"] == next && line["kind"] == "fiber_started"
+    });
+    until(client, "the third session's extensions_loaded", |line| {
+        line["session_id"] == next && line["kind"] == "extensions_loaded"
+    });
+
+    // The rewound session's name rides with the conversation, not the
+    // ancestor's: `session_named` right after `session_started`.
+    let new_log = session_log(&setup, &next);
+    let new_kinds: Vec<&str> = new_log
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        new_kinds,
+        [
+            "session_started",
+            "session_named",
+            "fiber_started",
+            "extensions_loaded"
+        ],
+        "{new_kinds:?}"
+    );
+    assert_eq!(
+        new_log[1]["payload"],
+        json!({"name": "Mine", "by": "person"})
+    );
+
+    // The pin holds in the new session: its model's `name_session` fails
+    // `name_pinned` and writes no further name.
+    hubbed.prompt("a1_p4", &next, "four");
+    let after = session_log(&setup, &next);
+    let named = named_lines(&after);
+    assert_eq!(named.len(), 1, "{after:?}");
+    assert_eq!(named[0]["payload"], json!({"name": "Mine", "by": "person"}));
+    let completed: Vec<&Value> = after
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    let last = completed.last().unwrap();
+    assert_eq!(last["payload"]["status"], "failed");
+    assert_eq!(last["payload"]["error"]["code"], "name_pinned");
+
+    hubbed.close("a1_close_old", &old);
+    hubbed.close("a1_close_next", &next);
     hubbed.finish();
 }
 

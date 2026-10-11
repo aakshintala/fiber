@@ -88,7 +88,7 @@ pub use prompt::{DisabledReader, PromptInputs};
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
-pub use rewind::{Rewound, rewind_note};
+pub use rewind::{Rewound, latest_name, rewind_note};
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;
 pub use slash::{FetchPrompt, ServerPrompts};
