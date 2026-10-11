@@ -11,6 +11,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use contract::clock::Clock;
 use contract::events::{Variables, VariablesSource};
 use log::diag::{Diag, Severity};
+use serde_json::{Map, Value};
+
+use crate::connection::Hub;
 
 pub(crate) mod capture;
 
@@ -176,6 +179,36 @@ impl Environments {
         self.finish(Err(failed), &cancel, diag);
     }
 
+    /// Rebuilds the hub's environment for the sessions started
+    /// afterwards: one capture, serialized with every other capture,
+    /// published with the overlay once it ends. A failed refresh
+    /// publishes the fallback. After `close` nothing is spawned and the
+    /// published environment is returned. Running sessions keep theirs:
+    /// a published environment never changes.
+    pub(crate) fn refresh(&self, clock: &dyn Clock, diag: &Diag) -> Arc<Environment> {
+        let cancel = capture::Cancel::new();
+        {
+            let mut state = lock(&self.state);
+            if state.closed {
+                return state
+                    .published
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(self.fallback()));
+            }
+            state.running = state.running.saturating_add(1);
+            state.cancels.push(Arc::clone(&cancel));
+        }
+        let _serial = lock(&self.capture_lock);
+        if self.is_closed() {
+            self.end(&cancel);
+            return self.get();
+        }
+        let outcome = capture::capture(&self.inherited, clock, &cancel);
+        self.run_before_publish();
+        self.finish(outcome, &cancel, diag);
+        self.get()
+    }
+
     /// Stops the environment: no capture starts after it, every running
     /// capture's wait ends at once, a `get` waiting on the first capture
     /// gets the fallback, and this returns once no capture runs. The
@@ -284,6 +317,22 @@ impl Environments {
         #[cfg(not(test))]
         {}
     }
+}
+
+/// Answers `refresh` (`docs/invocation.md`, "What the hub speaks"):
+/// rebuilds the hub's environment on this connection's thread,
+/// serialized with every other capture. Accepted with no `result` once
+/// the new environment is published, whichever way the capture ended.
+/// Any argument is `invalid_arguments`, as `status`.
+pub(crate) fn refresh(
+    hub: &Hub,
+    args: &Map<String, Value>,
+) -> Result<Option<Value>, crate::feed::Refusal> {
+    if !args.is_empty() {
+        return Err(crate::feed::invalid());
+    }
+    hub.environments.refresh(&*hub.clock, &hub.diag);
+    Ok(None)
 }
 
 /// Locks, never poisoned: no thread holding this lock panics while

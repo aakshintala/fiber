@@ -545,3 +545,166 @@ fn debug_holds_names_but_no_values() {
     assert!(!shown.contains("s3cret-value"), "no value leaks: {shown}");
     assert!(!shown.contains("/secret/bin"), "no value leaks: {shown}");
 }
+
+#[test]
+fn refresh_publishes_a_new_environment_from_a_rewritten_body() {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
+    let clock = fakes::clock::FakeClock::new();
+    let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
+    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    let old = environments.get();
+    assert_eq!(get(&old.vars, "MARK").as_deref(), Some("1"));
+    fakes::script(
+        &temp.dir,
+        "shell",
+        &format!(
+            "export FAKE_DIR={}\necho $$ > $FAKE_DIR/pid\nexport MARK=2\nexec /bin/sh -c \"$4\"",
+            temp.dir.display(),
+        ),
+    );
+    let new = environments.refresh(&*clock, &temp.diag(Arc::clone(&clock)));
+    assert_eq!(get(&new.vars, "MARK").as_deref(), Some("2"));
+    assert_eq!(new.source, VariablesSource::LoginShell);
+    assert!(!Arc::ptr_eq(&old, &new), "a refresh publishes a new Arc");
+    assert_eq!(environments.get().vars.len(), new.vars.len());
+    let built: Vec<_> = temp
+        .log_lines()
+        .into_iter()
+        .filter(|line| line["code"] == "environment_built")
+        .collect();
+    assert_eq!(built.len(), 2, "{built:?}");
+    assert_eq!(built[1]["level"], "info");
+}
+
+#[test]
+fn a_failed_refresh_publishes_the_fallback() {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
+    let clock = fakes::clock::FakeClock::new();
+    let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
+    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    assert_eq!(environments.get().source, VariablesSource::LoginShell);
+    fakes::script(
+        &temp.dir,
+        "shell",
+        &format!(
+            "export FAKE_DIR={}\necho $$ > $FAKE_DIR/pid\nexit 1\n",
+            temp.dir.display(),
+        ),
+    );
+    let new = environments.refresh(&*clock, &temp.diag(Arc::clone(&clock)));
+    assert_eq!(new.source, VariablesSource::Inherited);
+    assert!(get(&new.vars, "MARK").is_none());
+    assert_eq!(
+        get(&new.vars, "FIBER_HOME").as_deref(),
+        Some(temp.home.to_string_lossy().as_ref())
+    );
+    let built: Vec<_> = temp
+        .log_lines()
+        .into_iter()
+        .filter(|line| line["code"] == "environment_built")
+        .collect();
+    assert_eq!(built.len(), 2, "{built:?}");
+    assert_eq!(built[1]["level"], "warn");
+}
+
+#[test]
+fn two_refreshes_run_one_capture_at_a_time() {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
+    let clock = fakes::clock::FakeClock::new();
+    let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
+    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    // The first refresh is held between its capture's end and its publish.
+    fakes::script(
+        &temp.dir,
+        "shell",
+        &format!(
+            "export FAKE_DIR={}\necho $$ > $FAKE_DIR/pid\nexport MARK=2\nexec /bin/sh -c \"$4\"",
+            temp.dir.display(),
+        ),
+    );
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    *support::lock(&environments.before_publish) = Some(Box::new(move || {
+        held_tx.send(()).unwrap_or(());
+        Deadline::after(WITHIN).recv(&release_rx).unwrap_or(());
+    }));
+    let first_env = Arc::clone(&environments);
+    let first_clock = Arc::clone(&clock);
+    let first_diag = temp.diag(Arc::clone(&clock));
+    let (first_tx, first_rx) = mpsc::channel();
+    thread::spawn(move || {
+        first_tx
+            .send(first_env.refresh(&*first_clock, &first_diag))
+            .unwrap_or(());
+    });
+    Deadline::after(WITHIN)
+        .recv(&held_rx)
+        .expect("the first refresh holds before publishing");
+    // The second refresh's body is rewritten now: it spawns only after the
+    // first publishes, so its side file proves the serialization.
+    let second_ran = temp.dir.join("second_ran");
+    fakes::script(
+        &temp.dir,
+        "shell",
+        &format!(
+            "export FAKE_DIR={}\necho $$ > $FAKE_DIR/pid\ntouch {}\nexport MARK=3\nexec /bin/sh -c \"$4\"",
+            temp.dir.display(),
+            second_ran.display(),
+        ),
+    );
+    fs::remove_file(&second_ran).unwrap_or(());
+    let second_env = Arc::clone(&environments);
+    let second_clock = Arc::clone(&clock);
+    let second_diag = temp.diag(Arc::clone(&clock));
+    let (second_tx, second_rx) = mpsc::channel();
+    thread::spawn(move || {
+        second_tx
+            .send(second_env.refresh(&*second_clock, &second_diag))
+            .unwrap_or(());
+    });
+    assert!(
+        Deadline::after(QUIET).recv(&second_rx).is_err(),
+        "the second refresh waits for the first"
+    );
+    assert!(
+        !second_ran.exists(),
+        "the second capture spawns only after the first published"
+    );
+    release_tx.send(()).unwrap_or(());
+    let first = Deadline::after(WITHIN)
+        .recv(&first_rx)
+        .expect("the first refresh publishes");
+    assert_eq!(get(&first.vars, "MARK").as_deref(), Some("2"));
+    let second = Deadline::after(WITHIN)
+        .recv(&second_rx)
+        .expect("the second refresh publishes");
+    assert_eq!(get(&second.vars, "MARK").as_deref(), Some("3"));
+    assert!(second_ran.exists());
+    assert_eq!(get(&environments.get().vars, "MARK").as_deref(), Some("3"));
+}
+
+#[test]
+fn a_refresh_after_close_spawns_nothing_and_returns_the_published() {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
+    let clock = fakes::clock::FakeClock::new();
+    let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
+    environments.first(&*clock, &temp.diag(Arc::clone(&clock)));
+    let published = environments.get();
+    let lines_before = temp.log_lines().len();
+    fs::remove_file(temp.dir.join("pid")).unwrap();
+    environments.close();
+    let after = environments.refresh(&*clock, &temp.diag(Arc::clone(&clock)));
+    assert!(
+        Arc::ptr_eq(&published, &after),
+        "no new publish after close"
+    );
+    assert!(
+        !temp.dir.join("pid").exists(),
+        "the refresh after close spawned nothing"
+    );
+    assert_eq!(temp.log_lines().len(), lines_before, "no line after close");
+}

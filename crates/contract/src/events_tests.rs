@@ -749,7 +749,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "command_accepted",
-            json!({"command_id": "c", "result": {"clients": 2, "fiber_version": "0.0.0", "running": true}}),
+            json!({"command_id": "c", "result": {"clients": 2, "fiber_version": "0.0.0", "running": true, "variables": {"path": "/usr/bin:/bin", "names": ["HOME"], "source": "inherited"}}}),
         ),
         (
             "command_accepted",
@@ -1358,12 +1358,17 @@ fn a_session_id_result_reads_as_start_and_a_status_object_as_status() {
     );
     assert_eq!(
         result_of(
-            json!({"command_id": "c", "result": {"clients": 2, "fiber_version": "0.0.0", "running": true}})
+            json!({"command_id": "c", "result": {"clients": 2, "fiber_version": "0.0.0", "running": true, "variables": {"path": "/usr/bin:/bin", "names": ["HOME"], "source": "inherited"}}})
         ),
         CommandResult::Status {
             running: true,
             fiber_version: "0.0.0".into(),
             clients: 2,
+            variables: crate::events::Variables {
+                path: "/usr/bin:/bin".into(),
+                names: vec!["HOME".into()],
+                source: crate::events::VariablesSource::Inherited,
+            },
         }
     );
     assert!(matches!(

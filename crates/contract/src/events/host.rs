@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::action::Progress;
 use super::context::{Outcome, SkillSource};
+use super::session::Variables;
 use crate::shapes::{Failure, Point, Process, Question, Usage, Worktree};
 use crate::{CommandId, Envelope, ErrorCode, JobId, SessionId};
 
@@ -382,6 +383,8 @@ pub enum CommandResult {
         fiber_version: String,
         /// The open client connections, this connection's asker included.
         clients: usize,
+        /// The environment sessions the hub starts now get, as `session_started` carries it.
+        variables: Variables,
     },
 }
 
