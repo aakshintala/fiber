@@ -212,30 +212,30 @@ pub(crate) fn parts_in(
         (label.clone(), session_credential),
     );
     let reviewer = {
-        let mut lookup = |provider: &config::ProviderData|
-            -> Result<(String, lua_providers::Access), Failure> {
-            let access = scripted::access(provider, || {
-                let lua = providers.lua(&provider.name);
-                if let Some((_, read)) = credentials.get(&provider.name) {
-                    return Ok(lua_providers::Access::new(lua, read.clone()));
-                }
-                let label = config.credentials().credential_label(provider);
-                let read = lua_providers::session_credential(lua, provider, &label, || {
-                    crate::credential::session_credential(&config, provider, None)
-                        .map(|(_, key)| key)
+        let mut lookup =
+            |provider: &config::ProviderData| -> Result<(String, lua_providers::Access), Failure> {
+                let access = scripted::access(provider, || {
+                    let lua = providers.lua(&provider.name);
+                    if let Some((_, read)) = credentials.get(&provider.name) {
+                        return Ok(lua_providers::Access::new(lua, read.clone()));
+                    }
+                    let label = config.credentials().credential_label(provider);
+                    let read = lua_providers::session_credential(lua, provider, &label, || {
+                        crate::credential::session_credential(&config, provider, None)
+                            .map(|(_, key)| key)
+                    })?;
+                    credentials.insert(provider.name.clone(), (label, read.clone()));
+                    Ok(lua_providers::Access::new(lua, read))
                 })?;
-                credentials.insert(provider.name.clone(), (label, read.clone()));
-                Ok(lua_providers::Access::new(lua, read))
-            })?;
-            // The label the access was read for: the startup map's, else the
-            // provider's configured one. A scripted reviewer reads no
-            // credential, so its label is only the configured default.
-            let label = credentials
-                .get(&provider.name)
-                .map(|(label, _)| label.clone())
-                .unwrap_or_else(|| config.credentials().credential_label(provider));
-            Ok((label, access))
-        };
+                // The label the access was read for: the startup map's, else the
+                // provider's configured one. A scripted reviewer reads no
+                // credential, so its label is only the configured default.
+                let label = credentials
+                    .get(&provider.name)
+                    .map(|(label, _)| label.clone())
+                    .unwrap_or_else(|| config.credentials().credential_label(provider));
+                Ok((label, access))
+            };
         choose_reviewer(&providers, &config, &model, &here, &mut lookup)
     };
     // Every refreshed provider the session does not use is unloaded once

@@ -215,8 +215,8 @@ fn the_reviewer_fetches_quota_for_the_lookup_label() {
     let home = root.path().join("home");
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
-    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{\"windows\": []}")])
-        .unwrap();
+    let server =
+        fakes::ProviderServer::start([fakes::Response::status(200, "{\"windows\": []}")]).unwrap();
     test_support::install_extension(
         &home,
         "extensions/qp",

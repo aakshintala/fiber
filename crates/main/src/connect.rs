@@ -154,11 +154,8 @@ pub(crate) fn connect(
             let costed = lua
                 .costed(Arc::clone(&provider), &model.model.base_url, lookup_key)
                 .unwrap_or(Arc::clone(&provider));
-            lua.with_quota(
-                costed,
-                CredentialPair::for_provider(model.provider, label),
-            )
-            .unwrap_or(provider)
+            lua.with_quota(costed, CredentialPair::for_provider(model.provider, label))
+                .unwrap_or(provider)
         }
         None => provider,
     })

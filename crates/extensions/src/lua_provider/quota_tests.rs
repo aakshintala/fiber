@@ -27,11 +27,7 @@ fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
 }
 
 /// A provider `p` whose `quota()` returns `run`, on `clock`.
-fn quota_provider_on(
-    root: &fakes::TempDir,
-    run: &str,
-    clock: Arc<FakeClock>,
-) -> Arc<LuaProvider> {
+fn quota_provider_on(root: &fakes::TempDir, run: &str, clock: Arc<FakeClock>) -> Arc<LuaProvider> {
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
@@ -88,8 +84,7 @@ fn percent(name: &str, used: f64, resets_at: Option<u64>) -> Quota {
         name: name.to_owned(),
         used: WindowUse::Percent {
             used,
-            resets_at: resets_at
-                .map(|secs| UNIX_EPOCH + Duration::from_secs(secs)),
+            resets_at: resets_at.map(|secs| UNIX_EPOCH + Duration::from_secs(secs)),
         },
     }])
 }
@@ -153,10 +148,7 @@ fn quota_return_shapes_read_through_the_public_reader() {
             "{ windows = { { name = \"a\", used_percent = -1 } } }",
             unreachable.clone(),
         ),
-        (
-            "{ credit = { remaining = \"lots\" } }",
-            unreachable.clone(),
-        ),
+        ("{ credit = { remaining = \"lots\" } }", unreachable.clone()),
         (
             "{ credit = { remaining = 1, limit = -2 } }",
             unreachable.clone(),
@@ -314,7 +306,8 @@ fn read_label(provider: &Arc<LuaProvider>, label: &str) -> QuotaEntry {
 fn a_package_without_quota_reports_no_quota_and_fetches_nothing() {
     let root = fakes::TempDir::new("fiber-quota-absent");
     let server = fakes::ProviderServer::start([]).unwrap();
-    let script = "fiber.provider(\"p\", { sign = { timeout = 1000, run = function() return {} end } })\n";
+    let script =
+        "fiber.provider(\"p\", { sign = { timeout = 1000, run = function() return {} end } })\n";
     let bare = verbatim_provider(&root, script);
     assert_eq!(read(&bare), QuotaEntry::NoQuota);
     assert!(
@@ -425,10 +418,7 @@ fn a_fetch_times_out_at_exactly_eight_seconds() {
         clock.await_parked_since(&mark, Some(until), WAIT),
         "the reader never re-parked at the same deadline"
     );
-    assert!(
-        rx.try_recv().is_err(),
-        "the fetch ended before its 8 s cap"
-    );
+    assert!(rx.try_recv().is_err(), "the fetch ended before its 8 s cap");
     // The cap itself: `unreachable` with the last value and its age.
     clock.advance(Duration::from_nanos(1));
     assert_eq!(
@@ -453,8 +443,8 @@ fn a_failed_fetch_is_unreachable_with_the_last_value_and_its_age() {
     // the next trigger retries: the fetch time does not move.
     let root = fakes::TempDir::new("fiber-quota-error-retry");
     let value = percent("primary", 42.5, None);
-    let server = fakes::ProviderServer::start([ok(windows_body("primary", 42.5, None)), denied()])
-        .unwrap();
+    let server =
+        fakes::ProviderServer::start([ok(windows_body("primary", 42.5, None)), denied()]).unwrap();
     let clock = FakeClock::new();
     let provider = http_quota_provider(&root, &server.url(), Arc::clone(&clock));
     assert_eq!(read(&provider), QuotaEntry::Reported(value.clone()));
@@ -477,8 +467,8 @@ fn a_window_reads_as_reset_once_its_reset_time_passes() {
     let root = fakes::TempDir::new("fiber-quota-reset");
     // The fake wall starts at 1_700_000_000: the window resets 60 s after it.
     let resets_at = 1_700_000_000 + 60;
-    let server = fakes::ProviderServer::start([ok(windows_body("primary", 42.5, Some(resets_at)))])
-        .unwrap();
+    let server =
+        fakes::ProviderServer::start([ok(windows_body("primary", 42.5, Some(resets_at)))]).unwrap();
     let clock = FakeClock::new();
     let provider = http_quota_provider(&root, &server.url(), Arc::clone(&clock));
     let window = || Window {
@@ -580,7 +570,8 @@ fn quoted(
 #[test]
 fn with_quota_without_quota_is_the_inner_provider_itself() {
     let root = fakes::TempDir::new("fiber-quota-unquoted");
-    let script = "fiber.provider(\"p\", { sign = { timeout = 1000, run = function() return {} end } })\n";
+    let script =
+        "fiber.provider(\"p\", { sign = { timeout = 1000, run = function() return {} end } })\n";
     let lua = verbatim_provider(&root, script);
     let inner: Arc<dyn contract::provider::Provider> =
         Arc::new(crate::test_support::Inner::default());
@@ -681,10 +672,7 @@ fn quoted_forwards_calls_tools_warms_and_cost_lookup() {
     assert!(wrapped.warms(&crate::test_support::request()));
     assert!(wrapped.cost_lookup().is_none());
     let _call = wrapped.call(&crate::test_support::request());
-    assert_eq!(
-        inner.calls.load(std::sync::atomic::Ordering::SeqCst),
-        1
-    );
+    assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -698,10 +686,7 @@ fn a_failed_fetch_never_reaches_the_caller() {
         let wrapped = Arc::clone(&wrapped);
         move || wrapped.call(&crate::test_support::request())
     });
-    assert_eq!(
-        inner.calls.load(std::sync::atomic::Ordering::SeqCst),
-        1
-    );
+    assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(read(&lua), QuotaEntry::Unreachable { last: None });
 }
 

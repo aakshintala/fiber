@@ -63,11 +63,8 @@ fn request() -> ModelRequest {
 #[test]
 fn connect_fetches_quota_for_its_label() {
     let root = fakes::TempDir::new("fiber-connect-quota");
-    let server = fakes::ProviderServer::start([fakes::Response::status(
-        200,
-        "{\"windows\": []}",
-    )])
-    .unwrap();
+    let server =
+        fakes::ProviderServer::start([fakes::Response::status(200, "{\"windows\": []}")]).unwrap();
     let lua = quota_lua(&root, &server.url());
     let data: config::ProviderData = serde_json::from_value(json!({
         "name": "qp",

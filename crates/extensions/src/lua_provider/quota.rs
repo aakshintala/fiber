@@ -166,9 +166,7 @@ fn parse_windows(value: &Value) -> Result<Vec<Window>, &'static str> {
                 .get("used_percent")
                 .and_then(Value::as_f64)
                 .filter(|used| used.is_finite() && *used >= 0.0)
-                .ok_or(
-                    "a window with a `used_percent` that is not a number at or above 0",
-                )?;
+                .ok_or("a window with a `used_percent` that is not a number at or above 0")?;
             let resets_at = match map.get("resets_at").filter(|value| !value.is_null()) {
                 None => None,
                 Some(value) => Some(
@@ -176,9 +174,7 @@ fn parse_windows(value: &Value) -> Result<Vec<Window>, &'static str> {
                         .as_f64()
                         .and_then(|secs| Duration::try_from_secs_f64(secs).ok())
                         .and_then(|secs| UNIX_EPOCH.checked_add(secs))
-                        .ok_or(
-                            "a window with a `resets_at` that is not Unix seconds",
-                        )?,
+                        .ok_or("a window with a `resets_at` that is not Unix seconds")?,
                 ),
             };
             Ok(Window {
@@ -216,9 +212,10 @@ fn parse_credit(value: &Value) -> Result<Quota, &'static str> {
 /// readers. A flight is overdue at exactly `FETCH_TIMEOUT`. True when it
 /// expired one.
 fn expire_overdue(cache: &mut Cache, now: Instant, parker: &Parker) -> bool {
-    let overdue = cache.flight.as_ref().is_some_and(|flight| {
-        now.saturating_duration_since(flight.started) >= FETCH_TIMEOUT
-    });
+    let overdue = cache
+        .flight
+        .as_ref()
+        .is_some_and(|flight| now.saturating_duration_since(flight.started) >= FETCH_TIMEOUT);
     if overdue {
         cache.flight = None;
         cache.failed = true;
@@ -234,12 +231,9 @@ fn expire_overdue(cache: &mut Cache, now: Instant, parker: &Parker) -> bool {
 fn entry(cache: &Cache, now: Instant, wall: SystemTime) -> QuotaEntry {
     if cache.failed {
         let last = cache.fetched.as_ref().and_then(|(value, at)| {
-            value.clone().map(|quota| {
-                (
-                    reset_view(&quota, wall),
-                    now.saturating_duration_since(*at),
-                )
-            })
+            value
+                .clone()
+                .map(|quota| (reset_view(&quota, wall), now.saturating_duration_since(*at)))
         });
         return QuotaEntry::Unreachable { last };
     }
@@ -360,10 +354,7 @@ impl LuaProvider {
                             Next::Return(entry(cache, now, clock.wall()))
                         }
                         _ => {
-                            let deadline = flight
-                                .started
-                                .checked_add(FETCH_TIMEOUT)
-                                .unwrap_or(now);
+                            let deadline = flight.started.checked_add(FETCH_TIMEOUT).unwrap_or(now);
                             saw = Some((flight.id, deadline));
                             Next::Park(deadline)
                         }
@@ -399,12 +390,7 @@ impl LuaProvider {
     /// never replaces the `unreachable` entry. A success stores the value
     /// and clears the failure; a failure keeps the last value and its fetch
     /// time. Every stored end wakes the readers.
-    fn finish_quota(
-        &self,
-        pair: &CredentialPair,
-        id: u64,
-        fetched: Result<Option<Quota>, ()>,
-    ) {
+    fn finish_quota(&self, pair: &CredentialPair, id: u64, fetched: Result<Option<Quota>, ()>) {
         {
             let mut states = lock(&self.quotas.state);
             let Some(cache) = states.get_mut(pair) else {

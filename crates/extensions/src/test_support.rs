@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use contract::events::CacheLifetime;
 use contract::provider::{
-    CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply, ToolDefinition,
+    CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    ToolDefinition,
 };
 use serde_json::{Map, Value, json};
 
