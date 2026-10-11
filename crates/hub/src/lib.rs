@@ -20,6 +20,7 @@ mod connection;
 mod delete;
 mod devices;
 mod diag;
+mod directories;
 mod environment;
 mod error;
 #[cfg(test)]
