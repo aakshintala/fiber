@@ -89,7 +89,7 @@ pub(crate) fn start(gate: &Arc<Gate>, command: &Shell) -> Result<Running, Refuse
         });
     }
     let cancel = Arc::new(ShellCancel::new());
-    gate.track_shell(Arc::clone(&cancel));
+    gate.shells.track(Arc::clone(&cancel));
     let mut arguments = Map::new();
     arguments.insert("command".to_owned(), Value::String(command.command.clone()));
     Ok(Running {
@@ -109,12 +109,12 @@ impl Running {
             .run(&self.arguments, self.cancel.as_ref(), &Silent);
         (ack.0)(answered(gate, output, self.tool.bound()));
         // A panic aborts the process, so nothing later cancels this shell.
-        gate.untrack_shell(&self.cancel);
+        gate.shells.untrack(&self.cancel);
     }
 
     /// Unregisters a shell that never ran, after the reader answered it.
     pub(crate) fn abandon(self, gate: &Gate) {
-        gate.untrack_shell(&self.cancel);
+        gate.shells.untrack(&self.cancel);
     }
 }
 

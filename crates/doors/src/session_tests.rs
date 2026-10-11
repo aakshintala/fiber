@@ -1619,7 +1619,7 @@ fn the_stopper_cancels_a_running_driver_shell_and_wakes_the_loop() {
 fn the_stopper_after_the_inbox_is_gone_still_cancels_later_shells() {
     let opened = Opened::open(Vec::new());
     (opened.session.stopper())();
-    assert!(super::lock(&opened.session.gate.shells).stopped);
+    assert!(opened.session.gate.shells.sealed());
     close_within(opened.session, opened.log);
 }
 
@@ -1639,10 +1639,10 @@ fn abandon_unregisters_a_driver_shell_that_never_ran() {
     let Ok(running) = crate::shell::start(&gate, &command) else {
         panic!("the driver shell passed its checks");
     };
-    assert_eq!(super::lock(&gate.shells).running.len(), 1);
+    assert_eq!(gate.shells.running_len(), 1);
     running.abandon(&gate);
     assert!(
-        super::lock(&gate.shells).running.is_empty(),
+        gate.shells.running_len() == 0,
         "close would wait for a shell that never runs"
     );
     close_within(opened.session, opened.log);
@@ -1663,7 +1663,7 @@ fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
         .recv(&running.cancelled)
         .expect("quiesce cancelled the driver shell");
     // The shell is cancelled but still running: quiesce is still waiting.
-    assert!(!super::lock(&gate.shells).running.is_empty());
+    assert!(gate.shells.running_len() != 0);
     assert!(
         done.try_recv().is_err(),
         "quiesce returned before the shell ended"
@@ -1673,7 +1673,7 @@ fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
         .recv(&done)
         .expect("quiesce returned once the shell ended");
     let session = quiescing.join().unwrap();
-    assert!(super::lock(&gate.shells).running.is_empty());
+    assert_eq!(gate.shells.running_len(), 0);
     drop(running.client);
     close_within(session, running.opened.log);
 }
@@ -1695,7 +1695,7 @@ fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
     // The shell is cancelled but still running: close is still waiting,
     // before it stops accepting. A subscriber's writer would hold close
     // later anyway, as the shell's answer keeps its queue open.
-    assert!(!super::lock(&gate.shells).running.is_empty());
+    assert!(gate.shells.running_len() != 0);
     assert!(!gate.stopped(), "close went on before the shell ended");
     running.release.send(()).unwrap();
     // The answer is queued before the shell leaves the registry, so it
@@ -1711,7 +1711,7 @@ fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("close returned once the shell ended");
-    assert!(super::lock(&gate.shells).running.is_empty());
+    assert_eq!(gate.shells.running_len(), 0);
 }
 
 #[test]
@@ -1749,11 +1749,11 @@ fn a_driver_shell_started_after_the_stopper_is_cancelled_and_waited_for() {
         .recv(&cancelled)
         .expect("the driver shell started cancelled");
     // Registered although shutdown had begun, so close waits for it.
-    assert!(!super::lock(&gate.shells).running.is_empty());
+    assert!(gate.shells.running_len() != 0);
     release.send(()).unwrap();
     drop(connected);
     close_within(opened.session, opened.log);
-    assert!(super::lock(&gate.shells).running.is_empty());
+    assert_eq!(gate.shells.running_len(), 0);
 }
 
 #[test]
@@ -1824,7 +1824,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("close returned once the shell ended");
-    assert!(super::lock(&gate.shells).running.is_empty());
+    assert_eq!(gate.shells.running_len(), 0);
     drop(client);
 }
 

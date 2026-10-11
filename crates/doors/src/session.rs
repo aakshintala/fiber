@@ -39,7 +39,7 @@ use conns::Conns;
 #[cfg(test)]
 use conns::{GRACE, grace_remains};
 pub(crate) use event::envelope;
-use shells::RunningShells;
+use shells::Shells;
 pub(crate) use shells::Stopped;
 
 /// A running session process's door side: its socket, the clients on it, and
@@ -98,11 +98,8 @@ pub(crate) struct Gate {
     /// `fiber ask` and a bare [`Session::run`] append no prompt.
     pub(crate) history: OnceLock<Option<PathBuf>>,
     /// Driver shells running now, and whether shutdown has begun, which
-    /// cancels a new one as it registers. Both sit under this lock, so a
-    /// shell that registers after `close` cannot miss the snapshot.
-    shells: Mutex<RunningShells>,
-    /// Signalled whenever a driver shell leaves [`Gate::shells`].
-    shell_ended: Condvar,
+    /// cancels a new one as it registers.
+    pub(crate) shells: Shells,
     /// What a test observes, or holds, at a [`tests::Probe`] point.
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
@@ -434,6 +431,31 @@ impl Session {
 }
 
 impl Gate {
+    /// Stops a running turn and every driver shell.
+    pub(crate) fn stop_running(&self) -> Stopped {
+        let turn = lock(&self.cancel).as_ref().is_some_and(|cancel| cancel());
+        let shell = self.shells.stop_all();
+        Stopped { turn, shell }
+    }
+
+    /// Marks the gate so a shell that registers later is cancelled at once,
+    /// and cancels the shells already running. A pasted image in flight is
+    /// cancelled too: the session started its child, so shutdown stops it
+    /// inside the bound. Closing the socket does not stop a tool blocked
+    /// in `run`.
+    pub(super) fn cancel_shells(&self) {
+        self.shells.seal_and_cancel();
+        self.pasting.cancel();
+    }
+
+    /// Waits until no driver shell is registered: each has answered.
+    pub(super) fn wait_shells(&self) {
+        #[cfg(test)]
+        self.shells.wait(&|| self.note(tests::Probe::ShellsWaiting));
+        #[cfg(not(test))]
+        self.shells.wait(&|| {});
+    }
+
     #[cfg(test)]
     pub(crate) fn note(&self, point: tests::Probe) {
         let probe = lock(&self.probe).clone();
@@ -562,11 +584,7 @@ fn open_in(
         images: Mutex::new(None),
         pasting: Arc::new(crate::shell::ShellCancel::new()),
         history: OnceLock::new(),
-        shells: Mutex::new(RunningShells {
-            stopped: false,
-            running: Vec::new(),
-        }),
-        shell_ended: Condvar::new(),
+        shells: Shells::new(),
         #[cfg(test)]
         probe: Mutex::new(None),
         stop: AtomicBool::new(false),

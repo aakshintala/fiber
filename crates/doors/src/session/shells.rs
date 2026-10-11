@@ -1,15 +1,20 @@
 //! Owns the registry of running driver shells and their shutdown cancellation.
 
-use std::sync::{Arc, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
-use super::{Gate, lock};
+/// Driver shells running now, and whether shutdown has begun, which cancels a
+/// new one as it registers.
+pub(crate) struct Shells {
+    running: Mutex<RunningShells>,
+    ended: Condvar,
+}
 
 /// Driver shells running now, and whether shutdown has begun, which cancels a
 /// new one as it registers. Both sit under this lock, so a shell that registers
 /// after `close` cannot miss the snapshot.
-pub(super) struct RunningShells {
-    pub(super) stopped: bool,
-    pub(super) running: Vec<Arc<crate::shell::ShellCancel>>,
+struct RunningShells {
+    stopped: bool,
+    running: Vec<Arc<crate::shell::ShellCancel>>,
 }
 
 fn cancel_each(shells: &[Arc<crate::shell::ShellCancel>]) {
@@ -18,61 +23,30 @@ fn cancel_each(shells: &[Arc<crate::shell::ShellCancel>]) {
     }
 }
 
-/// What [`Gate::stop_running`] found running.
+/// What [`crate::session::Gate::stop_running`] found running.
 pub(crate) struct Stopped {
     pub(crate) turn: bool,
     pub(crate) shell: bool,
 }
 
-impl Gate {
-    /// Waits until no driver shell is registered: each has answered.
-    pub(super) fn wait_shells(&self) {
-        let mut shells = lock(&self.shells);
-        while !shells.running.is_empty() {
-            #[cfg(test)]
-            self.note(super::tests::Probe::ShellsWaiting);
-            shells = self
-                .shell_ended
-                .wait(shells)
-                .unwrap_or_else(PoisonError::into_inner);
+impl Shells {
+    pub(crate) fn new() -> Self {
+        Self {
+            running: Mutex::new(RunningShells {
+                stopped: false,
+                running: Vec::new(),
+            }),
+            ended: Condvar::new(),
         }
-    }
-
-    /// Stops a running turn and every driver shell. The shells are
-    /// cancelled after the registry lock is released, so a shell's return
-    /// can remove its entry without waiting on this call.
-    pub(crate) fn stop_running(&self) -> super::Stopped {
-        let turn = lock(&self.cancel).as_ref().is_some_and(|cancel| cancel());
-        let shells = lock(&self.shells).running.clone();
-        cancel_each(&shells);
-        Stopped {
-            turn,
-            shell: !shells.is_empty(),
-        }
-    }
-
-    /// Marks the gate so a shell that registers later is cancelled at once,
-    /// and cancels the shells already running. A pasted image in flight is
-    /// cancelled too: the session started its child, so shutdown stops it
-    /// inside the bound. Closing the socket does not stop a tool blocked
-    /// in `run`.
-    pub(super) fn cancel_shells(&self) {
-        let running = {
-            let mut shells = lock(&self.shells);
-            shells.stopped = true;
-            shells.running.clone()
-        };
-        cancel_each(&running);
-        self.pasting.cancel();
     }
 
     /// Registers a driver shell's cancel. After `close` or the stopper it
     /// is registered too, so they wait for its thread, and cancelled at once.
-    pub(crate) fn track_shell(&self, cancel: Arc<crate::shell::ShellCancel>) {
+    pub(crate) fn track(&self, cancel: Arc<crate::shell::ShellCancel>) {
         let stopped = {
-            let mut shells = lock(&self.shells);
-            shells.running.push(Arc::clone(&cancel));
-            shells.stopped
+            let mut running = lock(&self.running);
+            running.running.push(Arc::clone(&cancel));
+            running.stopped
         };
         // After the lock: `cancel` wakes the tool, which must not need this lock.
         if stopped {
@@ -80,10 +54,59 @@ impl Gate {
         }
     }
 
-    pub(crate) fn untrack_shell(&self, cancel: &Arc<crate::shell::ShellCancel>) {
-        lock(&self.shells)
+    /// Unregisters a driver shell's cancel and wakes whoever waits for none
+    /// to be registered.
+    pub(crate) fn untrack(&self, cancel: &Arc<crate::shell::ShellCancel>) {
+        lock(&self.running)
             .running
             .retain(|tracked| !Arc::ptr_eq(tracked, cancel));
-        self.shell_ended.notify_all();
+        self.ended.notify_all();
     }
+
+    /// Cancels every driver shell and says whether any ran. The shells are
+    /// cancelled after the registry lock is released, so a shell's return
+    /// can remove its entry without waiting on this call.
+    pub(super) fn stop_all(&self) -> bool {
+        let running = lock(&self.running).running.clone();
+        cancel_each(&running);
+        !running.is_empty()
+    }
+
+    /// Marks the registry so a shell that registers later is cancelled at once,
+    /// and cancels the shells already running.
+    pub(super) fn seal_and_cancel(&self) {
+        let running = {
+            let mut running = lock(&self.running);
+            running.stopped = true;
+            running.running.clone()
+        };
+        cancel_each(&running);
+    }
+
+    /// Waits until no driver shell is registered: each has answered. Calls
+    /// `on_wait` before each park.
+    pub(super) fn wait(&self, on_wait: &dyn Fn()) {
+        let mut running = lock(&self.running);
+        while !running.running.is_empty() {
+            on_wait();
+            running = self
+                .ended
+                .wait(running)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sealed(&self) -> bool {
+        lock(&self.running).stopped
+    }
+
+    #[cfg(test)]
+    pub(crate) fn running_len(&self) -> usize {
+        lock(&self.running).running.len()
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
