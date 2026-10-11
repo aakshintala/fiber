@@ -520,31 +520,40 @@ fn an_initialize_answered_404_without_an_endpoint_stream_names_its_status() {
     }
 }
 
+/// Probes an endpoint-shaped body and requires the POST's original status.
+fn probe_error(status: u16, media: &str) -> StartError {
+    let setup = Setup::new();
+    let probe = Response {
+        status,
+        headers: vec![("content-type".to_owned(), media.to_owned())],
+        body: b"event: endpoint\ndata: /messages?sessionId=abc\n\n".to_vec(),
+        drop_connection: false,
+        stall: false,
+    };
+    let server =
+        ProviderServer::start([Response::status(405, "method not allowed"), probe]).unwrap();
+    let url = format!("{}/mcp", server.url());
+    let error = setup.start_err(&url, Duration::from_secs(5));
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "the probe is sent after initialize");
+    assert_eq!(requests[1].method, "GET", "the legacy probe is a GET");
+    error
+}
+
 #[test]
-fn a_legacy_probe_requires_both_a_success_status_and_an_event_stream() {
-    let endpoint = b"event: endpoint\ndata: /messages?sessionId=abc\n\n".to_vec();
-    for (name, status, media) in [
-        ("success_without_sse", 200, "text/plain"),
-        ("sse_without_success", 404, "text/event-stream"),
-    ] {
-        let setup = Setup::new();
-        let probe = Response {
-            status,
-            headers: vec![("content-type".to_owned(), media.to_owned())],
-            body: endpoint.clone(),
-            drop_connection: false,
-            stall: false,
-        };
-        let server =
-            ProviderServer::start([Response::status(405, "method not allowed"), probe]).unwrap();
-        let url = format!("{}/mcp", server.url());
-        let error = setup.start_err(&url, Duration::from_secs(5));
-        assert_eq!(
-            error,
-            StartError::StartFailed("The server answered HTTP 405.".to_owned()),
-            "row {name}: only a 2xx event stream can identify legacy HTTP+SSE",
-        );
-    }
+fn a_success_status_without_sse_is_not_a_legacy_probe() {
+    assert_eq!(
+        probe_error(200, "text/plain"),
+        StartError::StartFailed("The server answered HTTP 405.".to_owned()),
+    );
+}
+
+#[test]
+fn an_sse_probe_without_a_success_status_is_not_legacy() {
+    assert_eq!(
+        probe_error(404, "text/event-stream"),
+        StartError::StartFailed("The server answered HTTP 405.".to_owned()),
+    );
 }
 
 #[test]
