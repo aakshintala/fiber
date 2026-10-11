@@ -676,11 +676,11 @@ fn a_checklist_row_cuts_its_id_from_the_roles_cell() {
     let roles_at = cell_x(&line, " [deep]");
     assert_eq!(
         crate::mouse::hit(&targets, id_at, y),
-        Some(TargetId::View(Spot::Cell(2, 1)))
+        Some(TargetId::View(Spot::Cell(3, 1)))
     );
     assert_eq!(
         crate::mouse::hit(&targets, roles_at, y),
-        Some(TargetId::View(Spot::Cell(2, 2)))
+        Some(TargetId::View(Spot::Cell(3, 2)))
     );
 }
 

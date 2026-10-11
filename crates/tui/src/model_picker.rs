@@ -25,7 +25,8 @@ pub(crate) enum Mode {
     /// whatever the scope, and choosing it saves only the level.
     Thinking,
     /// Marking which installed models `scoped_models` keeps: every row
-    /// shows whatever the scope, with a mark, and Enter saves the list.
+    /// shows whatever the scope, with a mark. Typing filters the list
+    /// as in the picker, Enter toggles a mark, and Ctrl+S saves.
     Scope,
 }
 
@@ -73,7 +74,7 @@ pub(crate) struct Open {
     /// The scope toggle shows every installed model.
     pub(crate) show_all: bool,
     /// The filter query: what typing narrowed the list to. Empty at
-    /// every open; the checklist never filters, so it stays empty there.
+    /// every open; Space counts as a typed query on the checklist too.
     pub(crate) query: String,
 }
 
@@ -99,7 +100,7 @@ pub(crate) struct PickerView {
     pub(crate) count: String,
     /// The scope toggle, or `None` with no scope or on the checklist.
     pub(crate) toggle: Option<String>,
-    /// The buttons row's layout index (refresh is cell 0 there).
+    /// The buttons row's layout index (the filter is row 0 there).
     pub(crate) buttons_at: usize,
     /// One section per shown provider, in list order.
     pub(crate) sections: Vec<Section>,
@@ -109,6 +110,9 @@ pub(crate) struct PickerView {
     pub(crate) status: Vec<String>,
     /// The legend's keys and labels.
     pub(crate) footer: Vec<(&'static str, &'static str)>,
+    /// Whether the buttons row draws the refresh button and its click
+    /// target: false only on the checklist, which has no refresh button.
+    pub(crate) refresh: bool,
     /// This frame's spinner, for lists still refreshing.
     pub(crate) spinner: String,
     /// The focused model row's layout index, else the first shown row.
@@ -544,14 +548,25 @@ impl ModelPicker {
             .is_some_and(|open| open.mode == Mode::Scope)
     }
 
-    /// Flips the selected row's mark. Only the checklist keeps marks,
-    /// so everywhere else this changes nothing.
+    /// Flips the selected row's mark, only when the selection is one of
+    /// the shown rows: with a query matching nothing, Enter toggles
+    /// nothing. Only the checklist keeps marks, so everywhere else this
+    /// changes nothing.
     pub(crate) fn toggle_mark(&mut self) {
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        // The checklist shows every installed model, so the selection
-        // always names a marked row.
+        let rows = shown_in(
+            &self.catalogue.models,
+            &self.scoped,
+            open.show_all,
+            open.mode,
+            open.target.as_ref(),
+            &open.query,
+        );
+        if !rows.contains(&open.selected) {
+            return;
+        }
         if let Some(mark) = open.marks.get_mut(open.selected) {
             *mark = !*mark;
         }
@@ -680,7 +695,8 @@ impl ModelPicker {
     /// `/thinking` choice of the current model's own row saves only the
     /// level; any other row is an ordinary choice. `None` while closed,
     /// with no scoped row to choose, or while the checklist is open: it
-    /// saves its marks with Enter and never chooses.
+    /// toggles its marks with Enter and saves them with Ctrl+S, and
+    /// never chooses.
     pub(crate) fn choice(&self, session_only: bool) -> Option<Choice> {
         if self.is_scope() {
             return None;
@@ -836,6 +852,9 @@ impl ModelPicker {
                     .as_ref()
                     .is_some_and(|(_, r)| *r == entry.reference)
                     || ctx.home_only.is_some_and(|r| r == entry.reference);
+                // A checklist row carries no level chip and never the
+                // session-only third row: its second row is dim text.
+                let checklist = open.mode == Mode::Scope;
                 section.models.push(ModelRow {
                     at,
                     id: entry.id.clone(),
@@ -855,23 +874,37 @@ impl ModelPicker {
                         .configured
                         .as_ref()
                         .and_then(|saved| entry.levels.iter().position(|level| level == saved)),
-                    chip: open.chips.get(*index).copied().flatten(),
-                    mark: (open.mode == Mode::Scope)
+                    chip: if checklist {
+                        None
+                    } else {
+                        open.chips.get(*index).copied().flatten()
+                    },
+                    mark: checklist
                         .then(|| open.marks.get(*index).copied())
                         .flatten(),
-                    session_only: only,
+                    session_only: !checklist && only,
                 });
             }
         }
+        // The checklist counts its marked installed rows, hidden rows
+        // included: one leading and one trailing space either way.
+        let marked = open.marks.iter().filter(|mark| **mark).count();
+        let count = if open.mode == Mode::Scope {
+            if open.query.is_empty() {
+                format!(" {marked} of {total} marked ")
+            } else {
+                format!(" {shown} of {total} models · {marked} marked ")
+            }
+        } else if !open.query.is_empty() {
+            format!("{shown} of {total} models")
+        } else if !self.scoped.is_empty() && !open.show_all {
+            format!("scoped · {shown} of {total}")
+        } else {
+            format!("{shown} models")
+        };
         Some(PickerView {
             filter: open.query.clone(),
-            count: if !open.query.is_empty() {
-                format!("{shown} of {total} models")
-            } else if open.mode != Mode::Scope && !self.scoped.is_empty() && !open.show_all {
-                format!("scoped · {shown} of {total}")
-            } else {
-                format!("{shown} models")
-            },
+            count,
             toggle: (open.mode != Mode::Scope && !self.scoped.is_empty()).then(|| {
                 if open.show_all {
                     "[show scoped]"
@@ -888,7 +921,7 @@ impl ModelPicker {
             // The checklist marks rows and saves the list: no model
             // or level is chosen here.
             footer: if open.mode == Mode::Scope {
-                vec![("Space", "mark"), ("Enter", "save"), ("Esc", "back")]
+                vec![("↑↓", "move"), ("Enter", "toggle"), ("Ctrl+S", "save"), ("Esc", "close")]
             } else {
                 vec![
                     ("↑↓", "move"),
@@ -903,11 +936,14 @@ impl ModelPicker {
             // The selection may sit off the shown rows after a read
             // answered, so it falls to the first model row shown.
             focused,
+            // The checklist draws no refresh button and no refresh
+            // click target.
+            refresh: open.mode != Mode::Scope,
         })
     }
 
-    /// The layout rows in draw order: the filter (never on the
-    /// checklist), the buttons, headings with their models, or the
+    /// The layout rows in draw order: the filter first in every mode,
+    /// then the buttons, headings with their models, or the
     /// empty-filter line. `None` while closed.
     fn layout(&self) -> Option<Vec<RowAt>> {
         let open = self.open.as_ref()?;
@@ -919,13 +955,9 @@ impl ModelPicker {
             open.target.as_ref(),
             &open.query,
         );
-        // The checklist takes no filter: its frame starts at the buttons
-        // with no filter row, so no row number shifts there.
-        let mut layout = if open.mode == Mode::Scope {
-            vec![RowAt::Buttons]
-        } else {
-            vec![RowAt::Filter, RowAt::Buttons]
-        };
+        // The filter row is first in every mode, so the buttons row
+        // is 1 everywhere.
+        let mut layout = vec![RowAt::Filter, RowAt::Buttons];
         // A typed query hiding every installed model shows one dim line
         // and no provider sections.
         if !open.query.is_empty() && rows.is_empty() && !self.catalogue.models.is_empty() {
@@ -1126,9 +1158,15 @@ pub(crate) fn shown_in(
     query: &str,
 ) -> Vec<usize> {
     // The checklist opens over every installed model whatever the
-    // scope, with no toggle and no filter.
+    // scope, with no toggle: the query filters it as in the picker.
     if mode == Mode::Scope {
-        return (0..models.len()).collect();
+        return (0..models.len())
+            .filter(|index| {
+                models
+                    .get(*index)
+                    .is_some_and(|entry| filter::matches(entry, query))
+            })
+            .collect();
     }
     let mut rows = visible(models, scoped, show_all);
     if mode == Mode::Thinking

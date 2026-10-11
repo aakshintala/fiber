@@ -2436,14 +2436,14 @@ fn space_and_a_click_toggle_a_mark() {
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     // Layout rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1`,
     // 4 the `zeta` heading, 5 `zeta/z1`.
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(marks(&app), Some(vec![true, false, false]));
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(marks(&app), Some(vec![false, false, false]));
     // A click on the mark toggles its row.
     assert_eq!(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
-            2, 0
+            3, 0
         ))),
         Effect::None
     );
@@ -2451,7 +2451,7 @@ fn space_and_a_click_toggle_a_mark() {
     // A click on the name selects without toggling.
     assert_eq!(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
-            5, 1
+            6, 1
         ))),
         Effect::None
     );
@@ -2467,8 +2467,8 @@ fn enter_saves_marked_in_order_then_unlisted_old_entries() {
     assert_eq!(marks(&app), Some(vec![false, false, true]));
     // Mark `acme/m1`: the save lists marked references in catalogue
     // order, then the old list's uninstalled entries in their order.
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(
         seam.writes(),
@@ -2497,9 +2497,9 @@ fn marking_none_clears_even_with_an_unavailable_old_entry() {
     let (mut app, seam) = scope_app(&["gone/x", "acme/m1"]);
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     assert_eq!(marks(&app), Some(vec![true, false, false]));
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
-    assert_eq!(marks(&app), Some(vec![false, false, false]));
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(
         seam.writes(),
@@ -2517,7 +2517,7 @@ fn marking_none_clears_even_with_an_unavailable_old_entry() {
 fn esc_saves_nothing() {
     let (mut app, seam) = scope_app(&["acme/m1"]);
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(!app.model_picker_open());
     assert!(seam.writes().is_empty());
@@ -2543,8 +2543,8 @@ fn text_after_the_command_is_ignored() {
 fn the_saved_list_scopes_the_next_open() {
     let (mut app, _) = scope_app(&[]);
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
     // Choosing next lists only the saved entry until "show all".
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
@@ -2565,8 +2565,8 @@ fn saving_on_home_writes_at_once_and_sets_the_saved_list() {
     ));
     app.on_models(Ok(three()));
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
     assert_eq!(
@@ -2623,7 +2623,7 @@ fn a_failed_scope_write_is_a_notice_and_keeps_the_list() {
     let (mut app, seam) = scope_app(&["acme/m1"]);
     *seam.refuse.lock().expect("the refusal") = Some("locked".to_owned());
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert_eq!(app.notice(), Some("Saving scoped_models failed: locked"));
     assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
     assert!(!app.model_picker_open());
@@ -2635,8 +2635,8 @@ fn saving_without_a_seam_says_nothing_changed() {
     app.on_line(hello());
     app.on_models(Ok(three()));
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert_eq!(
         app.notice(),
         Some("Saving is not available; nothing changed.")
@@ -2663,10 +2663,10 @@ fn opening_before_the_first_read_marks_toggles_and_saves() {
     assert_eq!(marks(&app), Some(vec![true, false, false]));
     // Space toggles the selected row; Enter saves the marked list,
     // keeping the old list's uninstalled entries.
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
-    assert_eq!(marks(&app), Some(vec![false, false, false]));
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(
         seam.writes(),

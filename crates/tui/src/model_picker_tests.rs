@@ -835,30 +835,84 @@ fn scope_clicks_toggle_the_mark_cell_and_select_on_any_other() {
         lists: Vec::new(),
     };
     picker.open(Mode::Scope, None);
-    // Layout rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1`.
-    assert_eq!(picker.click_cell(2, 0), None);
+    // Layout rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // 3 `acme/m1`.
+    assert_eq!(picker.click_cell(3, 0), None);
     assert_eq!(
         picker.open.as_ref().map(|open| open.marks.clone()),
         Some(vec![true, false, false, false, false])
     );
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(0));
     // The name cell selects without toggling.
-    assert_eq!(picker.click_cell(3, 1), None);
+    assert_eq!(picker.click_cell(4, 1), None);
     assert_eq!(picker.open.as_ref().map(|open| open.selected), Some(1));
     assert_eq!(
         picker.open.as_ref().map(|open| open.marks.clone()),
         Some(vec![true, false, false, false, false])
     );
     // A heading toggles nothing.
-    assert_eq!(picker.click_cell(1, 0), None);
+    assert_eq!(picker.click_cell(2, 0), None);
     assert_eq!(
         picker.open.as_ref().map(|open| open.marks.clone()),
         Some(vec![true, false, false, false, false])
     );
     // The checklist never chooses, on any cell.
-    assert_eq!(picker.click_cell(2, 0), None);
+    assert_eq!(picker.click_cell(3, 0), None);
     assert!(picker.choice(false).is_none());
     assert!(picker.choice(true).is_none());
+}
+
+#[test]
+fn toggle_mark_with_no_shown_row_changes_nothing() {
+    let mut picker = ModelPicker {
+        scoped: vec!["acme/m1".to_owned()],
+        ..ModelPicker::default()
+    };
+    picker.catalogue = Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+        lists: Vec::new(),
+    };
+    picker.open(Mode::Scope, None);
+    picker.push_query('q');
+    picker.push_query('q');
+    picker.push_query('q');
+    assert_eq!(picker.query(), "qqq");
+    picker.toggle_mark();
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, false, false, false])
+    );
+    assert!(picker.is_open());
+}
+
+#[test]
+fn marks_survive_query_edits() {
+    let mut picker = ModelPicker {
+        scoped: Vec::new(),
+        ..ModelPicker::default()
+    };
+    picker.catalogue = Catalogue {
+        models: catalogue(),
+        notices: Vec::new(),
+        lists: Vec::new(),
+    };
+    picker.open(Mode::Scope, None);
+    picker.toggle_mark();
+    picker.push_query('z');
+    // The selection moved onto the first shown row; toggling it marks
+    // a second row while the first stays marked but hidden.
+    picker.toggle_mark();
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, true, false, false])
+    );
+    picker.clear_query();
+    assert_eq!(picker.query(), "");
+    assert_eq!(
+        picker.open.as_ref().map(|open| open.marks.clone()),
+        Some(vec![true, false, true, false, false])
+    );
 }
 
 #[test]
@@ -1206,12 +1260,19 @@ fn thinking_drops_its_target_row_on_a_non_matching_query() {
 }
 
 #[test]
-fn the_checklist_ignores_the_query() {
+fn the_checklist_filters_every_installed_model() {
     let models = catalogue();
+    // The scope is ignored, and Space is part of the query.
+    let scoped = vec!["acme/m1".to_owned()];
     assert_eq!(
-        shown_in(&models, &[], false, Mode::Scope, None, "zzz"),
-        [0, 1, 2, 3, 4]
+        shown_in(&models, &scoped, false, Mode::Scope, None, "z"),
+        [2, 3, 4]
     );
+    assert_eq!(
+        shown_in(&models, &scoped, false, Mode::Scope, None, "acme 2"),
+        [1]
+    );
+    assert_eq!(shown_in(&models, &scoped, false, Mode::Scope, None, ""), [0, 1, 2, 3, 4]);
 }
 
 /// An open picker over `catalogue()` with `lists`, for the view tests.
@@ -1324,31 +1385,57 @@ fn the_view_counts_the_scope_and_marks_its_models_when_shown_all() {
 }
 
 #[test]
-fn the_checklist_view_marks_rows_and_keeps_its_footer() {
+fn the_checklist_view_counts_marks_and_keeps_its_footer() {
     let mut picker = open_over(catalogue());
+    picker.scoped = vec!["acme/m1".to_owned(), "zeta/z2".to_owned()];
     picker.open(Mode::Scope, None);
+    // A session-only wait names a row: the checklist still draws no
+    // session-only row.
+    picker.session_only = Some((contract::SessionId("s_1".to_owned()), "acme/m1".to_owned()));
+    // Unfiltered, two of five marked.
     let view = view_of(&picker);
-    // Every installed model shows, with no filter, count or toggle.
-    assert_eq!(view.count, "5 models");
+    assert_eq!(view.count, " 2 of 5 marked ");
     assert_eq!(view.toggle, None);
-    assert_eq!(view.buttons_at, 0);
+    assert_eq!(view.buttons_at, 1);
+    assert!(!view.refresh);
+    assert!(!view.no_match);
     assert_eq!(
         view.footer,
-        [("Space", "mark"), ("Enter", "save"), ("Esc", "back")]
+        [
+            ("↑↓", "move"),
+            ("Enter", "toggle"),
+            ("Ctrl+S", "save"),
+            ("Esc", "close")
+        ]
     );
+    for model in view.sections.iter().flat_map(|section| section.models.iter()) {
+        assert!(model.mark.is_some());
+        assert_eq!(model.chip, None);
+        assert!(!model.session_only);
+    }
     let marks: Vec<bool> = view
         .sections
         .iter()
         .flat_map(|section| section.models.iter())
         .map(|model| model.mark.unwrap_or(false))
         .collect();
-    assert_eq!(marks, [false; 5]);
-    picker.toggle_mark();
+    assert_eq!(marks, [true, false, false, true, false]);
+    // Filtered to three shown rows, both marks held: m counts hidden
+    // marks too.
+    picker.push_query('z');
     let view = view_of(&picker);
-    assert!(
-        view.sections[0].models[0].mark.unwrap_or(false),
-        "the first row marks"
-    );
+    assert_eq!(view.count, " 3 of 5 models · 2 marked ");
+    assert!(!view.no_match);
+    // A query matching nothing shows no rows but keeps both marks.
+    picker.push_query('q');
+    picker.push_query('q');
+    picker.push_query('q');
+    let view = view_of(&picker);
+    assert_eq!(view.count, " 0 of 5 models · 2 marked ");
+    assert!(view.no_match);
+    // A choosing open keeps the refresh button.
+    picker.open(Mode::Choose, None);
+    assert!(view_of(&picker).refresh);
 }
 
 #[test]
