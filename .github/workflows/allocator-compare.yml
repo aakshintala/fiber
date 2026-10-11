@@ -121,9 +121,31 @@ jobs:
 
       - name: Print the compared medians
         run: |
+          for file in "$RUNNER_TEMP/allocator/musl-system.json" \
+            "$RUNNER_TEMP/allocator/musl-mimalloc.json" \
+            "$RUNNER_TEMP/allocator/gnu.json"; do
+            if [ "$(jq '(.failures // []) | length > 0' "$file")" = "true" ]; then
+              echo "benchmark failures in $file:"
+              jq -r '.failures[]' "$file"
+              exit 1
+            fi
+            for id in terminal_attach_rss_kib terminal_attach_retained_kib \
+              busy_turn_retained_kib; do
+              count=$(jq --arg id "$id" '(.metrics[$id] // []) | length' "$file")
+              if [ "$count" -lt 5 ]; then
+                echo "$file: $id has $count samples, need 5"
+                exit 1
+              fi
+            done
+            count=$(jq '[.metrics.terminal_attach_ms[]? | select(.fixture == "10 MiB")] | length' "$file")
+            if [ "$count" -lt 5 ]; then
+              echo "$file: terminal_attach_ms for 10 MiB has $count samples, need 5"
+              exit 1
+            fi
+          done
           table=$(jq -r '
             def median: if length == 0 then null else sort | .[(length / 2) | floor] end;
-            def show: if . == null then "n/a" else ((. * 10 | round / 10) | tostring) end;
+            def show: ((. * 10 | round / 10) | tostring);
             def med(build; id): (build[0].metrics[id] // []) | median;
             def attach(build): [(build[0].metrics.terminal_attach_ms // [])[]
               | select(.fixture == "10 MiB") | .ms] | median;
@@ -148,4 +170,4 @@ jobs:
         with:
           name: allocator-compare-${{ github.sha }}
           path: ${{ runner.temp }}/allocator/
-          if-no-files-found: warn
+          if-no-files-found: error

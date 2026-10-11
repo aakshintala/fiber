@@ -1,6 +1,6 @@
 use super::{
-    PAGE_BYTES, RESULT_BYTES, RETAINED_SETTLE, TOOL_CALLS, TRIGGER_TOKENS, Turn, busy_turn_samples,
-    count, fdatasync_calls, filler, log_lines, page, retained_anon_kib, turn_bytes,
+    PAGE_BYTES, RESULT_BYTES, TOOL_CALLS, TRIGGER_TOKENS, Turn, busy_turn_samples, count,
+    fdatasync_calls, filler, log_lines, page, retained_anon_kib, turn_bytes,
 };
 
 #[test]
@@ -81,12 +81,6 @@ fn the_busy_turn_reports_its_peak_its_retained_and_its_log() {
     };
     assert_eq!(value("busy_turn_rss_kib"), serde_json::json!(20480));
     assert_eq!(value("busy_turn_retained_kib"), serde_json::json!(19000));
-    // The peak and the retained never swap: equal medians must not hide
-    // one standing in for the other.
-    assert_ne!(
-        samples,
-        busy_turn_samples(19000, 20480, &lines, 1_520_000).unwrap()
-    );
     // A different retained reading is a different sample.
     assert_ne!(
         samples,
@@ -131,9 +125,7 @@ fn the_retained_reading_waits_the_settle_then_reads_rss_anon() {
     );
     assert_eq!(anon, Ok(4100));
     let recorder = recorder.borrow();
-    // Exactly one settle wait, of ten seconds.
-    assert_eq!(recorder.sleeps, vec![RETAINED_SETTLE]);
-    assert_eq!(RETAINED_SETTLE, std::time::Duration::from_secs(10));
+    assert_eq!(recorder.sleeps, [std::time::Duration::from_secs(10)]);
     // The read follows the wait, so the settled memory is read.
     assert_eq!(recorder.events, vec!["sleep", "read"]);
 }

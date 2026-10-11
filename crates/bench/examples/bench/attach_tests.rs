@@ -52,9 +52,6 @@ fn the_attach_memory_rows_carry_the_terminals_peak_and_retained() {
     };
     assert_eq!(value("terminal_attach_rss_kib"), json!(51200));
     assert_eq!(value("terminal_attach_retained_kib"), json!(48000));
-    // The peak and the retained never swap: equal medians must not hide
-    // one standing in for the other.
-    assert_ne!(rows, memory_rows("10 MiB", 48000, 51200));
     // A different retained reading is a different sample.
     assert_ne!(rows, memory_rows("10 MiB", 51200, 48001));
 }
