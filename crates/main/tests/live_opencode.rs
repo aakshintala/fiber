@@ -51,24 +51,25 @@ fn a_live_opencode_quota_fetch_reports_three_windows() {
         .recv(&fetched)
         .expect("the live quota fetch never returned")
         .expect("the live quota fetch failed");
-    if let Some(quota) = quota {
-        let extensions::Quota::Windows(windows) = quota else {
-            panic!("the live quota is not windows: {quota:?}");
+    let Some(quota) = quota else {
+        panic!("the live quota fetch reported nothing");
+    };
+    let extensions::Quota::Windows(windows) = quota else {
+        panic!("the live quota is not windows: {quota:?}");
+    };
+    let names: Vec<&str> = windows.iter().map(|window| window.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["rolling", "weekly", "monthly"],
+        "the live quota holds unexpected windows: {windows:?}"
+    );
+    for window in &windows {
+        let extensions::WindowUse::Percent { used, .. } = &window.used else {
+            panic!("the live window is already reset: {window:?}");
         };
-        let names: Vec<&str> = windows.iter().map(|window| window.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["rolling", "weekly", "monthly"],
-            "the live quota holds unexpected windows: {windows:?}"
+        assert!(
+            used.is_finite() && (0.0..=100.0).contains(used),
+            "the live window percent is out of range: {window:?}"
         );
-        for window in &windows {
-            let extensions::WindowUse::Percent { used, .. } = &window.used else {
-                panic!("the live window is already reset: {window:?}");
-            };
-            assert!(
-                used.is_finite() && (0.0..=100.0).contains(used),
-                "the live window percent is out of range: {window:?}"
-            );
-        }
     }
 }
