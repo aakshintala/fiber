@@ -52,7 +52,15 @@ fn a_code_pull_request_runs_what_it_selected() {
 
 #[test]
 fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
-    let plan = plan("all", &strings(&["log"]), "pull_request", false, false, true, 100);
+    let plan = plan(
+        "all",
+        &strings(&["log"]),
+        "pull_request",
+        false,
+        false,
+        true,
+        100,
+    );
     assert_eq!(plan.jobs, jobs(true, true, true, false, false));
 }
 
@@ -317,7 +325,15 @@ fn shard_timeouts_grow_with_the_largest_shard_past_the_cap() {
 
 #[test]
 fn a_selected_run_with_no_mutants_starts_no_shard() {
-    let plan = plan("crates", &strings(&["log"]), "pull_request", false, false, true, 0);
+    let plan = plan(
+        "crates",
+        &strings(&["log"]),
+        "pull_request",
+        false,
+        false,
+        true,
+        0,
+    );
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);
 }
