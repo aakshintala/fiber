@@ -21,7 +21,8 @@ use serde_json::json;
 use support::pty::{FINISHED_TITLE, Run, exact_end};
 use support::{Deadline, Setup, write_json};
 
-/// The idle title, as the old wait spelled it.
+/// The idle title, written only when the named idle row lands before
+/// the finished attention latches.
 const IDLE_TITLE: &str = "\u{2713} say hi \u{b7} fiber\x07";
 
 /// Waits for the finished attention title. It is the last title the turn
@@ -150,10 +151,10 @@ fn thirty_wheel_ups_scroll_the_opened_read_ninety_rows() {
     assert_eq!(finished.status.code(), Some(0));
 }
 
-/// The ordering that made the idle-title wait fail under load: the named
+/// Harness-level fixture for one ordering of the turn's titles: the named
 /// idle row lands after the finished attention title latched, so
-/// `✓ say hi · fiber` is never written (#2032). The titles are fed in the
-/// order captured from a failing run.
+/// `✓ say hi · fiber` is never written (#2032). A wait on the finished
+/// title returns in this ordering; a wait on the idle title never would.
 #[test]
 fn the_finished_title_arrives_when_the_idle_title_never_does() {
     let (main, mut terminal) = {
@@ -175,6 +176,6 @@ fn the_finished_title_arrives_when_the_idle_title_never_does() {
     assert_eq!(
         exact_end(&run.output(), 0, IDLE_TITLE.as_bytes()),
         None,
-        "the old wait's title was written, so this is not the failing order"
+        "the idle title was written, so this is not the ordering under test"
     );
 }
