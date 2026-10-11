@@ -9,65 +9,42 @@
     reason = "test code"
 )]
 
+#[path = "support/harness.rs"]
+mod harness;
+
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use contract::GenerationId;
 use contract::events::{CacheLifetime, TextDelta};
 use contract::provider::{
-    CallError, CallUsage, Delta, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
+    CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider,
 };
 use contract::shapes::Tokens;
 use fakes::{Deadline, ProviderServer, Response};
 use provider::Endpoint;
 use serde_json::{Value, json};
 
-const DEADLINE: Duration = Duration::from_secs(10);
+use harness::{
+    DEADLINE, anthropic_sse as anthropic_stream, gemini_sse as gemini_stream,
+    responses_sse as responses_stream, run,
+};
 
 fn request() -> ModelRequest {
     ModelRequest {
-        system_prompt: "You are terse.".into(),
-        tools: Vec::new(),
-        thinking: None,
-        tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "s_1".into(),
-        conversation: vec![Input::User {
-            text: "hi".into(),
-            images: Vec::new(),
-        }],
-        previous_end: None,
-        sent_tools: None,
-        max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        ..harness::request()
     }
 }
 
 fn endpoint(provider: &str, model: &str, server: &ProviderServer) -> Endpoint {
     Endpoint {
-        provider: provider.into(),
         model: model.into(),
         base_url: server.url(),
         key: None,
-        direct: true,
-        ..Endpoint::default()
+        ..harness::endpoint(provider, server)
     }
-}
-
-/// Runs `call` on its own thread, so a call that never returns fails the
-/// test at the deadline instead of hanging it.
-#[track_caller]
-fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |d| deltas.push(d));
-        done.send((reply, deltas)).unwrap();
-    });
-    Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("waited for the call to return")
 }
 
 fn body_len(server: &ProviderServer) -> u64 {
@@ -93,14 +70,6 @@ fn tokens(input: u64, cache_read: u64, output: u64) -> Tokens {
 }
 
 // Anthropic.
-
-fn anthropic_stream(events: &[Value]) -> Vec<u8> {
-    events
-        .iter()
-        .map(|e| format!("data: {e}\n\n"))
-        .collect::<String>()
-        .into_bytes()
-}
 
 fn anthropic_started(id: &str, usage: Option<Value>) -> Value {
     let mut message = json!({"id": id});
@@ -211,14 +180,6 @@ fn anthropic_cancelled_after_usage_carries_what_it_saw() {
 }
 
 // Responses.
-
-fn responses_stream(events: &[Value]) -> Vec<u8> {
-    events
-        .iter()
-        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
-        .collect::<String>()
-        .into_bytes()
-}
 
 fn responses_created(id: &str) -> Value {
     json!({"type": "response.created", "response": {"id": id, "status": "in_progress"}})
@@ -445,14 +406,6 @@ fn completions_cancelled_after_usage_carries_what_it_saw() {
 }
 
 // Gemini.
-
-fn gemini_stream(chunks: &[Value]) -> Vec<u8> {
-    chunks
-        .iter()
-        .map(|c| format!("data: {c}\r\n\r\n"))
-        .collect::<String>()
-        .into_bytes()
-}
 
 fn gemini_chunk(text: &str, usage: Option<Value>) -> Value {
     let mut chunk = json!({"candidates": [{"content": {"role": "model",

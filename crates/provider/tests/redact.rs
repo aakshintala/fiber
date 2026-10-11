@@ -8,122 +8,14 @@
     reason = "test code, helpers included"
 )]
 
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
+#[path = "support/harness.rs"]
+mod harness;
 
 use contract::ErrorCode;
-use contract::events::CacheLifetime;
-use contract::provider::{CallError, Delta, Input, ModelCall, ModelRequest, Reply};
-use fakes::{Deadline, ProviderServer, Response};
+use fakes::{ProviderServer, Response};
 use provider::Endpoint;
-use provider::anthropic_messages::Messages;
-use provider::google_generative_ai::Gemini;
-use provider::openai_completions::Completions;
-use provider::openai_responses::Responses;
 
-const DEADLINE: Duration = Duration::from_secs(10);
-
-fn request() -> ModelRequest {
-    ModelRequest {
-        system_prompt: "You are terse.".into(),
-        tools: Vec::new(),
-        thinking: None,
-        tool_choice: "auto".into(),
-        cache_lifetime: CacheLifetime::OneHour,
-        cache_key: "session_1".into(),
-        previous_end: None,
-        sent_tools: None,
-        max_output_tokens: None,
-        conversation: vec![Input::User {
-            text: "hi".into(),
-            images: Vec::new(),
-        }],
-        session_dir: std::path::PathBuf::new(),
-    }
-}
-
-fn endpoint(provider: &str, server: &ProviderServer) -> Endpoint {
-    Endpoint {
-        provider: provider.into(),
-        model: "m".into(),
-        base_url: format!("{}/v1", server.url()),
-        key: Some(contract::Secret::new("sk-secret".into())),
-        direct: true,
-        ..Endpoint::default()
-    }
-}
-
-/// Runs `call` on its own thread, so a call that never returns fails the
-/// test at the deadline instead of hanging it.
-#[allow(
-    clippy::result_large_err,
-    reason = "the error is the model call's, returned unchanged"
-)]
-#[track_caller]
-fn run(call: Box<dyn ModelCall>) -> Result<Reply, CallError> {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |d: Delta| deltas.push(d));
-        done.send(reply).unwrap();
-    });
-    Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("waited for the call to return")
-}
-
-#[track_caller]
-fn failed(call: Box<dyn ModelCall>) -> (contract::shapes::Failure, Option<bool>) {
-    let Err(CallError::Failed {
-        failure,
-        should_retry,
-        ..
-    }) = run(call)
-    else {
-        panic!("expected a failure");
-    };
-    (failure, should_retry)
-}
-
-/// One protocol's calls: against the fake server.
-struct Protocol {
-    name: &'static str,
-    call: fn(&Endpoint) -> Box<dyn ModelCall>,
-}
-
-fn protocols() -> [Protocol; 4] {
-    fn messages(endpoint: &Endpoint) -> Box<dyn ModelCall> {
-        Box::new(Messages::new(endpoint.clone()).request(&request()))
-    }
-    fn responses(endpoint: &Endpoint) -> Box<dyn ModelCall> {
-        Box::new(Responses::new(endpoint.clone()).request(&request()))
-    }
-    fn completions(endpoint: &Endpoint) -> Box<dyn ModelCall> {
-        Box::new(Completions::new(endpoint.clone()).request(&request()))
-    }
-    fn gemini(endpoint: &Endpoint) -> Box<dyn ModelCall> {
-        Box::new(Gemini::new(endpoint.clone()).request(&request()))
-    }
-    [
-        Protocol {
-            name: "anthropic",
-            call: messages,
-        },
-        Protocol {
-            name: "opencode",
-            call: responses,
-        },
-        Protocol {
-            name: "openrouter",
-            call: completions,
-        },
-        Protocol {
-            name: "gemini",
-            call: gemini,
-        },
-    ]
-}
+use harness::{endpoint, failed, protocols, request};
 
 #[test]
 fn a_401_that_echoes_the_key_stores_it_redacted() {
@@ -134,7 +26,7 @@ fn a_401_that_echoes_the_key_stores_it_redacted() {
         )])
         .unwrap();
         let endpoint = endpoint(protocol.name, &server);
-        let (failure, _) = failed((protocol.call)(&endpoint));
+        let (failure, _) = failed((protocol.call)(&endpoint, &request()));
         assert_eq!(
             failure.code,
             ErrorCode::AuthenticationFailed,
@@ -228,12 +120,8 @@ use serde_json::json;
 
 fn endpoint_key(provider: &str, server: &ProviderServer, key: &str) -> Endpoint {
     Endpoint {
-        provider: provider.into(),
-        model: "m".into(),
-        base_url: format!("{}/v1", server.url()),
         key: Some(contract::Secret::new(key.to_owned())),
-        direct: true,
-        ..Endpoint::default()
+        ..harness::endpoint(provider, server)
     }
 }
 
@@ -291,7 +179,7 @@ fn a_non_json_body_echoing_the_key_is_stored_redacted() {
     for protocol in protocols() {
         let server = ProviderServer::start([Response::status(400, "bad key sk-secret")]).unwrap();
         let endpoint = endpoint(protocol.name, &server);
-        let (failure, _) = failed((protocol.call)(&endpoint));
+        let (failure, _) = failed((protocol.call)(&endpoint, &request()));
         let said = failure.provider.as_ref().unwrap();
         assert_eq!(said.status.unwrap(), 400, "{}", protocol.name);
         assert_eq!(
@@ -312,7 +200,7 @@ fn a_body_echoing_the_wrapped_key_redacts_the_key_only() {
         )])
         .unwrap();
         let endpoint = endpoint(protocol.name, &server);
-        let (failure, _) = failed((protocol.call)(&endpoint));
+        let (failure, _) = failed((protocol.call)(&endpoint, &request()));
         assert_eq!(
             failure.provider.as_ref().unwrap().message.as_str(),
             "Bearer [redacted]",
@@ -338,7 +226,7 @@ fn a_body_echoing_signed_header_values_is_stored_redacted() {
             direct: true,
             ..Endpoint::default()
         };
-        let (failure, _) = failed((protocol.call)(&endpoint));
+        let (failure, _) = failed((protocol.call)(&endpoint, &request()));
         assert_eq!(
             failure.provider.as_ref().unwrap().message.as_str(),
             "[redacted] then [redacted] then [redacted]",
@@ -377,7 +265,7 @@ fn a_body_echoing_a_replaced_credential_is_stored_redacted() {
         direct: true,
         ..Endpoint::default()
     };
-    let (failure, _) = failed((protocols()[2].call)(&endpoint));
+    let (failure, _) = failed((protocols()[2].call)(&endpoint, &request()));
     assert_eq!(
         failure.provider.as_ref().unwrap().message.as_str(),
         "bad [redacted]"
@@ -390,7 +278,7 @@ fn an_error_inside_a_200_stream_is_stored_redacted() {
         let (body, expected) = stream_error(protocol.name);
         let server = ProviderServer::start([Response::stream(body)]).unwrap();
         let endpoint = endpoint(protocol.name, &server);
-        let (failure, _) = failed((protocol.call)(&endpoint));
+        let (failure, _) = failed((protocol.call)(&endpoint, &request()));
         let said = failure.provider.as_ref().unwrap();
         assert_eq!(said.status.unwrap(), 200, "{}", protocol.name);
         assert_eq!(said.message.as_str(), expected, "{}", protocol.name);
@@ -407,7 +295,7 @@ fn declared_and_fiber_built_header_values_stay() {
         .unwrap();
         let mut endpoint = endpoint(protocol.name, &server);
         endpoint.headers = vec![("originator".to_owned(), "fiber".to_owned())];
-        let (failure, _) = failed((protocol.call)(&endpoint));
+        let (failure, _) = failed((protocol.call)(&endpoint, &request()));
         assert_eq!(
             failure.provider.as_ref().unwrap().message.as_str(),
             "fiber sent application/json",
@@ -426,7 +314,7 @@ fn a_json_escaped_key_is_decoded_then_redacted() {
         )])
         .unwrap();
         let endpoint = endpoint_key(protocol.name, &server, "sk-a/b");
-        let (failure, _) = failed((protocol.call)(&endpoint));
+        let (failure, _) = failed((protocol.call)(&endpoint, &request()));
         assert_eq!(
             failure.provider.as_ref().unwrap().message.as_str(),
             "bad [redacted]",
@@ -451,7 +339,7 @@ fn gemini_classification_reads_the_original_body() {
     )])
     .unwrap();
     let endpoint = endpoint_key(protocol.name, &server, "API_KEY_INVALID");
-    let (failure, _) = failed((protocol.call)(&endpoint));
+    let (failure, _) = failed((protocol.call)(&endpoint, &request()));
     assert_eq!(failure.code, ErrorCode::AuthenticationFailed);
     assert_eq!(
         failure.provider.as_ref().unwrap().message.as_str(),
@@ -464,7 +352,7 @@ fn gemini_classification_reads_the_original_body() {
     )])
     .unwrap();
     let endpoint = endpoint_key(protocol.name, &server, "37s");
-    let (failure, _) = failed((protocol.call)(&endpoint));
+    let (failure, _) = failed((protocol.call)(&endpoint, &request()));
     assert_eq!(failure.retry_after_ms, Some(37000));
     assert_eq!(
         failure.provider.as_ref().unwrap().message.as_str(),
@@ -496,7 +384,7 @@ fn a_sign_error_echoing_the_credential_is_stored_redacted() {
         direct: true,
         ..Endpoint::default()
     };
-    let (failure, _) = failed((protocols()[2].call)(&endpoint));
+    let (failure, _) = failed((protocols()[2].call)(&endpoint, &request()));
     assert_eq!(failure.code, ErrorCode::CredentialFailed);
     assert_eq!(failure.message.as_str(), "openrouter's sign() failed.");
     let said = failure.provider.as_ref().unwrap();
@@ -521,7 +409,7 @@ fn a_credential_error_echoing_the_key_is_stored_redacted() {
     let server = ProviderServer::start([Response::status(500, "{}")]).unwrap();
     let mut endpoint = endpoint_key("openrouter", &server, "sk-key");
     endpoint.signer = Some(Arc::new(EchoKey) as Arc<dyn Signer>);
-    let (failure, _) = failed((protocols()[2].call)(&endpoint));
+    let (failure, _) = failed((protocols()[2].call)(&endpoint, &request()));
     assert_eq!(failure.code, ErrorCode::CredentialFailed);
     let said = failure.provider.as_ref().unwrap();
     assert_eq!(said.status, None);
@@ -553,7 +441,7 @@ fn an_unusable_header_name_holding_the_credential_is_redacted() {
         direct: true,
         ..Endpoint::default()
     };
-    let (failure, _) = failed((protocols()[2].call)(&endpoint));
+    let (failure, _) = failed((protocols()[2].call)(&endpoint, &request()));
     assert_eq!(failure.code, ErrorCode::CredentialFailed);
     assert!(
         !failure.message.contains("hidden-tok"),

@@ -4,7 +4,11 @@
 //! or `endpoint()` under the same name, whose body is only a struct update
 //! over the harness value, so the field list exists once.
 
-#![allow(dead_code, reason = "each test file uses only part of it")]
+#![allow(
+    dead_code,
+    clippy::indexing_slicing,
+    reason = "each test file uses only part of it; sent_body indexes a scripted request"
+)]
 
 use std::sync::mpsc;
 use std::thread;
@@ -178,8 +182,10 @@ pub(crate) fn completions_completed() -> Response {
 }
 
 pub(crate) fn gemini_completed() -> Response {
-    Response::stream(gemini_sse(&[json!({"candidates": [{"content": {"role": "model",
+    Response::stream(gemini_sse(&[
+        json!({"candidates": [{"content": {"role": "model",
         "parts": [{"text": "hi"}]}, "index": 0, "finishReason": "STOP"}],
         "responseId": "r1",
-        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}})]))
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}}),
+    ]))
 }
