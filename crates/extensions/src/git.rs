@@ -200,6 +200,60 @@ impl Origin {
             .to_owned())
     }
 
+    /// Clones the repository at the exact recorded `commit` to `dest`
+    /// and returns it. Only a full commit hash is checked out: anything
+    /// else fails before `git` runs, so a record can never inject a `git`
+    /// option or name a ref. After the checkout, the commit `HEAD` names
+    /// must equal the recorded one. `dest/.git` stays.
+    pub(crate) fn clone_at(
+        &self,
+        repo: &str,
+        commit: &str,
+        dest: &Path,
+        clock: &dyn Clock,
+    ) -> Result<String, Error> {
+        if ![40, 64].contains(&commit.len())
+            || !commit
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(Error::Git {
+                command: "checkout".into(),
+                why: format!("the recorded commit `{commit}` is not a full commit hash"),
+            });
+        }
+        let url = (self.url)(repo);
+        let to = dest.to_string_lossy();
+        self.run(
+            &["clone", "--quiet", "--no-checkout", url.as_str(), &to],
+            None,
+            clock,
+        )?;
+        self.run(
+            &["checkout", "--quiet", "--detach", commit],
+            Some(dest),
+            clock,
+        )?;
+        let head = self.run(&["rev-parse", "HEAD"], Some(dest), clock)?;
+        Self::checked_out_as(head.trim(), commit)?;
+        Ok(commit.to_owned())
+    }
+
+    /// The commit a detached checkout landed on is the recorded one. `git`
+    /// never resolves a 40- or 64-hex name to another ref, so checking out a
+    /// full hash either fails or lands on that commit, and no test can make
+    /// this mismatch fire without replacing `git` itself.
+    #[cfg_attr(false, mutants::skip)]
+    fn checked_out_as(head: &str, commit: &str) -> Result<(), Error> {
+        if head != commit {
+            return Err(Error::Git {
+                command: "checkout".into(),
+                why: format!("`{commit}` checked out as `{head}`"),
+            });
+        }
+        Ok(())
+    }
+
     /// What changed in `dir` of the clone since commit `old`. A call stopped
     /// at its deadline fails the update: an update never commits a change
     /// list the call did not finish reading.
