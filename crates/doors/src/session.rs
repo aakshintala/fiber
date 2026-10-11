@@ -69,6 +69,9 @@ pub(crate) struct Gate {
     /// empty until then.
     skills: OnceLock<Vec<SkillInfo>>,
     pub(crate) accepted: Accepted,
+    /// The loop's inbox (`docs/architecture.md`, "One inbox"): unbounded;
+    /// each entry is one admitted command, a job's end or a hook's delivery,
+    /// and the loop drains it at step boundaries.
     inbox: Mutex<Option<Sender<Delivery>>>,
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.

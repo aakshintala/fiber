@@ -6,7 +6,11 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use contract::CommandId;
 
-/// The ids this process accepted or is running, across connections.
+/// The id of every command this process accepted or is running, across
+/// connections, so a repeat is rejected `duplicate_command`. A session
+/// "remembers the id of every command it accepted for as long as its
+/// process runs" (`docs/invocation.md`, "The command line"), so the set
+/// stays unbounded: one `String` per accepted command for the process's life.
 pub(crate) struct Accepted {
     ids: Mutex<HashSet<String>>,
 }
