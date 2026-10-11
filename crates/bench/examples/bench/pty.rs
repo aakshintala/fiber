@@ -139,7 +139,12 @@ impl Terminal {
                     });
                 }
             };
-            match self.wakes.recv_timeout(wait) {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "the bench's wait, computed from its injected clock"
+            )]
+            let woke = self.wakes.recv_timeout(wait);
+            match woke {
                 Ok(()) | Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err(format!("the terminal closed before {what}"));
