@@ -149,9 +149,16 @@ fn backticked(cell: &str) -> Vec<String> {
         .collect()
 }
 
-/// A hook returning `key`'s valid value at `point`. Panics on a key the
-/// table names without a value here, so the table and this test change
-/// together.
+/// Every return key the decoders accept, per point: what the table must
+/// document, and what the test exercises against the code.
+const SUPPORTED: &[(&str, &[&str])] = &[
+    ("before_message", &["content", "context", "refuse"]),
+    ("before_tool", &["arguments", "refuse"]),
+    ("after_tool", &["content", "details", "artifact"]),
+];
+
+/// A hook returning `key`'s valid value at `point`. Panics on a key
+/// without a value here, so a new decoder key updates this test.
 fn returning(point: &str, key: &str) -> String {
     let body = match (point, key) {
         ("before_message", "content") => {
@@ -292,18 +299,28 @@ fn each_point_is_given_exactly_the_tables_keys() {
 }
 
 #[test]
-fn each_returned_key_alone_is_accepted_and_bogus_fails() {
-    for (point, _, returned) in table_rows() {
-        for key in returned {
+fn each_supported_return_key_is_accepted_and_matches_the_table() {
+    let rows = table_rows();
+    for (point, keys) in SUPPORTED {
+        for key in *keys {
             let home = Home::new();
-            home.install("a", &returning(&point, &key));
-            let notices = ask_plain(&home.load(), &point);
+            home.install("a", &returning(point, key));
+            let notices = ask_plain(&home.load(), point);
             assert!(notices.is_empty(), "{point} `{key}`: {notices:?}");
         }
+        let mut documented: Vec<String> =
+            rows.iter().find(|row| row.0 == *point).unwrap().2.clone();
+        documented.sort();
+        let mut keys: Vec<String> = keys.iter().map(|key| (*key).to_owned()).collect();
+        keys.sort();
+        assert_eq!(
+            keys, documented,
+            "{point}: the table documents every supported return key"
+        );
         // A key the table does not name fails the hook.
         let home = Home::new();
-        home.install("a", &hook(&point, "return { bogus = 1 }"));
-        let notices = ask_plain(&home.load(), &point);
+        home.install("a", &hook(point, "return { bogus = 1 }"));
+        let notices = ask_plain(&home.load(), point);
         assert_eq!(notices.len(), 1, "{point} `bogus` fails");
     }
 }

@@ -49,28 +49,12 @@ impl Home {
         self.root.path().join("home")
     }
 
-    /// Installs `fiber.test/<short>`, whose entry script is `init`. The
-    /// manifest declares every `fiber.provider` the script registers, with
-    /// no URLs, so the helper builds a well-formed package.
+    /// Installs `fiber.test/<short>`, whose entry script is `init`. No
+    /// fixture registers a provider, so the manifest declares hooks alone.
     fn install(&self, short: &str, init: &str) {
         let src = self.root.path().join("src").join(short);
         fs::create_dir_all(&src).unwrap();
-        let mut manifest = json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1});
-        let mut seen: Vec<&str> = Vec::new();
-        for part in init.split("fiber.provider(\"").skip(1) {
-            if let Some(registered) = part.split('"').next()
-                && !seen.contains(&registered)
-            {
-                seen.push(registered);
-            }
-        }
-        if !seen.is_empty() {
-            let declared: serde_json::Map<String, serde_json::Value> = seen
-                .iter()
-                .map(|registered| ((*registered).to_owned(), json!([])))
-                .collect();
-            manifest["providers"] = serde_json::Value::Object(declared);
-        }
+        let manifest = json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1});
         fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
         fs::write(src.join("init.lua"), init).unwrap();
         plan(
