@@ -1723,7 +1723,7 @@ fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
         vec![sp(" ", Style::new())],
         vec![sp(" ", Style::new())],
     );
-    let bw = body.iter().map(|l| width(l)).max().unwrap_or(0) + 3;
+    let bw = body.iter().map(|l| width(l)).max().unwrap_or(0) + 2;
     let pad = w.saturating_sub(bw);
     let mut out = vec![];
     let e = |ch: &str| {
@@ -1734,8 +1734,7 @@ fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
     out.push(e("▄"));
     for (i, l) in body.into_iter().enumerate() {
         let mut s = vec![sp(" ".repeat(pad), Style::new())];
-        let mut inner = fit(&l, bw - 2);
-        inner.push(sp(" ", Style::new()));
+        let mut inner = fit(&l, bw - 1);
         inner.push(sp("▐", fg(BLUE)));
         s.extend(tint(inner, BU));
         out.push(Row {
@@ -7102,6 +7101,21 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bubble_has_one_blank_column_before_its_stripe() {
+        let rows = bubble("go", 0, 40);
+        let text = |r: &Row| {
+            r.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        };
+        let lines: Vec<String> = rows.iter().map(text).collect();
+        assert!(lines[1].ends_with(" go ▐"), "{:?}", lines[1]);
+        assert_eq!(lines[0], format!("{}▄▄▄▄▄", " ".repeat(35)));
+        assert!(lines[2].ends_with("▀▀▀▀▀"));
+    }
 
     #[test]
     fn home_case_parsing() {
