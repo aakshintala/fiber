@@ -50,6 +50,7 @@ The hub:
   hub install [--port <port>]  Register the hub as a login service
   hub uninstall                Remove the hub's login service; running sessions carry on
   hub status [--json]          Print the hub's state: running, version, port, clients, devices, installed
+  hub refresh                  Rebuild the hub's environment for the sessions it starts from now on
 
 Flags:
   -h, --help     Print this menu
@@ -227,6 +228,8 @@ pub(crate) enum HubCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Rebuild the hub's environment for the sessions it starts from now on
+    Refresh,
     /// The internal hub command: hidden and free to change.
     #[command(hide = true)]
     Serve {
