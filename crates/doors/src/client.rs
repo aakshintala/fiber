@@ -12,12 +12,10 @@ pub(crate) use writer::{STOP, control_line, spawn_writer, write_line};
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 
-use contract::clock::wall_ms;
 use contract::commands::{Command, CommandLine};
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, Event};
 use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
@@ -535,10 +533,15 @@ fn deliver_message(
             command_id: Some(id.clone()),
         },
     };
-    let ack = inbox_ack(conn, id);
+    let ack = inbox_ack(conn, id.clone());
     if prompt {
         let ack = match conn.gate.history.get().cloned().flatten() {
-            Some(path) => recorded(ack, path, &conn.gate, message.content.clone()),
+            Some(path) => {
+                conn.gate
+                    .prompts
+                    .register(id.clone(), message.content.clone());
+                crate::prompt_history::recorded(ack, path, &conn.gate, id)
+            }
             None => ack,
         };
         conn.gate.deliver(Delivery::Prompt(message, ack));
@@ -680,24 +683,6 @@ pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
             &event,
         ));
     })
-}
-
-/// Wraps a prompt's acknowledgement so an accepted prompt is appended to
-/// the prompt history at `path` before `ack` answers, so a client that
-/// reads its acceptance finds the line. A wrapper dropped uncalled drops
-/// `ack`, which still answers `closing`.
-fn recorded(ack: Ack, path: PathBuf, gate: &Arc<Gate>, content: Vec<ContentPart>) -> Ack {
-    let gate = Arc::clone(gate);
-    Ack(Box::new(move |result| {
-        if result.is_ok() {
-            // debt: a failed append is dropped unreported, when a session gets a diag log, record a failed history append.
-            let ts = wall_ms(gate.clock.wall());
-            match crate::prompt_history::append(&path, ts, &gate.session_id, &content) {
-                Ok(()) | Err(_) => {}
-            }
-        }
-        (ack.0)(result);
-    }))
 }
 
 /// Answers `closing` when the loop drops the acknowledgement uncalled.

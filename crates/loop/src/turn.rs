@@ -61,16 +61,22 @@ impl Loop {
         }
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
-        let input = self.turn_input(started.pieces);
+        let (input, contexts) = self.turn_input(started.pieces);
         let person = input
             .iter()
             .any(|item| matches!(item, contract::events::InputItem::Handoff { .. }));
         self.handoff.new_turn(person);
-        // Armed with `turn_started`: a shutdown lands before both or after.
+        // Armed with `turn_started` and its contexts: a shutdown lands
+        // before all of them or after (`docs/extensions.md`, "Hooks").
         let cancel = Arc::clone(&self.cancel);
         let event = Event::TurnStarted(TurnStarted { input });
-        let Some(written) = cancel.commit(cancel::Commit::Arm, || self.append(&event, &turn, None))
-        else {
+        let Some(written) = cancel.commit(cancel::Commit::Arm, || -> Result<(), Error> {
+            self.append(&event, &turn, None)?;
+            for added in &contexts {
+                self.append(&Event::ContextAdded(added.clone()), &turn, None)?;
+            }
+            Ok(())
+        }) else {
             return Ok(None);
         };
         written?;

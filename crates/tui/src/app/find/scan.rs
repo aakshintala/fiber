@@ -54,18 +54,18 @@ const SNIPPET: usize = 400;
 
 /// One match's display lines for the results view: its logical line cut
 /// to [`SNIPPET`] characters around the match, with its char range in the
-/// cut line, and one logical line each side, cut to [`SNIPPET`]
+/// cut line, and the nearest line with text each side, cut to [`SNIPPET`]
 /// characters. Display only, never compared: the anchor holds the whole
 /// line's hash and length (`docs/tui.md`, "Search").
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Snippet {
-    /// The logical line before the match's, or none at a page's edge.
+    /// The nearest line with text before the match's, or none.
     pub(crate) before: String,
     /// The match's logical line, cut around the match.
     pub(crate) line: String,
     /// The match's char range in the cut line.
     pub(crate) at: Range<usize>,
-    /// The logical line after the match's, or none at a page's edge.
+    /// The nearest line with text after the match's, or none.
     pub(crate) after: String,
 }
 
@@ -191,7 +191,7 @@ fn cut_head(text: &str) -> String {
 }
 
 /// The display snippet for the match `hit` on `line`: its line cut
-/// around the match, one logical line each side cut from its start. A
+/// around the match, the nearest line with text each side cut from its start. A
 /// neighbour at a page's edge is none: the scan renders one page at a
 /// time and fetches nothing extra for a snippet (`docs/tui.md`,
 /// "Search").
@@ -210,17 +210,26 @@ fn snippet_for(
     }
 }
 
-/// The neighbouring lines' text around `lines[at]`, or none at a page's
-/// edge: the scan renders one page at a time and fetches nothing extra
-/// for a snippet (`docs/tui.md`, "Search").
+/// The nearest line with text on each side of `lines[at]`, skipping the
+/// blank separator rows between blocks, or none when a side has no such
+/// line on the page: the scan renders one page at a time and fetches
+/// nothing extra for a snippet (`docs/tui.md`, "Search").
 fn sides(lines: &[Logical], at: usize) -> (Option<&str>, Option<&str>) {
+    fn text(line: &Logical) -> Option<&str> {
+        Some(line.text.as_str()).filter(|t| !t.trim().is_empty())
+    }
     (
-        at.checked_sub(1)
-            .and_then(|prev| lines.get(prev))
-            .map(|line| line.text.as_str()),
         lines
-            .get(at.saturating_add(1))
-            .map(|line| line.text.as_str()),
+            .get(..at)
+            .unwrap_or_default()
+            .iter()
+            .rev()
+            .find_map(text),
+        lines
+            .get(at.saturating_add(1)..)
+            .unwrap_or_default()
+            .iter()
+            .find_map(text),
     )
 }
 

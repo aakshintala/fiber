@@ -23,9 +23,9 @@
 //!   as tab-separated lines
 //! - `docs-only FILE...`: whether every file is a docs file, as `docs-only: yes` or
 //!   `docs-only: no`
-//! - `bench-report --head FILE [--base FILE --base-commit SHA] --doc docs/performance.md --event
-//!   pull_request|push --comment FILE`: judges the benchmark result files
-//!   against the budget table and writes the pull request comment; exit 1
+//! - `bench-report --head FILE [--base FILE --base-commit SHA] [--stored-base FILE --stored-commit SHA]
+//!   --doc docs/performance.md --event pull_request|push --comment FILE`: judges the benchmark result
+//!   files against the budget table and writes the pull request comment; exit 1
 //!   when a budget, a head self-check or the table mapping fails
 //! - `models-dev [--from FILE]`: regenerates the first-party model lists
 //!   from models.dev, or from FILE instead of fetching
@@ -280,7 +280,23 @@ fn run(args: &[String]) -> Result<bool, String> {
             // error: the base only feeds advisory timings.
             let base = optional(rest, "--base").map(|path| read(&path));
             let base_commit = optional(rest, "--base-commit").unwrap_or_default();
-            let out = bench::report(&doc, &head, base, event, &base_commit);
+            // An unreadable stored file is reported in the comment, not as
+            // a usage error: memory and exact rows then fall back to the table.
+            let stored_commit = optional(rest, "--stored-commit").unwrap_or_default();
+            let stored = optional(rest, "--stored-base").map(|path| {
+                let commit = stored_commit.clone();
+                match read(&path) {
+                    Ok(text) => bench::Stored {
+                        commit,
+                        text: Ok(text),
+                    },
+                    Err(e) => bench::Stored {
+                        commit,
+                        text: Err(e),
+                    },
+                }
+            });
+            let out = bench::report(&doc, &head, base, stored, event, &base_commit);
             std::fs::write(&comment_path, &out.comment)
                 .map_err(|e| format!("{comment_path}: {e}"))?;
             report(

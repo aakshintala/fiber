@@ -3,7 +3,9 @@
 //! request comment. Memory and exact budgets fail the run; timing budgets
 //! are advisory and show the head and base medians ("When a budget is
 //! exceeded"). Ceilings are read from the table at run time; an exact row's
-//! formula is code here, so its cell text is pinned.
+//! formula is code here, so its cell text is pinned. On a pull request the
+//! live base feeds only the timing columns; memory and exact rows compare
+//! against the backstop's stored results for the base commit.
 
 use crate::rules::{section, table_rows};
 
@@ -51,14 +53,24 @@ pub(crate) struct Report {
     pub(crate) comment: String,
 }
 
+/// The backstop's stored results for the base or its nearest stored
+/// ancestor: the commit they are from, and the file's text or why it could
+/// not be read.
+pub(crate) struct Stored {
+    pub(crate) commit: String,
+    pub(crate) text: Result<String, String>,
+}
+
 /// Judges `head` (and `base` on a pull request) against the budget table in
 /// `performance`, the text of `docs/performance.md`. `base` is the base
-/// result file's text, or why it could not be read. `base_commit` names the
-/// commit the base binary is from.
+/// result file's text, or why it could not be read. `stored` is the
+/// backstop's stored results the memory and exact rows compare against.
+/// `base_commit` names the commit the base binary is from.
 pub(crate) fn report(
     performance: &str,
     head: &str,
     base: Option<Result<String, String>>,
+    stored: Option<Stored>,
     event: Event,
     base_commit: &str,
 ) -> Report {
@@ -70,10 +82,19 @@ pub(crate) fn report(
             None
         }
     };
-    let base_parsed = match (event, &base) {
-        (Event::PullRequest, Some(Ok(text))) => parse_results(text).ok(),
-        _ => None,
-    };
+    // The stored results feed only over-at-base, and only on a pull
+    // request: the backstop must fail on a budget the base fails.
+    let (stored_results, stored_why): (Option<results::Results>, Option<String>) =
+        match (event, &stored) {
+            (Event::PullRequest, Some(stored)) => match &stored.text {
+                Ok(text) => match parse_results(text) {
+                    Ok(results) => (Some(results), None),
+                    Err(e) => (None, Some(e)),
+                },
+                Err(e) => (None, Some(e.clone())),
+            },
+            (Event::Push, _) | (_, None) => (None, None),
+        };
     if let Some(results) = &head {
         failures.extend(results.failures.iter().map(|f| format!("self-check: {f}")));
         if results.idle_secs < MIN_IDLE_SECS {
@@ -104,6 +125,9 @@ pub(crate) fn report(
         failures.push("docs/performance.md has no table under \"Budgets\"".to_owned());
     }
     let mut lines = Vec::new();
+    // Over-at-base names the stored commit: the live base feeds only the
+    // timing columns.
+    let stored_commit = stored.as_ref().map(|s| s.commit.as_str()).unwrap_or("");
     for cells in &rows {
         let budget = cells.first().map_or("", String::as_str);
         let cell = cells.get(1).map_or("", String::as_str);
@@ -112,7 +136,7 @@ pub(crate) fn report(
                 budget,
                 cell,
                 *check,
-                (head.as_ref(), base_parsed.as_ref(), base_commit),
+                (head.as_ref(), stored_results.as_ref(), stored_commit),
                 &base,
                 &rows,
             );
@@ -140,19 +164,136 @@ pub(crate) fn report(
     }
 
     let idle_secs = head.as_ref().map(|h| h.idle_secs);
-    let comment = comment(&lines, &failures, &base, idle_secs);
+    let comment = comment(
+        &lines,
+        &failures,
+        &base,
+        idle_secs,
+        &run_sentence(head.as_ref()),
+        stored_line(
+            &stored,
+            stored_results.as_ref(),
+            stored_why.as_deref(),
+            event,
+        )
+        .as_deref(),
+        &cpu_lines(
+            head.as_ref(),
+            &base,
+            base_commit,
+            stored_results.as_ref(),
+            stored_commit,
+        ),
+    );
     Report { failures, comment }
 }
 
-fn comment(lines: &[Line], failures: &[String], base: &Base, idle_secs: Option<u64>) -> String {
+/// The run-count sentence for the head file: the full count, and the
+/// timing-only count when it differs.
+fn run_sentence(head: Option<&results::Results>) -> String {
+    match head {
+        None => "Each number is the median of its runs on Linux x86_64 (`docs/performance.md`)."
+            .to_owned(),
+        Some(results) if results.timing_runs != results.runs => format!(
+            "Each number is the median of {} runs on Linux x86_64, a timing-only workload's of {} (`docs/performance.md`).",
+            results.runs, results.timing_runs
+        ),
+        Some(results) => format!(
+            "Each number is the median of {} runs on Linux x86_64 (`docs/performance.md`).",
+            results.runs
+        ),
+    }
+}
+
+/// The stored-results sentence on a pull request: which stored results the
+/// memory and exact rows compare against, or why they are judged against
+/// the table alone. A push judges the head alone and carries none.
+fn stored_line(
+    stored: &Option<Stored>,
+    parsed: Option<&results::Results>,
+    why: Option<&str>,
+    event: Event,
+) -> Option<String> {
+    match event {
+        Event::Push => None,
+        Event::PullRequest => Some(match (stored, parsed, why) {
+            (Some(stored), Some(_), _) => format!(
+                "Memory and exact rows compare against the backstop's stored results for {}.",
+                stored.commit
+            ),
+            (Some(stored), None, Some(why)) => format!(
+                "The stored results for {} could not be read ({why}): memory and exact rows are judged against the table alone.",
+                stored.commit
+            ),
+            (Some(stored), None, None) => format!(
+                "The stored results for {} could not be read (no reason given): memory and exact rows are judged against the table alone.",
+                stored.commit
+            ),
+            (None, _, _) => "No stored results for the base or its 9 nearest first-parent ancestors: memory and exact rows are judged against the table alone."
+                .to_owned(),
+        }),
+    }
+}
+
+/// The CPU models each compared file records, in order: the head's, the
+/// live base's, the stored results'. A file without one shows `not
+/// recorded`; a file that did not parse shows no line.
+fn cpu_lines(
+    head: Option<&results::Results>,
+    base: &Base,
+    base_commit: &str,
+    stored: Option<&results::Results>,
+    stored_commit: &str,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(results) = head {
+        lines.push(format!(
+            "- Head CPU: {}",
+            results.cpu.as_deref().unwrap_or("not recorded")
+        ));
+    }
+    if let Base::Ok(results) = base {
+        let cpu = results.cpu.as_deref().unwrap_or("not recorded");
+        if base_commit.is_empty() {
+            lines.push(format!("- Base CPU: {cpu}"));
+        } else {
+            lines.push(format!("- Base CPU ({base_commit}): {cpu}"));
+        }
+    }
+    if let Some(results) = stored {
+        lines.push(format!(
+            "- Stored results CPU ({stored_commit}): {}",
+            results.cpu.as_deref().unwrap_or("not recorded")
+        ));
+    }
+    lines
+}
+
+fn comment(
+    lines: &[Line],
+    failures: &[String],
+    base: &Base,
+    idle_secs: Option<u64>,
+    run_sentence: &str,
+    stored_line: Option<&str>,
+    cpus: &[String],
+) -> String {
     let with_base = !matches!(base, Base::None);
     let mut out = format!("{MARKER}\n## Benchmarks\n\n");
-    out.push_str(
-        "Exact and memory budgets fail the run; timing budgets are advisory. \
-         Each number is the median of 5 runs on Linux x86_64 (`docs/performance.md`).\n",
-    );
+    out.push_str("Exact and memory budgets fail the run; timing budgets are advisory. ");
+    out.push_str(run_sentence);
+    out.push('\n');
     if let Some(secs) = idle_secs {
         out.push_str(&format!("The idle window was {secs} s.\n"));
+    }
+    if let Some(line) = stored_line {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push('\n');
+    for cpu in cpus {
+        out.push_str(cpu);
+        out.push('\n');
     }
     out.push('\n');
     if with_base {

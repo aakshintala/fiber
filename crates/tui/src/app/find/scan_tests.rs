@@ -24,16 +24,16 @@ fn a_snippet_is_its_line_and_one_line_either_side_cut_to_400() {
     assert_eq!(first.line.chars().count(), super::SNIPPET);
     assert_eq!(first.at, 197..203);
     assert_eq!(&first.line[first.at.start..first.at.end], "needle");
-    // Each text is its own block, so the matches sit between the blank
-    // separator rows.
-    assert_eq!(first.before, "");
-    assert_eq!(first.after, "");
+    // Each text is its own block, so the matches sit between blank
+    // separator rows: the context skips them to the nearest text.
+    assert_eq!(first.before, "the line before");
+    assert_eq!(first.after, exact);
     // A line of exactly 400 characters stays whole.
     let second = &flat[1].snippet;
     assert_eq!(second.line, exact);
     assert_eq!(second.at, 0..6);
-    assert_eq!(second.before, "");
-    assert_eq!(second.after, "");
+    assert_eq!(second.before, long.chars().take(400).collect::<String>());
+    assert_eq!(second.after, "the line after");
 }
 
 #[test]
@@ -82,13 +82,12 @@ fn a_match_at_a_page_edge_has_no_neighbour_across_it() {
     let flat = app.find.flat();
     assert_eq!(flat.len(), 3);
     // The prompt bubble is the page's first logical line, with the time
-    // under it, so the first match's line after is the time; the turn's
-    // end marker follows its last reply after a blank separator, and the
-    // replies sit between blank separators.
-    assert_eq!(flat[0].snippet.before, "");
-    assert_eq!(flat[0].snippet.after, "");
-    assert_eq!(flat[2].snippet.before, "");
-    assert_eq!(flat[2].snippet.after, "");
+    // under it; the replies sit between blank separators, which the
+    // context skips to the nearest text.
+    assert_eq!(flat[0].snippet.before, "you 00:00");
+    assert_eq!(flat[0].snippet.after, "needle two");
+    assert_eq!(flat[2].snippet.before, "needle two");
+    assert_eq!(flat[2].snippet.after, "▣ completed");
     // The bubble is the page's first line and the end marker its last:
     // a match on either has no line past the edge.
     assert!(search_all(&mut app, &log, "go").is_empty());
@@ -99,6 +98,6 @@ fn a_match_at_a_page_edge_has_no_neighbour_across_it() {
     assert!(search_all(&mut app, &log, "completed").is_empty());
     let flat = app.find.flat();
     assert_eq!(flat.len(), 1);
-    assert_eq!(flat[0].snippet.before, "");
+    assert_eq!(flat[0].snippet.before, "needle three");
     assert_eq!(flat[0].snippet.after, "");
 }

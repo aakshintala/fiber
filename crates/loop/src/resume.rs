@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::events::{
-    DecidedBy, Decision, Event, Grant, JobCompleted, ModelSettings, ToolCallRequested,
-    TurnCompleted, TurnOutcome,
+    DecidedBy, Decision, Event, Grant, JobCompleted, ModelSettings, ToolCallCompleted,
+    ToolCallRequested, TurnCompleted, TurnOutcome,
 };
 use contract::{ActionId, Envelope, TurnId};
 
@@ -26,6 +26,13 @@ use crate::{Error, Loop, Session, Step};
 /// The denial's reason for a request re-raised in a session nobody can
 /// answer (`docs/events.md`, `permission_resolved`).
 const NOBODY_TO_ANSWER: &str = "The session was resumed with nobody to answer.";
+
+/// The decision line's reason for a call settled on resume: the settled
+/// completion's first text part, naming the extension that refused it,
+/// failed it, or rewrote it into arguments the tool rejects.
+fn settled_reason(completed: &ToolCallCompleted) -> String {
+    crate::conversation::text(&completed.content)
+}
 
 /// What a resume folds back over the session's chain of logs, root
 /// first (`docs/events.md`, "Rewind"): the session, the root the cache
@@ -423,13 +430,28 @@ impl Loop {
         // completes without raising the request again.
         match self.prepared_suspended(call, &turn, &request)? {
             crate::before_tool::Again::Settled(completed) => {
-                // Armed first: a shutdown before it writes nothing more,
-                // so the next resume settles again.
+                // Armed with the decision line: a shutdown before it
+                // writes nothing more, so the next resume settles again.
+                // The decision is always `deny`: a hook still never
+                // approves (`docs/extensions.md`, "`before_tool`").
                 let cancel = Arc::clone(&self.cancel);
-                let armed = cancel.commit(Commit::Arm, || {});
-                let Some(()) = armed else {
+                let answered = cancel.commit(Commit::Arm, || {
+                    self.decided(
+                        &suspended.action,
+                        &turn,
+                        resolved(
+                            Some(request.request_id.clone()),
+                            Decision::Deny,
+                            DecidedBy::Hook,
+                            Some(settled_reason(&completed)),
+                            None,
+                        ),
+                    )
+                });
+                let Some(answered) = answered else {
                     return Ok(None);
                 };
+                answered?;
                 let decision: Decided = Err(completed);
                 let calls = crate::suspend::form_batch(
                     suspended.batch,

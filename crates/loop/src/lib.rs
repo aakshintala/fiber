@@ -29,6 +29,7 @@ pub use util::{set_variables_source, variables_source};
 
 mod answer;
 mod asking;
+mod before_message;
 mod before_tool;
 mod calls;
 mod cancel;
@@ -76,6 +77,7 @@ mod usage;
 mod util;
 mod warm;
 
+pub use before_message::OnRewrite;
 pub use cancel::TurnCancel;
 pub use caps::{ResultCaps, capped};
 pub use commands::{Commands, commands, skills};
@@ -242,6 +244,9 @@ pub struct Loop {
     idle_left: bool,
     /// The session's hooks; `None` runs none.
     hooks: Option<Arc<dyn contract::hook::Hooks>>,
+    /// Reports a replaced prompt's replacement to the door, before the
+    /// prompt's acceptance (`docs/state.md`, "Prompt history").
+    on_rewrite: Option<crate::before_message::OnRewrite>,
     /// Handoff: the settings, the context's measure and what its render
     /// carries (`docs/handoff.md`).
     handoff: handoff::State,
@@ -525,6 +530,7 @@ impl Loop {
             idle_exit: None,
             idle_left: false,
             hooks: None,
+            on_rewrite: None,
             handoff: handoff::State::new(carry),
             ending: jobs::Ending::default(),
             warming: warm::Warming::default(),

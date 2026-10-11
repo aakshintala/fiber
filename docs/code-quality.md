@@ -167,6 +167,9 @@ The crate that defines an enum maps each case to a stable code, with no
 wildcard arm. The codes and the mapping rule are `docs/errors.md`.
 `support` names no stable codes; a caller that reports one of its errors
 maps each case to its own code, with no wildcard arm.
+A tool that reports another crate's error in a tool call maps each case to
+a code `docs/errors.md` allows for tool calls, with no wildcard arm, since
+the defining crate's codes may belong to driver and hub commands.
 
 A type that holds a secret prints it redacted in `Debug`, including header
 values, `env` values and command arguments. A key leaves `Secret` only on the
