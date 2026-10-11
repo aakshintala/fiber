@@ -25,7 +25,7 @@ use contract::provider::{Finish, Input, Provider, ReplyAction};
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode};
 use fakes::{Scripted, ScriptedProvider};
-use r#loop::{HandoffSettings, Hosted, Prepare, Prepared, Retry, Switchable, rebuild};
+use r#loop::{HandoffSettings, Hosted, Prepare, Prepared, Retry, Switchable};
 use serde_json::json;
 
 use support::{
@@ -266,6 +266,7 @@ fn the_live_conversation_after_a_handoff_is_what_a_rebuild_renders() {
             called(TRIGGER - 1),
             Scripted::text("The note."),
             said("Done.", 50),
+            Scripted::text("Again."),
         ],
         settings(),
     );
@@ -277,7 +278,7 @@ fn the_live_conversation_after_a_handoff_is_what_a_rebuild_renders() {
     );
 
     let requests = session.requests();
-    let rebuilt = rebuild(&lines, MODEL).unwrap();
+    let rebuilt = session.rebuilt();
     // The request after the handoff, then the reply it got.
     assert_eq!(rebuilt.len(), 4);
     assert_eq!(rebuilt[..3], requests[2].conversation[..]);
@@ -1254,7 +1255,11 @@ fn a_steer_drop_between_turns_cannot_drop_a_handoff_either() {
 fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
     let (ack, answer) = answered();
     let mut session = session(
-        vec![Scripted::text("The note."), said("Next.", 50)],
+        vec![
+            Scripted::text("The note."),
+            said("Next.", 50),
+            Scripted::text("Again."),
+        ],
         settings(),
     );
     session
@@ -1307,7 +1312,7 @@ fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
     assert_eq!(next[1], user("The note."));
     assert_eq!(next[2], user("next"));
     // The live conversation is what a rebuild renders.
-    let rebuilt = rebuild(&[lines, second].concat(), MODEL).unwrap();
+    let rebuilt = session.rebuilt();
     assert_eq!(rebuilt[..3], next[..]);
 }
 
@@ -1585,6 +1590,7 @@ fn the_other_calls_of_the_step_follow_the_note_in_call_order() {
         vec![
             calling(&["get_weather", "wrapup", "get_weather"], 500),
             said("Done.", 50),
+            Scripted::text("Again."),
         ],
         vec![weather(), wrapping("wrapup", "Tool note.")],
     );
@@ -1646,7 +1652,7 @@ fn the_other_calls_of_the_step_follow_the_note_in_call_order() {
         .collect();
     assert_eq!(results, [(ids[0], "abcd"), (ids[2], "abcd")]);
     // The live conversation is what a rebuild renders.
-    let rebuilt = rebuild(&lines, MODEL).unwrap();
+    let rebuilt = session.rebuilt();
     assert_eq!(rebuilt[..7], next[..]);
 }
 
@@ -1657,6 +1663,7 @@ fn two_calls_that_set_control_handoff_join_their_notes_in_call_order() {
         vec![
             calling(&["wrap_b", "get_weather", "wrap_a"], 500),
             said("Done.", 50),
+            Scripted::text("Again."),
         ],
         vec![
             wrapping("wrap_a", "A note."),
@@ -1693,7 +1700,7 @@ fn two_calls_that_set_control_handoff_join_their_notes_in_call_order() {
     assert_eq!(next.len(), 5);
     assert!(matches!(&next[3], Input::ToolCall { action_id, .. } if action_id.0 == ids[1]));
     assert!(matches!(&next[4], Input::ToolResult { action_id, .. } if action_id.0 == ids[1]));
-    assert_eq!(rebuild(&lines, MODEL).unwrap()[..5], next[..]);
+    assert_eq!(session.rebuilt()[..5], next[..]);
 }
 
 #[test]
@@ -2364,6 +2371,7 @@ fn the_live_conversation_after_an_overflow_handoff_is_what_a_rebuild_renders() {
             overflowing(),
             Scripted::text("The note."),
             said("Done.", 50),
+            Scripted::text("Again."),
         ],
         None,
         both_tools(),
@@ -2380,7 +2388,7 @@ fn the_live_conversation_after_an_overflow_handoff_is_what_a_rebuild_renders() {
     );
 
     let requests = session.requests();
-    let rebuilt = rebuild(&lines, MODEL).unwrap();
+    let rebuilt = session.rebuilt();
     // The request after the handoff, then the reply it got.
     assert_eq!(rebuilt.len(), 4);
     assert_eq!(rebuilt[..3], requests[3].conversation[..]);
@@ -2390,7 +2398,12 @@ fn the_live_conversation_after_an_overflow_handoff_is_what_a_rebuild_renders() {
 #[test]
 fn a_failed_overflow_handoff_leaves_what_a_rebuild_renders_as_before() {
     let mut session = Session::with_tools(
-        vec![called_both(100), overflowing(), overflowing()],
+        vec![
+            called_both(100),
+            overflowing(),
+            overflowing(),
+            Scripted::text("Again."),
+        ],
         None,
         both_tools(),
     )
@@ -2405,7 +2418,7 @@ fn a_failed_overflow_handoff_leaves_what_a_rebuild_renders_as_before() {
 
     // The conversation the overflowing request held, the results unmoved.
     let requests = session.requests();
-    assert_eq!(rebuild(&lines, MODEL).unwrap(), requests[1].conversation);
+    assert_eq!(session.rebuilt(), requests[1].conversation);
 }
 
 #[test]
@@ -2557,6 +2570,7 @@ fn a_tool_handoff_in_a_step_that_already_handed_off_is_an_ordinary_result() {
             Scripted::text("The note."),
             calling(&["wrapup"], 50),
             said("Done.", 50),
+            Scripted::text("Again."),
         ],
         vec![weather(), wrapping("wrapup", "Tool note.")],
     );
@@ -2599,7 +2613,7 @@ fn a_tool_handoff_in_a_step_that_already_handed_off_is_an_ordinary_result() {
         &next[4],
         Input::ToolResult { action_id, text, .. } if action_id.0 == wrapup && text.is_empty()
     ));
-    assert_eq!(rebuild(&lines, MODEL).unwrap()[..5], next[..]);
+    assert_eq!(session.rebuilt()[..5], next[..]);
 }
 
 #[test]

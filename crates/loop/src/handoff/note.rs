@@ -8,21 +8,18 @@ use contract::provider::{Finish, Input, Reply, ReplyAction};
 use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, TurnId};
 
-use crate::prompt::{body, fill};
+use crate::prompt::{fill, message};
 use crate::retry::Attempted;
 use crate::{Error, Loop};
 
 /// The request for the note: `handoff-note`, then `handoff-focus` when there
 /// are instructions.
 pub(crate) fn note_request_text(session_log: &str, instructions: Option<&str>) -> String {
-    let mut text = fill(
-        &body(crate::conversation::MESSAGES_MD, "handoff-note"),
-        &[("session_log", session_log)],
-    );
+    let mut text = fill(message("handoff-note"), &[("session_log", session_log)]);
     if let Some(instructions) = instructions {
         text.push_str("\n\n");
         text.push_str(&fill(
-            &body(crate::conversation::MESSAGES_MD, "handoff-focus"),
+            message("handoff-focus"),
             &[("instructions", instructions)],
         ));
     }
@@ -213,10 +210,7 @@ impl Loop {
             } = input
                 && let Some(path) = self.artifact_of(action_id, text)
             {
-                *text = fill(
-                    &body(crate::conversation::MESSAGES_MD, "moved-result"),
-                    &[("path", path.as_str())],
-                );
+                *text = fill(message("moved-result"), &[("path", path.as_str())]);
             }
         }
         conversation

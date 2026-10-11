@@ -788,7 +788,7 @@ fn with_no_skills_the_heading_and_sentence_are_absent_and_the_bytes_are_unchange
         environment.workspace,
         environment.session_log,
         crate::prompt::fill(
-            &crate::prompt::body(include_str!("../prompt/messages.md"), "instruction-file"),
+            crate::prompt::message("instruction-file"),
             &[
                 ("path", file.path.as_str()),
                 (

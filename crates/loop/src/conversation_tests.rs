@@ -2161,3 +2161,962 @@ fn a_skills_change_after_a_crash_follows_the_fixed_result() {
     assert!(matches!(&conversation[2], Input::User { .. }));
     assert!(user_text(&conversation[2]).contains("was removed"));
 }
+
+#[path = "../tests/support/events.rs"]
+mod events;
+
+// Pure `rebuild` cases over whole logs (`docs/events.md`, "Resume"),
+// moved from the resume binary: every behaviour the crate exposes is also
+// tested through its public API, and these pin the branches.
+mod from_log {
+    #![allow(
+        clippy::indexing_slicing,
+        reason = "test code; a failure is the test's"
+    )]
+
+    use contract::events::{Event, InputItem, ReasoningCompleted, ToolCallCompleted, TurnStarted};
+    use contract::provider::Input;
+    use contract::shapes::{ContentPart, Origin, Sender};
+    use contract::{ActionId, CommandId, Envelope, SessionId};
+    use log::Log;
+
+    use super::events::{
+        assistant, completed_event, fiber_started, handoff_done, handoff_started, hosted_requested,
+        job_completed, job_started, kinds_of, message_started, opening_of, requested, result_of,
+        started, steering, text_of, texts, user_turn,
+    };
+    use super::line;
+    use serde_json::json;
+
+    const MODEL: &str = "fake/model-1";
+
+    /// A log in a temporary directory, with helpers appending lines under fixed
+    /// turn and action ids.
+    struct LogLines {
+        _root: fakes::TempDir,
+        dir: std::path::PathBuf,
+        log: Log,
+    }
+
+    impl LogLines {
+        fn new() -> Self {
+            let root = fakes::TempDir::new("fiber-resume");
+            let log = Log::create(
+                root.path(),
+                SessionId("s_1".into()),
+                fakes::clock::FakeClock::new(),
+            )
+            .unwrap();
+            let dir = root.path().join("s_1");
+            Self {
+                dir,
+                _root: root,
+                log,
+            }
+        }
+
+        fn append(&self, event: Event, action: Option<&str>) {
+            self.log
+                .append(
+                    &event,
+                    Some(contract::TurnId("t_1".into())),
+                    action.map(|a| ActionId(a.into())),
+                )
+                .unwrap();
+        }
+
+        fn lines(&self) -> Vec<Envelope> {
+            log::read(&self.dir).unwrap()
+        }
+    }
+
+    fn reasoning(text: &str) -> Event {
+        Event::ReasoningCompleted(ReasoningCompleted {
+            text: text.into(),
+            provider_item: None,
+        })
+    }
+
+    #[test]
+    fn a_completed_call_is_unchanged() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(started(), Some("a_1"));
+        log.append(completed_event("Paris."), Some("a_1"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            [
+                "turn_started",
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed"
+            ]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 3);
+        assert!(matches!(conversation[0], Input::User { .. }));
+        assert!(matches!(conversation[1], Input::ToolCall { .. }));
+        let (id, text, is_error) = result_of(&conversation[2]);
+        assert_eq!(id.0, "a_1");
+        assert_eq!(text, "Paris.");
+        assert!(!is_error);
+    }
+
+    #[test]
+    fn a_requested_only_call_is_sent_as_never_ran() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+
+        let lines = log.lines();
+        assert_eq!(kinds_of(&lines), ["turn_started", "tool_call_requested"]);
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 3);
+        let (id, text, is_error) = result_of(&conversation[2]);
+        assert_eq!(id.0, "a_1");
+        assert_eq!(text, "It never ran.");
+        assert!(is_error);
+    }
+
+    #[test]
+    fn a_started_call_without_a_result_is_sent_as_outcome_unknown() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(started(), Some("a_1"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            ["turn_started", "tool_call_requested", "tool_call_started"]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 3);
+        let (id, text, is_error) = result_of(&conversation[2]);
+        assert_eq!(id.0, "a_1");
+        assert_eq!(text, "Its outcome is unknown: it may have run.");
+        assert!(is_error);
+    }
+
+    #[test]
+    fn one_completed_and_one_cut_short_call_share_a_batch() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(requested("search", "Paris"), Some("a_2"));
+        log.append(started(), Some("a_1"));
+        log.append(completed_event("Paris."), Some("a_1"));
+        log.append(started(), Some("a_2"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            [
+                "turn_started",
+                "tool_call_requested",
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed",
+                "tool_call_started",
+            ]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        // The real result stays where the log put it; the fixed one follows the
+        // batch.
+        assert_eq!(conversation.len(), 5);
+        let (_, text, is_error) = result_of(&conversation[3]);
+        assert_eq!(text, "Paris.");
+        assert!(!is_error);
+        let (id, text, is_error) = result_of(&conversation[4]);
+        assert_eq!(id.0, "a_2");
+        assert_eq!(text, "Its outcome is unknown: it may have run.");
+        assert!(is_error);
+    }
+
+    #[test]
+    fn a_fixed_result_sits_before_the_next_user_message() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(user_turn("two"), None);
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            ["turn_started", "tool_call_requested", "turn_started"]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 4);
+        let (id, text, _) = result_of(&conversation[2]);
+        assert_eq!(id.0, "a_1");
+        assert_eq!(text, "It never ran.");
+        assert!(matches!(&conversation[3], Input::User { text , ..} if text == "two"));
+    }
+
+    #[test]
+    fn a_text_between_request_and_start_does_not_flush_early() {
+        // The reply's text sits between the request and the start in log
+        // order. The batch is the whole reply plus its result lines, so the
+        // start is still seen before the flush decides.
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(assistant("Looking."), Some("a_0"));
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(assistant("Found it."), Some("a_0"));
+        log.append(started(), Some("a_1"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            [
+                "turn_started",
+                "text_completed",
+                "tool_call_requested",
+                "text_completed",
+                "tool_call_started",
+            ]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 5);
+        assert!(matches!(&conversation[1], Input::Assistant { .. }));
+        assert!(matches!(&conversation[2], Input::ToolCall { .. }));
+        assert!(matches!(&conversation[3], Input::Assistant { .. }));
+        let (id, text, is_error) = result_of(&conversation[4]);
+        assert_eq!(id.0, "a_1");
+        assert_eq!(text, "Its outcome is unknown: it may have run.");
+        assert!(is_error);
+    }
+
+    #[test]
+    fn a_later_text_does_not_flush_a_pending_call() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(reasoning("Hmm."), Some("a_0"));
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(requested("search", "Paris"), Some("a_2"));
+        log.append(assistant("One down."), Some("a_0"));
+        log.append(completed_event("Paris."), Some("a_1"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            [
+                "turn_started",
+                "reasoning_completed",
+                "tool_call_requested",
+                "tool_call_requested",
+                "text_completed",
+                "tool_call_completed",
+            ]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        // The real result stays where the log put it; the text ends no batch.
+        assert_eq!(conversation.len(), 7);
+        assert!(matches!(&conversation[1], Input::Reasoning { .. }));
+        assert!(matches!(&conversation[4], Input::Assistant { .. }));
+        let (_, text, is_error) = result_of(&conversation[5]);
+        assert_eq!(text, "Paris.");
+        assert!(!is_error);
+        let (id, text, is_error) = result_of(&conversation[6]);
+        assert_eq!(id.0, "a_2");
+        assert_eq!(text, "It never ran.");
+        assert!(is_error);
+    }
+
+    #[test]
+    fn a_completion_after_a_flush_leaves_exactly_one_result() {
+        // The completion sits after a `turn_started` that already flushed the
+        // batch. The pre-scan sees it, so the call gets no fixed result: the
+        // real one stays where the log put it, the only result the call has.
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(user_turn("two"), None);
+        log.append(completed_event("Paris."), Some("a_1"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            [
+                "turn_started",
+                "tool_call_requested",
+                "turn_started",
+                "tool_call_completed",
+            ]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 4);
+        assert!(matches!(&conversation[1], Input::ToolCall { .. }));
+        assert!(matches!(&conversation[2], Input::User { .. }));
+        let (id, text, is_error) = result_of(&conversation[3]);
+        assert_eq!(id.0, "a_1");
+        assert_eq!(text, "Paris.");
+        assert!(!is_error);
+        for input in &conversation {
+            if let Input::ToolResult { text, .. } = input {
+                assert!(
+                    !text.contains("never ran") && !text.contains("unknown"),
+                    "{text}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn two_pending_calls_get_fixed_results_in_request_order() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(assistant("Two calls."), Some("a_0"));
+        log.append(requested("search", "Paris"), Some("a_2"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            [
+                "turn_started",
+                "tool_call_requested",
+                "text_completed",
+                "tool_call_requested",
+            ]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 6);
+        let (first, _, _) = result_of(&conversation[4]);
+        let (second, _, _) = result_of(&conversation[5]);
+        assert_eq!(first.0, "a_1");
+        assert_eq!(second.0, "a_2");
+    }
+
+    #[test]
+    fn steering_starts_a_new_batch() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(steering("wait"), Some("a_9"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            ["turn_started", "tool_call_requested", "steering_applied"]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 4);
+        let (id, text, _) = result_of(&conversation[2]);
+        assert_eq!(id.0, "a_1");
+        assert_eq!(text, "It never ran.");
+        assert!(matches!(&conversation[3], Input::User { .. }));
+    }
+
+    #[test]
+    fn an_assistant_message_start_starts_a_new_batch() {
+        // The log continues after the flush point: without the
+        // `assistant_message_started` flush, the fixed result would sit after
+        // the text at the end of the log.
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(message_started(), Some("a_9"));
+        log.append(assistant("On it."), Some("a_9"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            [
+                "turn_started",
+                "tool_call_requested",
+                "assistant_message_started",
+                "text_completed",
+            ]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 4);
+        let (id, text, _) = result_of(&conversation[2]);
+        assert_eq!(id.0, "a_1");
+        assert_eq!(text, "It never ran.");
+        assert!(matches!(&conversation[3], Input::Assistant { .. }));
+    }
+
+    #[test]
+    fn a_fixed_result_at_the_end_of_the_log_ends_the_conversation() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(assistant("Looking."), Some("a_0"));
+        log.append(requested("read", "Paris"), Some("a_1"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            ["turn_started", "text_completed", "tool_call_requested"]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 4);
+        let (id, text, _) = result_of(&conversation[3]);
+        assert_eq!(id.0, "a_1");
+        assert_eq!(text, "It never ran.");
+    }
+
+    #[test]
+    fn a_call_with_no_action_id_is_skipped() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), None);
+        log.append(completed_event("Paris."), None);
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            ["turn_started", "tool_call_requested", "tool_call_completed"]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 1);
+    }
+
+    // `Loop::resume`: the first request, the folds, and the state.
+
+    /// A log: an opening message, the turn's input and a steer, then (when
+    /// `jobs`) a job still running and one that ended.
+    fn before_handoff(log: &LogLines, jobs: bool) {
+        log.append(opening_of("old-os"), None);
+        if jobs {
+            log.append(job_started("j_1"), None);
+            log.append(job_started("j_2"), None);
+            log.append(job_completed("j_2"), None);
+        }
+        log.append(user_turn("one"), None);
+        log.append(steering("steer"), None);
+    }
+
+    /// The note request's lines under the message action `a_note`.
+    fn note_lines(log: &LogLines) {
+        log.append(handoff_started(), None);
+        log.append(message_started(), Some("a_note"));
+        log.append(assistant("the note"), Some("a_note"));
+    }
+
+    const JOBS_LINE: &str = "Fiber: these background jobs are still running. Each one's end is reported when it happens.\n\n- j_1: npm test";
+
+    #[test]
+    fn a_completed_handoff_is_the_opening_the_turn_input_the_note_and_the_jobs_line() {
+        let log = LogLines::new();
+        before_handoff(&log, true);
+        note_lines(&log);
+        log.append(
+            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            None,
+        );
+        log.append(opening_of("new-os"), None);
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        let seen = texts(&conversation);
+        assert_eq!(seen.len(), 5, "{seen:?}");
+        assert!(seen[0].contains("new-os"), "{seen:?}");
+        assert_eq!(seen[1..], ["one", "steer", "the note", JOBS_LINE]);
+    }
+
+    #[test]
+    fn a_completed_handoff_with_no_job_running_has_no_jobs_line() {
+        let log = LogLines::new();
+        before_handoff(&log, false);
+        log.append(job_started("j_3"), None);
+        log.append(job_completed("j_3"), None);
+        note_lines(&log);
+        log.append(
+            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            None,
+        );
+        log.append(opening_of("new-os"), None);
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        assert_eq!(texts(&conversation)[1..], ["one", "steer", "the note"]);
+    }
+
+    #[test]
+    fn a_handoff_carries_only_the_latest_turns_input() {
+        let log = LogLines::new();
+        before_handoff(&log, false);
+        log.append(assistant("answer"), Some("a_1"));
+        log.append(user_turn("two"), None);
+        note_lines(&log);
+        log.append(
+            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            None,
+        );
+        log.append(opening_of("new-os"), None);
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        // The first turn's "one" and its steer stay behind in the log.
+        assert_eq!(texts(&conversation)[1..], ["two", "the note"]);
+    }
+
+    /// The conversation before `handoff_started`.
+    fn before(jobs: bool) -> Vec<Input> {
+        let log = LogLines::new();
+        before_handoff(&log, jobs);
+        crate::conversation::rebuild(&log.lines(), MODEL).unwrap()
+    }
+
+    #[test]
+    fn a_failed_handoff_leaves_the_conversation_as_it_was() {
+        let log = LogLines::new();
+        before_handoff(&log, true);
+        note_lines(&log);
+        log.append(handoff_done(contract::events::Outcome::Failed, &[]), None);
+
+        assert_eq!(
+            crate::conversation::rebuild(&log.lines(), MODEL).unwrap(),
+            before(true)
+        );
+    }
+
+    #[test]
+    fn a_cancelled_handoff_leaves_the_conversation_as_it_was() {
+        let log = LogLines::new();
+        before_handoff(&log, true);
+        note_lines(&log);
+        log.append(
+            handoff_done(contract::events::Outcome::Cancelled, &[]),
+            None,
+        );
+
+        assert_eq!(
+            crate::conversation::rebuild(&log.lines(), MODEL).unwrap(),
+            before(true)
+        );
+    }
+
+    #[test]
+    fn a_handoff_that_never_completed_leaves_the_conversation_as_it_was() {
+        let log = LogLines::new();
+        before_handoff(&log, true);
+        note_lines(&log);
+
+        assert_eq!(
+            crate::conversation::rebuild(&log.lines(), MODEL).unwrap(),
+            before(true)
+        );
+    }
+
+    #[test]
+    fn a_turn_resumed_after_an_unfinished_handoff_is_never_discarded() {
+        let log = LogLines::new();
+        before_handoff(&log, false);
+        note_lines(&log);
+        log.append(fiber_started(), None);
+        log.append(user_turn("three"), None);
+        log.append(assistant("answer"), Some("a_9"));
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        let mut expected = before(false);
+        expected.push(Input::User {
+            text: "three".into(),
+            images: Vec::new(),
+        });
+        expected.push(Input::Assistant {
+            model: MODEL.into(),
+            text: "answer".into(),
+            provider_item: None,
+        });
+        assert_eq!(conversation, expected);
+    }
+
+    #[test]
+    fn a_handoff_window_closes_at_each_completion_even_in_a_later_window() {
+        let log = LogLines::new();
+        before_handoff(&log, false);
+        note_lines(&log);
+        log.append(handoff_done(contract::events::Outcome::Failed, &[]), None);
+        log.append(user_turn("two"), None);
+        log.append(handoff_started(), None);
+        log.append(message_started(), Some("a_note2"));
+        log.append(assistant("second note"), Some("a_note2"));
+        log.append(
+            handoff_done(contract::events::Outcome::Completed, &["a_note2"]),
+            None,
+        );
+        log.append(opening_of("new-os"), None);
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        // The first note's text never reaches the second window's note.
+        assert_eq!(texts(&conversation)[1..], ["two", "second note"]);
+    }
+
+    #[test]
+    fn a_note_call_cut_short_by_a_crash_leaves_no_result_behind() {
+        let log = LogLines::new();
+        before_handoff(&log, false);
+        note_lines(&log);
+        // The process died after logging the note reply's call, before its
+        // completion; a new process resumed and took a turn.
+        log.append(requested("read", "Paris"), Some("a_call"));
+        log.append(fiber_started(), None);
+        log.append(user_turn("two"), None);
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        let mut expected = before(false);
+        expected.push(Input::User {
+            text: "two".into(),
+            images: Vec::new(),
+        });
+        assert_eq!(conversation, expected);
+    }
+
+    #[test]
+    fn the_nudge_renders_with_the_openings_session_log_path() {
+        let log = LogLines::new();
+        log.append(opening_of("old-os"), None);
+        log.append(user_turn("one"), None);
+        log.append(
+            Event::ContextNudged(contract::events::ContextNudged {
+                tokens: 266_700,
+                trigger_at: 400_000,
+            }),
+            None,
+        );
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        assert_eq!(
+            text_of(conversation.last().unwrap()),
+            "Fiber: your context holds 266700 tokens. At 400000 tokens Fiber will ask you for a handoff note and continue this work from it in a fresh context, so carry on as normal. The whole session stays in the session log at /log/events.jsonl."
+        );
+    }
+
+    #[test]
+    fn a_second_opening_message_sits_at_the_front() {
+        let log = LogLines::new();
+        before_handoff(&log, false);
+        note_lines(&log);
+        log.append(
+            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            None,
+        );
+        log.append(opening_of("new-os"), None);
+        log.append(user_turn("two"), None);
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        let seen = texts(&conversation);
+        assert!(seen[0].contains("new-os"), "{seen:?}");
+        assert_eq!(seen[1..], ["one", "steer", "the note", "two"]);
+        assert_eq!(
+            seen.iter().filter(|text| text.contains("old-os")).count(),
+            0
+        );
+    }
+
+    // A person's and a tool's handoff render as every handoff does.
+
+    fn handoff_turn(items: Vec<InputItem>) -> Event {
+        Event::TurnStarted(TurnStarted { input: items })
+    }
+
+    fn message_item(text: &str) -> InputItem {
+        InputItem::Message {
+            content: vec![ContentPart::Text { text: text.into() }],
+            sender: Sender {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_1".into())),
+            },
+            changed_by: None,
+        }
+    }
+
+    fn handoff_item(id: &str) -> InputItem {
+        InputItem::Handoff {
+            command_id: CommandId(id.into()),
+        }
+    }
+
+    #[test]
+    fn a_handoff_item_renders_nothing_and_a_turn_of_only_one_carries_no_input() {
+        let log = LogLines::new();
+        log.append(opening_of("old-os"), None);
+        log.append(
+            handoff_turn(vec![handoff_item("c_h"), message_item("one")]),
+            None,
+        );
+        note_lines(&log);
+        log.append(
+            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            None,
+        );
+        log.append(opening_of("new-os"), None);
+        log.append(handoff_turn(vec![handoff_item("c_h2")]), None);
+        note_lines(&log);
+
+        // The first handoff carries the message beside the command's item.
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+        assert_eq!(texts(&conversation)[1..], ["one", "the note"]);
+
+        log.append(
+            handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+            None,
+        );
+        log.append(opening_of("newer-os"), None);
+
+        // A turn of only the command has no input to carry.
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+        let seen = texts(&conversation);
+        assert!(seen[0].contains("newer-os"), "{seen:?}");
+        assert_eq!(seen[1..], ["the note"]);
+    }
+
+    fn completed_with_note(text: &str, note: Option<&str>) -> Event {
+        let Event::ToolCallCompleted(mut done) = completed_event(text) else {
+            panic!("a completion");
+        };
+        done.control = note.map(|handoff| contract::events::Control {
+            handoff: Some(handoff.into()),
+            ..Default::default()
+        });
+        Event::ToolCallCompleted(done)
+    }
+
+    /// A turn whose reply made the calls `a_w1` (`get_weather`), `a_h1`
+    /// (`wrapup`, which set `control.handoff`) and `a_w2` (`get_weather`) and
+    /// whose results were all written, then the tool handoff and the new
+    /// opening message.
+    fn tool_handoff(log: &LogLines, notes: &[(&str, &str)]) {
+        log.append(opening_of("old-os"), None);
+        log.append(user_turn("one"), None);
+        log.append(message_started(), Some("a_m"));
+        for (id, name) in [
+            ("a_w1", "get_weather"),
+            ("a_h1", "wrapup"),
+            ("a_w2", "get_weather"),
+        ] {
+            log.append(requested(name, "Paris"), Some(id));
+        }
+        for id in ["a_w1", "a_h1", "a_w2"] {
+            log.append(started(), Some(id));
+        }
+        for id in ["a_w1", "a_h1", "a_w2"] {
+            let note = notes
+                .iter()
+                .find(|(call, _)| *call == id)
+                .map(|(_, note)| *note);
+            log.append(
+                completed_with_note(&format!("result of {id}"), note),
+                Some(id),
+            );
+        }
+        let ids: Vec<&str> = notes.iter().map(|(call, _)| *call).collect();
+        log.append(
+            Event::HandoffCompleted(contract::events::HandoffCompleted {
+                outcome: contract::events::Outcome::Completed,
+                error: None,
+                note: Some(contract::events::Note::Actions {
+                    note: ids.iter().map(|id| ActionId((*id).into())).collect(),
+                }),
+                tokens_before: 500,
+                instructions: None,
+            }),
+            None,
+        );
+        log.append(opening_of("new-os"), None);
+    }
+
+    fn call_ids(conversation: &[Input]) -> Vec<(&'static str, String)> {
+        conversation
+            .iter()
+            .map(|input| match input {
+                Input::ToolCall { action_id, .. } => ("call", action_id.0.clone()),
+                Input::ToolResult {
+                    action_id, text, ..
+                } => {
+                    assert_eq!(*text, format!("result of {}", action_id.0));
+                    ("result", action_id.0.clone())
+                }
+                Input::User { .. } | Input::Assistant { .. } | Input::Reasoning { .. } => {
+                    ("text", text_of(input).to_owned())
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_tool_handoff_renders_the_note_then_the_other_calls_and_their_results() {
+        let log = LogLines::new();
+        tool_handoff(&log, &[("a_h1", "Tool note.")]);
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        let seen = call_ids(&conversation);
+        assert!(seen[0].1.contains("new-os"), "{seen:?}");
+        assert_eq!(
+            seen[1..],
+            [
+                ("text", "one".to_owned()),
+                ("text", "Tool note.".to_owned()),
+                ("call", "a_w1".to_owned()),
+                ("call", "a_w2".to_owned()),
+                ("result", "a_w1".to_owned()),
+                ("result", "a_w2".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn two_tool_notes_join_in_the_order_the_line_lists_the_calls() {
+        let log = LogLines::new();
+        tool_handoff(&log, &[("a_w1", "First."), ("a_h1", "Second.")]);
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        let seen = call_ids(&conversation);
+        assert_eq!(
+            seen[1..],
+            [
+                ("text", "one".to_owned()),
+                ("text", "First.\n\nSecond.".to_owned()),
+                ("call", "a_w2".to_owned()),
+                ("result", "a_w2".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tool_handoff_survives_a_crash_and_a_second_resume() {
+        let log = LogLines::new();
+        tool_handoff(&log, &[("a_h1", "Tool note.")]);
+        let after_handoff = call_ids(&crate::conversation::rebuild(&log.lines(), MODEL).unwrap());
+        for _ in 0..2 {
+            log.append(fiber_started(), None);
+            log.append(user_turn("again"), None);
+            log.append(assistant("answer"), Some("a_9"));
+        }
+
+        let seen = call_ids(&crate::conversation::rebuild(&log.lines(), MODEL).unwrap());
+
+        // The context from the handoff on is intact, with each resumed turn
+        // after it.
+        assert_eq!(seen[..after_handoff.len()], after_handoff[..]);
+        assert_eq!(
+            seen[after_handoff.len()..],
+            [
+                ("text", "again".to_owned()),
+                ("text", "answer".to_owned()),
+                ("text", "again".to_owned()),
+                ("text", "answer".to_owned()),
+            ]
+        );
+    }
+
+    // Resuming over handoffs (`docs/handoff.md`, "Resume").
+
+    fn hosted_completed() -> Event {
+        let Event::ToolCallCompleted(done) = completed_event("https://blog.rust-lang.org/") else {
+            panic!("completed builds a tool_call_completed");
+        };
+        Event::ToolCallCompleted(ToolCallCompleted {
+            provider_item: Some(json!({"type": "web_search_tool_result"})),
+            ..done
+        })
+    }
+
+    fn raw(item: serde_json::Value) -> Input {
+        Input::Assistant {
+            model: MODEL.into(),
+            text: String::new(),
+            provider_item: Some(item),
+        }
+    }
+
+    #[test]
+    fn a_hosted_pair_rebuilds_as_its_two_raw_blocks_and_no_result() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(message_started(), Some("a_0"));
+        log.append(hosted_requested(), Some("a_1"));
+        log.append(started(), Some("a_1"));
+        log.append(hosted_completed(), Some("a_1"));
+        log.append(assistant("Done."), Some("a_0"));
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        assert_eq!(
+            conversation[1..],
+            [
+                raw(json!({"type": "server_tool_use", "id": "srvtoolu_01"})),
+                raw(json!({"type": "web_search_tool_result"})),
+                Input::Assistant {
+                    model: MODEL.into(),
+                    text: "Done.".into(),
+                    provider_item: None
+                }
+            ]
+        );
+        assert!(
+            conversation
+                .iter()
+                .all(|i| !matches!(i, Input::ToolCall { .. } | Input::ToolResult { .. }))
+        );
+    }
+
+    #[test]
+    fn a_hosted_call_cut_from_its_result_by_a_crash_renders_nothing_and_gets_no_fixed_result() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(message_started(), Some("a_0"));
+        log.append(hosted_requested(), Some("a_1"));
+        log.append(started(), Some("a_1"));
+
+        let conversation = crate::conversation::rebuild(&log.lines(), MODEL).unwrap();
+
+        assert_eq!(conversation.len(), 1, "{conversation:?}");
+        assert!(matches!(conversation[0], Input::User { .. }));
+    }
+
+    #[test]
+    fn rebuild_reads_only_durable_lines_and_refuses_a_bad_one() {
+        let mut ghost = line("text_completed", &assistant("Nobody."), None);
+        ghost.seq = None;
+        let mut lines = vec![
+            line("opening_message", &opening_of("test-os"), None),
+            line("turn_started", &user_turn("one"), None),
+            line("text_completed", &assistant("Hi."), None),
+            ghost,
+        ];
+        assert_eq!(
+            crate::conversation::rebuild(&lines, MODEL).unwrap()[1..],
+            [
+                Input::User {
+                    text: "one".into(),
+                    images: Vec::new(),
+                },
+                Input::Assistant {
+                    model: MODEL.into(),
+                    text: "Hi.".into(),
+                    provider_item: None,
+                },
+            ]
+        );
+        let turn = lines.iter().position(|l| l.kind == "turn_started").unwrap();
+        lines[turn].payload.insert("input".into(), json!(3));
+        let error = crate::conversation::rebuild(&lines, MODEL).unwrap_err();
+        assert_eq!(error.code(), contract::ErrorCode::LogCorrupt);
+    }
+}

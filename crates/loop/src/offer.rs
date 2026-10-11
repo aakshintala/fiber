@@ -236,7 +236,7 @@ impl Loop {
             .append(&Event::RepositoryCodeOffered(offer.clone()), None, None)?;
         let deadline = self.idle_deadline();
         loop {
-            let delivery = match self.take_held_offer_answer(&offer.request_id) {
+            let delivery = match self.take_held_answer(&offer.request_id) {
                 Some(delivery) => delivery,
                 None => match self.recv_until(deadline, false, None) {
                     InboxRecv::Delivery(delivery) => delivery,
@@ -279,30 +279,6 @@ impl Loop {
                 }
             }
         }
-    }
-
-    /// The first held delivery that answers the offer `request_id`: a
-    /// `reply` naming it, or `close`. Everything else stays held.
-    fn take_held_offer_answer(&mut self, request_id: &RequestId) -> Option<Delivery> {
-        let at = self.deferred.iter().position(|held| match held {
-            Delivery::Reply(reply, _) => reply.request_id == *request_id,
-            Delivery::Close(_) => true,
-            Delivery::Prompt(..)
-            | Delivery::Steer(..)
-            | Delivery::SteerDrop(..)
-            | Delivery::Handoff(..)
-            | Delivery::Model(..)
-            | Delivery::Credential(..)
-            | Delivery::Rewind(..)
-            | Delivery::Interaction(_)
-            | Delivery::Resolved(..)
-            | Delivery::Job(_)
-            | Delivery::JobLine(_)
-            | Delivery::ExtensionExec(_)
-            | Delivery::ExtensionLog(_)
-            | Delivery::Cancelled => false,
-        })?;
-        self.deferred.remove(at)
     }
 
     /// Applies a reply to `offer`: `true` once `repository_code_resolved`

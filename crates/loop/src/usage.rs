@@ -207,26 +207,118 @@ impl crate::Loop {
     }
 }
 
-/// The latest `usage_recorded` per `generation_id`. A later line with an id
-/// already recorded replaces the earlier one in every total, so a copy of a
-/// copy is still one call (`docs/events.md`, `usage_recorded`).
-#[derive(Debug, Default)]
+/// The latest `usage_recorded` per `generation_id`, in first-recorded
+/// order, with the fold's running state beside it. A later line with an id
+/// already recorded replaces the earlier one in every total, so a copy of
+/// a copy is still one call (`docs/events.md`, `usage_recorded`). After
+/// any sequence of records the usage equals [`log::usage`] over the held
+/// lines exactly: a new call takes one step, and a correction folds the
+/// whole ledger again.
+#[derive(Debug)]
 pub(crate) struct Ledger {
-    calls: BTreeMap<GenerationId, UsageRecorded>,
+    calls: Vec<UsageRecorded>,
+    index: BTreeMap<GenerationId, usize>,
+    tokens: Tokens,
+    billed: bool,
+    cost: Option<f64>,
+    subscription_cost: f64,
+}
+
+impl Default for Ledger {
+    fn default() -> Self {
+        Self {
+            calls: Vec::new(),
+            index: BTreeMap::new(),
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 0,
+            },
+            billed: false,
+            cost: None,
+            subscription_cost: 0.0,
+        }
+    }
 }
 
 impl Ledger {
-    /// Keeps `line`, replacing any earlier line with its `generation_id`.
-    /// True when it replaced one: `line` corrects a call already counted.
+    /// Keeps `line`, replacing any earlier line with its `generation_id`
+    /// in place, keeping first-recorded order. True when it replaced one:
+    /// `line` corrects a call already counted.
     pub(crate) fn record(&mut self, line: &UsageRecorded) -> bool {
-        self.calls
-            .insert(line.generation_id.clone(), line.clone())
-            .is_some()
+        match self.index.get(&line.generation_id).copied() {
+            Some(at) => {
+                // An identical correction changes nothing; any other one
+                // folds the whole ledger again, so only corrections pay
+                // O(n). The index only holds positions of held lines.
+                if self.calls.get(at).is_some_and(|held| held != line)
+                    && let Some(held) = self.calls.get_mut(at)
+                {
+                    *held = line.clone();
+                    self.recount();
+                }
+                true
+            }
+            None => {
+                self.index
+                    .insert(line.generation_id.clone(), self.calls.len());
+                self.calls.push(line.clone());
+                self.add(line);
+                false
+            }
+        }
+    }
+
+    /// One step of the fold [`log::usage`] runs: what a new call adds.
+    fn add(&mut self, call: &UsageRecorded) {
+        self.tokens.input = self.tokens.input.saturating_add(call.tokens.input);
+        self.tokens.cache_read = self
+            .tokens
+            .cache_read
+            .saturating_add(call.tokens.cache_read);
+        self.tokens.output = self.tokens.output.saturating_add(call.tokens.output);
+        for (lifetime, count) in &call.tokens.cache_write {
+            let total = self.tokens.cache_write.entry(lifetime.clone()).or_default();
+            *total = total.saturating_add(*count);
+        }
+        if call.subscription == Some(true) {
+            self.subscription_cost += call.cost.unwrap_or(0.0);
+        } else {
+            self.billed = true;
+            if let Some(known) = call.cost {
+                *self.cost.get_or_insert(0.0) += known;
+            }
+        }
+    }
+
+    /// Folds the held lines again from scratch.
+    fn recount(&mut self) {
+        let calls = std::mem::take(&mut self.calls);
+        self.tokens = Tokens {
+            input: 0,
+            cache_read: 0,
+            cache_write: BTreeMap::new(),
+            output: 0,
+        };
+        self.billed = false;
+        self.cost = None;
+        self.subscription_cost = 0.0;
+        for call in &calls {
+            self.add(call);
+        }
+        self.calls = calls;
     }
 
     /// The docs' `usage` shape over the lines kept.
     pub(crate) fn usage(&self) -> Usage {
-        log::usage(self.calls.values())
+        Usage {
+            tokens: self.tokens.clone(),
+            // `docs/events.md`, `usage`: 0 with no billed call, null when
+            // billed calls exist and none had a known cost.
+            cost: if self.billed { self.cost } else { Some(0.0) },
+            subscription_cost: self.subscription_cost,
+        }
     }
 
     /// US dollars billed per token. A `cost` still null counts as zero

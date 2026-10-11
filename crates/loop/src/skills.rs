@@ -508,21 +508,12 @@ pub(crate) fn size_notice(listed: &[&Found], window: u64) -> Option<Notice> {
             None => places.push((&skill.place, bytes)),
         }
     }
-    if total * 10 <= u128::from(window) * 4 {
-        return None;
-    }
-    places.sort_by_key(|place| std::cmp::Reverse(place.1));
-    let largest: Vec<String> = places
-        .into_iter()
-        .take(3)
-        .map(|(place, bytes)| format!("{place} ({bytes} bytes)"))
-        .collect();
+    let largest = crate::prompt::oversize(total, window, places)?;
     Some(Notice {
         code: ErrorCode::SkillsLarge,
         message: format!(
-            "The skills listing is about {} tokens, over 10% of the {window}-token context window. Largest: {}.",
+            "The skills listing is about {} tokens, over 10% of the {window}-token context window. Largest: {largest}.",
             total / 4,
-            largest.join(", ")
         ),
         extension: None,
     })

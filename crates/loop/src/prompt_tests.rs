@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use super::{PromptInputs, fill, section, system_prompt};
+use super::{PromptInputs, fill, message, oversize, section, system_prompt};
 
 /// Every optional input absent, for system prompt tests: the opening
 /// message fields never reach `system_prompt`.
@@ -182,7 +182,6 @@ fn reviewer_md_bytes_are_pinned() {
 
 #[test]
 fn messages_md_holds_every_section_the_doc_names() {
-    let md = include_str!("../prompt/messages.md");
     for name in [
         "tools",
         "tool",
@@ -217,10 +216,32 @@ fn messages_md_holds_every_section_the_doc_names() {
         "skill-removed",
     ] {
         assert!(
-            !section(md, name).is_empty(),
+            !message(name).is_empty(),
             "messages.md has no ## {name} section"
         );
     }
+}
+
+#[test]
+fn an_unknown_message_is_empty() {
+    assert_eq!(message("no-such-section"), "");
+}
+
+#[test]
+fn oversize_passes_exactly_ten_percent_and_marks_a_byte_more() {
+    assert_eq!(oversize(400, 1000, vec![("a", 300), ("b", 200)]), None);
+    assert_eq!(
+        oversize(401, 1000, vec![("a", 300), ("b", 200)]),
+        Some("a (300 bytes), b (200 bytes)".into())
+    );
+}
+
+#[test]
+fn oversize_marks_a_total_too_big_to_multiply() {
+    assert_eq!(
+        oversize(u128::MAX, 1, Vec::<(&str, u128)>::new()),
+        Some(String::new())
+    );
 }
 
 #[test]

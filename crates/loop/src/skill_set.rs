@@ -285,8 +285,8 @@ impl SkillSet {
     /// (`docs/system-prompt.md`, "Recording"): each added line, then each
     /// removed line, both in the name order the check wrote.
     pub(crate) fn changed_text(changed: &SkillsChanged) -> String {
-        let added = crate::prompt::body(crate::conversation::MESSAGES_MD, "skill-added");
-        let removed = crate::prompt::body(crate::conversation::MESSAGES_MD, "skill-removed");
+        let added = crate::prompt::message("skill-added").to_owned();
+        let removed = crate::prompt::message("skill-removed").to_owned();
         let mut lines = Vec::with_capacity(changed.added.len() + changed.removed.len());
         for entry in &changed.added {
             lines.push(crate::prompt::fill(

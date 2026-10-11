@@ -17,9 +17,7 @@ use contract::{ActionId, Envelope};
 
 use crate::Error;
 use crate::handoff::Carry;
-use crate::prompt::{body, fill};
-
-pub(crate) const MESSAGES_MD: &str = include_str!("../prompt/messages.md");
+use crate::prompt::{fill, message};
 
 /// A call with no `tool_call_completed`, which only a crash can leave
 /// (`docs/events.md`, "Resume"), is sent with a fixed result: it never
@@ -32,8 +30,11 @@ const NEVER_RAN: &str = "It never ran.";
 const OUTCOME_UNKNOWN: &str = "Its outcome is unknown: it may have run.";
 
 /// The conversation `lines` render, for a session whose model reference is
-/// `model`. Lines of kinds this build does not know are skipped.
-pub fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
+/// `model`. Lines of kinds this build does not know are skipped. Only tests
+/// rebuild a whole log directly; production resumes through
+/// [`rebuild_and_sent`].
+#[cfg(test)]
+pub(crate) fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
     let (mut conversation, _, mut held, _) =
         rebuild_and_sent(lines, model, &HashSet::new(), Carry::default())?;
     conversation.append(&mut held);
@@ -494,7 +495,7 @@ pub(crate) fn render(
         Event::DateChanged(changed) => {
             conversation.push(Input::User {
                 text: fill(
-                    &body(MESSAGES_MD, "date"),
+                    message("date"),
                     &[("date", changed.date.as_str())],
                 ),
              images: Vec::new(),});
@@ -651,12 +652,12 @@ fn changed_message(file: &InstructionFile, had: &BTreeMap<String, String>) -> Op
             let old = had.get(&file.path).map(String::as_str).unwrap_or("");
             let diff = crate::changes::unified_diff(old, content, &file.path);
             fill(
-                &body(MESSAGES_MD, "diff-file"),
+                message("diff-file"),
                 &[("path", file.path.as_str()), ("diff", diff.as_str())],
             )
         }
         (InstructionReason::Changed, InstructionSent::Full) => fill(
-            &body(MESSAGES_MD, "replaced-file"),
+            message("replaced-file"),
             &[("path", file.path.as_str()), ("content", content)],
         ),
         (InstructionReason::Created, InstructionSent::Full) => match &file.extension {
@@ -664,7 +665,7 @@ fn changed_message(file: &InstructionFile, had: &BTreeMap<String, String>) -> Op
             // instruction-file template's "applies to {dir}" is wrong
             // for it.
             Some(extension) => fill(
-                &body(MESSAGES_MD, "created-section-file"),
+                message("created-section-file"),
                 &[
                     ("extension", extension.as_str()),
                     ("path", file.path.as_str()),
@@ -672,7 +673,7 @@ fn changed_message(file: &InstructionFile, had: &BTreeMap<String, String>) -> Op
                 ],
             ),
             None => fill(
-                &body(MESSAGES_MD, "created-file"),
+                message("created-file"),
                 &[
                     ("path", file.path.as_str()),
                     ("dir", dir_of(&file.path).as_str()),
@@ -681,17 +682,16 @@ fn changed_message(file: &InstructionFile, had: &BTreeMap<String, String>) -> Op
             ),
         },
         (InstructionReason::Subdirectory, InstructionSent::Full) => fill(
-            &body(MESSAGES_MD, "subdirectory-file"),
+            message("subdirectory-file"),
             &[
                 ("path", file.path.as_str()),
                 ("dir", dir_of(&file.path).as_str()),
                 ("content", content),
             ],
         ),
-        (InstructionReason::Deleted, InstructionSent::Deleted) => fill(
-            &body(MESSAGES_MD, "deleted-file"),
-            &[("path", file.path.as_str())],
-        ),
+        (InstructionReason::Deleted, InstructionSent::Deleted) => {
+            fill(message("deleted-file"), &[("path", file.path.as_str())])
+        }
         _ => return None,
     };
     Some(text)

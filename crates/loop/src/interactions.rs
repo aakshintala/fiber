@@ -296,22 +296,10 @@ impl Loop {
             Err(TryRecvError::Disconnected) => return Received::Closed,
             Err(TryRecvError::Empty) => {}
         }
-        let clock = Arc::clone(self.log.clock());
-        let mut slot = None;
-        clock.wait_until(until, &mut |bound| {
-            // `None` blocks until a delivery or the channel closes.
-            slot = Some(match bound {
-                None => self
-                    .inbox
-                    .recv()
-                    .map_err(|_| RecvTimeoutError::Disconnected),
-                Some(limit) => self.inbox.recv_timeout(limit),
-            });
-        });
-        match slot {
-            Some(Ok(delivery)) => Received::Delivery(delivery),
-            Some(Err(RecvTimeoutError::Disconnected)) => Received::Closed,
-            Some(Err(RecvTimeoutError::Timeout)) | None => Received::Due,
+        match self.recv_bounded(until) {
+            Ok(delivery) => Received::Delivery(delivery),
+            Err(RecvTimeoutError::Disconnected) => Received::Closed,
+            Err(RecvTimeoutError::Timeout) => Received::Due,
         }
     }
 

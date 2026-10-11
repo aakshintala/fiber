@@ -22,14 +22,12 @@ use contract::clock::Wake;
 use contract::commands::ReplyAnswer;
 use contract::emit::Emit;
 use contract::events::{
-    AskStep, CacheLifetime, CallStatus, Decision, Event, InputItem, PermissionRequested,
-    ReasoningCompleted, RuleScope, SessionStarted, StandingRule, TextDelta, ToolCallArgumentsDelta,
-    ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnOutcome, TurnStarted, Variables,
-    VariablesSource,
+    CacheLifetime, Decision, Event, ReasoningCompleted, SessionStarted, TextDelta,
+    ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome, Variables, VariablesSource,
 };
 use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
 use contract::provider::{
-    CallError, Delta, ModelCall, ModelRequest, Provider, Reply, ReplyAction, ToolDefinition,
+    CallError, Delta, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction, ToolDefinition,
 };
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
@@ -41,6 +39,14 @@ use log::{Log, Watcher};
 use r#loop::{BlockLimits, Loop, Model, Reviewer, TurnCancel};
 use serde_json::{Map, Value, json};
 
+mod events;
+
+#[allow(unused_imports, reason = "each test target uses some helpers")]
+pub(crate) use events::{
+    assistant, completed_event, fiber_started, handoff_done, handoff_started, hosted_requested,
+    job_completed, job_started, kinds_of, message_started, opening_of, requested, result_of,
+    standing_request, started, steering, text_of, texts, user_turn,
+};
 /// How long a turn may take before a test fails instead of hanging.
 pub(crate) const DEADLINE: Duration = Duration::from_secs(5);
 
@@ -1316,6 +1322,25 @@ impl Session {
         self.looped = Some(looped);
     }
 
+    /// Resumes the session's log and runs one `again` turn, returning
+    /// what the resumed request was built from without the prompt: what
+    /// `rebuild` over the whole log returned. The last thing a test does
+    /// with the session: the provider's script holds one more reply.
+    pub(crate) fn rebuilt(&mut self) -> Vec<Input> {
+        self.resume(Vec::new());
+        self.inbox.send(delivery("again")).unwrap();
+        assert_eq!(self.turn(), Some(TurnOutcome::Completed));
+        let mut conversation = self.requests().pop().unwrap().conversation;
+        assert_eq!(
+            conversation.pop(),
+            Some(Input::User {
+                text: "again".into(),
+                images: Vec::new(),
+            })
+        );
+        conversation
+    }
+
     /// Whether a person can answer an approval.
     pub(crate) fn answerable(mut self, yes: bool) -> Self {
         self.looped = self.looped.take().map(|looped| looped.answerable(yes));
@@ -1825,81 +1850,6 @@ impl History {
     pub(crate) fn append(&self, event: &Event, turn: Option<TurnId>, action: Option<ActionId>) {
         self.log.append(event, turn, action).unwrap();
     }
-}
-
-/// The turn-starting event of a driver turn saying `text`.
-pub(crate) fn user_turn(text: &str) -> Event {
-    Event::TurnStarted(TurnStarted {
-        input: vec![InputItem::Message {
-            content: vec![ContentPart::Text { text: text.into() }],
-            sender: contract::shapes::Sender {
-                origin: Origin::Driver,
-                command_id: Some(CommandId("c_1".into())),
-            },
-            changed_by: None,
-        }],
-    })
-}
-
-/// The request event of a call to `name` with `{"city": city}` arguments.
-pub(crate) fn requested(name: &str, city: &str) -> Event {
-    Event::ToolCallRequested(ToolCallRequested {
-        name: name.into(),
-        arguments: json!({"city": city}),
-        provider_id: None,
-        repair: None,
-        ran_by: None,
-        provider_item: None,
-    })
-}
-
-/// The start event of a call that declares no effects.
-pub(crate) fn started() -> Event {
-    Event::ToolCallStarted(ToolCallStarted {
-        declared: DeclaredEffects {
-            effects: Vec::new(),
-            reversible: true,
-            paths: None,
-        },
-        arguments: None,
-        changed_by: None,
-    })
-}
-
-/// The completion event of a call that returned `text`. Named apart from
-/// the `tool_call_completed` line filter because it builds an event.
-pub(crate) fn completed_event(text: &str) -> Event {
-    Event::ToolCallCompleted(ToolCallCompleted {
-        status: CallStatus::Completed,
-        reason: None,
-        error: None,
-        process: None,
-        content: vec![ContentPart::Text { text: text.into() }],
-        details: None,
-        artifact: None,
-        changes: None,
-        control: None,
-        changed_by: None,
-        provider_item: None,
-    })
-}
-
-/// A standing-ask approval carrying `request_id`.
-pub(crate) fn standing_request(request_id: &str) -> Event {
-    Event::PermissionRequested(PermissionRequested {
-        request_id: RequestId(request_id.into()),
-        declared: DeclaredEffects {
-            effects: vec![Effect::Executes],
-            reversible: true,
-            paths: None,
-        },
-        step: AskStep::StandingAsk {
-            standing_rule: StandingRule {
-                scope: RuleScope::Project,
-                prefix: "run tests".into(),
-            },
-        },
-    })
 }
 
 /// One attempt number per `assistant_message_started`, in order. A start

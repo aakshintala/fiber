@@ -19,7 +19,6 @@ use contract::provider::{Cost, Delta, Input, InputSize, ReplyAction};
 use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, Seq};
 use fakes::{Scripted, reply};
-use r#loop::rebuild;
 use serde_json::{Value, json};
 
 use support::{
@@ -314,6 +313,10 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
             reasoning_reply("Think.", "Hi."),
             tool_call_reply("Checking.", &["get_weather", "get_time"]),
             Scripted::text("Done."),
+            // The second turn has no reply of its own: it consumes the
+            // first, and the rebuild the second.
+            Scripted::text("Again."),
+            Scripted::text("Again."),
         ],
         Some(message("steer")),
     );
@@ -321,14 +324,13 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
     session.turn();
     session.inbox.send(delivery("two")).unwrap();
     session.turn();
-    let lines = log::read(&session.dir).unwrap();
     // The log up to the last request is what that request was built from.
-    let last = lines
-        .iter()
-        .rposition(|l| l.kind == "assistant_message_started")
-        .unwrap();
     let sent = session.requests().pop().unwrap().conversation;
-    assert_eq!(rebuild(&lines[..last], MODEL).unwrap(), sent);
+    let rebuilt = session.rebuilt();
+    assert_eq!(rebuilt[..sent.len()], sent[..]);
+    // The second turn had no reply of its own, so what follows the sent
+    // request is that turn's `Again.` answer.
+    assert_eq!(rebuilt[sent.len()..], [assistant("Again.")]);
 
     // In log order: a reply's text parts sit among its calls, and the
     // calls' results follow the reply.
@@ -371,22 +373,6 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
     assert_eq!(sent[10], assistant("Done."));
     assert_eq!(sent[11], user("two"));
     assert_eq!(sent.len(), 12);
-}
-
-#[test]
-fn rebuild_reads_only_durable_lines_and_refuses_a_bad_one() {
-    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
-    session.inbox.send(delivery("one")).unwrap();
-    session.turn();
-    let mut lines = session.lines();
-    assert_eq!(
-        rebuild(&lines, MODEL).unwrap()[1..],
-        [user("one"), assistant("Hi.")]
-    );
-    let turn = lines.iter().position(|l| l.kind == "turn_started").unwrap();
-    lines[turn].payload.insert("input".into(), json!(3));
-    let error = rebuild(&lines, MODEL).unwrap_err();
-    assert_eq!(error.code(), ErrorCode::LogCorrupt);
 }
 
 #[test]
@@ -563,7 +549,10 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
         retry_after_ms: None,
         provider: None,
     };
-    let mut session = Session::new(vec![Scripted::failed(failure)], None);
+    let mut session = Session::new(
+        vec![Scripted::failed(failure), Scripted::text("Again.")],
+        None,
+    );
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
@@ -588,10 +577,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
     assert_eq!(lines[8].payload["outcome"], "failed");
     assert_eq!(lines[8].payload["error"], call["error"]);
     // A failed call sends nothing to the model.
-    assert_eq!(
-        rebuild(&log::read(&session.dir).unwrap(), MODEL).unwrap()[1..],
-        [user("hi")]
-    );
+    assert_eq!(session.rebuilt()[1..], [user("hi")]);
 }
 
 #[test]
@@ -627,6 +613,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
                 deltas: Vec::new(),
                 end: Ok(last),
             },
+            Scripted::text("Again."),
         ],
         None,
         vec![std::sync::Arc::new(TestTool::reads(
@@ -676,7 +663,6 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
         .iter()
         .rposition(|l| l.kind == "assistant_message_started")
         .unwrap();
-    assert_eq!(rebuild(&logged[..opened], MODEL).unwrap(), sent);
     assert_eq!(sent[1], user("hi"));
     assert_eq!(sent[2], assistant("A"));
     assert!(matches!(&sent[3], Input::ToolCall { call, .. } if call.name == "get_weather"));
@@ -687,6 +673,18 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
     let exited = log::read(&session.dir).unwrap();
     assert_eq!(exited.last().unwrap().kind, "fiber_exited");
     assert_eq!(exited.last().unwrap().payload["text"], "AB");
+
+    let rebuilt = session.rebuilt();
+    assert_eq!(rebuilt[..sent.len()], sent[..]);
+    // The log after the request holds the reply's text parts, which the
+    // rebuild carries after the sent conversation.
+    let after: Vec<&str> = logged[opened..]
+        .iter()
+        .filter(|l| l.kind == "text_completed")
+        .map(|l| l.payload["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(after, ["A", "B"]);
+    assert_eq!(rebuilt[sent.len()..], [assistant("A"), assistant("B")]);
 }
 
 #[test]

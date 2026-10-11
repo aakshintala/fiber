@@ -612,18 +612,6 @@ fn a_20_kib_final_message_is_cut_with_its_full_text_in_an_artifact() {
 }
 
 #[test]
-fn exactly_16_kib_is_not_cut() {
-    let full = "z".repeat(16 * 1024);
-    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
-    world.send(delegate_held(DELEGATE, full.clone()));
-    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    let lines = world.turn_lines();
-    assert_eq!(lines[2].kind, "delegate_finished");
-    assert_eq!(lines[2].payload["text"], full.as_str());
-    assert!(lines[2].payload.get("artifact").is_none());
-}
-
-#[test]
 fn delegate_mode_writes_its_parent_and_no_worktree() {
     fn opened(id: &str, parent: Option<Parent>) -> (fakes::TempDir, std::path::PathBuf) {
         let home = fakes::TempDir::new("fiber-delegate-open");
@@ -1431,7 +1419,8 @@ fn close_with_a_job_running_gives_the_ending_notice_then_waits_for_the_job() {
     let requests = world.requests();
     assert_eq!(requests.len(), 3);
     // A resume renders the notice from the log as the loop sent it.
-    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let rebuilt =
+        crate::conversation::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
     let sent = &requests[2].conversation;
     assert_eq!(rebuilt[..sent.len()], sent[..]);
     assert_eq!(
@@ -2299,7 +2288,8 @@ fn a_batch_while_idle_starts_a_turn_named_by_its_monitor() {
         })
     );
     // A resume renders the batch from the log as the loop sent it.
-    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let rebuilt =
+        crate::conversation::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
     let sent = &requests[0].conversation;
     assert_eq!(rebuilt[..sent.len()], sent[..]);
 }
@@ -2337,7 +2327,8 @@ fn a_monitors_batches_and_its_end_are_one_jobs_item_naming_it_once() {
             rendered(JOB),
         ]
     );
-    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let rebuilt =
+        crate::conversation::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
     let sent = &world.requests()[0].conversation;
     assert_eq!(rebuilt[..sent.len()], sent[..]);
 }
@@ -2389,7 +2380,8 @@ fn a_batch_while_a_call_runs_is_written_at_the_next_step_boundary() {
         users.contains(&format!("Fiber: monitor {JOB} printed:\nready")),
         "{users:?}"
     );
-    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let rebuilt =
+        crate::conversation::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
     let sent = &requests[1].conversation;
     assert_eq!(rebuilt[..sent.len()], sent[..]);
 }

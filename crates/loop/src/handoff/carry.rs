@@ -5,7 +5,7 @@ use contract::events::{ContextNudged, Control, Event, HandoffCompleted, Note, Sk
 use contract::provider::Input;
 use contract::shapes::Question;
 
-use crate::prompt::{body, fill};
+use crate::prompt::{fill, message};
 
 /// The render state a handoff reads: the same fold in the live loop and in a
 /// rebuild, so the two never differ (`docs/loop.md`, "What the model is
@@ -99,7 +99,7 @@ impl Carry {
                 .collect();
             conversation.push(Input::User {
                 text: fill(
-                    &body(crate::conversation::MESSAGES_MD, "handoff-jobs"),
+                    message("handoff-jobs"),
                     &[("jobs", listed.join("\n").as_str())],
                 ),
                 images: Vec::new(),
@@ -206,7 +206,7 @@ impl Carry {
     /// The nudge's text, from its payload.
     pub(crate) fn nudge_text(&self, nudged: &ContextNudged) -> String {
         fill(
-            &body(crate::conversation::MESSAGES_MD, "nudge"),
+            message("nudge"),
             &[
                 ("tokens", nudged.tokens.to_string().as_str()),
                 ("trigger_at", nudged.trigger_at.to_string().as_str()),

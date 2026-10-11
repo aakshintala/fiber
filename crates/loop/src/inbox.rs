@@ -7,7 +7,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use contract::commands::Reply;
-use contract::events::{Event, ExtensionLog, QueuedMessage, SteeringQueue};
+use contract::events::{Event, ExtensionExec, ExtensionLog, QueuedMessage, SteeringQueue};
 use contract::inbox::{Ack, Delivery, Rejection};
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
 
@@ -160,21 +160,10 @@ impl Loop {
                     Err(std::sync::mpsc::TryRecvError::Empty) => return InboxRecv::Idle,
                 }
             }
-            let mut slot = None;
-            clock.wait_until(deadline, &mut |bound| {
-                // `None` blocks until a delivery or the channel closes.
-                slot = Some(match bound {
-                    None => self
-                        .inbox
-                        .recv()
-                        .map_err(|_| RecvTimeoutError::Disconnected),
-                    Some(limit) => self.inbox.recv_timeout(limit),
-                });
-            });
-            match slot {
-                Some(Ok(delivery)) => return InboxRecv::Delivery(delivery),
-                Some(Err(RecvTimeoutError::Disconnected)) => return InboxRecv::Closed,
-                Some(Err(RecvTimeoutError::Timeout)) | None => {}
+            match self.recv_bounded(deadline) {
+                Ok(delivery) => return InboxRecv::Delivery(delivery),
+                Err(RecvTimeoutError::Disconnected) => return InboxRecv::Closed,
+                Err(RecvTimeoutError::Timeout) => {}
             }
         }
     }
@@ -560,15 +549,42 @@ impl Loop {
                     input.pieces.push(Queued::Line(line));
                 }
             }
-            // Written at the drain that takes it, idle or not: it never
-            // starts a turn and never joins the model's input.
-            Delivery::ExtensionExec(exec) => {
-                self.log.append(&Event::ExtensionExec(exec), None, None)?;
-            }
+            Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
         }
+        Ok(())
+    }
+
+    /// Waits on the loop's clock until `until` for the next queued
+    /// delivery. `None` blocks until a delivery arrives or the channel
+    /// closes. A wait the clock ends without calling the receive closure
+    /// maps to `Err(Timeout)`, as the idle wait treats it as another
+    /// turn of the loop and the step's receive as its wait ending.
+    pub(crate) fn recv_bounded(
+        &self,
+        until: Option<Instant>,
+    ) -> Result<Delivery, RecvTimeoutError> {
+        let clock = Arc::clone(self.log.clock());
+        let mut slot = None;
+        clock.wait_until(until, &mut |bound| {
+            // `None` blocks until a delivery or the channel closes.
+            slot = Some(match bound {
+                None => self
+                    .inbox
+                    .recv()
+                    .map_err(|_| RecvTimeoutError::Disconnected),
+                Some(limit) => self.inbox.recv_timeout(limit),
+            });
+        });
+        slot.unwrap_or(Err(RecvTimeoutError::Timeout))
+    }
+
+    /// Writes an `extension_exec` delivery at the drain that takes it:
+    /// it never starts a turn and never joins the model's input.
+    pub(crate) fn record_extension_exec(&self, exec: ExtensionExec) -> Result<(), Error> {
+        self.log.append(&Event::ExtensionExec(exec), None, None)?;
         Ok(())
     }
 
@@ -654,11 +670,7 @@ impl Loop {
             Delivery::Job(notice) => self.admit_job(notice),
             // Held until the next step boundary, as a job's end is.
             Delivery::JobLine(line) => self.queued.push_back(Queued::Line(line)),
-            // Written at the drain that takes it: it never starts a turn
-            // and never joins the model's input.
-            Delivery::ExtensionExec(exec) => {
-                self.log.append(&Event::ExtensionExec(exec), None, None)?;
-            }
+            Delivery::ExtensionExec(exec) => self.record_extension_exec(exec)?,
             Delivery::Interaction(requested) => self.record_interaction(requested)?,
             Delivery::Resolved(resolved, ack) => self.record_resolved(resolved, ack)?,
             Delivery::ExtensionLog(entry) => self.record_extension_log(entry)?,
