@@ -30,10 +30,11 @@ pub(crate) struct Output {
 pub(crate) type Generated = (Vec<Output>, Vec<String>);
 
 /// The model keys `generate` reads, kept verbatim.
-const MODEL_KEYS: [&str; 6] = [
+const MODEL_KEYS: [&str; 7] = [
     "cost",
     "limit",
     "modalities",
+    "name",
     "provider",
     "status",
     "tool_call",
@@ -343,6 +344,13 @@ fn generate_model(
         .filter(|output| *output > 0)
     {
         generated.insert("max_output_tokens".to_owned(), Value::from(output));
+    }
+    if let Some(name) = model
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+    {
+        generated.insert("name".to_owned(), Value::from(name));
     }
     generated.insert("protocol".to_owned(), Value::from(protocol));
     let by_protocol = package

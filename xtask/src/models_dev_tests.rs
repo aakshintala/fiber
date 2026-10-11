@@ -726,7 +726,7 @@ fn trim_keeps_every_model_and_only_the_fields_read() {
                 },
                 "modalities": {"input": ["text"], "output": ["text"], "extra": true},
                 "provider": {"npm": "@ai-sdk/openai", "extra": true},
-                "name": "dropped",
+                "name": "Acme Model",
                 "reasoning_options": [],
             }),
         );
@@ -743,7 +743,7 @@ fn trim_keeps_every_model_and_only_the_fields_read() {
         let model = &trimmed[package.source]["models"]["m"];
         assert_eq!(model["tool_call"], false);
         assert_eq!(model["status"], "deprecated");
-        assert!(model.get("name").is_none());
+        assert_eq!(model["name"], "Acme Model");
         assert!(model.get("reasoning_options").is_none());
         assert!(model["limit"].get("input").is_none());
         assert!(model["cost"].get("context_over_200k").is_none());
@@ -752,6 +752,47 @@ fn trim_keeps_every_model_and_only_the_fields_read() {
     }
     let twice = trim(&trimmed).unwrap();
     assert_eq!(trimmed, twice);
+}
+
+#[test]
+fn a_non_empty_string_name_is_written_verbatim() {
+    let package = fixed_package("s", "openai-responses");
+    let (output, _) = generate_one(
+        &package,
+        &[("m", tool_model(json!({"name": "Acme Model"})))],
+    );
+    let model = generated_model(&output, "m").unwrap();
+    assert_eq!(model["name"], "Acme Model");
+    let keys: Vec<&str> = model
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort();
+    assert_eq!(keys, sorted);
+}
+
+#[test]
+fn a_missing_non_string_or_empty_name_is_left_out() {
+    let package = fixed_package("s", "openai-responses");
+    let (output, _) = generate_one(
+        &package,
+        &[
+            ("missing", tool_model(json!({}))),
+            ("number", tool_model(json!({"name": 7}))),
+            ("null", tool_model(json!({"name": null}))),
+            ("empty", tool_model(json!({"name": ""}))),
+        ],
+    );
+    assert_eq!(output.models, 4);
+    for id in ["missing", "number", "null", "empty"] {
+        assert!(
+            generated_model(&output, id).unwrap().get("name").is_none(),
+            "{id} names no name"
+        );
+    }
 }
 
 #[test]

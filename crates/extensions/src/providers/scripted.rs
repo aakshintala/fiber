@@ -68,6 +68,7 @@ impl Providers {
         }
         data.models.push(ModelData {
             id: id.to_owned(),
+            name: None,
             protocol: Protocol::Scripted,
             base_url: String::new(),
             compat: Map::new(),

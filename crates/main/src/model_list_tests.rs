@@ -108,6 +108,57 @@ fn unloaded(called: &Cell<bool>) -> impl Fn(&Config) -> SessionExtensions + '_ {
 }
 
 #[test]
+fn a_model_name_reaches_its_picker_entry() {
+    let setup = Setup::new("fiber-model-list-name");
+    install_extension(
+        &setup.home(),
+        "extensions/acme-ext",
+        json!({
+            "name": "acme-ext",
+            "version": "v1.0.0",
+            "fiber": "0.1.0",
+            "api": extensions::API,
+        }),
+        &[(
+            "acme",
+            json!({"name": "acme", "models": [
+                {"id": "sonnet", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000,
+                 "name": "Claude Opus 5.5"},
+                {"id": "haiku", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
+            ]}),
+        )],
+    );
+    let called = Cell::new(false);
+    let catalogue = read(
+        &setup.home(),
+        &setup.workspace(),
+        tui::Refresh::Cached,
+        now(),
+        &unloaded(&called),
+    )
+    .unwrap();
+    // Neither the provider nor either id contains "opus": only the
+    // display name can carry the picker's "opus 5.5" query. The picker's
+    // matcher is pub(crate) to tui, so this test cannot run the query;
+    // tui's own filter tests cover matching on the name, and this
+    // covers the wiring that hands the name to the entry.
+    let named = catalogue
+        .models
+        .iter()
+        .find(|entry| entry.reference == "acme/sonnet")
+        .unwrap();
+    assert_eq!(named.name.as_deref(), Some("Claude Opus 5.5"));
+    let plain = catalogue
+        .models
+        .iter()
+        .find(|entry| entry.reference == "acme/haiku")
+        .unwrap();
+    assert_eq!(plain.name, None);
+}
+
+#[test]
 fn each_refresh_maps_to_its_read_mode() {
     assert_eq!(mode(tui::Refresh::Cached), cli::ModelLists::Cached);
     assert_eq!(

@@ -159,6 +159,10 @@ pub enum Login {
 pub struct ModelData {
     /// The model's id, as the vendor spells it.
     pub id: String,
+    /// Its display name, such as `Claude Opus 5.5`; absent when the
+    /// provider data names none.
+    #[serde(default)]
+    pub name: Option<String>,
     /// The wire protocol it speaks.
     pub protocol: Protocol,
     /// Its base URL.

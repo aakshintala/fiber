@@ -571,6 +571,7 @@ fn required_fields_only_read_every_default() {
         panic!("{:?}", data.models);
     };
     assert!(bare.compat.is_empty());
+    assert_eq!(bare.name, None);
     assert!(!bare.deferred_tools);
     assert!(bare.extra_body.is_empty());
     assert_eq!(bare.context_window, None);
@@ -708,4 +709,30 @@ fn provider_files_lists_json_files_in_name_order_and_none_without_the_directory(
         files,
         vec![dir.join("providers/a.json"), dir.join("providers/b.json")]
     );
+}
+
+#[test]
+fn a_model_name_reads_verbatim_and_defaults_to_none() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    let data = |name: &str| {
+        format!(
+            r#"{{"name":"p","models":[{{"id":"m","protocol":"openai-responses","base_url":"u","context_window":1000{name}}}]}}"#
+        )
+    };
+    setup.write(
+        &dir.join("providers/p.json"),
+        &data(r#", "name": "Claude Opus 5.5""#),
+    );
+    assert_eq!(
+        read_providers(&dir).unwrap()[0].models[0].name.as_deref(),
+        Some("Claude Opus 5.5")
+    );
+    setup.write(&dir.join("providers/p.json"), &data(""));
+    assert_eq!(read_providers(&dir).unwrap()[0].models[0].name, None);
+    setup.write(&dir.join("providers/p.json"), &data(r#", "name": null"#));
+    assert_eq!(read_providers(&dir).unwrap()[0].models[0].name, None);
+    setup.write(&dir.join("providers/p.json"), &data(r#", "name": 7"#));
+    let err = read_providers(&dir).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
 }

@@ -301,6 +301,7 @@ fn add_scripted_replaces_an_entry_it_did_not_build() {
             placeholders: BTreeMap::new(),
             models: vec![ModelData {
                 id: "s.json".to_owned(),
+                name: None,
                 protocol: Protocol::OpenaiResponses,
                 base_url: "http://127.0.0.1:1/v1".to_owned(),
                 compat: Map::new(),
