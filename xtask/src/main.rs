@@ -12,7 +12,7 @@
 //!   `library_specs` are `name@version` (for `cargo -p`, which resolves a
 //!   bare name against the whole dependency graph and can be ambiguous), and
 //!   `extension_packages` are first-party package directories with cases
-//! - `plan --mode M --packages "A B" --event E --draft true|false --bug true|false --mutants true|false --mutant-count N`:
+//! - `plan --base REV --mode M --packages "A B" --event E --draft true|false --bug true|false --mutants true|false --mutant-count N`:
 //!   which CI jobs run, the mutant shards and each shard's time limit,
 //!   as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
@@ -119,6 +119,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             let mutant_count: u64 = flag(rest, "--mutant-count")?
                 .parse()
                 .map_err(|e| format!("--mutant-count: {e}"))?;
+            let release_paths = release_paths(&flag(rest, "--base")?)?;
             let plan = select::plan(
                 &flag(rest, "--mode")?,
                 &packages,
@@ -127,6 +128,7 @@ fn run(args: &[String]) -> Result<bool, String> {
                 bug,
                 mutants,
                 mutant_count,
+                &release_paths,
             );
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
@@ -420,6 +422,35 @@ fn changed_files(base: &str) -> Result<Vec<String>, String> {
         .collect();
     files.extend(git_lines(&["ls-files", "--others", "--exclude-standard"])?);
     Ok(files.into_iter().collect())
+}
+
+/// Paths for the release rule from the merge base with `base`: committed
+/// changes with renames reported as both endpoints, plus untracked files.
+/// Both reads are NUL-delimited, so non-ASCII paths arrive literally,
+/// never git-quoted; a non-UTF-8 path fails with an error, never a skip.
+fn release_paths(base: &str) -> Result<Vec<String>, String> {
+    let merge_base = git_lines(&["merge-base", base, "HEAD"])?
+        .into_iter()
+        .next()
+        .ok_or("no merge base")?;
+    let mut files: BTreeSet<String> = BTreeSet::new();
+    files.extend(split_nul(&output(
+        "git",
+        &["diff", "--name-only", "--no-renames", "-z", &merge_base],
+    )?));
+    files.extend(split_nul(&output(
+        "git",
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?));
+    Ok(files.into_iter().collect())
+}
+
+/// The NUL-delimited paths in `out`, dropping the empty trailing field.
+fn split_nul(out: &str) -> Vec<String> {
+    out.split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn packages() -> Result<(String, Vec<Value>), String> {
