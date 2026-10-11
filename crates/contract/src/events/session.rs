@@ -84,6 +84,31 @@ pub struct Variables {
     pub source: VariablesSource,
 }
 
+impl Variables {
+    /// `vars` as `session_started` records them: the `PATH` (lossy, "" when absent),
+    /// the other names sorted (lossy), never a value.
+    pub fn of(
+        vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+        source: VariablesSource,
+    ) -> Self {
+        let mut path = String::new();
+        let mut names = Vec::new();
+        for (name, value) in vars {
+            if name == "PATH" {
+                path = value.to_string_lossy().into_owned();
+            } else {
+                names.push(name.to_string_lossy().into_owned());
+            }
+        }
+        names.sort();
+        Variables {
+            path,
+            names,
+            source,
+        }
+    }
+}
+
 /// Where a session's environment came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -376,3 +401,7 @@ pub struct ContextAdded {
     /// The hook point, such as `turn_start`.
     pub hook: String,
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;

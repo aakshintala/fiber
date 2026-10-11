@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::clock::wall_ms;
-use contract::events::Parent;
+use contract::events::{Parent, VariablesSource};
 use contract::shapes::{Failure, Worktree};
 use contract::{ErrorCode, SessionId};
 use doors::Session;
@@ -44,6 +44,13 @@ pub(crate) fn run(
         Ok(signals) => signals,
         Err(e) => return ask_failed(failed(ErrorCode::IoFailed, format!("signals: {e}"))),
     };
+    // The hub passes `--login-shell` when the session's environment came
+    // from its login-shell capture: every entry below records it, and a
+    // delegate the session starts carries it (`docs/invocation.md`, "A
+    // session's environment").
+    if args.login_shell {
+        r#loop::set_variables_source(VariablesSource::LoginShell);
+    }
     if args.resume {
         return crate::resume::session_resume(
             SessionId(args.id),
@@ -370,6 +377,7 @@ pub(crate) fn run_new(
         return Ok(code);
     }
     let inbox_wake = session.inbox_wake();
+    let rewrites = session.rewrites();
     let admission = session.admission();
     // The fetch runs a prompt row through its server, starting a lazy
     // one as a first tool call does (`docs/mcp.md`, "Prompts and
@@ -468,6 +476,7 @@ pub(crate) fn run_new(
                             fetch,
                         })
                         .inbox_wake(inbox_wake)
+                        .on_rewrite(rewrites)
                         .admission(admission)
                 }),
                 budget,

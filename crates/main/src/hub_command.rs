@@ -51,13 +51,20 @@ fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {
         let home = home.clone();
         move || configure(&home, std::env::current_dir())
     };
+    // The hub's inherited environment, read once: the login-shell capture
+    // falls back to it, with `FIBER_HOME` set to the hub's own home.
+    let environments = hub::Environments::new(std::env::vars_os().collect(), &home);
     finish(hub::serve(
         &home,
         mode,
         configure,
         env!("CARGO_PKG_VERSION"),
-        Arc::new(SpawnStarter { exe }),
+        Arc::new(SpawnStarter {
+            exe,
+            environments: Arc::clone(&environments),
+        }),
         clock,
+        environments,
     ))
 }
 
@@ -150,6 +157,9 @@ fn fail(failure: Failure) -> i32 {
 struct SpawnStarter {
     /// This process's path, read once when the hub starts.
     exe: PathBuf,
+    /// The environment every session starts with: the login-shell
+    /// capture's publish, once the first capture ends.
+    environments: Arc<hub::Environments>,
 }
 
 impl hub::Starter for SpawnStarter {
@@ -161,17 +171,15 @@ impl hub::Starter for SpawnStarter {
         overrides: &[&str],
         worktree: bool,
     ) -> std::io::Result<Box<dyn hub::Started>> {
-        spawn(
-            id,
-            start_command(&self.exe, id, workspace, model, overrides, worktree),
-        )
+        let mut command = start_command(&self.exe, id, workspace, model, overrides, worktree);
+        apply(&mut command, &self.environments.get());
+        spawn(id, command)
     }
 
     fn resume(&self, id: &SessionId, workspace: &Path) -> std::io::Result<Box<dyn hub::Started>> {
-        spawn(
-            id,
-            session_command(&self.exe, id, workspace, None, false, true, None),
-        )
+        let mut command = session_command(&self.exe, id, workspace, None, false, true, None);
+        apply(&mut command, &self.environments.get());
+        spawn(id, command)
     }
 
     fn rewind(
@@ -180,10 +188,20 @@ impl hub::Starter for SpawnStarter {
         workspace: &Path,
         from: &SessionId,
     ) -> std::io::Result<Box<dyn hub::Started>> {
-        spawn(
-            id,
-            session_command(&self.exe, id, workspace, None, false, false, Some(from)),
-        )
+        let mut command = session_command(&self.exe, id, workspace, None, false, false, Some(from));
+        apply(&mut command, &self.environments.get());
+        spawn(id, command)
+    }
+}
+
+/// The hub's current environment onto the session command: exactly its
+/// variables, and `--login-shell` exactly when they came from the
+/// login-shell capture (`docs/invocation.md`, "A session's environment").
+fn apply(command: &mut Command, environment: &hub::Environment) {
+    command.env_clear();
+    command.envs(environment.vars.iter().map(|(name, value)| (name, value)));
+    if environment.source == contract::events::VariablesSource::LoginShell {
+        command.arg("--login-shell");
     }
 }
 

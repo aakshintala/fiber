@@ -130,11 +130,16 @@ pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &Atomic
             Idle::Signal(signal) => {
                 stop.store(true, Ordering::SeqCst);
                 hub.shutdown_clients();
+                // Before `hub_stopped`: every `environment_built` line
+                // precedes it, no capture outlives `serve`, and nothing is
+                // logged after it.
+                hub.environments.close();
                 hub.diag
                     .peak_memory_then_info("hub_stopped", "The hub stopped: signal.");
                 return Exit::Signal(signal);
             }
             Idle::Expired => {
+                hub.environments.close();
                 hub.diag
                     .peak_memory_then_info("hub_stopped", "The hub stopped: idle.");
                 return Exit::Idle;

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::results::{RUNS, Results, median, metric};
+use super::results::{Results, median, metric};
 
 /// The attaching row's formula, 50 ms plus 10 ms per MiB of session log:
 /// its base and its rate, in milliseconds.
@@ -51,21 +51,23 @@ pub(super) fn per_mib(id: &str, results: Option<&Results>) -> (Vec<String>, Stri
     }
     let mut failures = Vec::new();
     let mut shown = Vec::new();
+    // `metric` fails on `None`, so results exists past here.
+    let runs = results.map(|results| results.runs_of(id)).unwrap_or(0);
     for fixture in ATTACH_FIXTURES {
         let Some(samples) = by_fixture.get(fixture) else {
             failures.push(format!("{id}: no {fixture} fixture"));
             continue;
         };
-        if samples.len() != RUNS {
+        if samples.len() != runs {
             failures.push(format!(
-                "{id}: {fixture}: {} runs, expected {RUNS}",
+                "{id}: {fixture}: {} runs, expected {runs}",
                 samples.len()
             ));
             continue;
         }
         let bytes = samples.iter().map(|(bytes, _)| *bytes).max().unwrap_or(0);
         let ms: Vec<f64> = samples.iter().map(|(_, ms)| *ms).collect();
-        match median(&ms) {
+        match median(&ms, runs) {
             Ok(middle) => shown.push(format!(
                 "{fixture} ({} bytes): {middle:.1} ms of {:.1} ms",
                 commas(bytes),

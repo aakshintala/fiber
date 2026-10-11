@@ -29,12 +29,12 @@ use support::group::Listing;
 
 /// The protocol version Fiber speaks (`docs/mcp.md` has no number; the
 /// current draft does).
-const PROTOCOL_VERSION: &str = "2025-06-18";
+pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// How many request lines wait for the writer thread. Picked, not
 /// measured: no doc sets a number. A full queue means the server is
 /// wedged, so it counts as gone.
-const WRITE_QUEUE: usize = 64;
+pub(crate) const WRITE_QUEUE: usize = 64;
 
 /// Why [`Server::start`] failed: the session records it as
 /// `mcp_server_failed` and leaves the server out.
@@ -48,7 +48,7 @@ pub(crate) enum StartError {
 }
 
 /// A start refused because Fiber is shutting down.
-fn shutting_down() -> StartError {
+pub(crate) fn shutting_down() -> StartError {
     StartError::StartFailed("Fiber is shutting down.".to_owned())
 }
 
@@ -117,6 +117,10 @@ pub(crate) enum CallError {
         /// The error's message.
         message: String,
     },
+    /// The request failed over HTTP without ending the server; Fiber's sentence.
+    Http(String),
+    /// The remote server ended its session.
+    Expired,
 }
 
 /// A running server and its end of the wire.
@@ -131,10 +135,39 @@ struct Inner {
     /// closing here really closes: a strong clone in the reader would keep
     /// the channel open and EOF would never arrive during the grace.
     writer: Mutex<Option<std::sync::Arc<mpsc::SyncSender<Vec<u8>>>>>,
-    /// The child and its process-group registration, until [`Server::stop`]
-    /// or [`Drop`] takes, kills and reaps it exactly once.
-    child: Mutex<Option<(Child, Listing)>>,
+    /// The far end of the wire: [`Server::stop`] or [`Drop`] takes, kills
+    /// and reaps it exactly once.
+    peer: Peer,
     clock: Arc<dyn Clock>,
+}
+
+/// The far end of one server's wire: the child Fiber started, or a remote
+/// server's link (`docs/mcp.md`, "What Fiber does with MCP").
+pub(crate) enum Peer {
+    /// The child and its process-group registration.
+    Child(Mutex<Option<(Child, Listing)>>),
+    /// A remote server's session link.
+    Remote(std::sync::Arc<crate::http::Link>),
+}
+
+impl Peer {
+    /// The protocol version the `initialize` result negotiated: stored by
+    /// a remote link for every later request, ignored for a child.
+    fn negotiated(&self, version: &str) {
+        match self {
+            Peer::Child(_) => {}
+            Peer::Remote(link) => link.negotiated(version),
+        }
+    }
+
+    /// Shuts request `id`'s socket and refuses any it opens later: a
+    /// no-op for a child, whose pipe needs no interrupt.
+    fn abandon(&self, id: u64) {
+        match self {
+            Peer::Child(_) => {}
+            Peer::Remote(link) => link.abandon(id),
+        }
+    }
 }
 
 /// A server [`Server::start`] opened, with the tools and prompts it listed.
@@ -165,7 +198,6 @@ impl Server {
         if Stopping.is_cancelled() {
             return Err(shutting_down());
         }
-        let stopping = Stopping;
         let mut cmd = Command::new(command);
         cmd.args(args)
             .current_dir(workspace)
@@ -197,12 +229,37 @@ impl Server {
                 reading.gone();
             }
         });
+        Self::open(
+            shared,
+            writer,
+            Peer::Child(Mutex::new(Some((child, listing)))),
+            clock,
+            startup_timeout,
+            client_version,
+        )
+    }
+
+    /// Runs the handshake on a wire already open: `initialize`,
+    /// `notifications/initialized`, the capability-gated `tools/list` and
+    /// `prompts/list` under `startup_timeout` on `clock`, then the opened
+    /// server. A failure stops or shuts it exactly once, so neither
+    /// transport repeats the failure path: `stop` then "Fiber is shutting
+    /// down." when stopping, else `shutdown`.
+    pub(crate) fn open(
+        shared: Arc<Shared>,
+        writer: Arc<mpsc::SyncSender<Vec<u8>>>,
+        peer: Peer,
+        clock: &Arc<dyn Clock>,
+        startup_timeout: Duration,
+        client_version: &str,
+    ) -> Result<OpenServer, StartError> {
+        let stopping = Stopping;
         clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
         let server = Server {
             inner: Inner {
                 shared,
                 writer: Mutex::new(Some(writer)),
-                child: Mutex::new(Some((child, listing))),
+                peer,
                 clock: Arc::clone(clock),
             },
         };
@@ -225,12 +282,17 @@ impl Server {
             ) {
                 Ok(value) if value.is_object() => value,
                 Err(CallError::Timeout) => return Err(StartError::Deadline),
+                Err(CallError::Http(detail)) => return Err(StartError::StartFailed(detail)),
                 Ok(_) | Err(_) => {
                     return Err(StartError::StartFailed(
                         "The server's `initialize` reply was not a result.".to_owned(),
                     ));
                 }
             };
+            // The negotiated version rides on every later request of a
+            // remote server; a child ignores it.
+            let version = crate::http::negotiated_version(&initialize);
+            server.inner.peer.negotiated(&version);
             server.notify("notifications/initialized", &serde_json::json!({}));
             // `tools/list` runs only when `initialize` advertises the
             // `tools` capability as an object: a server advertising only
@@ -313,6 +375,11 @@ impl Server {
         lock(&self.inner.shared.inner).gone
     }
 
+    /// Whether the remote server ended its session.
+    pub(crate) fn is_expired(&self) -> bool {
+        lock(&self.inner.shared.inner).expired
+    }
+
     /// Stops the server: closes stdin, sends SIGTERM to its process group,
     /// waits on the clock until its output ends or the grace passes, then
     /// kills and reaps the child (`docs/invocation.md`, "Shutdown"). Idempotent:
@@ -322,16 +389,22 @@ impl Server {
     pub(crate) fn stop(&self) {
         let inner = &self.inner;
         inner.close_stdin();
-        // Under the child's lock: a reap takes the child under it, so
-        // the group id is unreaped while the SIGTERM runs.
-        let child = lock(&inner.child);
-        if let Some((child, _)) = child.as_ref() {
-            before_signal();
-            match support::group::signal(child.id(), Signal::TERM) {
-                Ok(()) | Err(_) => {}
+        match &inner.peer {
+            Peer::Child(child) => {
+                // Under the child's lock: a reap takes the child under
+                // it, so the group id is unreaped while the SIGTERM runs.
+                let child = lock(child);
+                if let Some((child, _)) = child.as_ref() {
+                    before_signal();
+                    match support::group::signal(child.id(), Signal::TERM) {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
             }
+            // A remote server takes no signal: dropping the writer ends
+            // its pump, which closes its sockets.
+            Peer::Remote(_) => {}
         }
-        drop(child);
         inner.wait_gone();
         self.reap();
     }
@@ -358,6 +431,11 @@ impl Server {
             if let Some(outcome) = view.response {
                 break Ok(outcome);
             }
+            // An expired session sets both flags: the expiry reads
+            // first, so it never reports as a death.
+            if view.expired {
+                break Err(CallError::Expired);
+            }
             if view.gone {
                 break Err(CallError::Gone);
             }
@@ -380,10 +458,15 @@ impl Server {
             );
         };
         drop(bridge);
+        // The slot is removed before the abandon: a socket error from the
+        // abandoned request then finds no waiter and never marks the
+        // server gone.
         inner.shared.remove(id);
+        inner.peer.abandon(id);
         match outcome {
             Ok(Outcome::Result(value)) => Ok(value),
             Ok(Outcome::Error { code, message }) => Err(CallError::JsonRpc { code, message }),
+            Ok(Outcome::Http(message)) => Err(CallError::Http(message)),
             Err(error) => Err(error),
         }
     }
@@ -400,23 +483,29 @@ impl Server {
 
     /// Kills and reaps the child exactly once; later calls find none.
     fn reap(&self) {
-        let taken = {
-            before_lock("child");
-            lock(&self.inner.child).take()
-        };
-        if let Some((mut child, listing)) = taken {
-            // The leader is taken but unreaped, so the group id cannot
-            // have been reused: the SIGKILL reaches this server's group.
-            match support::group::signal(child.id(), Signal::KILL) {
-                Ok(()) | Err(_) => {}
-            }
-            before_lock("live");
-            // Unlisted under the shared list's lock, before the wait
-            // frees the pid: a group the shutdown kill signals always
-            // has an unreaped leader.
-            support::group::live().unlist(listing);
-            match child.wait() {
-                Ok(_) | Err(_) => {}
+        match &self.inner.peer {
+            Peer::Remote(link) => link.close(),
+            Peer::Child(child) => {
+                let taken = {
+                    before_lock("child");
+                    lock(child).take()
+                };
+                if let Some((mut child, listing)) = taken {
+                    // The leader is taken but unreaped, so the group id
+                    // cannot have been reused: the SIGKILL reaches this
+                    // server's group.
+                    match support::group::signal(child.id(), Signal::KILL) {
+                        Ok(()) | Err(_) => {}
+                    }
+                    before_lock("live");
+                    // Unlisted under the shared list's lock, before the
+                    // wait frees the pid: a group the shutdown kill signals
+                    // always has an unreaped leader.
+                    support::group::live().unlist(listing);
+                    match child.wait() {
+                        Ok(_) | Err(_) => {}
+                    }
+                }
             }
         }
     }

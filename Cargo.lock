@@ -1672,12 +1672,14 @@ dependencies = [
  "base64 0.23.1",
  "contract",
  "fakes",
+ "net",
  "ring",
  "rustix",
  "serde",
  "serde_json",
  "support",
  "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]

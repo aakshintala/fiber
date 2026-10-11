@@ -1,6 +1,8 @@
 //! The hub (`docs/invocation.md`, "The hub"): it lists sessions, starts and
 //! resumes them, and relays every client connection to a session's socket.
-//! It holds no session.
+//! It holds no session. Every session it starts runs with one environment,
+//! built from a login-shell capture when the hub starts
+//! (`docs/invocation.md`, "A session's environment").
 //!
 //! [`serve`] listens on `run/hub`, answers `start`, `status`,
 //! `prompt_history`, `feed`, `dismiss`, `recent`, `sessions`, `delete` and
@@ -18,6 +20,7 @@ mod connection;
 mod delete;
 mod devices;
 mod diag;
+mod environment;
 mod error;
 #[cfg(test)]
 pub(crate) mod fake;
@@ -55,6 +58,7 @@ use log::diag::Severity;
 use crate::connection::Hub;
 use crate::listen::Held;
 
+pub use crate::environment::{Environment, Environments};
 pub use crate::error::StartError;
 pub use crate::recent::{Left, RecentRow, append};
 
@@ -157,6 +161,7 @@ pub fn serve(
     fiber_version: &str,
     starter: Arc<dyn Starter>,
     clock: Arc<dyn Clock>,
+    environments: Arc<Environments>,
 ) -> Result<i32, StartError> {
     let lock = match mode {
         Mode::OnDemand => match listen::lock(home)? {
@@ -227,7 +232,10 @@ pub fn serve(
         Mode::OnDemand => held,
     };
     let diag = diag.with_level(settings.level);
-    let hub = Arc::new(Hub::new(home, fiber_version, starter, clock, diag));
+    let hub = Arc::new(
+        Hub::new(home, fiber_version, starter, Arc::clone(&clock), diag)
+            .with_environments(Arc::clone(&environments)),
+    );
     // The feed starts a rewound session even when no client relayed the
     // rewind: the callback holds the hub weakly, so nothing runs after
     // the hub drops, and the start runs on a thread of its own, never on
@@ -257,11 +265,34 @@ pub fn serve(
     });
     hub.diag
         .line(Severity::Info, None, "hub_started", "The hub started.");
+    // The first capture runs beside the hub: binding comes first, since a
+    // client that started the hub waits only 5 seconds for it to answer.
+    // A thread that cannot start publishes the fallback at once.
+    {
+        let hub = Arc::clone(&hub);
+        let environments = Arc::clone(&environments);
+        let clock = Arc::clone(&clock);
+        let failed_environments = Arc::clone(&environments);
+        let failed_hub = Arc::clone(&hub);
+        match thread::Builder::new()
+            .name("hub-environment".to_owned())
+            .spawn(move || environments.first(&*clock, &hub.diag))
+        {
+            Ok(_) => {}
+            Err(error) => failed_environments.first_failed(
+                crate::environment::capture::Failed::Spawn(error.kind()),
+                &failed_hub.diag,
+            ),
+        }
+    }
     crate::rejoin::wire(&hub);
     let got = Arc::new(AtomicI32::new(0));
     arm(&got, hub.waker());
     hub.feed.start();
     let exit = idle::run(&hub, &held, idle_exit, &got);
+    // `idle::run`'s early returns never reach its own `close`: cover them
+    // here, after which no capture outlives `serve`.
+    environments.close();
     hub.feed.stop();
     held.stop();
     Ok(exit.code())

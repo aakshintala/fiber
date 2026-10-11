@@ -70,7 +70,7 @@ jobs:
             base=$(git rev-parse HEAD^1)
           else
             # The backstop compares against the last main commit whose
-            # backstop passed. This is the only Actions API call CI makes to find a run.
+            # backstop passed. The release job's stored-results lookup (scripts/stored-results) is the only other Actions API call CI makes to find a run.
             base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
               -q '.workflow_runs[0].head_sha // empty')
             if [ -z "$base" ] || ! git merge-base --is-ancestor "$base" HEAD; then
@@ -430,6 +430,11 @@ jobs:
     # benchmarks 5.3+; those runs timed out at 15), and the bound is twice
     # that (docs/ci.md, "Job time limits").
     timeout-minutes: 30
+    # The stored-results lookup lists another run's artifact, which needs
+    # `actions: read` beyond the workflow's `contents: read`.
+    permissions:
+      contents: read
+      actions: read
     env:
       BASE: ${{ needs.select.outputs.base }}
       # C code (lua-src, ring) compiles against musl's headers; the Rust linker stays the default.
@@ -520,7 +525,14 @@ jobs:
           out=$RUNNER_TEMP/bench
           mkdir -p "$out"
           harness=target/debug/examples/bench
+          # A pull request measures its timing-only workloads 3 times and
+          # the rest 5 times; a push measures every workload 5 times.
+          runs=()
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            runs=(--timing-runs 3)
+          fi
           "$harness" --fiber "$RUNNER_TEMP/release/head/fiber" --out "$out/head.json" --only all \
+            "${runs[@]}" \
             --paging "$RUNNER_TEMP/release/head/paging"
           # A base that does not build and has no stored ancestor leaves no base
           # binary (scripts/release-size): its timings are skipped, and
@@ -530,10 +542,12 @@ jobs:
             if [ -f "$RUNNER_TEMP/release/base/paging" ]; then
               base_paging=(--paging "$RUNNER_TEMP/release/base/paging")
             fi
-            # The base is measured on every row: a memory or exact budget it
-            # fails too does not fail the pull request. A base run that writes
-            # no file is reported by bench-report, not here.
-            "$harness" --fiber "$RUNNER_TEMP/release/base/fiber" --out "$out/base.json" --only all \
+            # The base runs the timing benchmarks only; memory and exact
+            # rows compare against the backstop's stored results, looked up
+            # by scripts/stored-results. A base run that writes no file is
+            # reported by bench-report, not here.
+            "$harness" --fiber "$RUNNER_TEMP/release/base/fiber" --out "$out/base.json" --only timing \
+              "${runs[@]}" \
               "${base_paging[@]}" || echo "::warning::the base binary's benchmarks exited $?"
           fi
       - name: Print the attach stages
@@ -568,6 +582,12 @@ jobs:
           ' "$RUNNER_TEMP/bench/head.json")
           echo "$table"
           echo "$table" >> "$GITHUB_STEP_SUMMARY"
+      - name: Look up the base's stored results
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_COMMIT: ${{ steps.base.outputs.commit }}
+        run: scripts/stored-results "$BASE_COMMIT"
       - name: Judge the benchmarks against docs/performance.md
         id: report
         run: |
@@ -578,6 +598,10 @@ jobs:
             args+=(--base "$out/base.json")
             if [ -f "$RUNNER_TEMP/release/base/commit" ]; then
               args+=(--base-commit "$(git rev-parse --short "$(cat "$RUNNER_TEMP/release/base/commit")")")
+            fi
+            if [ -f "$RUNNER_TEMP/stored/commit" ]; then
+              args+=(--stored-base "$RUNNER_TEMP/stored/head.json"
+                --stored-commit "$(git rev-parse --short "$(cat "$RUNNER_TEMP/stored/commit")")")
             fi
           fi
           status=0

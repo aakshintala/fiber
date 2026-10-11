@@ -78,6 +78,7 @@ impl McpTool {
         description: String,
         schema: Value,
         hints: &Hints,
+        remote: bool,
         target: Target,
     ) -> Self {
         let name = qualified(server, tool);
@@ -90,7 +91,7 @@ impl McpTool {
                 hosted: None,
             },
             effects: Effects {
-                declared: hints.declared(),
+                declared: hints.declared_for(remote),
                 subject: Some(String::new()),
                 prefix: None,
                 always_reviewed: false,
@@ -181,6 +182,12 @@ fn output(
         }
         Err(Fault::Refused(message)) => {
             let mut out = fail::failed(ErrorCode::ToolError, message);
+            out.servers = servers;
+            out
+        }
+        Err(Fault::Expired) => {
+            let mut out =
+                fail::failed(ErrorCode::McpServerUnavailable, slot::expired(&call.server));
             out.servers = servers;
             out
         }

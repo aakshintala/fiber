@@ -229,6 +229,7 @@ impl Rendered {
             // not compile until it is placed.
             Event::TurnStarted(_)
             | Event::SteeringApplied(_)
+            | Event::ContextAdded(_)
             | Event::OpeningMessage(_)
             | Event::SessionStarted(_)
             | Event::InstructionFile(_)
@@ -255,7 +256,6 @@ impl Rendered {
             | Event::SessionNamed(_)
             | Event::Clients(_)
             | Event::SessionStatus(_)
-            | Event::ContextAdded(_)
             | Event::AssistantMessageDelta(_)
             | Event::ToolCallArgumentsDelta(_)
             | Event::ReasoningStarted(_)
@@ -419,6 +419,15 @@ pub(crate) fn render(
             conversation.push(user(&steering.content));
             carry.input.push(user(&steering.content));
         }
+        // A hook's added context: its own user message, holding the text
+        // alone. It joins neither the handoff's input nor what the
+        // reviewer is shown (`docs/extensions.md`, "The hook points").
+        Event::ContextAdded(added) => {
+            conversation.push(Input::User {
+                text: added.text.clone(),
+                images: Vec::new(),
+            });
+        }
         // A rewind's note rides on its `session_started`: one user
         // message, so a live start and a resume render it the same way.
         Event::SessionStarted(started) => {
@@ -579,7 +588,6 @@ pub(crate) fn render(
         | Event::SessionNamed(_)
         | Event::Clients(_)
         | Event::SessionStatus(_)
-        | Event::ContextAdded(_)
         | Event::AssistantMessageDelta(_)
         | Event::ToolCallArgumentsDelta(_)
         | Event::ReasoningStarted(_)

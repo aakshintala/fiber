@@ -224,7 +224,7 @@ impl Loop {
             let kept_steer = self
                 .queued
                 .iter()
-                .any(|piece| matches!(piece, Queued::Steer(_)));
+                .any(|piece| matches!(piece, Queued::Steer(..)));
             input.pieces.extend(self.queued.drain(..));
             if kept_steer {
                 // The queue moved into `turn_started`. Only steers are
@@ -316,7 +316,7 @@ impl Loop {
         // A session message still queued runs its turn after `close`; a
         // person's steer never does (`docs/tools.md`, "Messaging other sessions").
         self.queued.retain(|piece| {
-            !matches!(piece, Queued::Steer(message) if !session_message::is_session(message))
+            !matches!(piece, Queued::Steer(message, _) if !session_message::is_session(message))
         });
         let mut input = TurnInput::of(self.queued.drain(..).collect());
         for delivery in std::mem::take(&mut self.deferred) {
@@ -387,13 +387,13 @@ impl Loop {
     /// Writes the queue as it stands: every steering message still queued,
     /// oldest first, empty when the queue is (`docs/events.md`,
     /// `steering_queue`).
-    fn emit_queue(&mut self, turn: Option<&TurnId>) -> Result<(), Error> {
+    pub(crate) fn emit_queue(&mut self, turn: Option<&TurnId>) -> Result<(), Error> {
         let event = contract::events::Event::SteeringQueue(SteeringQueue {
             messages: self
                 .queued
                 .iter()
                 .filter_map(|piece| match piece {
-                    Queued::Steer(message) => Some(QueuedMessage {
+                    Queued::Steer(message, _) => Some(QueuedMessage {
                         content: message.content.clone(),
                         sender: message.sender.clone(),
                     }),
@@ -493,20 +493,7 @@ impl Loop {
                 if self.closing {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
-                    match self.slash(message)? {
-                        Ok(expanded) => {
-                            self.attended();
-                            input.prompt_at.push(input.pieces.len());
-                            input.pieces.push(Queued::Steer(expanded));
-                            input.prompts.push(ack);
-                        }
-                        // A rejected prompt is not pushed and not attended:
-                        // it moves neither the turn nor the idle deadline
-                        // (`docs/invocation.md`, "Lifecycle").
-                        Err(rejection) => {
-                            (ack.0)(Err(rejection));
-                        }
-                    }
+                    self.take_prompt(message, ack, input)?;
                 }
             }
             Delivery::Steer(message, ack) => {
@@ -514,9 +501,7 @@ impl Loop {
                 if self.closing && !has_message(input) {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
-                    self.attended();
-                    accept(ack);
-                    input.pieces.push(Queued::Steer(message));
+                    self.take_steer_idle(message, ack, input)?;
                 }
             }
             Delivery::SteerDrop(id, ack) => {
@@ -647,10 +632,7 @@ impl Loop {
                 reject(ack, ErrorCode::Closing, CLOSING);
             }
             Delivery::Steer(message, ack) => {
-                self.attended();
-                accept(ack);
-                self.queued.push_back(Queued::Steer(message));
-                self.emit_queue(Some(turn))?;
+                self.take_steer_running(message, ack, turn)?;
             }
             Delivery::SteerDrop(id, ack) => {
                 if drop_queued(&mut self.queued, &id) {
@@ -748,14 +730,14 @@ fn has_message(input: &TurnInput) -> bool {
     input
         .pieces
         .iter()
-        .any(|piece| matches!(piece, Queued::Steer(_)))
+        .any(|piece| matches!(piece, Queued::Steer(..)))
 }
 
 /// Removes the unapplied steer `id` names. A prompt's message is not a
 /// steer, wherever it sits, so it is skipped.
 fn drop_piece(input: &mut TurnInput, id: &CommandId) -> bool {
     let found = input.pieces.iter().enumerate().position(|(index, piece)| {
-        matches!(piece, Queued::Steer(message) if message.sender.command_id.as_ref() == Some(id) && !session_message::is_session(message))
+        matches!(piece, Queued::Steer(message, _) if message.sender.command_id.as_ref() == Some(id) && !session_message::is_session(message))
             && !input.prompt_at.contains(&index)
     });
     let Some(index) = found else {
@@ -783,7 +765,7 @@ fn drop_queued(queued: &mut std::collections::VecDeque<Queued>, id: &CommandId) 
     queued
         .iter()
         .position(
-            |piece| matches!(piece, Queued::Steer(message) if message.sender.command_id.as_ref() == Some(id) && !session_message::is_session(message)),
+            |piece| matches!(piece, Queued::Steer(message, _) if message.sender.command_id.as_ref() == Some(id) && !session_message::is_session(message)),
         )
         .map(|index| queued.remove(index))
         .is_some()

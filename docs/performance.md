@@ -136,8 +136,8 @@ rules out a derived database, and the ruling stands while this budget holds.
 
 ## Measuring
 
-Each number is the median of 5 runs, except a pull request's timings, which
-are the median of 3. Every results file records the runner's CPU model.
+Each number is the median of 5 runs, except a pull request's timing-only
+workloads, which are the median of 3. Every results file records the runner's CPU model.
 Memory is peak RSS on Linux and peak
 footprint on macOS, by the method in `docs/dependencies.md`. The retained rows
 read RssAnon from `/proc/<pid>/status` 10 s after the work ends, once freed

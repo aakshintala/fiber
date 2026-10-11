@@ -15,6 +15,15 @@ use serde_json::{Value, json};
 use super::{Later, Waiting, pinned_spec, prepare};
 use crate::mcp_servers::{RepositorySpec, specs};
 
+/// The stdio half of `spec`: an exhaustive match, so a new transport
+/// breaks every site that assumes stdio.
+fn stdio(spec: &mcp::ServerSpec) -> &mcp::StdioSpec {
+    match &spec.transport {
+        mcp::Transport::Stdio(stdio) => stdio,
+        mcp::Transport::Http { .. } => panic!("a stdio-only test met a remote spec"),
+    }
+}
+
 struct Setup {
     rig: crate::test_support::Rig,
     project: ProjectKey,
@@ -52,7 +61,7 @@ impl Setup {
     }
 
     fn repository(&self) -> Vec<RepositorySpec> {
-        specs(&self.config()).repository
+        specs(&self.config()).expect("the specs read").repository
     }
 
     /// The gathered item and its current hash.
@@ -159,20 +168,23 @@ fn prepare_starts_an_approved_server_from_its_copy() {
         panic!("one ready spec");
     };
     // The declaration stays the cache-key input; the program runs the copy.
-    assert_eq!(spec.command, "./srv/run.sh");
-    assert_eq!(spec.args, vec!["srv/run.sh".to_owned()]);
-    assert_eq!(spec.env.get("MODE").map(String::as_str), Some("fast"));
+    assert_eq!(stdio(spec).command, "./srv/run.sh");
+    assert_eq!(stdio(spec).args, vec!["srv/run.sh".to_owned()]);
+    assert_eq!(
+        stdio(spec).env.get("MODE").map(String::as_str),
+        Some("fast")
+    );
     assert_eq!(spec.call_timeout, std::time::Duration::from_millis(2000));
     assert!(spec.required);
     assert!(
         spec.hints.is_empty(),
         "a repository's hints never reach the spec"
     );
-    let run = spec.run.as_ref().expect("a program");
+    let run = stdio(spec).run.as_ref().expect("a program");
     let copy = setup.home().join("pinned").join(&hash).join("srv/run.sh");
     assert_eq!(run.command, copy.display().to_string());
     assert_eq!(run.args, vec![copy.display().to_string()]);
-    let (command, args) = spec.program();
+    let (command, args) = stdio(spec).program();
     assert_eq!(command, run.command.as_str());
     assert_eq!(args, run.args.as_slice());
     // The built spec's guard passes, and holds the copy while it lives.
@@ -229,7 +241,7 @@ fn pinned_spec_maps_each_string_through_the_frozen_resolutions() {
         .unwrap()
         .display()
         .to_string();
-    let run = spec.run.as_ref().expect("a program");
+    let run = stdio(&spec).run.as_ref().expect("a program");
     assert_eq!(run.command, bash);
     assert_eq!(
         run.args,
@@ -240,7 +252,7 @@ fn pinned_spec_maps_each_string_through_the_frozen_resolutions() {
             "bare".to_owned(),
         ]
     );
-    assert_eq!(spec.command, "/bin/bash");
+    assert_eq!(stdio(&spec).command, "/bin/bash");
 }
 
 #[test]
@@ -421,7 +433,7 @@ fn a_persons_layer_never_drifts() {
     let [spec] = prepared.ready.as_slice() else {
         panic!("one ready spec");
     };
-    assert_eq!(spec.env.get("SAFE").map(String::as_str), Some("1"));
+    assert_eq!(stdio(spec).env.get("SAFE").map(String::as_str), Some("1"));
 }
 
 #[test]
@@ -436,7 +448,7 @@ fn the_guard_recovers_when_the_new_file_goes_away() {
     let [spec] = prepared.ready.as_slice() else {
         panic!("one ready spec");
     };
-    let guard = spec.run.as_ref().expect("a program").guard.clone();
+    let guard = stdio(spec).run.as_ref().expect("a program").guard.clone();
     assert!(guard().is_ok());
     fs::write(setup.workspace().join("late.sh"), "late\n").unwrap();
     let error = guard().expect_err("the new repository file is refused");
@@ -672,4 +684,47 @@ fn the_load_reports_a_drift_it_refuses_without_starting() {
         failure.error.message
     );
     assert!(!setup.home().join("cache").exists(), "no server starts");
+}
+
+#[test]
+fn prepare_starts_an_approved_remote_server_as_declared() {
+    let setup = Setup::new();
+    setup.write_repo(&json!({"db": {"url": "https://example.com/mcp"}}));
+    let repository = setup.repository();
+    setup.approve("db");
+    let prepared = setup.prepare(&[], repository);
+    assert!(prepared.failed.is_empty());
+    assert!(prepared.waiting.is_empty());
+    let [spec] = prepared.ready.as_slice() else {
+        panic!("one ready spec");
+    };
+    // No files to pin and no `run`: the declaration runs as declared.
+    let mcp::Transport::Http { url } = &spec.transport else {
+        panic!("a remote transport");
+    };
+    assert_eq!(url, "https://example.com/mcp");
+}
+
+#[test]
+fn a_changed_url_after_approval_fails_the_server() {
+    let setup = Setup::new();
+    setup.write_repo(&json!({"db": {"url": "https://example.com/first"}}));
+    let repository = setup.repository();
+    // The approval covers the second declaration; the session read the first.
+    setup.write_repo(&json!({"db": {"url": "https://example.com/second"}}));
+    setup.approve("db");
+    let prepared = setup.prepare(&[], repository);
+    assert!(prepared.ready.is_empty());
+    assert!(prepared.waiting.is_empty());
+    let [failure] = prepared.failed.as_slice() else {
+        panic!("the drift fails the server");
+    };
+    assert_eq!(failure.server, "db");
+    assert!(
+        failure.error.message.contains(
+            "the repository's declaration of it changed after this session read its configuration"
+        ),
+        "{}",
+        failure.error.message
+    );
 }

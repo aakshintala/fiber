@@ -2133,6 +2133,226 @@ fn an_ask_session_appends_no_prompt_even_one_a_client_sends() {
     close_within(opened.session, opened.log);
 }
 
+/// The next delivery, which must be a prompt, with its command id and
+/// acknowledgement.
+fn prompt_parts(inbox: &mpsc::Receiver<Delivery>) -> (CommandId, contract::inbox::Ack) {
+    let delivery = Deadline::after(DEADLINE)
+        .recv(inbox)
+        .expect("a delivery arrives");
+    let Delivery::Prompt(message, ack) = delivery else {
+        panic!("expected a prompt, got {delivery:?}");
+    };
+    (
+        message
+            .sender
+            .command_id
+            .clone()
+            .expect("a client command id"),
+        ack,
+    )
+}
+
+fn text_part(text: &str) -> Vec<ContentPart> {
+    vec![ContentPart::Text { text: text.into() }]
+}
+
+/// Answers `closing` when dropped uncalled, as the door's guarded
+/// acknowledgements do: dropping the wrapper answers the inner ack.
+struct CallOnDrop {
+    f: Option<Box<dyn FnOnce(contract::inbox::Answer) + Send>>,
+}
+
+impl Drop for CallOnDrop {
+    fn drop(&mut self) {
+        if let Some(f) = self.f.take() {
+            f(Err(contract::inbox::Rejection {
+                code: ErrorCode::Closing,
+                message: "the session ended".into(),
+            }));
+        }
+    }
+}
+
+#[test]
+fn a_rewritten_prompt_records_its_replacement_before_its_acceptance() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    let file = history_file(&opened);
+    let rewrites = opened.session.rewrites();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
+            let _ack = answer_of(&client, "c_sub");
+            send_text(&client, "c_1", "prompt", "one");
+            let (id, ack) = prompt_parts(&inbox);
+            assert_eq!(id, CommandId("c_1".into()));
+            rewrites(&id, &text_part("redacted"));
+            (ack.0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_accepted");
+            Ok(())
+        })
+        .unwrap();
+    let lines = history_lines(&file);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        lines[0]["content"],
+        serde_json::json!([{"type": "text", "text": "redacted"}])
+    );
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_rewrite_for_an_unknown_or_rejected_prompt_writes_nothing() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    let file = history_file(&opened);
+    let rewrites = opened.session.rewrites();
+    // No prompt registered: a steer's id and an unknown id change nothing.
+    rewrites(&CommandId("c_steer".into()), &text_part("nope"));
+    rewrites(&CommandId("c_unknown".into()), &text_part("nope"));
+    opened
+        .session
+        .serve(None, Arc::new(|| false), |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
+            let _ack = answer_of(&client, "c_sub");
+            // A prompt rejected after its rewrite leaves no line.
+            send_text(&client, "c_1", "prompt", "one");
+            let (id, ack) = prompt_parts(&inbox);
+            rewrites(&id, &text_part("redacted"));
+            (ack.0)(Err(busy()));
+            assert_eq!(answer_of(&client, "c_1")["kind"], "command_rejected");
+            // Its id released: a later rewrite for it writes nothing.
+            rewrites(&id, &text_part("late"));
+            send_text(&client, "c_2", "prompt", "two");
+            let (_, ack) = prompt_parts(&inbox);
+            (ack.0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_2")["kind"], "command_accepted");
+            Ok(())
+        })
+        .unwrap();
+    let lines = history_lines(&file);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["content"][0]["text"], "two");
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_dropped_prompt_leaves_no_pending_rewrite() {
+    reset();
+    let opened = Opened::open(Vec::new());
+    let socket = opened.socket.clone();
+    let file = history_file(&opened);
+    let rewrites = opened.session.rewrites();
+    opened
+        .session
+        .serve(None, Arc::new(|| false), |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            client.send(&subscribe_line("c_sub", "summary")).unwrap();
+            let _ack = answer_of(&client, "c_sub");
+            send_text(&client, "c_1", "prompt", "same");
+            let (id, ack) = prompt_parts(&inbox);
+            drop(ack);
+            let dropped = answer_of(&client, "c_1");
+            assert_eq!(dropped["kind"], "command_rejected");
+            assert_eq!(dropped["payload"]["code"], "closing");
+            // The entry is gone: a rewrite for the dropped id writes nothing.
+            rewrites(&id, &text_part("dropped"));
+            send_text(&client, "c_2", "prompt", "same");
+            let (_, ack) = prompt_parts(&inbox);
+            (ack.0)(Ok(None));
+            assert_eq!(answer_of(&client, "c_2")["kind"], "command_accepted");
+            Ok(())
+        })
+        .unwrap();
+    let lines = history_lines(&file);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["content"][0]["text"], "same");
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn the_history_entry_is_gone_before_the_inner_ack_answers() {
+    for dropped in [false, true] {
+        reset();
+        let opened = Opened::open(Vec::new());
+        let file = opened.dir.join("history.jsonl");
+        let id = CommandId("c_1".into());
+        opened
+            .session
+            .gate
+            .prompts
+            .register(id.clone(), text_part("orig"));
+        let (tx, rx) = mpsc::channel::<contract::inbox::Answer>();
+        let inner = contract::inbox::Ack(Box::new({
+            let gate = Arc::clone(&opened.session.gate);
+            let mut on_drop = Some(CallOnDrop {
+                f: Some(Box::new(move |answer: contract::inbox::Answer| {
+                    assert!(
+                        !gate.prompts.contains(&CommandId("c_1".into())),
+                        "the entry is gone before the inner ack answers"
+                    );
+                    gate.prompts
+                        .register(CommandId("c_1".into()), text_part("retry"));
+                    drop(tx.send(answer));
+                })),
+            });
+            move |answer: contract::inbox::Answer| {
+                let mut taken = on_drop.take().expect("the inner ack answers once");
+                let f = taken.f.take().expect("the inner ack answers once");
+                drop(taken);
+                f(answer);
+            }
+        }));
+        let wrapper =
+            crate::prompt_history::recorded(inner, file.clone(), &opened.session.gate, id.clone());
+        // The loop's rewrite lands before the acknowledgement.
+        opened.session.rewrites()(&id, &text_part("replaced"));
+        if dropped {
+            drop(wrapper);
+            let answer = Deadline::after(DEADLINE)
+                .recv(&rx)
+                .expect("the dropped wrapper answers closing");
+            assert!(answer.is_err());
+        } else {
+            (wrapper.0)(Err(busy()));
+            let answer = Deadline::after(DEADLINE)
+                .recv(&rx)
+                .expect("the rejection is answered");
+            assert!(answer.is_err());
+        }
+        // The retry's entry survived and takes a rewrite: answering it
+        // records the retry's replacement.
+        assert!(opened.session.gate.prompts.contains(&id));
+        opened.session.rewrites()(&id, &text_part("final"));
+        let (tx, rx) = mpsc::channel::<contract::inbox::Answer>();
+        let retry = contract::inbox::Ack(Box::new(move |answer| {
+            drop(tx.send(answer));
+        }));
+        let wrapper =
+            crate::prompt_history::recorded(retry, file.clone(), &opened.session.gate, id);
+        (wrapper.0)(Ok(None));
+        assert!(
+            Deadline::after(DEADLINE)
+                .recv(&rx)
+                .expect("the retry is answered")
+                .is_ok()
+        );
+        let lines: Vec<Value> = std::fs::read_to_string(&file)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["content"][0]["text"], "final");
+        close_within(opened.session, opened.log);
+    }
+}
+
 fn ui_status(extension: &str, status: &str) -> Event {
     Event::ExtensionUi(contract::events::ExtensionUi {
         extension: extension.to_owned(),

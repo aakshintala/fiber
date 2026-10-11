@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use contract::events::{Event, Rewind, SessionStarted, ToolCallRequested};
+use contract::events::{Event, Rewind, SessionNamed, SessionStarted, ToolCallRequested};
 use contract::provider::{Input, ToolDefinition};
 use contract::shapes::{Effect, Point, Worktree};
 use contract::{ActionId, Seq};
@@ -26,6 +26,10 @@ pub struct Rewound {
     /// The old session's worktree, when it runs in one: the new session
     /// runs there too and never removes it (`docs/events.md`, "Rewind").
     pub worktree: Option<Worktree>,
+    /// The rewound session's latest `session_named`, from
+    /// [`latest_name`]: the new session writes a copy after
+    /// `session_started`, so the name and a pin carry over.
+    pub name: Option<SessionNamed>,
 }
 
 impl Loop {
@@ -56,6 +60,14 @@ impl Loop {
             None,
             None,
         )?;
+        // The name goes with the conversation: a copy of the parent's
+        // latest `session_named`, `by` included, so a pin holds
+        // (`docs/events.md`, "Rewind").
+        if let Some(named) = start.name {
+            session
+                .log
+                .append(&Event::SessionNamed(named), None, None)?;
+        }
         let mut folded = crate::resume::resumed(session.log.dir())?;
         let logged = folded.preamble.clone();
         // The new session adopts no job: nothing it folds can orphan. It
@@ -77,6 +89,19 @@ impl Loop {
         }
         Ok(rewound)
     }
+}
+
+/// The latest `session_named` in the log in `dir`, read from the end
+/// backwards; `None` when the session never named itself or its log
+/// cannot be read.
+pub fn latest_name(dir: &Path) -> Option<SessionNamed> {
+    log::last_line_where(dir, |line| {
+        let event: Value = serde_json::from_slice(line).ok()?;
+        if event.get("kind")?.as_str()? != "session_named" {
+            return None;
+        }
+        serde_json::from_value(event.get("payload")?.clone()).ok()
+    })
 }
 
 impl Preamble {
