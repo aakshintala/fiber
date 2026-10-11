@@ -28,11 +28,10 @@ pub(crate) fn args_value(text: String) -> Value {
 /// map. Two calls built from the same inputs send the same bytes
 /// (`docs/prompt-cache.md`, "Bytes").
 pub(crate) fn object(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            Map::new()
-        }
+    if let Value::Object(map) = value {
+        map
+    } else {
+        Map::new()
     }
 }
 
