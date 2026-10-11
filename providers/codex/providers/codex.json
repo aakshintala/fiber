@@ -32,6 +32,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "GPT-6 Astra",
       "protocol": "openai-responses",
       "subscription": true,
       "thinking_default": "low",
@@ -71,6 +72,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "GPT-6 Luna",
       "protocol": "openai-responses",
       "subscription": true,
       "thinking_default": "medium",
@@ -110,6 +112,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "GPT-6 Sol",
       "protocol": "openai-responses",
       "subscription": true,
       "thinking_default": "medium",
@@ -149,6 +152,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "GPT-6.1 Sol",
       "protocol": "openai-responses",
       "subscription": true,
       "thinking_default": "low",

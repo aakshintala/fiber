@@ -18,6 +18,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Fable 5",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "low",
@@ -43,6 +44,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Fable 5.1",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "low",
@@ -71,6 +73,7 @@
         "image"
       ],
       "max_output_tokens": 64000,
+      "name": "Claude Haiku 4.5 (latest)",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -99,6 +102,7 @@
         "image"
       ],
       "max_output_tokens": 64000,
+      "name": "Claude Haiku 4.5",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -133,6 +137,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Haiku 5.5",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "low",
@@ -161,6 +166,7 @@
         "image"
       ],
       "max_output_tokens": 64000,
+      "name": "Claude Opus 4.5 (latest)",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -189,6 +195,7 @@
         "image"
       ],
       "max_output_tokens": 64000,
+      "name": "Claude Opus 4.5",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -214,6 +221,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Opus 4.6",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -239,6 +247,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Opus 4.7",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -265,6 +274,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Opus 4.8",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -291,6 +301,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Opus 5",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "low",
@@ -316,6 +327,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Opus 5.5",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "low",
@@ -344,6 +356,7 @@
         "image"
       ],
       "max_output_tokens": 64000,
+      "name": "Claude Sonnet 4.5 (latest)",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -372,6 +385,7 @@
         "image"
       ],
       "max_output_tokens": 64000,
+      "name": "Claude Sonnet 4.5",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -397,6 +411,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Sonnet 4.6",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -422,6 +437,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "off",
@@ -448,6 +464,7 @@
         "image"
       ],
       "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5.5",
       "protocol": "anthropic-messages",
       "thinking_levels": [
         "low",
