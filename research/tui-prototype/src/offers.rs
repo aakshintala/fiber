@@ -11,7 +11,7 @@
 
 use super::input::{Ev, Key};
 use super::{Args, Term};
-use super::{BC, BK, PURPLE, RED};
+use super::{BC, BK, PURPLE, RED, SEL};
 use super::{bold, dim, fg, paint, row, slab, sp, t, view_header};
 use crate::cases::{Case, Surface};
 use ratatui::style::{Modifier, Style};
@@ -204,6 +204,116 @@ fn offer_rows(cols: usize) -> Vec<super::Row> {
     out
 }
 
+/// One option row: the cursor, its number, its mark, the label and its
+/// description, as the question form draws each option.
+fn opt_row(
+    cursor: bool,
+    n: usize,
+    mark: &str,
+    on: bool,
+    label: &str,
+    desc: &str,
+) -> super::Row {
+    let mut ls = Style::new();
+    if on {
+        ls = ls.add_modifier(Modifier::BOLD);
+    }
+    if cursor {
+        ls = ls.add_modifier(Modifier::UNDERLINED);
+    }
+    let mut v = vec![
+        sp(if cursor { "▸ " } else { "  " }, fg(PURPLE)),
+        sp(format!("{} ", n + 1), dim()),
+        sp(mark.to_string(), if on { fg(PURPLE) } else { dim() }),
+        sp(label.to_string(), ls),
+    ];
+    if !desc.is_empty() {
+        v.push(sp(format!("  {desc}"), dim()));
+    }
+    panel_row(v)
+}
+
+/// The row to answer in words, with its cursor.
+fn words_row() -> super::Row {
+    panel_row(vec![
+        sp("✎ ", dim()),
+        sp("Type an answer", dim()),
+        sp("█", dim()),
+    ])
+}
+
+/// The ` Submit ` row ending a multi-choice or typed answer, doing what
+/// Enter does for the mouse.
+fn submit_row() -> super::Row {
+    panel_row(vec![sp(
+        " Submit ",
+        Style::new().add_modifier(Modifier::REVERSED),
+    )])
+}
+
+/// The last row of every one-question form, declining into a chat.
+fn chat_row() -> super::Row {
+    panel_row(vec![sp(" Chat about this ", Style::new().bg(SEL))])
+}
+
+/// The question with its rows, ending in "Chat about this". Only the last
+/// two end with a ` Submit ` row, for the mouse.
+fn form_rows(kind: Kind) -> Vec<super::Row> {
+    let q = |s: &str| panel_row(vec![sp(s.to_string(), bold())]);
+    let mut out = vec![title_row(), panel_blank()];
+    match kind {
+        Kind::Offer => out,
+        Kind::Confirm => {
+            out.extend([
+                q("Restart the linear server now?"),
+                panel_blank(),
+                opt_row(true, 0, "(•) ", true, "yes", ""),
+                opt_row(false, 1, "( ) ", false, "no", ""),
+                panel_blank(),
+                chat_row(),
+            ]);
+            out
+        }
+        Kind::Select => {
+            out.extend([
+                q("Which scope should the token get?"),
+                panel_blank(),
+                opt_row(true, 0, "(•) ", true, "write", "can create issues"),
+                opt_row(false, 1, "( ) ", false, "read", "can list issues"),
+                opt_row(false, 2, "( ) ", false, "triage", "can label issues"),
+                panel_blank(),
+                chat_row(),
+            ]);
+            out
+        }
+        Kind::MultiSelect => {
+            out.extend([
+                q("Which crates should the change touch?"),
+                panel_row(vec![sp("choose any", dim())]),
+                panel_blank(),
+                opt_row(true, 0, "[x] ", true, "hub", "the session host"),
+                opt_row(false, 1, "[ ] ", false, "tui", "the terminal"),
+                opt_row(false, 2, "[ ] ", false, "log", "the event log"),
+                panel_blank(),
+                submit_row(),
+                chat_row(),
+            ]);
+            out
+        }
+        Kind::TextInput => {
+            out.extend([
+                q("What should the server's display name be?"),
+                panel_blank(),
+                words_row(),
+                panel_blank(),
+                submit_row(),
+                chat_row(),
+            ]);
+            out
+        }
+    }
+}
+
 /// A row painted at its own offset and width.
 struct Placed {
     x: u16,
@@ -238,7 +348,7 @@ fn body_rows(c: &Look, cols: usize, rows: usize) -> Vec<Placed> {
         }
         Kind::Confirm | Kind::Select | Kind::MultiSelect | Kind::TextInput => {
             // The panel sits at the bottom of an otherwise quiet frame.
-            let panel = slab(vec![title_row(), panel_blank()], BC, None, cols);
+            let panel = slab(form_rows(c.kind), BC, None, cols);
             let stub = stub_rows();
             let fill = rows.saturating_sub(stub.len() + panel.len());
             let mut out = placed(stub, full);
@@ -563,6 +673,163 @@ mod tests {
         assert_eq!(buf[(0, y)].fg, RED);
         for x in [0, 79, 159] {
             assert_eq!(buf[(x, y)].bg, BK, "no hunk tint at {x}");
+        }
+    }
+
+    #[test]
+    fn form_title_has_no_tabs_and_ends_in_chat() {
+        for name in ["confirm", "select", "multi_select", "text_input"] {
+            for (cols, rows) in [(160, 48), (100, 40)] {
+                let c = parse_case(name);
+                let t = text(&c, cols, rows);
+                assert!(t.contains("Question from main"), "no title");
+                // No tab row: the tabs' marks and arrows never appear.
+                for mark in ["☐", "✔", "←", "→"] {
+                    assert!(!t.contains(mark), "a tab row in {name}");
+                }
+                // "Chat about this" is the last row but the slab edge.
+                let chat = t.rfind("Chat about this").unwrap();
+                assert!(
+                    t[chat..].lines().skip(1).all(|l| {
+                        let s = l.trim();
+                        s.is_empty() || s.starts_with('▀')
+                    }),
+                    "a row after Chat in {name}"
+                );
+                if name == "multi_select" || name == "text_input" {
+                    let submit = t.find("Submit").unwrap();
+                    assert!(submit < chat, "Submit after Chat in {name}");
+                } else {
+                    assert!(!t.contains("Submit"), "a Submit row in {name}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn form_stripe_runs_every_panel_row() {
+        for name in ["confirm", "select", "multi_select", "text_input"] {
+            for (cols, rows) in [(160, 48), (100, 40)] {
+                let c = parse_case(name);
+                let buf = buffer(&c, cols, rows);
+                let painted = buf_text(&buf, cols, rows);
+                let lines: Vec<&str> = painted.lines().collect();
+                let top = lines.iter().position(|l| l.starts_with('▄')).unwrap();
+                let bottom = lines.iter().rposition(|l| l.starts_with('▀')).unwrap();
+                assert!(bottom > top + 2, "no panel in {name}");
+                for (y, line) in lines.iter().enumerate().take(bottom).skip(top + 1) {
+                    let cell = &buf[(0, y as u16)];
+                    assert_eq!(cell.symbol(), "▌", "no stripe in {name}: {line}");
+                    assert_eq!(cell.fg, PURPLE, "stripe not secondary in {name}");
+                }
+                // The title row reads "Question from <session>" with Esc
+                // right-aligned.
+                let ty = lines
+                    .iter()
+                    .position(|l| l.contains("Question from main"))
+                    .unwrap();
+                assert!(top < ty && ty < bottom, "title outside {name}");
+                assert!(lines[ty].starts_with("▌ Question"));
+                assert!(
+                    lines[ty].trim_end().ends_with("Esc: chat about this"),
+                    "Esc not right-aligned in {name}"
+                );
+                let qx = lines[ty].find('Q').unwrap() as u16;
+                let qcell = &buf[(qx, ty as u16)];
+                assert_eq!(qcell.fg, PURPLE);
+                assert!(qcell.modifier.contains(Modifier::BOLD));
+                let ex = lines[ty].trim_end().len() as u16 - "Esc: chat about this".len() as u16;
+                assert!(
+                    buf[(ex, ty as u16)].modifier.contains(Modifier::DIM),
+                    "Esc not dim in {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn form_option_marks() {
+        let t = text(&parse_case("confirm"), 160, 48);
+        assert!(t.contains("(•) yes"), "no chosen yes");
+        assert!(t.contains("( ) no"), "no unchosen no");
+        let t = text(&parse_case("select"), 160, 48);
+        assert!(t.contains("(•) write"), "no chosen write");
+        for o in ["( ) read", "( ) triage"] {
+            assert!(t.contains(o), "no {o}");
+        }
+        for d in ["can create issues", "can list issues", "can label issues"] {
+            assert!(t.contains(d), "no {d}");
+        }
+        let t = text(&parse_case("multi_select"), 160, 48);
+        assert!(t.contains("choose any"), "no choose-any");
+        assert!(t.contains("[x] hub"), "no checked hub");
+        for o in ["[ ] tui", "[ ] log"] {
+            assert!(t.contains(o), "no {o}");
+        }
+        let t = text(&parse_case("text_input"), 160, 48);
+        assert!(t.contains("✎ "), "no words row");
+        assert!(t.contains("Type an answer"), "no words hint");
+        assert!(t.contains('█'), "no words cursor");
+        for mark in ["( )", "(•)", "[ ]", "[x]", "▸"] {
+            assert!(!t.contains(mark), "an option mark in text_input");
+        }
+        // The option cursor sits on exactly one row of the other forms.
+        for name in ["confirm", "select", "multi_select"] {
+            let t = text(&parse_case(name), 160, 48);
+            assert_eq!(t.matches('▸').count(), 1, "no single cursor in {name}");
+        }
+    }
+
+    #[test]
+    fn option_rows_mark_cursor_and_choice() {
+        // panel_row puts the stripe and a space before the option.
+        let on = opt_row(true, 0, "(•) ", true, "write", "can create issues");
+        assert_eq!(on.spans[2].content, "▸ ");
+        assert_eq!(on.spans[2].style, fg(PURPLE));
+        assert_eq!(on.spans[4].content, "(•) ");
+        assert_eq!(on.spans[4].style, fg(PURPLE));
+        assert_eq!(
+            on.spans[5].style,
+            Style::new()
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::UNDERLINED)
+        );
+        assert_eq!(on.spans[6].content, "  can create issues");
+        let off = opt_row(false, 1, "( ) ", false, "read", "");
+        assert_eq!(off.spans[2].content, "  ");
+        assert_eq!(off.spans[4].content, "( ) ");
+        assert_eq!(off.spans[4].style, dim());
+        assert_eq!(off.spans[5].style, Style::new());
+        assert_eq!(off.spans.len(), 6, "a description row without one");
+    }
+
+    #[test]
+    fn submit_and_chat_rows_carry_their_tints() {
+        let plain = |r: &crate::Row| {
+            r.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+        };
+        for kind in [Kind::MultiSelect, Kind::TextInput] {
+            let rows = form_rows(kind);
+            let submit = rows.iter().find(|r| plain(r).contains("Submit")).unwrap();
+            assert!(
+                submit.spans.iter().any(|s| s.content.contains("Submit")
+                    && s.style == Style::new().add_modifier(Modifier::REVERSED)),
+                "Submit not reversed"
+            );
+            let chat = rows.iter().rfind(|r| plain(r).contains("Chat")).unwrap();
+            assert!(
+                chat
+                    .spans
+                    .iter()
+                    .any(|s| s.content.contains("Chat about this") && s.style.bg == Some(SEL)),
+                "Chat without its tint"
+            );
+        }
+        for kind in [Kind::Confirm, Kind::Select] {
+            assert!(
+                form_rows(kind).iter().all(|r| !plain(r).contains("Submit")),
+                "a Submit row"
+            );
         }
     }
 }
