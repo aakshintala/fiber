@@ -16,7 +16,7 @@ expression: "screen(&app, 80, 24)"
 
                       › /w
 [w]  [no model]  [th
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ↑↓ move · enter open · esc closes     ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  ↑↓ move · Enter open · Esc closes     ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ●  fix the parser                                                              ✕
                     ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 

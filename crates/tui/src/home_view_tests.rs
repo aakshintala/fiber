@@ -1116,7 +1116,7 @@ fn the_chips_join_with_two_spaces_from_the_box_edge() {
     let drawn = screen(&app, 80, 24);
     assert!(
         drawn.lines().any(|row| row.contains(
-            "[w]  [no model]  [thinking: default]  enter starts a session"
+            "[w]  [no model]  [thinking: default]  Enter starts a session"
         )),
         "the chips join with two spaces"
     );
@@ -1529,7 +1529,7 @@ fn the_picker_draws_centred_with_a_bar_and_a_legend() {
     let foot = u16::try_from(
         shown
             .lines()
-            .position(|row| row.contains("esc closes"))
+            .position(|row| row.contains("Esc closes"))
             .expect("the legend"),
     )
     .unwrap_or(u16::MAX);

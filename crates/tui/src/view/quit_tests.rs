@@ -158,7 +158,7 @@ fn the_bar_stays_on_enter_and_arrows_do_nothing() {
                 .map(|x| buf[(x, y)].symbol().to_owned())
                 .collect::<String>()
         })
-        .find(|row| row.contains("› enter"))
+        .find(|row| row.contains("› Enter"))
         .expect("Enter's row keeps the bar");
     assert!(row.contains("leave them running"), "{row}");
 }

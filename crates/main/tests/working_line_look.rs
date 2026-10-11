@@ -363,7 +363,7 @@ fn the_working_line_glimmers_and_the_queue_selects() {
         &grid,
         at(footer),
         0,
-        2 + width("⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop"),
+        2 + width("⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop"),
         "footer",
     );
 
@@ -433,7 +433,7 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     // The hint is right-aligned to the box's width, which settles as
     // the panel fills in: wait for it whole, not just started.
     grid = run.wait_screen("the full hint", |grid| {
-        grid.rows.iter().any(|row| row.contains("esc stops"))
+        grid.rows.iter().any(|row| row.contains("Esc stops"))
     });
     let selected = find_row(&grid.rows, "▸ second").expect("the selected row");
     let mark = col_of(&grid.rows[selected], '▸').expect("the mark");
@@ -447,7 +447,7 @@ fn the_working_line_glimmers_and_the_queue_selects() {
     assert_eq!(grid.cell(0, box_row).fg, ATTENTION);
     let hint = find_row(&grid.rows, "editing a queued message").expect("the hint");
     assert!(
-        grid.rows[hint].trim_end().ends_with("esc stops"),
+        grid.rows[hint].trim_end().ends_with("Esc stops"),
         "{}",
         grid.rows[hint]
     );
@@ -465,7 +465,7 @@ fn the_working_line_glimmers_and_the_queue_selects() {
         }
     }
 
-    // Esc stops the edit and ⌥x drops the queue; the session box fills
+    // Esc stops the edit and ⌥X drops the queue; the session box fills
     // for one word and for a wrapping draft.
     run.write(ESC);
     run.write(ALT_X);

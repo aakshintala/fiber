@@ -378,7 +378,7 @@ mod tests {
 
     #[test]
     fn choices_carry_the_gutter_marker_and_a_bold_key() {
-        let rows = choice_row(true, "enter", "leave them running", 5, 40);
+        let rows = choice_row(true, "Enter", "leave them running", 5, 40);
         assert!(text(&rows).contains("› "));
         assert!(rows[0].spans[1].style.add_modifier.contains(Modifier::BOLD));
         let rest = choice_row(false, "c", "close all", 5, 40);
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn the_focused_description_reads_bold_in_the_buffer() {
         for (focused, want) in [(true, true), (false, false)] {
-            let rows = choice_row(focused, "enter", "leave them running", 5, 40);
+            let rows = choice_row(focused, "Enter", "leave them running", 5, 40);
             let buf = buffer(&rows, 40);
             let mut bold = false;
             for x in 0..40 {
@@ -406,7 +406,7 @@ mod tests {
     fn long_choices_wrap_onto_the_hanging_indent() {
         let rows = choice_row(
             false,
-            "enter",
+            "Enter",
             "leave them running while the turn winds down",
             5,
             30,
@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn the_bar_is_full_width_accent_with_dark_ink() {
-        let rows = bar(choice_row(true, "enter", "leave them running", 5, 40));
+        let rows = bar(choice_row(true, "Enter", "leave them running", 5, 40));
         for r in &rows {
             assert_eq!(r.bg, Some(BLUE));
             for s in &r.spans {
@@ -491,7 +491,7 @@ mod tests {
     fn tiny_terminals_clamp_without_panicking() {
         let rows = frame(
             Some(title_row("Key map", None)),
-            choice_row(false, "esc", "stay", 5, inner_w(MIN_W)),
+            choice_row(false, "Esc", "stay", 5, inner_w(MIN_W)),
             None,
             width_for(200, 30),
         );

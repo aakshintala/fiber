@@ -14,9 +14,9 @@ expression: "screen(&app, 80, 24)"
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 › █? for shortcu  2 sessions working
 
-                  › enter  leave them running
+                  › Enter  leave them running
 [w]  [no model]     c      close all
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    esc    stay                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    Esc    stay                                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ●  fix the parse                                                               ✕
 ●  fix the parse  click a choice · they keep running meanwhile                 ✕
 

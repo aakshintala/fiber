@@ -1826,7 +1826,7 @@ fn the_chip_defaults_to_the_launch_directory() {
             "[w]",
             "[test/model]",
             "[thinking: default]",
-            "enter starts a session",
+            "Enter starts a session",
         ]
     );
 }
@@ -2625,7 +2625,7 @@ fn x_on_an_exited_row_asks_to_delete() {
     assert_eq!(click_stop(&mut app), Effect::None);
     assert_eq!(
         question(&app),
-        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
     );
 }
 
@@ -2640,7 +2640,7 @@ fn backspace_on_a_focused_exited_row_asks() {
     assert_eq!(app.on_key(Key::Backspace, now), Effect::None);
     assert_eq!(
         question(&app),
-        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
     );
 }
 
@@ -2659,7 +2659,7 @@ fn delete_on_a_focused_crashed_row_asks() {
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert_eq!(
         question(&app),
-        "Delete dead work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+        "Delete dead work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
     );
 }
 
@@ -2733,7 +2733,7 @@ fn other_keys_do_nothing_in_the_question() {
     assert!(app.input().expand().is_empty());
     assert_eq!(
         question(&app),
-        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
     );
 }
 
@@ -2840,7 +2840,7 @@ fn dependents_ask_again_naming_them_and_enter_sends_cascade_with_expect() {
     assert_eq!(
         question(&app),
         "Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it: \
-        s_1111111111111111, s_2222222222222222? It cannot be undone · enter delete all · esc keep"
+        s_1111111111111111, s_2222222222222222? It cannot be undone · Enter delete all · Esc keep"
     );
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes all");
@@ -2888,7 +2888,7 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
     assert_eq!(
         question(&app),
         "Delete fix the parser (s_0123456789abcdef) and 1 session that continues it: \
-        s_1111111111111111? It cannot be undone · enter delete all · esc keep"
+        s_1111111111111111? It cannot be undone · Enter delete all · Esc keep"
     );
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes all");
@@ -2906,7 +2906,7 @@ fn a_stale_cascade_asks_again_with_the_new_set() {
     assert_eq!(
         question(&app),
         "Delete fix the parser (s_0123456789abcdef) and 2 sessions that continue it: \
-        s_1111111111111111, s_3333333333333333? It cannot be undone · enter delete all · esc keep"
+        s_1111111111111111, s_3333333333333333? It cannot be undone · Enter delete all · Esc keep"
     );
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter deletes all");
@@ -3061,7 +3061,7 @@ fn enter_with_the_link_down_keeps_the_question() {
     assert_eq!(app.on_key(Key::Enter, now), Effect::None);
     assert_eq!(
         question(&app),
-        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
     );
 }
 
@@ -3104,7 +3104,7 @@ fn delete_edit_in_the_question_does_nothing() {
     assert_eq!(app.on_edit(crate::keys::Edit::Delete), Effect::None);
     assert_eq!(
         question(&app),
-        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · enter delete · esc keep"
+        "Delete old work (s_aaaaaaaaaaaaaaaa)? It cannot be undone · Enter delete · Esc keep"
     );
 }
 
@@ -3527,7 +3527,7 @@ fn the_switch_is_hidden_outside_git() {
             "[w]",
             "[test/model]",
             "[thinking: default]",
-            "enter starts a session",
+            "Enter starts a session",
         ]
     );
 }
@@ -3552,7 +3552,7 @@ fn a_chosen_row_workspace_takes_its_git_flag() {
             "[ ] new worktree",
             "[test/model]",
             "[thinking: default]",
-            "enter starts a session",
+            "Enter starts a session",
         ]
     );
     // Turning it on, then choosing the workspace without git: hidden,
