@@ -507,7 +507,7 @@ fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
             "line {n} in order"
         );
     }
-    let before = lock(&feed.state).subscribers.len();
+    let before = feed.subscribers();
     // Under a deadline: ending the live subscriber must never wait on the
     // slow one's blocked writer.
     let (done_tx, done_rx) = mpsc::channel();
@@ -520,7 +520,7 @@ fn a_dead_or_slow_subscriber_does_not_stop_a_live_one() {
         Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "unsubscribe returns"
     );
-    assert_eq!(lock(&feed.state).subscribers.len(), before - 1);
+    assert_eq!(feed.subscribers(), before - 1);
     drop(slow_far);
     stop_within(&feed);
 }
@@ -543,11 +543,7 @@ fn each_subscriber_gets_its_own_id_and_unsubscribe_ends_only_that_one() {
         Deadline::after(DEADLINE).recv(&done_rx).is_ok(),
         "unsubscribe returns"
     );
-    let left: Vec<u64> = lock(&feed.state)
-        .subscribers
-        .iter()
-        .map(|sub| sub.id)
-        .collect();
+    let left: Vec<u64> = lock(&feed.state).fanout.ids();
     assert_eq!(left, [first.id]);
     stop_within(&feed);
 }
@@ -730,7 +726,7 @@ fn stop_waits_for_a_writer_still_draining_its_backlog() {
     {
         let mut state = lock(&feed.state);
         for _ in 0..count {
-            broadcast(&mut state, &line);
+            state.fanout.broadcast(&line);
         }
     }
     let total = line.len() * count;
