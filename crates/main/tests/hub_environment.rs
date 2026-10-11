@@ -69,15 +69,23 @@ fn success_body(other_home: &Path) -> String {
     )
 }
 
+/// The check-run nonce `connect_hub` gives the hub when the run has
+/// none, so the nonce assertion bites outside `scripts/check` too.
+const TEST_NONCE: &str = "hub-environment-test";
+
 /// Connects to the hub, starting `fiber hub serve` with `HUB_ONLY` set
-/// and `shell` as `$SHELL` when given. The starter records the hub for the
-/// caller to kill and wait.
+/// and `shell` as `$SHELL` when given. Outside `scripts/check` the hub
+/// gets a nonce of its own, so the nonce assertion bites there too. The
+/// starter records the hub for the caller to kill and wait.
 #[track_caller]
 fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<HubProc>>>, shell: Option<&Path>) -> Socket {
     let slot = Arc::clone(hub);
     let deadline = setup.deadline;
     let mut serve = setup.fiber(&["hub", "serve"]);
     serve.env("HUB_ONLY", "1");
+    if fakes::check_run().is_none() {
+        serve.env("FIBER_CHECK_RUN", TEST_NONCE);
+    }
     if let Some(shell) = shell {
         serve.env("SHELL", shell);
     }
@@ -278,7 +286,9 @@ fn a_session_without_a_shell_runs_with_the_inherited_environment() {
     let printenv = stream(&[support::function_call(
         "call_1",
         "shell",
-        &json!({"command": "printenv HUB_ONLY FIBER_CHECK_RUN"}),
+        // One variable: BSD `printenv` (macOS) prints only its first
+        // argument, so naming two can never show the second there.
+        &json!({"command": "printenv FIBER_CHECK_RUN"}),
     )]);
     let server = ProviderServer::start([printenv, hello()]).unwrap();
     setup.provider(&server);
@@ -308,15 +318,21 @@ fn a_session_without_a_shell_runs_with_the_inherited_environment() {
         .as_str()
         .expect("the call's output text");
     let printed: Vec<&str> = output.lines().collect();
-    assert!(printed.contains(&"1"), "the call saw HUB_ONLY: {output:?}");
-    if let Some((_, nonce)) = fakes::check_run() {
-        assert!(
-            printed.contains(&nonce.to_string_lossy().as_ref()),
-            "the call saw the check-run nonce: {output:?}"
-        );
-    }
+    // The run's nonce when one is there, else the one `connect_hub`
+    // gave the hub: the assertion bites either way.
+    let nonce = match fakes::check_run() {
+        Some((_, value)) => value.to_string_lossy().into_owned(),
+        None => TEST_NONCE.to_owned(),
+    };
+    assert!(
+        printed.contains(&nonce.as_str()),
+        "the call saw the check-run nonce: {output:?}"
+    );
     let variables = started_variables(&setup, &session);
     assert_eq!(variables["source"], "inherited");
+    let names = names_of(&variables);
+    assert!(names.contains(&"HUB_ONLY".to_owned()), "{names:?}");
+    assert!(names.contains(&"FIBER_CHECK_RUN".to_owned()), "{names:?}");
     assert!(
         setup.hub_log().contains("because SHELL is not set"),
         "the hub records why: {}",
