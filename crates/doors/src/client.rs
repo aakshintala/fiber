@@ -368,21 +368,22 @@ fn job_input(conn: &mut Conn, id: CommandId, args: &contract::commands::JobInput
     };
     match jobs.write(&args.job_id, &args.text) {
         Ok(()) => accept(conn, id, None),
-        Err(contract::jobs::WriteError::NotRunning) => {
-            reject(conn, Some(id), ErrorCode::StaleRequest, NO_JOB);
-        }
-        Err(contract::jobs::WriteError::NotTty) => {
-            reject(conn, Some(id), ErrorCode::InvalidArguments, NOT_TTY);
-        }
-        Err(contract::jobs::WriteError::Io(error)) => {
-            // A terminal that never took the input reports the wait; any
-            // other failure reports its cause.
-            let message = if error.kind() == std::io::ErrorKind::TimedOut {
-                NOT_TAKEN.to_owned()
-            } else {
-                format!("Writing to the job's terminal failed: {error}.")
+        Err(error) => {
+            let message = match &error {
+                contract::jobs::WriteError::NotRunning
+                | contract::jobs::WriteError::Ended(_) => NO_JOB.to_owned(),
+                contract::jobs::WriteError::NotTty => NOT_TTY.to_owned(),
+                contract::jobs::WriteError::Io(io) => {
+                    // A terminal that never took the input reports the wait; any
+                    // other failure reports its cause.
+                    if io.kind() == std::io::ErrorKind::TimedOut {
+                        NOT_TAKEN.to_owned()
+                    } else {
+                        format!("Writing to the job's terminal failed: {io}.")
+                    }
+                }
             };
-            reject(conn, Some(id), ErrorCode::IoFailed, &message);
+            reject(conn, Some(id), error.code(), &message);
         }
     }
 }

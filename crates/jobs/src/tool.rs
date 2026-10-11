@@ -5,13 +5,13 @@ use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::emit::Emit;
-use contract::jobs::JobRecord;
+use contract::jobs::{JobRecord, StopError, WriteError};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
-use crate::registry::{self, Registry, StopError, WriteError};
+use crate::registry::{self, Registry};
 
 /// Lists, waits on, writes to and stops the jobs the calling session started.
 pub struct JobsTool {
@@ -160,7 +160,7 @@ impl JobsTool {
         };
         match self.registry.write(&id, input, wait_ms, cancel) {
             Ok(answer) => answered(answer.text, answer.records),
-            Err(WriteError::Unknown) => failed(unknown_message(&id)),
+            Err(WriteError::NotRunning) => failed(unknown_message(&id)),
             Err(WriteError::NotTty) => failed(format!("Job {id} was not started with `tty`.")),
             Err(WriteError::Ended(status)) => failed(format!(
                 "Job `{id}` has ended: {}.",
@@ -180,7 +180,7 @@ impl JobsTool {
         };
         match self.registry.stop(&id, cancel) {
             Ok(answer) => answered(answer.text, answer.records),
-            Err(StopError::Unknown) => failed(unknown_message(&id)),
+            Err(StopError::NotRunning) => failed(unknown_message(&id)),
             Err(StopError::Ended(status)) => failed(format!(
                 "Job `{id}` has ended: {}.",
                 registry::status_word(status)

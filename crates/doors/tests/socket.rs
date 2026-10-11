@@ -2347,7 +2347,8 @@ fn job_input_line(id: &str, job_id: &str, text: &str) -> String {
 
 /// Jobs whose `write` types into the inner fake's terminal, as the registry
 /// does: accepted while the job runs with one, `NotTty` while it runs
-/// without one, `NotRunning` for an unknown id or once it ended. A job
+/// without one, `NotRunning` for an unknown id and `Ended` once it ended.
+/// A job
 /// passed to [`WritableJobs::stick`] never takes another byte instead:
 /// its write parks until the session clock moves a second on, then reports
 /// the timeout the registry reports.
@@ -2412,6 +2413,16 @@ impl Jobs for WritableJobs {
         text: &str,
     ) -> Result<(), contract::jobs::WriteError> {
         if !self.inner.running().contains(job_id) {
+            if self
+                .inner
+                .started()
+                .iter()
+                .any(|started| &started.job_id == job_id)
+            {
+                return Err(contract::jobs::WriteError::Ended(
+                    contract::events::Outcome::Completed,
+                ));
+            }
             return Err(contract::jobs::WriteError::NotRunning);
         }
         if let Some(entered) = self
