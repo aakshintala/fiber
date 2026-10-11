@@ -572,11 +572,11 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
     });
     let _guard = SettleGuard;
     let lua = mlua::Lua::new();
-    let callback_port = {
-        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-            .expect("a free loopback port");
-        listener.local_addr().expect("a bound port").port()
-    };
+    // Held for the test: a cancelled call never binds, so the port only
+    // names it, and holding it leaves no gap for another listener.
+    let held = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .expect("a held loopback port");
+    let callback_port = held.local_addr().expect("a bound port").port();
     for case in ["exec", "drive", "callback", "lock"] {
         let id = started(&hub);
         let pair = crate::lua_provider::CredentialPair {
@@ -673,11 +673,34 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
         let hub = ready_hub();
         let id = started(&hub);
         let name = format!("race-oauth-{id}");
-        let port = {
-            let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-                .expect("a free loopback port");
-            listener.local_addr().expect("a bound port").port()
-        };
+        /// A browser holding the callback listener the start hands over
+        /// through `callback_listener`, so choosing and binding the port
+        /// leave no gap for another listener.
+        struct Handover {
+            listener: std::sync::Mutex<Option<std::net::TcpListener>>,
+        }
+        impl crate::oauth::Browser for Handover {
+            fn open(&self, _url: &str) {}
+            fn show(&self, _url: &str, _code: &str) {}
+            fn attended(&self) -> bool {
+                true
+            }
+            fn callback_listener(
+                &self,
+                port: u16,
+            ) -> std::io::Result<std::net::TcpListener> {
+                if let Some(listener) = self.listener.lock().unwrap().take() {
+                    return Ok(listener);
+                }
+                std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port))
+            }
+        }
+        let held = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .expect("a held loopback port");
+        let port = held.local_addr().expect("a bound port").port();
+        let browser: Arc<dyn crate::oauth::Browser> = Arc::new(Handover {
+            listener: std::sync::Mutex::new(Some(held)),
+        });
         let target = Target::Provider {
             name: name.clone(),
             function: "credential",
@@ -730,12 +753,22 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
             let hub = Arc::clone(&hub);
             let target = target.clone();
             let home = dir.path().to_path_buf();
+            let browser = Arc::clone(&browser);
             std::thread::spawn(move || {
                 let lua = mlua::Lua::new();
                 let thread = entry(&lua, id).thread;
                 let mut parked = Vec::new();
                 settle(
-                    &start_in(&home),
+                    &Start {
+                        name: "fiber.test/stopped".to_owned(),
+                        dir: home.clone(),
+                        home,
+                        load_by: None,
+                        memory_cap: super::super::MEMORY_CAP,
+                        browser,
+                        session: None,
+                        secrets: Vec::new(),
+                    },
                     &hub,
                     &mut parked,
                     id,
