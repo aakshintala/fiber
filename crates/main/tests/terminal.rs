@@ -172,10 +172,10 @@ fn working_elapsed(contents: &str) -> bool {
 
 #[test]
 fn working_elapsed_needs_the_count() {
-    assert!(working_elapsed("Working 0s · esc to interrupt"));
-    assert!(working_elapsed("Working 39s · esc to interrupt"));
-    assert!(working_elapsed("Working 1m 2s · esc to interrupt"));
-    assert!(!working_elapsed("Working · esc to interrupt"));
+    assert!(working_elapsed("Working 0s · Esc to interrupt"));
+    assert!(working_elapsed("Working 39s · Esc to interrupt"));
+    assert!(working_elapsed("Working 1m 2s · Esc to interrupt"));
+    assert!(!working_elapsed("Working · Esc to interrupt"));
     assert!(!working_elapsed("Working"));
     assert!(!working_elapsed("idle"));
 }
@@ -240,7 +240,7 @@ fn typing_a_prompt_sees_the_answer_and_cancels_a_turn() {
     // The finished turn's working line is cleared a moment after its
     // close is drawn; the next wait must not match that old count.
     run.wait_screen("the first turn's working line cleared", |grid| {
-        !grid.contents.contains("esc to interrupt")
+        !grid.contents.contains("Esc to interrupt")
     });
     // The second prompt starts a stalled turn; Esc interrupts it. The
     // elapsed count proves `turn_started` folded, which opens the turn:
