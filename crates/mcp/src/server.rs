@@ -29,12 +29,12 @@ use support::group::Listing;
 
 /// The protocol version Fiber speaks (`docs/mcp.md` has no number; the
 /// current draft does).
-const PROTOCOL_VERSION: &str = "2025-06-18";
+pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// How many request lines wait for the writer thread. Picked, not
 /// measured: no doc sets a number. A full queue means the server is
 /// wedged, so it counts as gone.
-const WRITE_QUEUE: usize = 64;
+pub(crate) const WRITE_QUEUE: usize = 64;
 
 /// Why [`Server::start`] failed: the session records it as
 /// `mcp_server_failed` and leaves the server out.
@@ -131,10 +131,17 @@ struct Inner {
     /// closing here really closes: a strong clone in the reader would keep
     /// the channel open and EOF would never arrive during the grace.
     writer: Mutex<Option<std::sync::Arc<mpsc::SyncSender<Vec<u8>>>>>,
-    /// The child and its process-group registration, until [`Server::stop`]
-    /// or [`Drop`] takes, kills and reaps it exactly once.
-    child: Mutex<Option<(Child, Listing)>>,
+    /// The far end of the wire: [`Server::stop`] or [`Drop`] takes, kills
+    /// and reaps it exactly once.
+    peer: Peer,
     clock: Arc<dyn Clock>,
+}
+
+/// The far end of one server's wire: the child Fiber started, or a remote
+/// server's link (`docs/mcp.md`, "What Fiber does with MCP").
+pub(crate) enum Peer {
+    /// The child and its process-group registration.
+    Child(Mutex<Option<(Child, Listing)>>),
 }
 
 /// A server [`Server::start`] opened, with the tools and prompts it listed.
@@ -165,7 +172,6 @@ impl Server {
         if Stopping.is_cancelled() {
             return Err(shutting_down());
         }
-        let stopping = Stopping;
         let mut cmd = Command::new(command);
         cmd.args(args)
             .current_dir(workspace)
@@ -197,12 +203,37 @@ impl Server {
                 reading.gone();
             }
         });
+        Self::open(
+            shared,
+            writer,
+            Peer::Child(Mutex::new(Some((child, listing)))),
+            clock,
+            startup_timeout,
+            client_version,
+        )
+    }
+
+    /// Runs the handshake on a wire already open: `initialize`,
+    /// `notifications/initialized`, the capability-gated `tools/list` and
+    /// `prompts/list` under `startup_timeout` on `clock`, then the opened
+    /// server. A failure stops or shuts it exactly once, so neither
+    /// transport repeats the failure path: `stop` then "Fiber is shutting
+    /// down." when stopping, else `shutdown`.
+    pub(crate) fn open(
+        shared: Arc<Shared>,
+        writer: Arc<mpsc::SyncSender<Vec<u8>>>,
+        peer: Peer,
+        clock: &Arc<dyn Clock>,
+        startup_timeout: Duration,
+        client_version: &str,
+    ) -> Result<OpenServer, StartError> {
+        let stopping = Stopping;
         clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
         let server = Server {
             inner: Inner {
                 shared,
                 writer: Mutex::new(Some(writer)),
-                child: Mutex::new(Some((child, listing))),
+                peer,
                 clock: Arc::clone(clock),
             },
         };
@@ -322,16 +353,19 @@ impl Server {
     pub(crate) fn stop(&self) {
         let inner = &self.inner;
         inner.close_stdin();
-        // Under the child's lock: a reap takes the child under it, so
-        // the group id is unreaped while the SIGTERM runs.
-        let child = lock(&inner.child);
-        if let Some((child, _)) = child.as_ref() {
-            before_signal();
-            match support::group::signal(child.id(), Signal::TERM) {
-                Ok(()) | Err(_) => {}
+        match &inner.peer {
+            Peer::Child(child) => {
+                // Under the child's lock: a reap takes the child under
+                // it, so the group id is unreaped while the SIGTERM runs.
+                let child = lock(child);
+                if let Some((child, _)) = child.as_ref() {
+                    before_signal();
+                    match support::group::signal(child.id(), Signal::TERM) {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
             }
         }
-        drop(child);
         inner.wait_gone();
         self.reap();
     }
@@ -400,9 +434,11 @@ impl Server {
 
     /// Kills and reaps the child exactly once; later calls find none.
     fn reap(&self) {
-        let taken = {
-            before_lock("child");
-            lock(&self.inner.child).take()
+        let taken = match &self.inner.peer {
+            Peer::Child(child) => {
+                before_lock("child");
+                lock(child).take()
+            }
         };
         if let Some((mut child, listing)) = taken {
             // The leader is taken but unreaped, so the group id cannot

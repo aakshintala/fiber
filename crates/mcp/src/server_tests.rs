@@ -939,11 +939,8 @@ fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
     let opened = lingering(&setup, "exit 0");
     let server = std::sync::Arc::new(opened.server);
     let shared = std::sync::Arc::clone(&server.inner.shared);
-    let pid = super::lock(&server.inner.child)
-        .as_ref()
-        .expect("unreaped")
-        .0
-        .id();
+    let super::Peer::Child(child) = &server.inner.peer;
+    let pid = super::lock(child).as_ref().expect("unreaped").0.id();
     let (entered, go) = pause_signallers();
     let stopping = std::sync::Arc::clone(&server);
     let (stopped_tx, stopped) = mpsc::channel();
