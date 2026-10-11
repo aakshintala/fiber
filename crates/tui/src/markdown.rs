@@ -531,8 +531,11 @@ fn header(label: &str, width: usize) -> Line<'static> {
     };
     let shown = truncate(label, room);
     let lead = if width > COPY.len() { " " } else { "" };
-    let pad = width
-        .saturating_sub(cells_width(lead).saturating_add(cells_width(&shown)).saturating_add(copy.len()));
+    let pad = width.saturating_sub(
+        cells_width(lead)
+            .saturating_add(cells_width(&shown))
+            .saturating_add(copy.len()),
+    );
     Line::from(vec![
         Span::styled(lead, tinted(Role::Muted)),
         Span::styled(shown, tinted(Role::Muted)),

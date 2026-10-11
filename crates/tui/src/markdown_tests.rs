@@ -281,7 +281,11 @@ fn the_header_truncates_its_label_and_drops_it_then_copy_when_narrow() {
     assert_eq!(text(&header(12).lines[1]), "            ");
     assert!(header(12).targets.is_empty());
     for width in 1..30 {
-        assert_eq!(header(width).lines[1].width(), usize::from(width), "{width}");
+        assert_eq!(
+            header(width).lines[1].width(),
+            usize::from(width),
+            "{width}"
+        );
     }
 }
 
@@ -305,7 +309,12 @@ fn a_table_has_a_bold_header_a_rule_and_right_aligned_numbers() {
     let rendered = render(markdown, 40);
     assert_eq!(
         rendered.lines.iter().map(text).collect::<Vec<_>>(),
-        vec!["name    size", "────   ─────", "a      1,200", "bb         7"]
+        vec![
+            "name    size",
+            "────   ─────",
+            "a      1,200",
+            "bb         7"
+        ]
     );
     assert!(
         style_at(&rendered.lines[0], 0)
@@ -321,7 +330,11 @@ fn a_table_has_a_bold_header_a_rule_and_right_aligned_numbers() {
     // The rule breaks at the gaps.
     assert_eq!(style_at(&rendered.lines[1], 4).fg, None);
     assert_eq!(
-        text(&rendered.lines[1]).chars().skip(4).take(3).collect::<String>(),
+        text(&rendered.lines[1])
+            .chars()
+            .skip(4)
+            .take(3)
+            .collect::<String>(),
         "   ".to_owned()
     );
 }
@@ -495,7 +508,14 @@ fn an_item_that_opens_with_a_code_block_shows_its_marker_first() {
     let lines = texts("- ```\n  x\n  ```\n- b", 12);
     assert_eq!(
         lines,
-        vec!["• ", "▄▄▄▄▄▄▄▄▄▄▄▄", "            ", "   1  x     ", "▀▀▀▀▀▀▀▀▀▀▀▀", "• b"]
+        vec![
+            "• ",
+            "▄▄▄▄▄▄▄▄▄▄▄▄",
+            "            ",
+            "   1  x     ",
+            "▀▀▀▀▀▀▀▀▀▀▀▀",
+            "• b"
+        ]
     );
 }
 

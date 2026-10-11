@@ -94,15 +94,16 @@ impl Table {
                         .get(column)
                         .map(|(cell, links)| (cell.as_slice(), links.as_slice()))
                         .unwrap_or((&[][..], &[][..]));
-                    let numeric =
-                        at > 0 && numeric.get(column).copied().unwrap_or_default();
+                    let numeric = at > 0 && numeric.get(column).copied().unwrap_or_default();
                     let owned: Vec<Cell> = if at == 0 {
                         cell.iter()
                             .map(|&(ch, style)| (ch, style.add_modifier(Modifier::BOLD)))
                             .collect()
                     } else if numeric {
                         // A number column's body cells are plain text.
-                        cell.iter().map(|&(ch, _)| (ch, style(Role::Text))).collect()
+                        cell.iter()
+                            .map(|&(ch, _)| (ch, style(Role::Text)))
+                            .collect()
                     } else {
                         cell.to_vec()
                     };

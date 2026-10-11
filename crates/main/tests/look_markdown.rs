@@ -54,9 +54,9 @@ fn find_col(screen: &Grid, y: u16, needle: &str) -> u16 {
     let want: Vec<String> = needle.chars().map(|ch| ch.to_string()).collect();
     (0..160)
         .find(|x| {
-            want.iter().enumerate().all(|(dx, ch)| {
-                screen.cell(x + dx as u16, y).symbol == *ch
-            })
+            want.iter()
+                .enumerate()
+                .all(|(dx, ch)| screen.cell(x + dx as u16, y).symbol == *ch)
         })
         .expect("the markdown run on its row")
 }
@@ -154,7 +154,11 @@ fn markdown_reply_uses_the_markdown_look() {
     let mut slab = 0..0u16;
     for x in 0..160 {
         if screen.cell(x, header).bg == CODE_BG {
-            slab = if slab.start == slab.end { x..x + 1 } else { slab.start..x + 1 };
+            slab = if slab.start == slab.end {
+                x..x + 1
+            } else {
+                slab.start..x + 1
+            };
         } else if slab.start != slab.end {
             break;
         }
@@ -167,7 +171,10 @@ fn markdown_reply_uses_the_markdown_look() {
     assert_eq!(rust.fg, Colour::Default);
     assert!(rust.dim, "the language is dim");
     assert_eq!(rust.bg, CODE_BG);
-    assert_eq!(symbols(&screen, header, slab.end - 13..slab.end), "click to copy");
+    assert_eq!(
+        symbols(&screen, header, slab.end - 13..slab.end),
+        "click to copy"
+    );
     for x in slab.end - 13..slab.end {
         let cell = screen.cell(x, header);
         assert_eq!(cell.fg, Colour::Default, "copy cell ({x}, {header})");
@@ -197,9 +204,16 @@ fn markdown_reply_uses_the_markdown_look() {
         assert_eq!(cell.fg, RULE, "number cell ({x}, {first})");
         assert_eq!(cell.bg, CODE_BG, "number cell ({x}, {first})");
     }
-    assert_eq!(symbols(&screen, first, slab.start + 4..slab.start + 6), "  ");
+    assert_eq!(
+        symbols(&screen, first, slab.start + 4..slab.start + 6),
+        "  "
+    );
     for x in slab.clone() {
-        assert_eq!(screen.cell(x, first).bg, CODE_BG, "code cell ({x}, {first})");
+        assert_eq!(
+            screen.cell(x, first).bg,
+            CODE_BG,
+            "code cell ({x}, {first})"
+        );
     }
     // The comment is in the comment colour on the code tint; SGR 3
     // carries its italic, the reply's only italic.
@@ -218,10 +232,16 @@ fn markdown_reply_uses_the_markdown_look() {
     // The table matches the doc's mock column for column.
     let thead = find_row(&screen, "Crate");
     let tx = find_col(&screen, thead, "Crate");
-    assert_eq!(symbols(&screen, thead, tx..tx + 21), "Crate   Tests   Lines");
+    assert_eq!(
+        symbols(&screen, thead, tx..tx + 21),
+        "Crate   Tests   Lines"
+    );
     let trule = find_row(&screen, "─────");
     let rx = find_col(&screen, trule, "─────");
-    assert_eq!(symbols(&screen, trule, rx..rx + 21), "─────   ─────   ─────");
+    assert_eq!(
+        symbols(&screen, trule, rx..rx + 21),
+        "─────   ─────   ─────"
+    );
     for dx in [0, 1, 2, 3, 4, 8, 9, 10, 11, 12, 16, 17, 18, 19, 20] {
         assert_eq!(
             screen.cell(rx + dx, trule).fg,
