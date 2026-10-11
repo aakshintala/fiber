@@ -877,6 +877,68 @@ fn a_notice_after_close_with_a_message_joins_its_turn() {
 }
 
 #[test]
+fn a_prompt_turn_that_saw_close_in_its_batch_still_takes_a_steer() {
+    // `close` lands in the same idle batch as the prompt, after it: the
+    // turn still starts with no session message, so `after_close` stays
+    // false and a person's steer during the turn is accepted.
+    let (steered, steer_answer) = mpsc::channel();
+    let mut world = World::new(
+        vec![Scripted::text("Hi."), Scripted::text("Steered.")],
+        vec![vec![Delivery::Steer(
+            message("And this.", "c_and"),
+            reported(steered),
+        )]],
+        |_| Vec::new(),
+    );
+    world.send(prompt("Hello."));
+    world.send(Delivery::Close(ignore()));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(steer_answer.recv_timeout(DEADLINE), Ok(true));
+    let requests = world.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(users(&requests[1]).last(), Some(&"And this.".to_owned()));
+}
+
+#[test]
+fn a_session_message_turn_without_close_still_takes_a_steer() {
+    // No `close`: the message starts the turn, so `after_close` stays
+    // false and a person's steer during the turn is accepted.
+    let (steered, steer_answer) = mpsc::channel();
+    let mut world = World::new(
+        vec![Scripted::text("Hi."), Scripted::text("Steered.")],
+        vec![vec![Delivery::Steer(
+            message("And this.", "c_and"),
+            reported(steered),
+        )]],
+        |_| Vec::new(),
+    );
+    world.send(session_message("c_message"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(steer_answer.recv_timeout(DEADLINE), Ok(true));
+    let requests = world.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(users(&requests[0]).last(), Some(&FRAMED.to_owned()));
+    assert_eq!(users(&requests[1]).last(), Some(&"And this.".to_owned()));
+}
+
+#[test]
+fn a_steer_drop_naming_a_session_message_leaves_it_queued() {
+    // A `steer_drop` never removes a session message: the drop names the
+    // message's command, but the message stays and starts its turn.
+    let (dropped, drop_answer) = mpsc::channel();
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    world.send(session_message("c_message"));
+    world.send(Delivery::SteerDrop(
+        CommandId("c_message".into()),
+        reported(dropped),
+    ));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(drop_answer.recv_timeout(DEADLINE), Ok(false));
+    let lines = world.turn_lines();
+    assert_eq!(lines[0].payload["input"], message_input("c_message"));
+}
+
+#[test]
 fn a_steer_drop_while_idle_skips_notices_and_the_prompt() {
     let mut world = World::new(vec![Scripted::text("Hi.")], Vec::new(), |_| Vec::new());
     world.send(held(JOB));
