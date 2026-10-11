@@ -33,7 +33,7 @@ pub(crate) struct McpTool {
     call: Call,
 }
 
-struct Call {
+pub(crate) struct Call {
     /// The server's configured name, for messages.
     server: String,
     /// The server's own tool name, sent as `tools/call`'s `name`.
@@ -46,6 +46,20 @@ struct Call {
     images: Arc<dyn Images>,
     /// The server's slot. A dead link means the session is gone.
     slot: Weak<Slot>,
+}
+
+impl Call {
+    /// One call to `tool` on `server`, running through `target`.
+    pub(crate) fn new(server: &str, tool: &str, target: Target) -> Call {
+        Call {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+            timeout: target.timeout,
+            artifacts: target.artifacts,
+            images: target.images,
+            slot: target.slot,
+        }
+    }
 }
 
 /// Where a declared tool's calls run: the call timeout, the session
@@ -96,14 +110,7 @@ impl McpTool {
                 prefix: None,
                 always_reviewed: false,
             },
-            call: Call {
-                server: server.to_owned(),
-                tool: tool.to_owned(),
-                timeout: target.timeout,
-                artifacts: target.artifacts,
-                images: target.images,
-                slot: target.slot,
-            },
+            call: Call::new(server, tool, target),
         }
     }
 }
@@ -170,35 +177,43 @@ fn output(
             answered.servers = servers;
             answered
         }
-        Err(Fault::Timeout) => {
+        Err(fault) => faulted(call, fault, servers),
+    }
+}
+
+/// Maps one failed call to its output: the incoming records come first,
+/// and a death appends its own record after them.
+pub(crate) fn faulted(call: &Call, fault: Fault, servers: Vec<ServerRecord>) -> Output {
+    match fault {
+        Fault::Timeout => {
             let mut out = fail::failed(ErrorCode::Timeout, timed_out(call));
             out.servers = servers;
             out
         }
-        Err(Fault::Cancelled) => {
+        Fault::Cancelled => {
             let mut out = fail::failed(ErrorCode::McpCancelRequested, cancelled(call));
             out.servers = servers;
             out
         }
-        Err(Fault::Refused(message)) => {
+        Fault::Refused(message) => {
             let mut out = fail::failed(ErrorCode::ToolError, message);
             out.servers = servers;
             out
         }
-        Err(Fault::Expired) => {
+        Fault::Expired => {
             let mut out =
                 fail::failed(ErrorCode::McpServerUnavailable, slot::expired(&call.server));
             out.servers = servers;
             out
         }
-        Err(Fault::Died(record)) => {
+        Fault::Died(record) => {
             let mut out = fail::failed(record.error.code.clone(), record.error.message.clone());
             let mut all = servers;
             all.push(ServerRecord::Failed(record));
             out.servers = all;
             out
         }
-        Err(Fault::Gone) => {
+        Fault::Gone => {
             let mut out = fail::failed(
                 ErrorCode::McpServerUnavailable,
                 slot::unavailable(&call.server),
@@ -221,7 +236,7 @@ fn output(
 /// marks as an error ends failed with code `tool_error`, with the message
 /// built from its text parts only. `structuredContent` is dropped in this
 /// slice.
-fn answer(call: &Call, result: &CallResult, cancel: &dyn Cancel) -> Output {
+pub(crate) fn answer(call: &Call, result: &CallResult, cancel: &dyn Cancel) -> Output {
     let mut content: Vec<ContentPart> = Vec::new();
     let mut error_texts = Vec::new();
     for part in &result.content {
