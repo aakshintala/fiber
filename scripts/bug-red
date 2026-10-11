@@ -15,9 +15,9 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 base=$1
-prhead=${2:-HEAD}
-if ! git cat-file -e "$prhead^{commit}" 2>/dev/null; then
-  echo "bug-red: $prhead is not a commit in this checkout"
+# Resolve to a SHA once: the one-commit check below compares SHAs.
+if ! prhead=$(git rev-parse --verify --quiet "${2:-HEAD}^{commit}"); then
+  echo "bug-red: ${2:-HEAD} is not a commit in this checkout"
   exit 1
 fi
 merge_base=$(git merge-base "$base" "$prhead")
