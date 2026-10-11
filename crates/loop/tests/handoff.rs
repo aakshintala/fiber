@@ -93,7 +93,6 @@ fn failed(code: ErrorCode) -> Scripted {
     })
 }
 
-#[track_caller]
 fn run(session: &mut Session, prompt: &str) -> (Option<TurnOutcome>, Vec<Envelope>) {
     session.inbox.send(delivery(prompt)).unwrap();
     let outcome = session.turn();

@@ -56,7 +56,6 @@ fn empty_rules() -> Result<StandingRules, RulesError> {
 }
 
 /// A workspace, a Fiber home and a credentials directory that all exist.
-#[track_caller]
 fn dirs() -> (fakes::TempDir, PathBuf, PathBuf, PathBuf) {
     let root = fakes::TempDir::new("fiber-permission");
     let workspace = root.path().join("ws");
@@ -201,7 +200,6 @@ fn a_fast_path_beats_a_grant_and_an_allow() {
 /// A machine data directory holding one Markdown file, for the ordering
 /// tests: the write below would take the fast path, so any other verdict
 /// proves an earlier step judged it.
-#[track_caller]
 fn data_markdown(home: &std::path::Path) -> String {
     std::fs::create_dir_all(home.join("data/n")).unwrap();
     let kept = home.join("data/n/x.md");

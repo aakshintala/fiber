@@ -67,7 +67,6 @@ fn asking() -> Asking {
 
 /// An answerable loop with an inbox wake when `woken`, holding its scratch
 /// directory alive in `home`.
-#[track_caller]
 fn looped(answerable: bool, woken: bool) -> (Loop, fakes::TempDir) {
     let home = fakes::TempDir::new("fiber-interactions-cancel");
     let workspace = home.path().join("workspace");
@@ -121,7 +120,6 @@ fn looped(answerable: bool, woken: bool) -> (Loop, fakes::TempDir) {
     (looped, home)
 }
 
-#[track_caller]
 fn durable(home: &fakes::TempDir) -> Vec<Envelope> {
     log::read(&home.path().join("s_test"))
         .unwrap()

@@ -525,7 +525,6 @@ fn a_thinking_level_is_recorded_and_sent_on_every_request() {
 }
 
 /// Bytes of the definitions a probe session sent in full.
-#[track_caller]
 fn definition_bytes(tools: Vec<std::sync::Arc<dyn contract::tool::Tool>>) -> u64 {
     let mut session = Session::windowed(vec![Scripted::text("Done.")], tools, 1_000_000);
     session.inbox.send(delivery("hi")).unwrap();
@@ -570,7 +569,6 @@ const TURN_KINDS: [&str; 12] = [
 
 /// The turn's event kinds and its notices' payloads, for a window of
 /// `window` tokens.
-#[track_caller]
 fn tool_turn(window: u64) -> (Vec<String>, Vec<Value>) {
     let mut session = Session::windowed(vec![Scripted::text("Done.")], two_tools(), window);
     session.inbox.send(delivery("hi")).unwrap();

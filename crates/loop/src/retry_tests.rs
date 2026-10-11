@@ -349,7 +349,6 @@ impl RetryRun {
     /// Starts a turn whose first call fails retryably and whose retry
     /// succeeds. The test clock advances on the first `now()` after
     /// `retry_scheduled` is appended.
-    #[track_caller]
     fn start(advance_before_park: Duration) -> Self {
         let home = fakes::TempDir::new("fiber-retry-deadline");
         let workspace = home.path().join("workspace");

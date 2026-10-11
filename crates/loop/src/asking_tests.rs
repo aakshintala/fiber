@@ -432,7 +432,6 @@ impl Wake for Awake {
 
 /// A loop with the fake clock, a 60 s idle delay and an open inbox: the
 /// clock and the sender stay alive in the test.
-#[track_caller]
 fn suspendable_loop() -> (
     Loop,
     fakes::TempDir,

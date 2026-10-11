@@ -26,7 +26,6 @@ struct Tree {
 }
 
 impl Tree {
-    #[track_caller]
     fn new() -> Self {
         let held = fakes::TempDir::new("fiber-commands");
         let root = held.path().canonicalize().unwrap();
@@ -44,7 +43,6 @@ impl Tree {
         self.root.join("home")
     }
 
-    #[track_caller]
     fn inputs(&self) -> PromptInputs {
         let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
         let mut inputs = PromptInputs::new(

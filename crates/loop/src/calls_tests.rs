@@ -103,7 +103,6 @@ fn a_later_tool_of_a_taken_name_replaces_the_earlier_and_is_recorded() {
 
 /// A fresh workspace, symlinks resolved, holding `real/` and a link `out`
 /// to a directory outside it, beside a Fiber home holding nothing yet.
-#[track_caller]
 fn workspace() -> (fakes::TempDir, PathBuf, PathBuf) {
     let root = fakes::TempDir::new("fiber-calls");
     let canon = root.path().canonicalize().unwrap();
@@ -184,7 +183,6 @@ fn executes_and_network_never_take_the_fast_path() {
 /// data directory `projects/k/data/n/`, with a link `out` to a directory
 /// outside the home, a link `link.md` to an outside Markdown file and a
 /// link `code.md` to a Lua file inside, beside a workspace elsewhere.
-#[track_caller]
 fn data_dirs() -> (fakes::TempDir, PathBuf, PathBuf) {
     let root = fakes::TempDir::new("fiber-data");
     let canon = root.path().canonicalize().unwrap();
@@ -366,7 +364,6 @@ impl Rules for FakeRules {
 
 /// A loop on a fresh log with the fakes clock, holding `rules`: the session
 /// is `s_test`. The returned directories keep the log's files alive.
-#[track_caller]
 fn start(rules: Arc<FakeRules>) -> (Loop, fakes::TempDir, PathBuf, PathBuf) {
     let home = fakes::TempDir::new("fiber-remember");
     let workspace = home.path().join("workspace");

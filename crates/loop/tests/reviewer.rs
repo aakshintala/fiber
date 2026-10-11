@@ -33,7 +33,6 @@ use support::{
 };
 
 /// Sends "go", runs one turn, and returns its lines.
-#[track_caller]
 fn go(session: &mut Session) -> Vec<Envelope> {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -98,7 +97,6 @@ fn kinds_next(middle: &[&str], reviews: usize) -> Vec<String> {
 
 /// One turn whose reply calls `shell` once, reviewed with `review`: the
 /// session, the tool, the reviewer and the turn's lines.
-#[track_caller]
 fn reviewed_turn(
     review: Vec<Scripted>,
 ) -> (Session, Arc<TestTool>, Arc<ScriptedProvider>, Vec<Envelope>) {

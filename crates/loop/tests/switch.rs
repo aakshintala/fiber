@@ -108,7 +108,6 @@ fn with_switch(session: &mut Session, prepare: Prepare, switchable: Switchable) 
     session.looped = Some(looped);
 }
 
-#[track_caller]
 fn run(session: &mut Session, prompt: &str) -> (Option<TurnOutcome>, Vec<Envelope>) {
     session.inbox.send(delivery(prompt)).unwrap();
     let outcome = session.turn();
@@ -1406,7 +1405,6 @@ fn hosted_in(request: &contract::provider::ModelRequest) -> Option<Option<String
 /// One session started with the hosted search of type `type_a`, switched
 /// between turns with `hosted`: the start's request, the switched
 /// request, and the switched turn's lines.
-#[track_caller]
 fn switch_hosted(
     hosted: impl Fn() -> Hosted + Send + Sync + 'static,
 ) -> (

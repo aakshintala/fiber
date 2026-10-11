@@ -26,7 +26,6 @@ fn clock() -> Arc<FakeClock> {
     FakeClock::new()
 }
 
-#[track_caller]
 fn inputs(home: &Path, clock: &Arc<FakeClock>) -> PromptInputs {
     let owned: Arc<FakeClock> = Arc::clone(clock);
     let clock: Arc<dyn contract::clock::Clock> = owned;
@@ -52,7 +51,6 @@ fn write(path: &Path, content: &str) {
     std::fs::write(path, content).unwrap();
 }
 
-#[track_caller]
 fn collected(home: &Path, workspace: &Path, clock: &Arc<FakeClock>) -> super::Collected {
     collect(&inputs(home, clock), workspace)
 }
@@ -872,7 +870,6 @@ fn notices_come_in_the_documented_order() {
     );
 }
 
-#[track_caller]
 fn section_inputs(
     home: &Path,
     clock: &Arc<FakeClock>,
@@ -1034,7 +1031,6 @@ fn size_notice_names_a_large_section_file() {
     );
 }
 
-#[track_caller]
 fn sectioned(
     home: &Path,
     workspace: &Path,

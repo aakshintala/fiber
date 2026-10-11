@@ -71,7 +71,6 @@ fn allow_rule(tool: &str) -> Rule {
 
 /// Session A after two turns: turn 1 answers "one-done", turn 2 calls both
 /// tools, then answers "two-done".
-#[track_caller]
 fn run_a() -> Session {
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::clone(&write_tool()) as Arc<dyn Tool>,
@@ -1007,7 +1006,6 @@ fn take_inbox(session: &mut Session) -> mpsc::Sender<Delivery> {
 
 /// Session A after two turns, with `id` as its session id: a session id a
 /// `from_session_id` can name.
-#[track_caller]
 fn run_a_with_id(id: &str) -> Session {
     let tools: Vec<Arc<dyn Tool>> = vec![
         Arc::clone(&write_tool()) as Arc<dyn Tool>,
@@ -1694,7 +1692,6 @@ fn a_rewind_naming_a_session_off_the_chain_is_refused() {
 
 /// Session A after two turns under a session id a `from_session_id` can
 /// name, with its two turn starts and the point B continues from.
-#[track_caller]
 fn run_chained_a() -> (Session, u64, u64, u64) {
     let session = run_a_with_id(A_ID);
     let lines = log::read(&session.dir).unwrap();

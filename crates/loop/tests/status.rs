@@ -30,7 +30,6 @@ use support::{DEADLINE, MODEL, Session, TestTool, delivery, ignore, tool_call_re
 /// The `session_status` lines from now on, up to and including the first one
 /// `until` accepts, with one [`DEADLINE`]. Takes the watcher and returns it
 /// with the lines.
-#[track_caller]
 fn statuses_until(
     watcher: Watcher,
     until: impl Fn(&Envelope) -> bool + Send + 'static,

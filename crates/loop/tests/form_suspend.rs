@@ -269,14 +269,12 @@ fn session(calls: &[&str], tools: Vec<Arc<dyn Tool>>, idle: Option<Duration>) ->
 type Finished = mpsc::Receiver<(Loop, Result<Option<TurnOutcome>, Error>)>;
 
 /// Sends a prompt and runs one turn on its own thread.
-#[track_caller]
 fn start(session: &mut Session) -> Finished {
     session.inbox.send(delivery("go")).unwrap();
     run_turn(session)
 }
 
 /// Runs one turn on its own thread.
-#[track_caller]
 fn run_turn(session: &mut Session) -> Finished {
     let mut looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
@@ -347,7 +345,6 @@ fn no_resolution(tap: &Tap) {
 
 /// Writes `fiber_exited` as the process does at exit, and returns every
 /// line of the session through it.
-#[track_caller]
 fn exit(session: &mut Session, signal: Option<i32>) -> Vec<Envelope> {
     r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, signal).unwrap();
     session.events_until("fiber_exited", |line| line.kind == "fiber_exited")

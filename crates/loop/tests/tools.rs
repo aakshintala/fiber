@@ -37,7 +37,6 @@ use support::{
 
 /// A session whose first reply makes `calls` and whose second says "Done.",
 /// with `tools` registered. Runs one turn and returns its lines.
-#[track_caller]
 fn turn(tools: Vec<Arc<dyn Tool>>, calls: &[(&str, Value)]) -> (Session, Vec<Envelope>) {
     let mut session = Session::with_tools(
         vec![calls_reply("", calls), Scripted::text("Done.")],

@@ -53,7 +53,6 @@ struct Listed {
 }
 
 impl Listed {
-    #[track_caller]
     fn new(ids: &[&str]) -> (Arc<Self>, Receiver<JobId>) {
         let (stops, stopped) = mpsc::channel();
         let listed = Arc::new(Self {
@@ -198,7 +197,6 @@ struct Held {
 }
 
 impl World {
-    #[track_caller]
     fn new(jobs: Arc<dyn Jobs>) -> Self {
         let home = fakes::TempDir::new("fiber-shutdown");
         let workspace = home.path().join("workspace");

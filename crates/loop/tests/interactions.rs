@@ -162,7 +162,6 @@ fn session(calls: &[&str], tools: Vec<Arc<dyn Tool>>) -> Session {
 }
 
 /// Runs one turn on its own thread.
-#[track_caller]
 fn spawn_turn(session: &mut Session) -> mpsc::Receiver<(Loop, Result<Option<TurnOutcome>, Error>)> {
     let mut looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
@@ -571,7 +570,6 @@ impl Tool for Answerable {
 
 /// Runs a turn whose one call reports `answerable`, and returns what it
 /// said; the log holds no interaction line.
-#[track_caller]
 fn answerable_in(mut session: Session) -> Value {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));

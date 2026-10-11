@@ -30,12 +30,10 @@ fn logged(message: &str) -> ExtensionLog {
     }
 }
 
-#[track_caller]
 fn diag_text(home: &fakes::TempDir) -> String {
     std::fs::read_to_string(home.path().join("logs").join("session-s_test.log")).unwrap_or_default()
 }
 
-#[track_caller]
 fn saved_kinds(home: &fakes::TempDir) -> Vec<String> {
     log::read(&home.path().join("s_test"))
         .unwrap_or_default()
@@ -58,13 +56,11 @@ fn exec(program: &str) -> ExtensionExec {
     }
 }
 
-#[track_caller]
 fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
     started_with(None)
 }
 
 /// [`started`] with `worktree` on `session_started`.
-#[track_caller]
 fn started_with(worktree: Option<Worktree>) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
     let home = fakes::TempDir::new("fiber-exec-inbox");
     let workspace = home.path().join("workspace");

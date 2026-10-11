@@ -24,7 +24,6 @@ struct Tree {
 }
 
 impl Tree {
-    #[track_caller]
     fn new() -> Self {
         let held = fakes::TempDir::new("fiber-skill-reader");
         let root = held.path().canonicalize().unwrap();
@@ -34,17 +33,14 @@ impl Tree {
         Self { _held: held, root }
     }
 
-    #[track_caller]
     fn top(&self) -> PathBuf {
         self.root.join("top")
     }
 
-    #[track_caller]
     fn home(&self) -> PathBuf {
         self.root.join("home")
     }
 
-    #[track_caller]
     fn inputs(&self) -> PromptInputs {
         let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
         let mut inputs = PromptInputs::new(
@@ -58,13 +54,11 @@ impl Tree {
         inputs
     }
 
-    #[track_caller]
     fn reader(&self) -> SkillReader {
         SkillSet::new(self.inputs(), &self.top()).reader()
     }
 }
 
-#[track_caller]
 fn skill(place: &Path, entry: &str, name: &str, description: &str) -> PathBuf {
     write(
         place,
@@ -73,7 +67,6 @@ fn skill(place: &Path, entry: &str, name: &str, description: &str) -> PathBuf {
     )
 }
 
-#[track_caller]
 fn write(place: &Path, entry: &str, text: &str) -> PathBuf {
     let dir = place.join(entry);
     std::fs::create_dir_all(&dir).unwrap();

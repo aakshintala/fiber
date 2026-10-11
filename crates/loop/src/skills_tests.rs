@@ -30,7 +30,6 @@ struct Tree {
 }
 
 impl Tree {
-    #[track_caller]
     fn new() -> Self {
         let held = fakes::TempDir::new("fiber-skills");
         let root = held.path().canonicalize().unwrap();
@@ -40,22 +39,18 @@ impl Tree {
         Self { _held: held, root }
     }
 
-    #[track_caller]
     fn top(&self) -> PathBuf {
         self.root.join("top")
     }
 
-    #[track_caller]
     fn home(&self) -> PathBuf {
         self.root.join("home")
     }
 
-    #[track_caller]
     fn person(&self) -> PathBuf {
         self.root.join("person")
     }
 
-    #[track_caller]
     fn inputs(&self) -> PromptInputs {
         let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
         let mut inputs = PromptInputs::new(
@@ -69,7 +64,6 @@ impl Tree {
         inputs
     }
 
-    #[track_caller]
     fn discover(&self) -> super::Discovered {
         discover(&self.inputs(), &self.top())
     }
@@ -77,7 +71,6 @@ impl Tree {
 
 /// Writes `<place>/<entry>/SKILL.md` with `name` and `description`, and
 /// returns its path.
-#[track_caller]
 fn skill(place: &Path, entry: &str, name: &str, description: &str) -> PathBuf {
     write(
         place,
@@ -86,7 +79,6 @@ fn skill(place: &Path, entry: &str, name: &str, description: &str) -> PathBuf {
     )
 }
 
-#[track_caller]
 fn write(place: &Path, entry: &str, text: &str) -> PathBuf {
     let dir = place.join(entry);
     std::fs::create_dir_all(&dir).unwrap();
@@ -234,7 +226,6 @@ fn the_name_is_the_headers_not_the_directorys() {
 }
 
 /// The six places in order, most specific first, under `tree`.
-#[track_caller]
 fn six_places(tree: &Tree) -> [PathBuf; 6] {
     let extension = tree.root.join("ext/acme");
     [
@@ -247,7 +238,6 @@ fn six_places(tree: &Tree) -> [PathBuf; 6] {
     ]
 }
 
-#[track_caller]
 fn with_extension(tree: &Tree) -> PromptInputs {
     let mut inputs = tree.inputs();
     inputs.extension_dirs = vec![("acme".into(), tree.root.join("ext/acme"))];
@@ -659,7 +649,6 @@ fn a_skill_the_model_may_not_load_adds_nothing_to_the_size() {
     assert_eq!(large(&found, 100), None);
 }
 
-#[track_caller]
 fn builtin_dir(tree: &Tree) -> PathBuf {
     tree.home().join("docs/skills")
 }
@@ -770,7 +759,6 @@ fn both_shipped_texts_parse_with_the_name_of_their_directory() {
 
 /// Writes the `review-pr` skill with body `Review it.` into the
 /// repository's `.agents/skills/`.
-#[track_caller]
 fn review_skill(tree: &Tree) {
     write(
         &tree.top().join(".agents/skills"),
@@ -783,7 +771,6 @@ fn text_only(text: &str) -> Vec<ContentPart> {
     vec![ContentPart::Text { text: text.into() }]
 }
 
-#[track_caller]
 fn expand_text(
     tree: &Tree,
     inputs: &PromptInputs,
@@ -1056,7 +1043,6 @@ fn the_session_commands_are_read_from_the_repository_top_level() {
 }
 
 /// `discover_cached` over `tree` with `cache`.
-#[track_caller]
 fn cached(tree: &Tree, cache: &mut Cache) -> super::Discovered {
     discover_cached(&tree.inputs(), &tree.top(), cache)
 }

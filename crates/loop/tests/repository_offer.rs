@@ -217,7 +217,6 @@ fn close(session: &Session) {
     session.inbox.send(Delivery::Close(ignore())).unwrap();
 }
 
-#[track_caller]
 fn until_kind(watcher: Watcher, kind: &'static str) -> (Watcher, Vec<Envelope>) {
     read_until(watcher, kind, move |line| line.kind == kind)
 }
@@ -964,7 +963,6 @@ impl support::History {
         (looped, tx)
     }
 
-    #[track_caller]
     fn of(&self, kind: &str) -> Vec<Envelope> {
         self.lines()
             .into_iter()
