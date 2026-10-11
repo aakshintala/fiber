@@ -30,7 +30,9 @@ const CASES: &[Case<Look>] = &[
         name: "confirm",
         help: "a one-question form with yes and no",
         check: "the approval slab with its stripe, the title with Esc right-aligned and no tab row, the question, yes and no, and Chat about this last with no Submit row.",
-        build: || Look { kind: Kind::Confirm },
+        build: || Look {
+            kind: Kind::Confirm,
+        },
     },
     Case {
         name: "select",
@@ -206,14 +208,7 @@ fn offer_rows(cols: usize) -> Vec<super::Row> {
 
 /// One option row: the cursor, its number, its mark, the label and its
 /// description, as the question form draws each option.
-fn opt_row(
-    cursor: bool,
-    n: usize,
-    mark: &str,
-    on: bool,
-    label: &str,
-    desc: &str,
-) -> super::Row {
+fn opt_row(cursor: bool, n: usize, mark: &str, on: bool, label: &str, desc: &str) -> super::Row {
     let mut ls = Style::new();
     if on {
         ls = ls.add_modifier(Modifier::BOLD);
@@ -603,9 +598,7 @@ mod tests {
             assert!(cursor.contains("Extension notes"), "cursor not on {cursor}");
             // A package's TUI files are never installed from a repository.
             assert!(
-                t.contains(
-                    "A package's TUI files are never installed from a repository."
-                ),
+                t.contains("A package's TUI files are never installed from a repository."),
                 "no TUI-files sentence"
             );
             assert!(
@@ -653,7 +646,10 @@ mod tests {
         let rows = offer_diff_rows();
         assert_eq!(rows.len(), 5);
         let plain = |r: &crate::Row| {
-            r.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+            r.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
         };
         let removal = rows.iter().find(|r| plain(r).contains("read")).unwrap();
         assert_eq!(removal.spans[0].style.fg, Some(RED));
@@ -806,7 +802,10 @@ mod tests {
     #[test]
     fn submit_and_chat_rows_carry_their_tints() {
         let plain = |r: &crate::Row| {
-            r.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+            r.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
         };
         for kind in [Kind::MultiSelect, Kind::TextInput] {
             let rows = form_rows(kind);
@@ -818,8 +817,7 @@ mod tests {
             );
             let chat = rows.iter().rfind(|r| plain(r).contains("Chat")).unwrap();
             assert!(
-                chat
-                    .spans
+                chat.spans
                     .iter()
                     .any(|s| s.content.contains("Chat about this") && s.style.bg == Some(SEL)),
                 "Chat without its tint"
