@@ -32,7 +32,7 @@ jobs:
   profile:
     runs-on: ubuntu-24.04
     # No history yet; generous until a few runs set a median. The job builds
-    # fiber, the paging jig and inferno cold, then runs the timing benchmarks
+    # fiber and inferno cold, then runs the timing benchmarks
     # under perf.
     timeout-minutes: 60
     env:
@@ -90,16 +90,12 @@ jobs:
           CARGO_PROFILE_RELEASE_STRIP: none
         run: cargo build --release --locked --target "$FIBER_TARGET" --bin fiber
 
-      - name: Build the paging jig
-        env:
-          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
-          CARGO_PROFILE_RELEASE_STRIP: none
-        run: cargo build --release --locked --target "$FIBER_TARGET" -p tui --example paging
-
       # The harness is built in the debug profile, as the Release job builds it.
       - name: Build the benchmark harness
         run: cargo build -p bench --example bench
 
+      # No --paging: the paging rows are not attach, and their jig took two thirds of
+      # the samples on the first run.
       # cpu-clock, not the default hardware event: a runner's VM has no PMU counters.
       # -g --call-graph dwarf unwinds through the binaries' line tables; perf follows
       # the child processes the harness spawns. A failed run still uploads what it wrote.
@@ -111,16 +107,19 @@ jobs:
           perf record -e cpu-clock -F 499 -g --call-graph dwarf -o "$out/perf.data" -- \
             target/debug/examples/bench \
             --fiber "$PWD/target/$FIBER_TARGET/release/fiber" \
-            --paging "$PWD/target/$FIBER_TARGET/release/examples/paging" \
             --out "$out/bench.json" --only timing || status=$?
           echo "bench exited $status"
           # The harness exits 0 with a failed workload recorded in its file, so only a
           # missing file is a failed run here.
           test -s "$out/bench.json"
-          # Stacks of every process, then of the fiber processes alone (the harness
-          # and the paging jig are the other comms).
+          # Stacks of every process, then of the fiber processes alone with all their
+          # threads: --comm matches thread names (hub-relay, writer, tui-hub, ...), so
+          # select the process ids of any sample whose thread is named fiber (the main thread).
           perf script -i "$out/perf.data" | inferno-collapse-perf > "$out/folded.txt"
-          perf script -i "$out/perf.data" --comm fiber | inferno-collapse-perf > "$out/fiber-folded.txt"
+          pids=$(perf script -i "$out/perf.data" -F pid,tid,comm |
+            awk '$3 == "fiber" { print $1 }' | sort -u | paste -sd, -)
+          test -n "$pids"
+          perf script -i "$out/perf.data" --pid "$pids" | inferno-collapse-perf > "$out/fiber-folded.txt"
           inferno-flamegraph < "$out/folded.txt" > "$out/flamegraph.svg"
           inferno-flamegraph < "$out/fiber-folded.txt" > "$out/fiber-flamegraph.svg"
           exit "$status"
