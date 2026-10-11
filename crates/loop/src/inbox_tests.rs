@@ -399,3 +399,114 @@ fn interaction_lines_while_an_approval_waits_are_written_and_the_wait_goes_on() 
     assert_eq!(first.kind, "interaction_requested");
     assert_eq!(second.kind, "interaction_resolved");
 }
+
+fn ignore() -> Ack {
+    Ack(Box::new(|_| {}))
+}
+
+fn reply(request_id: &str) -> Delivery {
+    Delivery::Reply(
+        contract::commands::Reply {
+            request_id: RequestId(request_id.into()),
+            answer: contract::commands::ReplyAnswer::Approval {
+                decision: contract::events::Decision::Allow,
+                feedback: None,
+                remember: None,
+            },
+        },
+        ignore(),
+    )
+}
+
+fn prompt() -> Delivery {
+    Delivery::Prompt(
+        contract::inbox::Message {
+            content: Vec::new(),
+            sender: contract::shapes::Sender {
+                origin: contract::shapes::Origin::Driver,
+                command_id: None,
+            },
+        },
+        ignore(),
+    )
+}
+
+fn steer() -> Delivery {
+    Delivery::Steer(
+        contract::inbox::Message {
+            content: Vec::new(),
+            sender: contract::shapes::Sender {
+                origin: contract::shapes::Origin::Driver,
+                command_id: None,
+            },
+        },
+        ignore(),
+    )
+}
+
+fn close() -> Delivery {
+    Delivery::Close(ignore())
+}
+
+fn held_kinds(looped: &Loop) -> Vec<&str> {
+    looped
+        .deferred
+        .iter()
+        .map(|held| match held {
+            Delivery::Prompt(..) => "prompt",
+            Delivery::Steer(..) => "steer",
+            Delivery::Reply(reply, _) => {
+                if reply.request_id.0 == "r_1" {
+                    "reply r_1"
+                } else {
+                    "reply other"
+                }
+            }
+            Delivery::Close(_) => "close",
+            Delivery::SteerDrop(..)
+            | Delivery::Model(..)
+            | Delivery::Credential(..)
+            | Delivery::Rewind(..)
+            | Delivery::Handoff(..)
+            | Delivery::Job(_)
+            | Delivery::JobLine(_)
+            | Delivery::ExtensionExec(_)
+            | Delivery::ExtensionLog(_)
+            | Delivery::Interaction(_)
+            | Delivery::Resolved(..)
+            | Delivery::Cancelled => "other",
+        })
+        .collect()
+}
+
+#[test]
+fn take_held_answer_returns_the_matching_reply_and_keeps_the_rest_in_order() {
+    let (mut looped, _log, _watched, _home) = started();
+    looped.deferred.push_back(prompt());
+    looped.deferred.push_back(steer());
+    looped.deferred.push_back(reply("r_2"));
+    looped.deferred.push_back(reply("r_1"));
+    let taken = looped.take_held_answer(&RequestId("r_1".into()));
+    assert!(matches!(taken, Some(Delivery::Reply(reply, _)) if reply.request_id.0 == "r_1"));
+    assert_eq!(held_kinds(&looped), ["prompt", "steer", "reply other"]);
+}
+
+#[test]
+fn take_held_answer_prefers_an_earlier_close_to_a_later_reply() {
+    let (mut looped, _log, _watched, _home) = started();
+    looped.deferred.push_back(reply("r_9"));
+    looped.deferred.push_back(close());
+    looped.deferred.push_back(reply("r_1"));
+    let taken = looped.take_held_answer(&RequestId("r_1".into()));
+    assert!(matches!(taken, Some(Delivery::Close(_))));
+    assert_eq!(held_kinds(&looped), ["reply other", "reply r_1"]);
+}
+
+#[test]
+fn take_held_answer_with_only_stale_replies_returns_none_and_keeps_them() {
+    let (mut looped, _log, _watched, _home) = started();
+    looped.deferred.push_back(reply("r_9"));
+    looped.deferred.push_back(reply("r_8"));
+    assert!(looped.take_held_answer(&RequestId("r_1".into())).is_none());
+    assert_eq!(held_kinds(&looped), ["reply other", "reply other"]);
+}

@@ -142,36 +142,17 @@ impl Loop {
             return Ok(None);
         };
         raised?;
-        let calls = self.form_batch(batch, &action);
+        let calls = form_batch(
+            batch,
+            &action,
+            || Err(self.cancelled_before_ran()),
+            |call| {
+                self.checked(call)
+                    .map(|(tool, arguments, effects)| (tool, arguments, effects.declared))
+            },
+        );
         let cancelled = self.run_batch(calls, &turn, Some((action, request)))?;
         self.finish_batch(&turn, cancelled)
-    }
-
-    /// The finishing turn's batch: the calls before `action` complete
-    /// `cancelled` without running, `action` runs as it was allowed, and the
-    /// calls after it are judged as in any step.
-    fn form_batch(
-        &self,
-        batch: Vec<(ActionId, ToolCallRequested)>,
-        action: &ActionId,
-    ) -> Vec<(ActionId, ToolCallRequested, Option<Decided>)> {
-        let mut before = true;
-        let mut calls = Vec::with_capacity(batch.len());
-        for (id, call) in batch {
-            let already = if id == *action {
-                before = false;
-                Some(
-                    self.checked(&call)
-                        .map(|(tool, arguments, effects)| (tool, arguments, effects.declared)),
-                )
-            } else if before {
-                Some(Err(self.cancelled_before_ran()))
-            } else {
-                None
-            };
-            calls.push((id, call, already));
-        }
-        calls
     }
 
     /// The finishing turn after its batch. The idle delay passing in it
@@ -203,3 +184,36 @@ impl Loop {
         self.run_steps(turn)
     }
 }
+
+/// The finishing turn's batch: the calls before `action` get `before`,
+/// the action gets `decide` of its call, and the calls after it are judged
+/// as in any step. `decide` runs once, at the first entry naming the
+/// action: a later duplicate names an id no call holds decisions for, so
+/// it gets `None` like any later call. With no `action` in the batch every
+/// entry gets `before` and `decide` never runs.
+pub(crate) fn form_batch(
+    batch: Vec<(ActionId, ToolCallRequested)>,
+    action: &ActionId,
+    before: impl Fn() -> Decided,
+    decide: impl FnOnce(&ToolCallRequested) -> Decided,
+) -> Vec<(ActionId, ToolCallRequested, Option<Decided>)> {
+    let mut decide = Some(decide);
+    let mut at_action = false;
+    let mut calls = Vec::with_capacity(batch.len());
+    for (id, call) in batch {
+        let already = if id == *action {
+            at_action = true;
+            decide.take().map(|decide| decide(&call))
+        } else if at_action {
+            None
+        } else {
+            Some(before())
+        };
+        calls.push((id, call, already));
+    }
+    calls
+}
+
+#[cfg(test)]
+#[path = "suspend_tests.rs"]
+mod tests;

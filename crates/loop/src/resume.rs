@@ -482,21 +482,15 @@ impl Loop {
                 return Ok(None);
             };
             refused?;
-            let mut decision: Option<Decided> =
-                Some(Err(crate::completion::denied("credentials", text)));
-            let mut before = true;
-            let mut calls = Vec::with_capacity(suspended.batch.len());
-            for (id, call) in suspended.batch {
-                let already = if id == suspended.action {
-                    before = false;
-                    decision.take()
-                } else if before {
-                    Some(Err(self.cancelled_before_ran()))
-                } else {
-                    None
-                };
-                calls.push((id, call, already));
-            }
+            // The refusal stands as decided: it is passed as is, never
+            // re-checked into an allow.
+            let decision: Decided = Err(crate::completion::denied("credentials", text));
+            let calls = crate::suspend::form_batch(
+                suspended.batch,
+                &suspended.action,
+                || Err(self.cancelled_before_ran()),
+                |_| decision,
+            );
             let cancelled = self.run_batch(calls, &turn, None)?;
             return self.finish_batch(&turn, cancelled);
         }
@@ -586,20 +580,12 @@ impl Loop {
             // (`docs/events.md`, `permission_resolved`).
             Asked::Closed => Err(crate::calls::no_person()),
         };
-        let mut decision = Some(decision);
-        let mut before = true;
-        let mut calls = Vec::with_capacity(batch.len());
-        for (id, call) in batch {
-            let already = if id == action {
-                before = false;
-                decision.take()
-            } else if before {
-                Some(Err(self.cancelled_before_ran()))
-            } else {
-                None
-            };
-            calls.push((id, call, already));
-        }
+        let calls = crate::suspend::form_batch(
+            batch,
+            &action,
+            || Err(self.cancelled_before_ran()),
+            |_| decision,
+        );
         let cancelled = self.run_batch(calls, &turn, None)?;
         self.finish_batch(&turn, cancelled)
     }
