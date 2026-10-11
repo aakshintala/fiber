@@ -2,7 +2,8 @@
 #![allow(clippy::panic, reason = "the test's wait deadline is its failure")]
 
 use std::fs;
-use std::sync::Arc;
+use std::net::{Ipv4Addr, TcpListener};
+use std::sync::{Arc, Mutex, mpsc};
 
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -273,8 +274,44 @@ fn a_stored_login_prints_redacted() {
     assert!(!format!("{:?}", logged).contains("rt"), "{:?}", logged);
 }
 
-/// An attended browser that opens nothing.
-struct AttendedBrowser;
+/// An attended browser holding a listener it bound at port 0 and never
+/// released, handed to the package through `callback_listener`: choosing
+/// and binding leave no gap for another listener.
+struct AttendedBrowser {
+    listener: Mutex<Option<TcpListener>>,
+    taken: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+impl AttendedBrowser {
+    /// A browser holding its port-0 listener.
+    fn holding() -> Arc<Self> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        Arc::new(Self {
+            listener: Mutex::new(Some(listener)),
+            taken: Mutex::new(None),
+        })
+    }
+
+    /// The held callback port: the package's port once installed with it.
+    fn port(&self) -> u16 {
+        self.listener
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port()
+    }
+
+    /// Reports when the package takes the held listener: waiting on it
+    /// proves `listen` bound before a stop lands.
+    fn take_signal(&self) -> mpsc::Receiver<()> {
+        let (tx, rx) = mpsc::channel();
+        *self.taken.lock().unwrap() = Some(tx);
+        rx
+    }
+}
 
 impl crate::oauth::Browser for AttendedBrowser {
     fn open(&self, _url: &str) {}
@@ -282,22 +319,24 @@ impl crate::oauth::Browser for AttendedBrowser {
     fn attended(&self) -> bool {
         true
     }
-}
-
-/// A free localhost port, bound and released at once.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    fn callback_listener(&self, port: u16) -> std::io::Result<TcpListener> {
+        if let Some(taken) = self.taken.lock().unwrap().take() {
+            match taken.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        if let Some(listener) = self.listener.lock().unwrap().take() {
+            return Ok(listener);
+        }
+        TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+    }
 }
 
 /// An extension whose `credential()` parks in `host.oauth.callback` on `port`.
 fn waiting_provider(
     name: &str,
     port: u16,
-    browser: std::sync::Arc<dyn crate::oauth::Browser>,
+    browser: Arc<AttendedBrowser>,
 ) -> (fakes::TempDir, std::sync::Arc<LuaProvider>) {
     let root = fakes::TempDir::new(name);
     let home = root.path().join("home");
@@ -322,28 +361,15 @@ fn waiting_provider(
     (root, LuaProvider::new(extension, "p"))
 }
 
-/// Waits until `port` accepts a connection, within the wall deadline: the
-/// callback listener bound, so the login parks there.
-#[track_caller]
-fn await_listening(port: u16) {
-    let deadline = std::time::Duration::from_secs(10);
-    fakes::within("the callback to listen", deadline, move || {
-        loop {
-            if std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).is_ok() {
-                return;
-            }
-            std::thread::yield_now();
-        }
-    });
-}
-
 #[test]
 fn stop_while_a_login_waits_on_its_callback_ends_it_and_frees_the_port() {
-    let port = free_port();
+    let browser = AttendedBrowser::holding();
+    let port = browser.port();
+    let taken = browser.take_signal();
     let (_root, provider) = waiting_provider(
         "fiber-provider-login-stop",
-        port,
-        std::sync::Arc::new(AttendedBrowser),
+        browser.port(),
+        Arc::clone(&browser),
     );
     let (done, finished) = std::sync::mpsc::channel();
     let waiting = std::sync::Arc::clone(&provider);
@@ -353,7 +379,10 @@ fn stop_while_a_login_waits_on_its_callback_ends_it_and_frees_the_port() {
             Ok(()) | Err(_) => {}
         }
     });
-    await_listening(port);
+    // Taken, so `listen` bound: a stop now ends the wait instead of
+    // racing its start, which would leave the held listener behind.
+    Deadline::after(std::time::Duration::from_secs(10))
+        .recv_or_fail(&taken, "the package to take the callback listener");
     provider.stop();
     let result = Deadline::after(std::time::Duration::from_secs(10))
         .recv(&finished)
@@ -377,11 +406,17 @@ fn stop_while_a_login_waits_on_its_callback_ends_it_and_frees_the_port() {
 fn a_login_started_after_stop_runs_no_credential() {
     use std::time::Duration;
     const WAIT: Duration = Duration::from_secs(4);
-    let port = free_port();
+    // Held, never released: the stopped login never binds, so the port
+    // only names it, and freeing it at the end proves nothing listened.
+    let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = held.local_addr().unwrap().port();
     let (_root, provider) = waiting_provider(
         "fiber-provider-login-after-stop",
         port,
-        std::sync::Arc::new(AttendedBrowser),
+        Arc::new(AttendedBrowser {
+            listener: Mutex::new(None),
+            taken: Mutex::new(None),
+        }),
     );
     provider.stop();
     // A second stop is idempotent: no panic, still stopped.
@@ -400,6 +435,7 @@ fn a_login_started_after_stop_runs_no_credential() {
         .recv(&finished)
         .unwrap_or_else(|_| panic!("the login after stop did not return within {WAIT:?}"))
         .unwrap_err();
+    drop(held);
     assert!(
         std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok(),
         "credential() ran after stop and bound the port"
