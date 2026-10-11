@@ -99,6 +99,41 @@ fn each_row_reports_its_join_and_skip() {
 }
 
 #[test]
+fn a_line_number_wider_than_four_columns_widens_its_gutter() {
+    let block = |lines: usize| {
+        let code: String = (1..=lines).map(|n| format!("l{n}\n")).collect();
+        super::super::render(&format!("```\n{code}```"), 24)
+    };
+    // An edge row, the header, one row per code line, then the edge.
+    let narrow = block(9_999);
+    assert_eq!(narrow.text.len(), narrow.lines.len());
+    assert_eq!(
+        narrow.lines[2 + 9998].to_string(),
+        format!("9999  l9999{}", " ".repeat(13))
+    );
+    assert_eq!(narrow.text[2 + 9998].skip, 6);
+    // Past four digits every row in the block widens, keeping the
+    // numbers aligned.
+    let wide = block(10_000);
+    assert_eq!(
+        wide.lines[2 + 9998].to_string(),
+        format!(" 9999  l9999{}", " ".repeat(12))
+    );
+    assert_eq!(
+        wide.lines[2 + 9999].to_string(),
+        format!("10000  l10000{}", " ".repeat(11))
+    );
+    assert_eq!(wide.text[2 + 9998].skip, 7);
+    assert_eq!(wide.text[2 + 9999].skip, 7);
+    let wider = block(100_000);
+    assert_eq!(
+        wider.lines[2 + 99999].to_string(),
+        format!("100000  l100000{}", " ".repeat(9))
+    );
+    assert_eq!(wider.text[2 + 99999].skip, 8);
+}
+
+#[test]
 fn a_table_row_is_a_break_with_no_skip() {
     let rows = rows("| a | b |\n|---|---|\n| c | d |", 20);
     assert!(rows.len() >= 3, "{rows:?}");

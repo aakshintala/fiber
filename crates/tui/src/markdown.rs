@@ -469,6 +469,8 @@ impl Writer {
                 .map(|line| vec![(Role::CodeText, line.to_owned())])
                 .collect()
         });
+        // The number's columns fit every line, four at minimum.
+        let digits = runs.len().to_string().len().max(NUMBER_WIDTH);
         for (at, line) in runs.iter().enumerate() {
             let mut cells = Vec::new();
             for (role, text) in line {
@@ -487,11 +489,13 @@ impl Writer {
                     }
                 }
             }
-            // The number right-aligned in four columns, then two spaces.
-            let number = format!("{:>width$}  ", at.saturating_add(1), width = NUMBER_WIDTH);
-            let first = [Span::styled(number, tinted(Role::Rule))];
-            let rest = [Span::styled(" ".repeat(GUTTER), tinted(Role::Rule))];
-            let gutter = u16::try_from(GUTTER).unwrap_or(u16::MAX);
+            // The number right-aligned in its columns, then two spaces;
+            // each row skips its own prefix.
+            let number = format!("{:>width$}  ", at.saturating_add(1), width = digits);
+            let first = [Span::styled(number.clone(), tinted(Role::Rule))];
+            let gutter_cells = cells_width(&number);
+            let rest = [Span::styled(" ".repeat(gutter_cells), tinted(Role::Rule))];
+            let gutter = u16::try_from(gutter_cells).unwrap_or(u16::MAX);
             let mut rows = wrap(&cells, width, &first, &rest, false);
             if rows.is_empty() {
                 rows.push((Line::from(first.to_vec()), Join::Break));
@@ -507,9 +511,7 @@ impl Writer {
     }
 }
 
-/// The line number's columns with its two spaces.
-const GUTTER: usize = 6;
-/// The line number's columns without its two spaces.
+/// The line number's minimum columns, without its two spaces.
 const NUMBER_WIDTH: usize = 4;
 
 /// The `copy` label's cells on a header row `width` wide: its last
