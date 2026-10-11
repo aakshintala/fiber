@@ -224,7 +224,7 @@ impl Loop {
             if idle.is_some_and(|at| clock.now() >= at) {
                 // Anything already queued is taken first, as the idle wait
                 // takes it.
-                match self.inbox.try_recv() {
+                match self.last_idle_check() {
                     Ok(delivery) => {
                         return self.take_while_asked(delivery, calls, turn).map(|()| false);
                     }

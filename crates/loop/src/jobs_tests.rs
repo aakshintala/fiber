@@ -22,7 +22,7 @@ use contract::events::{
     Decision, DelegateFinished, JobCompleted, Outcome, Parent, ToolCallArgumentsDelta,
     ToolCallRequested, TurnOutcome,
 };
-use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message};
+use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, SessionMessage};
 use contract::jobs::{Jobs, OpenError};
 use contract::provider::{
     Delta, Input, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition,
@@ -165,6 +165,31 @@ fn message(text: &str, command: &str) -> Message {
             command_id: Some(CommandId(command.into())),
         },
     }
+}
+
+/// What a session message from `s_0123456789abcdef`, named `builder`,
+/// saying `Tests pass on main.` renders as once framed.
+const FRAMED: &str = "Fiber: a message from session s_0123456789abcdef, named \"builder\". Another session wrote it, not the person.\n\nTests pass on main.";
+
+/// A session message from another session, sent by `command`.
+fn session_message(command: &str) -> Delivery {
+    Delivery::Message(SessionMessage {
+        from_session_id: SessionId("s_0123456789abcdef".into()),
+        command_id: CommandId(command.into()),
+        text: "Tests pass on main.".into(),
+        name: Some("builder".into()),
+    })
+}
+
+/// `turn_started`'s input for one session message sent by `command`.
+fn message_input(command: &str) -> Value {
+    json!([{
+        "type": "message",
+        "source": "session",
+        "from_session_id": "s_0123456789abcdef",
+        "command_id": command,
+        "content": [{"type": "text", "text": FRAMED}],
+    }])
 }
 
 fn ignore() -> Ack {
@@ -1200,6 +1225,55 @@ fn a_notice_kept_by_a_cancelled_turn_starts_the_next_one() {
     assert!(!kinds(&watched).contains(&"steering_queue"));
 }
 
+#[test]
+fn a_session_message_kept_by_a_cancelled_turn_runs_after_close_with_no_jobs() {
+    let (steered, steer_answer) = mpsc::channel();
+    let mut world = World::new(
+        vec![calls("gated"), Scripted::text("Seen.")],
+        vec![
+            Vec::new(),
+            vec![Delivery::Steer(
+                message("And this.", "c_and"),
+                reported(steered),
+            )],
+        ],
+        |_| vec![Arc::new(Gated)],
+    );
+    let cancel = Arc::clone(&world.looped.as_ref().unwrap().cancel);
+    let answered = on_request(&world.log, {
+        let inbox = world.inbox.clone();
+        move |_| {
+            // The message queues while the approval waits; the cancel ends
+            // the turn with it still queued.
+            inbox.send(session_message("c_message")).unwrap();
+            assert!(cancel.cancel());
+            inbox.send(Delivery::Cancelled).unwrap();
+        }
+    });
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Interrupted));
+    answered.join().unwrap();
+    let cut = world.turn_lines();
+    assert!(!kinds(&cut).contains(&"steering_applied"), "{cut:?}");
+    assert_eq!(cut.last().unwrap().kind, "turn_completed");
+    let _first = world.watched();
+    // The close ends the wait for a turn; the kept message starts one
+    // after it, while the person's steer in it is refused.
+    world.send(Delivery::Close(ignore()));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(steer_answer.recv_timeout(DEADLINE), Ok(false));
+    let lines = world.turn_lines();
+    assert_eq!(lines[0].payload["input"], message_input("c_message"));
+    // The queue moved into `turn_started`: it is listed empty first.
+    let watched = world.watched();
+    assert_eq!(kinds(&watched)[0], "steering_queue");
+    assert_eq!(watched[0].payload["messages"], json!([]));
+    assert_eq!(kinds(&watched)[1], "turn_started");
+    let requests = world.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(users(&requests[1]).last(), Some(&FRAMED.to_owned()));
+}
+
 // Ending with jobs running (`docs/tools.md`, "Background jobs").
 
 /// What the ending notice reads for `ids`.
@@ -1817,6 +1891,106 @@ fn a_steer_while_idle_arms_the_check_again() {
 }
 
 #[test]
+fn a_session_message_while_idle_does_not_arm_the_check_again() {
+    let world = World::new(
+        vec![
+            Scripted::text("Checked."),
+            Scripted::text("Noted."),
+            Scripted::text("Seen."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let finished = world.spawn_run();
+    assert!(clock.await_parked(origin + IDLE, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    assert_check(&world.next_turn(), &id);
+    // A session message is neither a prompt nor a steer, so it leaves the
+    // check given (`docs/invocation.md`, "Lifecycle").
+    world.send(session_message("c_message"));
+    let turn = world.next_turn();
+    assert_eq!(kinds(&turn), one_step_with(&[]));
+    assert_eq!(turn[0].payload["input"], message_input("c_message"));
+    // Past another delay no second check comes due: the wait holds no
+    // deadline while the job runs.
+    let m1 = clock.advance_marked(IDLE);
+    world.send(Delivery::Cancelled);
+    assert!(
+        clock.await_parked_since(&m1, None, DEADLINE),
+        "a session message leaves the check given: {:?}",
+        clock.parked()
+    );
+    (job.end.0)(failed(&id));
+    assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    ran(&finished);
+    assert_eq!(world.requests().len(), 3);
+    let requests = world.requests();
+    assert_eq!(users(&requests[1]).last(), Some(&FRAMED.to_owned()));
+}
+
+#[test]
+fn a_session_message_in_the_check_turn_does_not_arm_the_check_again() {
+    let world = World::new(
+        vec![
+            Scripted::text("Checked."),
+            Scripted::text("Noted."),
+            Scripted::text("Seen."),
+        ],
+        vec![vec![session_message("c_message")]],
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let finished = world.spawn_run();
+    assert!(clock.await_parked(origin + IDLE, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    // The message joins the check turn at its next step boundary, applied
+    // without arming the check again.
+    let check = world.next_turn();
+    let mut steered = one_step_with(&["jobs_pending_notified"]);
+    steered.pop();
+    steered.extend(["step_started", "steering_applied"]);
+    steered.extend(REPLY);
+    assert_eq!(kinds(&check), steered);
+    assert_check(&check, &id);
+    let applied = check
+        .iter()
+        .find(|line| line.kind == "steering_applied")
+        .expect("the message applies");
+    assert_eq!(applied.payload["source"], "session");
+    assert_eq!(applied.payload["command_id"], "c_message");
+    assert_eq!(applied.payload["content"][0]["text"], json!(FRAMED));
+    // Past another delay no second check comes due.
+    let m1 = clock.advance_marked(IDLE);
+    world.send(Delivery::Cancelled);
+    assert!(
+        clock.await_parked_since(&m1, None, DEADLINE),
+        "a session message leaves the check given: {:?}",
+        clock.parked()
+    );
+    (job.end.0)(failed(&id));
+    assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    ran(&finished);
+    assert_eq!(world.requests().len(), 3);
+}
+
+#[test]
 fn a_jobs_end_does_not_arm_the_check_again() {
     let world = World::new(
         vec![
@@ -2239,6 +2413,63 @@ fn the_turn_in_flight_when_close_arrives_still_takes_a_steer() {
     assert_eq!(kinds(&turn), expected);
     ran(&finished);
     assert_eq!(world.requests().len(), 2);
+    assert_eq!(durable_kinds(&world), session_of(&[expected]));
+}
+
+#[test]
+fn a_session_message_taken_with_close_in_one_idle_batch_runs_its_turn() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    world.send(session_message("c_message"));
+    world.send(Delivery::Close(ignore()));
+    let finished = world.spawn_run();
+    ran(&finished);
+    // The message starts the turn the close ends the run after.
+    assert_eq!(durable_kinds(&world), session_of(&[one_step_with(&[])]));
+    let lines = world.turn_lines();
+    assert_eq!(lines[0].payload["input"], message_input("c_message"));
+    let requests = world.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(users(&requests[0]).last(), Some(&FRAMED.to_owned()));
+}
+
+#[test]
+fn a_session_message_queued_before_close_is_applied_by_the_turn_in_flight() {
+    let world = World::new(
+        vec![Scripted::text("Hi."), Scripted::text("Steered.")],
+        vec![vec![
+            session_message("c_message"),
+            Delivery::Close(ignore()),
+        ]],
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(prompt("Hello."));
+    let finished = world.spawn_run();
+    let turn = world.next_turn();
+    let mut expected = vec![
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "step_started",
+        "steering_applied",
+    ];
+    expected.extend_from_slice(&REPLY);
+    assert_eq!(kinds(&turn), expected);
+    let applied = turn
+        .iter()
+        .find(|line| line.kind == "steering_applied")
+        .expect("the message applies");
+    assert_eq!(applied.payload["source"], "session");
+    assert_eq!(applied.payload["command_id"], "c_message");
+    assert_eq!(applied.payload["content"][0]["text"], json!(FRAMED));
+    ran(&finished);
+    let requests = world.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(users(&requests[1]).last(), Some(&FRAMED.to_owned()));
     assert_eq!(durable_kinds(&world), session_of(&[expected]));
 }
 

@@ -137,6 +137,9 @@ impl Loop {
             }
         };
         self.write_last_settled()?;
+        // No session message enters after this: one admitted before it and
+        // still behind the `rewind` is dropped with the drain below.
+        self.close_admission();
         let new_session_id = SessionId(crate::mint("s_"));
         // `rewound` names the point's session only for an ancestor point:
         // for this session's own point the key is absent.
@@ -226,6 +229,7 @@ pub(crate) fn refuse_after_rewound(delivery: Delivery) {
         | Delivery::Rewind(_, ack) => reject(ack, ErrorCode::Closing, REWOUND_CLOSING),
         Delivery::Job(_)
         | Delivery::JobLine(_)
+        | Delivery::Message(_)
         | Delivery::ExtensionExec(_)
         | Delivery::Interaction(_)
         | Delivery::ExtensionLog(_)

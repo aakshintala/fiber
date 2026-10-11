@@ -12,6 +12,8 @@
 
 mod support;
 
+extern crate support as ext_support;
+
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
@@ -21,7 +23,7 @@ use contract::commands::RewindArgs;
 use contract::events::{
     CommandResult, Parent, SessionStarted, TurnOutcome, Variables, VariablesSource,
 };
-use contract::inbox::{Answer, Delivery, Rejection};
+use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::provider::Input;
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, Origin, Point, Sender, Worktree};
@@ -1177,6 +1179,73 @@ fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     let after = log::read(&session.dir).unwrap();
     assert_eq!(after.len(), count, "`run` writes nothing after `rewound`");
     assert_eq!(after.last().unwrap().kind, "rewound");
+}
+
+#[test]
+fn a_message_after_rewound_is_refused() {
+    let mut session = run_a();
+    let admission = Arc::new(ext_support::admission::Admission::default());
+    let looped = session
+        .looped
+        .take()
+        .unwrap()
+        .admission(Arc::clone(&admission));
+    session.looped = Some(looped);
+    // The rewind answers through an ack that probes admission first: the
+    // flag is already set before any client learns of `rewound`.
+    let (tx, answered) = mpsc::channel();
+    let (probe_tx, probe_rx) = mpsc::channel();
+    let probing = Arc::clone(&admission);
+    let ack = Ack(Box::new(move |answer| {
+        let mut called = false;
+        let done = probing.admit(|| {
+            called = true;
+        });
+        probe_tx.send((done.is_some(), called)).unwrap();
+        tx.send(answer).unwrap();
+    }));
+    let rw = Delivery::Rewind(args(None, None, false, vec![]), ack);
+    let looped = session.looped.take().unwrap();
+    let (looped, outcome) = drive(looped, &session.inbox, rw);
+    session.looped = Some(looped);
+    let new = accepted(answer_of(answered));
+    assert_minted(&new);
+    assert_eq!(outcome, None, "no turn starts after the rewind");
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&probe_rx),
+        Ok((false, false)),
+        "admission closed under the ack, with the send never running"
+    );
+    // The process ends with nothing more written, and admission stays shut.
+    session.looped.take().unwrap().run().unwrap();
+    let mut called = false;
+    let done = admission.admit(|| {
+        called = true;
+    });
+    assert!(done.is_none());
+    assert!(!called);
+}
+
+#[test]
+fn a_refused_rewind_leaves_admission_open() {
+    let mut session = Session::new(vec![Scripted::text("unused")], None);
+    let admission = Arc::new(ext_support::admission::Admission::default());
+    let looped = session
+        .looped
+        .take()
+        .unwrap()
+        .admission(Arc::clone(&admission));
+    session.looped = Some(looped);
+    let before = log_bytes(&session.dir);
+    let inbox = take_inbox(&mut session);
+    let (rw, answered) = rewind(args(None, None, false, vec![]));
+    let looped = session.looped.take().unwrap();
+    session.looped = Some(drive_closed(looped, inbox, vec![rw]));
+    let rejection = rejected(answer_of(answered));
+    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(log_bytes(&session.dir), before);
+    // The refusal closed nothing: a later message is still admitted.
+    assert!(admission.admit(|| true).is_some());
 }
 
 #[test]

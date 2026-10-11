@@ -109,6 +109,18 @@ Fiber: this session is about to end, and these background jobs are still running
 
 Fiber: no one has prompted this session for a while, and these background jobs are still running: {job_ids}. Read each job's output file, and stop with `jobs stop` any that look hung or that you no longer need.
 
+## session-message
+
+Fiber: a message from session {session_id}, named "{name}". Another session wrote it, not the person.
+
+{text}
+
+## session-message-unnamed
+
+Fiber: a message from session {session_id}. Another session wrote it, not the person.
+
+{text}
+
 ## extension
 
 # Instructions from the {extension} extension

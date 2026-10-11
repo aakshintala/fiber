@@ -162,6 +162,10 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("drop {}", id.0)
         }
+        Delivery::Message(message) => format!(
+            "message {} {}",
+            message.from_session_id.0, message.command_id.0
+        ),
         Delivery::Reply(reply, ack) => {
             ack.0(Ok(None));
             format!("reply {}", reply.request_id.0)
@@ -1020,6 +1024,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
+                | Delivery::Message(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
@@ -1054,6 +1059,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
+                | Delivery::Message(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
@@ -1140,6 +1146,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
+                | Delivery::Message(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the credential arrives as a credential"),
             }
@@ -1199,6 +1206,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ExtensionExec(_)
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
+                | Delivery::Message(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -1236,6 +1244,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ExtensionExec(_)
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
+                | Delivery::Message(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }

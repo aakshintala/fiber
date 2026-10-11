@@ -468,6 +468,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             }
             Delivery::Close(_) => "close",
             Delivery::SteerDrop(..)
+            | Delivery::Message(_)
             | Delivery::Model(..)
             | Delivery::Credential(..)
             | Delivery::Rewind(..)
