@@ -35,10 +35,7 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
 
 /// A repository with one commit (`file.txt` holding `x`, message `first`)
 /// on `main`, in a temporary directory.
-#[allow(
-    clippy::unwrap_used,
-    reason = "a test helper; a failure is the test's"
-)]
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 pub fn repo(prefix: &str) -> TempDir {
     let home = TempDir::new(prefix);
     git(home.path(), &["init", "--quiet"]);
