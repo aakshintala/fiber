@@ -26,7 +26,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
-use fakes::{ProviderServer, Watchdog};
+use fakes::{Deadline, ProviderServer, Watchdog};
 use serde_json::{Value, json};
 
 /// A running `fiber session` process: its drained stdout lines, killed on
@@ -42,6 +42,7 @@ struct Running {
 impl Running {
     /// Starts `fiber session` with `args` and `stdin` in `dir`, draining
     /// stdout on a thread. The caller holds the returned stdin open.
+    #[track_caller]
     fn spawn(
         setup: &support::Setup,
         args: &[&str],
@@ -88,6 +89,7 @@ impl Running {
     }
 
     /// Stdout lines until one completes `done`.
+    #[track_caller]
     fn wait_line(&mut self, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
         let mut got = Vec::new();
         loop {
@@ -98,7 +100,7 @@ impl Running {
                     self.stderr.try_recv().unwrap_or_default()
                 )
             }
-            match self.lines.recv_timeout(left) {
+            match Deadline::after(left).recv(&self.lines) {
                 Ok(line) => {
                     let stop = done(&line);
                     got.push(line);
@@ -123,11 +125,12 @@ impl Running {
     }
 
     /// Waits for the process to exit under the deadline.
+    #[track_caller]
     fn wait_exit(mut self) {
         let mut child = self.child.take().unwrap();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
-        match finished.recv_timeout(self.deadline.left()) {
+        match self.deadline.recv(&finished) {
             Ok(status) => assert_eq!(status.unwrap().code(), Some(0)),
             Err(_) => panic!("waited until the deadline for the session to exit"),
         }
@@ -146,6 +149,7 @@ fn wall_ms() -> u64 {
 
 /// Connects to the session's socket once it runs: the caller waits for its
 /// load line on stdout first, as its bind precedes it.
+#[track_caller]
 fn connect_session(setup: &support::Setup, id: &str, later: &mut Running) -> support::Socket {
     later.wait_line("the resumed run's load", |line| {
         line["kind"] == "extensions_loaded"

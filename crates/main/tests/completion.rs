@@ -27,7 +27,7 @@ use std::thread;
 use std::time::Duration;
 
 use fakes::{Watchdog, group_empties, kill_group, kill_matching, matching_exits};
-use support::Setup;
+use support::{Deadline, Setup};
 
 /// How long one `fiber` or shell run may take.
 const RUN: Duration = Duration::from_secs(20);
@@ -60,6 +60,7 @@ const _: () = assert!(
 
 /// Runs one cleanup step on its own thread and returns failures so later
 /// cleanup checks still run before the test reports them.
+#[track_caller]
 fn within_cleanup<T: Send + 'static>(
     what: &str,
     deadline: Duration,
@@ -69,7 +70,7 @@ fn within_cleanup<T: Send + 'static>(
     thread::spawn(move || {
         let _sent = done.send(work());
     });
-    match finished.recv_timeout(deadline) {
+    match Deadline::after(deadline).recv(&finished) {
         Ok(result) => Ok(result),
         Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("waited {deadline:?} for {what}")),
         Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -189,6 +190,7 @@ fn set(words: &[&str]) -> BTreeSet<String> {
 /// block until `RUN` expires. After the exit, the group and every process
 /// whose command line holds `tag` must be gone within `REAP`. On expiry,
 /// both are killed and reaped before the test fails.
+#[track_caller]
 fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     let tag = tag.to_str().unwrap().to_owned();
     let mut child = command
@@ -202,7 +204,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     let tag_dog = Watchdog::matching(&tag);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap_or(()));
-    let Ok(output) = finished.recv_timeout(RUN) else {
+    let Ok(output) = Deadline::after(RUN).recv(&finished) else {
         // Both bounded kills finish before either process check starts.
         let group_killed = within_cleanup(
             &format!("killing {what}'s process group"),
@@ -287,6 +289,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
 
 /// `fiber completion <shell>` with `FIBER_HOME` a regular file: a run that
 /// read home would fail on it.
+#[track_caller]
 fn fiber(setup: &Setup, args: &[&str]) -> Command {
     let home = setup.root.path().join("home-is-a-file");
     fs::write(&home, "not a directory").unwrap();
@@ -296,6 +299,7 @@ fn fiber(setup: &Setup, args: &[&str]) -> Command {
 }
 
 /// The script, from a run that exited 0 with nothing on stderr.
+#[track_caller]
 fn script(setup: &Setup, shell: &str) -> String {
     let output = run_bounded(
         &format!("fiber completion {shell}"),

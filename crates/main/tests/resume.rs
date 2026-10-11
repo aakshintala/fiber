@@ -110,6 +110,7 @@ impl Setup {
     /// Runs `fiber` with `args` in its own process group, waiting under the
     /// test's [`Deadline`]. A watchdog beside it kills that group if this process
     /// dies first.
+    #[track_caller]
     fn fiber(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -129,7 +130,7 @@ impl Setup {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,
@@ -857,6 +858,7 @@ struct Running {
 
 /// Starts `fiber` with `args` in its own process group, as [`Setup::fiber`]
 /// runs it, but returns before it exits.
+#[track_caller]
 fn start(setup: &Setup, args: &[&str]) -> Running {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
     command
@@ -909,10 +911,11 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
 
 /// Reads `stdout` until a `clients` line arrives, each line taking what
 /// remains of the test's [`Deadline`].
+#[track_caller]
 fn until_clients(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
     loop {
-        let line = stdout
-            .recv_timeout(deadline.left())
+        let line = deadline
+            .recv(stdout)
             .expect("waited until the deadline for a clients line");
         let line: Value = serde_json::from_str(&line).unwrap();
         if line["kind"] == "clients" {
@@ -922,6 +925,7 @@ fn until_clients(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
 }
 
 /// Waits for `running` to exit successfully under the test's [`Deadline`].
+#[track_caller]
 fn finish(running: Running) {
     let Running {
         mut child,
@@ -934,12 +938,12 @@ fn finish(running: Running) {
     } = running;
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(deadline.left()) {
+    let status = match deadline.recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(_) => support::expired(deadline, group, &finished, "fiber to exit"),
     };
-    let stderr = stderr
-        .recv_timeout(deadline.left())
+    let stderr = deadline
+        .recv(&stderr)
         .expect("waited until the deadline for stderr to close");
     assert!(status.success(), "stderr: {stderr}");
     assert!(
@@ -963,6 +967,7 @@ struct Finished {
 /// group on expiry like [`Setup::fiber`] does, and returns what it printed. Its
 /// stdout sender is dropped once the process closes stdout, so collecting
 /// the lines ends once the process has exited.
+#[track_caller]
 fn finish_output(running: Running) -> Finished {
     let Running {
         mut child,
@@ -975,7 +980,7 @@ fn finish_output(running: Running) -> Finished {
     } = running;
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(deadline.left()) {
+    let status = match deadline.recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(_) => support::expired(deadline, group, &finished, "`fiber` to exit"),
     };
@@ -985,12 +990,12 @@ fn finish_output(running: Running) -> Finished {
     );
     std::mem::forget(guard);
     watchdog.stand_down(deadline.cleanup());
-    let stderr = stderr
-        .recv_timeout(deadline.left())
+    let stderr = deadline
+        .recv(&stderr)
         .expect("waited until the deadline for stderr to close");
     let mut lines = Vec::new();
     loop {
-        match stdout.recv_timeout(deadline.left()) {
+        match deadline.recv(&stdout) {
             Ok(line) if is_status(&line) => {}
             Ok(line) => lines.push(serde_json::from_str(&line).unwrap()),
             Err(mpsc::RecvTimeoutError::Disconnected) => break,

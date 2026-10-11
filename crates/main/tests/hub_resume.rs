@@ -135,13 +135,14 @@ impl Setup {
 
     /// Runs `fiber` once with `args` to its exit under the test's
     /// [`Deadline`]: its exit code and stdout lines.
+    #[track_caller]
     fn run(&self, args: &[&str]) -> (Option<i32>, Vec<Value>) {
         let child = self.fiber(args).spawn().unwrap();
         let group = child.id();
         let watchdog = Watchdog::group(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,
@@ -232,12 +233,13 @@ impl Hub {
 
     /// Kills the hub, then waits for every session holding the workspace
     /// path to exit on its own.
+    #[track_caller]
     fn finish(mut self) {
         support::kill_group(self.deadline, self.group, "KILL").unwrap();
         if let Some(mut child) = self.child.take() {
             let (done, finished) = mpsc::channel();
             thread::spawn(move || done.send(child.wait().is_ok()).unwrap_or(()));
-            match finished.recv_timeout(self.deadline.left()) {
+            match self.deadline.recv(&finished) {
                 Ok(_) => {}
                 Err(_) => support::expired(
                     self.deadline,
@@ -276,7 +278,7 @@ impl Drop for Hub {
             }) {
                 Ok(_) | Err(_) => {}
             }
-            match reaped.recv_timeout(self.deadline.cleanup()) {
+            match self.deadline.cleanup_phase().recv(&reaped) {
                 Ok(_) | Err(_) => {}
             }
         }
@@ -301,6 +303,7 @@ impl Socket {
         }
     }
 
+    #[track_caller]
     fn send(&self, line: &Value) {
         let mut write = self.write.lock().unwrap();
         let mut bytes = serde_json::to_vec(line).unwrap();
@@ -340,6 +343,7 @@ fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> V
 /// Connects to the hub, starting `fiber hub serve` when none runs. The
 /// connect blocks, so it runs on a thread bounded by the test's
 /// [`Deadline`]; the serve command, workspace and home are built first.
+#[track_caller]
 fn connect_hub(setup: &Setup, hub: &Arc<Mutex<Option<Hub>>>) -> Socket {
     let slot = Arc::clone(hub);
     let deadline = setup.deadline;

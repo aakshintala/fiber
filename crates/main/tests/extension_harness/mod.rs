@@ -121,6 +121,7 @@ impl Setup {
         command
     }
 
+    #[track_caller]
     pub(crate) fn start_session(&self, id: &str, extra: &[&str]) -> Running {
         let workspace = self.workspace();
         let mut args = vec!["session", "--id", id, "--workspace"];
@@ -190,6 +191,7 @@ pub(crate) struct Running {
 }
 
 impl Running {
+    #[track_caller]
     pub(crate) fn connect(&mut self, socket: &Path) -> Socket {
         let line = self.first_line();
         self.first.push(line);
@@ -197,6 +199,7 @@ impl Running {
             .expect("the session's socket accepted before the deadline")
     }
 
+    #[track_caller]
     pub(crate) fn connect_client(&mut self, socket: &Path) -> fakes::Client {
         let line = self.first_line();
         self.first.push(line);
@@ -209,8 +212,9 @@ impl Running {
         .expect("the session's socket accepted before the deadline")
     }
 
+    #[track_caller]
     fn first_line(&mut self) -> String {
-        match self.lines.recv_timeout(self.deadline.left()) {
+        match self.deadline.recv(&self.lines) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 panic!("waited until the deadline for the session's first stdout line")
@@ -221,9 +225,10 @@ impl Running {
         }
     }
 
+    #[track_caller]
     pub(crate) fn wait_for(&mut self, kind: &str) {
         loop {
-            let line = match self.lines.recv_timeout(self.deadline.left()) {
+            let line = match self.deadline.recv(&self.lines) {
                 Ok(line) => line,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     panic!("waited until the deadline for {kind} on the session's stdout")
@@ -241,6 +246,7 @@ impl Running {
         }
     }
 
+    #[track_caller]
     pub(crate) fn wait(self) -> (ExitStatus, Vec<Value>, String) {
         let (status, raw, stderr) = self.wait_raw();
         let out = raw
@@ -250,10 +256,11 @@ impl Running {
         (status, out, stderr)
     }
 
+    #[track_caller]
     fn wait_raw(mut self) -> (ExitStatus, Vec<String>, String) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(self.child.wait()).unwrap());
-        let status = match finished.recv_timeout(self.deadline.left()) {
+        let status = match self.deadline.recv(&finished) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 crate::support::expired(self.deadline, self.group, &finished, "the session to exit")
@@ -266,7 +273,7 @@ impl Running {
         while let Ok(line) = self.lines.try_recv() {
             lines.push(line);
         }
-        let stderr = match self.stderr.recv_timeout(self.deadline.left()) {
+        let stderr = match self.deadline.recv(&self.stderr) {
             Ok(text) => text,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 panic!("waited until the deadline for the session's stderr")
@@ -295,6 +302,7 @@ pub(crate) struct Socket {
 
 impl Socket {
     /// Connects to `path` on a thread bounded by the deadline.
+    #[track_caller]
     pub(crate) fn connect(deadline: Deadline, path: &Path) -> std::io::Result<Self> {
         let target = path.to_owned();
         let write = crate::support::bounded(
@@ -310,6 +318,7 @@ impl Socket {
         })
     }
 
+    #[track_caller]
     fn send(&self, line: &str) {
         let mut bytes = line.as_bytes().to_vec();
         if !line.ends_with('\n') {
@@ -340,6 +349,7 @@ impl Socket {
     }
 }
 
+#[track_caller]
 pub(crate) fn send(client: &Socket, line: &str) {
     client.send(line);
 }
@@ -423,6 +433,7 @@ pub(crate) type Held = (String, mpsc::Receiver<()>, mpsc::Sender<()>);
 /// of `deadline`; the connection is held until the returned sender sends or
 /// drops. The caller receives the accepted signal with the deadline, which
 /// bounds the accept.
+#[track_caller]
 pub(crate) fn hold_server(deadline: Deadline) -> Held {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());

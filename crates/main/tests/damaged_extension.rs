@@ -82,6 +82,7 @@ impl Setup {
 
     /// Runs `fiber extension` with `args` and no terminal, so it does not
     /// ask.
+    #[track_caller]
     fn extension(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -100,7 +101,7 @@ impl Setup {
         let group = child.id();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,
@@ -141,6 +142,7 @@ fn skips(run: &Run) -> usize {
     run.stderr.lines().filter(|line| *line == SKIP).count()
 }
 
+#[track_caller]
 fn damaged_flow(invalid: bool) {
     let setup = Setup::new();
     let installed = setup.extension(&["install", &setup.src("healthy")]);

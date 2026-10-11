@@ -47,6 +47,7 @@ fn declare_db(setup: &Setup, extra: &Value) {
 }
 
 /// `fiber <args>` run in the workspace.
+#[track_caller]
 fn in_workspace(setup: &Setup, args: &[&str]) -> Command {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -54,6 +55,7 @@ fn in_workspace(setup: &Setup, args: &[&str]) -> Command {
 }
 
 /// `fiber ask hi` in the workspace: its exit code, stdout lines and stderr.
+#[track_caller]
 fn ask(setup: &Setup) -> (Option<i32>, Vec<Value>, String) {
     let output = run_to_exit(
         setup.deadline,
@@ -78,6 +80,7 @@ fn of<'a>(lines: &'a [Value], kind: &str) -> Vec<&'a Value> {
 
 /// The internal session command for `id`, with `extra` appended, in its
 /// own process group, and its stdout lines as they come.
+#[track_caller]
 fn spawn_session(setup: &Setup, id: &str, extra: &[&str]) -> (HubProc, mpsc::Receiver<Value>) {
     let workspace = setup.workspace();
     let mut args = vec!["session", "--id", id, "--workspace"];
@@ -118,14 +121,15 @@ const SLICE: Duration = Duration::from_secs(1);
 /// line is written and the socket is listening. One deadline bounds the
 /// whole wait: a scoped thread reads the lines and the test takes the
 /// arrival with one `recv_timeout`.
+#[track_caller]
 fn started(deadline: Deadline, lines: mpsc::Receiver<Value>) {
     let stop = AtomicBool::new(false);
-    thread::scope(|scope| {
+    let got = thread::scope(|scope| {
         let (tx, found) = mpsc::channel();
         let stop = &stop;
         scope.spawn(move || {
             while !stop.load(Ordering::SeqCst) {
-                match lines.recv_timeout(SLICE) {
+                match Deadline::after(SLICE).recv(&lines) {
                     Ok(line) => {
                         if line["kind"] == "extensions_loaded" {
                             if let Ok(()) = tx.send(true) {}
@@ -140,16 +144,18 @@ fn started(deadline: Deadline, lines: mpsc::Receiver<Value>) {
                 }
             }
         });
-        let got = found.recv_timeout(deadline.left());
+        let got = deadline.recv(&found);
         stop.store(true, Ordering::SeqCst);
-        assert!(
-            got.expect("the session's extensions_loaded within the deadline"),
-            "the session's stdout closed before extensions_loaded"
-        );
+        got
     });
+    assert!(
+        got.expect("the session's extensions_loaded within the deadline"),
+        "the session's stdout closed before extensions_loaded"
+    );
 }
 
 /// A `full` client on the session `id`, once the session counts it.
+#[track_caller]
 fn attach(setup: &Setup, id: &str, sub: &str) -> Client {
     let client = Client::connect(&setup.session_socket(id)).unwrap();
     client
@@ -181,6 +187,7 @@ fn answer(deadline: Deadline, client: &Client, id: &str) -> Value {
         .unwrap_or_else(|| panic!("no answer to {id} within the deadline"))
 }
 
+#[track_caller]
 fn prompt(client: &Client, id: &str) {
     client
         .send(&format!(
@@ -189,6 +196,7 @@ fn prompt(client: &Client, id: &str) {
         .unwrap();
 }
 
+#[track_caller]
 fn reply(client: &Client, id: &str, request: &str, decisions: &[&str]) {
     client
         .send(&format!(
@@ -198,6 +206,7 @@ fn reply(client: &Client, id: &str, request: &str, decisions: &[&str]) {
         .unwrap();
 }
 
+#[track_caller]
 fn close(client: &Client, id: &str) {
     client
         .send(&format!(r#"{{"id":"{id}","command":"close"}}"#))
@@ -569,6 +578,7 @@ fn a_session_that_exits_on_its_first_offer_raises_it_again_on_resume() {
 
 /// Ends a session started through the hub: kills the hub, closes the
 /// session on its own socket and waits for its processes to exit.
+#[track_caller]
 fn end_through_hub(
     setup: &Setup,
     hub: &Arc<Mutex<Option<HubProc>>>,

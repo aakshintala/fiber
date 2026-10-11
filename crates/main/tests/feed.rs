@@ -168,6 +168,7 @@ fn client(setup: &Setup) -> Socket {
 }
 
 /// Subscribes `client` to the feed.
+#[track_caller]
 fn feed(client: &Socket) {
     client.send(r#"{"id":"c_feed","command":"feed"}"#);
     let ack = recv_reply(client, "the feed acknowledgement");
@@ -176,6 +177,7 @@ fn feed(client: &Socket) {
 }
 
 /// The session ids `recent` lists with `args`.
+#[track_caller]
 fn recent(client: &Socket, args: &Value) -> Vec<String> {
     client.send(&json!({"id": "c_recent", "command": "recent", "args": args}).to_string());
     let ack = recv_reply(client, "the recent answer");
@@ -428,8 +430,9 @@ fn a_killed_session_whose_listener_outlives_its_summary_connection_is_crashed() 
         let accepted = listener.accept().map(|(stream, _)| stream);
         tx.send((listener, accepted)).unwrap_or(());
     });
-    let (listener, accepted) = rx
-        .recv_timeout(setup.deadline.left())
+    let (listener, accepted) = setup
+        .deadline
+        .recv(&rx)
         .expect("the hub connects to the session");
     let summary = Socket::from(setup.deadline, accepted.unwrap());
     assert_eq!(

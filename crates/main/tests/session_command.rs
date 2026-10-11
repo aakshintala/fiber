@@ -141,6 +141,7 @@ impl Setup {
     /// Starts `fiber session --id <id> --workspace <workspace>` with
     /// `extra` appended, in its own process group, its stdout drained on a
     /// thread and its stderr kept for a failure.
+    #[track_caller]
     fn start_session(&self, id: &str, extra: &[&str]) -> Running {
         let workspace = self.workspace();
         self.start_session_in(id, &workspace, extra)
@@ -148,6 +149,7 @@ impl Setup {
 
     /// [`Setup::start_session`] in `workspace`: a second workspace is a
     /// second project, so the same id names another project's session.
+    #[track_caller]
     fn start_session_in(&self, id: &str, workspace: &Path, extra: &[&str]) -> Running {
         let mut args = vec!["session", "--id", id, "--workspace"];
         args.push(workspace.to_str().unwrap());
@@ -158,6 +160,7 @@ impl Setup {
     /// Spawns `fiber` with `args` and `stdin`, draining stdout on a thread
     /// and keeping stderr for a failure: [`Setup::start_session_in`] and
     /// the delegate tests share it.
+    #[track_caller]
     fn spawn_session(
         &self,
         args: &[&str],
@@ -210,6 +213,7 @@ impl Setup {
     /// holds the returned stdin open for the run, or drops it to take the
     /// lifeline path. The idle exit is the config's, so the tests set it
     /// high and the exit proves the run ended on its own.
+    #[track_caller]
     fn start_delegate(
         &self,
         id: &str,
@@ -251,6 +255,7 @@ impl Setup {
     /// wait runs on a thread and is received under the deadline, so a
     /// hang reports what it waited for (`docs/testing.md`, "Waits and
     /// timeouts").
+    #[track_caller]
     fn run(&self, args: &[&str]) -> (Option<i32>, Vec<Value>, String) {
         let mut command = self.fiber(args);
         let child = command.spawn().unwrap();
@@ -259,7 +264,7 @@ impl Setup {
         let watchdog = Watchdog::group(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => support::expired(
                 self.deadline,
@@ -323,8 +328,9 @@ impl Running {
     /// connects once. The socket is bound in `Session::open` before the
     /// loop writes that line, so the line is the signal the socket
     /// accepts (`docs/testing.md`, "Waits and timeouts").
+    #[track_caller]
     fn connect(&mut self, socket: &Path) -> Socket {
-        let line = match self.lines.recv_timeout(self.deadline.left()) {
+        let line = match self.deadline.recv(&self.lines) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 panic!("waited until the deadline for the session's first stdout line")
@@ -342,9 +348,10 @@ impl Running {
     /// remains of the test's [`Deadline`], and keeps every line for [`Running::wait`]. Only kinds the
     /// loop writes before waiting for a prompt qualify: `preamble_built`
     /// and later need a turn, which needs the test's prompt.
+    #[track_caller]
     fn wait_for(&mut self, kind: &str) {
         loop {
-            let line = match self.lines.recv_timeout(self.deadline.left()) {
+            let line = match self.deadline.recv(&self.lines) {
                 Ok(line) => line,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     panic!("waited until the deadline for {kind} on the session's stdout")
@@ -364,6 +371,7 @@ impl Running {
 
     /// Waits under the test's [`Deadline`] for the process to exit, and asserts that
     /// nothing it started is left in its group.
+    #[track_caller]
     fn wait(self) -> (ExitStatus, Vec<Value>, String) {
         let (status, raw, stderr) = self.wait_raw();
         let out = raw
@@ -374,10 +382,11 @@ impl Running {
     }
 
     /// [`Running::wait`], with stdout's lines as written.
+    #[track_caller]
     fn wait_raw(mut self) -> (ExitStatus, Vec<String>, String) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(self.child.wait()).unwrap());
-        let status = match finished.recv_timeout(self.deadline.left()) {
+        let status = match self.deadline.recv(&finished) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 support::expired(self.deadline, self.group, &finished, "the session to exit")
@@ -399,7 +408,7 @@ impl Running {
         // as the readiness signal come first.
         let mut out = std::mem::take(&mut self.first);
         loop {
-            match self.lines.recv_timeout(self.deadline.left()) {
+            match self.deadline.recv(&self.lines) {
                 Ok(line) => out.push(line),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     panic!("waited until the deadline for the session's stdout to close")
@@ -407,7 +416,7 @@ impl Running {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        let stderr = match self.stderr.recv_timeout(self.deadline.left()) {
+        let stderr = match self.deadline.recv(&self.stderr) {
             Ok(text) => text,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 panic!("waited until the deadline for the session's stderr")
@@ -432,6 +441,7 @@ struct Socket {
 
 impl Socket {
     /// Connects to `path` on a thread bounded by the deadline.
+    #[track_caller]
     fn connect(deadline: Deadline, path: &Path) -> std::io::Result<Self> {
         let target = path.to_owned();
         let write = support::bounded(
@@ -447,6 +457,7 @@ impl Socket {
         })
     }
 
+    #[track_caller]
     fn send(&self, line: &str) {
         let mut bytes = line.as_bytes().to_vec();
         if !line.ends_with('\n') {
@@ -479,6 +490,7 @@ impl Socket {
     }
 }
 
+#[track_caller]
 fn send(client: &Socket, line: &str) {
     client.send(line);
 }
@@ -1335,6 +1347,7 @@ fn a_second_session_with_the_same_id_fails_and_leaves_the_first_alone() {
 /// Starts a session on a standing ask that idle-exits on it at once, and
 /// returns the request it stopped on, after restoring the default idle
 /// delay for the resume.
+#[track_caller]
 fn suspend_on_an_approval(setup: &Setup, id: &str) -> String {
     fs::write(
         setup.home().join("rules"),
@@ -1503,6 +1516,7 @@ fn personal_skill(setup: &Setup, name: &str, header: &str) {
 }
 
 /// Subscribes `client`, sends `skills`, and returns the event stream and answer.
+#[track_caller]
 fn skills_answer(client: &Socket) -> (Vec<Value>, Value) {
     send(
         client,
@@ -1517,6 +1531,7 @@ fn skills_answer(client: &Socket) -> (Vec<Value>, Value) {
 }
 
 /// Subscribes `client`, sends `commands`, and returns the event stream and answer.
+#[track_caller]
 fn commands_answer(client: &Socket) -> (Vec<Value>, Value) {
     send(
         client,
@@ -2157,6 +2172,7 @@ fn bg_call() -> Value {
 /// `after_prompt` runs before the job's ready line is awaited: the held
 /// mid-turn test releases one held response there, so the job starts while
 /// the next request stays held.
+#[track_caller]
 fn job_session(
     setup: &Setup,
     script: &str,
@@ -2222,6 +2238,7 @@ fn stdout_kinds(out: &[Value]) -> Vec<&str> {
 }
 
 /// A `close` with `now`, answered `command_accepted`.
+#[track_caller]
 fn send_close_now(client: &Socket) {
     send(
         client,

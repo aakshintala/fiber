@@ -97,6 +97,7 @@ fn install_models(setup: &Setup, models: &Value, configured: &str) {
 /// Starts `fiber session --id <id> --workspace <workspace>` with `extra`
 /// appended, in its own process group, its stdout drained on a thread and
 /// its stderr kept for a failure.
+#[track_caller]
 fn start_session(setup: &Setup, id: &str, extra: &[&str]) -> Running {
     let workspace = setup.workspace();
     let mut args = vec!["session", "--id", id, "--workspace"];
@@ -167,8 +168,9 @@ impl Running {
     /// connects once. The socket is bound in `Session::open` before the
     /// loop writes that line, so the line is the signal the socket
     /// accepts (`docs/testing.md`, "Waits and timeouts").
+    #[track_caller]
     fn connect(&self, socket: &Path) -> Socket {
-        match self.lines.recv_timeout(self.deadline.left()) {
+        match self.deadline.recv(&self.lines) {
             Ok(_) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 panic!("waited until the deadline for the session's first stdout line")
@@ -184,9 +186,10 @@ impl Running {
     /// remains of the test's deadline. Only kinds the loop writes before waiting for a prompt
     /// qualify: `preamble_built` and later need a turn, which needs the
     /// test's prompt.
+    #[track_caller]
     fn wait_for(&self, kind: &str) {
         loop {
-            let line = match self.lines.recv_timeout(self.deadline.left()) {
+            let line = match self.deadline.recv(&self.lines) {
                 Ok(line) => line,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     panic!("waited until the deadline for {kind} on the session's stdout")
@@ -204,10 +207,11 @@ impl Running {
 
     /// Waits under the test's [`Deadline`] for the process to exit, drains its stdout
     /// to EOF, and asserts that nothing it started is left in its group.
+    #[track_caller]
     fn wait(mut self) -> (ExitStatus, String) {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(self.child.wait()).unwrap());
-        let status = match finished.recv_timeout(self.deadline.left()) {
+        let status = match self.deadline.recv(&finished) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 expired(self.deadline, self.group, &finished, "the session to exit")
@@ -224,7 +228,7 @@ impl Running {
         // The process is gone, so its stdout is closed: the drain ends,
         // each line taking what remains of the test's deadline.
         loop {
-            match self.lines.recv_timeout(self.deadline.left()) {
+            match self.deadline.recv(&self.lines) {
                 Ok(_) => {}
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     panic!("waited until the deadline for the session's stdout to close")
@@ -232,7 +236,7 @@ impl Running {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        let stderr = match self.stderr.recv_timeout(self.deadline.left()) {
+        let stderr = match self.deadline.recv(&self.stderr) {
             Ok(text) => text,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 panic!("waited until the deadline for the session's stderr")
@@ -274,6 +278,7 @@ fn shell_call() -> Response {
     }})])
 }
 
+#[track_caller]
 fn subscribe(client: &Socket) -> Value {
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
     let sub = until(client, "the subscribe acknowledgement", |line| {
@@ -284,12 +289,14 @@ fn subscribe(client: &Socket) -> Value {
     sub.into_iter().next().unwrap()
 }
 
+#[track_caller]
 fn prompt(client: &Socket, id: &str, text: &str) {
     client.send(&format!(
         r#"{{"id":"{id}","command":"prompt","args":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#
     ));
 }
 
+#[track_caller]
 fn model(client: &Socket, id: &str, reference: &str, thinking: Option<&str>) {
     let thinking = thinking.map_or(String::new(), |level| format!(r#","thinking":"{level}""#));
     client.send(&format!(
@@ -297,6 +304,7 @@ fn model(client: &Socket, id: &str, reference: &str, thinking: Option<&str>) {
     ));
 }
 
+#[track_caller]
 fn close(client: &Socket) {
     client.send(r#"{"id":"c_close","command":"close"}"#);
 }
@@ -1090,6 +1098,7 @@ fn searches(body: &Value) -> Vec<Value> {
 
 /// Asks for the `tools` answer as `id` and returns its lines and its
 /// `web_search` entries.
+#[track_caller]
 fn tools_answer(client: &Socket, id: &str) -> (Vec<Value>, Vec<Value>) {
     client.send(&format!(r#"{{"id":"{id}","command":"tools"}}"#));
     let lines = until(client, "the tools answer", |line| {
@@ -1123,6 +1132,7 @@ type Switched = (Vec<Value>, [Vec<Value>; 2], Vec<(String, Value)>);
 /// Runs one session started on `from`: a turn, the `tools` answer, a
 /// switch to `to`, a turn, the `tools` answer, then `close`. Returns the
 /// stream, the two `web_search` answers and the request bodies.
+#[track_caller]
 fn switch_and_list(from: &str, to: &str, replies: [Response; 2]) -> Switched {
     let setup = Setup::new();
     let server = ProviderServer::start(replies).unwrap();
@@ -1364,6 +1374,7 @@ fn install_other(setup: &Setup, server: &ProviderServer, credential: &Value) {
 
 /// Waits under the test's deadline for `file` to hold a whole line, and
 /// returns it trimmed.
+#[track_caller]
 fn ready_line(setup: &Setup, file: &Path) -> String {
     let file = file.to_path_buf();
     fakes::within("the ready file", setup.deadline.left(), move || {
@@ -1805,6 +1816,7 @@ fn install_labeled_provider(setup: &Setup, server: &ProviderServer) {
     );
 }
 
+#[track_caller]
 fn credential(client: &Socket, id: &str, label: &str) {
     client.send(&format!(
         r#"{{"id":"{id}","command":"credential","args":{{"label":"{label}"}}}}"#

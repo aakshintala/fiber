@@ -48,6 +48,7 @@ struct Setup {
 }
 
 impl Setup {
+    #[track_caller]
     fn new() -> Self {
         Self::within(Deadline::start())
     }
@@ -140,11 +141,13 @@ impl Setup {
 
     /// Runs `fiber` with `args`, `stdin` piped in (closed when `None`) and
     /// `FIBER_HOME` set to `home`.
+    #[track_caller]
     fn fiber_with_home(&self, home: &str, args: &[&str], stdin: Option<&str>) -> Run {
         self.run(home, args, Stdio::piped(), stdin, &[])
     }
 
     /// Runs `fiber` with `args` and the extra environment `env`.
+    #[track_caller]
     fn fiber_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
         let home = self.home();
         self.run(home.to_str().unwrap(), args, Stdio::piped(), None, env)
@@ -158,17 +161,20 @@ impl Setup {
     }
 
     /// Runs `fiber` with `args` and its stdin on a pseudo-terminal.
+    #[track_caller]
     fn fiber_on_terminal(&self, args: &[&str]) -> Run {
         self.fiber_typing(args, "")
     }
 
     /// Runs `fiber` with `args`, its stdin on a pseudo-terminal where
     /// `typed` was already typed.
+    #[track_caller]
     fn fiber_typing(&self, args: &[&str], typed: &str) -> Run {
         self.fiber_typing_env(args, typed, &[])
     }
 
     /// [`Self::fiber_typing`] with extra environment variables.
+    #[track_caller]
     fn fiber_typing_env(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> Run {
         let terminal = Terminal::open();
         let mut main = fs::File::from(terminal.main.try_clone().unwrap());
@@ -185,6 +191,7 @@ impl Setup {
     /// [`Deadline`], and asserts that nothing it started is left in the
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
     /// A watchdog beside it kills that group if this process dies first.
+    #[track_caller]
     fn run(
         &self,
         home: &str,
@@ -222,7 +229,7 @@ impl Setup {
         }
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,
@@ -242,6 +249,7 @@ impl Setup {
         Run::from(output)
     }
 
+    #[track_caller]
     fn fiber(&self, args: &[&str], stdin: Option<&str>) -> Run {
         self.fiber_with_home(self.home().to_str().unwrap(), args, stdin)
     }
@@ -249,6 +257,7 @@ impl Setup {
     /// `stdin` is the child's standard input as given. A write end the caller
     /// still holds stays open until this returns, so an unread pipe is open
     /// when `fiber` exits.
+    #[track_caller]
     fn fiber_with_stdio(&self, args: &[&str], stdin: Stdio) -> Run {
         self.run(self.home().to_str().unwrap(), args, stdin, None, &[])
     }
@@ -277,6 +286,7 @@ struct Terminal {
 }
 
 impl Terminal {
+    #[track_caller]
     fn open() -> Self {
         let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
         pty::grantpt(&main).unwrap();
@@ -337,7 +347,7 @@ fn dropping_the_group_guard_kills_the_group() {
     // reaped, so the group is checked after `wait`.
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(deadline.left()) {
+    let status = match deadline.recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(_) => support::expired(deadline, group, &finished, "the process group to die"),
     };
@@ -393,7 +403,7 @@ fn a_killed_test_kills_the_stand_in_group() {
         }
         send_group(&tx, None);
     });
-    let group = match rx.recv_timeout(deadline.left()) {
+    let group = match deadline.recv(&rx) {
         Ok(Some(group)) => group,
         Ok(None) => panic!("the stand-in exited before printing its group"),
         Err(_) => panic!("waited until the deadline for the stand-in to print its group"),
@@ -407,12 +417,12 @@ fn a_killed_test_kills_the_stand_in_group() {
     thread::spawn(move || match done.send(helper.wait()) {
         Ok(()) | Err(mpsc::SendError(_)) => {}
     });
-    let status = match finished.recv_timeout(deadline.left()) {
+    let status = match deadline.recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(_) => panic!("waited until the deadline for the killed test process to exit"),
     };
     assert_eq!(status.signal(), Some(9));
-    match rx.recv_timeout(deadline.left()) {
+    match deadline.recv(&rx) {
         Ok(None) => {}
         Ok(Some(_)) | Err(_) => {
             panic!("waited until the deadline for stand-in group {group} to die")
@@ -420,6 +430,7 @@ fn a_killed_test_kills_the_stand_in_group() {
     }
 }
 
+#[track_caller]
 fn send_group(tx: &mpsc::Sender<Option<u32>>, message: Option<u32>) {
     match tx.send(message) {
         Ok(()) | Err(mpsc::SendError(_)) => {}
@@ -1331,6 +1342,7 @@ fn go_exchange() -> [Response; 2] {
 
 /// Installs the package at `path` with `fiber extension install`, stdin not a
 /// terminal, so it does not ask.
+#[track_caller]
 fn install(setup: &Setup, path: &Path) {
     let run = setup.fiber(&["extension", "install", path.to_str().unwrap()], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1540,6 +1552,7 @@ struct Github {
 }
 
 impl Github {
+    #[track_caller]
     fn new(setup: &Setup) -> Self {
         let base = setup.root.path().join("gh");
         let repo = base.join("aakshintala/fiber");
@@ -1562,6 +1575,7 @@ impl Github {
     }
 
     /// Commits `providers/muse` with a note file and tags it.
+    #[track_caller]
     fn release(&self, tag: &str) {
         let dir = self.repo.join("providers/muse");
         fs::create_dir_all(dir.join("providers")).unwrap();
@@ -1575,6 +1589,7 @@ impl Github {
     }
 
     /// Commits `providers/needs-muse`, which depends on [`MUSE`] at `muse_min`.
+    #[track_caller]
     fn release_needs_muse(&self, tag: &str, muse_min: &str) {
         let dir = self.repo.join("providers/needs-muse");
         fs::create_dir_all(dir.join("providers")).unwrap();
@@ -2489,6 +2504,7 @@ fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
 /// `home_config` as the global `config.json` and `repo_config` as the
 /// workspace's `.fiber/config.json` when given. Returns the run and the
 /// request it sent.
+#[track_caller]
 fn openrouter_claude_request(
     server: &ProviderServer,
     setup: &Setup,
@@ -2972,6 +2988,7 @@ fn install_takes_one_name_or_path() {
 /// A live turn with `model`, opt in by naming the key
 /// file in `var` (`docs/testing.md`, "Live calls and evals"). Prints the
 /// event kinds and the final text.
+#[track_caller]
 fn live(var: &str, package_name: &str, provider: &str, model: &str, key_env: &str) {
     let deadline = Deadline::start();
     let Some(key_file) = std::env::var_os(var) else {

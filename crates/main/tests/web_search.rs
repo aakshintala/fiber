@@ -116,6 +116,7 @@ impl Run {
 
 /// Runs `fiber` with `args` in the workspace, in its own process group,
 /// and waits for it under the test's deadline.
+#[track_caller]
 fn run_fiber(setup: &Setup, args: &[&str]) -> Run {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -124,7 +125,7 @@ fn run_fiber(setup: &Setup, args: &[&str]) -> Run {
     let watchdog = Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(setup.deadline.left()) {
+    let output = match setup.deadline.recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => support::expired(setup.deadline, group, &finished, "`fiber` to exit"),
     };
@@ -137,6 +138,7 @@ fn run_fiber(setup: &Setup, args: &[&str]) -> Run {
 }
 
 /// Runs `fiber ask <prompt>` and asserts it exits 0.
+#[track_caller]
 fn ask(setup: &Setup, prompt: &str) -> Run {
     let run = run_fiber(setup, &["ask", prompt]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);

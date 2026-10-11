@@ -204,6 +204,7 @@ struct Running {
 impl Running {
     /// Starts `fiber session --id <id>` with `extra` appended, draining
     /// stdout on a thread and keeping stderr for a failure.
+    #[track_caller]
     fn start(setup: &support::Setup, id: &str, extra: &[&str]) -> Self {
         let workspace = setup.workspace();
         let mut args = vec!["session", "--id", id, "--workspace"];
@@ -214,6 +215,7 @@ impl Running {
 
     /// Spawns `fiber` with `args`, draining stdout on a thread and keeping
     /// stderr for a failure.
+    #[track_caller]
     fn spawn(setup: &support::Setup, args: &[&str]) -> Self {
         let (running, _) = Self::spawn_stdin(setup, args, Stdio::null());
         running
@@ -221,6 +223,7 @@ impl Running {
 
     /// As [`Running::spawn`], with `stdin`: the caller holds the returned
     /// stdin open, which a delegate reads as its lifeline.
+    #[track_caller]
     fn spawn_stdin(
         setup: &support::Setup,
         args: &[&str],
@@ -280,6 +283,7 @@ impl Running {
     /// each receive takes what remains of the test's deadline, at most
     /// 5 s, so endless unrelated output cannot postpone expiry, and a
     /// quiet hang fails fast.
+    #[track_caller]
     fn wait_line(&mut self, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
         let mut got = Vec::new();
         loop {
@@ -288,7 +292,7 @@ impl Running {
             if left.is_zero() {
                 panic!("waited until the deadline for {what}; got {got:?}")
             }
-            match self.lines.recv_timeout(left) {
+            match Deadline::after(left).recv(&self.lines) {
                 Ok(line) => {
                     let stop = done(&line);
                     self.taken.push(line.clone());
@@ -313,6 +317,7 @@ impl Running {
     /// line is read: the drain ends at end of file once the process is
     /// gone, so a disconnect means the output is whole. Returns the whole
     /// stream, including the lines `wait_line` returned.
+    #[track_caller]
     fn wait(self) -> (ExitStatus, Vec<Value>, String) {
         let watchdog = self._watchdog;
         watchdog.stand_down(self.deadline.cleanup());
@@ -325,7 +330,7 @@ impl Running {
         let group = self.group;
         let deadline = self.deadline;
         thread::spawn(move || done.send(child.wait()).unwrap());
-        let status = match finished.recv_timeout(deadline.left()) {
+        let status = match deadline.recv(&finished) {
             Ok(status) => status.unwrap(),
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 support::expired(deadline, group, &finished, "the session to exit")
@@ -335,7 +340,7 @@ impl Running {
             }
         };
         loop {
-            match self.lines.recv_timeout(deadline.left()) {
+            match deadline.recv(&self.lines) {
                 Ok(line) => out.push(line),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -350,6 +355,7 @@ impl Running {
 
 /// Subscribes `client` full, for the session's later lines. A late
 /// subscription replays the log first, so lines arrive until the accept.
+#[track_caller]
 fn subscribe(client: &support::Socket) {
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
     loop {
@@ -363,6 +369,7 @@ fn subscribe(client: &support::Socket) {
 
 /// Sends `close` with `now` and reads its accept, past whatever the
 /// subscription is still replaying.
+#[track_caller]
 fn close_now(client: &support::Socket) {
     client.send(r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#);
     loop {
@@ -1337,6 +1344,7 @@ fn direct_client(setup: &support::Setup) -> support::Socket {
 /// for its first turn to end, then subscribes to the delegate through the
 /// hub. The delegate's id comes only from the parent's `delegate_started`.
 /// Server B stays held, so the delegate's turn is still open on return.
+#[track_caller]
 fn open_delegate(
     setup: &support::Setup,
     hub: &Arc<Mutex<Option<support::HubProc>>>,
@@ -1427,6 +1435,7 @@ struct FeedWatch {
     handle: Option<thread::JoinHandle<Vec<Value>>>,
 }
 
+#[track_caller]
 fn watch_feed(setup: &support::Setup, hub: &Arc<Mutex<Option<support::HubProc>>>) -> FeedWatch {
     let (client, _) = support::connect_hub(setup, hub);
     client.send(r#"{"id":"c_feed","command":"feed"}"#);
@@ -1466,11 +1475,12 @@ impl FeedWatch {
 /// session that lives and dies between rescans never reaches it: this wait
 /// keeps the parent alive across one, and proves the positive fact the
 /// final collection asserts.
+#[track_caller]
 fn wait_feed_status(watch: &FeedWatch, setup: &support::Setup, parent: &str) {
     loop {
-        let line = watch
-            .each
-            .recv_timeout(setup.deadline.left())
+        let line = setup
+            .deadline
+            .recv(&watch.each)
             .expect("the feed to report the parent before the deadline");
         if line["kind"] == "session_status" && is_session(&line, parent) {
             return;
@@ -1479,6 +1489,7 @@ fn wait_feed_status(watch: &FeedWatch, setup: &support::Setup, parent: &str) {
 }
 
 /// Stops the hub in `slot` with SIGTERM, as a person stopping it would.
+#[track_caller]
 fn stop_hub(hub: &Arc<Mutex<Option<support::HubProc>>>) {
     let hub = hub.lock().unwrap().take().expect("the hub started");
     hub.kill("TERM");

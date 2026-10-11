@@ -18,6 +18,8 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use fakes::Deadline;
+
 /// How long the live turn may take.
 const LIVE_DEADLINE: Duration = Duration::from_secs(300);
 
@@ -52,18 +54,18 @@ fn a_live_codex_turn_replies() {
     let watchdog = fakes::Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || done.send(child.wait_with_output()));
-    let first = finished.recv_timeout(LIVE_DEADLINE);
+    let first = Deadline::after(LIVE_DEADLINE).recv(&finished);
     let timed_out = first.is_err();
     let mut received = match first {
         Ok(output) => Some(output),
         Err(_) => {
             fakes::kill_group(group, "KILL").unwrap_or(false);
-            finished.recv_timeout(REAP_DEADLINE).ok()
+            Deadline::after(REAP_DEADLINE).recv(&finished).ok()
         }
     };
     if received.is_none() {
         fakes::kill_group(group, "KILL").unwrap_or(false);
-        received = finished.recv_timeout(REAP_DEADLINE).ok();
+        received = Deadline::after(REAP_DEADLINE).recv(&finished).ok();
     }
 
     let empty = fakes::group_empties(group, REAP_DEADLINE);

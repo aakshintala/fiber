@@ -50,6 +50,7 @@ impl Setup {
 
     /// Runs `fiber` with `args` and waits for it under the test's
     /// [`Deadline`].
+    #[track_caller]
     fn fiber(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -67,7 +68,7 @@ impl Setup {
         let group = child.id();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,
@@ -143,6 +144,7 @@ fn serve() -> fakes::ProviderServer {
 }
 
 /// The commit `fiber --version` shows, if the build recorded one.
+#[track_caller]
 fn commit(setup: &Setup) -> Option<String> {
     let run = setup.fiber(&["--version"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);

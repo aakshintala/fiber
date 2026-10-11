@@ -36,6 +36,7 @@ struct Setup {
 }
 
 impl Setup {
+    #[track_caller]
     fn new() -> Self {
         let deadline = Deadline::start();
         let setup = Self {
@@ -52,6 +53,7 @@ impl Setup {
     }
 
     /// A git repository named `name` beside Fiber home.
+    #[track_caller]
     fn repository(&self, name: &str) -> PathBuf {
         let repo = self.root.path().join(name);
         fs::create_dir_all(&repo).unwrap();
@@ -95,6 +97,7 @@ impl Setup {
 
     /// Runs `fiber approve` with `args` in repository `name`, with `input`
     /// on standard input (none is an empty, closed input).
+    #[track_caller]
     fn approve(&self, name: &str, args: &[&str], input: Option<&str>) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -120,7 +123,7 @@ impl Setup {
         });
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(self.deadline, group, &finished, "`fiber approve` to exit"),
         };
@@ -529,6 +532,7 @@ fn an_install_step_runs_at_the_pinned_path_and_an_unfinished_copy_is_rebuilt() {
 
 /// What the script the install step left prints, run with a deadline in its
 /// own process group, so a hung script fails naming what it waited for.
+#[track_caller]
 fn script_output(deadline: Deadline, script: &Path) -> String {
     let mut command = Command::new("sh");
     command
@@ -540,7 +544,7 @@ fn script_output(deadline: Deadline, script: &Path) -> String {
     let group = child.id();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(deadline.left()) {
+    let output = match deadline.recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => support::expired(
             deadline,

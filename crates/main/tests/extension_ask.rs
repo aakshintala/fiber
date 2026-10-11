@@ -200,6 +200,7 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
 /// watchdog, and the group is reaped and checked empty under the test's
 /// [`Deadline`], including after a timeout (`docs/testing.md`, "Running
 /// tests").
+#[track_caller]
 fn run_ask(setup: &Setup, args: &[&str]) -> (ExitStatus, Vec<Value>, String) {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -208,7 +209,7 @@ fn run_ask(setup: &Setup, args: &[&str]) -> (ExitStatus, Vec<Value>, String) {
     let guard = KillGroup(group);
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(setup.deadline.left()) {
+    let output = match setup.deadline.recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => support::expired(setup.deadline, group, &finished, "fiber ask to exit"),
     };

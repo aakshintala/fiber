@@ -33,6 +33,7 @@ use support::{Deadline, Setup, TRUECOLOUR};
 /// grid once the bytes are published: the raw wait proves the reader
 /// took them, and the publish snapshots the grid before waking the
 /// test.
+#[track_caller]
 fn feed(run: &mut Run, terminal: &mut fs::File, bytes: &[u8]) -> Grid {
     let from = run.output().len();
     terminal.write_all(bytes).unwrap();
@@ -42,6 +43,7 @@ fn feed(run: &mut Run, terminal: &mut fs::File, bytes: &[u8]) -> Grid {
 
 /// An attached run with no child over a sized pty, with the terminal
 /// side the test writes to.
+#[track_caller]
 fn grid_run(cols: u16, rows: u16) -> (Run, fs::File) {
     let (main, terminal) = pair_sized(cols, rows);
     (Run::attach(main, cols, rows, Deadline::start()), terminal)
@@ -169,11 +171,13 @@ fn a_wide_char_takes_two_cells() {
 
 /// A pty pair with no child: the master the reader drains, and the
 /// terminal side the test holds open and writes to.
+#[track_caller]
 fn pair() -> (fs::File, fs::File) {
     pair_sized(80, 24)
 }
 
 /// [`pair`], sized `cols` by `rows`.
+#[track_caller]
 fn pair_sized(cols: u16, rows: u16) -> (fs::File, fs::File) {
     let terminal = support::pty::open(cols, rows);
     (fs::File::from(terminal.main), terminal.terminal)
@@ -208,7 +212,7 @@ fn a_reader_stops_while_the_terminal_side_stays_open() {
     // A retained terminal side holds end of file off: the reader answers
     // the stop pipe instead.
     terminal.write_all(b"ab").unwrap();
-    wakes.recv_timeout(deadline.left()).unwrap();
+    deadline.recv(&wakes).unwrap();
     assert!(contains(&shared.lock().unwrap().output(), b"ab"));
     // Still draining: only the stop signal ends it.
     assert!(!reader.ended(Duration::ZERO));
@@ -323,12 +327,14 @@ fn a_query_is_not_published_before_its_reply_is_written() {
     // The wait has no probe interval of its own, waking per chunk, so
     // 100 ms bounds the proof that it has not answered yet.
     assert!(
-        finished.recv_timeout(Duration::from_millis(100)).is_err(),
+        Deadline::after(Duration::from_millis(100))
+            .recv(&finished)
+            .is_err(),
         "the query waited for its reply"
     );
     drop(guard);
-    let (run, _) = finished
-        .recv_timeout(deadline.left())
+    let (run, _) = deadline
+        .recv(&finished)
         .expect("the run back after the release");
     // The reply was on the master before the query was published.
     let reply = support::bounded(deadline, "the reply on the master", move || {
@@ -524,8 +530,8 @@ fn the_hub_wait_outlives_the_sockets_absence() {
     drop(stdin);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = finished
-        .recv_timeout(deadline.left())
+    let status = deadline
+        .recv(&finished)
         .expect("the fake hub back after the release")
         .expect("the fake hub reaped");
     assert!(
@@ -618,6 +624,7 @@ fn turn_drawn(grid: &Grid) -> bool {
 /// One turn at 160x48 with `env`: the scripted provider answers "Hello.",
 /// the journey types a prompt, sees the answer and quits. Returns the
 /// drawn grid and the whole output.
+#[track_caller]
 fn one_turn(env: &[(&str, &str)]) -> (Grid, Vec<u8>) {
     let setup = Setup::new();
     support::write_json(
@@ -886,6 +893,7 @@ fn settled(screen: &Grid, layout: SettledScreen) -> bool {
 
 /// Spawns 160x48 with the scripted provider, runs one turn to `finished`
 /// and returns the run.
+#[track_caller]
 fn started_run() -> (Setup, Run) {
     let setup = Setup::new();
     support::write_json(
@@ -908,6 +916,7 @@ fn started_run() -> (Setup, Run) {
     (setup, run)
 }
 
+#[track_caller]
 fn quit(mut run: Run) {
     run.write(b"\x03\x03\r");
     let finished = run.wait();

@@ -96,6 +96,7 @@ impl Setup {
     }
 
     /// Runs `fiber sessions export` with `args` in the workspace.
+    #[track_caller]
     fn export(&self, args: &[&str]) -> Run {
         let mut all = vec!["sessions", "export"];
         all.extend_from_slice(args);
@@ -103,6 +104,7 @@ impl Setup {
     }
 
     /// Runs `fiber` with `args` in the workspace.
+    #[track_caller]
     fn fiber(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -120,7 +122,7 @@ impl Setup {
         let group = child.id();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(self.deadline, group, &finished, "`fiber` to exit"),
         };
@@ -268,6 +270,7 @@ fn listing_setup(replies: usize) -> (support::Setup, ProviderServer) {
 
 /// Runs `fiber` with `args` in `dir` to its exit, and gives its stdout;
 /// it must exit 0.
+#[track_caller]
 fn fiber_in(setup: &support::Setup, dir: &Path, args: &[&str]) -> String {
     let mut command = setup.fiber(args);
     command.current_dir(dir);
@@ -312,6 +315,7 @@ fn listed_ids(stdout: &str) -> Vec<String> {
 }
 
 /// Waits under the deadline until the hub's socket is gone: it idled out.
+#[track_caller]
 fn until_hub_gone(setup: &support::Setup) {
     let socket = setup.hub_socket();
     let (done, gone) = mpsc::channel();
@@ -321,10 +325,11 @@ fn until_hub_gone(setup: &support::Setup) {
         }
         done.send(()).unwrap_or(());
     });
-    let deadline = Deadline::start().left();
+    let deadline = Deadline::start();
     assert!(
-        gone.recv_timeout(deadline).is_ok(),
-        "waited {deadline:?} for the hub to idle out"
+        deadline.recv(&gone).is_ok(),
+        "waited {:?} for the hub to idle out",
+        deadline.left()
     );
 }
 

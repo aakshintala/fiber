@@ -35,6 +35,7 @@ struct Running {
     deadline: Deadline,
 }
 
+#[track_caller]
 fn start(setup: &Setup, args: &[&str]) -> Running {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -72,6 +73,7 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
     }
 }
 
+#[track_caller]
 fn finish(running: Running) {
     let Running {
         mut child,
@@ -83,7 +85,7 @@ fn finish(running: Running) {
     } = running;
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(deadline.left()) {
+    let status = match deadline.recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             expired(deadline, group, &finished, "fiber to exit")
@@ -102,6 +104,7 @@ fn finish(running: Running) {
 }
 
 /// Connects a raw socket to `path`, on a thread bounded by the deadline.
+#[track_caller]
 fn connect(deadline: Deadline, path: &std::path::Path) -> UnixStream {
     let target = path.to_owned();
     bounded(
@@ -113,6 +116,7 @@ fn connect(deadline: Deadline, path: &std::path::Path) -> UnixStream {
 }
 
 /// Sends `line` (plus its newline) on the raw socket.
+#[track_caller]
 fn send(stream: &mut UnixStream, deadline: Deadline, line: &str, what: &str) {
     let mut bytes = line.as_bytes().to_vec();
     bytes.push(b'\n');
@@ -132,9 +136,9 @@ fn a_full_subscriber_gets_every_line_before_an_unreadable_one_then_end_of_file()
     server.hold();
     let running = start(&setup, &["ask", "hi"]);
     let started: Value = serde_json::from_str(
-        &running
-            .stdout
-            .recv_timeout(setup.deadline.left())
+        &setup
+            .deadline
+            .recv(&running.stdout)
             .expect("waited until the deadline for session_started"),
     )
     .unwrap();

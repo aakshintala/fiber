@@ -71,6 +71,7 @@ fn terminal(
 
 /// Waits under the test's [`Deadline`] until `socket` exists or not, as
 /// `present` says, naming `what` on expiry.
+#[track_caller]
 fn until_socket(deadline: Deadline, socket: &std::path::Path, present: bool, what: &str) {
     let socket = socket.to_owned();
     let (done, reached) = mpsc::channel();
@@ -81,7 +82,7 @@ fn until_socket(deadline: Deadline, socket: &std::path::Path, present: bool, wha
         done.send(()).unwrap_or(());
     });
     assert!(
-        reached.recv_timeout(deadline.left()).is_ok(),
+        deadline.recv(&reached).is_ok(),
         "waited until the deadline for {what}"
     );
 }

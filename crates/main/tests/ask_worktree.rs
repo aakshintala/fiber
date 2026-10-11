@@ -24,6 +24,7 @@ use support::{Deadline, Setup, group_alive, run_to_exit};
 
 /// Runs the system `git` in `dir`, in its own process group, to its exit
 /// under the test's [`Deadline`].
+#[track_caller]
 fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
     let mut command = Command::new("git");
     command
@@ -42,6 +43,7 @@ fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
 }
 
 /// A repository with one commit on `main` at `dir`.
+#[track_caller]
 fn init_repo(deadline: Deadline, dir: &Path) {
     git(deadline, dir, &["init", "--quiet"]);
     fs::write(dir.join("file.txt"), "x").unwrap();
@@ -101,6 +103,7 @@ fn ask_command(setup: &Setup, cwd: &Path, extra_env: &[(&str, &str)], args: &[&s
 
 /// The project's key for the workspace, naming its sessions and worktrees.
 /// The blocking `git` runs on a thread under the test's one deadline.
+#[track_caller]
 fn key_of(deadline: Deadline, workspace: &Path) -> String {
     let workspace = workspace.to_owned();
     support::bounded(deadline, "the project key", move || {
@@ -125,6 +128,7 @@ fn started(lines: &[Value]) -> &Value {
 }
 
 /// Whether `refs/heads/<branch>` still exists in the repository.
+#[track_caller]
 fn branch_exists(deadline: Deadline, repo: &Path, branch: &str) -> bool {
     !git(deadline, repo, &["branch", "--list", branch]).is_empty()
 }
@@ -323,7 +327,7 @@ fn a_signal_while_the_post_checkout_hook_runs_stops_it_and_leaves_nothing() {
     support::kill_pid(setup.deadline, fiber_pid, "TERM").unwrap();
     let (done, finished) = std::sync::mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let out = match finished.recv_timeout(setup.deadline.left()) {
+    let out = match setup.deadline.recv(&finished) {
         Ok(out) => out.unwrap(),
         Err(_) => panic!("waited for `fiber ask --worktree` to exit on SIGTERM"),
     };

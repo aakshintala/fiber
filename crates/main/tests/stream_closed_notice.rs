@@ -43,6 +43,7 @@ struct Running {
     deadline: Deadline,
 }
 
+#[track_caller]
 fn start(setup: &Setup, args: &[&str]) -> Running {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -80,6 +81,7 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
     }
 }
 
+#[track_caller]
 fn finish(running: Running) {
     let Running {
         mut child,
@@ -91,7 +93,7 @@ fn finish(running: Running) {
     } = running;
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(deadline.left()) {
+    let status = match deadline.recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             expired(deadline, group, &finished, "fiber to exit")
@@ -110,14 +112,10 @@ fn finish(running: Running) {
 }
 
 /// The session id of a started `fiber ask`: its first stdout line.
+#[track_caller]
 fn session_of(running: &Running, what: &str) -> String {
-    let started: Value = serde_json::from_str(
-        &running
-            .stdout
-            .recv_timeout(running.deadline.left())
-            .unwrap_or_else(|_| panic!("waited until the deadline for {what}")),
-    )
-    .unwrap();
+    let started: Value =
+        serde_json::from_str(&running.deadline.recv_or_fail(&running.stdout, what)).unwrap();
     started["session_id"].as_str().unwrap().to_owned()
 }
 

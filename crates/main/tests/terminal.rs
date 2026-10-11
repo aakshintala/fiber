@@ -119,6 +119,7 @@ fn only_session(setup: &support::Setup) -> String {
 /// Runs `fiber` with `args` headless in its own process group, waiting
 /// under the test's [`Deadline`]. A watchdog beside it kills that group
 /// if this process dies first.
+#[track_caller]
 fn ask(setup: &support::Setup, args: &[&str]) -> std::process::Output {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -181,6 +182,7 @@ fn working_elapsed_needs_the_count() {
 
 /// Waits under the test's [`Deadline`] until `socket` exists or not, as
 /// `present` says, naming `what` on expiry.
+#[track_caller]
 fn until_socket(deadline: Deadline, socket: &Path, present: bool, what: &str) {
     let socket = socket.to_owned();
     let (done, reached) = mpsc::channel();
@@ -191,7 +193,7 @@ fn until_socket(deadline: Deadline, socket: &Path, present: bool, what: &str) {
         done.send(()).unwrap_or(());
     });
     assert!(
-        reached.recv_timeout(deadline.left()).is_ok(),
+        deadline.recv(&reached).is_ok(),
         "waited until the deadline for {what}"
     );
 }
@@ -721,6 +723,7 @@ fn resume_with_an_unknown_prefix_fails_before_any_frame() {
 /// piped: with no tty on `missing`, it exits 2 naming `fiber ask`.
 /// Without a tty the binary never draws, so these keep their
 /// byte/stderr/exit assertions: there is no screen to assert on.
+#[track_caller]
 fn assert_names_ask(deadline: Deadline, stdin: Stdio, missing: &str, args: &[&str]) {
     let setup = setup_within(deadline);
     let mut command = setup.fiber(args);
@@ -852,6 +855,7 @@ struct Screen {
 impl Screen {
     /// Pads the grid's rows to `cols` columns: the grid omits trailing
     /// blanks, while the card assertions index by column.
+    #[track_caller]
     fn from_rows(rows: Vec<String>, cols: usize) -> Self {
         Self {
             cells: rows
@@ -1040,6 +1044,7 @@ fn session_card_rows_are_cut_with_an_ellipsis() {
 /// Drives one turn with the panel pinned to `share` percent of a
 /// 160-by-48 screen and asserts the Session card's exact rows: a row
 /// too long for the card is cut with `…`, a row that fits is whole.
+#[track_caller]
 fn session_card_cut_with_an_ellipsis(panel: u16, share: f64) {
     let setup = support::Setup::new();
     let server = ProviderServer::start([reply("Hello.")]).unwrap();
