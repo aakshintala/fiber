@@ -474,7 +474,7 @@ pub(crate) fn glob_match(pattern: &[u8], text: &[u8], ignore_case: bool) -> bool
     while ti < text.len() {
         if pattern.get(pi) == Some(&b'*') {
             // Consecutive stars act as one: the group ends past the last.
-            let mut resume = pi + 1;
+            let mut resume = pi;
             while pattern.get(resume) == Some(&b'*') {
                 resume += 1;
             }

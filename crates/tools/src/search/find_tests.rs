@@ -671,6 +671,17 @@ fn globs_match_bytes() {
     });
 }
 
+#[test]
+fn glob_tokens_advance_at_their_nonzero_pattern_offsets() {
+    use super::glob_match;
+
+    assert!(glob_match(b"ab?d", b"abcd", false));
+    assert!(glob_match(b"abc\\*d", b"abc*d", false));
+    assert!(!glob_match(b"ab[c]d", b"ab[d", false));
+    assert!(glob_match(b"ab[", b"ab[", false));
+    assert!(glob_match(b"ab\\", b"ab\\", false));
+}
+
 /// How long one glob match may take: a hang guard, not a timing assertion.
 /// Backtracking over many stars, or a class rescanned per `[`, takes
 /// minutes at the sizes below; the two-pointer walk stays linear.
