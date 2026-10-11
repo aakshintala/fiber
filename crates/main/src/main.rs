@@ -36,6 +36,7 @@ mod session_command;
 mod session_extensions;
 mod settings;
 mod shutdown;
+mod startup_log;
 mod switch;
 mod theme_setting;
 
@@ -603,5 +604,6 @@ fn failed(code: ErrorCode, e: impl Display) -> Failure {
 }
 
 fn ask_failed(e: Failure) -> i32 {
+    startup_log::record(&e, Arc::new(clock::System));
     doors::exit_before_session(e, &mut io::stdout(), &mut io::stderr())
 }
