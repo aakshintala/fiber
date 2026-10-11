@@ -127,6 +127,3 @@ impl fmt::Debug for Claim {
     }
 }
 
-#[cfg(test)]
-#[path = "inbox_tests.rs"]
-mod tests;

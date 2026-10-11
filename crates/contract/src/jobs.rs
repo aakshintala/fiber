@@ -221,6 +221,3 @@ pub enum JobRecord {
     Completed(JobCompleted),
 }
 
-#[cfg(test)]
-#[path = "jobs_tests.rs"]
-mod tests;

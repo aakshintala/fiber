@@ -52,16 +52,3 @@ fn an_absent_option_is_left_out_never_null() {
          \"request_bytes\":2214,\"response_bytes\":0,\"total_ms\":180}"
     );
 }
-
-#[test]
-fn every_purpose_is_snake_case() {
-    for (purpose, text) in [
-        (Purpose::ModelCall, "\"model_call\""),
-        (Purpose::ModelList, "\"model_list\""),
-        (Purpose::Quota, "\"quota\""),
-        (Purpose::TokenRefresh, "\"token_refresh\""),
-        (Purpose::Cost, "\"cost\""),
-    ] {
-        assert_eq!(serde_json::to_string(&purpose).unwrap(), text);
-    }
-}

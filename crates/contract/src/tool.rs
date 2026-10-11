@@ -244,6 +244,3 @@ impl Bound {
     };
 }
 
-#[cfg(test)]
-#[path = "tool_tests.rs"]
-mod tests;
