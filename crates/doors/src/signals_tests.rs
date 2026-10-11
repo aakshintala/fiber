@@ -8,10 +8,8 @@
     reason = "test code"
 )]
 
-use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock as _;
@@ -537,8 +535,10 @@ fn close_now_after_a_signal_keeps_the_signal_and_its_code() {
 /// SIGTERM while booting.
 const CHILD: &str = "FIBER_DOORS_SIGNALS_CHILD";
 
-/// How long the child may run before the test kills it and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+/// How long the real-SIGTERM child may run: the rerun waits this long
+/// for its exit, then this long again to clean up, so the worst case is
+/// twice this.
+const CHILD_WITHIN: Duration = Duration::from_secs(5);
 
 #[test]
 fn a_real_sigterm_while_booting_exits_143() {
@@ -549,31 +549,16 @@ fn a_real_sigterm_while_booting_exits_143() {
         // The signals thread exits the process; this wait only bounds a
         // child whose exit never came.
         let (_held, never) = mpsc::channel::<()>();
-        let _waited = Deadline::after(CHILD_DEADLINE).recv(&never);
+        let _waited = Deadline::after(DEADLINE).recv(&never);
         std::process::exit(0);
     }
     let name = module_path!().split_once("::").unwrap().1;
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::a_real_sigterm_while_booting_exits_143"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD, "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for the child to exit on SIGTERM");
-    };
-    assert_eq!(status.code(), Some(143), "{status}");
+    let output = fakes::rerun_within(
+        &format!("{name}::a_real_sigterm_while_booting_exits_143"),
+        &[(CHILD, "1")],
+        CHILD_WITHIN,
+    );
+    assert_eq!(output.status.code(), Some(143), "{}", output.status);
 }
 
 #[test]
