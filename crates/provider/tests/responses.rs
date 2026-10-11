@@ -20,14 +20,16 @@ mod large;
 #[path = "support/wire_tools.rs"]
 mod wire_tools;
 
+#[path = "support/harness.rs"]
+mod harness;
+
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
 
-use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
+use contract::events::{ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
     CallError, CallUsage, Delta, Finish, Input, InputSize, ModelCall, ModelRequest, Provider,
     Reply, ReplyAction, ToolDefinition,
@@ -40,7 +42,7 @@ use serde_json::{Value, json};
 
 use probes::Recorded;
 
-const DEADLINE: Duration = Duration::from_secs(10);
+use harness::{DEADLINE, responses_sse as stream, run, sent_body};
 
 fn research(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -56,12 +58,9 @@ fn decoded(bytes: &[u8]) -> (Result<Reply, provider::Error>, Vec<Delta>) {
 
 fn endpoint(server: &ProviderServer) -> Endpoint {
     Endpoint {
-        provider: "opencode".into(),
         model: "muse-spark-1.3-contributor".into(),
         base_url: format!("{}/zen/go/v1", server.url()),
-        key: Some(contract::Secret::new("sk-secret".into())),
-        direct: true,
-        ..Endpoint::default()
+        ..harness::endpoint("opencode", server)
     }
 }
 
@@ -97,49 +96,15 @@ fn loose_tool() -> ToolDefinition {
 
 fn request() -> ModelRequest {
     ModelRequest {
-        system_prompt: "You are terse.".into(),
         tools: vec![weather_tool(), loose_tool()],
         thinking: Some(contract::ThinkingLevel::Low),
-        tool_choice: "auto".into(),
-        cache_lifetime: CacheLifetime::OneHour,
         cache_key: "s_root".into(),
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
             images: Vec::new(),
         }],
-        previous_end: None,
-        sent_tools: None,
-        max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        ..harness::request()
     }
-}
-
-/// Runs `call` on its own thread, so a call that never returns fails the
-/// test at the deadline instead of hanging it.
-#[track_caller]
-fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |d| deltas.push(d));
-        done.send((reply, deltas)).unwrap();
-    });
-    Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("waited for the call to return")
-}
-
-fn sent_body(server: &ProviderServer, n: usize) -> Value {
-    serde_json::from_slice(&server.requests()[n].body).unwrap()
-}
-
-/// A stream of `data:` events, one per JSON value.
-fn stream(events: &[Value]) -> Vec<u8> {
-    events
-        .iter()
-        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
-        .collect::<String>()
-        .into_bytes()
 }
 
 fn completed(status: &str, extra: Value) -> Value {
