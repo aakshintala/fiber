@@ -4,22 +4,19 @@
 
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use config::Secret;
 use contract::GenerationId;
 use contract::clock::Clock;
-use contract::events::CacheLifetime;
-use contract::provider::ToolDefinition;
-use contract::provider::{
-    CallError, CallUsage, Delta, InputSize, ModelCall, ModelRequest, Provider, Reply,
-};
+use contract::provider::{Provider, ToolDefinition};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use serde_json::{Map, Value, json};
+use serde_json::json;
 
+use crate::test_support::{Inner, request};
 use crate::{Error, LuaExtension, LuaProvider};
 
 /// How long a test waits for one call.
@@ -197,63 +194,6 @@ fn without_a_key_run_receives_no_key() {
          error(\"unexpected argument\")",
     );
     assert_eq!(cost(&provider, None).unwrap(), Some(0.5));
-}
-
-/// A provider whose tools are its own shape, which counts its calls.
-#[derive(Default)]
-struct Inner {
-    calls: AtomicUsize,
-    warms: bool,
-}
-
-struct Idle;
-
-impl ModelCall for Idle {
-    fn run(&self, _sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        Err(CallError::Cancelled {
-            usage: Box::new(CallUsage::unnamed(InputSize::default())),
-        })
-    }
-
-    fn cancel(&self) {}
-}
-
-impl Provider for Inner {
-    fn call(&self, _request: &ModelRequest) -> Box<dyn ModelCall> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Box::new(Idle)
-    }
-
-    fn warms(&self, _request: &ModelRequest) -> bool {
-        self.warms
-    }
-
-    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-        tools
-            .iter()
-            .map(|tool| {
-                let mut map = Map::new();
-                map.insert("own".into(), json!(tool.name));
-                map
-            })
-            .collect()
-    }
-}
-
-fn request() -> ModelRequest {
-    ModelRequest {
-        system_prompt: String::new(),
-        tools: Vec::new(),
-        thinking: None,
-        tool_choice: "auto".into(),
-        cache_lifetime: CacheLifetime::FiveMinutes,
-        cache_key: String::new(),
-        conversation: Vec::new(),
-        previous_end: None,
-        sent_tools: None,
-        max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
-    }
 }
 
 fn tool(name: &str) -> ToolDefinition {
