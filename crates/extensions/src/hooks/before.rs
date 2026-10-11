@@ -483,7 +483,6 @@ fn decode_check(extension: &str, value: Value) -> Result<Option<String>, Error> 
             return Err(bad(format!("{}, not a table", kind(&other))));
         }
     };
-    let len = map.len();
     let mut refuse = None;
     for (key, value) in map {
         match (key.as_str(), value) {
@@ -507,11 +506,7 @@ fn decode_check(extension: &str, value: Value) -> Result<Option<String>, Error> 
             }
         }
     }
-    if refuse.is_some() && len > 1 {
-        return Err(bad(
-            "`refuse` beside another key: a hook either lets the call pass or refuses it"
-                .to_owned(),
-        ));
-    }
+    // Any key besides `refuse` returns above, so a refusal that reaches
+    // here stood alone.
     Ok(refuse)
 }

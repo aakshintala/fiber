@@ -500,6 +500,13 @@ fn a_bad_message_return_fails_the_hook() {
         ("return { context = 3 }", "`context`"),
         ("return { context = \"\" }", "`context`"),
         ("return { refuse = \"\" }", "`refuse`"),
+        ("return {{ type = \"text\", text = \"hi\" }}", "not a table"),
+        (
+            "return { content = { { type = \"text\", text = \"hi\" }, \
+             { type = \"image\", path = \"artifacts/evil.png\", \
+             mime_type = \"image/png\", width = 4, height = 4 } } }",
+            "`content` part 2",
+        ),
     ] {
         let home = Home::new();
         home.install("a", &message_hook("blocking", "transform", body));
@@ -510,6 +517,21 @@ fn a_bad_message_return_fails_the_hook() {
         assert_eq!(failure.extension, "fiber.test/a", "{body}");
         assert!(failure.message.contains(why), "{body}: {}", failure.message);
     }
+}
+
+#[test]
+fn nil_and_an_empty_table_change_no_message() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &message_hook("non-blocking", "transform", "return nil"),
+    );
+    home.install("b", &message_hook("non-blocking", "transform", "return {}"));
+    let answer = before_message(&home.load(&[]), message_parts());
+    let (replaced, context) = passed(&answer);
+    assert_eq!(replaced, None);
+    assert!(context.is_empty(), "{context:?}");
+    assert!(answer.notices.is_empty(), "{:?}", answer.notices);
 }
 
 #[test]
@@ -919,6 +941,50 @@ fn a_check_hook_that_returns_arguments_has_failed() {
 }
 
 #[test]
+fn nil_and_an_empty_table_pass_a_check() {
+    let home = Home::new();
+    home.install("a", &tool_hook("non-blocking", "check", "return nil"));
+    home.install("b", &tool_hook("non-blocking", "check", "return {}"));
+    let answer = check_tool(&home.load(&[]), arguments(&[("path", "x")]), reads());
+    assert_eq!(answer.outcome, CheckOutcome::Passed);
+    assert!(answer.notices.is_empty(), "{:?}", answer.notices);
+}
+
+#[test]
+fn a_bare_list_fails_a_check_hook() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &tool_hook("blocking", "check", "return {{ refuse = \"no\" }}"),
+    );
+    let answer = check_tool(&home.load(&[]), arguments(&[("path", "x")]), reads());
+    let CheckOutcome::Failed(failure) = answer.outcome else {
+        panic!("the hook fails: {:?}", answer.outcome);
+    };
+    assert_eq!(failure.extension, "fiber.test/a");
+    assert!(
+        failure.message.contains("not a table"),
+        "{}",
+        failure.message
+    );
+}
+
+#[test]
+fn an_empty_check_refusal_fails_the_hook() {
+    let home = Home::new();
+    home.install(
+        "a",
+        &tool_hook("blocking", "check", "return { refuse = \"\" }"),
+    );
+    let answer = check_tool(&home.load(&[]), arguments(&[("path", "x")]), reads());
+    let CheckOutcome::Failed(failure) = answer.outcome else {
+        panic!("the hook fails: {:?}", answer.outcome);
+    };
+    assert_eq!(failure.extension, "fiber.test/a");
+    assert!(failure.message.contains("`refuse`"), "{}", failure.message);
+}
+
+#[test]
 fn check_hooks_see_the_effects_they_are_given() {
     let home = Home::new();
     home.install(
@@ -1019,8 +1085,10 @@ fn a_bad_return_fails_the_hook() {
         ("return { refuse = \"\" }", "`refuse`"),
         ("return { refuse = \"x\", arguments = {} }", "`refuse`"),
         ("return { arguments = \"x\" }", "`arguments`"),
+        ("return { arguments = { \"x\" } }", "`arguments`"),
         ("return { bogus = 1 }", "`bogus`"),
         ("return 3", "not a table"),
+        ("return {{ path = \"x\" }}", "not a table"),
     ] {
         let home = Home::new();
         home.install("a", &tool_hook("blocking", "transform", body));
