@@ -4,7 +4,7 @@
 //! crash leaves the old file or the new one. A hard link is written in place,
 //! because a rename would replace only one name.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -110,13 +110,11 @@ fn replace(
     bytes: &[u8],
     permissions: Option<std::fs::Permissions>,
 ) -> io::Result<()> {
-    let path = fresh_temp(target)?;
+    let (path, mut file) = fresh_temp(target)?;
     let mut temp = TempFile { path, armed: true };
-    {
-        let mut file = OpenOptions::new().write(true).open(&temp.path)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
     if let Some(permissions) = permissions {
         fs::set_permissions(&temp.path, permissions)?;
     }
@@ -125,15 +123,14 @@ fn replace(
     Ok(())
 }
 
-fn fresh_temp(target: &Path) -> io::Result<PathBuf> {
+fn fresh_temp(target: &Path) -> io::Result<(PathBuf, File)> {
     let pid = std::process::id();
     for _ in 0..64 {
         let n = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let path = temporary_name(target, pid, n);
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(file) => {
-                drop(file);
-                return Ok(path);
+                return Ok((path, file));
             }
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
             Err(err) => return Err(err),
@@ -155,20 +152,7 @@ impl Drop for TempFile {
         if !self.armed {
             return;
         }
-        remove_quietly(&self.path);
-    }
-}
-
-/// Removes `path`, ignoring every error: Drop cannot report one, and the
-/// caller already has the landing error.
-// The NotFound arm and the catch-all do the same thing, so a mutant of the
-// guard changes nothing.
-#[cfg_attr(false, mutants::skip)]
-fn remove_quietly(path: &Path) {
-    match fs::remove_file(path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-        Err(_err) => {}
+        drop(fs::remove_file(&self.path));
     }
 }
 
