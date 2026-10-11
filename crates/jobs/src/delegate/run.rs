@@ -27,10 +27,6 @@ use crate::registry::Unreported;
 use support::clock::Parker;
 use support::group::Listing;
 
-/// Resolves a `fiber:` model reference to the `provider/model[:level]` the
-/// child is started with, or lists the valid references for the refusal.
-pub type Resolve = Arc<dyn Fn(&str) -> Result<String, Vec<String>> + Send + Sync>;
-
 /// Builds the child's command from its launch. The runner sets the stdio,
 /// the process group and the lifeline around it.
 pub type Launch = Arc<dyn Fn(&Launched) -> Command + Send + Sync>;

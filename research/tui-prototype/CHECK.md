@@ -75,3 +75,12 @@ Each surface's cases are in `check/`, one file per surface, built from the cases
 - [check/views.md](check/views.md)
 - [check/offers.md](check/offers.md)
 - [check/images.md](check/images.md)
+- [check/theme.md](check/theme.md)
+- [check/failures.md](check/failures.md)
+
+Themes (#1634), one run per case at 160 by 48:
+
+- `light` (`--static --theme light`): the conversation, panel, approval and question form on light tints with dark text; rules and comments dim but legible, the alert red.
+- `dark-256` (`--static --theme dark-256`): the same screen through the xterm palette; neutral tints grey, hues kept, the alert still red.
+- `light-256` (`--static --theme light-256`): the light screen through the xterm palette; dark text on light tints, the alert still red.
+- `dark-no-color` (`--static --theme dark-no-color`, or with `NO_COLOR=1`): no colour anywhere, only bold, dim, reversed and underline; edges blank but rows kept.

@@ -75,8 +75,10 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   (`docs/model-routing.md`, "Thinking"), for another harness it is passed to
   that harness's flag, such as Claude Code's `--effort` (cursor-agent writes
   it inside its model name).
-- It is required and checked when the call is made. An invalid value fails with
-  `invalid_arguments` and lists the valid roles and references.
+- It is required and checked when the call is made. The schema leaves it
+  optional and untyped, so a missing or wrong value reaches that check. An
+  invalid value fails with `invalid_arguments` and lists the valid roles and
+  references.
 - Neither the roles nor the references appear in any tool definition or the
   system prompt. They change when config changes, when a provider withdraws a
   model, or when model discovery refreshes, and a tool definition that changes
