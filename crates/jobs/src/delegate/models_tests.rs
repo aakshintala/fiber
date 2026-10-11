@@ -63,5 +63,8 @@ fn delegate_models_returns_the_catalogue_text() {
     let [contract::shapes::ContentPart::Text { text }] = &output.content[..] else {
         panic!("one text part: {:?}", output.content);
     };
-    assert_eq!(text, "Roles:\ndeep: fiber:fake/m\nReferences:\nfiber:fake/m");
+    assert_eq!(
+        text,
+        "Roles:\ndeep: fiber:fake/m\nReferences:\nfiber:fake/m"
+    );
 }

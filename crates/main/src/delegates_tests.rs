@@ -50,7 +50,11 @@ fn rig_with(roles: serde_json::Value, install: bool) -> (extensions::Providers, 
     } else {
         std::fs::create_dir_all(&home).unwrap();
     }
-    std::fs::write(home.join("config.json"), json!({"roles": roles}).to_string()).unwrap();
+    std::fs::write(
+        home.join("config.json"),
+        json!({"roles": roles}).to_string(),
+    )
+    .unwrap();
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let config = load(&home, &workspace, "test", Vec::<String>::new());
@@ -69,7 +73,10 @@ fn rig(roles: serde_json::Value) -> (extensions::Providers, config::Config) {
 fn a_full_reference_resolves_to_its_provider_model_and_level() {
     let (providers, config) = rig(json!({}));
     let resolve = resolver(&providers, &config);
-    assert_eq!((resolve.lookup)("fiber:fake/m:high").unwrap(), "fake/m:high");
+    assert_eq!(
+        (resolve.lookup)("fiber:fake/m:high").unwrap(),
+        "fake/m:high"
+    );
 }
 
 #[test]
@@ -186,7 +193,10 @@ fn a_role_with_a_level_its_model_does_not_take_is_refused() {
         reason.starts_with("Role \"bad\" maps to \"fiber:fake/plain:high\": "),
         "{reason}"
     );
-    assert!(reason.contains("not one model `fake/plain` takes"), "{reason}");
+    assert!(
+        reason.contains("not one model `fake/plain` takes"),
+        "{reason}"
+    );
 }
 
 #[test]
@@ -233,7 +243,11 @@ fn lookup_and_catalogue_agree_for_every_role() {
     let resolve = resolver(&providers, &config);
     let catalogue = resolve.catalogue.as_ref().to_owned();
     let mut sections = catalogue.split("\nReferences:\n");
-    let roles = sections.next().expect("a roles section").strip_prefix("Roles:\n").expect("the roles header");
+    let roles = sections
+        .next()
+        .expect("a roles section")
+        .strip_prefix("Roles:\n")
+        .expect("the roles header");
     let references = sections.next().expect("a references section");
     // At least one role on each side, so the test asserts a positive
     // fact about each branch.

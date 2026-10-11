@@ -63,7 +63,8 @@ pub struct DelegateSpawn {
 /// wrongly typed one reaches the tool's own check, which lists the valid
 /// roles and references (`docs/delegates.md`, "Choosing a model").
 fn check_effects_arguments(arguments: &Map<String, Value>) -> Result<(String, String), String> {
-    check_strings(arguments, &["description", "prompt"]).map(|values| (values[0].clone(), values[1].clone()))
+    check_strings(arguments, &["description", "prompt"])
+        .map(|values| (values[0].clone(), values[1].clone()))
 }
 
 /// Reads each of `names` from the call's arguments: each is required,
@@ -105,12 +106,7 @@ fn check_strings(arguments: &Map<String, Value>, names: &[&str]) -> Result<Vec<S
     }
     Ok(names
         .iter()
-        .map(|name| {
-            arguments[*name]
-                .as_str()
-                .unwrap_or_default()
-                .to_owned()
-        })
+        .map(|name| arguments[*name].as_str().unwrap_or_default().to_owned())
         .collect())
 }
 
@@ -190,8 +186,10 @@ impl Tool for DelegateSpawn {
         let model = match arguments.get("model") {
             Some(Value::String(model)) => model.clone(),
             None => {
-                let message =
-                    format!("Give model: a role or a full reference.\n{}", self.resolve.catalogue);
+                let message = format!(
+                    "Give model: a role or a full reference.\n{}",
+                    self.resolve.catalogue
+                );
                 return crate::registry::failed(
                     ErrorCode::InvalidArguments,
                     message.clone(),

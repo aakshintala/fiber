@@ -97,9 +97,7 @@ fn resolve() -> Resolve {
             "deep" => Ok("fake/m:high".to_owned()),
             _ => Err(format!("Unknown delegate model {model:?}.")),
         }),
-        catalogue: Arc::from(
-            "Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/m",
-        ),
+        catalogue: Arc::from("Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/m"),
     }
 }
 
@@ -214,7 +212,10 @@ fn a_non_string_model_fails_listing_the_roles_and_references() {
         let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
         let error = output.error.expect("a non-string model fails");
         assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
-        assert_eq!(error.message, format!("model must be a string.\n{CATALOGUE}"));
+        assert_eq!(
+            error.message,
+            format!("model must be a string.\n{CATALOGUE}")
+        );
         assert!(output.jobs.is_empty());
         assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
     }
@@ -231,7 +232,10 @@ fn effects_accept_a_call_without_a_model_or_with_a_non_string_one() {
     wrong.insert("model".to_owned(), serde_json::json!(5));
     for call in [plain, wrong] {
         let effects = spawned.effects(&call).expect("model reaches run");
-        assert_eq!(effects.declared.effects, [contract::shapes::Effect::Executes]);
+        assert_eq!(
+            effects.declared.effects,
+            [contract::shapes::Effect::Executes]
+        );
         assert!(effects.always_reviewed);
     }
 }
