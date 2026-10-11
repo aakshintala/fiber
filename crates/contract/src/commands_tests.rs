@@ -177,79 +177,47 @@ fn a_missing_args_is_read_as_an_empty_object() {
     );
 }
 
-/// `command`, which takes no `args`, reads as `expected` with `args` missing
-/// or empty, and still refuses a key in them.
-fn empty_args_read_as_missing(command: &str, expected: Command) {
-    let missing = format!(r#"{{"id":"c","command":"{command}"}}"#);
-    let empty = format!(r#"{{"id":"c","command":"{command}","args":{{}}}}"#);
-    let extra = format!(r#"{{"id":"c","command":"{command}","args":{{"future":1}}}}"#);
-    assert_eq!(parse(&missing).unwrap().command, expected);
-    assert_eq!(
-        parse(&empty)
-            .unwrap_or_else(|e| panic!("{empty}: {e}"))
-            .command,
-        expected
-    );
-    assert!(parse(&extra).is_err(), "{extra}");
-}
-
+/// A command that takes no `args` reads with `args` missing or empty as
+/// without it, and still refuses a key in them: the missing-or-empty retry
+/// in `CommandLine::deserialize`.
 #[test]
-fn cancel_reads_an_empty_args_as_a_missing_one() {
-    empty_args_read_as_missing("cancel", Command::Cancel);
-}
-
-#[test]
-fn background_reads_an_empty_args_as_a_missing_one() {
-    empty_args_read_as_missing("background", Command::Background);
-}
-
-#[test]
-fn reload_reads_an_empty_args_as_a_missing_one() {
-    empty_args_read_as_missing("reload", Command::Reload);
-}
-
-#[test]
-fn tools_reads_an_empty_args_as_a_missing_one() {
-    empty_args_read_as_missing("tools", Command::Tools);
-}
-
-#[test]
-fn commands_reads_an_empty_args_as_a_missing_one() {
-    empty_args_read_as_missing("commands", Command::Commands);
-}
-
-#[test]
-fn commands_writes_without_args() {
-    let line = CommandLine {
-        id: CommandId("c_1".into()),
-        command: Command::Commands,
-    };
-    assert_eq!(
-        serde_json::to_string(&line).unwrap(),
-        r#"{"id":"c_1","command":"commands"}"#
-    );
-}
-
-#[test]
-fn skills_reads_an_empty_args_as_a_missing_one() {
-    empty_args_read_as_missing("skills", Command::Skills);
-}
-
-#[test]
-fn skills_writes_without_args() {
-    let line = CommandLine {
-        id: CommandId("c_1".into()),
-        command: Command::Skills,
-    };
-    assert_eq!(
-        serde_json::to_string(&line).unwrap(),
-        r#"{"id":"c_1","command":"skills"}"#
-    );
-}
-
-#[test]
-fn close_reads_an_empty_args_as_a_missing_one() {
-    empty_args_read_as_missing("close", Command::Close(CloseArgs { now: false }));
+fn commands_without_args_read_missing_and_empty_as_missing() {
+    for (name, expected) in [
+        ("cancel", Command::Cancel),
+        ("background", Command::Background),
+        ("reload", Command::Reload),
+        ("tools", Command::Tools),
+        ("commands", Command::Commands),
+        ("skills", Command::Skills),
+        ("close", Command::Close(CloseArgs { now: false })),
+    ] {
+        let missing = format!(r#"{{"id":"c","command":"{name}"}}"#);
+        let empty = format!(r#"{{"id":"c","command":"{name}","args":{{}}}}"#);
+        let extra = format!(r#"{{"id":"c","command":"{name}","args":{{"future":1}}}}"#);
+        assert_eq!(parse(&missing).unwrap().command, expected, "{name}");
+        assert_eq!(
+            parse(&empty)
+                .unwrap_or_else(|e| panic!("{empty}: {e}"))
+                .command,
+            expected,
+            "{name}"
+        );
+        assert!(parse(&extra).is_err(), "{extra}");
+    }
+    for (name, command) in [
+        ("commands", Command::Commands),
+        ("skills", Command::Skills),
+    ] {
+        let line = CommandLine {
+            id: CommandId("c_1".into()),
+            command,
+        };
+        assert_eq!(
+            serde_json::to_string(&line).unwrap(),
+            format!(r#"{{"id":"c_1","command":"{name}"}}"#),
+            "{name}"
+        );
+    }
 }
 
 #[test]
