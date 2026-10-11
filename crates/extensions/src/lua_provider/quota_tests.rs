@@ -842,37 +842,43 @@ fn quoted_forwards_calls_tools_warms_and_cost_lookup() {
     let root = fakes::TempDir::new("fiber-quota-forward");
     let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))]).unwrap();
     let lua = http_quota_provider(&root, &server.url(), FakeClock::new());
-    // `Inner::default()` warms `false`, while `Provider::warms` defaults to
-    // `true`, so a wrapper that answered its own default would show.
-    let inner = Arc::new(crate::test_support::Inner::default());
-    let priced: Arc<dyn Provider> = Arc::new(Priced(Arc::clone(&inner)));
-    let wrapped = {
-        let lua = Arc::clone(&lua);
-        let pair = pair();
-        within(move || lua.with_quota(priced, pair)).unwrap()
-    };
-    let tools = [ToolDefinition {
-        name: "b".into(),
-        description: String::new(),
-        input_schema: serde_json::json!({"type": "object"}),
-        deferred: false,
-        hosted: None,
-    }];
-    assert_eq!(wrapped.wire_tools(&tools), inner.wire_tools(&tools));
-    assert!(
-        !wrapped.warms(&crate::test_support::request()),
-        "warms was not forwarded"
-    );
-    let lookup = wrapped
-        .cost_lookup()
-        .expect("cost_lookup was not forwarded");
-    assert_eq!(
-        lookup.cost(&GenerationId("gen".to_owned())),
-        Some(0.25),
-        "cost_lookup was not forwarded"
-    );
-    let _call = wrapped.call(&crate::test_support::request());
-    assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // One inner per value of `warms`: a wrapper that answered its own
+    // default (`true`) or a constant would match only one of them.
+    for warms in [true, false] {
+        let inner = Arc::new(crate::test_support::Inner {
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            warms,
+        });
+        let priced: Arc<dyn Provider> = Arc::new(Priced(Arc::clone(&inner)));
+        let wrapped = {
+            let lua = Arc::clone(&lua);
+            let pair = pair();
+            within(move || lua.with_quota(priced, pair)).unwrap()
+        };
+        let tools = [ToolDefinition {
+            name: "b".into(),
+            description: String::new(),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }];
+        assert_eq!(wrapped.wire_tools(&tools), inner.wire_tools(&tools));
+        assert_eq!(
+            wrapped.warms(&crate::test_support::request()),
+            warms,
+            "warms {warms} was not forwarded"
+        );
+        let lookup = wrapped
+            .cost_lookup()
+            .expect("cost_lookup was not forwarded");
+        assert_eq!(
+            lookup.cost(&GenerationId("gen".to_owned())),
+            Some(0.25),
+            "cost_lookup was not forwarded"
+        );
+        let _call = wrapped.call(&crate::test_support::request());
+        assert_eq!(inner.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 }
 
 #[test]
