@@ -477,8 +477,7 @@ fn busy_turn(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
         let pid = session.proc.pid();
         let measured = until_stdout(ctx, &session, "turn_completed", TURN).and_then(|()| {
             let rss = linux::peak_rss_kib(pid)?;
-            retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait))
-                .map(|retained| (rss, retained))
+            retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait)).map(|retained| (rss, retained))
         });
         let stopped = session.proc.stop(ctx.clock);
         let (rss, retained) = measured?;

@@ -3,7 +3,7 @@ use serde_json::json;
 use crate::busy::filler;
 
 use super::{
-    ATTACH_TAIL, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, PLANS, OpenFigures, PROBE_A, PROBE_B,
+    ATTACH_TAIL, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures, PLANS, PROBE_A, PROBE_B,
     Step, TURN_REPLY_BYTES, attach_stage_rows, feed_step, memory_rows, open_command,
     open_error_samples, parse_open_line, plan_turns, replay_finished, size_note, stage_rows,
 };

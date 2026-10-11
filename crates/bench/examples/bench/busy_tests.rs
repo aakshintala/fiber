@@ -93,7 +93,10 @@ fn the_busy_turn_reports_its_peak_its_retained_and_its_log() {
         busy_turn_samples(20480, 19001, &lines, 1_520_000).unwrap()
     );
     let log = value("turn_log_bytes");
-    assert_eq!(log.get("bytes"), Some(&serde_json::json!(turn_bytes(&lines).unwrap())));
+    assert_eq!(
+        log.get("bytes"),
+        Some(&serde_json::json!(turn_bytes(&lines).unwrap()))
+    );
     assert_eq!(log.get("content"), Some(&serde_json::json!(1_520_000)));
     assert_eq!(log.get("tool_calls"), Some(&serde_json::json!(1)));
 }

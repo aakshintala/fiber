@@ -710,10 +710,7 @@ fn the_attach_and_retained_memory_rows_gate_their_medians() {
         "{attach}"
     );
     let busy = row(&comment, "Session, memory kept");
-    assert!(
-        busy.contains("busy_turn_retained_kib: 19000 KiB"),
-        "{busy}"
-    );
+    assert!(busy.contains("busy_turn_retained_kib: 19000 KiB"), "{busy}");
     let retained = row(&comment, "Terminal, memory kept");
     assert!(
         retained.contains("terminal_attach_retained_kib: 48000 KiB"),
