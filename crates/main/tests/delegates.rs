@@ -351,7 +351,15 @@ impl Running {
                 }
             }
         }
-        let stderr = self.stderr.recv().unwrap_or_default();
+        let stderr = match deadline.recv(&self.stderr) {
+            Ok(text) => text,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited for the session's stderr to close; stdout: {out:?}")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the stderr thread ended without its text")
+            }
+        };
         (status, out, stderr)
     }
 }
