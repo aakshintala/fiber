@@ -247,7 +247,7 @@ impl Ctx<'_, '_> {
 
     /// Refuses a name whose directory another name already has, in Fiber
     /// home or in this plan. A directory slug a damaged extension holds
-    /// fails as [`Error::Damaged`]: remove it, then install it again.
+    /// fails as [`Error::Damaged`]: reinstall it.
     fn slug_free(&self, plan: &Plan, name: &str) -> Result<(), Error> {
         let mine = slug(name)?;
         if let Some(hit) = plan.damaged.iter().find(|hit| is_damaged(hit, name)) {
@@ -479,8 +479,7 @@ impl Ctx<'_, '_> {
     }
 
     /// Stages the lowest tag of `dep` that meets `wants`. A slug a
-    /// damaged directory holds fails before any fetch: remove it, then
-    /// install it again.
+    /// damaged directory holds fails before any fetch: reinstall it.
     fn stage_dep(
         &mut self,
         plan: &mut Plan,

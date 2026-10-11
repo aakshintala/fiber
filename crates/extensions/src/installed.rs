@@ -87,7 +87,7 @@ impl fmt::Display for Damaged {
         let shown = short_name(&self.name);
         write!(
             f,
-            "`{shown}` is damaged; run `fiber extension remove {shown}`, then install it again."
+            "`{shown}` is damaged; run `fiber extension reinstall {shown}`."
         )
     }
 }
@@ -99,7 +99,7 @@ impl Damaged {
     pub fn skipped(&self) -> String {
         let shown = short_name(&self.name);
         format!(
-            "`{shown}` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension remove {shown}`, then install it again."
+            "`{shown}` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension reinstall {shown}`."
         )
     }
 }

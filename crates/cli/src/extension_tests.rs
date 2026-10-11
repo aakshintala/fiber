@@ -242,11 +242,11 @@ fn install_fixture(home: &Path, source: &Path) {
 
 /// The damaged line an install or update names, without the `fiber: `
 /// prefix, for a directory whose record does not read.
-const BROKEN_SKIPPED: &str = "`broken` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension remove broken`, then install it again.";
+const BROKEN_SKIPPED: &str = "`broken` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension reinstall broken`.";
 
 /// The damaged line `list` prints for the same directory.
 const BROKEN_DISPLAY: &str =
-    "`broken` is damaged; run `fiber extension remove broken`, then install it again.";
+    "`broken` is damaged; run `fiber extension reinstall broken`.";
 
 #[test]
 fn install_from_a_path_without_a_terminal_installs_and_names_it() {

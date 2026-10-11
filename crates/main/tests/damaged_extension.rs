@@ -27,9 +27,9 @@ use support::{Deadline, Setup};
 const BROKEN: &str = "github.com/aakshintala/fiber/providers/opencode";
 /// The fix sentence `list` prints first on stdout.
 const FIX: &str =
-    "`opencode` is damaged; run `fiber extension remove opencode`, then install it again.";
+    "`opencode` is damaged; run `fiber extension reinstall opencode`.";
 /// The skip line `install` and `update` print once on stderr.
-const SKIP: &str = "fiber: `opencode` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension remove opencode`, then install it again.";
+const SKIP: &str = "fiber: `opencode` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension reinstall opencode`.";
 
 impl Setup {
     fn new_with_sources() -> Self {

@@ -1254,14 +1254,14 @@ fn a_damaged_messages_name_the_extension_and_the_fix() {
     assert_eq!(listing.damaged[0].name, name);
     assert_eq!(
         listing.damaged[0].to_string(),
-        "`opencode` is damaged; run `fiber extension remove opencode`, then install it again."
+        "`opencode` is damaged; run `fiber extension reinstall opencode`."
     );
     let shown = listing.damaged[0].to_string();
     assert!(!shown.contains(setup.home().to_str().unwrap()), "{shown}");
     assert!(!shown.contains("os error"), "{shown}");
     assert_eq!(
         listing.damaged[0].skipped(),
-        "`opencode` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension remove opencode`, then install it again."
+        "`opencode` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension reinstall opencode`."
     );
 }
 
@@ -1360,7 +1360,7 @@ fn install_or_update_of_a_damaged_name_fails_as_damaged() {
             write(&dir.join(".fiber.json"), "{");
         }
         let fix =
-            "`opencode` is damaged; run `fiber extension remove opencode`, then install it again.";
+            "`opencode` is damaged; run `fiber extension reinstall opencode`.";
         for request in [
             Request::Install(name.into()),
             Request::Update("opencode".into()),

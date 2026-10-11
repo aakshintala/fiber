@@ -438,7 +438,7 @@ fn a_damaged_extension_leaves_a_notice_and_the_rest_load() {
     assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/broken"));
     assert_eq!(
         notices[0].message,
-        "`fiber.test/broken` is damaged; run `fiber extension remove fiber.test/broken`, then install it again."
+        "`fiber.test/broken` is damaged; run `fiber extension reinstall fiber.test/broken`."
     );
     assert_eq!(changed_content(&after_tool(&session, "x")), Some("x|fine"));
 }
