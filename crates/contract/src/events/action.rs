@@ -499,6 +499,10 @@ pub enum DecidedBy {
     /// No reviewer could be set up, such as with no reviewer model, and no
     /// person could answer the escalation.
     NoReviewer,
+    /// A call whose request was pending when the session exited, refused by
+    /// a `before_tool` hook on resume, stopped by that hook's failure, or
+    /// stopped because the arguments it rewrote no longer fit the tool.
+    Hook,
     /// The turn was cancelled while the request was pending.
     Cancel,
 }
