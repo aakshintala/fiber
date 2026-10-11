@@ -15,7 +15,7 @@ use config::Config;
 use extensions::SessionExtensions;
 use serde_json::{Value, json};
 
-use super::{mode, read};
+use super::{mode, read, reader};
 
 /// Model-list fixtures with test-specific extension helpers.
 struct Setup {
@@ -157,6 +157,29 @@ fn a_model_name_reaches_its_picker_entry() {
         .find(|entry| entry.reference == "acme/haiku")
         .unwrap();
     assert_eq!(plain.name, None);
+}
+
+/// The terminal's reader lists the installed models on a cached read,
+/// through the same runner a switch reads with: replacing it with a
+/// default would list nothing.
+#[test]
+fn the_readers_cached_read_lists_the_installed_models() {
+    let setup = Setup::new("fiber-model-list-reader");
+    setup.install_data("acme-ext", "acme", &["m1"], &json!({}));
+    let clock: std::sync::Arc<dyn contract::clock::Clock> =
+        fakes::clock::FakeClock::new();
+    let locks: std::sync::Arc<dyn contract::files::PathLock> =
+        std::sync::Arc::new(tools::PathLocks::new());
+    let catalogue = reader(setup.home(), setup.workspace(), clock, locks)(tui::Refresh::Cached)
+        .map_err(|error| format!("the cached read: {error}"))
+        .unwrap();
+    assert!(
+        catalogue
+            .models
+            .iter()
+            .any(|entry| entry.reference == "acme/m1"),
+        "{catalogue:?}"
+    );
 }
 
 #[test]
