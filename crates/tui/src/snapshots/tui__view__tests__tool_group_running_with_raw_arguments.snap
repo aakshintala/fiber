@@ -3,13 +3,13 @@ source: crates/tui/src/view_tests.rs
 expression: screen(&app)
 ---
 
-
                                              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄
                                               look around ▐
                                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-                                                      00:00
+                                                 you 00:00
+
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-• Read 1 file, thought once · read README.md, shell {"comm…
+ • Read 1 file, thought once · read README.md, shell {"co…
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █

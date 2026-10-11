@@ -423,9 +423,10 @@ fn a_bare_url_is_drawn_on_exactly_its_own_cells() {
             .unwrap_or_else(|| panic!("no bare link in {text:?}: {found:?}"));
         assert_eq!(link.rects.len(), 1, "{text:?}: {link:?}");
         let rect = link.rects[0];
+        // The card's padding shifts the cells one column right.
         assert_eq!(
             (rect.x, rect.width),
-            (area.x.saturating_add(col), width),
+            (area.x.saturating_add(col).saturating_add(1), width),
             "{text:?}"
         );
     }

@@ -149,16 +149,17 @@ fn prompt_bubble_shows_the_local_time_under_it() {
     assert_eq!(
         texts,
         vec![
+            "".to_owned(),
             "▄▄▄▄▄".to_owned(),
             " go ▐".to_owned(),
             "▀▀▀▀▀".to_owned(),
-            "10:15".to_owned()
+            "you 10:15 ".to_owned()
         ]
     );
     let time = app
         .lines()
         .into_iter()
-        .find(|line| line.to_string() == "10:15")
+        .find(|line| line.to_string() == "you 10:15 ")
         .unwrap_or_default();
     assert!(time.style.add_modifier.contains(Modifier::DIM));
     assert_eq!(time.alignment, Some(Alignment::Right));
@@ -170,7 +171,7 @@ fn prompt_bubble_shows_the_local_time_under_it() {
     let at = (0..HEIGHT)
         .find(|y| row_text(&buf, *y).contains("10:15"))
         .expect("the time row is drawn");
-    assert!(row_text(&buf, at).ends_with("10:15 "));
+    assert!(row_text(&buf, at).trim_end().ends_with("you 10:15"));
     // The time sits under the bubble's bottom edge, its text row above
     // that.
     assert!(
@@ -192,10 +193,11 @@ fn prompt_bubble_defaults_to_utc() {
     assert_eq!(
         texts,
         vec![
+            "".to_owned(),
             "▄▄▄▄▄".to_owned(),
             " go ▐".to_owned(),
             "▀▀▀▀▀".to_owned(),
-            "14:15".to_owned()
+            "you 14:15 ".to_owned()
         ]
     );
 }
@@ -273,16 +275,20 @@ fn page_down_to_the_bottom_follows_again() {
         app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", &format!("prompt {n}")));
     }
     let bottom = screen(&app);
-    // The bottom shows prompt 28's time through prompt 30: four rows a
-    // turn over 120 rows, nine of conversation. A page is those 9
+    // The bottom shows prompt 29's bubble through prompt 30: five rows
+    // a turn over 150 rows, nine of conversation. A page is those 9
     // rows less one, and the top stops at the first row.
-    let time = format!("{:>59}", "00:00");
     app.on_key(Key::PageUp, now);
     let shown = screen(&app);
     let shown: Vec<&str> = shown.lines().collect();
-    assert_eq!(shown[0], format!("{time}│"), "one page up moves eight rows");
-    assert_eq!(shown[1], format!("{:>59}│", "▄".repeat(12)));
-    assert!(shown[2].contains("prompt 27"), "{shown:?}");
+    assert_eq!(
+        shown[0],
+        format!("{:>59}", "▀".repeat(12)),
+        "one page up moves eight rows"
+    );
+    assert_eq!(shown[1], format!("{:>58}", "you 00:00"));
+    assert_eq!(shown[2], "");
+    assert!(shown[4].contains("prompt 28"), "{shown:?}");
     // One page down lands exactly on the bottom, which follows again: new
     // output scrolls in with no overlay.
     app.on_key(Key::PageDown, now);
@@ -291,21 +297,22 @@ fn page_down_to_the_bottom_follows_again() {
     let followed = screen(&app);
     assert!(!followed.contains("↓ New messages below"));
     assert!(followed.contains("prompt 31"));
-    // Fifteen pages up reaches the top, where another stops.
-    for _ in 0..15 {
+    // Nineteen pages up reaches the top, where another stops.
+    for _ in 0..19 {
         app.on_key(Key::PageUp, now);
     }
     assert_eq!(app.top(), Some(0));
     let top = screen(&app);
     let top: Vec<&str> = top.lines().collect();
-    assert!(top[0].trim_start().starts_with('▄'), "{top:?}");
-    assert!(top[1].contains("prompt 1"), "{top:?}");
+    assert_eq!(top[0], "");
+    assert!(top[1].trim_start().starts_with('▄'), "{top:?}");
+    assert!(top[2].contains("prompt 1"), "{top:?}");
     app.on_key(Key::PageUp, now);
     assert_eq!(app.top(), Some(0));
-    // Fifteen pages down lands exactly on the bottom.
+    // Nineteen pages down lands exactly on the bottom.
     app.on_key(Key::PageDown, now);
     assert_eq!(app.top(), Some(8));
-    for _ in 0..14 {
+    for _ in 0..18 {
         app.on_key(Key::PageDown, now);
     }
     assert!(screen(&app).contains("prompt 31"));
@@ -345,7 +352,7 @@ fn draw_folds_an_events_file() {
     assert_eq!(
         shown,
         format!(
-            "{}█\n{}\n▌ › █\n{}\n",
+            "{}┃\n{}\n▌ › █\n{}\n",
             "▀".repeat(19),
             "▄".repeat(20),
             "▀".repeat(20)
@@ -403,7 +410,7 @@ fn the_overlay_never_covers_the_input_line() {
     assert_eq!(sized(&mut app, 30, 1), "▌ › █\n");
     assert_eq!(
         sized(&mut app, 30, 2),
-        "    ↓ New messages below     █\n▌ › █\n"
+        "▐ ↓ New messages below · End ┃\n▌ › █\n"
     );
 }
 
@@ -1005,18 +1012,18 @@ fn styles_reach_the_screen() {
     let reset = Some(ratatui::style::Color::Reset);
     assert_ne!(cell(WIDTH - 2, bubble).bg, reset);
     assert_eq!(cell(0, bubble).bg, reset);
-    // The card's surface tint reaches the last text column: past the end
-    // of a short card row, and on the wrapped rows of a long one
+    // The card's turn tint reaches the last text column: past the end
+    // of a short card row, and on the split rows of a long one
     // (`docs/tui.md`, "Look"). The time row keeps the background.
-    let surface = Some(crate::theme::Role::Surface.color());
-    assert_eq!(cell(30, row("Fixed.")).bg, surface);
-    assert_eq!(cell(WIDTH - 2, summary + 1).bg, surface);
-    assert_eq!(cell(0, row("00:00")).bg, reset);
+    let turn = Some(crate::theme::Role::Turn.color());
+    assert_eq!(cell(30, row("Fixed.")).bg, turn);
+    assert_eq!(cell(WIDTH - 2, summary + 1).bg, turn);
+    assert_eq!(cell(0, row("you 00:00")).bg, reset);
 }
 
 #[test]
 fn a_card_row_wrapped_by_the_view_is_tinted_on_every_row() {
-    // The ▣ closing line wraps in the view at 19 columns; every row it
+    // The ▣ closing line splits in the card at 17 columns; every row it
     // draws carries the card's tint (`docs/tui.md`, "Look").
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(20, 10);
@@ -1045,15 +1052,15 @@ fn a_card_row_wrapped_by_the_view_is_tinted_on_every_row() {
         .iter()
         .position(|row| row.contains("▣"))
         .expect("a closing line");
-    // "▣ completed · 4 calls" is 21 columns: two view rows, the word
-    // wrap putting "calls" on the second whatever the bar draws
+    // "▣ completed · 4 calls" is 22 columns: two card rows, the split
+    // putting "calls" on the second whatever the bar draws
     // after it.
-    assert!(shown[closing + 1].starts_with("calls"), "{shown:?}");
-    let surface = crate::theme::Role::Surface.color();
+    assert!(shown[closing + 1].starts_with(" calls"), "{shown:?}");
+    let turn = crate::theme::Role::Turn.color();
     let row = u16::try_from(closing).unwrap_or(u16::MAX);
-    assert_eq!(buf[(0, row)].bg, surface);
-    assert_eq!(buf[(0, row + 1)].bg, surface);
-    assert_eq!(buf[(18, row + 1)].bg, surface);
+    assert_eq!(buf[(0, row)].bg, turn);
+    assert_eq!(buf[(0, row + 1)].bg, turn);
+    assert_eq!(buf[(18, row + 1)].bg, turn);
 }
 
 #[test]
@@ -1365,7 +1372,7 @@ fn the_badge_is_a_target_over_the_cells_it_drew() {
     // the badge.
     let turn = Target {
         id: TargetId::Turn(0),
-        rect: Rect::new(0, 4, 39, 4),
+        rect: Rect::new(0, 3, 39, 5),
     };
     assert_eq!(targets, vec![badge, turn]);
     // Narrower than its text, it takes the whole row.
@@ -1385,14 +1392,16 @@ fn new_messages_below_is_a_target_over_the_cells_it_drew() {
     app.on_line(turn_started(S_A, "one"));
     app.on_key(Key::PageUp, now);
     app.on_line(delta(S_A, "a_1", "streamed"));
-    // "↓ New messages below" is 20 cells, centred on the row above the
-    // input line.
-    let (_, targets) = pointed(&mut app, 30, 2, None);
+    // The pill is 30 cells, centred over the rows area: at 30 columns
+    // the rows are 29 wide, so it clips at the right edge with no ▌.
+    let (buf, targets) = pointed(&mut app, 30, 2, None);
     let below = Target {
         id: TargetId::NewBelow,
-        rect: Rect::new(4, 0, 20, 1),
+        rect: Rect::new(0, 0, 29, 1),
     };
     assert_eq!(targets, vec![below]);
+    assert_eq!(buf[(0, 0)].symbol(), "▐");
+    assert!(row_text(&buf, 0).contains("↓ New messages below · End"));
     let (_, targets) = pointed(&mut app, 10, 2, None);
     assert_eq!(
         targets.first().map(|target| target.rect),
@@ -1401,6 +1410,113 @@ fn new_messages_below_is_a_target_over_the_cells_it_drew() {
     // No conversation row, no overlay and no target.
     let (_, targets) = pointed(&mut app, 30, 1, None);
     assert!(targets.is_empty());
+}
+
+#[test]
+fn the_pill_is_centred_on_the_bottom_row_in_attention_on_rule() {
+    use crate::mouse::TargetId;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    for n in 1..=14 {
+        app.on_line(turn_started(S_A, &format!("prompt {n}")));
+    }
+    app.on_key(Key::PageUp, now);
+    let area = Rect::new(0, 0, WIDTH, HEIGHT);
+    let mut plain = Buffer::empty(area);
+    render(&app, area, &mut plain, None);
+    app.on_line(turn_started(S_A, "one more"));
+    // At 60 columns the rows are 59 wide: the 30-cell pill starts at 14.
+    let mut buf = Buffer::empty(area);
+    let targets = render(&app, area, &mut buf, None);
+    let pill = text(&buf)
+        .lines()
+        .position(|row| row.contains("↓ New messages below · End"))
+        .expect("the pill");
+    let row = u16::try_from(pill).unwrap_or(u16::MAX);
+    assert_eq!(buf[(14, row)].symbol(), "▐");
+    assert_eq!(buf[(14, row)].fg, crate::theme::Role::Rule.color());
+    assert_eq!(buf[(43, row)].symbol(), "▌");
+    assert_eq!(buf[(43, row)].fg, crate::theme::Role::Rule.color());
+    let label: String = (15..=42)
+        .map(|x| buf[(x, row)].symbol().to_owned())
+        .collect();
+    assert_eq!(label, super::NEW_BELOW);
+    for x in 15..=42 {
+        assert_eq!(
+            buf[(x, row)].fg,
+            crate::theme::Role::Attention.color(),
+            "col {x}"
+        );
+        assert_eq!(
+            buf[(x, row)].bg,
+            crate::theme::Role::Rule.color(),
+            "col {x}"
+        );
+    }
+    for x in 14..=43 {
+        assert!(
+            !buf[(x, row)]
+                .symbol()
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_digit()),
+            "col {x}"
+        );
+    }
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::NewBelow
+                && target.rect == Rect::new(14, row, 30, 1)),
+        "{targets:?}"
+    );
+    // Either side of the pill the conversation's row shows through:
+    // the row is never blanked.
+    for x in (0..14).chain(44..WIDTH) {
+        assert_eq!(buf[(x, row)].symbol(), plain[(x, row)].symbol(), "col {x}");
+    }
+    app.on_key(Key::End, now);
+    let mut followed = Buffer::empty(area);
+    render(&app, area, &mut followed, None);
+    assert!(
+        !text(&followed).contains("↓ New messages below"),
+        "{}",
+        text(&followed)
+    );
+}
+
+#[test]
+fn the_pill_clips_at_a_narrow_conversation() {
+    use crate::mouse::TargetId;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    for n in 1..=14 {
+        app.on_line(turn_started(S_A, &format!("prompt {n}")));
+    }
+    app.on_key(Key::PageUp, now);
+    app.on_line(turn_started(S_A, "one more"));
+    // At 20 columns the rows are 19 wide: the pill starts at the rows'
+    // left edge and is cut at their right one, with no closing end.
+    let (buf, targets) = pointed(&mut app, 20, HEIGHT, None);
+    let pill = text(&buf)
+        .lines()
+        .position(|row| row.contains("↓ New messages"))
+        .expect("the clipped pill");
+    let row = u16::try_from(pill).unwrap_or(u16::MAX);
+    assert_eq!(buf[(0, row)].symbol(), "▐");
+    assert!(
+        (0..20).all(|x| buf[(x, row)].symbol() != "▌"),
+        "{}",
+        row_text(&buf, row)
+    );
+    assert!(
+        targets.iter().any(
+            |target| target.id == TargetId::NewBelow && target.rect == Rect::new(0, row, 19, 1)
+        ),
+        "{targets:?}"
+    );
 }
 
 #[test]
@@ -1468,7 +1584,7 @@ fn a_collapsed_groups_line_is_a_target_over_its_rows() {
     let group = app.targets().first().map(|(_, target)| *target);
     assert!(matches!(group, Some(Target::Group(_))), "{group:?}");
     let drawn: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
-    assert_eq!(drawn, vec![Rect::new(0, 4, WIDTH - 1, 1)]);
+    assert_eq!(drawn, vec![Rect::new(0, 2, WIDTH - 1, 1)]);
     assert_eq!(
         lines(&targets).first().map(|(target, _)| Some(*target)),
         Some(group)
@@ -1505,11 +1621,11 @@ fn ledger_rows_are_targets_over_their_rows() {
     assert_eq!(
         rects,
         vec![
+            Rect::new(0, 0, WIDTH - 1, 1),
+            Rect::new(0, 1, WIDTH - 1, 1),
             Rect::new(0, 2, WIDTH - 1, 1),
             Rect::new(0, 3, WIDTH - 1, 1),
-            Rect::new(0, 4, WIDTH - 1, 1),
-            Rect::new(0, 5, WIDTH - 1, 1),
-            Rect::new(0, 8, WIDTH - 1, 1),
+            Rect::new(0, 6, WIDTH - 1, 1),
         ]
     );
     let opens: Vec<_> = app
@@ -1526,14 +1642,14 @@ fn a_thought_line_is_a_target_over_its_row() {
     use crate::app::Target;
     let mut app = empty();
     thought_turn(&mut app);
-    // Row 5 of `thought_line`.
+    // Row 3 of `thought_line`.
     let (_, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let drawn = lines(&targets);
     assert_eq!(drawn.len(), 1);
     assert!(matches!(drawn.first(), Some((Target::Thought(_), _))));
     assert_eq!(
         drawn.first().map(|(_, rect)| *rect),
-        Some(Rect::new(0, 5, WIDTH - 1, 1))
+        Some(Rect::new(0, 3, WIDTH - 1, 1))
     );
 }
 
@@ -1541,13 +1657,13 @@ fn a_thought_line_is_a_target_over_its_row() {
 fn a_line_partly_scrolled_off_targets_only_its_rows_shown() {
     let mut app = empty();
     tool_turn(&mut app);
-    // Four conversation rows: the summary's second row, the reply and the
-    // two-row footer.
-    let (_, targets) = pointed(&mut app, WIDTH, 8, None);
+    // Seven conversation rows: the group summary whole, the reply, the
+    // two-row footer and the blanks between them.
+    let (_, targets) = pointed(&mut app, WIDTH, 10, None);
     let rects: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
     assert_eq!(rects, vec![Rect::new(0, 0, WIDTH - 1, 1)]);
-    // Three rows: the summary is wholly out of view.
-    let (_, targets) = pointed(&mut app, WIDTH, 7, None);
+    // Six rows: the summary is wholly out of view.
+    let (_, targets) = pointed(&mut app, WIDTH, 9, None);
     assert!(lines(&targets).is_empty());
 }
 
@@ -1561,15 +1677,14 @@ fn the_overlay_row_hits_new_messages_below_not_the_line_under_it() {
     app.on_key(Key::PageUp, now);
     app.on_line(turn_started(S_A, "next"));
     assert!(app.has_new());
-    // The summary's rows above the overlay, the second line's target on
-    // the top row with the overlay below it.
+    // The reply's row above the overlay, with the pill below it: the
+    // pill's cells hit NewBelow, while the same row outside the pill
+    // hits nothing, and the plain row above hits nothing either.
     let (buf, targets) = pointed(&mut app, WIDTH, 5, None);
     assert!(text(&buf).contains("New messages below"), "{}", text(&buf));
-    let rects: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
-    assert_eq!(rects, vec![Rect::new(0, 0, WIDTH - 1, 1)]);
     assert_eq!(hit(&targets, WIDTH / 2, 1), Some(TargetId::NewBelow));
     assert_eq!(hit(&targets, 0, 1), None);
-    assert!(matches!(hit(&targets, 0, 0), Some(TargetId::Line(_))));
+    assert_eq!(hit(&targets, 0, 0), None);
 }
 
 /// An empty app with `see ` and then a 312-line paste token typed.
@@ -1747,9 +1862,11 @@ fn a_streaming_reply_renders_its_markdown_in_place() {
 #[test]
 fn a_resize_renders_the_reply_again_at_the_new_width() {
     let mut app = replying(40, 18, "```rust\nlet x = 1;\n```");
-    assert!(text(&buffer(&app, 40, 18)).contains(&format!("rust{}click to copy", " ".repeat(21))));
+    // At 40 columns the header renders at the card's inner width of 37.
+    assert!(text(&buffer(&app, 40, 18)).contains(&format!("rust{}click to copy", " ".repeat(19))));
     app.set_size(20, 18);
-    assert!(text(&buffer(&app, 20, 18)).contains("rust click to copy"));
+    // At 20 columns its language name ellipsizes.
+    assert!(text(&buffer(&app, 20, 18)).contains("r… click to copy"));
 }
 
 #[test]

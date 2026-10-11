@@ -280,8 +280,9 @@ fn release_copies_the_unwrapped_text_and_shows_copied() {
 
 #[test]
 fn a_selection_over_paragraphs_keeps_the_blank_line_between() {
-    // The blank line after "beta" is outside the selection.
-    let mut app = replied(40, 10, "alpha\n\nbeta\n\ngamma");
+    // The blank line after "beta" is outside the selection: a taller
+    // screen shows the whole card.
+    let mut app = replied(40, 12, "alpha\n\nbeta\n\ngamma");
     let alpha = find(&app, "alpha");
     let beta = find(&app, "beta");
     assert_eq!(
@@ -1013,11 +1014,12 @@ fn overlapping_pending_copies_keep_each_others_pins() {
     app.focus = Some(TargetId::Turn(0));
     assert_eq!(app.on_key(Key::Char('y'), now()), Effect::None);
     load_needed(&mut app, &lines);
-    // The selection covers the bubble's rows, edges included, and the
-    // bar's cells show its glyphs; the copy holds only its text.
-    assert_eq!(shown, ["▄▄▄▄▄█", "go ▐│", "▀▀▀▀▀│"]);
+    // The selection covers the turn's first rows, and the bar's cells
+    // show its glyphs; the copy holds only its text.
+    assert_eq!(shown, ["┃", "▄▄▄▄▄", "go ▐"]);
     let text = app.take_copy().expect("the selection copies");
-    assert_eq!(text, "go", "{text:?} from {shown:?}");
+    // The gap row above the bubble copies as its blank line.
+    assert_eq!(text, "\ngo", "{text:?} from {shown:?}");
     // The turn copy still pins its pages: page 0 stays.
     assert!(app.pages().pinned() > prior);
     app.on_key(Key::End, now());
@@ -1123,8 +1125,9 @@ fn the_conversation_area_is_the_drawn_rect() {
     ] {
         let area = app.conversation_area();
         // The empty prompt draws no bubble, so the card's top edge is
-        // the first drawn row and "first" sits one row below it.
-        assert_eq!(drawn_origin(&mut app), (area.x, area.y + 1), "{name}");
+        // the first drawn row and "first" sits one row below it, one
+        // column in past the card's padding.
+        assert_eq!(drawn_origin(&mut app), (area.x + 1, area.y + 1), "{name}");
         assert_eq!(
             usize::from(area.height),
             app.conversation_height(),
@@ -1144,7 +1147,7 @@ fn the_conversation_area_is_the_drawn_rect() {
             .unwrap_or_default();
         assert!(before.contains("▣ completed"), "{name}: {before:?}");
         // The card's bottom edge, with the bar's glyph after it.
-        let edge = last.trim().trim_end_matches(['█', '│']);
+        let edge = last.trim().trim_end_matches(['█', '│', '┃']);
         assert!(
             !edge.is_empty() && edge.chars().all(|cell| cell == '▀'),
             "{name}: {last:?}"
@@ -1176,7 +1179,7 @@ fn a_selection_starting_after_a_wrapped_space_copies_no_space_before_it() {
     let mut app = replied(12, 10, "alpha beta gamma delta");
     let gamma = find(&app, "gamma");
     let delta = find(&app, "delta");
-    assert_eq!(delta.1, gamma.1, "{:#?}", rows(&app));
+    assert_eq!(delta.1, gamma.1 + 1, "{:#?}", rows(&app));
     assert_eq!(
         select(&mut app, gamma, right(delta, 4)),
         Effect::Copy("gamma delta".to_owned())

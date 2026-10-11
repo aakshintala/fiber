@@ -1,20 +1,21 @@
 ---
 source: crates/tui/src/turn/answers_tests.rs
+assertion_line: 599
 expression: answered_screen(60)
 ---
-
-                                                    ▄▄▄▄▄▄▄
-                                                     pick ▐
                                                     ▀▀▀▀▀▀▀
-                                                      00:00
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-• Asked 2 questions · 4s
-you answered
-Base: main (Recommended), dev, "and tags"
-Name: skipped
-note: "by friday"
-Thanks.
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                 you 00:00
+
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄┃
+ • Asked 2 questions · 4s                                  ┃
+                                                           ┃
+ you answered                                              ┃
+ Base: main (Recommended), dev, "and tags"                 ┃
+ Name: skipped                                             ┃
+ note: "by friday"                                         ┃
+                                                           ┃
+ Thanks.                                                   ┃
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┃
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 ▌ › █
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
