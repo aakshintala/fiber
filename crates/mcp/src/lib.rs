@@ -12,6 +12,7 @@ mod name;
 mod pipes;
 mod prompt;
 mod registry;
+mod resources;
 mod rpc;
 mod server;
 mod server_json;
@@ -26,6 +27,7 @@ mod wait;
 pub use effects::Hints;
 pub use prompt::Prompts;
 pub use registry::stop_every_start;
+pub use resources::{RESOURCES_TOOL, resources_definition};
 pub use start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, Program, ServerSpec, Servers, Started,
     StdioSpec, Transport, start,

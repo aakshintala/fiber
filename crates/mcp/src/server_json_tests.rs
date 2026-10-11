@@ -379,3 +379,73 @@ fn array_shapes_never_read_positionally() {
         from_object(json!([[{"type": "text", "text": "hi"}], true])).unwrap_or_default();
     assert_eq!(result, CallResult::default());
 }
+
+#[test]
+fn a_listed_resource_keeps_known_fields_and_drops_wrong_types() {
+    let resource: super::ListedResource = serde_json::from_value(json!({
+        "uri": "file:///notes.txt",
+        "name": "notes",
+        "title": "Notes",
+        "description": "The notes.",
+        "mimeType": "text/plain",
+        "size": 41,
+    }))
+    .expect("a resource reads");
+    assert_eq!(resource.uri, "file:///notes.txt");
+    assert_eq!(resource.name.as_deref(), Some("notes"));
+    assert_eq!(resource.title.as_deref(), Some("Notes"));
+    assert_eq!(resource.description.as_deref(), Some("The notes."));
+    assert_eq!(resource.mime_type.as_deref(), Some("text/plain"));
+    assert_eq!(resource.size, Some(41));
+    // A field of the wrong type is left out, and the rest still reads.
+    let lenient: super::ListedResource = serde_json::from_value(json!({
+        "uri": "file:///notes.txt",
+        "name": 7,
+        "title": 7,
+        "description": 7,
+        "mimeType": 7,
+        "size": "big",
+    }))
+    .expect("a resource with wrong types reads");
+    assert_eq!(lenient.uri, "file:///notes.txt");
+    assert_eq!(lenient.name, None);
+    assert_eq!(lenient.title, None);
+    assert_eq!(lenient.description, None);
+    assert_eq!(lenient.mime_type, None);
+    assert_eq!(lenient.size, None);
+    // What `page` writes: the known fields in order, wrong types left out.
+    assert_eq!(
+        serde_json::to_value(&lenient).expect("a resource writes"),
+        json!({"uri": "file:///notes.txt"}),
+    );
+    assert_eq!(
+        serde_json::to_value(&resource).expect("a resource writes"),
+        json!({
+            "uri": "file:///notes.txt",
+            "name": "notes",
+            "title": "Notes",
+            "description": "The notes.",
+            "mimeType": "text/plain",
+            "size": 41,
+        }),
+    );
+}
+
+#[test]
+fn an_entry_without_a_string_uri_is_dropped() {
+    let kept: Vec<super::ListedResource> = entries(vec![
+        json!({"uri": "file:///kept.txt", "name": "kept"}),
+        json!({"name": "no uri"}),
+        json!({"uri": 7, "name": "numeric uri"}),
+        json!({"uri": null, "name": "null uri"}),
+        json!(7),
+        json!(null),
+    ]);
+    assert_eq!(
+        kept.iter()
+            .map(|resource| resource.uri.as_str())
+            .collect::<Vec<_>>(),
+        ["file:///kept.txt"],
+    );
+    assert_eq!(kept[0].name.as_deref(), Some("kept"));
+}
