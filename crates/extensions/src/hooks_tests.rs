@@ -424,7 +424,7 @@ fn a_loaded_extensions_directory_is_listed_and_a_disabled_ones_is_not() {
 }
 
 #[test]
-fn a_damaged_extension_leaves_a_notice_and_the_rest_load() {
+fn a_damaged_extension_is_skipped_without_a_notice_and_the_rest_load() {
     let home = Home::new();
     home.install("fine", Some(&tagging("fine", "transform")));
     home.install("broken", Some(&tagging("broken", "transform")));
@@ -432,14 +432,8 @@ fn a_damaged_extension_leaves_a_notice_and_the_rest_load() {
     let session = home.load(&[]);
     let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
     assert_eq!(loaded, names(&["fine"]));
-    let notices = session.notices();
-    assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
-    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/broken"));
-    assert_eq!(
-        notices[0].message,
-        "`fiber.test/broken` is damaged; run `fiber extension reinstall fiber.test/broken`."
-    );
+    // `Providers::load` already reported it, so no notice here.
+    assert!(session.notices().is_empty());
     assert_eq!(changed_content(&after_tool(&session, "x")), Some("x|fine"));
 }
 
