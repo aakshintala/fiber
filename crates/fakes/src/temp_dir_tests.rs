@@ -38,6 +38,39 @@ fn name_is(path: &Path, prefix: &str) -> bool {
 }
 
 #[test]
+fn under_places_the_directory_under_its_parent_and_removes_it_on_drop() {
+    let parent = TempDir::new("under-parent");
+    let child = TempDir::under(parent.path(), "kid");
+    assert_eq!(child.path().parent(), Some(parent.path()));
+    assert!(name_is(child.path(), "kid"), "{}", child.path().display());
+    assert!(child.path().is_dir());
+    assert_eq!(fs::read_dir(child.path()).unwrap().count(), 0);
+    let path = child.path().to_path_buf();
+    drop(child);
+    assert!(!path.exists());
+}
+
+#[test]
+fn write_creates_nested_parents_and_content() {
+    let dir = TempDir::new("w");
+    dir.write("a/b/c.txt", "hello");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("a/b/c.txt")).unwrap(),
+        "hello"
+    );
+    dir.write("top.txt", "top");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("top.txt")).unwrap(),
+        "top"
+    );
+    dir.write("a/b/c.txt", "again");
+    assert_eq!(
+        fs::read_to_string(dir.path().join("a/b/c.txt")).unwrap(),
+        "again"
+    );
+}
+
+#[test]
 fn two_directories_differ_and_leave_nothing() {
     let parent = std::env::temp_dir();
     let a = TempDir::new("t");

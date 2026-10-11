@@ -31,8 +31,32 @@ impl TempDir {
     /// taken, and another suffix is drawn. Panics if creating the directory
     /// fails for any other reason, or after [`ATTEMPTS`] names were taken.
     pub fn new(prefix: &str) -> Self {
-        let path = create(&std::env::temp_dir(), prefix, std::iter::from_fn(suffix));
+        Self::under(&std::env::temp_dir(), prefix)
+    }
+
+    /// Creates `<parent>/<prefix>-<8 lowercase hex digits>`, as [`TempDir::new`]
+    /// but under `parent` instead of the system temporary directory.
+    pub fn under(parent: &Path, prefix: &str) -> Self {
+        let path = create(parent, prefix, std::iter::from_fn(suffix));
         Self { path }
+    }
+
+    /// Writes `content` to `rel` under the directory, creating parent
+    /// directories first.
+    ///
+    /// # Panics
+    ///
+    /// When a parent directory cannot be created or the file cannot be
+    /// written.
+    #[allow(
+        clippy::panic,
+        clippy::unwrap_used,
+        reason = "a test helper; a failure is the test's"
+    )]
+    pub fn write(&self, rel: &str, content: &str) {
+        let path = self.path.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
     }
 
     /// The directory's path.
