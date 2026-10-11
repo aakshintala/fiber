@@ -305,7 +305,7 @@ fn a_table_has_a_bold_header_a_rule_and_right_aligned_numbers() {
     let rendered = render(markdown, 40);
     assert_eq!(
         rendered.lines.iter().map(text).collect::<Vec<_>>(),
-        vec!["name   size", "───────────", "a     1,200", "bb        7"]
+        vec!["name    size", "────   ─────", "a      1,200", "bb         7"]
     );
     assert!(
         style_at(&rendered.lines[0], 0)
@@ -317,7 +317,24 @@ fn a_table_has_a_bold_header_a_rule_and_right_aligned_numbers() {
             .add_modifier
             .contains(Modifier::BOLD)
     );
-    assert_eq!(style_at(&rendered.lines[1], 0).fg, fg(Role::Muted));
+    assert_eq!(style_at(&rendered.lines[1], 0).fg, fg(Role::Rule));
+    // The rule breaks at the gaps.
+    assert_eq!(style_at(&rendered.lines[1], 4).fg, None);
+    assert_eq!(
+        text(&rendered.lines[1]).chars().skip(4).take(3).collect::<String>(),
+        "   ".to_owned()
+    );
+}
+
+#[test]
+fn a_number_columns_body_cells_are_plain_text() {
+    let rendered = render("| n | t |\n|---|---|\n| `41` | `xy` |", 40);
+    let row = &rendered.lines[2];
+    assert_eq!(text(row), "41   xy");
+    // The number column's body cell keeps the text colour only.
+    assert_eq!(style_at(row, 1), style(Role::Text));
+    // Any other column keeps its inline style.
+    assert_eq!(style_at(row, 5).fg, fg(Role::Info));
 }
 
 #[test]
@@ -326,16 +343,16 @@ fn numeric_columns_take_signs_and_percentages_but_not_units() {
         "| a | b | c |\n|---|---|---|\n| -1.5 | 3ms | |\n| +20% | 4 | x |",
         40,
     );
-    assert_eq!(lines[2], "-1.5  3ms   ");
-    assert_eq!(lines[3], "+20%  4    x");
+    assert_eq!(lines[2], "-1.5   3ms    ");
+    assert_eq!(lines[3], "+20%   4     x");
     let lines = texts("| a | b |\n|---|---|\n| 1 | - |", 40);
-    assert_eq!(lines[2], "1  -");
+    assert_eq!(lines[2], "1   -");
 }
 
 #[test]
 fn the_alignment_row_is_honoured() {
     let lines = texts("| left | right | mid |\n|:--|--:|:-:|\n| a | b | c |", 40);
-    assert_eq!(lines[2], "a         b   c ");
+    assert_eq!(lines[2], "a          b    c ");
 }
 
 #[test]
@@ -345,11 +362,12 @@ fn a_wide_table_shrinks_its_widest_column_and_wraps_its_cells() {
     assert_eq!(
         rendered.lines.iter().map(text).collect::<Vec<_>>(),
         vec![
-            "key  descriptio",
-            "     n         ",
-            "───────────────",
-            "k    one two   ",
-            "     three four",
+            "key   descripti",
+            "      on       ",
+            "───   ─────────",
+            "k     one two  ",
+            "      three    ",
+            "      four     ",
         ]
     );
 }
@@ -358,9 +376,9 @@ fn a_wide_table_shrinks_its_widest_column_and_wraps_its_cells() {
 fn shrinking_stops_at_six_columns_each() {
     let markdown = "| aaaaaaaa | bbbbbbbb |\n|---|---|\n| x | y |";
     let lines = texts(markdown, 4);
-    assert_eq!(lines[0], "aaaaaa  bbbbbb");
-    assert_eq!(lines[1], "aa      bb    ");
-    assert_eq!(lines[2], "──────────────");
+    assert_eq!(lines[0], "aaaaaa   bbbbbb");
+    assert_eq!(lines[1], "aa       bb    ");
+    assert_eq!(lines[2], "──────   ──────");
 }
 
 #[test]
@@ -377,7 +395,9 @@ fn rendering_is_pure() {
 #[test]
 fn every_line_fits_the_width() {
     let markdown = "# A heading that is long\n\n- item with words that wrap\n  - nested item that wraps too\n\n> quote that wraps around\n\n```rust\nlet a_long_line = \"with a string\";\n```\n\n| a | b |\n|---|---|\n| 語語語語 | wide |";
-    for width in 12..40u16 {
+    // The table's minimum is 13: its columns stop shrinking at six and
+    // four with a three-space gap, so narrower widths overflow by design.
+    for width in 13..40u16 {
         for line in render(markdown, width).lines {
             assert!(
                 line.width() <= usize::from(width),
@@ -443,7 +463,7 @@ fn an_items_text_ends_before_a_block_inside_it() {
     assert_eq!(lines[2], "            ");
     let lines = texts("- a\n  | x | y |\n  |---|---|\n  | 1 | 2 |", 20);
     assert_eq!(lines[0], "• a");
-    assert_eq!(lines[1], "x  y");
+    assert_eq!(lines[1], "x   y");
 }
 
 #[test]
@@ -460,8 +480,8 @@ fn the_label_is_the_info_strings_first_word() {
 #[test]
 fn a_tie_for_widest_shrinks_the_first_column() {
     let lines = texts("| aaaaaaaa | bbbbbbbb |\n|---|---|\n| x | y |", 17);
-    assert_eq!(lines[0], "aaaaaaa  bbbbbbbb");
-    assert_eq!(lines[1], "a                ");
+    assert_eq!(lines[0], "aaaaaaa   bbbbbbb");
+    assert_eq!(lines[1], "a         b      ");
 }
 
 #[test]
@@ -482,7 +502,7 @@ fn an_item_that_opens_with_a_code_block_shows_its_marker_first() {
 #[test]
 fn the_widest_of_unequal_columns_shrinks_first() {
     let lines = texts("| aaaaaaaaaa | bbbbbbb |\n|---|---|\n| x | y |", 17);
-    assert_eq!(lines[0], "aaaaaaaa  bbbbbbb");
+    assert_eq!(lines[0], "aaaaaaa   bbbbbbb");
 }
 
 /// `text` wrapped by [`super::wrap_joined`], each row as a string.
@@ -564,9 +584,9 @@ fn a_table_in_a_quote_keeps_the_bars_and_shrinks_inside_them() {
     assert_eq!(
         texts(markdown, 19),
         vec![
-            "│ aaaaaaaa  bbbbbbb",
-            "│ aa               ",
-            "│ ─────────────────",
+            "│ aaaaaaa   bbbbbbb",
+            "│ aaa              ",
+            "│ ───────   ───────",
             "│ x         y      ",
         ]
     );

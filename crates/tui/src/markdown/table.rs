@@ -1,6 +1,6 @@
-//! GFM tables: a bold header row, a rule under it, columns two spaces
-//! apart, numbers right-aligned, and a table wider than the area shrunk
-//! widest column first (`docs/tui.md`, "Look").
+//! GFM tables: a bold header row, a rule under each column, columns
+//! three spaces apart, numbers right-aligned, and a table wider than the
+//! area shrunk widest column first (`docs/tui.md`, "Look").
 
 use std::ops::Range;
 
@@ -11,7 +11,7 @@ use ratatui::text::{Line, Span};
 use super::{Cell, Role, char_width, link_cols, spans_of, style, wrap_joined_indices};
 
 /// Cells between columns.
-const GAP: usize = 2;
+const GAP: usize = 3;
 /// A column shrinks no narrower than this.
 const MIN_COLUMN: usize = 6;
 
@@ -82,10 +82,6 @@ impl Table {
             })
             .collect();
         shrink(&mut widths, width);
-        let total = widths
-            .iter()
-            .sum::<usize>()
-            .saturating_add(GAP.saturating_mul(count.saturating_sub(1)));
         let mut lines = Vec::new();
         for (at, row) in self.rows.iter().enumerate() {
             // The wrapped rows with their source indices, per column, so
@@ -98,10 +94,15 @@ impl Table {
                         .get(column)
                         .map(|(cell, links)| (cell.as_slice(), links.as_slice()))
                         .unwrap_or((&[][..], &[][..]));
+                    let numeric =
+                        at > 0 && numeric.get(column).copied().unwrap_or_default();
                     let owned: Vec<Cell> = if at == 0 {
                         cell.iter()
                             .map(|&(ch, style)| (ch, style.add_modifier(Modifier::BOLD)))
                             .collect()
+                    } else if numeric {
+                        // A number column's body cells are plain text.
+                        cell.iter().map(|&(ch, _)| (ch, style(Role::Text))).collect()
                     } else {
                         cell.to_vec()
                     };
@@ -155,10 +156,15 @@ impl Table {
                 lines.push((Line::from(spans), links_out));
             }
             if at == 0 {
-                lines.push((
-                    Line::from(Span::styled("─".repeat(total), style(Role::Muted))),
-                    Vec::new(),
-                ));
+                // A rule under each column, breaking at the gaps.
+                let mut rule = Vec::new();
+                for (column, width) in widths.iter().enumerate() {
+                    if column > 0 {
+                        rule.push(Span::raw(" ".repeat(GAP)));
+                    }
+                    rule.push(Span::styled("─".repeat(*width), style(Role::Rule)));
+                }
+                lines.push((Line::from(rule), Vec::new()));
             }
         }
         lines
