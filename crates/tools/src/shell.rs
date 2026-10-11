@@ -14,7 +14,10 @@ use contract::jobs::Jobs;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Process};
 use contract::tool::{Bound, Cancel, Effects, Output, Tool};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
+
+use crate::tool_util::{cancelled_before, failed, failure};
 
 mod background;
 
@@ -64,7 +67,6 @@ const MONITOR_ALONE: &str = "`monitor` cannot be combined with `run_in_backgroun
 
 const NO_JOBS: &str = "Background jobs are not available in this session.";
 
-const CANCELLED_BEFORE: &str = "Cancelled before it started.";
 const CANCELLED: &str = "Cancelled and stopped.";
 const INDETERMINATE: &str = "The command was stopped, and Fiber cannot tell whether it completed.";
 const HELD_OPEN: &str = "Output was still held open.";
@@ -187,7 +189,7 @@ impl Tool for Shell {
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
-            return line_only(CANCELLED_BEFORE);
+            return cancelled_before();
         }
         let parsed = match parse(arguments, &self.workspace, self.max_deadline_ms) {
             Ok(parsed) => parsed,
@@ -261,6 +263,21 @@ impl Tool for Shell {
     }
 }
 
+/// The call's arguments, checked against the schema before the call runs.
+#[derive(Debug, Deserialize)]
+struct Args {
+    command: String,
+    workdir: Option<String>,
+    timeout_ms: Option<u64>,
+    deadline_ms: Option<u64>,
+    #[serde(default)]
+    run_in_background: bool,
+    #[serde(default)]
+    tty: bool,
+    #[serde(default)]
+    monitor: bool,
+}
+
 struct Parsed {
     command: String,
     workdir: PathBuf,
@@ -323,23 +340,14 @@ fn parse(
     workspace: &Path,
     max_deadline_ms: u64,
 ) -> Result<Parsed, String> {
-    let command = match arguments.get("command") {
-        Some(Value::String(command)) => command.clone(),
-        Some(_) => return Err("`command` must be a string.".to_owned()),
-        None => return Err("Give the command to run as `command`.".to_owned()),
-    };
-    let workdir = workdir(arguments, workspace)?;
-    let given_timeout = arguments
-        .get("timeout_ms")
-        .map(|value| millis(value, "timeout_ms"))
-        .transpose()?;
-    let given_deadline = arguments
-        .get("deadline_ms")
-        .map(|value| millis(value, "deadline_ms"))
-        .transpose()?;
-    let run_in_background = flag(arguments, "run_in_background")?;
-    let tty = flag(arguments, "tty")?;
-    let monitor = flag(arguments, "monitor")?;
+    let args: Args = crate::tool_util::arguments(arguments)?;
+    let command = args.command;
+    let workdir = workdir(args.workdir.as_deref(), workspace)?;
+    let given_timeout = args.timeout_ms;
+    let given_deadline = args.deadline_ms;
+    let run_in_background = args.run_in_background;
+    let tty = args.tty;
+    let monitor = args.monitor;
     let mode = match (monitor, tty, run_in_background) {
         (true, false, false) => Mode::Monitor,
         (true, _, _) => return Err(MONITOR_ALONE.to_owned()),
@@ -372,18 +380,10 @@ fn parse(
     })
 }
 
-fn flag(arguments: &Map<String, Value>, name: &str) -> Result<bool, String> {
-    match arguments.get(name) {
-        None => Ok(false),
-        Some(Value::Bool(value)) => Ok(*value),
-        Some(_) => Err(format!("`{name}` must be a boolean.")),
-    }
-}
-
-fn workdir(arguments: &Map<String, Value>, workspace: &Path) -> Result<PathBuf, String> {
-    let path = match arguments.get("workdir") {
+fn workdir(workdir: Option<&str>, workspace: &Path) -> Result<PathBuf, String> {
+    let path = match workdir {
         None => workspace.to_path_buf(),
-        Some(Value::String(raw)) => {
+        Some(raw) => {
             let given = Path::new(raw);
             if given.is_absolute() {
                 given.to_path_buf()
@@ -391,7 +391,6 @@ fn workdir(arguments: &Map<String, Value>, workspace: &Path) -> Result<PathBuf, 
                 workspace.join(given)
             }
         }
-        Some(_) => return Err("`workdir` must be a string.".to_owned()),
     };
     if path.is_dir() {
         Ok(path)
@@ -401,24 +400,6 @@ fn workdir(arguments: &Map<String, Value>, workspace: &Path) -> Result<PathBuf, 
             path.display()
         ))
     }
-}
-
-fn millis(value: &Value, name: &str) -> Result<u64, String> {
-    let not_integer = || format!("`{name}` must be an integer number of milliseconds.");
-    let Some(number) = value.as_number() else {
-        return Err(not_integer());
-    };
-    // Signed first, so 0 is accepted and a negative is rejected. Checking
-    // `as_u64` first would make `<` and `<=` agree on every value.
-    let Some(ms) = number.as_i64() else {
-        return Err(not_integer());
-    };
-    if ms < 0 {
-        return Err(format!(
-            "`{name}` is negative. Give 0 or more milliseconds."
-        ));
-    }
-    u64::try_from(ms).map_err(|_| not_integer())
 }
 
 /// The first part is the text before the first `;`, `&`, `|` or newline.
@@ -599,40 +580,12 @@ fn text_of(output: &[u8], line: &str) -> String {
     text
 }
 
-fn line_only(line: &str) -> Output {
-    Output {
-        content: vec![ContentPart::Text {
-            text: format!("{line}\n"),
-        }],
-        ..Output::default()
-    }
-}
-
 fn with_process(text: String, error: Option<Failure>, process: Process) -> Output {
     Output {
         content: vec![ContentPart::Text { text }],
         error,
         process: Some(process),
         ..Output::default()
-    }
-}
-
-fn failed(code: ErrorCode, message: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text {
-            text: format!("{message}\n"),
-        }],
-        error: Some(failure(code, message)),
-        ..Output::default()
-    }
-}
-
-fn failure(code: ErrorCode, message: String) -> Failure {
-    Failure {
-        code,
-        message,
-        retry_after_ms: None,
-        provider: None,
     }
 }
 

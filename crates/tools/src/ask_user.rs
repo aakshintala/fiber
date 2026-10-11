@@ -5,11 +5,11 @@ use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::events::{Answer, Control, FormAnswer, Interaction};
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, DeclaredEffects, Question};
+use contract::shapes::{ContentPart, Question};
 use contract::tool::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
-use crate::files::{failed, text_output};
+use crate::tool_util::{failed, no_effects, text_output};
 
 /// The result of a call whose questions went to a program driver
 /// (`docs/tools.md`, "When a program drives the session").
@@ -86,16 +86,7 @@ impl Tool for AskUser {
     }
 
     fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: Vec::new(),
-                reversible: true,
-                paths: None,
-            },
-            subject: Some(String::new()),
-            prefix: None,
-            always_reviewed: false,
-        })
+        Ok(no_effects())
     }
 
     fn run(

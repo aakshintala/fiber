@@ -11,14 +11,23 @@ use contract::events::FileChange;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use similar::{ChangeTag, TextDiff};
 
 use crate::files::land::{land, shape_replacement};
 use crate::files::{
-    Shared, declare, effects_error, failed, hash_bytes, kind_of, path_text, resolve, resolved,
-    string_argument, text_output, unsupported_message,
+    Shared, declare, effects_error, hash_bytes, kind_of, path_text, resolve, resolved,
+    unsupported_message,
 };
+use crate::tool_util::failed;
+
+/// The call's arguments, checked against the schema before the call runs.
+#[derive(Debug, Deserialize)]
+struct Args {
+    path: String,
+    content: String,
+}
 
 /// Creates or replaces a text file.
 pub struct Write {
@@ -60,28 +69,22 @@ impl Tool for Write {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let raw = string_argument(arguments, "path", "Give the file path as `path`.")
-            .map_err(EffectsError::Arguments)?;
-        let _content = string_argument(arguments, "content", "Give the file content as `content`.")
-            .map_err(EffectsError::Arguments)?;
-        let resolved = resolve(self.shared.workspace(), &raw).map_err(effects_error)?;
-        self.shared.note_judged(&raw, &resolved);
+        let args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        let resolved = resolve(self.shared.workspace(), &args.path).map_err(effects_error)?;
+        self.shared.note_judged(&args.path, &resolved);
         Ok(declare(Effect::Writes, reversible(&resolved), &resolved))
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
-            return text_output("Cancelled before it started.\n".to_owned());
+            return crate::tool_util::cancelled_before();
         }
-        let raw = match string_argument(arguments, "path", "Give the file path as `path`.") {
-            Ok(raw) => raw,
+        let args: Args = match crate::tool_util::arguments(arguments) {
+            Ok(args) => args,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        let content =
-            match string_argument(arguments, "content", "Give the file content as `content`.") {
-                Ok(content) => content,
-                Err(message) => return failed(ErrorCode::InvalidArguments, message),
-            };
+        let raw = args.path;
+        let content = args.content;
         let key = match resolved(self.shared.workspace(), &raw) {
             Ok(path) => path,
             Err(output) => return output,
@@ -95,18 +98,15 @@ impl Tool for Write {
             Ok(path) => path,
             Err(output) => return output,
         };
-        if path != key
-            || self
-                .shared
-                .judged(&raw)
-                .is_some_and(|judged| judged != path)
-        {
-            return failed(
-                ErrorCode::PathChanged,
-                format!(
-                    "`{raw}` changed between the permission check and the write. Nothing was written."
-                ),
-            );
+        let judged = self.shared.judged(&raw);
+        if let Err(output) = crate::tool_util::recheck(
+            &raw,
+            &path,
+            Some(&key),
+            judged.as_deref(),
+            crate::tool_util::Act::Write,
+        ) {
+            return output;
         }
         let existing = match existing(&path) {
             Ok(existing) => existing,

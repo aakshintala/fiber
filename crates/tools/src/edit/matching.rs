@@ -7,12 +7,15 @@
 //! CRLF pair is two bytes seen as one. Untouched lines are copied from the
 //! original bytes, so a mixed-ending file keeps those endings.
 
+use serde::Deserialize;
+
 use crate::files::land::shape_lines;
 use crate::write::line_count;
 
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 
 /// One `{ old_text, new_text }` block, in the order the model sent it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct Block {
     pub old_text: String,
     pub new_text: String,

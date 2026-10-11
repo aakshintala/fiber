@@ -19,7 +19,7 @@ use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
 use serde_json::Value;
 
-use crate::files::{failed, text_output};
+use crate::tool_util::{failed, text_output};
 
 /// How much of the child's standard error a failure message keeps.
 const MESSAGE_CAP: usize = 2048;
@@ -193,48 +193,28 @@ struct Stored {
     height: u32,
 }
 
-/// Runs the child on `path`, which `read` has already resolved and classified
-/// as a regular file with an image's first bytes.
-pub(crate) fn read(child: Option<&ImageChild>, path: &Path, cancel: &dyn Cancel) -> Output {
+/// Reads `bytes`, already resolved and classified as an image, through
+/// the image child on its standard input.
+pub(crate) fn read(
+    child: Option<&ImageChild>,
+    path: &Path,
+    bytes: &[u8],
+    cancel: &dyn Cancel,
+) -> Output {
     let Some(child) = child else {
         return failed(
             ErrorCode::ToolError,
             "image reading is not configured.".to_owned(),
         );
     };
-    // A new name for every read: an older log line's path never points at
-    // new bytes.
-    let stem = fresh_stem("i");
-    let Some(output) = run_child(child, path, &stem, cancel) else {
-        return text_output("Cancelled and stopped.\n".to_owned());
-    };
-    let output = match output {
-        Ok(output) => output,
-        Err(error) => {
-            return failed(
-                ErrorCode::ToolError,
-                format!("the image child could not start: {error}."),
-            );
-        }
-    };
-    let message = capped(&output.stderr);
-    match output.status.code() {
-        Some(0) => match parse(&output.stdout, &stem) {
-            Ok(stored) => rendered(&stored),
-            Err(why) => failed(ErrorCode::ToolError, format!("the image child {why}.")),
-        },
-        Some(1) => failed(
+    match child.process(bytes, cancel) {
+        Ok(reference) => rendered_ref(&reference),
+        Err(ImageError::Unreadable(message)) => failed(
             ErrorCode::UnsupportedFile,
             format!("`{}` cannot be read as an image: {message}", path.display()),
         ),
-        Some(code) => failed(
-            ErrorCode::ToolError,
-            format!("the image child exited with status {code}: {message}"),
-        ),
-        None => failed(
-            ErrorCode::ToolError,
-            format!("the image child was killed by a signal: {message}"),
-        ),
+        Err(ImageError::Failed(message)) => failed(ErrorCode::ToolError, message),
+        Err(ImageError::Cancelled) => text_output("Cancelled and stopped.\n".to_owned()),
     }
 }
 
@@ -272,25 +252,7 @@ fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<Vec<u8>> {
     })
 }
 
-/// Runs the child to its end. `None` when the call was cancelled: the child
-/// is then killed and reaped, and its output is dropped. The child is the
-/// only process, so killing it needs no group.
-fn run_child(
-    child: &ImageChild,
-    path: &Path,
-    stem: &str,
-    cancel: &dyn Cancel,
-) -> Option<std::io::Result<Collected>> {
-    let mut command = Command::new(&child.fiber);
-    command
-        .arg("image")
-        .arg(path)
-        .arg(&child.artifacts)
-        .arg(stem);
-    run_to_end(&mut command, cancel)
-}
-
-/// Runs `command` to its end: the image child, the PDF child and `pdftoppm`
+/// Runs `command` to its end: the PDF child and `pdftoppm`
 /// share this cancel-and-wait loop (`docs/tools.md`, "read"). `None` when
 /// the call was cancelled: the process is then killed and reaped, and its
 /// output is dropped.
@@ -403,23 +365,20 @@ fn image_ref(stored: &Stored) -> ImageRef {
     }
 }
 
-fn rendered(stored: &Stored) -> Output {
-    let Stored {
-        file,
-        mime_type,
-        width,
-        height,
-    } = stored;
+fn rendered_ref(reference: &ImageRef) -> Output {
     Output {
         content: vec![
             ContentPart::Text {
-                text: format!("Image: {width}x{height} {mime_type}.\n"),
+                text: format!(
+                    "Image: {}x{} {}.\n",
+                    reference.width, reference.height, reference.mime_type
+                ),
             },
             ContentPart::Image {
-                path: format!("artifacts/{file}"),
-                mime_type: mime_type.clone(),
-                width: *width,
-                height: *height,
+                path: reference.path.clone(),
+                mime_type: reference.mime_type.clone(),
+                width: reference.width,
+                height: reference.height,
             },
         ],
         ..Output::default()

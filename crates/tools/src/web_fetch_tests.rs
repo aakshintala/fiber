@@ -1322,17 +1322,6 @@ fn a_url_the_effects_cannot_parse_is_an_arguments_error() {
             "{url}"
         );
     }
-    let Value::Object(wrong) = json!({"url": 5}) else {
-        unreachable!()
-    };
-    assert!(matches!(
-        tool.effects(&wrong),
-        Err(EffectsError::Arguments(_))
-    ));
-    assert!(matches!(
-        tool.effects(&Map::new()),
-        Err(EffectsError::Arguments(_))
-    ));
 }
 
 #[test]

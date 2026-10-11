@@ -11,16 +11,25 @@ use contract::events::FileChange;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use similar::TextDiff;
 
 use matching::{Applied, Block, MatchError, Report};
 
 use crate::files::{
-    InspectError, Inspected, Shared, declare, effects_error, failed, hash_bytes, inspect,
-    path_text, resolve, resolved, string_argument, text_output, unsupported_message,
+    InspectError, Inspected, Shared, declare, effects_error, hash_bytes, inspect, path_text,
+    resolve, resolved, unsupported_message,
 };
+use crate::tool_util::failed;
 use crate::write::line_changes;
+
+/// The call's arguments, checked against the schema before the call runs.
+#[derive(Debug, Deserialize)]
+struct Args {
+    path: String,
+    edits: Vec<Block>,
+}
 
 /// Replaces stretches of a text file. Every block matches the file as it was
 /// before the call, and the file is written once or not at all.
@@ -77,23 +86,24 @@ impl Tool for Edit {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let raw = string_argument(arguments, "path", "Give the file path as `path`.")
-            .map_err(EffectsError::Arguments)?;
-        let _blocks = blocks(arguments).map_err(EffectsError::Arguments)?;
-        let resolved = resolve(self.shared.workspace(), &raw).map_err(effects_error)?;
-        self.shared.note_judged(&raw, &resolved);
+        let args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        blocks(&args.edits).map_err(EffectsError::Arguments)?;
+        let resolved = resolve(self.shared.workspace(), &args.path).map_err(effects_error)?;
+        self.shared.note_judged(&args.path, &resolved);
         Ok(declare(Effect::Writes, false, &resolved))
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
-            return text_output("Cancelled before it started.\n".to_owned());
+            return crate::tool_util::cancelled_before();
         }
-        let raw = match string_argument(arguments, "path", "Give the file path as `path`.") {
-            Ok(raw) => raw,
+        let args: Args = match crate::tool_util::arguments(arguments) {
+            Ok(args) => args,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        let blocks = match blocks(arguments) {
+        let raw = args.path;
+        let all = args.edits;
+        let blocks = match blocks(&all) {
             Ok(blocks) => blocks,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
@@ -107,18 +117,15 @@ impl Tool for Edit {
             Ok(path) => path,
             Err(output) => return output,
         };
-        if path != key
-            || self
-                .shared
-                .judged(&raw)
-                .is_some_and(|judged| judged != path)
-        {
-            return failed(
-                ErrorCode::PathChanged,
-                format!(
-                    "`{raw}` changed between the permission check and the write. Nothing was written."
-                ),
-            );
+        let judged = self.shared.judged(&raw);
+        if let Err(output) = crate::tool_util::recheck(
+            &raw,
+            &path,
+            Some(&key),
+            judged.as_deref(),
+            crate::tool_util::Act::Write,
+        ) {
+            return output;
         }
         let text = match inspect(&path) {
             Ok(Inspected::Pdf { size, .. }) | Ok(Inspected::PdfOverCap { size }) => {
@@ -148,7 +155,7 @@ impl Tool for Edit {
             }
             Err(InspectError::Tool(message)) => return failed(ErrorCode::ToolError, message),
         };
-        let applied = match matching::apply(&text, &blocks) {
+        let applied = match matching::apply(&text, blocks) {
             Ok(applied) => applied,
             Err(error) => return match_failed(error),
         };
@@ -167,32 +174,11 @@ impl Tool for Edit {
     }
 }
 
-fn blocks(arguments: &Map<String, Value>) -> Result<Vec<Block>, String> {
-    let Some(value) = arguments.get("edits") else {
-        return Err("Give the edits as `edits`.".to_owned());
-    };
-    let Some(list) = value.as_array() else {
-        return Err("`edits` must be a list of blocks.".to_owned());
-    };
-    if list.is_empty() {
+fn blocks(edits: &[Block]) -> Result<&[Block], String> {
+    if edits.is_empty() {
         return Err("`edits` must contain at least one block.".to_owned());
     }
-    let mut blocks = Vec::with_capacity(list.len());
-    for (index, block) in list.iter().enumerate() {
-        let Some(object) = block.as_object() else {
-            return Err(format!("`edits[{index}]` must be an object."));
-        };
-        let old_text = match string_argument(object, "old_text", "Give `old_text`.") {
-            Ok(old_text) => old_text,
-            Err(message) => return Err(format!("edits[{index}]: {message}")),
-        };
-        let new_text = match string_argument(object, "new_text", "Give `new_text`.") {
-            Ok(new_text) => new_text,
-            Err(message) => return Err(format!("edits[{index}]: {message}")),
-        };
-        blocks.push(Block { old_text, new_text });
-    }
-    Ok(blocks)
+    Ok(edits)
 }
 
 fn match_failed(error: MatchError) -> Output {

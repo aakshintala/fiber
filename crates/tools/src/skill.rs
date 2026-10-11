@@ -10,12 +10,20 @@ use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::events::{Control, SkillLoad};
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, DeclaredEffects, Effect};
+use contract::shapes::{ContentPart, Effect};
 use contract::skills::{SkillRead, Skills};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::files::{failed, path_text, string_argument, text_output};
+use crate::files::path_text;
+use crate::tool_util::{cancelled_before, effects, failed, no_effects};
+
+/// The call's arguments, checked against the schema before the call runs.
+#[derive(Debug, Deserialize)]
+struct Args {
+    name: String,
+}
 
 /// Loads one skill from the skills listing. The definition never lists
 /// skill names, so adding or removing a skill leaves the tool set's bytes
@@ -70,20 +78,6 @@ enum Resolve {
     NotUtf8,
 }
 
-/// No effect: the call takes the fast path and `run` fails it.
-fn no_effect() -> Effects {
-    Effects {
-        declared: DeclaredEffects {
-            effects: Vec::new(),
-            reversible: true,
-            paths: None,
-        },
-        subject: Some(String::new()),
-        prefix: None,
-        always_reviewed: false,
-    }
-}
-
 impl Tool for Skill {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
@@ -110,39 +104,34 @@ impl Tool for Skill {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let Ok(name) = string_argument(arguments, "name", "Give the skill's name as `name`.")
-        else {
-            return Ok(no_effect());
+        let Ok(args) = crate::tool_util::arguments::<Args>(arguments) else {
+            return Ok(no_effects());
         };
+        let name = args.name;
         let Ok((target, _)) = self.resolve(&name) else {
             self.judged().remove(&name);
-            return Ok(no_effect());
+            return Ok(no_effects());
         };
         self.judged().insert(name, target.clone());
         let path = path_text(&target);
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: vec![Effect::Reads],
-                reversible: true,
-                paths: Some(vec![path]),
-            },
-            subject: Some(String::new()),
-            prefix: None,
-            always_reviewed: false,
-        })
+        Ok(effects(
+            vec![Effect::Reads],
+            true,
+            Some(vec![path]),
+            Some(String::new()),
+            None,
+        ))
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
-            return text_output("Cancelled before it started.\n".to_owned());
+            return cancelled_before();
         }
-        let Ok(name) = string_argument(arguments, "name", "Give the skill's name as `name`.")
-        else {
-            return failed(
-                ErrorCode::InvalidArguments,
-                "Give the skill's name as `name`.".to_owned(),
-            );
+        let args: Args = match crate::tool_util::arguments(arguments) {
+            Ok(args) => args,
+            Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
+        let name = args.name;
         let (target, listing) = match self.resolve(&name) {
             Ok(resolved) => resolved,
             Err(Resolve::NotListed) => {

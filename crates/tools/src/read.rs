@@ -8,13 +8,15 @@ use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Effect};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::files::{
-    InspectError, Inspected, ResolveError, Shared, declare, effects_error, failed, hash_bytes,
-    inspect, resolve, string_argument, text_output, unsupported_message,
+    InspectError, Inspected, ResolveError, Shared, declare, effects_error, hash_bytes, inspect,
+    resolve, unsupported_message,
 };
 use crate::pdf::{PageRange, page_range};
+use crate::tool_util::{failed, text_output};
 
 /// The tool's own cut (`docs/tools.md`, "Bounded results"): the default cap.
 /// The loop's bound sits above this, so a result is not cut twice and no
@@ -35,6 +37,15 @@ impl Read {
     pub(crate) fn new(shared: Arc<Shared>) -> Self {
         Self { shared, cap: CAP }
     }
+}
+
+/// The call's arguments, checked against the schema before the call runs.
+#[derive(Debug, Deserialize)]
+struct Args {
+    path: String,
+    offset: Option<i64>,
+    limit: Option<i64>,
+    pages: Option<String>,
 }
 
 impl Tool for Read {
@@ -77,30 +88,30 @@ impl Tool for Read {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let raw = string_argument(arguments, "path", "Give the file path as `path`.")
-            .map_err(EffectsError::Arguments)?;
-        let resolved = resolve(self.shared.workspace(), &raw).map_err(effects_error)?;
-        self.shared.note_judged(&raw, &resolved);
+        let args: Args = crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        let resolved = resolve(self.shared.workspace(), &args.path).map_err(effects_error)?;
+        self.shared.note_judged(&args.path, &resolved);
         Ok(declare(Effect::Reads, true, &resolved))
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
-            return text_output("Cancelled before it started.\n".to_owned());
+            return crate::tool_util::cancelled_before();
         }
-        let raw = match string_argument(arguments, "path", "Give the file path as `path`.") {
-            Ok(raw) => raw,
+        let args: Args = match crate::tool_util::arguments(arguments) {
+            Ok(args) => args,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        let offset = match line_argument(arguments, "offset", 1) {
+        let raw = args.path;
+        let offset = match line_argument(args.offset, "offset", 1) {
             Ok(offset) => offset,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        let limit = match line_argument(arguments, "limit", usize::MAX) {
+        let limit = match line_argument(args.limit, "limit", usize::MAX) {
             Ok(limit) => limit,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        let pages = match page_range(arguments) {
+        let pages = match page_range(args.pages.as_deref()) {
             Ok(pages) => pages,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
@@ -111,17 +122,15 @@ impl Tool for Read {
             }
             Err(ResolveError::Tool(message)) => return failed(ErrorCode::ToolError, message),
         };
-        if self
-            .shared
-            .judged(&raw)
-            .is_some_and(|judged| judged != path)
-        {
-            return failed(
-                ErrorCode::PathChanged,
-                format!(
-                    "`{raw}` changed between the permission check and the read. Nothing was read."
-                ),
-            );
+        let judged = self.shared.judged(&raw);
+        if let Err(output) = crate::tool_util::recheck(
+            &raw,
+            &path,
+            None,
+            judged.as_deref(),
+            crate::tool_util::Act::Read,
+        ) {
+            return output;
         }
         // debt: the whole file is read into memory, a measured file that does not fit
         let text = match inspect(&path) {
@@ -132,11 +141,11 @@ impl Tool for Read {
                 text
             }
             // `offset` and `limit` do not apply to an image.
-            Ok(Inspected::Image { hash, .. }) => {
+            Ok(Inspected::Image { hash, bytes, .. }) => {
                 if let Err(output) = reject_pages(&path, pages) {
                     return output;
                 }
-                let output = crate::image::read(self.shared.images(), &path, cancel);
+                let output = crate::image::read(self.shared.images(), &path, &bytes, cancel);
                 // Seen for a later `write`: the bytes this read took in. A
                 // failed or cancelled read returned no image, so saw nothing.
                 if output
@@ -237,21 +246,11 @@ fn reject_pages(path: &Path, pages: Option<PageRange>) -> Result<(), Output> {
     }
 }
 
-/// `offset` and `limit`. Absent means `default`. Below 1, or not an integer,
-/// is `invalid_arguments`.
-fn line_argument(
-    arguments: &Map<String, Value>,
-    key: &str,
-    default: usize,
-) -> Result<usize, String> {
-    let Some(value) = arguments.get(key) else {
+/// `offset` and `limit`. Absent means `default`. Below 1 is
+/// `invalid_arguments`.
+fn line_argument(value: Option<i64>, key: &str, default: usize) -> Result<usize, String> {
+    let Some(value) = value else {
         return Ok(default);
-    };
-    let Some(number) = value.as_number().filter(|number| number.is_i64()) else {
-        return Err(format!("`{key}` must be an integer."));
-    };
-    let Some(value) = number.as_i64() else {
-        return Err(format!("`{key}` must be an integer."));
     };
     if value < 1 {
         return Err(format!("`{key}` must be 1 or greater."));

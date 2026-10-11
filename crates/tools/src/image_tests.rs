@@ -55,7 +55,8 @@ fn the_childs_line_becomes_text_then_an_image_part() {
     let dir = workspace();
     let fiber = stub(
         dir.path(),
-        r#"printf '{"file":"%s.png","mime_type":"image/png","width":80,"height":60}\n' "$4""#,
+        r#"cat >/dev/null
+printf '{"file":"%s.png","mime_type":"image/png","width":80,"height":60}\n' "$4""#,
     );
     let output = run_with(dir.path(), &fiber, "a.png");
     assert_eq!(code(&output), None);
@@ -79,25 +80,55 @@ fn the_childs_line_becomes_text_then_an_image_part() {
 }
 
 #[test]
-fn the_child_gets_the_resolved_path_the_artifacts_directory_and_a_fresh_stem() {
+fn the_child_reads_stdin_into_the_artifacts_directory_under_a_fresh_stem() {
     let dir = workspace();
     let fiber = stub(
         dir.path(),
         r#"echo "$1 $2 $3 $4" > "$(dirname "$0")/argv"
+mkdir -p "$3"
+cat > "$3/$4.png"
 printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#,
     );
     let first = run_with(dir.path(), &fiber, "a.png");
+    assert_eq!(code(&first), None);
     let argv = fs::read_to_string(dir.path().join("argv")).unwrap();
     let words: Vec<&str> = argv.split_whitespace().collect();
     assert_eq!(words.first(), Some(&"image"));
-    assert_eq!(
-        words.get(1).map(|word| fs::canonicalize(word).unwrap()),
-        Some(fs::canonicalize(dir.path().join("a.png")).unwrap())
-    );
+    assert_eq!(words.get(1), Some(&"/dev/stdin"));
     assert_eq!(words.get(2).copied(), dir.path().join("artifacts").to_str());
+    let stem = words.get(3).expect("a stem");
+    assert!(stem.starts_with("i_"), "{stem}");
+    let stored = dir.path().join("artifacts").join(format!("{stem}.png"));
+    assert_eq!(fs::read(&stored).unwrap(), PNG);
     // The same file read twice is two artifacts.
     let second = run_with(dir.path(), &fiber, "a.png");
     assert_ne!(first.content.get(1), second.content.get(1));
+}
+
+#[test]
+fn a_read_image_reaches_the_child_once() {
+    let dir = workspace();
+    let fiber = stub(
+        dir.path(),
+        r#"mkdir -p "$3"
+cat > "$3/$4.png"
+echo ran >> "$(dirname "$0")/markers"
+printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#,
+    );
+    let output = {
+        // On a thread, so a hang fails at the limit instead of hanging.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let root = dir.path().to_path_buf();
+        let call = std::thread::spawn(move || drop(done_tx.send(run_with(&root, &fiber, "a.png"))));
+        let output = Deadline::after(LIMIT)
+            .recv(&done_rx)
+            .expect("the call ends");
+        call.join().unwrap();
+        output
+    };
+    assert_eq!(code(&output), None);
+    let markers = fs::read_to_string(dir.path().join("markers")).unwrap();
+    assert_eq!(markers.lines().count(), 1, "{markers}");
 }
 
 #[test]
@@ -105,7 +136,7 @@ fn exit_1_is_unsupported_file_with_the_childs_message() {
     let dir = workspace();
     let fiber = stub(
         dir.path(),
-        "echo '8000x7000 is 56000000 pixels; the limit is 50000000' >&2; exit 1",
+        "cat >/dev/null\necho '8000x7000 is 56000000 pixels; the limit is 50000000' >&2; exit 1",
     );
     let output = run_with(dir.path(), &fiber, "a.png");
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
@@ -123,7 +154,8 @@ fn a_long_message_is_cut_to_2048_bytes_at_a_character_boundary() {
     // 2,047 ASCII bytes and then two-byte characters: byte 2,048 is inside one.
     let fiber = stub(
         dir.path(),
-        r#"i=0; while [ $i -lt 2047 ]; do printf a >&2; i=$((i+1)); done; printf 'ééé' >&2; exit 1"#,
+        r#"cat >/dev/null
+i=0; while [ $i -lt 2047 ]; do printf a >&2; i=$((i+1)); done; printf 'ééé' >&2; exit 1"#,
     );
     let output = run_with(dir.path(), &fiber, "a.png");
     let failure = output.error.unwrap();
@@ -137,7 +169,8 @@ fn a_message_of_exactly_2048_bytes_is_kept_whole() {
     let dir = workspace();
     let fiber = stub(
         dir.path(),
-        r#"i=0; while [ $i -lt 2048 ]; do printf a >&2; i=$((i+1)); done; exit 1"#,
+        r#"cat >/dev/null
+i=0; while [ $i -lt 2048 ]; do printf a >&2; i=$((i+1)); done; exit 1"#,
     );
     let output = run_with(dir.path(), &fiber, "a.png");
     let failure = output.error.unwrap();
@@ -149,9 +182,12 @@ fn a_message_of_exactly_2048_bytes_is_kept_whole() {
 fn exit_3_exit_2_and_a_signal_are_tool_error() {
     let dir = workspace();
     for (body, expect) in [
-        ("echo disk full >&2; exit 3", "exited with status 3"),
-        ("exit 2", "exited with status 2"),
-        ("kill -9 $$", "killed by a signal"),
+        (
+            "cat >/dev/null; echo disk full >&2; exit 3",
+            "exited with status 3",
+        ),
+        ("cat >/dev/null; exit 2", "exited with status 2"),
+        ("cat >/dev/null; kill -9 $$", "killed by a signal"),
     ] {
         let fiber = stub(dir.path(), body);
         let output = run_with(dir.path(), &fiber, "a.png");
@@ -168,15 +204,18 @@ fn exit_3_exit_2_and_a_signal_are_tool_error() {
 fn unparseable_extra_or_incomplete_output_is_tool_error() {
     let dir = workspace();
     for (body, expect) in [
-        ("echo hello", "not JSON"),
-        ("echo '{\"file\":\"x.png\"}'", "without file"),
+        ("cat >/dev/null; echo hello", "not JSON"),
         (
-            "echo '{\"file\":\"x.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}'; echo more",
+            "cat >/dev/null; echo '{\"file\":\"x.png\"}'",
+            "without file",
+        ),
+        (
+            "cat >/dev/null; echo '{\"file\":\"x.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}'; echo more",
             "more than one line",
         ),
-        ("", "not JSON"),
+        ("cat >/dev/null", "not JSON"),
         (
-            "printf '{\"file\":\"x.png\",\"mime_type\":\"image/png\",\"width\":-1,\"height\":1}\\n'",
+            "cat >/dev/null; printf '{\"file\":\"x.png\",\"mime_type\":\"image/png\",\"width\":-1,\"height\":1}\\n'",
             "without file",
         ),
     ] {
@@ -227,7 +266,8 @@ fn offset_and_limit_are_ignored_for_an_image() {
     let dir = workspace();
     let fiber = stub(
         dir.path(),
-        r#"printf '{"file":"%s.png","mime_type":"image/png","width":2,"height":2}\n' "$4""#,
+        r#"cat >/dev/null
+printf '{"file":"%s.png","mime_type":"image/png","width":2,"height":2}\n' "$4""#,
     );
     let files =
         Files::new(dir.path().to_path_buf()).with_images(fiber, dir.path().join("artifacts"));
@@ -361,7 +401,8 @@ fn a_child_that_fills_both_pipes_does_not_deadlock() {
     // 300 KiB on each pipe, past any pipe buffer, stderr first.
     let fiber = stub(
         dir.path(),
-        r#"head -c 300000 /dev/zero | tr '\0' x >&2
+        r#"cat > /dev/null
+head -c 300000 /dev/zero | tr '\0' x >&2
 head -c 300000 /dev/zero | tr '\0' y
 exit 3"#,
     );
@@ -381,8 +422,8 @@ exit 3"#,
     );
 }
 
-const OK_CHILD: &str =
-    r#"printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#;
+const OK_CHILD: &str = r#"cat >/dev/null
+printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#;
 
 /// A `write` of `a.png` through the same `Files` that read it.
 fn write_png(files: &Files) -> Output {
@@ -430,7 +471,7 @@ fn an_image_changed_after_the_read_is_stale_and_a_refused_read_sees_nothing() {
     assert_eq!(code(&write_png(&files)), Some(ErrorCode::StaleFile));
 
     let refusing = workspace();
-    let fiber = stub(refusing.path(), "echo refused >&2\nexit 1");
+    let fiber = stub(refusing.path(), "cat >/dev/null\necho refused >&2\nexit 1");
     let files = Files::new(refusing.path().to_path_buf())
         .with_images(fiber, refusing.path().join("artifacts"));
     let failed = files
@@ -505,7 +546,7 @@ fn process_exit_1_is_unreadable_with_the_childs_message() {
     let dir = workspace();
     let fiber = stub(
         dir.path(),
-        "echo '8000x7000 is 56000000 pixels; the limit is 50000000' >&2; exit 1",
+        "cat >/dev/null\necho '8000x7000 is 56000000 pixels; the limit is 50000000' >&2; exit 1",
     );
     let Err(ImageError::Unreadable(message)) =
         process_with(dir.path(), &fiber, b"bytes", &CancelToken::new())
@@ -522,9 +563,12 @@ fn process_exit_1_is_unreadable_with_the_childs_message() {
 fn process_exit_2_exit_3_and_a_signal_are_failed() {
     let dir = workspace();
     for (body, expect) in [
-        ("echo disk full >&2; exit 3", "exited with status 3"),
-        ("exit 2", "exited with status 2"),
-        ("kill -9 $$", "killed by a signal"),
+        (
+            "cat >/dev/null; echo disk full >&2; exit 3",
+            "exited with status 3",
+        ),
+        ("cat >/dev/null; exit 2", "exited with status 2"),
+        ("cat >/dev/null; kill -9 $$", "killed by a signal"),
     ] {
         let fiber = stub(dir.path(), body);
         let Err(ImageError::Failed(message)) =
@@ -540,13 +584,16 @@ fn process_exit_2_exit_3_and_a_signal_are_failed() {
 fn process_unparseable_extra_or_incomplete_output_is_failed() {
     let dir = workspace();
     for (body, expect) in [
-        ("echo hello", "not JSON"),
-        ("echo '{\"file\":\"x.png\"}'", "without file"),
+        ("cat >/dev/null; echo hello", "not JSON"),
+        (
+            "cat >/dev/null; echo '{\"file\":\"x.png\"}'",
+            "without file",
+        ),
         (
             "echo '{\"file\":\"x.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}'; echo more",
             "more than one line",
         ),
-        ("", "not JSON"),
+        ("cat >/dev/null", "not JSON"),
     ] {
         let fiber = stub(dir.path(), &format!("cat >/dev/null; {body}"));
         let Err(ImageError::Failed(message)) =

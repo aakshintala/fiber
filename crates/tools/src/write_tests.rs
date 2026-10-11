@@ -97,6 +97,24 @@ fn creating_a_file_reports_its_size_and_adds_every_line() {
 }
 
 #[test]
+fn a_call_without_content_fails_invalid_arguments() {
+    let dir = TempDir::new("fiber-write-args");
+    let files = Files::new(dir.path().to_path_buf());
+    let output = files.write().run(
+        &args(json!({"path": "a.txt"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert!(
+        text(&output).starts_with("The arguments do not fit the schema:"),
+        "{}",
+        text(&output)
+    );
+    assert!(!dir.path().join("a.txt").exists());
+}
+
+#[test]
 fn a_new_file_is_stored_as_given() {
     let dir = TempDir::new("fiber-write-as-given");
     let files = Files::new(dir.path().to_path_buf());

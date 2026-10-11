@@ -2,7 +2,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use contract::shapes::{DeclaredEffects, Effect};
+use contract::shapes::Effect;
 use contract::tool::Effects;
 
 use super::read_only::{COMMANDS, Command, EXACT};
@@ -43,16 +43,7 @@ fn declared(
     subject: Option<String>,
     prefix: Option<String>,
 ) -> Effects {
-    Effects {
-        declared: DeclaredEffects {
-            effects: vec![effect],
-            reversible,
-            paths,
-        },
-        subject,
-        prefix,
-        always_reviewed: false,
-    }
+    crate::tool_util::effects(vec![effect], reversible, paths, subject, prefix)
 }
 
 /// The subject and prefix of a one-part plain command. Anything else has

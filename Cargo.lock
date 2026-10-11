@@ -3227,6 +3227,7 @@ dependencies = [
  "net",
  "proptest",
  "rustix",
+ "serde",
  "serde_json",
  "similar",
  "support",

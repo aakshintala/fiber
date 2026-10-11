@@ -12,10 +12,10 @@ use contract::ErrorCode;
 use contract::images::Images as _;
 use contract::shapes::{ContentPart, ImagePart, PdfPart};
 use contract::tool::{Cancel, Output};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::files::{failed, text_output};
 use crate::image::{ImageChild, run_to_end};
+use crate::tool_util::{failed, text_output};
 
 /// The most pages a PDF without `pages` may hold (`docs/tools.md`, "read").
 const WHOLE_MAX: u32 = 10;
@@ -57,14 +57,11 @@ pub(crate) struct PageRange {
     pub last: u32,
 }
 
-/// Reads `pages` from the tool arguments: absent is the whole file, a string
-/// `N` or `N-M` is that range, anything else is why the call fails.
-pub(crate) fn page_range(arguments: &Map<String, Value>) -> Result<Option<PageRange>, String> {
-    let Some(value) = arguments.get("pages") else {
+/// Reads `pages`: absent is the whole file, a string `N` or `N-M` is
+/// that range, anything else is why the call fails.
+pub(crate) fn page_range(pages: Option<&str>) -> Result<Option<PageRange>, String> {
+    let Some(text) = pages else {
         return Ok(None);
-    };
-    let Value::String(text) = value else {
-        return Err("`pages` must be a string.".to_owned());
     };
     match parse_range(text) {
         Some(range) => {

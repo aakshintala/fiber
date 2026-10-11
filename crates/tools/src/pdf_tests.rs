@@ -104,10 +104,6 @@ fn pdf_part(output: &Output) -> Option<(String, u32, Option<usize>)> {
     })
 }
 
-fn pages_argument(text: &str) -> Map<String, Value> {
-    arguments(json!({"path": "a.pdf", "pages": text}))
-}
-
 #[test]
 fn the_pdf_cap_fails_over_not_at() {
     for (len, over) in [
@@ -170,14 +166,10 @@ printf '{"file":"%s.pdf","page_count":2,"total":2}\n' "$5""#,
 #[test]
 fn page_ranges_accept_a_page_and_a_range_up_to_20() {
     for (text, first, last) in [("3", 3, 3), ("1-20", 1, 20), ("5-5", 5, 5)] {
-        let range = page_range(&pages_argument(text)).unwrap().unwrap();
+        let range = page_range(Some(text)).unwrap().unwrap();
         assert_eq!((range.first, range.last), (first, last), "{text}");
     }
-    assert!(
-        page_range(&arguments(json!({"path": "a.pdf"})))
-            .unwrap()
-            .is_none()
-    );
+    assert!(page_range(None).unwrap().is_none());
 }
 
 #[test]
@@ -199,7 +191,7 @@ fn page_ranges_refuse_anything_else() {
         "1-+3",
         "+3",
     ] {
-        let error = page_range(&pages_argument(text)).unwrap_err();
+        let error = page_range(Some(text)).unwrap_err();
         if text == "1-21" {
             assert_eq!(
                 error, "`pages` 1-21 names 21 pages; a request takes at most 20.",
@@ -212,8 +204,6 @@ fn page_ranges_refuse_anything_else() {
             );
         }
     }
-    let error = page_range(&arguments(json!({"path": "a.pdf", "pages": 3}))).unwrap_err();
-    assert_eq!(error, "`pages` must be a string.");
 }
 
 #[test]
