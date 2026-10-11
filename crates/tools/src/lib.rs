@@ -15,6 +15,7 @@ mod search;
 mod session_search;
 mod shell;
 mod skill;
+mod tool_util;
 mod web_fetch;
 mod web_search;
 mod write;

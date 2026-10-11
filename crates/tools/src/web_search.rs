@@ -8,11 +8,12 @@ use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::search::{Domains, SearchBackend, SearchResult};
-use contract::shapes::{DeclaredEffects, Effect};
+use contract::shapes::Effect;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::files::failed;
+use crate::tool_util::{failed, text_output};
 
 /// A search the model's provider hosts. It is declared as the vendor's tool
 /// type and name only, and carries the effects and the guideline line a
@@ -42,16 +43,13 @@ impl Tool for HostedSearch {
     }
 
     fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: vec![Effect::Network],
-                reversible: true,
-                paths: None,
-            },
-            subject: Some(String::new()),
-            prefix: None,
-            always_reviewed: false,
-        })
+        Ok(crate::tool_util::effects(
+            vec![Effect::Network],
+            true,
+            None,
+            Some(String::new()),
+            None,
+        ))
     }
 
     fn run(
@@ -69,6 +67,15 @@ impl Tool for HostedSearch {
     fn guidelines(&self) -> Option<String> {
         crate::guidelines::of("web_search")
     }
+}
+
+/// The backend call's arguments, checked against the schema before the
+/// call runs.
+#[derive(Debug, Deserialize)]
+struct Args {
+    query: String,
+    allowed_domains: Option<Vec<String>>,
+    blocked_domains: Option<Vec<String>>,
 }
 
 /// Fiber's own `web_search` over an installed search backend
@@ -121,16 +128,13 @@ impl Tool for BackendSearch {
     }
 
     fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: vec![Effect::Network],
-                reversible: true,
-                paths: None,
-            },
-            subject: Some(String::new()),
-            prefix: None,
-            always_reviewed: false,
-        })
+        Ok(crate::tool_util::effects(
+            vec![Effect::Network],
+            true,
+            None,
+            Some(String::new()),
+            None,
+        ))
     }
 
     /// Runs the backend on the query and the domain filter. Both domain
@@ -140,54 +144,30 @@ impl Tool for BackendSearch {
     /// stopped returns no content and no error, so the loop completes it
     /// `cancelled` (`docs/tools.md`, "Cancellation").
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
-        let Some(Value::String(query)) = arguments.get("query") else {
-            return failed(
-                ErrorCode::InvalidArguments,
-                "`query` must be a non-empty string.".to_owned(),
-            );
+        let args: Args = match crate::tool_util::arguments(arguments) {
+            Ok(args) => args,
+            Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        if query.is_empty() {
+        if args.query.is_empty() {
             return failed(
                 ErrorCode::InvalidArguments,
                 "`query` must be a non-empty string.".to_owned(),
             );
         }
-        let has_allowed = arguments.contains_key("allowed_domains");
-        let has_blocked = arguments.contains_key("blocked_domains");
-        if has_allowed && has_blocked {
-            return failed(
-                ErrorCode::InvalidArguments,
-                "Pass either `allowed_domains` or `blocked_domains`, never both.".to_owned(),
-            );
-        }
-        let domains = if has_allowed {
-            let Some(list) = arguments.get("allowed_domains") else {
+        let domains = match (args.allowed_domains, args.blocked_domains) {
+            (Some(_), Some(_)) => {
                 return failed(
                     ErrorCode::InvalidArguments,
-                    "`allowed_domains` must be a list of strings.".to_owned(),
+                    "Pass either `allowed_domains` or `blocked_domains`, never both.".to_owned(),
                 );
-            };
-            match strings(list) {
-                Ok(domains) => Domains::Allowed(domains),
-                Err(why) => return failed(ErrorCode::InvalidArguments, why),
             }
-        } else if has_blocked {
-            let Some(list) = arguments.get("blocked_domains") else {
-                return failed(
-                    ErrorCode::InvalidArguments,
-                    "`blocked_domains` must be a list of strings.".to_owned(),
-                );
-            };
-            match strings(list) {
-                Ok(domains) => Domains::Blocked(domains),
-                Err(why) => return failed(ErrorCode::InvalidArguments, why),
-            }
-        } else {
-            Domains::Any
+            (Some(allowed), None) => Domains::Allowed(allowed),
+            (None, Some(blocked)) => Domains::Blocked(blocked),
+            (None, None) => Domains::Any,
         };
-        match self.backend.search(query, &domains, cancel) {
+        match self.backend.search(&args.query, &domains, cancel) {
             Ok(None) => Output::default(),
-            Ok(Some(results)) => crate::files::text_output(render(&results)),
+            Ok(Some(results)) => text_output(render(&results)),
             Err(failure) => failed(failure.code, failure.message),
         }
     }
@@ -195,21 +175,6 @@ impl Tool for BackendSearch {
     fn guidelines(&self) -> Option<String> {
         crate::guidelines::of("web_search")
     }
-}
-
-/// A domain filter as written: a list of strings.
-fn strings(list: &Value) -> Result<Vec<String>, String> {
-    let Some(items) = list.as_array() else {
-        return Err("the domain filter must be a list of strings.".to_owned());
-    };
-    items
-        .iter()
-        .map(|item| {
-            item.as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| "the domain filter must be a list of strings.".to_owned())
-        })
-        .collect()
 }
 
 /// The backend's results in order, each as its title, URL and snippet on

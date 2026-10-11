@@ -5,13 +5,17 @@ use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::events::Control;
 use contract::provider::ToolDefinition;
-use contract::shapes::DeclaredEffects;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::files::{failed, string_argument};
+use crate::tool_util::{failed, no_effects};
 
-const MISSING: &str = "Give the handoff note as `note`.";
+/// The call's arguments, checked against the schema before the call runs.
+#[derive(Debug, Deserialize)]
+struct Args {
+    note: String,
+}
 
 /// Restarts the model's context from `note`. It declares no effects, so it is
 /// never reviewed, and its result has no content: it carries only
@@ -44,17 +48,9 @@ impl Tool for Handoff {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        string_argument(arguments, "note", MISSING).map_err(EffectsError::Arguments)?;
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: Vec::new(),
-                reversible: true,
-                paths: None,
-            },
-            subject: Some(String::new()),
-            prefix: None,
-            always_reviewed: false,
-        })
+        let _args: Args =
+            crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        Ok(no_effects())
     }
 
     fn run(
@@ -63,8 +59,8 @@ impl Tool for Handoff {
         _cancel: &dyn Cancel,
         _emit: &dyn Emit,
     ) -> Output {
-        match string_argument(arguments, "note", MISSING) {
-            Ok(note) => Output {
+        match crate::tool_util::arguments(arguments) {
+            Ok(Args { note }) => Output {
                 control: Some(Control {
                     handoff: Some(note),
                     questions: None,

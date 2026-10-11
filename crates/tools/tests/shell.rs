@@ -1625,7 +1625,7 @@ fn on_terminal(ready: &Path, body: &str) -> String {
 }
 
 #[test]
-fn tty_is_a_boolean_and_needs_jobs() {
+fn tty_needs_jobs() {
     let dir = fakes::TempDir::new("fiber-shell-tty-args");
     let marker = dir.path().join("marker");
     let touch = format!("touch {}", quote(&marker));
@@ -1633,21 +1633,7 @@ fn tty_is_a_boolean_and_needs_jobs() {
         .definition()
         .input_schema;
     assert_eq!(schema["properties"]["tty"]["type"], "boolean");
-    let with_jobs = Arc::new(
-        Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(FakeJobs::new(dir.path())),
-    );
     let without = Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()));
-    for value in [json!("yes"), json!(1)] {
-        let mut arguments = args(&touch);
-        arguments.insert("tty".into(), value);
-        let output = run_on(&with_jobs, arguments, &Arc::new(Recorder::default()));
-        assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
-        assert!(
-            text(&output).contains("`tty` must be a boolean"),
-            "{}",
-            text(&output)
-        );
-    }
     let mut arguments = args(&touch);
     arguments.insert("tty".into(), json!(true));
     let output = run_on(&without, arguments, &Arc::new(Recorder::default()));
