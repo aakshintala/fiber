@@ -15,7 +15,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::events::CacheLifetime;
 use contract::provider::{CallError, Delta, Input, ModelCall, ModelRequest, Reply};
-use fakes::{ProviderServer, Response};
+use fakes::{Deadline, ProviderServer, Response};
 use provider::Endpoint;
 use provider::anthropic_messages::Messages;
 use provider::google_generative_ai::Gemini;
@@ -60,6 +60,7 @@ fn endpoint(provider: &str, server: &ProviderServer) -> Endpoint {
     clippy::result_large_err,
     reason = "the error is the model call's, returned unchanged"
 )]
+#[track_caller]
 fn run(call: Box<dyn ModelCall>) -> Result<Reply, CallError> {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -67,11 +68,12 @@ fn run(call: Box<dyn ModelCall>) -> Result<Reply, CallError> {
         let reply = call.run(&mut |d: Delta| deltas.push(d));
         done.send(reply).unwrap();
     });
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for the call to return")
 }
 
+#[track_caller]
 fn failed(call: Box<dyn ModelCall>) -> (contract::shapes::Failure, Option<bool>) {
     let Err(CallError::Failed {
         failure,

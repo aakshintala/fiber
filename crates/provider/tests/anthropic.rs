@@ -32,7 +32,7 @@ use contract::provider::{
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
-use fakes::{ProviderServer, Response};
+use fakes::{Deadline, ProviderServer, Response};
 use provider::Endpoint;
 use provider::anthropic_messages::{Messages, decode};
 use serde_json::{Value, json};
@@ -100,6 +100,7 @@ fn request() -> ModelRequest {
 
 /// Runs `call` on its own thread, so a call that never returns fails the
 /// test at the deadline instead of hanging it.
+#[track_caller]
 fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -107,8 +108,8 @@ fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
         let reply = call.run(&mut |d| deltas.push(d));
         done.send((reply, deltas)).unwrap();
     });
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for the call to return")
 }
 
@@ -1189,15 +1190,15 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
         let result = runner.run(&mut |delta| first.send(delta).unwrap());
         done.send(result).unwrap();
     });
-    let delta = first_seen
-        .recv_timeout(DEADLINE)
+    let delta = Deadline::after(DEADLINE)
+        .recv(&first_seen)
         .expect("waited for the first delta");
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
 
     // The reader is now blocked waiting for the next bytes.
     call.cancel();
-    let result = finished
-        .recv_timeout(DEADLINE)
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for run to return after the cancel");
     let sent = InputSize {
         bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
@@ -1536,6 +1537,7 @@ fn png_ref(path: &str) -> contract::provider::ImageRef {
 }
 
 /// The request bodies the server saw for `request`, sent `times` times.
+#[track_caller]
 fn bodies_of(request: &ModelRequest, times: usize) -> Vec<Vec<u8>> {
     let server = ProviderServer::start((0..times).map(|_| completed_reply())).unwrap();
     for _ in 0..times {
@@ -2090,6 +2092,7 @@ fn hosted_conversation(model: &str) -> Vec<Input> {
     conversation
 }
 
+#[track_caller]
 fn sent_messages(conversation: Vec<Input>) -> Value {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {

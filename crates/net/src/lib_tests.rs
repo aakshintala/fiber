@@ -8,6 +8,7 @@ use ureq::tls::{RootCerts, TlsConfig};
 use ureq::unversioned::resolver::DefaultResolver;
 
 use super::{Error, agent, config, tls_config, tls_config_with};
+use fakes::Deadline;
 
 // The test CA and the leaf it signed, generated once with:
 //
@@ -249,12 +250,12 @@ fn an_empty_store_connects_through_the_fallback_roots() {
         tls_config_with(&OnceLock::new(), || 0, test_ca_roots()),
         server.port,
     );
-    match reply.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&reply) {
         Ok(Ok(body)) => assert_eq!(body, "ok", "the fallback roots reach the test server"),
         Ok(Err(err)) => panic!("requesting through the fallback roots: {err}"),
         Err(_) => panic!("the client answers within {DEADLINE:?}"),
     }
-    match server.outcome.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&server.outcome) {
         Ok(Ok(())) => {}
         Ok(Err(err)) => panic!("serving the test connection: {err}"),
         Err(_) => panic!("the server answers within {DEADLINE:?}"),

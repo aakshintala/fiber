@@ -33,7 +33,7 @@ use contract::provider::{
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
-use fakes::{ProviderServer, Response};
+use fakes::{Deadline, ProviderServer, Response};
 use provider::openai_completions::{Completions, decode};
 use provider::{Compat, Endpoint};
 use serde_json::{Value, json};
@@ -116,6 +116,7 @@ fn request() -> ModelRequest {
 
 /// Runs `call` on its own thread, so a call that never returns fails the
 /// test at the deadline instead of hanging it.
+#[track_caller]
 fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -123,8 +124,8 @@ fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
         let reply = call.run(&mut |d| deltas.push(d));
         done.send((reply, deltas)).unwrap();
     });
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for the call to return")
 }
 
@@ -157,6 +158,7 @@ fn completed_reply() -> Response {
     ]))
 }
 
+#[track_caller]
 fn send(endpoint: Endpoint, request: &ModelRequest) {
     run(Box::new(Completions::new(endpoint).request(request)))
         .0
@@ -914,13 +916,13 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
         let result = runner.run(&mut |delta| first.send(delta).unwrap());
         done.send(result).unwrap();
     });
-    let delta = first_seen
-        .recv_timeout(DEADLINE)
+    let delta = Deadline::after(DEADLINE)
+        .recv(&first_seen)
         .expect("waited for the first delta");
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
     call.cancel();
-    let result = finished
-        .recv_timeout(DEADLINE)
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for run to return after the cancel");
     let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");

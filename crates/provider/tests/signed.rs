@@ -19,7 +19,7 @@ use contract::ErrorCode;
 use contract::events::CacheLifetime;
 use contract::provider::{CallError, Delta, Input, ModelCall, ModelRequest};
 use contract::signing::{SignRequest, Signer};
-use fakes::{ProviderServer, Response};
+use fakes::{Deadline, ProviderServer, Response};
 use provider::Endpoint;
 use provider::anthropic_messages::Messages;
 use provider::google_generative_ai::Gemini;
@@ -124,6 +124,7 @@ fn protocols() -> [Protocol; 4] {
 
 /// Runs `call` on its own thread, so a call that never returns fails the
 /// test at the deadline instead of hanging it.
+#[track_caller]
 fn run(call: Box<dyn ModelCall>) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -131,19 +132,20 @@ fn run(call: Box<dyn ModelCall>) {
         let _reply = call.run(&mut |d: Delta| deltas.push(d));
         done.send(()).unwrap();
     });
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for the call to return");
 }
 
+#[track_caller]
 fn failed(call: Box<dyn ModelCall>) -> (contract::shapes::Failure, Option<bool>) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let mut deltas = Vec::new();
         done.send(call.run(&mut |d: Delta| deltas.push(d))).unwrap();
     });
-    let reply = finished
-        .recv_timeout(DEADLINE)
+    let reply = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for the call to return");
     let Err(CallError::Failed {
         failure,

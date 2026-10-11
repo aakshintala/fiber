@@ -1,3 +1,4 @@
+use fakes::Deadline;
 use std::io::Write;
 use std::net::TcpListener;
 use std::sync::mpsc;
@@ -312,8 +313,8 @@ fn cancelling_a_call_mid_stream_closes_the_socket_without_a_proxy() {
         "the server saw the call before it was cancelled"
     );
     cancel.cancel();
-    let result = finished
-        .recv_timeout(CALL_WITHIN)
+    let result = Deadline::after(CALL_WITHIN)
+        .recv(&finished)
         .expect("the cancelled call returns");
     assert!(
         matches!(result, Err(crate::Error::Connection(_))),
@@ -434,8 +435,8 @@ fn tls_runs_end_to_end_inside_the_tunnel() {
         }
     });
     assert_eq!(
-        first
-            .recv_timeout(HANDSHAKE_WITHIN)
+        Deadline::after(HANDSHAKE_WITHIN)
+            .recv(&first)
             .expect("the origin saw the handshake"),
         0x16,
         "a TLS ClientHello opens the tunnelled bytes"
@@ -444,8 +445,8 @@ fn tls_runs_end_to_end_inside_the_tunnel() {
         proxy.await_connects(1, CONNECT_WITHIN),
         "the proxy recorded CONNECT {target}"
     );
-    let result = finished
-        .recv_timeout(CALL_WITHIN)
+    let result = Deadline::after(CALL_WITHIN)
+        .recv(&finished)
         .expect("the tunnelled call returns");
     assert!(
         matches!(result, Err(crate::Error::Connection(_))),
@@ -496,8 +497,8 @@ fn cancelling_a_call_mid_stream_through_the_proxy_closes_the_tunnel() {
         "the proxy recorded CONNECT {target}"
     );
     cancel.cancel();
-    let result = finished
-        .recv_timeout(CALL_WITHIN)
+    let result = Deadline::after(CALL_WITHIN)
+        .recv(&finished)
         .expect("the cancelled tunnelled call returns");
     assert!(
         matches!(result, Err(crate::Error::Connection(_))),
