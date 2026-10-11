@@ -293,6 +293,12 @@ fn stopped(stops: &Receiver<JobId>, wait: &Deadline) -> String {
     wait.recv(stops).expect("a stop was sent").0
 }
 
+/// The ack's answer, failing at [`DEADLINE`].
+#[track_caller]
+fn answer(rx: &Receiver<Result<(), Rejection>>) -> Result<(), Rejection> {
+    Deadline::after(DEADLINE).recv(rx).unwrap()
+}
+
 #[test]
 fn a_shutdown_stops_a_running_job_and_writes_its_end_before_run_returns() {
     let (jobs, stops) = Listed::new(&["j_1"]);
@@ -461,7 +467,6 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
     jobs.end("j_1", &inbox);
     ran(&finished);
 
-    let answer = |rx: &Receiver<Result<(), Rejection>>| Deadline::after(DEADLINE).recv(rx).unwrap();
     assert_eq!(answer(&prompt_answer).unwrap_err().code, ErrorCode::Closing);
     assert_eq!(answer(&steer_answer).unwrap_err().code, ErrorCode::Closing);
     assert_eq!(

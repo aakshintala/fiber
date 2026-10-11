@@ -448,13 +448,6 @@ impl Latch {
     }
 }
 
-#[track_caller]
-fn entered(entered_rx: &mpsc::Receiver<()>) {
-    Deadline::after(support::DEADLINE)
-        .recv(entered_rx)
-        .expect("the fetch started");
-}
-
 #[test]
 fn a_shutdown_during_retrieval_reaches_the_fetch() {
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -483,7 +476,9 @@ fn a_shutdown_during_retrieval_reaches_the_fetch() {
     let cancel = Arc::clone(&session.cancel);
     thread::scope(|scope| {
         scope.spawn(move || {
-            entered(&entered_rx);
+            Deadline::after(support::DEADLINE)
+                .recv(&entered_rx)
+                .expect("the fetch started");
             cancel.shutdown(130);
         });
         assert_eq!(session.turn(), None);

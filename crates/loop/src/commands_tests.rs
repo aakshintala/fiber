@@ -36,12 +36,10 @@ impl Tree {
         Self { _held: held, root }
     }
 
-    #[track_caller]
     fn top(&self) -> PathBuf {
         self.root.join("top")
     }
 
-    #[track_caller]
     fn home(&self) -> PathBuf {
         self.root.join("home")
     }
@@ -63,7 +61,6 @@ impl Tree {
 
 /// Writes `<place>/<entry>/SKILL.md` with `name` and `description`, and
 /// returns its path.
-#[track_caller]
 fn skill(place: &Path, entry: &str, name: &str, description: &str) -> PathBuf {
     let dir = place.join(entry);
     std::fs::create_dir_all(&dir).unwrap();
