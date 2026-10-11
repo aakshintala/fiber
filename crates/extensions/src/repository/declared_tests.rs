@@ -642,3 +642,100 @@ fn stalled_ls_files_child() {
     );
     stall_guard.stand_down(WITHIN);
 }
+
+#[test]
+fn named_paths_record_inside_and_outside_resolutions() {
+    use super::declared::Named;
+    let repo = Repo::new();
+    repo.write("srv/run.sh", "echo");
+    repo.write("tools/srv.sh", "echo");
+    repo.link("bin/srv", &repo.root().join("tools/srv.sh"));
+    let outside = repo.elsewhere("elsewhere/tool.sh", "echo");
+    repo.config(&server(
+        "./srv/run.sh",
+        &json!(["bin/srv", outside.to_str().unwrap(), "missing.sh", "--port"]),
+    ));
+    let item = repo.item(OfferedKind::McpServer, "db");
+    assert_eq!(rels(&item), ["srv/run.sh", "tools/srv.sh"]);
+    assert!(matches!(
+        item.named.get("./srv/run.sh"),
+        Some(Named::Inside(rel)) if rel == "srv/run.sh"
+    ));
+    assert!(matches!(
+        item.named.get("bin/srv"),
+        Some(Named::Inside(rel)) if rel == "tools/srv.sh"
+    ));
+    assert!(matches!(
+        item.named.get(outside.to_str().unwrap()),
+        Some(Named::Outside(target)) if *target == outside.canonicalize().unwrap()
+    ));
+    assert!(!item.named.contains_key("missing.sh"));
+    assert!(!item.named.contains_key("--port"));
+}
+
+#[test]
+fn a_link_out_of_the_repository_maps_to_its_target() {
+    use super::declared::Named;
+    let repo = Repo::new();
+    let outside = repo.elsewhere("elsewhere/steal.sh", "echo");
+    repo.link("scripts/steal.sh", &outside);
+    repo.config(&server("scripts/steal.sh", &json!([])));
+    let item = repo.item(OfferedKind::McpServer, "db");
+    assert!(matches!(
+        item.named.get("scripts/steal.sh"),
+        Some(Named::Outside(target)) if *target == outside.canonicalize().unwrap()
+    ));
+}
+
+#[test]
+fn a_bare_word_command_names_nothing() {
+    let repo = Repo::new();
+    repo.write("node", "not the program");
+    repo.config(&server("node", &json!(["missing.js"])));
+    let item = repo.item(OfferedKind::McpServer, "db");
+    assert!(item.named.is_empty());
+    assert!(item.files.is_empty());
+    assert!(item.outside.is_empty());
+}
+
+#[test]
+fn declared_servers_hashes_like_declared_items() {
+    use super::declared::declared_servers;
+    let repo = Repo::new();
+    repo.write("srv/run.sh", "echo");
+    repo.write("other.txt", "x");
+    repo.config(&server("./srv.sh", &json!(["srv/run.sh"])));
+    let clock = FakeClock::new();
+    let from_items: Vec<_> = repo
+        .items()
+        .into_iter()
+        .filter(|i| i.kind == OfferedKind::McpServer)
+        .collect();
+    let from_servers = declared_servers(&repo.root()).unwrap();
+    assert_eq!(from_items.len(), from_servers.len());
+    for (left, right) in from_items.iter().zip(from_servers.iter()) {
+        assert_eq!(left.name, right.name);
+        let a = super::hash(&mut super::Index::scratch(), left).unwrap();
+        let b = super::hash(&mut super::Index::scratch(), right).unwrap();
+        assert_eq!(a, b);
+        let _ = &clock;
+    }
+}
+
+#[test]
+fn a_broken_extensions_path_fails_items_but_not_servers() {
+    use super::declared::declared_servers;
+    let repo = Repo::new();
+    repo.write("srv/run.sh", "echo");
+    repo.config(&json!({
+        "repository_extensions": [{"path": "missing-pkg"}],
+        "mcp": {"servers": {"db": {"command": "./srv.sh"}}},
+    }));
+    let clock = FakeClock::new();
+    assert!(declared_items(&repo.root(), &*clock).is_err());
+    let servers = declared_servers(&repo.root()).unwrap();
+    assert_eq!(
+        servers.iter().map(|i| i.name.clone()).collect::<Vec<_>>(),
+        vec!["db".to_owned()]
+    );
+}

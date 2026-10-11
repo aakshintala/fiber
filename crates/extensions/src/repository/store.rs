@@ -61,6 +61,15 @@ pub(crate) struct Previous {
     pub(crate) files: Vec<String>,
 }
 
+/// A finished copy, held: the shared lock on `pinned/<hash>.ready`,
+/// taken while `pinned/.lock` was held and released on drop. Keeping it
+/// for the session's life stops `fiber sessions prune` removing a copy
+/// a session runs. Lock order is `pinned/.lock`, then the marker.
+#[derive(Debug)]
+pub struct CopyHold {
+    _ready: File,
+}
+
 impl Store {
     /// The store in `home` for `project`. The clock bounds an extension's
     /// install step when its copy is built.
@@ -126,6 +135,36 @@ impl Store {
         self.record(item, hash, "never")
     }
 
+    /// Makes the copy again from the worktree when it is missing, and
+    /// holds it: never runs the repository's files. Writes nothing under
+    /// `approvals/`. A copy that cannot be made is the caller's error.
+    pub fn ensure_copy(&self, item: &RepoItem, hash: &str) -> Result<CopyHold, Error> {
+        check(item, hash)?;
+        let pinned = self.home.join("pinned");
+        fs::create_dir_all(&pinned).map_err(io_error(&pinned))?;
+        let lock_path = pinned.join(".lock");
+        let lock = File::options()
+            .create(true)
+            .append(true)
+            .open(&lock_path)
+            .map_err(io_error(&lock_path))?;
+        lock.lock().map_err(io_error(&lock_path))?;
+        let copy = self.copy_dir(hash);
+        self.pin_locked(item, hash, &copy, &pinned)?;
+        // Still under `pinned/.lock`: the shared hold on a finished copy.
+        // The marker exists: `pin_locked` writes it last, and keeps a
+        // finished copy. Read-write without create: macOS refuses
+        // `O_CREAT` on a read-only open.
+        let marker = pinned.join(format!("{hash}.ready"));
+        let ready = File::options()
+            .read(true)
+            .write(true)
+            .open(&marker)
+            .map_err(io_error(&marker))?;
+        ready.lock_shared().map_err(io_error(&marker))?;
+        Ok(CopyHold { _ready: ready })
+    }
+
     /// Builds the copy at its final path, under the lock in
     /// `pinned/.lock`, which serialises concurrent approvals. The path
     /// `pinned/<hash>/` is known before the step runs, so the copy is
@@ -146,6 +185,19 @@ impl Store {
             .open(&lock_path)
             .map_err(io_error(&lock_path))?;
         lock.lock().map_err(io_error(&lock_path))?;
+        self.pin_locked(item, hash, copy, &pinned)
+    }
+
+    /// The copy itself, with `pinned/.lock` already held: building it in
+    /// place there, keeping a finished copy, and removing an unfinished
+    /// one. The empty file `pinned/<hash>.ready` is written last.
+    fn pin_locked(
+        &self,
+        item: &RepoItem,
+        hash: &str,
+        copy: &Path,
+        pinned: &Path,
+    ) -> Result<(), Error> {
         let ready = pinned.join(format!("{hash}.ready"));
         if copy.is_dir() && ready.is_file() {
             return Ok(());
