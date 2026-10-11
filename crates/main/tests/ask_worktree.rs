@@ -574,16 +574,9 @@ fn ask_resume_of_a_kept_worktree_runs_in_it() {
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     init_repo(setup.deadline, &setup.workspace());
-    // A hook that leaves an untracked file behind, so the worktree is kept.
-    let hooks = setup.root.path().join("hooks");
-    fs::create_dir(&hooks).unwrap();
-    let hook = hooks.join("post-checkout");
-    fs::write(&hook, "#!/bin/sh\ntouch keep.txt\n").unwrap();
-    #[allow(clippy::unwrap_used, reason = "test setup; a failure is the test's")]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // A checked-in hook that leaves an untracked file behind, so the
+    // worktree is kept.
+    let hooks = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/keeping-hook");
     git(
         setup.deadline,
         &setup.workspace(),
