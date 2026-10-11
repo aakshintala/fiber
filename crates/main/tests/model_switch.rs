@@ -1344,11 +1344,34 @@ fn a_switch_from_anthropic_to_responses_declares_the_responses_type() {
 /// `init.lua` when given.
 fn install_extension(setup: &Setup, short: &str, data: &Value, init: Option<&str>) {
     let source = setup.root.path().join(format!("src-{short}"));
-    write_json(
-        &source.join("extension.json"),
-        &json!({"name": short, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-    );
+    // The manifest declares the data's distinct `base_url`s and every
+    // `fiber.provider` the script registers, so the session admits them.
+    let mut urls: Vec<&str> = data
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.get("base_url").and_then(Value::as_str))
+        .collect();
+    urls.sort();
+    urls.dedup();
     let provider = data["name"].as_str().unwrap();
+    let mut declared: Vec<(String, Value)> = vec![(provider.to_owned(), json!(urls))];
+    if let Some(init) = init {
+        for part in init.split("fiber.provider(\"").skip(1) {
+            if let Some(registered) = part.split('"').next()
+                && registered != provider
+                && !declared.iter().any(|(name, _)| name == registered)
+            {
+                declared.push((registered.to_owned(), json!([])));
+            }
+        }
+    }
+    let mut manifest = json!({"name": short, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert("providers".to_owned(), Value::Object(declared.into_iter().collect()));
+    }
+    write_json(&source.join("extension.json"), &manifest);
     write_json(&source.join(format!("providers/{provider}.json")), data);
     if let Some(init) = init {
         fs::write(source.join("init.lua"), init).unwrap();
