@@ -470,11 +470,9 @@ pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
 fn has_value(entry: &Value) -> bool {
     match entry {
         Value::Object(map) => map.values().any(has_value),
-        Value::Null
-        | Value::Bool(_)
-        | Value::Number(_)
-        | Value::String(_)
-        | Value::Array(_) => true,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            true
+        }
     }
 }
 
