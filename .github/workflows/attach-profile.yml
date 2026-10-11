@@ -83,11 +83,14 @@ jobs:
 
       # The release profile with debug info and symbols (Cargo.toml is not
       # edited): the same target and build as scripts/release-size, so the
-      # profile is of the shipped code generation.
+      # profile is of the shipped code generation, plus frame pointers.
       - name: Build fiber with symbols
         env:
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
           CARGO_PROFILE_RELEASE_STRIP: none
+          # perf's DWARF unwinder gave every user sample of the static musl binary
+          # an empty stack (run 38109358642); frame pointers unwind it.
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: -C force-frame-pointers=yes
         run: cargo build --release --locked --target "$FIBER_TARGET" --bin fiber
 
       # The harness is built in the debug profile, as the Release job builds it.
@@ -97,7 +100,7 @@ jobs:
       # No --paging: the paging rows are not attach, and their jig took two thirds of
       # the samples on the first run.
       # cpu-clock, not the default hardware event: a runner's VM has no PMU counters.
-      # -g --call-graph dwarf unwinds through the binaries' line tables; perf follows
+      # --call-graph fp unwinds through fiber's frame pointers; perf follows
       # the child processes the harness spawns. A failed run still uploads what it wrote.
       # Two runs, not five: a profile needs samples, not a median.
       - name: Profile the timing benchmarks
@@ -105,7 +108,7 @@ jobs:
           out="$RUNNER_TEMP/attach-profile"
           mkdir -p "$out"
           status=0
-          perf record -e cpu-clock -F 499 -g --call-graph dwarf -o "$out/perf.data" -- \
+          perf record -e cpu-clock -F 499 --call-graph fp -o "$out/perf.data" -- \
             target/debug/examples/bench \
             --fiber "$PWD/target/$FIBER_TARGET/release/fiber" \
             --out "$out/bench.json" --only timing --runs 2 || status=$?
@@ -125,6 +128,9 @@ jobs:
           # Where the fiber samples land by binary, and their raw stacks: a profile with
           # no fiber frames shows here whether the user samples or their symbols are missing.
           perf report -i "$out/perf.data" --pid "$pids" --sort comm,dso --stdio > "$out/fiber-dso.txt"
+          # Self time per function, which needs no unwinding.
+          perf report -i "$out/perf.data" --pid "$pids" --no-children -g none \
+            --sort dso,sym --stdio > "$out/fiber-symbols.txt"
           perf script -i "$out/perf.data" --pid "$pids" | head -n 400 > "$out/fiber-script-head.txt"
           inferno-flamegraph < "$out/folded.txt" > "$out/flamegraph.svg"
           inferno-flamegraph < "$out/fiber-folded.txt" > "$out/fiber-flamegraph.svg"
