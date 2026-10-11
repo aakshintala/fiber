@@ -15,7 +15,7 @@
 
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use fakes::Deadline;
@@ -25,6 +25,86 @@ const LIVE_DEADLINE: Duration = Duration::from_secs(300);
 
 /// How long a killed child may take to report after its group is killed.
 const REAP_DEADLINE: Duration = Duration::from_secs(10);
+
+/// How long the live quota fetch may take.
+const QUOTA_DEADLINE: Duration = Duration::from_secs(30);
+
+#[test]
+fn a_live_codex_quota_fetch_reports_windows() {
+    let Ok(home) = std::env::var("FIBER_LIVE_CODEX_HOME") else {
+        return;
+    };
+    let home = std::path::PathBuf::from(home);
+    // The owner's stored login: `default` where one is stored under it,
+    // else the home's only codex label.
+    let mut labels: Vec<String> = std::fs::read_dir(home.join("credentials").join("codex"))
+        .expect("the live home holds no codex login")
+        .map(|entry| {
+            entry
+                .expect("the live home holds an unreadable codex login")
+                .file_name()
+                .into_string()
+                .expect("the live home holds a codex login with an unreadable name")
+        })
+        .collect();
+    labels.sort();
+    let label = if labels.iter().any(|label| label == "default") {
+        "default".to_owned()
+    } else if labels.len() == 1 {
+        labels.pop().expect("the live home holds one codex login")
+    } else {
+        panic!(
+            "the live home holds {} codex logins and none is `default`: {}",
+            labels.len(),
+            labels.join(", ")
+        );
+    };
+    let dir = home
+        .join("extensions")
+        .join(config::dir_name("github.com/aakshintala/fiber/providers/codex"));
+    let clock = fakes::clock::FakeClock::new();
+    let extension = Arc::new(extensions::LuaExtension::new(
+        "github.com/aakshintala/fiber/providers/codex",
+        dir,
+        home,
+        clock,
+    ));
+    let provider = extensions::LuaProvider::new(extension, "codex");
+    let pair = extensions::CredentialPair {
+        credential: "codex".to_owned(),
+        label,
+    };
+    let (done, fetched) = mpsc::channel();
+    std::thread::spawn(move || done.send(provider.fetch_quota(&pair, None)));
+    let (quota, _) = fakes::Deadline::after(QUOTA_DEADLINE)
+        .recv(&fetched)
+        .expect("the live quota fetch never returned")
+        .expect("the live quota fetch failed");
+    let Some(quota) = quota else {
+        panic!("the live quota reported nothing");
+    };
+    let extensions::Quota::Windows(windows) = quota else {
+        panic!("the live quota is not windows: {quota:?}");
+    };
+    assert!(
+        (1..=2).contains(&windows.len()),
+        "the live quota holds {} windows: {windows:?}",
+        windows.len()
+    );
+    for window in &windows {
+        assert!(
+            ["primary", "secondary"].contains(&window.name.as_str()),
+            "the live window has an unexpected name: {window:?}"
+        );
+        let extensions::WindowUse::Percent { used, .. } = &window.used else {
+            panic!("the live window is already reset: {window:?}");
+        };
+        assert!(
+            used.is_finite() && (0.0..=100.0).contains(used),
+            "the live window percent is out of range: {window:?}"
+        );
+    }
+}
 
 #[test]
 fn a_live_codex_turn_replies() {
