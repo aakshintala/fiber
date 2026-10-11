@@ -292,12 +292,7 @@ impl Group {
         kinds
     }
 
-    /// Its lines. A finished group with no call is its thinking, one line
-    /// a block; otherwise a summary line, and the ledger when open. The
-    /// summary line is one row in `width` cells, whatever runs. A
-    /// call's images draw as their one line each under its ledger row
-    /// (`docs/tui.md`, "Images").
-    /// Its lines. A finished group with no call is its thinking, one line
+    /// Its lines. A group with no call is its thinking, one line
     /// a block; otherwise a summary line, and the ledger when open. The
     /// summary line is one row in `width` cells, whatever runs: the dot,
     /// the kinds in their fixed order, and, right-aligned, the group's
@@ -312,7 +307,10 @@ impl Group {
         layout: &crate::image::Layout,
         out: &mut Rows,
     ) {
-        if !running && !self.has_ledger() {
+        // A group with no call is its thinking, streaming or ended: a
+        // thinking-only group never draws a summary row, even while the
+        // model thinks (`docs/tui.md`, "Thinking").
+        if !self.has_ledger() && self.streaming.is_empty() {
             for thought in self.thoughts() {
                 thought_rows(thought, "", width, out);
             }
@@ -396,14 +394,15 @@ impl Group {
         let max = usize::from(width);
         let right_width = spans_width(&right);
         let left_width = spans_width(&left);
-        let mut row = if left_width + 1 + right_width <= max {
+        let row = if left_width + 1 + right_width <= max {
             let mut row = left;
             row.push(dim_span(" ".repeat(max - left_width - right_width)));
             row.extend(right);
             row
         } else if max >= right_width + 2 {
-            let mut row = fit(left, max - right_width - 2);
-            row.push(dim_span("…".to_owned()));
+            // One truncation: `fit` emits the row's single "…", so the
+            // right part keeps its columns.
+            let mut row = fit(left, max - right_width - 1);
             row.push(dim_span(" ".to_owned()));
             row.extend(right);
             row
@@ -428,7 +427,7 @@ impl Group {
         // moves with the card's pad.
         out.push_text(
             (
-                Line::from(std::mem::take(&mut row)),
+                Line::from(row),
                 self.key.as_deref().map(|key| Target::Group(target_id(key))),
             ),
             text,
@@ -614,30 +613,39 @@ fn spans_width(spans: &[Span<'_>]) -> usize {
         .sum()
 }
 
-/// `spans` cut to at most `max` cells, styles kept: the span crossing
-/// the edge is cut short with "…" in its own style, and the rest is
-/// left out (`docs/tui.md`, "Tool groups and the ledger").
+/// `spans` cut to at most `max` cells, styles kept: when anything is
+/// left out the row ends in exactly one "…", so a cut row still fills
+/// its width and what follows keeps its columns. Content keeps at most
+/// `max − 1` cells, and a wide character's unused column is filled in
+/// the cut span's style (`docs/tui.md`, "Tool groups and the ledger").
 fn fit(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+    if spans_width(&spans) <= max {
+        return spans;
+    }
     let mut out = Vec::new();
     let mut taken = 0usize;
+    let room = max.saturating_sub(1);
+    let mut style = Style::default();
     for span in spans {
+        style = span.style;
         let cells = crate::format::width(&span.content);
-        if taken >= max {
-            break;
-        }
-        if taken + cells <= max {
+        if taken + cells <= room {
             taken += cells;
             out.push(span);
-        } else {
-            let style = span.style;
-            let kept = crate::format::cut(&span.content, max - taken - 1);
-            if !kept.is_empty() {
-                out.push(Span::styled(kept, style));
-            }
-            out.push(Span::styled("…", style));
-            break;
+            continue;
         }
+        let kept = crate::format::cut(&span.content, room.saturating_sub(taken));
+        taken += crate::format::width(&kept);
+        if !kept.is_empty() {
+            out.push(Span::styled(kept, style));
+        }
+        break;
     }
+    out.push(Span::styled("…", style));
+    out.push(Span::styled(
+        " ".repeat(max.saturating_sub(taken + 1)),
+        style,
+    ));
     out
 }
 
@@ -695,11 +703,15 @@ fn thought_rows(thought: &Thought, gutter: &str, width: u16, out: &mut Rows) {
 }
 
 /// `target` cut with "…" to `room` cells, else padded with spaces to it,
-/// so the result ends at the row's last cell.
+/// so the result ends at the row's last cell. A wide character at the
+/// edge can leave one column unused: the cut is padded to `room` from
+/// its actual width, not its allowance.
 fn pad_target(target: &str, room: usize) -> String {
     let cells = crate::format::width(target);
     if cells > room {
-        format!("{}…", crate::format::cut(target, room.saturating_sub(1)))
+        let kept = crate::format::cut(target, room.saturating_sub(1));
+        let fill = room.saturating_sub(crate::format::width(&kept) + 1);
+        format!("{kept}…{}", " ".repeat(fill))
     } else {
         format!("{target}{}", " ".repeat(room - cells))
     }

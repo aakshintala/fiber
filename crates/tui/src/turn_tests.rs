@@ -269,7 +269,7 @@ fn shell_searches_and_other_tools_have_their_own_kinds() {
     text(&mut app, "a_m", "ok", 0);
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" ● Searched 2 patterns, listed 2 directories, edite…… 0s ▸")
+        Some(" ● Searched 2 patterns, listed 2 directories, edited… 0s ▸")
     );
 }
 
@@ -499,7 +499,7 @@ fn a_running_group_shows_calls_in_flight_and_thinking() {
     feed(&mut app, "reasoning_started", Some("a_t"), 0, json!({}));
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" ● Read 1 file, ran 1 command, thought once · shell…… 0s ▸")
+        Some(" ● Read 1 file, ran 1 command, thought once · shell … 0s ▸")
     );
     feed(
         &mut app,
@@ -510,7 +510,7 @@ fn a_running_group_shows_calls_in_flight_and_thinking() {
     );
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" ● Read 1 file, ran 1 command, thought once · shell…… 0s ▸")
+        Some(" ● Read 1 file, ran 1 command, thought once · shell … 0s ▸")
     );
     // A block that has finished no longer shows; completed calls leave.
     feed(
@@ -572,7 +572,7 @@ fn raw_arguments_stream_until_their_call_is_requested() {
     request(&mut app, "a_2", "shell", json!({"command": "ls"}), 0);
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" ● Read 1 file, listed 1 directory · read a.rs, she…… 0s ▸")
+        Some(" ● Read 1 file, listed 1 directory · read a.rs, shel… 0s ▸")
     );
 }
 
@@ -586,7 +586,7 @@ fn group_summary_lines_are_cut_to_one_row_at_the_width() {
         (35u16, " ● Read 1 file · read a.rs   0s ▸"),
         (34u16, " ● Read 1 file · read a.rs  0s ▸"),
         (33u16, " ● Read 1 file · read a.rs 0s ▸"),
-        (32u16, " ● Read 1 file · read a…… 0s ▸"),
+        (32u16, " ● Read 1 file · read a.… 0s ▸"),
     ] {
         let mut app = app();
         app.set_size(width, 24);
@@ -609,8 +609,8 @@ fn a_finished_group_summary_keeps_its_duration_when_cut() {
     // part keeps its columns (`docs/tui.md`, "Tool groups and the ledger").
     for (width, expected) in [
         (22u16, " ● Read 1 file 12s ▸"),
-        (21u16, " ● Read 1 f…… 12s ▸"),
-        (19u16, " ● Read 1…… 12s ▸"),
+        (21u16, " ● Read 1 fi… 12s ▸"),
+        (19u16, " ● Read 1 … 12s ▸"),
     ] {
         let mut app = app();
         app.set_size(width, 24);

@@ -4,7 +4,7 @@ use contract::events::{CallStatus, FileChange};
 use ratatui::style::Modifier;
 use serde_json::json;
 
-use super::{Call, Group, Section, Thought};
+use super::{Call, Group, Section, Streaming, Thought};
 use crate::theme::Role;
 
 #[test]
@@ -171,11 +171,19 @@ fn a_long_summary_is_cut_with_ellipsis_keeping_the_right_part() {
     let (rows, _) = summary_row(&group, false, exact);
     assert_eq!(rows[0].0.to_string(), format!("{left} {right}"));
     assert!(rows[0].0.to_string().ends_with('▸'));
-    // One below and at the cut: the ellipsis appears, ▸ keeps the last column.
+    // One below and at the cut: one "…" appears, ▸ keeps the last column.
     for width in [exact - 1, exact - 2] {
         let (rows, _) = summary_row(&group, false, width);
         let text = rows[0].0.to_string();
-        assert!(text.contains('…'), "{width}: {text}");
+        // One truncation only: the left part keeps `width − right − 2`
+        // cells, then "…", then one space and the right part.
+        let kept = usize::from(width) - crate::format::width(right) - 2;
+        assert_eq!(
+            text,
+            format!("{}… {right}", crate::format::cut(left, kept)),
+            "{width}"
+        );
+        assert_eq!(text.matches('…').count(), 1, "{width}: {text}");
         assert!(text.ends_with("4m 12s ▸"), "{width}: {text}");
         assert_eq!(crate::format::width(&text), usize::from(width), "{width}");
     }
@@ -290,6 +298,8 @@ fn a_streaming_thought_ends_the_body_italic() {
                 ended: None,
                 ..Thought::default()
             }],
+            // A call, so the thought suffix draws on a summary row.
+            calls: vec![read_call(2, "a.rs")],
             ..Section::default()
         }],
         ..Group::default()
@@ -308,6 +318,88 @@ fn a_streaming_thought_ends_the_body_italic() {
         thinking.style.add_modifier.contains(Modifier::ITALIC),
         "{thinking:?} is italic"
     );
+}
+
+/// A thinking-only group draws its thinking lines while running too:
+/// no summary row, no spinner, no duration or toggle, dim and italic
+/// throughout (`docs/tui.md`, "Thinking").
+#[test]
+fn a_running_thinking_only_group_draws_its_thought_lines() {
+    let thought = |id: usize, text: &str, ended: Option<u64>| Thought {
+        id,
+        action: format!("t{id}"),
+        text: text.to_owned(),
+        started: 0,
+        ended,
+        ..Thought::default()
+    };
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 1_000,
+        sections: vec![Section {
+            step: 1,
+            thoughts: vec![
+                thought(1, "# Fixing the lock", None),
+                thought(2, "# Finding the lock", Some(22_000)),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let (rows, texts) = summary_row(&group, true, 60);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0.to_string(), "Thinking: Fixing the lock");
+    assert_eq!(rows[1].0.to_string(), "+ Thought: Finding the lock · 22s");
+    for row in &rows {
+        let text = row.0.to_string();
+        assert!(!text.contains('●'), "{text} has no dot");
+        assert!(!text.contains('▸') && !text.contains('▾'), "{text}");
+        for span in &row.0.spans {
+            assert!(is_dim(span), "{span:?} is dim");
+        }
+    }
+    assert!(
+        texts.iter().all(|text| text.spin.is_none()),
+        "nothing spins"
+    );
+}
+
+/// A group with a call still streaming is not thinking-only: while
+/// running it draws a summary row with the call in flight.
+#[test]
+fn a_group_with_a_call_in_flight_draws_a_summary_row() {
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 1_000,
+        sections: vec![Section {
+            step: 1,
+            thoughts: vec![Thought {
+                id: 1,
+                action: "t".to_owned(),
+                text: "# Fixing the lock".to_owned(),
+                started: 0,
+                ended: None,
+                ..Thought::default()
+            }],
+            ..Section::default()
+        }],
+        streaming: vec![Streaming {
+            message: "a_m".to_owned(),
+            index: 0,
+            name: None,
+            text: "{\"pa".to_owned(),
+        }],
+        ..Group::default()
+    };
+    let (rows, texts) = summary_row(&group, true, 60);
+    assert_eq!(rows.len(), 1);
+    let text = rows[0].0.to_string();
+    assert!(text.starts_with("● "), "{text}");
+    assert!(text.contains("… {\"pa"), "{text}");
+    assert!(text.ends_with('▸'), "{text}");
+    assert_eq!(texts[0].spin, Some(0));
 }
 
 #[test]
@@ -1265,6 +1357,63 @@ fn a_narrow_summary_keeps_the_right_part() {
     assert_eq!(summary_row(&group, false, 6).0[0].0.to_string(), "… 0s ▸");
 }
 
+/// `fit` keeps what fits, and cut rows end in exactly one "…": a wide
+/// character at the edge leaves a filled column, never a short row.
+#[test]
+fn fit_cuts_spans_to_its_width_with_one_ellipsis() {
+    use ratatui::text::Span;
+    // What fits is kept whole with no ellipsis.
+    let kept = super::fit(vec![Span::raw("ab")], 2);
+    assert_eq!(kept, vec![Span::raw("ab")]);
+    // A cut inside a span keeps `max − 1` cells, then one "…".
+    let cut = super::fit(vec![Span::raw("abcde")], 4);
+    assert_eq!(cut.len(), 3);
+    assert_eq!(cut[0].content.as_ref(), "abc");
+    assert_eq!(cut[1].content.as_ref(), "…");
+    assert_eq!(super::spans_width(&cut), 4);
+    assert_eq!(cut.iter().filter(|span| span.content == "…").count(), 1);
+    // A cut on a span edge still ends in one "…", not a bare row.
+    let edge = super::fit(vec![Span::raw("ab"), Span::raw("cd")], 2);
+    assert_eq!(edge[0].content.as_ref(), "a");
+    assert_eq!(edge[1].content.as_ref(), "…");
+    assert_eq!(super::spans_width(&edge), 2);
+    // A wide character at the edge leaves one column unused: it is
+    // filled, so the cut row still fills its width.
+    let wide = super::fit(vec![Span::raw("ab界cd")], 4);
+    assert_eq!(wide[0].content.as_ref(), "ab");
+    assert_eq!(wide[1].content.as_ref(), "…");
+    assert_eq!(wide[2].content.as_ref(), " ");
+    assert_eq!(super::spans_width(&wide), 4);
+}
+
+/// A wide target cut at its edge fills the unused column: every ledger
+/// row is exactly its width, and the result keeps the last cell.
+#[test]
+fn a_wide_target_keeps_the_result_at_the_last_cell() {
+    let group = Group {
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![Call {
+                lines: 5,
+                ..read_call(1, "ab界cd/ef/gh.rs")
+            }],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    for width in 20..=76u16 {
+        let rows = ledger_rows(&group, width);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(cells(&rows[0]), usize::from(width), "{width}");
+        // Below 26 columns the target has no room and the result
+        // itself is cut; from 26 on it keeps the last cell.
+        if width >= 26 {
+            assert!(rows[0].to_string().ends_with("5 lines"), "{width}");
+        }
+    }
+}
+
 /// A target exactly filling its room is kept whole with no padding:
 /// `>=` would cut it to room − 1 plus "…".
 #[test]
@@ -1272,4 +1421,8 @@ fn pad_target_keeps_a_target_that_fills_its_room() {
     assert_eq!(super::pad_target("abcd", 4), "abcd");
     assert_eq!(super::pad_target("ab", 4), "ab  ");
     assert_eq!(super::pad_target("abcde", 4), "abc…");
+    // A wide character at the edge leaves one column unused: it is
+    // filled, so the result keeps its columns.
+    assert_eq!(super::pad_target("ab界cd", 4), "ab… ");
+    assert_eq!(crate::format::width(&super::pad_target("ab界cd", 4)), 4);
 }
