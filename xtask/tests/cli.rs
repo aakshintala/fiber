@@ -6,17 +6,11 @@
     reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); clippy exempts only #[test] functions here"
 )]
 
-#[path = "../src/child.rs"]
-mod child;
-#[path = "../src/test_dir.rs"]
-mod test_dir;
-
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
-use child::finished;
-use test_dir::TestDir;
+use fakes::{TempDir, finished};
 
 const DEPENDENCIES: &str = "# Dependencies
 
@@ -52,7 +46,7 @@ const CODE_QUALITY: &str = "# Code quality
 /// only bounds a hang.
 const CHILD_WITHIN: Duration = Duration::from_secs(5);
 
-fn xtask(dir: &TestDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i32, String) {
+fn xtask(dir: &TempDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i32, String) {
     let child = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(args)
         .envs(env.iter().copied())
@@ -77,7 +71,7 @@ fn xtask(dir: &TestDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i3
     (status.code().unwrap(), text)
 }
 
-fn git(dir: &TestDir, args: &[&str]) {
+fn git(dir: &TempDir, args: &[&str]) {
     let child = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
         .args(args)
@@ -94,8 +88,8 @@ fn git(dir: &TestDir, args: &[&str]) {
 
 /// A committed workspace: `a`, `b` depending on `a`, binary-only `c`
 /// depending on `a`, and `outside`, a path crate that is not a member.
-fn workspace() -> TestDir {
-    let dir = TestDir::new("cli");
+fn workspace() -> TempDir {
+    let dir = TempDir::new("xtask-cli");
     dir.write(
         "Cargo.toml",
         "[workspace]\nmembers = [\"crates/a\", \"crates/b\", \"crates/c\"]\nexclude = [\"outside\"]\nresolver = \"3\"\n",
@@ -179,7 +173,7 @@ fn select_prints_an_unambiguous_spec_for_a_crate_named_like_a_dependency() {
     // an unambiguous spec to `cargo clippy`/`nextest`/`test --doc`, which
     // resolve `-p` against the whole dependency graph, not just workspace
     // members.
-    let dir = TestDir::new("named-like-a-dependency");
+    let dir = TempDir::new("xtask-named-like-a-dependency");
     dir.write(
         "Cargo.toml",
         "[workspace]\nmembers = [\"crates/log\"]\nresolver = \"3\"\n",
@@ -218,7 +212,7 @@ fn select_fails_without_a_base() {
 
 #[test]
 fn plan_prints_the_jobs_and_shards() {
-    let dir = TestDir::new("plan");
+    let dir = TempDir::new("xtask-plan");
     let args = [
         "plan",
         "--mode",
@@ -277,7 +271,7 @@ fn plan_prints_the_jobs_and_shards() {
 
 #[test]
 fn verdict_passes_and_fails_by_exit_code() {
-    let dir = TestDir::new("verdict");
+    let dir = TempDir::new("xtask-verdict");
     let needs = r#"{"select":{"result":"success","outputs":{}},"docs":{"result":"success"},"test":{"result":"skipped"}}"#;
     let pass = [("NEEDS", needs), ("JOBS", r#"{"docs":true,"test":false}"#)];
     assert_eq!(
@@ -309,7 +303,7 @@ fn verdict_passes_and_fails_by_exit_code() {
 
 #[test]
 fn ticket_reads_the_body_on_stdin() {
-    let dir = TestDir::new("ticket");
+    let dir = TempDir::new("xtask-ticket");
     assert_eq!(
         xtask(&dir, &["ticket"], &[], "Body.\n\nResolves #42\n"),
         (0, "42\n".to_owned())
@@ -324,7 +318,7 @@ fn ticket_reads_the_body_on_stdin() {
 /// to a checked-in trampoline, so no test executes a file it wrote
 /// (docs/testing.md, "Waits and timeouts").
 #[cfg(unix)]
-fn fake_gh(dir: &TestDir, script: &str) -> String {
+fn fake_gh(dir: &TempDir, script: &str) -> String {
     let bin = dir.path().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     fakes::script(&bin, "gh", script);
@@ -338,7 +332,7 @@ fn fake_gh(dir: &TestDir, script: &str) -> String {
 #[cfg(unix)]
 #[test]
 fn ticket_prefers_the_issue_labelled_bug() {
-    let dir = TestDir::new("ticket-bug");
+    let dir = TempDir::new("xtask-ticket-bug");
     let path = fake_gh(
         &dir,
         "#!/bin/sh\nif [ \"$3\" = \"2\" ]; then echo bug; else echo enhancement; fi\n",
@@ -357,7 +351,7 @@ fn ticket_prefers_the_issue_labelled_bug() {
 #[cfg(unix)]
 #[test]
 fn ticket_prints_the_first_issue_when_none_is_labelled_bug() {
-    let dir = TestDir::new("ticket-no-bug");
+    let dir = TempDir::new("xtask-ticket-no-bug");
     let path = fake_gh(&dir, "#!/bin/sh\necho enhancement\n");
     assert_eq!(
         xtask(
@@ -373,7 +367,7 @@ fn ticket_prints_the_first_issue_when_none_is_labelled_bug() {
 #[cfg(unix)]
 #[test]
 fn ticket_fails_when_the_label_lookup_fails() {
-    let dir = TestDir::new("ticket-gh-fails");
+    let dir = TempDir::new("xtask-ticket-gh-fails");
     let path = fake_gh(&dir, "#!/bin/sh\nexit 1\n");
     assert_eq!(
         xtask(
@@ -465,7 +459,7 @@ fn the_signal_check_fails_a_signal_outside_the_allowlist() {
 
 #[test]
 fn the_signal_check_passes_a_signal_in_the_allowlist() {
-    let dir = TestDir::new("signal-allowlist");
+    let dir = TempDir::new("xtask-signal-allowlist");
     dir.write(
         "Cargo.toml",
         "[workspace]\nmembers = [\"crates/fakes\"]\nresolver = \"3\"\n",
@@ -564,7 +558,7 @@ fn a_check_without_its_doc_is_an_error() {
 
 #[test]
 fn docs_only_reports_whether_the_files_are_docs() {
-    let dir = TestDir::new("docs-only");
+    let dir = TempDir::new("xtask-docs-only");
     assert_eq!(
         xtask(&dir, &["docs-only", "docs/ci.md", "GLOSSARY.md"], &[], ""),
         (0, "docs-only: yes\n".to_owned())
@@ -612,7 +606,7 @@ fn ci_needs_passes_fails_and_errors() {
 
 #[test]
 fn an_unknown_or_missing_command_is_an_error() {
-    let dir = TestDir::new("unknown");
+    let dir = TempDir::new("xtask-unknown");
     assert_eq!(
         xtask(&dir, &["nope"], &[], ""),
         (2, "xtask: unknown command nope\n".to_owned())

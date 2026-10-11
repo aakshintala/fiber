@@ -14,6 +14,7 @@ mod connect_proxy;
 mod crash_ports;
 pub mod deadline;
 pub mod emit;
+mod finished;
 pub mod jobs;
 mod oauth_server;
 mod process_group;
@@ -35,6 +36,8 @@ pub use client::Client;
 pub use connect_proxy::ConnectProxy;
 pub use deadline::Deadline;
 pub use emit::Recorder;
+pub use finished::finished;
+pub mod git;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_group::{
     WATCHDOG_SCRIPT, group_empties, kill_group, kill_matching, kill_pid, matching, matching_exits,

@@ -11,23 +11,13 @@
     reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); a failure is the test's"
 )]
 
-#[path = "../src/child.rs"]
-mod child;
-#[path = "../src/test_dir.rs"]
-#[allow(
-    dead_code,
-    reason = "the shared TestDir has helpers this test does not call"
-)]
-mod test_dir;
-
 use std::fs;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use child::finished;
-use test_dir::TestDir;
+use fakes::{TempDir, finished};
 
 /// How long a test waits for one child, in real time; a passing run never
 /// waits on it, it only bounds a hang.
@@ -52,7 +42,7 @@ fn run(what: &str, mut command: Command) -> (Option<i32>, String) {
     (output.status.code(), text)
 }
 
-fn git(repo: &TestDir, args: &[&str]) -> String {
+fn git(repo: &TempDir, args: &[&str]) -> String {
     let mut command = Command::new("git");
     command
         .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
@@ -65,10 +55,10 @@ fn git(repo: &TestDir, args: &[&str]) -> String {
 
 /// The fixture repositories and the commits the cache keys name.
 struct Fixture {
-    repo: TestDir,
-    state: TestDir,
+    repo: TempDir,
+    state: TempDir,
     #[allow(dead_code, reason = "kept with the remote it was pushed from")]
-    origin: TestDir,
+    origin: TempDir,
     c2: String,
     c3: String,
     c12: String,
@@ -80,9 +70,9 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let origin = TestDir::new("cporigin");
-        let repo = TestDir::new("cprepo");
-        let state = TestDir::new("cpstate");
+        let origin = TempDir::new("xtask-cporigin");
+        let repo = TempDir::new("xtask-cprepo");
+        let state = TempDir::new("xtask-cpstate");
         git(&repo, &["init", "-q", "-b", "main"]);
         for n in 1..=25 {
             git(

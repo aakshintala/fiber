@@ -16,7 +16,6 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use contract::clock::Clock;
@@ -25,6 +24,7 @@ use common::{Setup, drive, manifest, provider, write};
 use contract::ErrorCode;
 use extensions::{Error, Installed, Origin, Provenance, Request, SHORT_NAMES, list, plan, removal};
 use fakes::Deadline;
+use fakes::git::git;
 use serde_json::{Value, json};
 
 const FIBER: &str = "0.1.0";
@@ -43,19 +43,6 @@ fn commit(i: &Installed) -> Option<String> {
         Provenance::Git { commit } => Some(commit.clone()),
         Provenance::Path(_) => None,
     }
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(["-c", "init.defaultBranch=main"])
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 
 /// Repositories by name, in the setup's directory.
