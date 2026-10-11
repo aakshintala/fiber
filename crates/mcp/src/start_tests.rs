@@ -847,3 +847,166 @@ fn an_embedded_pdf_runs_through_start_and_saves_without_images() {
     assert_eq!(read, b"hi");
     started.servers.stop();
 }
+
+/// A program running the fixture on the setup's directory, refused when
+/// `gate` is false. The test flips `gate` on its own thread between two
+/// operations whose results it has already received: ordered, never timed.
+fn run_program(
+    setup: &Setup,
+    gate: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> super::Program {
+    let gate = std::sync::Arc::clone(gate);
+    super::Program {
+        command: fakes::mcp_fixture().display().to_string(),
+        args: vec![setup.dir.path().display().to_string()],
+        guard: std::sync::Arc::new(move || {
+            if gate.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(())
+            } else {
+                Err("the test refused the spawn".to_owned())
+            }
+        }),
+    }
+}
+
+fn declared_only(name: &str) -> (String, Vec<String>) {
+    (
+        "/no/such/declared".to_owned(),
+        vec![format!("--declared-{name}")],
+    )
+}
+
+#[test]
+fn a_run_starts_lists_and_caches_under_the_declaration() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mut spec = setup.spec("fx");
+    (spec.command, spec.args) = declared_only("fx");
+    spec.run = Some(run_program(&setup, &gate));
+    let started = setup.start(vec![spec.clone()]);
+    assert!(started.failed.is_empty());
+    assert_eq!(names(&started), ["mcp__fx__echo"]);
+    assert!(setup.spawned(), "the run spawns at session start");
+    assert!(setup.cache().join("fx.json").is_file());
+    let declared = crate::cache::key(&spec.command, &spec.args, &spec.env);
+    assert!(crate::cache::read(&setup.cache(), "fx", &declared).is_some());
+    let (command, args) = spec.program();
+    let running = crate::cache::key(command, args, &spec.env);
+    assert_ne!(
+        declared, running,
+        "the pinned paths never enter the cache key"
+    );
+    assert!(crate::cache::read(&setup.cache(), "fx", &running).is_none());
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_second_start_with_a_different_run_hits_the_declaration_cache() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mut spec = setup.spec("fx");
+    (spec.command, spec.args) = declared_only("fx");
+    spec.run = Some(run_program(&setup, &gate));
+    let first = setup.start(vec![spec.clone()]);
+    assert!(first.failed.is_empty());
+    setup.stop(first.servers);
+    setup.forget_spawn();
+    // The same declaration with a different program: the cached list still
+    // declares, lazily, and nothing spawns.
+    let mut again = spec.clone();
+    again.run = Some(super::Program {
+        command: "/no/such/other".to_owned(),
+        args: Vec::new(),
+        guard: std::sync::Arc::new(|| Ok(())),
+    });
+    let second = setup.start(vec![again]);
+    assert!(second.failed.is_empty());
+    assert_eq!(names(&second), ["mcp__fx__echo"]);
+    assert!(!setup.spawned(), "the cache hit spawns nothing");
+    setup.stop(second.servers);
+}
+
+#[test]
+fn program_is_the_run_when_set_and_the_declaration_otherwise() {
+    let setup = Setup::new();
+    let plain = setup.spec("fx");
+    let (command, args) = plain.program();
+    assert_eq!(command, plain.command.as_str());
+    assert_eq!(args, plain.args.as_slice());
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mut run = setup.spec("fx");
+    (run.command, run.args) = declared_only("fx");
+    run.run = Some(run_program(&setup, &gate));
+    let (command, args) = run.program();
+    let program = run.run.as_ref().expect("a run");
+    assert_eq!(command, program.command.as_str());
+    assert_eq!(args, program.args.as_slice());
+}
+
+#[test]
+fn a_session_start_whose_guard_refuses_reports_start_failed() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut spec = setup.spec("fx");
+    (spec.command, spec.args) = declared_only("fx");
+    spec.run = Some(run_program(&setup, &gate));
+    let images: std::sync::Arc<dyn contract::images::Images> = FakeImages::ok();
+    let opened = super::open(
+        spec,
+        &setup.workspace(),
+        &setup.artifacts(),
+        &images,
+        &setup.cache(),
+        &setup.clock(),
+        "0.0.0",
+    );
+    let super::Opened::Down { failure, required } = opened else {
+        panic!("a refused guard fails the start");
+    };
+    assert!(!required);
+    assert_eq!(failure.reason, ServerFailure::StartFailed);
+    assert!(
+        failure.error.message.contains("the test refused the spawn"),
+        "message: {}",
+        failure.error.message
+    );
+    assert!(!setup.spawned(), "a refused spawn starts nothing");
+}
+
+#[test]
+fn adopt_then_stop_stops_the_adopted_server() {
+    let setup = Setup::with_tools(&json!([{"name": "echo"}]));
+    let started = setup.start(vec![setup.spec("fx")]);
+    assert!(started.failed.is_empty());
+    let pid = setup.pid();
+    let idle = setup.start(vec![]);
+    idle.servers.adopt(started.servers);
+    setup.stop(idle.servers);
+    setup.await_reaped(pid);
+}
+
+#[test]
+fn a_spec_debug_prints_no_argument_run_or_env_value() {
+    let setup = Setup::new();
+    let planted_env = "ghp_planted4c1e9b";
+    let planted_arg = "--token=planted7d2a";
+    let planted_run = "--key=planted9f31";
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let run = super::Program {
+        command: "/run/program".to_owned(),
+        args: vec![planted_run.to_owned()],
+        guard: std::sync::Arc::clone(&run_program(&setup, &gate).guard),
+    };
+    let spec = ServerSpec {
+        args: vec![planted_arg.to_owned()],
+        env: BTreeMap::from([("GITHUB_TOKEN".to_owned(), planted_env.to_owned())]),
+        run: Some(run),
+        ..setup.spec("github")
+    };
+    let printed = format!("{spec:?}");
+    assert!(printed.contains("github"), "{printed}");
+    assert!(!printed.contains(planted_env), "{printed}");
+    assert!(!printed.contains(planted_arg), "{printed}");
+    assert!(!printed.contains(planted_run), "{printed}");
+    assert!(!printed.contains("/run/program"), "{printed}");
+}

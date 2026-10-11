@@ -190,6 +190,7 @@ fn spec(config: &Config, name: &str) -> Option<mcp::ServerSpec> {
         command,
         args,
         env,
+        run: None,
         startup_timeout: millis(
             config,
             name,
