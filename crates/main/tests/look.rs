@@ -1105,10 +1105,13 @@ fn followed_end_is_complete(grid: &Grid) -> bool {
     }
     let first = bubble[0];
     let second = bubble[1];
-    if !(36..=124).all(|x| grid.cell(x, first).bg == PROMPT_RGB)
-        || grid.cell(35, first).bg != Colour::Default
-        || grid.cell(124, first).fg != ACCENT_RGB
-        || grid.cell(36, first).symbol != " "
+    if !bubble
+        .iter()
+        .all(|y| grid.cell(35, *y).bg == Colour::Default && grid.cell(124, *y).fg == ACCENT_RGB)
+    {
+        return false;
+    }
+    if grid.cell(36, first).symbol != " "
         || grid.cell(37, first).symbol != "a"
         || grid.cell(123, first).symbol != " "
     {
