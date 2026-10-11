@@ -743,7 +743,8 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
         )
         .expect("the gate is running");
     assert!(
-        gate.conns.wait_while(DEADLINE, |state| !state.published(id)),
+        gate.conns
+            .wait_while(DEADLINE, |state| !state.published(id)),
         "the reader is published under its id"
     );
     let (done_tx, done_rx) = mpsc::channel();
