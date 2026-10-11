@@ -209,7 +209,7 @@ binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
 under 24 MiB and runs the benchmarks that gate each pull request
-(`docs/performance.md`), timings at 3 runs and memory at 5. The base binary
+(`docs/performance.md`), timing-only workloads at 3 runs and the rest at 5. The base binary
 runs the timing benchmarks only, in the same job on the same runner, so a
 timing comparison never crosses runners. Memory and exact rows compare
 against the backstop's stored results for the base commit, the
@@ -405,8 +405,10 @@ Node.js version GitHub currently supports. An action still on a deprecated
 Node.js version is moved to its newest major before it is pinned.
 
 No job polls the Actions API in a loop. The backstop's one lookup of the
-last passing `main` commit is the only Actions API call a workflow makes to
-find a run; the backstop's cache pruning also lists and deletes cache entries.
+last passing `main` commit and the release job's stored-results lookup (one
+artifact listing per commit, at most 10, and one download) are the only
+Actions API calls a workflow makes to find a run; the backstop's cache pruning
+also lists and deletes cache entries.
 Agents wait on the `CI` check with `gh-ci`, never with a `gh run watch`
 loop, because such loops have tripped GitHub's Actions rate limit. `gh-ci` is
 a small `gh` wrapper that waits with few API calls; it lives in the owner's
