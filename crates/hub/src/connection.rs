@@ -21,6 +21,7 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake, wall_ms};
 use contract::commands::SentPart;
 use contract::events::CommandResult;
+use contract::events::VariablesSource;
 use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
 use log::diag::Severity;
 use serde_json::{Map, Value};
@@ -58,6 +59,10 @@ pub(crate) struct Hub {
     /// Held across a resume: one at a time per hub, so two commands for
     /// one exited session start one process.
     pub(crate) resume_gate: Mutex<()>,
+    /// The environment the hub's sessions start with: the login-shell
+    /// capture's publish, once the first capture ends (`docs/invocation.md`,
+    /// "A session's environment").
+    pub(crate) environments: Arc<crate::Environments>,
     /// Every served connection's writer and relays, for the rejoin sweep.
     pub(crate) rejoins: crate::rejoin::Connections,
     /// One start at a time per next session: a slow rewind start blocks
@@ -150,6 +155,10 @@ impl Hub {
             tick,
             wake,
             resume_gate: Mutex::new(()),
+            environments: crate::Environments::ready(crate::Environment {
+                vars: Vec::new(),
+                source: VariablesSource::Inherited,
+            }),
             rejoins: crate::rejoin::Connections::default(),
             starting: Mutex::new(HashMap::new()),
             #[cfg(test)]
@@ -169,6 +178,13 @@ impl Hub {
             #[cfg(test)]
             fail_spawn: Mutex::new(None),
         }
+    }
+
+    /// The environment the hub's sessions start with: `serve` sets the
+    /// shared capture, and every other caller keeps the published default.
+    pub(crate) fn with_environments(mut self, environments: Arc<crate::Environments>) -> Self {
+        self.environments = environments;
+        self
     }
 
     /// The open client connections, this connection's asker included.

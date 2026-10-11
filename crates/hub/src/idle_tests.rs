@@ -107,6 +107,47 @@ fn serve_mode(
                 "0.0.0",
                 Arc::new(FakeStarter::hang(&home)),
                 timed,
+                crate::Environments::ready(crate::Environment {
+                    vars: Vec::new(),
+                    source: contract::events::VariablesSource::Inherited,
+                }),
+            )
+            .expect("the hub starts");
+            done_tx.send(code).unwrap_or(());
+        })
+        .unwrap();
+    done_rx
+}
+
+/// [`serve_mode`] with the hub's shared environment.
+fn serve_mode_env(
+    temp: &Temp,
+    idle: Duration,
+    clock: Arc<fakes::clock::FakeClock>,
+    level: Level,
+    mode: crate::Mode,
+    environments: Arc<crate::Environments>,
+) -> mpsc::Receiver<i32> {
+    let home = temp.dir.clone();
+    let timed: Arc<dyn contract::clock::Clock> = clock;
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-serve".to_owned())
+        .spawn(move || {
+            let code = crate::serve(
+                &home,
+                mode,
+                move || {
+                    Ok(crate::Settings {
+                        idle_exit: idle,
+                        level,
+                        port: None,
+                    })
+                },
+                "0.0.0",
+                Arc::new(FakeStarter::hang(&home)),
+                timed,
+                environments,
             )
             .expect("the hub starts");
             done_tx.send(code).unwrap_or(());
@@ -789,4 +830,151 @@ fn an_idle_exit_connects_nowhere_through_the_socket_path() {
             "the rebound listener stays quiet"
         ),
     }
+}
+
+/// A fake `$SHELL` under `temp` running `body`, with the pid prologue.
+fn fake_shell(temp: &Temp, body: &str) -> std::path::PathBuf {
+    let nonce = match fakes::check_run() {
+        Some((name, value)) => format!("export {name}={}\n", value.to_string_lossy()),
+        None => String::new(),
+    };
+    let body = format!(
+        "export FAKE_DIR={}\necho $$ > $FAKE_DIR/pid\n{}{}",
+        temp.dir.display(),
+        nonce,
+        body
+    );
+    fakes::script(&temp.dir, "shell", &body)
+}
+
+/// The inherited environment handing `shell` as `$SHELL`.
+fn inherited_env(
+    shell: &std::path::Path,
+    home: &std::path::Path,
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    vec![
+        (
+            std::ffi::OsString::from("HOME"),
+            home.as_os_str().to_owned(),
+        ),
+        (
+            std::ffi::OsString::from("USER"),
+            std::ffi::OsString::from("fiber-test"),
+        ),
+        (
+            std::ffi::OsString::from("SHELL"),
+            shell.as_os_str().to_owned(),
+        ),
+    ]
+}
+
+/// The fake shell's pid, read under a wall-clock deadline.
+fn shell_pid(temp: &Temp) -> u32 {
+    let deadline = Deadline::after(WITHIN);
+    loop {
+        if let Ok(text) = fs::read_to_string(temp.dir.join("pid"))
+            && let Ok(pid) = text.trim().parse::<u32>()
+        {
+            return pid;
+        }
+        if deadline.left().is_zero() {
+            panic!("waited for the fake shell to report its pid");
+        }
+        thread::yield_now();
+    }
+}
+
+#[test]
+fn a_signal_during_a_hung_first_capture_stops_with_no_environment_built() {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "exec sleep 600");
+    let clock = fakes::clock::FakeClock::new();
+    let origin = clock.origin();
+    let environments = crate::Environments::new(inherited_env(&shell, &temp.dir), &temp.dir);
+    let done = serve_mode_env(
+        &temp,
+        IDLE,
+        Arc::clone(&clock),
+        Level::Info,
+        crate::Mode::OnDemand,
+        Arc::clone(&environments),
+    );
+    let pid = shell_pid(&temp);
+    let _watchdog = fakes::Watchdog::group(pid);
+    assert!(
+        clock.await_parked(
+            origin + crate::environment::capture::CAPTURE_DEADLINE,
+            WITHIN
+        ),
+        "the first capture waits on its deadline"
+    );
+    raise_sigterm();
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
+    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        !temp.log().contains("environment_built"),
+        "a cancelled capture writes no line"
+    );
+    assert!(temp.log().contains("The hub stopped: signal."));
+}
+
+#[test]
+fn close_runs_before_hub_stopped_in_the_shutdown_race() {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "export MARK=1\nexec /bin/sh -c \"$4\"");
+    let clock = fakes::clock::FakeClock::new();
+    let environments = crate::Environments::new(inherited_env(&shell, &temp.dir), &temp.dir);
+    // Hold the capture between its end and its publish: the hook reports
+    // it is held, then blocks until the test releases it.
+    let (held_tx, held_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    *support::lock(&environments.before_publish) = Some(Box::new(move || {
+        held_tx.send(()).unwrap_or(());
+        Deadline::after(DEADLINE).recv(&release_rx).unwrap_or(());
+    }));
+    let done = serve_mode_env(
+        &temp,
+        IDLE,
+        Arc::clone(&clock),
+        Level::Info,
+        crate::Mode::OnDemand,
+        Arc::clone(&environments),
+    );
+    Deadline::after(DEADLINE)
+        .recv(&held_rx)
+        .expect("the capture holds before publishing");
+    raise_sigterm();
+    crate::testkit::await_true("close begins", {
+        let environments = Arc::clone(&environments);
+        move || environments.is_closed()
+    });
+    assert!(
+        !temp.log().contains("hub_stopped"),
+        "close runs before hub_stopped is written"
+    );
+    release_tx.send(()).unwrap_or(());
+    assert_eq!(
+        Deadline::after(DEADLINE)
+            .recv(&done)
+            .expect("the hub stops"),
+        143
+    );
+    assert!(
+        !temp.log().contains("environment_built"),
+        "the cancelled capture writes no line"
+    );
+    assert!(
+        temp.log().trim_end().ends_with("}"),
+        "the log ends with a line"
+    );
+    let last = temp.log().lines().last().unwrap_or_default().to_owned();
+    assert!(
+        last.contains("hub_stopped"),
+        "the log ends with hub_stopped: {last}"
+    );
 }
