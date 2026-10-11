@@ -462,10 +462,9 @@ fn await_refresh_exit(deadline: Deadline, pattern: &str) {
         return;
     }
     support::kill_matching(deadline, pattern).unwrap();
-    assert!(
-        fakes::matching_exits(pattern, deadline.cleanup()),
-        "the refresh child outlived SIGKILL past the cleanup deadline"
-    );
+    fakes::try_matching_exits(pattern, deadline.cleanup()).unwrap_or_else(|err| {
+        panic!("the refresh child outlived SIGKILL past the cleanup deadline: {err}")
+    });
     panic!("waited until the deadline for the refresh child to exit");
 }
 
