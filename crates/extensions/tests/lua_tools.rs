@@ -905,6 +905,36 @@ fn a_disabled_name_no_tool_has_is_ignored() {
 }
 
 #[test]
+fn a_disabled_tool_takes_no_part_in_a_clash() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("dup", "a"), tool_line("only_a", "a")),
+    );
+    install_lua(
+        &setup,
+        "b",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("dup", "b"), tool_line("only_b", "b")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["dup"]"#],
+    );
+    assert_eq!(
+        declared(&session),
+        [
+            ("fiber.test/a".to_owned(), "only_a".to_owned()),
+            ("fiber.test/b".to_owned(), "dup".to_owned()),
+            ("fiber.test/b".to_owned(), "only_b".to_owned())
+        ]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
 fn an_extension_with_only_tools_stays_loaded_and_delivers() {
     let setup = Setup::new();
     install_lua(
