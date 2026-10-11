@@ -935,6 +935,28 @@ fn a_disabled_tool_takes_no_part_in_a_clash() {
 }
 
 #[test]
+fn reloading_with_a_disabled_list_declares_one_fewer_tool() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let first = session_with(&setup, &[]);
+    assert_eq!(declared(&first).len(), 2);
+    let second = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["one"]"#],
+    );
+    assert_eq!(
+        declared(&second),
+        [("fiber.test/a".to_owned(), "two".to_owned())]
+    );
+    assert_eq!(second.notices(), []);
+}
+
+#[test]
 fn an_extension_with_only_tools_stays_loaded_and_delivers() {
     let setup = Setup::new();
     install_lua(
