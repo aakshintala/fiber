@@ -21,7 +21,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "all-states",
         help: "the rail at 15% of 160: two projects, six sessions in every state",
-        check: "two project groups, the launch project first, in start order; six cards reading WORKING, NEEDS INPUT with its orange wait reason, RETRYING, CRASHED with the red ✕, READY and IDLE; the on-screen card brighter; every row 1 keeps its state word and percentage while the elapsed and spend give way to the 24 columns.",
+        check: "two project groups, the launch project first, in start order; six cards reading WORKING, NEEDS INPUT with its orange wait reason, RETRYING, CRASHED with the red ✕, READY and IDLE; the on-screen card brighter; every row 1 keeps its state word and elapsed, and the spend row keeps spend and percentage with no bar at the 24 columns.",
         build: || Look {
             kind: Kind::AllStates,
         },
@@ -82,13 +82,13 @@ struct Look {
 /// A fixed tick, so every still frame is stable: the spinners rest on their
 /// first frame and the waiting pulse on its attention phase.
 const TICK: u64 = 0;
-/// The B card density every rail case draws: three, the default.
-const DENSITY: u8 = 2;
+/// The B card density every rail case draws: medium, four rows a card.
+const DENSITY: u8 = 1;
 
-/// The six sessions behind `all-states` and `hovered`: two projects, every
-/// state once, context fills across all three bar colours. Only this fixture
-/// builds an idle session.
-fn six() -> Vec<Fake> {
+/// The two sessions `six` and `pair` share: a working session and a waiting
+/// one. Only the waiting session's context fill differs, so each case spans
+/// two bar colours: 41 behind `six`, 64 behind `pair`.
+fn first_two(wait_ctx: u8) -> Vec<Fake> {
     vec![
         Fake {
             name: "fix flaky lock test",
@@ -112,10 +112,19 @@ fn six() -> Vec<Fake> {
             ws: "fiber",
             spend: "$1.10".into(),
             dollars: 1.10,
-            ctx: 41,
+            ctx: wait_ctx,
             age: "22m".into(),
             st: SState::NeedsInput,
         },
+    ]
+}
+
+/// The six sessions behind `all-states` and `hovered`: two projects, every
+/// state once, context fills across all three bar colours. Only this fixture
+/// builds an idle session.
+fn six() -> Vec<Fake> {
+    let mut v = first_two(41);
+    v.extend([
         Fake {
             name: "backfill embeddings",
             project: "pi-rig",
@@ -168,7 +177,8 @@ fn six() -> Vec<Fake> {
             age: "3h".into(),
             st: SState::Idle,
         },
-    ]
+    ]);
+    v
 }
 
 /// One session with a set context fill, for the bar comparison: only the
@@ -192,34 +202,7 @@ fn barred(ctx: u8, spend: &'static str) -> Fake {
 /// Two sessions for the width comparison: waiting shows the wait reason,
 /// crashed would need the dismiss column, so neither is crashed.
 fn pair() -> Vec<Fake> {
-    vec![
-        Fake {
-            name: "fix flaky lock test",
-            project: "fiber",
-            wait: String::new(),
-            model: "opus-5-5 · high".into(),
-            branch: "main",
-            ws: "fiber",
-            spend: "$1.35".into(),
-            dollars: 1.35,
-            ctx: 12,
-            age: "16s".into(),
-            st: SState::Working,
-        },
-        Fake {
-            name: "review #688",
-            project: "fiber",
-            wait: "approval: shell cargo publish --dry-run".into(),
-            model: "gpt-6.1-sol · medium".into(),
-            branch: "review-688",
-            ws: "fiber",
-            spend: "$1.10".into(),
-            dollars: 1.10,
-            ctx: 64,
-            age: "22m".into(),
-            st: SState::NeedsInput,
-        },
-    ]
+    first_two(64)
 }
 
 /// The Session card's fixture behind `hidden`: enough of a session for the
@@ -387,12 +370,18 @@ fn context_bars(cols: usize, rows: usize) -> Frame {
     }
 }
 
+/// The width comparison's rails: the 22-column floor and the 48-column
+/// ceiling, one column apart. The tests draw each rail on its own too.
+const FLOOR_W: usize = 22;
+const CEIL_W: usize = 48;
+const RAIL_GAP: usize = 1;
+
 /// The width comparison: the 22-column floor and the 48-column ceiling side
 /// by side over one backdrop, labelled, so the owner compares directly.
 fn floor_ceiling(cols: usize, rows: usize) -> Frame {
-    const LEFT: usize = 22;
-    const RIGHT: usize = 48;
-    const GAP: usize = 1;
+    const LEFT: usize = FLOOR_W;
+    const RIGHT: usize = CEIL_W;
+    const GAP: usize = RAIL_GAP;
     let sess = pair();
     let shown: Vec<usize> = (0..sess.len()).collect();
     let (floor, _) = rail_full_b(&sess, &shown, 0, TICK, false, LEFT, DENSITY);
@@ -733,17 +722,11 @@ mod tests {
         // The 24-column rail cuts the wait reason, as on screen.
         assert!(t.contains("approval:"));
         assert!(t.contains("✕"));
-        // Row 1 keeps the state word and the percentage: the elapsed goes
-        // first, then the spend, per the narrow rule.
+        // Row 1 keeps the state word and the elapsed; the spend row keeps
+        // the spend and the percentage, the bar giving way below 30 columns.
         assert!(t.contains("12%"));
-        assert!(
-            !t.contains("16s"),
-            "the elapsed should give way at 24 columns"
-        );
-        assert!(
-            !t.contains("$1.35"),
-            "the spend should give way at 24 columns"
-        );
+        assert!(t.contains("16s"), "the elapsed should read at 24 columns");
+        assert!(t.contains("$1.35"), "the spend should read at 24 columns");
         // Stable numbers: every session keeps its start-order number.
         for n in ["1 ", "2 ", "3 ", "4 ", "5 ", "6 "] {
             assert!(t.contains(n), "missing number {n}");
@@ -840,9 +823,41 @@ mod tests {
         assert_eq!(t.matches("fix flaky").count(), 2);
         assert_eq!(t.matches("review #688").count(), 2);
         assert!(t.contains("NEEDS INPUT"));
-        // The ceiling card keeps its bar; the floor card keeps spend and percentage.
-        assert!(t.contains("$1.35"));
-        assert!(t.contains("12%"));
+    }
+
+    /// One rail of the width comparison on its own, so the floor test
+    /// asserts on the floor frame and the ceiling test on the ceiling frame.
+    fn width_rows(w: usize) -> Vec<crate::Row> {
+        let sess = pair();
+        let shown: Vec<usize> = (0..sess.len()).collect();
+        rail_full_b(&sess, &shown, 0, TICK, false, w, DENSITY).0
+    }
+
+    /// The text of rail rows on their own, one line each.
+    fn rows_text(rows: &[crate::Row]) -> String {
+        rows.iter()
+            .map(|r| {
+                r.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn floor_keeps_spend_with_no_bar() {
+        let t = rows_text(&width_rows(FLOOR_W));
+        assert!(t.contains("$1.35"), "the floor lost spend");
+        assert!(t.contains("12%"), "the floor lost the percentage");
+        assert!(!t.contains('▆'), "the floor draws a bar it has no room for");
+    }
+
+    #[test]
+    fn ceiling_keeps_its_bar() {
+        let t = rows_text(&width_rows(CEIL_W));
+        assert!(t.contains('▆'), "the ceiling lost its bar");
     }
 
     #[test]

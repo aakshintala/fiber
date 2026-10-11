@@ -258,7 +258,7 @@ Stage 2 covers selection and copy, search, keyboard protocol detection, the appr
 Eight fake sessions stand in for the hub's feed, so the owner can judge the rail's look in Ghostty. Session 1 is the replayed fixture (WORKING, NEEDS INPUT once it waits on its approval or question); its model, branch, spend and context % are the fixture's real numbers. The other seven are hard-coded: "docs: rail spec" WORKING, "review #688" NEEDS INPUT on an approval, "bump ratatui" NEEDS INPUT on a question, "lsp probe" CRASHED, "migrate every provider adapter to the new streaming contract" WORKING and "backfill embeddings" RETRYING in the `pi-rig` project, and "rewrite onboarding tour" READY in a third project, `beacon`. Sessions stay in start order, so ⌥N numbers never move; a waiting session draws attention by glyph, stripe, tint and pulse only. Clicking a card or pressing ⌥N moves the on-screen marker only; the conversation stays the replayed session, as the dim "click moves marker" line says.
 
 Rail cards (#1632): five still frames from the fixtures in `src/rail.rs`,
-each reusing the rail builders above, at 160 by 48:
+each a four-row medium card from the rail builders above, at 160 by 48:
 
 ```sh
 cargo run --release -- fixtures/session.jsonl --static --rail-case all-states
