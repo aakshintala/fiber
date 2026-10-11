@@ -70,9 +70,12 @@ fn each_row_reports_its_join_and_skip() {
             "```\nabcdefghij\n```",
             10,
             vec![
-                ("      copy", Break, 0, true),
-                ("1 │ abcdef", Break, 4, false),
-                ("  │ ghij  ", Wrap, 4, false),
+                ("▄▄▄▄▄▄▄▄▄▄", Break, 0, true),
+                ("          ", Break, 0, true),
+                ("   1  abcd", Break, 6, false),
+                ("      efgh", Wrap, 6, false),
+                ("      ij  ", Wrap, 6, false),
+                ("▀▀▀▀▀▀▀▀▀▀", Break, 0, true),
             ],
         ),
         (
