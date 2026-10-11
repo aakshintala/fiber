@@ -6,6 +6,7 @@ use super::{Input, Loop, Screen};
 use crate::app::App;
 use crate::link::Line;
 use contract::Envelope;
+use fakes::Deadline;
 use ratatui::backend::TestBackend;
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
@@ -205,6 +206,7 @@ fn answers_all() -> Script {
 
 /// Runs the loop on a thread over `inputs` then a double Ctrl+C, and hands
 /// it back once it quits, waiting at most [`DEADLINE`].
+#[track_caller]
 fn run(
     mut lp: Loop<TestBackend>,
     rx: mpsc::Receiver<Input>,
@@ -224,9 +226,10 @@ fn run(
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let (code, lp) = finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop to quit: {err}"));
+    let (code, lp) = match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(ended) => ended,
+        Err(err) => panic!("waited {DEADLINE:?} for the loop to quit: {err}"),
+    };
     assert_eq!(code, 0);
     lp
 }
@@ -326,9 +329,10 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
             done.send((code, lp, rx)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let (code, mut lp, rx) = finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the frame: {err}"));
+    let (code, mut lp, rx) = match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(ended) => ended,
+        Err(err) => panic!("waited {DEADLINE:?} for the frame: {err}"),
+    };
     assert_eq!(code, None);
     assert!(!ranges(&seen).is_empty());
     assert!(lp.app.pages().part(0).is_some());
@@ -626,8 +630,8 @@ fn paging_up_ends_at_the_top() {
     });
     // On a thread with a wall-clock deadline: a loop bound that never ends
     // fails here, instead of hanging the suite.
-    let report = finished
-        .recv_timeout(DEADLINE)
+    let report = Deadline::after(DEADLINE)
+        .recv(&finished)
         .unwrap_or_else(|error| panic!("waited {DEADLINE:?} for the paging jig: {error}"));
     assert!(report.is_ok(), "{report:?}");
 }
@@ -861,6 +865,7 @@ fn queued_hub_lines_draw_one_frame() {
 }
 
 /// Runs `lp` over `inputs` queued before it starts, to the end of input.
+#[track_caller]
 fn run_queued(
     lp: &mut Loop<CountingBackend>,
     rx: mpsc::Receiver<Input>,
@@ -1306,8 +1311,8 @@ fn resume_open_replays_the_log_to_the_tail() {
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let (code, lp) = finished
-        .recv_timeout(DRAIN)
+    let (code, lp) = Deadline::after(DRAIN)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to drain: {err}"));
     assert_eq!(code, 0);
     assert!(ranges(&seen).is_empty(), "{:?}", ranges(&seen));
@@ -1397,8 +1402,8 @@ fn a_key_that_opens_a_delegate_leaves_nothing_held() {
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let (code, lp) = finished
-        .recv_timeout(DRAIN)
+    let (code, lp) = Deadline::after(DRAIN)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
     assert_eq!(code, 0);
     assert!(lp.app.item_open());
@@ -1422,8 +1427,8 @@ fn a_quit_in_its_own_batch_leaves_nothing_held() {
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let (code, lp) = finished
-        .recv_timeout(DRAIN)
+    let (code, lp) = Deadline::after(DRAIN)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
     assert_eq!(code, 0);
     assert!(!lp.app.pages().holding());
@@ -1466,8 +1471,8 @@ fn a_hub_batch_holds_while_folding() {
             done.send((code, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let (code, lp) = finished
-        .recv_timeout(DRAIN)
+    let (code, lp) = Deadline::after(DRAIN)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DRAIN:?} for the loop to quit: {err}"));
     assert_eq!(code, 0);
     // Both lines folded before the count: one recount for the batch.

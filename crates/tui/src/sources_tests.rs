@@ -1,6 +1,7 @@
 //! Tests for the tty reader and its pause handshake.
 
 use crate::Input;
+use fakes::Deadline;
 use std::fs::File;
 use std::io::{self, Write};
 use std::sync::{Arc, mpsc};
@@ -11,15 +12,17 @@ const DEADLINE: Duration = Duration::from_secs(10);
 
 /// Runs `work` on a thread and returns its result, failing after
 /// [`DEADLINE`] with `what`: one deadline however many reads it makes.
+#[track_caller]
 fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("sources-within".to_owned())
         .spawn(move || done.send(work()).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for {what}: {err}"))
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(result) => result,
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
 }
 
 /// A reader on a pipe standing in for the tty: the reader, the pipe's
@@ -33,8 +36,9 @@ fn piped_reader() -> (super::Reader, io::PipeWriter, mpsc::Receiver<Input>) {
 }
 
 /// The next bytes the reader sends, with one deadline.
-fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str) -> Vec<u8> {
-    match rx.recv_timeout(DEADLINE) {
+#[track_caller]
+fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str, wait: &Deadline) -> Vec<u8> {
+    match wait.recv(rx) {
         Ok(Input::Bytes(bytes)) => bytes,
         Ok(_) => panic!("{what}: not bytes"),
         Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
@@ -42,6 +46,7 @@ fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str) -> Vec<u8> {
 }
 
 /// Pauses `reader` on a thread with one deadline, handing it back.
+#[track_caller]
 fn paused(reader: super::Reader) -> super::Reader {
     within("the pause to return", move || {
         let mut reader = reader;
@@ -55,7 +60,10 @@ fn a_paused_reader_holds_the_ttys_bytes_until_resumed() {
     let (reader, mut tty, rx) = piped_reader();
     tty.write_all(b"a")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    assert_eq!(next_bytes(&rx, "the first byte"), b"a");
+    assert_eq!(
+        next_bytes(&rx, "the first byte", &Deadline::after(DEADLINE)),
+        b"a"
+    );
     let reader = paused(reader);
     // Pause returned only once the reader parked.
     assert!(reader.gate.lock().parked);
@@ -65,7 +73,10 @@ fn a_paused_reader_holds_the_ttys_bytes_until_resumed() {
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     assert!(reader.gate.lock().parked);
     reader.resume();
-    assert_eq!(next_bytes(&rx, "the byte after resume"), b"b");
+    assert_eq!(
+        next_bytes(&rx, "the byte after resume", &Deadline::after(DEADLINE)),
+        b"b"
+    );
     assert!(!reader.gate.lock().parked);
     // A second pause and resume works the same.
     let reader = paused(reader);
@@ -73,7 +84,14 @@ fn a_paused_reader_holds_the_ttys_bytes_until_resumed() {
         .unwrap_or_else(|err| panic!("write: {err}"));
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     reader.resume();
-    assert_eq!(next_bytes(&rx, "the byte after the second resume"), b"c");
+    assert_eq!(
+        next_bytes(
+            &rx,
+            "the byte after the second resume",
+            &Deadline::after(DEADLINE)
+        ),
+        b"c"
+    );
 }
 
 #[test]
@@ -84,8 +102,9 @@ fn bytes_read_before_the_pause_are_sent_not_lost() {
     let reader = paused(reader);
     reader.resume();
     let mut got = Vec::new();
+    let wait = Deadline::after(DEADLINE);
     while got.len() < 2 {
-        got.extend(next_bytes(&rx, "the bytes written before the pause"));
+        got.extend(next_bytes(&rx, "the bytes written before the pause", &wait));
     }
     assert_eq!(got, b"xy");
 }
@@ -95,7 +114,7 @@ fn pause_on_an_ended_reader_returns_at_once() {
     let (reader, tty, rx) = piped_reader();
     // The tty's end ends the reader: its sender drops.
     drop(tty);
-    match rx.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&rx) {
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
         Ok(_) => panic!("bytes instead of the reader's end"),
         Err(mpsc::RecvTimeoutError::Timeout) => {

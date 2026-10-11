@@ -13,6 +13,7 @@ use super::{LoginStart, LoginStep, LoginTicket, LoginWorker, start};
 use crate::configure::{BrowserLogin, ConfigureError, LoginTarget, Stored};
 use crate::configure_fake::Fake;
 use crate::{Configure, Input};
+use fakes::Deadline;
 
 /// One named wall-clock deadline for every posted event.
 const WAIT: Duration = Duration::from_secs(10);
@@ -31,8 +32,9 @@ fn seam() -> Arc<Fake> {
 }
 
 /// The next posted login event within the deadline.
-fn next(out: &mpsc::Receiver<Input>) -> (LoginTicket, LoginStep) {
-    match out.recv_timeout(WAIT) {
+#[track_caller]
+fn next(out: &mpsc::Receiver<Input>, wait: &Deadline) -> (LoginTicket, LoginStep) {
+    match wait.recv(out) {
         Ok(Input::Login { ticket, step }) => (ticket, step),
         Ok(_) => panic!("the worker posted something else"),
         Err(err) => panic!("waited {WAIT:?} for the worker: {err}"),
@@ -61,7 +63,7 @@ fn start_posts_the_end_with_the_login_s_result() {
             replaced: false,
         }),
     );
-    let (ticket, step) = next(&rx);
+    let (ticket, step) = next(&rx, &Deadline::after(WAIT));
     assert_eq!(ticket, LoginTicket(3));
     match step {
         LoginStep::Done(Ok(stored)) => {
@@ -91,13 +93,13 @@ fn the_posting_show_sends_open_and_code_with_the_ticket() {
     let shown = seam.login_show(0).expect("one login started");
     shown.open("https://auth.example/authorize?state=1");
     shown.show("https://auth.example/device", "ABCD-1234");
-    let (ticket, step) = next(&rx);
+    let (ticket, step) = next(&rx, &Deadline::after(WAIT));
     assert_eq!(ticket, LoginTicket(7));
     assert!(
         matches!(step, LoginStep::Open(ref url) if url == "https://auth.example/authorize?state=1"),
         "{step:?}"
     );
-    let (ticket, step) = next(&rx);
+    let (ticket, step) = next(&rx, &Deadline::after(WAIT));
     assert_eq!(ticket, LoginTicket(7));
     assert!(
         matches!(step, LoginStep::Code { ref url, ref code }
@@ -113,7 +115,7 @@ fn the_posting_show_sends_open_and_code_with_the_ticket() {
             message: "the login was cancelled; nothing was stored.".to_owned(),
         }),
     );
-    let (_, step) = next(&rx);
+    let (_, step) = next(&rx, &Deadline::after(WAIT));
     assert!(matches!(step, LoginStep::Done(Err(_))), "{step:?}");
     drop(worker);
     assert_eq!(login.cancels(), 1);

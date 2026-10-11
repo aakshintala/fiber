@@ -9,18 +9,19 @@
 //! of file or on an error, and after the last marker it keeps reading and
 //! discards, whether or not the receiver still exists.
 
+use fakes::Deadline;
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 /// One named wall-clock deadline for every blocking wait.
-const DEADLINE: Duration = Duration::from_secs(10);
+pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
 
 /// Watches the pty from now on without ever stopping: one thread reads
 /// the main side to EOF, sending the bytes since the previous match up
 /// to and including each marker in order, then keeps reading and
-/// discards. A test takes each marker with one `recv_timeout` so a full
+/// discards. A test takes each marker with one `Deadline` receive so a full
 /// pty never blocks the terminal's frames.
 pub(crate) fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8>> {
     if markers.iter().any(|marker| marker.is_empty()) {
@@ -64,9 +65,11 @@ pub(crate) fn watch(main: &File, markers: Vec<&'static [u8]>) -> Receiver<Vec<u8
     finished
 }
 
-/// Takes one watched marker within [`DEADLINE`].
-pub(crate) fn watched(frames: &Receiver<Vec<u8>>, what: &str) -> Vec<u8> {
-    frames
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for {what}: {err}"))
+/// Takes one watched marker with `wait`.
+#[track_caller]
+pub(crate) fn watched(frames: &Receiver<Vec<u8>>, what: &str, wait: &Deadline) -> Vec<u8> {
+    match wait.recv(frames) {
+        Ok(chunk) => chunk,
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
 }

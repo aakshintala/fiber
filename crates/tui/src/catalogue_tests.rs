@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use super::{Catalogue, ReadModels, Reader, Refresh};
 use crate::Input;
+use fakes::Deadline;
 
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -59,9 +60,12 @@ fn setup() -> Setup {
 }
 
 /// The next answer on `rx`, or the test's failure naming the wait.
-fn next(rx: &mpsc::Receiver<Input>) -> Input {
-    rx.recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the read's answer"))
+#[track_caller]
+fn next(rx: &mpsc::Receiver<Input>, wait: &Deadline) -> Input {
+    match wait.recv(rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("waited {DEADLINE:?} for the read's answer"),
+    }
 }
 
 #[test]
@@ -77,12 +81,22 @@ fn a_read_while_one_runs_waits_and_runs_after() {
     reader.ask(Refresh::Stale, &tx);
     // The second read waits: releasing once answers only the first.
     release.send(()).unwrap();
-    assert!(matches!(next(&rx), Input::Models(Ok(_))));
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
     // Without `done` the queued read never starts.
-    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+    assert!(
+        Deadline::after(Duration::from_millis(100))
+            .recv(&rx)
+            .is_err()
+    );
     reader.done(&tx);
     release.send(()).unwrap();
-    assert!(matches!(next(&rx), Input::Models(Ok(_))));
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
     assert_eq!(*seen.lock().unwrap(), [Refresh::Cached, Refresh::Stale]);
 }
 
@@ -100,15 +114,25 @@ fn the_queue_keeps_the_widest_refresh() {
     reader.ask(Refresh::Cached, &tx);
     reader.ask(Refresh::Every, &tx);
     release.send(()).unwrap();
-    assert!(matches!(next(&rx), Input::Models(Ok(_))));
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
     reader.done(&tx);
     release.send(()).unwrap();
-    assert!(matches!(next(&rx), Input::Models(Ok(_))));
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
     // One waiting read ran, at the widest asked: `done` with nothing
     // waiting starts nothing.
     assert_eq!(*seen.lock().unwrap(), [Refresh::Cached, Refresh::Every]);
     reader.done(&tx);
-    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+    assert!(
+        Deadline::after(Duration::from_millis(100))
+            .recv(&rx)
+            .is_err()
+    );
 }
 
 #[test]
@@ -117,5 +141,9 @@ fn no_reader_asks_nothing() {
     let (tx, rx) = mpsc::channel();
     reader.ask(Refresh::Cached, &tx);
     reader.done(&tx);
-    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+    assert!(
+        Deadline::after(Duration::from_millis(100))
+            .recv(&rx)
+            .is_err()
+    );
 }

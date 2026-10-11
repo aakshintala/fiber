@@ -1,7 +1,8 @@
 //! Tests for raw mode, the alternate screen and restore, on a pty pair.
 
 use super::{restore, setup, size};
-use crate::pty_watch::{watch, watched};
+use crate::pty_watch::{DEADLINE, watch, watched};
+use fakes::Deadline;
 use std::fs::File;
 use std::io::Write;
 use std::os::unix::ffi::OsStrExt;
@@ -30,6 +31,7 @@ struct Pair {
 }
 
 /// Opens a pty pair.
+#[track_caller]
 fn open() -> Pair {
     let main =
         rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
@@ -58,9 +60,15 @@ fn setup_writes_alt_screen_mouse_modes_then_queries() {
     let pair = open();
     let frames = watch(&pair.main, vec![START_HOVER, END]);
     setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    assert_eq!(watched(&frames, "the start bytes"), START_HOVER);
+    assert_eq!(
+        watched(&frames, "the start bytes", &Deadline::after(DEADLINE)),
+        START_HOVER
+    );
     restore();
-    assert_eq!(watched(&frames, "the restore bytes"), END);
+    assert_eq!(
+        watched(&frames, "the restore bytes", &Deadline::after(DEADLINE)),
+        END
+    );
 }
 
 #[test]
@@ -68,9 +76,15 @@ fn setup_without_hover_drops_mode_1003_and_restore_still_turns_it_off() {
     let pair = open();
     let frames = watch(&pair.main, vec![START_NO_HOVER, END]);
     setup(&pair.slave, false).unwrap_or_else(|err| panic!("setup: {err}"));
-    assert_eq!(watched(&frames, "the start bytes"), START_NO_HOVER);
+    assert_eq!(
+        watched(&frames, "the start bytes", &Deadline::after(DEADLINE)),
+        START_NO_HOVER
+    );
     restore();
-    assert_eq!(watched(&frames, "the restore bytes"), END);
+    assert_eq!(
+        watched(&frames, "the restore bytes", &Deadline::after(DEADLINE)),
+        END
+    );
 }
 
 #[test]
@@ -80,12 +94,18 @@ fn setup_sets_raw_mode_and_restore_puts_it_back() {
     let before =
         rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    assert_eq!(watched(&frames, "the start bytes"), START_HOVER);
+    assert_eq!(
+        watched(&frames, "the start bytes", &Deadline::after(DEADLINE)),
+        START_HOVER
+    );
     let raw = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&before));
     assert!(!is_cooked(&raw));
     restore();
-    assert_eq!(watched(&frames, "the restore bytes"), END);
+    assert_eq!(
+        watched(&frames, "the restore bytes", &Deadline::after(DEADLINE)),
+        END
+    );
     let after = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&after));
 }
@@ -126,9 +146,15 @@ fn suspend_restores_and_resume_sets_up_again_without_hover_or_kitty() {
     let pair = open();
     let frames = watch(&pair.main, vec![START_NO_HOVER, END, b"mark" as &[u8], END]);
     setup(&pair.slave, false).unwrap_or_else(|err| panic!("setup: {err}"));
-    assert_eq!(watched(&frames, "the start bytes"), START_NO_HOVER);
+    assert_eq!(
+        watched(&frames, "the start bytes", &Deadline::after(DEADLINE)),
+        START_NO_HOVER
+    );
     super::suspend().unwrap_or_else(|err| panic!("suspend: {err}"));
-    assert_eq!(watched(&frames, "the suspend bytes"), END);
+    assert_eq!(
+        watched(&frames, "the suspend bytes", &Deadline::after(DEADLINE)),
+        END
+    );
     let cooked =
         rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&cooked));
@@ -141,10 +167,16 @@ fn suspend_restores_and_resume_sets_up_again_without_hover_or_kitty() {
         .write_all(b"mark")
         .unwrap_or_else(|err| panic!("write: {err}"));
     let expected = [RESUME_NO_HOVER, crate::appearance::QUERIES, b"mark"].concat();
-    assert_eq!(watched(&frames, "the resume bytes"), expected);
+    assert_eq!(
+        watched(&frames, "the resume bytes", &Deadline::after(DEADLINE)),
+        expected
+    );
     // Set up again: restore writes the restore bytes once more.
     restore();
-    assert_eq!(watched(&frames, "the restore bytes"), END);
+    assert_eq!(
+        watched(&frames, "the restore bytes", &Deadline::after(DEADLINE)),
+        END
+    );
 }
 
 #[test]
@@ -152,9 +184,15 @@ fn resume_turns_hover_on_and_pushes_kitty_when_they_were() {
     let pair = open();
     let frames = watch(&pair.main, vec![START_HOVER, END, b"mark" as &[u8]]);
     setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    assert_eq!(watched(&frames, "the start bytes"), START_HOVER);
+    assert_eq!(
+        watched(&frames, "the start bytes", &Deadline::after(DEADLINE)),
+        START_HOVER
+    );
     super::suspend().unwrap_or_else(|err| panic!("suspend: {err}"));
-    assert_eq!(watched(&frames, "the suspend bytes"), END);
+    assert_eq!(
+        watched(&frames, "the suspend bytes", &Deadline::after(DEADLINE)),
+        END
+    );
     super::resume(true, true).unwrap_or_else(|err| panic!("resume: {err}"));
     // No 1003 and no kitty push, then the appearance queries: the next
     // bytes are the test's own.
@@ -168,7 +206,10 @@ fn resume_turns_hover_on_and_pushes_kitty_when_they_were() {
         b"mark",
     ]
     .concat();
-    assert_eq!(watched(&frames, "the resume bytes"), expected);
+    assert_eq!(
+        watched(&frames, "the resume bytes", &Deadline::after(DEADLINE)),
+        expected
+    );
     restore();
 }
 
@@ -177,16 +218,25 @@ fn restore_after_a_suspend_writes_nothing_more() {
     let pair = open();
     let frames = watch(&pair.main, vec![START_HOVER, END, b"mark" as &[u8]]);
     setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    assert_eq!(watched(&frames, "the start bytes"), START_HOVER);
+    assert_eq!(
+        watched(&frames, "the start bytes", &Deadline::after(DEADLINE)),
+        START_HOVER
+    );
     super::suspend().unwrap_or_else(|err| panic!("suspend: {err}"));
-    assert_eq!(watched(&frames, "the suspend bytes"), END);
+    assert_eq!(
+        watched(&frames, "the suspend bytes", &Deadline::after(DEADLINE)),
+        END
+    );
     restore();
     // A second suspend does nothing either.
     super::suspend().unwrap_or_else(|err| panic!("suspend: {err}"));
     (&pair.slave)
         .write_all(b"mark")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    assert_eq!(watched(&frames, "the mark"), b"mark");
+    assert_eq!(
+        watched(&frames, "the mark", &Deadline::after(DEADLINE)),
+        b"mark"
+    );
 }
 
 #[test]

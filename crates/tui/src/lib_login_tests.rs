@@ -16,6 +16,7 @@ use super::tests::{feed, new_loop};
 use crate::configure::{LoginKind, LoginTarget};
 use crate::configure_fake::Fake;
 use crate::{Configure, Input};
+use fakes::Deadline;
 
 /// One named wall-clock deadline for every worker event and the opener.
 const WAIT: Duration = Duration::from_secs(10);
@@ -60,6 +61,7 @@ fn loop_with(
 }
 
 /// Opens `/login` and presses Enter on the browser row: the worker starts.
+#[track_caller]
 fn start_login(lp: &mut super::Loop<TestBackend>) {
     feed(&mut *lp, vec![Input::Bytes(b"/login".to_vec())]);
     feed(&mut *lp, vec![Input::Bytes(b"\r".to_vec())]);
@@ -69,13 +71,15 @@ fn start_login(lp: &mut super::Loop<TestBackend>) {
 }
 
 /// The next login event within the deadline.
+#[track_caller]
 fn next(
     rx: &Receiver<Input>,
+    wait: &Deadline,
 ) -> (
     crate::login_worker::LoginTicket,
     crate::login_worker::LoginStep,
 ) {
-    match rx.recv_timeout(WAIT) {
+    match wait.recv(rx) {
         Ok(Input::Login { ticket, step }) => (ticket, step),
         Ok(_) => panic!("the worker posted something else"),
         Err(err) => panic!("waited {WAIT:?} for the worker: {err}"),
@@ -84,6 +88,7 @@ fn next(
 
 /// Waits for the opener's file to hold `url`, within the deadline: the
 /// opener runs on its own thread.
+#[track_caller]
 fn await_opened(path: &str, url: &str) {
     let path = path.to_owned();
     let url = url.to_owned();
@@ -94,7 +99,9 @@ fn await_opened(path: &str, url: &str) {
             if std::fs::read_to_string(&path).ok().as_deref() == Some(url.as_str()) {
                 return;
             }
-            pace.recv_timeout(Duration::from_millis(1)).unwrap_or(());
+            Deadline::after(Duration::from_millis(1))
+                .recv(&pace)
+                .unwrap_or(());
         }
     });
 }
@@ -114,7 +121,7 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
     assert_eq!(seam.login_names(), ["codex"]);
     let url = "https://auth.example/authorize?state=1".to_owned();
     seam.login_show(0).expect("one login started").open(&url);
-    let (_, step) = next(&rx);
+    let (_, step) = next(&rx, &Deadline::after(WAIT));
     assert!(
         matches!(step, crate::login_worker::LoginStep::Open(ref opened) if *opened == url),
         "{step:?}"
@@ -134,7 +141,7 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
             replaced: false,
         }),
     );
-    let (_, step) = next(&rx);
+    let (_, step) = next(&rx, &Deadline::after(WAIT));
     assert!(
         matches!(step, crate::login_worker::LoginStep::Done(Ok(_))),
         "{step:?}"
@@ -162,7 +169,7 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
     assert_eq!(seam.login_names(), ["codex"]);
     let url = "https://auth.example/authorize?state=1".to_owned();
     seam.login_show(0).expect("one login started").open(&url);
-    let (_, step) = next(&rx);
+    let (_, step) = next(&rx, &Deadline::after(WAIT));
     assert!(
         matches!(step, crate::login_worker::LoginStep::Open(ref opened) if *opened == url),
         "{step:?}"
@@ -187,7 +194,7 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
             replaced: false,
         }),
     );
-    let (_, step) = next(&rx);
+    let (_, step) = next(&rx, &Deadline::after(WAIT));
     assert!(
         matches!(step, crate::login_worker::LoginStep::Done(Ok(_))),
         "{step:?}"

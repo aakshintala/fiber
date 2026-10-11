@@ -16,6 +16,7 @@ use crate::mouse::Target;
 use crate::pty_watch::{watch, watched};
 use crate::screen::Screen;
 use crate::theme::Role;
+use fakes::Deadline;
 
 /// The look for `setting` on a terminal with `vars` set.
 fn look(setting: ThemeSetting, vars: &[(&str, &str)]) -> Look {
@@ -125,14 +126,14 @@ fn run_shows_a_theme_files_notice() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     // Unchanged cells are skipped, spaces included, so one word is matched.
-    watched(&frames, "the theme notice");
+    watched(&frames, "the theme notice", &Deadline::after(DEADLINE));
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
     // The rest of what it writes is read, so no write blocks on a full pty.
-    watched(&frames, "the restore bytes");
-    let code = finished
-        .recv_timeout(DEADLINE)
+    watched(&frames, "the restore bytes", &Deadline::after(DEADLINE));
+    let code = Deadline::after(DEADLINE)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
 }

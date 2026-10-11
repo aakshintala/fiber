@@ -9,6 +9,7 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use contract::clock::Clock;
+use fakes::Deadline;
 use fakes::children;
 use fakes::clock::FakeClock;
 use fakes::{TempDir, Watchdog, group_empties, kill_pid, pids_exit};
@@ -357,9 +358,16 @@ fn spawn_read(
 }
 
 /// The read's answer within [`DEADLINE`], failing after it.
-fn answered(rx: &mpsc::Receiver<Result<Vec<u8>, Failed>>, what: &str) -> Result<Vec<u8>, Failed> {
-    rx.recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for {what}"))
+#[track_caller]
+fn answered(
+    rx: &mpsc::Receiver<Result<Vec<u8>, Failed>>,
+    what: &str,
+    wait: &Deadline,
+) -> Result<Vec<u8>, Failed> {
+    match wait.recv(rx) {
+        Ok(answer) => answer,
+        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+    }
 }
 
 /// Starts the watchdog for the group the ready FIFO's first line names,
@@ -461,7 +469,10 @@ fn stdout_past_the_cap_is_too_large_and_the_group_is_killed() {
     let reader = test.reader("sleep 3600 & printf '12345678901234567'; wait", Decode::Raw);
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 16);
     let (watchdog, pgid) = watch(&test);
-    assert_eq!(answered(&rx, "the over-cap read"), Err(Failed::TooLarge));
+    assert_eq!(
+        answered(&rx, "the over-cap read", &Deadline::after(DEADLINE)),
+        Err(Failed::TooLarge)
+    );
     reaped(watchdog, pgid, "the over-cap read");
 }
 
@@ -474,7 +485,10 @@ fn stdout_of_exactly_the_cap_is_read() {
     let reader = test.reader("printf '1234567890123456'", Decode::Raw);
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 16);
     let (watchdog, pgid) = watch(&test);
-    assert_eq!(answered(&rx, "the exact-cap read"), Err(Failed::Unreadable));
+    assert_eq!(
+        answered(&rx, "the exact-cap read", &Deadline::after(DEADLINE)),
+        Err(Failed::Unreadable)
+    );
     reaped(watchdog, pgid, "the exact-cap read");
 }
 
@@ -490,7 +504,7 @@ fn apple_script_at_its_frame_cap_is_read() {
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 16);
     let (watchdog, pgid) = watch(&test);
     assert_eq!(
-        answered(&rx, "the exact frame-cap read"),
+        answered(&rx, "the exact frame-cap read", &Deadline::after(DEADLINE)),
         Err(Failed::Unreadable)
     );
     reaped(watchdog, pgid, "the exact frame-cap read");
@@ -506,7 +520,7 @@ fn apple_script_past_its_frame_cap_is_too_large() {
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 16);
     let (watchdog, pgid) = watch(&test);
     assert_eq!(
-        answered(&rx, "the over frame-cap read"),
+        answered(&rx, "the over frame-cap read", &Deadline::after(DEADLINE)),
         Err(Failed::TooLarge)
     );
     reaped(watchdog, pgid, "the over frame-cap read");
@@ -597,6 +611,7 @@ impl Clock for HoldingClock {
     fn sleep(&self, d: Duration) {
         self.inner.sleep(d);
     }
+    #[track_caller]
     fn wait_until(
         &self,
         until: Option<std::time::Instant>,
@@ -605,10 +620,8 @@ impl Clock for HoldingClock {
         self.inner.wait_until(until, wait);
         if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
             self.left.lock().unwrap().send(()).unwrap();
-            self.moved
-                .lock()
-                .unwrap()
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&self.moved.lock().unwrap())
                 .expect("the held worker was never released: the clock did not move");
         }
     }
@@ -620,6 +633,7 @@ impl Clock for HoldingClock {
 /// Runs `script` (which blocks on the `go` FIFO before its event) under a
 /// read whose worker is held between parks when the event wakes it, and
 /// checks that `advance_to_parked` still sees the worker park again.
+#[track_caller]
 fn event_wakes_the_worker_before_the_advance(
     test: &ChildTest,
     script: &str,
@@ -651,11 +665,16 @@ fn event_wakes_the_worker_before_the_advance(
     assert!(fake.await_parked(end, DEADLINE), "{what}: never parked");
     held.armed.store(true, std::sync::atomic::Ordering::SeqCst);
     std::thread::spawn(move || std::fs::write(go, "go\n").unwrap());
-    left.recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("{what}: the worker never left its park"));
+    match Deadline::after(DEADLINE).recv(&left) {
+        Ok(()) => {}
+        Err(_) => panic!("{what}: the worker never left its park"),
+    }
     advance_to_parked(&rx, &fake, end, what);
     fake.advance(Duration::from_millis(1));
-    assert_eq!(answered(&rx, what), Err(Failed::TimedOut));
+    assert_eq!(
+        answered(&rx, what, &Deadline::after(DEADLINE)),
+        Err(Failed::TimedOut)
+    );
     reaped(watchdog, pgid, what);
 }
 
@@ -700,7 +719,10 @@ fn the_limit_kills_a_hung_command() {
     // millisecond later it has timed out.
     waiting(&rx, &clock, end, "the hung command");
     clock.advance(Duration::from_millis(1));
-    assert_eq!(answered(&rx, "the hung command"), Err(Failed::TimedOut));
+    assert_eq!(
+        answered(&rx, "the hung command", &Deadline::after(DEADLINE)),
+        Err(Failed::TimedOut)
+    );
     reaped(watchdog, pgid, "the hung command");
 }
 
@@ -712,7 +734,10 @@ fn a_failing_exit_is_no_image() {
     let reader = test.reader("exit 1", Decode::Raw);
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     let (watchdog, pgid) = watch(&test);
-    assert_eq!(answered(&rx, "the failing exit"), Err(Failed::NoImage));
+    assert_eq!(
+        answered(&rx, "the failing exit", &Deadline::after(DEADLINE)),
+        Err(Failed::NoImage)
+    );
     reaped(watchdog, pgid, "the failing exit");
 }
 
@@ -724,7 +749,10 @@ fn an_empty_read_is_no_image() {
     let reader = test.reader("exit 0", Decode::Raw);
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     let (watchdog, pgid) = watch(&test);
-    assert_eq!(answered(&rx, "the empty read"), Err(Failed::NoImage));
+    assert_eq!(
+        answered(&rx, "the empty read", &Deadline::after(DEADLINE)),
+        Err(Failed::NoImage)
+    );
     reaped(watchdog, pgid, "the empty read");
 }
 
@@ -736,7 +764,10 @@ fn a_signalled_command_is_no_image() {
     let reader = test.reader("kill -KILL $$", Decode::Raw);
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     let (watchdog, pgid) = watch(&test);
-    assert_eq!(answered(&rx, "the signalled command"), Err(Failed::NoImage));
+    assert_eq!(
+        answered(&rx, "the signalled command", &Deadline::after(DEADLINE)),
+        Err(Failed::NoImage)
+    );
     reaped(watchdog, pgid, "the signalled command");
 }
 
@@ -750,7 +781,7 @@ fn a_missing_program_is_a_spawn_error() {
     };
     let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
     assert!(matches!(
-        answered(&rx, "the missing program"),
+        answered(&rx, "the missing program", &Deadline::after(DEADLINE)),
         Err(Failed::Spawn(_))
     ));
 }
@@ -770,7 +801,10 @@ fn raw_bytes_pass_through_and_apple_script_is_decoded() {
         let reader = test.reader(&script, decode);
         let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
         let (watchdog, pgid) = watch(&test);
-        assert_eq!(answered(&rx, "the pixel read"), Ok(PIXEL.to_vec()));
+        assert_eq!(
+            answered(&rx, "the pixel read", &Deadline::after(DEADLINE)),
+            Ok(PIXEL.to_vec())
+        );
         reaped(watchdog, pgid, "the pixel read");
     }
 }
@@ -789,13 +823,13 @@ fn a_command_that_closes_stdout_and_keeps_running_hits_the_limit() {
     let (watchdog, pgid) = watch(&test);
     waiting(&rx, &clock, end, "the closed-stdout command");
     assert!(matches!(
-        rx.recv_timeout(Duration::from_millis(200)),
+        Deadline::after(Duration::from_millis(200)).recv(&rx),
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
     assert!(kill_pid(pgid, "0").unwrap());
     clock.advance(Duration::from_millis(1));
     assert_eq!(
-        answered(&rx, "the closed-stdout command"),
+        answered(&rx, "the closed-stdout command", &Deadline::after(DEADLINE)),
         Err(Failed::TimedOut)
     );
     reaped(watchdog, pgid, "the closed-stdout command");
@@ -826,7 +860,7 @@ fn a_descendant_that_escapes_the_group_cannot_hold_the_read() {
     waiting(&rx, &clock, end, "the escaped descendant");
     clock.advance(Duration::from_millis(1));
     assert_eq!(
-        answered(&rx, "the escaped descendant"),
+        answered(&rx, "the escaped descendant", &Deadline::after(DEADLINE)),
         Err(Failed::TimedOut)
     );
     assert!(group_empties(pgid, DEADLINE));
@@ -854,7 +888,10 @@ fn an_exited_shell_whose_child_holds_stdout_waits_for_the_limit() {
     let _ = test.ready.wait(DEADLINE);
     waiting(&rx, &clock, end, "the exited shell");
     clock.advance(Duration::from_millis(1));
-    assert_eq!(answered(&rx, "the exited shell"), Err(Failed::TimedOut));
+    assert_eq!(
+        answered(&rx, "the exited shell", &Deadline::after(DEADLINE)),
+        Err(Failed::TimedOut)
+    );
     reaped(watchdog, pgid, "the exited shell");
 }
 
@@ -877,7 +914,10 @@ fn a_successful_read_kills_what_the_command_left_behind() {
         .first()
         .copied()
         .unwrap_or_else(|| panic!("no sleep pid"));
-    assert_eq!(answered(&rx, "the successful read"), Ok(PIXEL.to_vec()));
+    assert_eq!(
+        answered(&rx, "the successful read", &Deadline::after(DEADLINE)),
+        Ok(PIXEL.to_vec())
+    );
     assert!(group_empties(pgid, DEADLINE));
     assert!(pids_exit(&[sleep], DEADLINE));
     watchdog.stand_down(DEADLINE);
@@ -929,7 +969,10 @@ fn the_pixel_limit_is_the_sessions() {
         let reader = test.reader(&body, Decode::Raw);
         let rx = spawn_read(reader, Arc::clone(&clock), LIMIT, 1024);
         let (watchdog, pgid) = watch(&test);
-        assert_eq!(answered(&rx, "the pixel limit"), want);
+        assert_eq!(
+            answered(&rx, "the pixel limit", &Deadline::after(DEADLINE)),
+            want
+        );
         reaped(watchdog, pgid, "the pixel limit");
     }
 }
@@ -946,9 +989,12 @@ fn start_reader(script: &str) -> Reader {
 }
 
 /// The worker's post within [`DEADLINE`], failing after it.
-fn posted(rx: &mpsc::Receiver<crate::Input>, what: &str) -> crate::Input {
-    rx.recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for {what}"))
+#[track_caller]
+fn posted(rx: &mpsc::Receiver<crate::Input>, what: &str, wait: &Deadline) -> crate::Input {
+    match wait.recv(rx) {
+        Ok(posted) => posted,
+        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+    }
 }
 
 #[test]
@@ -981,7 +1027,9 @@ fn start_posts_the_reads_image() {
     let reader = start_reader(&format!("printf '{}'", octal(PIXEL)));
     let (tx, rx) = mpsc::channel();
     assert_eq!(start(Some(&reader), &clock, Some(&tx), 7), None);
-    let crate::Input::Image { ticket, result } = posted(&rx, "the started read") else {
+    let crate::Input::Image { ticket, result } =
+        posted(&rx, "the started read", &Deadline::after(DEADLINE))
+    else {
         panic!("the worker posted something else");
     };
     assert_eq!(ticket, 7);
@@ -995,7 +1043,9 @@ fn start_posts_a_failure_as_its_notice() {
     let reader = start_reader("exit 1");
     let (tx, rx) = mpsc::channel();
     assert_eq!(start(Some(&reader), &clock, Some(&tx), 7), None);
-    let crate::Input::Image { ticket, result } = posted(&rx, "the failing read") else {
+    let crate::Input::Image { ticket, result } =
+        posted(&rx, "the failing read", &Deadline::after(DEADLINE))
+    else {
         panic!("the worker posted something else");
     };
     assert_eq!(ticket, 7);
@@ -1009,7 +1059,9 @@ fn start_posts_the_pixel_refusal_as_its_notice() {
     let reader = start_reader(&format!("printf '{}'", octal(&header(50_000_001, 1))));
     let (tx, rx) = mpsc::channel();
     assert_eq!(start(Some(&reader), &clock, Some(&tx), 7), None);
-    let crate::Input::Image { ticket, result } = posted(&rx, "the over-limit read") else {
+    let crate::Input::Image { ticket, result } =
+        posted(&rx, "the over-limit read", &Deadline::after(DEADLINE))
+    else {
         panic!("the worker posted something else");
     };
     assert_eq!(ticket, 7);
@@ -1045,7 +1097,7 @@ fn signal_pid_kills_the_child() {
     signal_pid(pid);
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || done.send(child.wait()).unwrap());
-    match finished.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&finished) {
         Ok(status) => assert!(
             !status.unwrap().success(),
             "sleep must not exit zero after SIGKILL"
@@ -1134,7 +1186,7 @@ fn read_stdout_waits_for_data_without_eof() {
     drop(stdin);
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || done.send(child.wait()).unwrap());
-    match finished.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&finished) {
         Ok(status) => assert!(status.unwrap().success()),
         Err(_) => panic!("waited {DEADLINE:?} for the printf child to exit"),
     }
@@ -1175,7 +1227,7 @@ fn stdout_of_exactly_the_cap_with_a_live_child_is_not_too_large() {
     waiting(&rx, &clock, end, "the exact-cap live child");
     clock.advance(Duration::from_millis(1));
     assert_eq!(
-        answered(&rx, "the exact-cap live child"),
+        answered(&rx, "the exact-cap live child", &Deadline::after(DEADLINE)),
         Err(Failed::TimedOut)
     );
     reaped(watchdog, pgid, "the exact-cap live child");

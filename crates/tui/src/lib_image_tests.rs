@@ -16,6 +16,7 @@ use crate::app::{App, Effect, Target};
 use crate::link::Line;
 use crate::mouse::TargetId;
 use crate::screen::Screen;
+use fakes::Deadline;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -171,8 +172,9 @@ fn accepted(id: &str, data: &str) -> Input {
 }
 
 /// The worker's completion within the deadline.
-fn completion(rx: &Receiver<Input>) -> Input {
-    match rx.recv_timeout(DEADLINE) {
+#[track_caller]
+fn completion(rx: &Receiver<Input>, wait: &Deadline) -> Input {
+    match wait.recv(rx) {
         Ok(done @ Input::Viewed { .. }) => done,
         Ok(
             Input::Bytes(_)
@@ -201,7 +203,7 @@ fn a_click_on_an_image_line_reads_the_file_and_opens_it() {
     lp.send(&lines);
     let id = answer(&theirs);
     assert_eq!(lp.step(accepted(&id, "Ynl0ZXM="), &idle), None);
-    match completion(&rx) {
+    match completion(&rx, &Deadline::after(DEADLINE)) {
         Input::Viewed { name, result, .. } => {
             assert_eq!(name, "shot.png");
             assert_eq!(result, Ok(()));
@@ -244,7 +246,7 @@ fn a_failed_viewer_draws_the_notice() {
     assert_eq!(lp.step(accepted(&id, "Ynl0ZXM="), &idle), None);
     // The worker's completion arrives as its own input: stepping it
     // draws the notice.
-    let done = completion(&rx);
+    let done = completion(&rx, &Deadline::after(DEADLINE));
     assert!(matches!(done, Input::Viewed { result: Err(_), .. }));
     assert_eq!(lp.step(done, &idle), None);
     assert!(

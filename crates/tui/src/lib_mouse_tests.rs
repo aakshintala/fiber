@@ -4,6 +4,7 @@
 use super::Input;
 use super::tests::{Sink, feed, new_loop, offering};
 use crate::link::Line;
+use fakes::Deadline;
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
@@ -83,6 +84,7 @@ fn long_session(turns: usize) -> Vec<Input> {
 
 /// An attached 60x12 loop showing [`long_session`] of 80 turns,
 /// following new output.
+#[track_caller]
 fn following() -> super::Loop<TestBackend> {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.app
@@ -163,6 +165,7 @@ fn status(session: &str, name: &str) -> Input {
 
 /// An attached 160x40 loop with home state, a rail of two live sessions
 /// and a panel tall enough to scroll, following new output.
+#[track_caller]
 fn wide() -> super::Loop<TestBackend> {
     use std::path::PathBuf;
     let (mut lp, _) = new_loop(TestBackend::new(160, 40), None);
@@ -334,6 +337,7 @@ fn the_wheel_on_home_scrolls_nothing() {
 /// An attached 60x12 loop showing [`long_session`], scrolled up one
 /// wheel step... by PageUp, which the wheel must leave alone under an
 /// overlay: the top it pages to.
+#[track_caller]
 fn scrolled_up() -> (super::Loop<TestBackend>, Option<usize>) {
     let mut lp = following();
     feed(&mut lp, vec![page_up()]);
@@ -627,6 +631,7 @@ fn thought_and_read() -> Vec<Input> {
 }
 
 /// A loop showing [`thought_and_read`] on `backend`.
+#[track_caller]
 fn grouped<B: ratatui::backend::Backend + crate::screen::SyncEmit>(backend: B) -> super::Loop<B> {
     let (mut lp, _) = new_loop(backend, None);
     lp.app
@@ -681,6 +686,7 @@ fn hover_over_a_group_line_tints_only_its_row() {
 }
 
 /// An attached loop at 60x12 fed `inputs`.
+#[track_caller]
 fn attached(inputs: Vec<Input>) -> super::Loop<TestBackend> {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.app
@@ -1152,12 +1158,13 @@ fn a_link_click_runs_the_opener() {
                     done.send(()).unwrap_or(());
                     return;
                 }
-                pace.recv_timeout(std::time::Duration::from_millis(1))
+                Deadline::after(std::time::Duration::from_millis(1))
+                    .recv(&pace)
                     .unwrap_or(());
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    if finished.recv_timeout(LINK_DEADLINE).is_err() {
+    if Deadline::after(LINK_DEADLINE).recv(&finished).is_err() {
         panic!("waited {LINK_DEADLINE:?} for the opener to write its file");
     }
     assert_eq!(

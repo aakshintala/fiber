@@ -9,6 +9,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use fakes::Deadline;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -82,6 +83,7 @@ impl Jig {
 
 /// Runs the jig with `args` and waits for it under [`JIG_DEADLINE`]. The
 /// environment holds `PATH` alone, as the bench harness runs the jig.
+#[track_caller]
 fn run(exe: &Path, args: &[&str]) -> Output {
     let child = Command::new(exe)
         .args(args)
@@ -96,8 +98,8 @@ fn run(exe: &Path, args: &[&str]) -> Output {
     let watchdog = fakes::Watchdog::group(child.id());
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = finished
-        .recv_timeout(JIG_DEADLINE)
+    let output = Deadline::after(JIG_DEADLINE)
+        .recv(&finished)
         .expect("the paging jig finished: the paging example")
         .unwrap();
     watchdog.stand_down(Duration::from_secs(5));

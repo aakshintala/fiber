@@ -12,6 +12,7 @@ use super::tests::{DEADLINE, feed, new_loop, open};
 use crate::Configure;
 use crate::configure::{Shown, WriteScope};
 use crate::configure_fake::{Fake, row};
+use fakes::Deadline;
 
 /// The bytes that open `/settings`, then `then`, one input each.
 fn inputs(then: &[&str]) -> Vec<Input> {
@@ -23,15 +24,17 @@ fn inputs(then: &[&str]) -> Vec<Input> {
 }
 
 /// Runs `work` on a thread, failing after [`DEADLINE`].
+#[track_caller]
 fn within<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> T {
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-settings".to_owned())
         .spawn(move || done.send(work()).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop: {err}"))
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(looped) => looped,
+        Err(err) => panic!("waited {DEADLINE:?} for the loop: {err}"),
+    }
 }
 
 /// A seam over the `tui.theme` row alone.

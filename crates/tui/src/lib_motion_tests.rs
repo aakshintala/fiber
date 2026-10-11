@@ -7,6 +7,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use contract::clock::Clock;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -131,7 +132,8 @@ fn a_tick_through_the_thread_draws_the_next_frame() {
     );
     clock.advance(Duration::from_millis(120));
     assert!(matches!(
-        rx.recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&rx)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the tick: {err}")),
         Input::Tick
     ));
@@ -158,7 +160,8 @@ fn a_tick_behind_a_key_is_acked_before_the_next() {
     clock.advance(Duration::from_millis(120));
     // Tick A arrives and is held: nothing is stepped yet.
     assert!(matches!(
-        rx.recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&rx)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for tick A: {err}")),
         Input::Tick
     ));
@@ -173,7 +176,8 @@ fn a_tick_behind_a_key_is_acked_before_the_next() {
     assert_eq!(step(&mut lp, Input::Tick), None);
     clock.advance(Duration::from_millis(120));
     assert!(matches!(
-        rx.recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&rx)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for tick B: {err}")),
         Input::Tick
     ));
@@ -209,7 +213,8 @@ fn a_tick_while_a_frame_waits_for_history_is_acked() {
     // already past sends at once.
     lp.tick.arm(Some(origin));
     assert!(matches!(
-        rx.recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&rx)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the next tick: {err}")),
         Input::Tick
     ));
@@ -329,8 +334,8 @@ fn quitting_stops_the_ticker() {
         .spawn(move || done.send(lp.run(&rx)).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     assert_eq!(
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop to quit: {err}")),
         0
     );

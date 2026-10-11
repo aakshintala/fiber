@@ -1,6 +1,7 @@
 //! Tests for OSC 52, the clipboard command pick and the pipe to it.
 
 use super::{command, osc52, pipe};
+use fakes::Deadline;
 use std::ffi::OsString;
 use std::io;
 use std::process::ExitStatus;
@@ -52,6 +53,7 @@ fn a_session_over_ssh_runs_no_command() {
 }
 
 /// Joins the pipe's thread under the deadline.
+#[track_caller]
 fn reap(handle: JoinHandle<io::Result<ExitStatus>>) -> io::Result<ExitStatus> {
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
@@ -60,7 +62,7 @@ fn reap(handle: JoinHandle<io::Result<ExitStatus>>) -> io::Result<ExitStatus> {
             done.send(handle.join()).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    match finished.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&finished) {
         Ok(Ok(result)) => result,
         Ok(Err(_)) => panic!("the clipboard thread panicked"),
         Err(_) => panic!("waited {DEADLINE:?} for the clipboard command"),
@@ -70,6 +72,7 @@ fn reap(handle: JoinHandle<io::Result<ExitStatus>>) -> io::Result<ExitStatus> {
 /// Waits until the file at `path` exists, failing after [`DEADLINE`].
 /// The hung command creates its marker file first, which proves it has
 /// exec'd: the watchdog's scan then matches it.
+#[track_caller]
 fn wait_for_marker(path: &str) {
     let (done, finished) = mpsc::channel();
     let path = path.to_owned();
@@ -85,11 +88,13 @@ fn wait_for_marker(path: &str) {
                     done.send(()).unwrap_or(());
                     return;
                 }
-                pace.recv_timeout(Duration::from_millis(1)).unwrap_or(());
+                Deadline::after(Duration::from_millis(1))
+                    .recv(&pace)
+                    .unwrap_or(());
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    if finished.recv_timeout(DEADLINE).is_err() {
+    if Deadline::after(DEADLINE).recv(&finished).is_err() {
         panic!("waited {DEADLINE:?} for the hung command to start");
     }
 }

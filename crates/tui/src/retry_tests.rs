@@ -5,6 +5,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use contract::clock::Clock;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::Retry;
@@ -36,9 +37,12 @@ fn waiting(clock: &Arc<FakeClock>, retry: &Arc<Retry>) -> Receiver<bool> {
 }
 
 /// The wait's result, within [`DEADLINE`].
-fn result(rx: &Receiver<bool>) -> bool {
-    rx.recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the wait to return: {err}"))
+#[track_caller]
+fn result(rx: &Receiver<bool>, wait: &Deadline) -> bool {
+    match wait.recv(rx) {
+        Ok(ended) => ended,
+        Err(err) => panic!("waited {DEADLINE:?} for the wait to return: {err}"),
+    }
 }
 
 /// Waits for the thread to park at `until`, within [`DEADLINE`].
@@ -56,7 +60,7 @@ fn wait_returns_after_the_delay_on_the_fake_clock() {
     retry.give(HALF);
     parked(&clock, clock.origin() + HALF);
     clock.advance(HALF);
-    assert!(result(&rx));
+    assert!(result(&rx, &Deadline::after(DEADLINE)));
     assert_eq!(retry.held(), None);
 }
 
@@ -76,7 +80,7 @@ fn an_advance_short_of_the_delay_keeps_waiting() {
     );
     assert!(rx.try_recv().is_err());
     clock.advance(Duration::from_millis(1));
-    assert!(result(&rx));
+    assert!(result(&rx, &Deadline::after(DEADLINE)));
 }
 
 #[test]
@@ -86,7 +90,7 @@ fn a_delay_given_before_the_wait_is_used() {
     let rx = waiting(&clock, &retry);
     parked(&clock, clock.origin() + HALF);
     clock.advance(HALF);
-    assert!(result(&rx));
+    assert!(result(&rx, &Deadline::after(DEADLINE)));
 }
 
 #[test]
@@ -94,10 +98,13 @@ fn quit_while_waiting_for_a_delay_returns_false() {
     let (clock, retry) = permit();
     let rx = waiting(&clock, &retry);
     retry.quit();
-    assert!(!result(&rx));
+    assert!(!result(&rx, &Deadline::after(DEADLINE)));
     assert!(clock.parked().is_empty());
     // Quit is sticky: a later wait returns at once.
-    assert!(!result(&waiting(&clock, &retry)));
+    assert!(!result(
+        &waiting(&clock, &retry),
+        &Deadline::after(DEADLINE)
+    ));
 }
 
 #[test]
@@ -107,7 +114,7 @@ fn quit_during_the_timed_wait_returns_false_without_advancing() {
     retry.give(HALF);
     parked(&clock, clock.origin() + HALF);
     retry.quit();
-    assert!(!result(&rx));
+    assert!(!result(&rx, &Deadline::after(DEADLINE)));
     assert_eq!(clock.now(), clock.origin());
 }
 
@@ -155,7 +162,7 @@ fn track_reports_the_clone_failure_and_watches_nothing() {
     // The failure wedges nothing: quit still ends a wait, within DEADLINE.
     let rx = waiting(&clock, &retry);
     retry.quit();
-    assert!(!result(&rx));
+    assert!(!result(&rx, &Deadline::after(DEADLINE)));
 }
 
 #[test]
@@ -184,8 +191,8 @@ fn end_read_stops_the_watched_read_and_leaves_the_permit_open() {
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     retry.end_read();
     assert!(
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the stopped read: {err}")),
         "end_read stops the watched read"
     );
@@ -219,8 +226,8 @@ fn quit_ends_the_watched_read_and_shuts_the_stream() {
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     retry.quit();
     assert!(
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the stopped read: {err}")),
         "quit stops the watched read"
     );
