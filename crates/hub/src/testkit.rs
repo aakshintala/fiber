@@ -49,8 +49,7 @@ pub(crate) fn home(prefix: &str) -> (fakes::TempDir, PathBuf) {
 
 /// The same, plus `h/run` for tests that bind session sockets.
 pub(crate) fn with_run(prefix: &str) -> (fakes::TempDir, PathBuf) {
-    let held = fakes::TempDir::new(prefix);
-    let dir = held.path().join("h");
+    let (held, dir) = home(prefix);
     fs::create_dir_all(dir.join("run")).unwrap();
     (held, dir)
 }

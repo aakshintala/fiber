@@ -120,7 +120,13 @@ fn a_too_long_home_is_usage_written_to_the_hub_log() {
         panic!("a too-long home cannot start");
     };
     assert_eq!(error.code(), ErrorCode::Usage);
-    assert!(error.to_string().contains("FIBER_HOME"), "{error}");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "FIBER_HOME is too long for the hub's socket path, which must fit in {} bytes.",
+            listen::SOCKET_PATH_MAX
+        )
+    );
     let lines = log_lines(&home);
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert_eq!(lines[0]["level"], "error");
