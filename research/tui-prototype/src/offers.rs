@@ -11,8 +11,8 @@
 
 use super::input::{Ev, Key};
 use super::{Args, Term};
-use super::{BC, PURPLE};
-use super::{dim, fg, paint, row, slab, sp, t, view_header};
+use super::{BC, BK, PURPLE, RED};
+use super::{bold, dim, fg, paint, row, slab, sp, t, view_header};
 use crate::cases::{Case, Surface};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
@@ -114,6 +114,96 @@ fn stub_rows() -> Vec<super::Row> {
     ]
 }
 
+/// The three choices on one offer item: approve, skip for this session,
+/// or never. Every item starts at skip; the chosen answer reads bold with
+/// its mark in secondary.
+fn offer_choices() -> super::Row {
+    row(vec![
+        sp("  ", Style::new()),
+        sp("( ) ", dim()),
+        sp("approve", Style::new()),
+        sp("   ", Style::new()),
+        sp("(•) ", fg(PURPLE)),
+        sp("skip for this session", bold()),
+        sp("   ", Style::new()),
+        sp("( ) ", dim()),
+        sp("never", Style::new()),
+    ])
+}
+
+/// The changed MCP server's diff, reusing the changed-files hunk look:
+/// `@@` dim, the removal red, the addition default, on the hunk surface.
+fn offer_diff_rows() -> Vec<super::Row> {
+    vec![
+        row(vec![sp("@@ -2,5 +2,5 @@ servers.linear", dim())]),
+        row(vec![sp("     \"command\": \"linear-mcp\",", Style::new())]),
+        row(vec![sp(
+            "-    \"args\": [\"--stdio\", \"--scope\", \"read\"],",
+            fg(RED),
+        )]),
+        row(vec![sp(
+            "+    \"args\": [\"--stdio\", \"--scope\", \"write\"],",
+            Style::new(),
+        )]),
+        row(vec![sp("     \"timeout_ms\": 5000,", Style::new())]),
+    ]
+}
+
+/// Every pending item with what an install shows: its name, what it runs
+/// or declares, and its source path.
+fn offer_rows(cols: usize) -> Vec<super::Row> {
+    let mut out = vec![
+        row(vec![
+            sp("▸ ", fg(PURPLE)),
+            sp("Extension notes · v0.3", Style::new()),
+        ]),
+        row(vec![sp(
+            "  from .fiber/extensions/notes · loads in this project only",
+            dim(),
+        )]),
+        row(vec![sp(
+            "  runs notes-server --serve · install: npm ci",
+            dim(),
+        )]),
+        row(vec![sp("  carries the review skill", dim())]),
+        offer_choices(),
+        super::Row::default(),
+        row(vec![sp(
+            "  Hook tidy · before_tool on read, shell",
+            Style::new(),
+        )]),
+        row(vec![sp(
+            "  runs scripts/tidy.sh · timeout 10s · on failure refuse",
+            dim(),
+        )]),
+        offer_choices(),
+        super::Row::default(),
+        row(vec![sp(
+            "  MCP server linear · declared in .fiber/mcp.json",
+            Style::new(),
+        )]),
+        row(vec![sp(
+            "  runs linear-mcp --stdio · the declaration changed",
+            dim(),
+        )]),
+    ];
+    out.extend(slab(offer_diff_rows(), BK, None, cols));
+    out.extend([
+        offer_choices(),
+        super::Row::default(),
+        row(vec![sp(
+            "A package's TUI files are never installed from a repository.",
+            dim(),
+        )]),
+        super::Row::default(),
+        row(vec![sp(
+            "↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside",
+            dim(),
+        )]),
+    ]);
+    out
+}
+
 /// A row painted at its own offset and width.
 struct Placed {
     x: u16,
@@ -143,6 +233,7 @@ fn body_rows(c: &Look, cols: usize, rows: usize) -> Vec<Placed> {
         Kind::Offer => {
             let mut out = placed(vec![view_header("Offer", "repository code")], full);
             out.push(blank());
+            out.extend(placed(offer_rows(cols), full));
             out
         }
         Kind::Confirm | Kind::Select | Kind::MultiSelect | Kind::TextInput => {
@@ -233,9 +324,103 @@ pub(crate) fn run_offer(a: &Args, term: &mut Term) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BI;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Modifier;
 
     fn parse(name: &str) -> Option<Look> {
         crate::cases::lookup(CASES, name)
+    }
+
+    fn parse_case(name: &str) -> Look {
+        parse(name).unwrap()
+    }
+
+    fn text(c: &Look, cols: usize, rows: usize) -> String {
+        frame(c, cols, rows)
+            .screen
+            .into_iter()
+            .map(|ps| {
+                ps.iter()
+                    .map(|p| {
+                        p.row
+                            .spans
+                            .iter()
+                            .map(|s| s.content.as_ref())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The buffer's text, one line per row, as `draw` painted it.
+    fn buf_text(buf: &Buffer, cols: usize, rows: usize) -> String {
+        (0..rows as u16)
+            .map(|y| {
+                (0..cols as u16)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Paints a case into a buffer, as `draw` does.
+    fn buffer(c: &Look, cols: usize, rows: usize) -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, cols as u16, rows as u16));
+        let fr = frame(c, cols, rows);
+        for (y, ps) in fr.screen.iter().enumerate() {
+            for p in ps {
+                crate::paint(&mut buf, p.x, y as u16, p.w, &p.row);
+            }
+        }
+        buf
+    }
+
+    /// The swapped-view top row: the surface tint, the name bold, the command
+    /// dim, and "Esc returns" dim right-aligned.
+    fn assert_header(buf: &Buffer, name: &str, cmd: &str, cols: usize) {
+        // The surface tint runs the whole row.
+        for x in [0, cols as u16 / 2, cols as u16 - 1] {
+            assert_eq!(buf[(x, 0)].bg, BI, "no surface tint at {x}");
+        }
+        // The name is bold from column 1; the command follows it, dim.
+        let nx = 1u16;
+        for (i, ch) in name.chars().enumerate() {
+            let cell = &buf[(nx + i as u16, 0)];
+            assert_eq!(cell.symbol(), ch.to_string().as_str());
+            assert!(
+                cell.modifier.contains(Modifier::BOLD),
+                "the name is not bold at {}",
+                nx as usize + i
+            );
+        }
+        let cx = nx + name.len() as u16 + 2;
+        for (i, ch) in cmd.chars().enumerate() {
+            let cell = &buf[(cx + i as u16, 0)];
+            assert_eq!(cell.symbol(), ch.to_string().as_str());
+            assert!(
+                cell.modifier.contains(Modifier::DIM),
+                "the command is not dim at {}",
+                cx as usize + i
+            );
+        }
+        // "Esc returns" ends the row, dim.
+        let ex = cols as u16 - "Esc returns ".len() as u16;
+        assert_eq!(buf[(ex, 0)].symbol(), "E");
+        for (i, ch) in "Esc returns ".chars().enumerate() {
+            let cell = &buf[(ex + i as u16, 0)];
+            assert_eq!(cell.symbol(), ch.to_string().as_str());
+            assert!(
+                cell.modifier.contains(Modifier::DIM),
+                "Esc is not dim at {}",
+                ex as usize + i
+            );
+        }
     }
 
     #[test]
@@ -265,6 +450,119 @@ mod tests {
         let n = body_rows(&c, 160, 48).len();
         for rows in [n - 1, n, n + 1] {
             assert_eq!(frame(&c, 160, rows).screen.len(), rows);
+        }
+    }
+
+    #[test]
+    fn offer_header_row() {
+        for (cols, rows) in [(160, 48), (100, 40)] {
+            let c = parse_case("offer");
+            let buf = buffer(&c, cols, rows);
+            assert_header(&buf, "Offer", "repository code", cols);
+        }
+    }
+
+    #[test]
+    fn offer_lists_three_items_starting_at_skip() {
+        for (cols, rows) in [(160, 48), (100, 40)] {
+            let c = parse_case("offer");
+            let t = text(&c, cols, rows);
+            for item in ["Extension notes", "Hook tidy", "MCP server linear"] {
+                assert!(t.contains(item), "no {item}");
+            }
+            // What an install shows per item: the name, what it
+            // runs or declares, and its source path.
+            for detail in [
+                ".fiber/extensions/notes",
+                "notes-server --serve",
+                "review skill",
+                "before_tool",
+                "scripts/tidy.sh",
+                ".fiber/mcp.json",
+                "linear-mcp --stdio",
+            ] {
+                assert!(t.contains(detail), "no {detail}");
+            }
+            // Every item starts at skip, and nothing starts approved or never.
+            assert_eq!(t.matches("(•) skip for this session").count(), 3);
+            assert!(!t.contains("(•) approve"), "an item starts approved");
+            assert!(!t.contains("(•) never"), "an item starts at never");
+            // The cursor sits on exactly one item, the first.
+            assert_eq!(t.matches('▸').count(), 1, "no single cursor");
+            let cursor = t.lines().find(|l| l.contains('▸')).unwrap();
+            assert!(cursor.contains("Extension notes"), "cursor not on {cursor}");
+            // A package's TUI files are never installed from a repository.
+            assert!(
+                t.contains(
+                    "A package's TUI files are never installed from a repository."
+                ),
+                "no TUI-files sentence"
+            );
+            assert!(
+                t.contains(
+                    "↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside"
+                ),
+                "no footer hint"
+            );
+            // Painted rows never run wider than the frame: fit() would cut
+            // them with …, and every choice label reads whole at 100 cols.
+            let buf = buffer(&c, cols, rows);
+            let painted = buf_text(&buf, cols, rows);
+            assert!(!painted.contains('…'), "truncated at {cols}");
+            for label in ["approve", "skip for this session", "never"] {
+                assert!(painted.contains(label), "no whole {label} at {cols}");
+            }
+        }
+    }
+
+    #[test]
+    fn offer_choices_mark_only_skip() {
+        let r = offer_choices();
+        let style_of = |want: &str| {
+            r.spans
+                .iter()
+                .find(|s| s.content == want)
+                .unwrap_or_else(|| panic!("no {want}"))
+                .style
+        };
+        assert_eq!(style_of("(•) "), fg(PURPLE));
+        assert_eq!(style_of("skip for this session"), bold());
+        assert!(
+            r.spans.iter().filter(|s| s.content == "( ) ").count() == 2,
+            "two unchosen marks"
+        );
+        for s in r.spans.iter().filter(|s| s.content == "( ) ") {
+            assert_eq!(s.style, dim());
+        }
+        assert_eq!(style_of("approve"), Style::new());
+        assert_eq!(style_of("never"), Style::new());
+    }
+
+    #[test]
+    fn offer_diff_marks_removal_red() {
+        let rows = offer_diff_rows();
+        assert_eq!(rows.len(), 5);
+        let plain = |r: &crate::Row| {
+            r.spans.iter().map(|s| s.content.as_ref()).collect::<String>()
+        };
+        let removal = rows.iter().find(|r| plain(r).contains("read")).unwrap();
+        assert_eq!(removal.spans[0].style.fg, Some(RED));
+        let addition = rows.iter().find(|r| plain(r).contains("write")).unwrap();
+        assert_eq!(addition.spans[0].style.fg, None);
+        let hunk = rows.iter().find(|r| plain(r).starts_with("@@")).unwrap();
+        assert_eq!(hunk.spans[0].style, dim());
+        // The hunk slab reads as one surface across the whole row.
+        let c = parse_case("offer");
+        let buf = buffer(&c, 160, 48);
+        let painted = buf_text(&buf, 160, 48);
+        let y = painted
+            .lines()
+            .position(|l| l.contains("\"read\""))
+            .unwrap() as u16;
+        assert_eq!(buf[(0, y)].symbol(), "-");
+        assert_eq!(buf[(0, y)].fg, RED);
+        for x in [0, 79, 159] {
+            assert_eq!(buf[(x, y)].bg, BK, "no hunk tint at {x}");
         }
     }
 }
