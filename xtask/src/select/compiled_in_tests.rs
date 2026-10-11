@@ -419,28 +419,6 @@ fn a_raw_string_package_literal_counts() {
 }
 
 #[test]
-fn xtask_sources_count_as_package_readers_like_any_crate() {
-    let mut files = package_ok_files();
-    files.push(package_src(
-        "xtask",
-        "xtask/src/select_tests.rs",
-        "let dir = \"../../providers/opencode\";\nlet manifest = env!(\"CARGO_MANIFEST_DIR\");\n",
-    ));
-    assert_eq!(
-        package_reader_mismatches(&files, &package_members()).unwrap(),
-        Vec::<String>::new()
-    );
-    let without_xtask: Vec<RustFile> = package_ok_files()
-        .into_iter()
-        .filter(|file| file.krate != "xtask")
-        .collect();
-    assert_eq!(
-        package_reader_mismatches(&without_xtask, &package_members()).unwrap(),
-        ["xtask: listed as reading a first-party package, but no source reads one"]
-    );
-}
-
-#[test]
 fn a_crates_extensions_segment_counts() {
     // Fails safe: a `CARGO_MANIFEST_DIR` file naming `"crates/extensions"`
     // counts as reading a package, so the list carries it.

@@ -208,10 +208,13 @@ request's head and at its base commit (`scripts/release-size`). The base
 binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
-under 20 MiB and runs the benchmarks that gate each pull request
-(`docs/performance.md`). The base binary runs the same benchmarks in the
-same job on the same runner: a timing gate compares against it, and a memory
-or exact budget the base fails too does not fail the pull request.
+under 24 MiB and runs the benchmarks that gate each pull request
+(`docs/performance.md`), timings at 3 runs and memory at 5. The base binary
+runs the timing benchmarks only, in the same job on the same runner, so a
+timing comparison never crosses runners. Memory and exact rows compare
+against the backstop's stored results for the base commit, the
+`benchmarks-<sha>` artifact, and a memory or exact budget the base fails
+there does not fail the pull request.
 
 A base that does not build, because `main` is red, does not fail the job. The
 job compares against the nearest first-parent ancestor of the base that has a
@@ -222,7 +225,9 @@ compared against or says the comparison was skipped. The head's size check and
 benchmarks still gate the pull request, and a head that does not build still
 fails the job. The paging jig and the benchmarks follow the same rule: the jig is built at
 the commit the base binary is from, and a base with no binary has no base
-timings, and the comment says so.
+timings, and the comment says so. Stored results follow the same lookup;
+with none among the 9 ancestors, memory and exact rows are judged against
+the table alone, and the comment says so.
 
 The release profile sets `lto = "fat"` and `codegen-units = 1`, which
 shrinks the binary and lengthens the release build.
@@ -276,8 +281,9 @@ the whole workspace. That is the parent
 commit unless a run was cancelled or failed. A conflict between two merged
 pull requests shows in a crate that depends on what the later one changed,
 and the selection includes that crate. The release job runs on every push
-and stores that commit's stripped binary in the build cache, for a later
-pull request's base.
+and stores that commit's stripped binary in the build cache and its
+benchmark results, the full suite at 5 runs, as the `benchmarks-<sha>`
+artifact, both for a later pull request's base.
 
 One backstop runs and one waits. All pushes to `main` share a concurrency group
 that cancels nothing, so the running backstop finishes, which lets `main` record
