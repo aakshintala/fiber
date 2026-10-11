@@ -199,13 +199,6 @@ impl Default for State {
     }
 }
 
-impl State {
-    /// Records `request`.
-    fn record(&mut self, request: Request) {
-        self.requests.push(request);
-    }
-}
-
 /// A fake provider listening on a local port. Each request gets the next
 /// response of the script, and a request past its end gets a 500 saying so.
 /// Dropping the server closes its port.
@@ -455,7 +448,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
     let answered = request.clone();
     let response = {
         let mut state = lock(state);
-        state.record(request);
+        state.requests.push(request);
         arrived.notify_all();
         // A malformed body is the client's bug: it gets a 400 and the script
         // keeps its next response.

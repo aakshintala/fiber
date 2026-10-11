@@ -307,8 +307,8 @@ fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
         &server,
         b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab",
     );
-    // Cases the inside unit tests pinned before this file took them: each
-    // still answers 400 over the wire and keeps the script's response.
+    // Each malformed framing answers 400 over the wire and keeps the
+    // script's response.
     let bad_hex = exchange(
         &server,
         b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nabc\r\n0\r\n\r\n",

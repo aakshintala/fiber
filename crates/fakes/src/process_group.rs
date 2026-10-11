@@ -337,7 +337,7 @@ pub fn kill_matching(text: &str) -> io::Result<()> {
 /// `pid` is 1 or less.
 #[allow(
     clippy::expect_used,
-    reason = "a probe of an id past the pid range panics, as it did before the shared guard"
+    reason = "a probe of an id past the pid range panics, like a refused id"
 )]
 fn alive(pid: u32) -> bool {
     let id = checked(pid, "pid").expect("a pid past the pid range is never alive");
@@ -348,7 +348,7 @@ fn alive(pid: u32) -> bool {
 /// process. Panics when `group` is 1 or less.
 #[allow(
     clippy::expect_used,
-    reason = "a probe of an id past the pid range panics, as it did before the shared guard"
+    reason = "a probe of an id past the pid range panics, like a refused id"
 )]
 fn group_lives(group: u32) -> bool {
     let id = checked(group, "process group").expect("a group past the pid range is never live");
