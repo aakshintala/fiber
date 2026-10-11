@@ -146,10 +146,7 @@ impl Loop {
             batch,
             &action,
             || Err(self.cancelled_before_ran()),
-            |call| {
-                self.checked(call)
-                    .map(|(tool, arguments, effects)| (tool, arguments, effects.declared))
-            },
+            |call| self.checked(call).map(crate::before_tool::Prepared::from),
         );
         let cancelled = self.run_batch(calls, &turn, Some((action, request)))?;
         self.finish_batch(&turn, cancelled)

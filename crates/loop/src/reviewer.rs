@@ -9,11 +9,11 @@ use contract::events::{
 };
 use contract::provider::{CallError, Cost, Input, ModelRequest, Provider, Reply};
 use contract::shapes::Failure;
-use contract::tool::{Effects, Tool};
+use contract::tool::Effects;
 use contract::{ActionId, ErrorCode, RequestId, TurnId};
-use serde_json::{Map, Value};
 
-use crate::calls::{Approved, Asked};
+use crate::before_tool::Prepared;
+use crate::calls::{Asked, Decided};
 use crate::{Error, Loop, Model};
 
 mod request;
@@ -21,9 +21,6 @@ mod selection;
 mod shown;
 
 pub(crate) use shown::{Reviewed, render_reviewed};
-
-/// What step 7 says about one call: it runs, or how its denial reads.
-type Decided = Result<Approved, Box<ToolCallCompleted>>;
 
 /// What a `no_model` escalation and notice say: nothing chose the
 /// reviewer's model, so every reviewed call goes to a person
@@ -180,9 +177,7 @@ struct UnderReview<'a> {
     call: &'a ToolCallRequested,
     id: &'a ActionId,
     turn: &'a TurnId,
-    tool: &'a Arc<dyn Tool>,
-    arguments: &'a Map<String, Value>,
-    effects: &'a Effects,
+    prepared: &'a Prepared,
 }
 
 /// What sends a reviewer request: the reviewer's provider and model, cloned
@@ -211,9 +206,7 @@ impl Loop {
         call: &ToolCallRequested,
         id: &ActionId,
         turn: &TurnId,
-        tool: Arc<dyn Tool>,
-        arguments: Map<String, Value>,
-        effects: &Effects,
+        prepared: Prepared,
     ) -> Result<Decided, Error> {
         let prompt = sections();
         if self.review_over_budget() {
@@ -223,9 +216,7 @@ impl Loop {
             call,
             id,
             turn,
-            tool: &tool,
-            arguments: &arguments,
-            effects,
+            prepared: &prepared,
         };
         let endpoint = match &self.reviewer {
             Ok(reviewer) => ReviewEndpoint {
@@ -314,7 +305,7 @@ impl Loop {
                 return Ok(StageReply::Budget);
             }
             let (conversation, previous) =
-                self.review_conversation(under.id, under.effects, stage, note.as_deref());
+                self.review_conversation(under.id, &under.prepared.effects, stage, note.as_deref());
             match self.send_review(
                 under.turn,
                 endpoint,
@@ -373,11 +364,7 @@ impl Loop {
             under.turn,
             Some(under.id),
         )?;
-        Ok(Ok((
-            Arc::clone(under.tool),
-            under.arguments.clone(),
-            under.effects.declared.clone(),
-        )))
+        Ok(Ok(under.prepared.clone()))
     }
 
     /// A reviewer `block`: counted, then escalated or returned to the model.
@@ -440,19 +427,15 @@ impl Loop {
             under.id,
             under.turn,
             &under.call.name,
-            &under.effects.declared,
+            &under.prepared.effects.declared,
             AskStep::Review {
                 escalation: Some(escalation),
-                rule: rule_offer(under.effects),
+                rule: rule_offer(&under.prepared.effects),
             },
         )? {
             Asked::Allow => {
                 self.consecutive = 0;
-                Ok(Ok((
-                    Arc::clone(under.tool),
-                    under.arguments.clone(),
-                    under.effects.declared.clone(),
-                )))
+                Ok(Ok(under.prepared.clone()))
             }
             Asked::Deny(completed) => {
                 self.consecutive = 0;

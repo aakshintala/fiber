@@ -489,9 +489,7 @@ impl Loop {
         let decision: Decided = match self.await_answer(&action, &turn, &call.name, request)? {
             // The answer allows the call the request was raised for, as
             // the model asked for it: checked again, it runs.
-            Asked::Allow => self
-                .checked(call)
-                .map(|(tool, arguments, effects)| (tool, arguments, effects.declared)),
+            Asked::Allow => self.checked(call).map(crate::before_tool::Prepared::from),
             Asked::Deny(completed) | Asked::Gone(completed) => Err(completed),
             Asked::Cancelled => Err(self.cancelled_before_ran()),
             Asked::Idle => {
