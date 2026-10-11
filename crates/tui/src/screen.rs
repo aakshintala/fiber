@@ -211,9 +211,8 @@ impl<W: std::io::Write> SyncEmit for CrosstermBackend<W> {
 
 /// One frame's bytes on their way to the tty: every byte crossterm
 /// writes waits here. Crossterm's cursor commands flush eagerly
-/// (`execute!`), mid-frame, so that `flush` only passes through to the
-/// tty: the frame backend below delivers the whole buffer in one `write`
-/// when the frame ends. Once a `Screen` call returns `Ok`, every byte it
+/// (`execute!`), mid-frame; `flush` holds those: the frame backend
+/// below delivers the whole buffer in one `write` when the frame ends. Once a `Screen` call returns `Ok`, every byte it
 /// produced has reached the tty, in order; once it returns `Err`, nothing
 /// it buffered is ever written later. It never writes on drop, so no
 /// byte can reach the tty after the restore bytes at exit.
