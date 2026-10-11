@@ -504,7 +504,10 @@ fn ask_resume_of_a_removed_worktree_is_session_not_found() {
         String::from_utf8_lossy(&first.stderr)
     );
     let first_lines = lines(&first);
-    let id = started(&first_lines)["session_id"].as_str().unwrap().to_owned();
+    let id = started(&first_lines)["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let workspace = started(&first_lines)["payload"]["workspace"]
         .as_str()
         .unwrap()
@@ -529,7 +532,12 @@ fn ask_resume_of_a_removed_worktree_is_session_not_found() {
     let refused = run_to_exit(
         setup.deadline,
         "`fiber ask --resume` of a removed worktree to exit",
-        ask_command(&setup, &setup.workspace(), &[], &["ask", "--resume", &id, "x"]),
+        ask_command(
+            &setup,
+            &setup.workspace(),
+            &[],
+            &["ask", "--resume", &id, "x"],
+        ),
     );
     assert_eq!(refused.status.code(), Some(1));
     let refused_lines = lines(&refused);
@@ -599,7 +607,10 @@ fn ask_resume_of_a_kept_worktree_runs_in_it() {
         String::from_utf8_lossy(&first.stderr)
     );
     let first_lines = lines(&first);
-    let id = started(&first_lines)["session_id"].as_str().unwrap().to_owned();
+    let id = started(&first_lines)["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let workspace = started(&first_lines)["payload"]["workspace"]
         .as_str()
         .unwrap()
@@ -614,7 +625,12 @@ fn ask_resume_of_a_kept_worktree_runs_in_it() {
     let second = run_to_exit(
         setup.deadline,
         "`fiber ask --resume` of a kept worktree to exit",
-        ask_command(&setup, &setup.workspace(), &[], &["ask", "--resume", &id, "x"]),
+        ask_command(
+            &setup,
+            &setup.workspace(),
+            &[],
+            &["ask", "--resume", &id, "x"],
+        ),
     );
     assert_eq!(
         second.status.code(),

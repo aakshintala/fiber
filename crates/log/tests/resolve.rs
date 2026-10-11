@@ -30,12 +30,7 @@ fn session(sessions: &std::path::Path, id: &str, workspace: &str) {
 
 /// Session `id` whose `session_started` records `workspace` and `worktree`:
 /// `Value::Null` writes no `worktree` key, any other value writes it whole.
-fn session_with_worktree(
-    sessions: &std::path::Path,
-    id: &str,
-    workspace: &str,
-    worktree: Value,
-) {
+fn session_with_worktree(sessions: &std::path::Path, id: &str, workspace: &str, worktree: Value) {
     let log = Log::create(
         sessions,
         SessionId(id.into()),
@@ -541,9 +536,7 @@ fn most_recent_checks_the_recorded_repository_when_present() {
             .0,
         "s_repo"
     );
-    assert!(
-        log::most_recent(&sessions, &|recorded| recorded == "/gone").is_none()
-    );
+    assert!(log::most_recent(&sessions, &|recorded| recorded == "/gone").is_none());
 }
 
 #[test]
@@ -572,7 +565,5 @@ fn lookup_checks_the_workspace_without_a_recorded_repository() {
             .0,
         "s_legacy"
     );
-    assert!(
-        log::most_recent(&sessions, &|recorded| recorded == "/r/.git").is_none()
-    );
+    assert!(log::most_recent(&sessions, &|recorded| recorded == "/r/.git").is_none());
 }
