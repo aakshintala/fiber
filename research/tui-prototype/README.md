@@ -586,3 +586,15 @@ Ten still frames from the fixtures in `src/views.rs`, one per swapped view docs/
 | `rules` | `cargo run --release -- fixtures/session.jsonl --static --view-case rules`: global rules then this project's, each with its prefix, origin and revoke mark |
 | `settings` | `cargo run --release -- fixtures/session.jsonl --static --view-case settings`: the keys with their effective values and layers, and the reload cost |
 | `skills` | `cargo run --release -- fixtures/session.jsonl --static --view-case skills`: one row per skill with its source, visibility, shadowed skill and switches |
+
+## Repository offer and one-question forms (#1636)
+
+Five still frames from the fixtures in `src/offers.rs`: the repository's offer of what it ships, and the one-question forms an extension's `host.ask` and MCP elicitation raise. The offer takes the conversation area under its header row (the view's name bold, `repository code` dim, `Esc returns` dim right-aligned); each form draws at the bottom of an otherwise quiet frame, an `approval` slab with the `▌` stripe on every row, the title `Question from <session>` with `Esc: chat about this` right-aligned and no tab row, ending in `Chat about this`. Each waits for a key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture still loads but the offers ignore it. Every case also renders at 100x40 for the narrow layout; capture at 160 by 48.
+
+| Case | How to reach it |
+|---|---|
+| `offer` | `cargo run --release -- fixtures/session.jsonl --static --offer-case offer`: the pending extension, hook and MCP server, each with what an install shows and three choices starting at skip, the changed server's diff, the TUI-files sentence, and the choose/send/put-aside hint |
+| `confirm` | `cargo run --release -- fixtures/session.jsonl --static --offer-case confirm`: the question with yes and no, and Chat about this with no Submit row |
+| `select` | `cargo run --release -- fixtures/session.jsonl --static --offer-case select`: the question with labelled options and descriptions, and Chat about this with no Submit row |
+| `multi_select` | `cargo run --release -- fixtures/session.jsonl --static --offer-case multi_select`: the question with toggles and choose any, the Submit row, then Chat about this |
+| `text_input` | `cargo run --release -- fixtures/session.jsonl --static --offer-case text_input`: the question with only the answer-in-words row, the Submit row, then Chat about this |
