@@ -53,6 +53,18 @@ The rail (#692), at a window of at least 150 columns so rail, conversation and p
 - Scope: in A, click "+1 other · show all". The long-named pi-rig session should appear under an "other projects" divider, truncated with …, and the row should offer "show less". B shows every project with no scope line.
 - Hover: run with `--hover` and hover a B card. The whole card should brighten; in compact a dim footer at the rail's bottom should name the full session, workspace, model and spend. In A one tooltip line should show the full name, workspace and spend.
 
+Images and links (#1637), in Ghostty itself at 160 by 48 (each case also renders at 100 by 40). Run every case with `cargo run --release -- fixtures/session.jsonl --static --image-case CASE`.
+
+- tool_image: the read ledger row with its blue tick and dimensions should read like the conversation's ledger; the gradient image should sit below it, at most 40% of the width and 12 rows, and scroll with the text on a redraw. With `TERM=xterm-256color` (no kitty protocol) the one line should show instead.
+- fallback: the first row should read as a link (accent, underlined) and open `screenshot.png` on click; the second row carries the missing-file notice and should not be asked for again.
+- pasted: the prompt bubble should hold `[Image #1]` with the gradient image below it, or its one line without the protocol.
+- links: the focused link should sit on the selection tint with the dim `Enter opens · y copies` hint under it; the hovered link should brighten. Pressing Enter should open the focused link, `y` should copy it, and clicking either should open it.
+- screen_reader: run with `--screen-reader` too. The frame should read flat: one line per item in order, state in words, the image as its one line, with no animation elsewhere. With no `--image-case`, `--static --screen-reader` should draw the replayed fixture flat instead of the conversation.
+- title_approval: the terminal title should read `! fiber · approval` while the case is up, and `fiber` after quitting with q.
+- title_question: the terminal title should read `! fiber · question` while the case is up, and `fiber` after quitting with q.
+- title_waiting: the terminal title should read `! fiber · waiting` while the case is up, and `fiber` after quitting with q.
+- title_finished: the terminal title should read `✓ fiber · finished` while the case is up, and `fiber` after quitting with q.
+
 Each surface's cases are in `check/`, one file per surface, built from the cases the surface declares:
 
 - [check/model-picker.md](check/model-picker.md)
@@ -62,6 +74,7 @@ Each surface's cases are in `check/`, one file per surface, built from the cases
 - [check/rail.md](check/rail.md)
 - [check/views.md](check/views.md)
 - [check/offers.md](check/offers.md)
+- [check/images.md](check/images.md)
 - [check/theme.md](check/theme.md)
 - [check/failures.md](check/failures.md)
 

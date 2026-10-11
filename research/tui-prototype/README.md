@@ -600,6 +600,21 @@ Five still frames from the fixtures in `src/offers.rs`: the repository's offer o
 | `multi_select` | `cargo run --release -- fixtures/session.jsonl --static --offer-case multi_select`: the question with toggles and choose any, the Submit row, then Chat about this |
 | `text_input` | `cargo run --release -- fixtures/session.jsonl --static --offer-case text_input`: the question with only the answer-in-words row, the Submit row, then Chat about this |
 
+## Images and links (#1637)
+
+| Case | How to reach it |
+|---|---|
+| `tool_image` | `cargo run --release -- fixtures/session.jsonl --static --image-case tool_image`: the read ledger row with its blue tick and dimensions, the image below it through kitty placeholders where the terminal speaks the protocol and its one line everywhere else |
+| `fallback` | `cargo run --release -- fixtures/session.jsonl --static --image-case fallback`: the one-line image row in the link look, and a second row for an image that cannot show with the notice saying why |
+| `pasted` | `cargo run --release -- fixtures/session.jsonl --static --image-case pasted`: the prompt bubble with [Image #1] and the image through kitty placeholders where the terminal speaks the protocol and its one line everywhere else |
+| `links` | `cargo run --release -- fixtures/session.jsonl --static --image-case links`: the reply with its focused and hovered links, the table with its focused and hovered link cells, the focused link on the selection tint with the Enter-opens hint |
+| `screen_reader` | `cargo run --release -- fixtures/session.jsonl --static --image-case screen_reader`: the flat frame with no tints, edges, stripes or animation, one line per item in reading order, state in words, the image as its one line |
+| `title_approval` | `cargo run --release -- fixtures/session.jsonl --static --image-case title_approval`: the labelled OSC 2 row for `! fiber · approval`, written to the terminal and restored to `fiber` on exit |
+| `title_question` | `cargo run --release -- fixtures/session.jsonl --static --image-case title_question`: the labelled OSC 2 row for `! fiber · question`, written to the terminal and restored to `fiber` on exit |
+| `title_waiting` | `cargo run --release -- fixtures/session.jsonl --static --image-case title_waiting`: the labelled OSC 2 row for `! fiber · waiting`, written to the terminal and restored to `fiber` on exit |
+| `title_finished` | `cargo run --release -- fixtures/session.jsonl --static --image-case title_finished`: the labelled OSC 2 row for `✓ fiber · finished`, written to the terminal and restored to `fiber` on exit |
+
+Each case draws one still frame and waits for a key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture still loads but the images ignore it. Every case also renders at 100x40 for the narrow layout; capture at 160 by 48. With no `--image-case`, `cargo run --release -- fixtures/session.jsonl --static --screen-reader` draws the replayed fixture flat instead of the conversation: one line per item in reading order, state in words, images as their one line.
 ## Themes (#1634)
 
 `--theme CASE` draws the screen in another theme or colour depth and

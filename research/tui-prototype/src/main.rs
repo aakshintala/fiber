@@ -6,6 +6,7 @@ mod cases;
 mod completions;
 mod failures;
 mod home;
+mod images;
 mod input;
 mod login;
 mod logo;
@@ -4817,6 +4818,7 @@ const SURFACES: &[cases::Surface] = &[
     rail::SURFACE,
     views::SURFACE,
     offers::SURFACE,
+    images::SURFACE,
     theme::SURFACE,
     failures::SURFACE,
 ];
@@ -4854,6 +4856,10 @@ struct Args {
     view_case: Option<String>,
     /// the offer and one-question-form case (`--offer-case`), drawn instead of the conversation
     offer_case: Option<String>,
+    /// the image and link case (`--image-case`), drawn instead of the conversation
+    image_case: Option<String>,
+    /// the flat screen-reader form: still frames and no animation
+    screen_reader: bool,
     /// the theme case (`--theme`), combined with any other flag
     theme: Option<String>,
     /// the failure case (`--failure-case`), drawn instead of the conversation
@@ -4925,6 +4931,8 @@ fn args() -> Args {
         rail_case: None,
         view_case: None,
         offer_case: None,
+        image_case: None,
+        screen_reader: false,
         theme: None,
         failure_case: None,
         rail: 1,
@@ -4986,6 +4994,8 @@ fn args() -> Args {
             "--rail-case" => a.rail_case = it.next(),
             "--view-case" => a.view_case = it.next(),
             "--offer-case" => a.offer_case = it.next(),
+            "--image-case" => a.image_case = it.next(),
+            "--screen-reader" => a.screen_reader = true,
             "--theme" => a.theme = it.next(),
             "--failure-case" => a.failure_case = it.next(),
             "--rail" => {
@@ -5030,7 +5040,7 @@ fn args() -> Args {
             "--login" => a.login = it.next(),
             "-h" | "--help" => {
                 print!(
-                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--screen-reader] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--image-case CASE] [--theme CASE] [--failure-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
                     cases::help(SURFACES)
                 );
                 std::process::exit(0);
@@ -5039,6 +5049,10 @@ fn args() -> Args {
         }
     }
     if std::env::var_os("FIBER_REDUCED_MOTION").is_some() {
+        a.reduced = true;
+    }
+    // A screen reader gets the still forms: docs/tui.md, "Reduced motion".
+    if a.screen_reader {
         a.reduced = true;
     }
     a
@@ -5228,6 +5242,8 @@ fn main() -> io::Result<()> {
         views::run_view(&a, &mut term)
     } else if a.offer_case.is_some() {
         offers::run_offer(&a, &mut term)
+    } else if a.image_case.is_some() {
+        images::run_images(&a, &mut term)
     } else if a.failure_case.is_some() {
         failures::run_failures(&a, &mut term)
     } else {
@@ -5249,15 +5265,16 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    // Home, the overlays, the login, the rail cases, the swapped views, the offers and the
-    // failures draw no session, so there is nothing to resume, unless home switched to the
-    // conversation, whose replayed session resumes as usual.
+    // Home, the overlays, the login, the rail cases, the swapped views, the offers, the images
+    // and the failures draw no session, so there is nothing to resume, unless home switched to
+    // the conversation, whose replayed session resumes as usual.
     if a.home.is_none()
         && a.overlay.is_none()
         && a.login.is_none()
         && a.rail_case.is_none()
         && a.view_case.is_none()
         && a.offer_case.is_none()
+        && a.image_case.is_none()
         && a.failure_case.is_none()
         || home_switched
     {
@@ -5271,6 +5288,13 @@ fn main() -> io::Result<()> {
 
 type Term = Terminal<theme::Themed<CrosstermBackend<Counting<BufWriter<io::Stdout>>>>>;
 
+/// Whether the replay draws flat: `--screen-reader --static` with no case
+/// open over the conversation draws the folded fixture flat, as docs/tui.md,
+/// "Screen readers", describes.
+fn flat_replay(a: &Args) -> bool {
+    a.screen_reader && a.static_ && !a.paged && a.picker.is_none() && a.completions.is_none()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run(
     a: &Args,
@@ -5282,6 +5306,10 @@ fn run(
     mut pager: Option<paged::Pager>,
     open_index: Duration,
 ) -> io::Result<String> {
+    // `--screen-reader --static` with no case draws the folded fixture flat.
+    if flat_replay(a) {
+        return images::run_flat(a, term, f);
+    }
     let v0 = Instant::now();
     // paged: rows in the whole conversation; the scans (count or search passes) and their
     // times; frames that loaded pages, how long the loading took, and from the input event
@@ -7138,6 +7166,7 @@ mod tests {
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
                 "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills",
                 "--offer-case offer, confirm, select, multi_select, text_input",
+                "--image-case tool_image, fallback, pasted, links, screen_reader, title_approval, title_question, title_waiting, title_finished",
                 "--theme light, dark-256, light-256, dark-no-color",
                 "--failure-case retry, failed, auth_failed, nudge, connection_lost, crashed, rewind, rewound",
             ]
@@ -7897,5 +7926,69 @@ mod tests {
         assert!(
             matches!(f.turns[0].blocks.last(), Some(Block::Done(s)) if s.starts_with("interrupted"))
         );
+    }
+
+    #[test]
+    fn flat_replay_needs_screen_reader_static_and_no_case() {
+        let base = || Args {
+            path: "fixtures/session.jsonl".into(),
+            speed: 12.0,
+            static_: true,
+            reduced: false,
+            stats: None,
+            exit_after: None,
+            warmup: 2.0,
+            audit: false,
+            commands: None,
+            log_input: None,
+            wheel: 1,
+            lua: None,
+            lua_uncached: false,
+            paged: false,
+            window: 1.0,
+            page_lines: 64,
+            verify_copy: false,
+            bench: false,
+            no_pending: false,
+            hover: false,
+            home: None,
+            overlay: None,
+            rail_case: None,
+            view_case: None,
+            offer_case: None,
+            image_case: None,
+            theme: None,
+            failure_case: None,
+            screen_reader: true,
+            rail: 1,
+            density: 2,
+            rail_share: 15.0,
+            panel_share: 21.0,
+            picker: None,
+            completions: None,
+            login: None,
+        };
+        assert!(flat_replay(&base()));
+        // Flipping any one condition replays the conversation instead.
+        assert!(!flat_replay(&Args {
+            screen_reader: false,
+            ..base()
+        }));
+        assert!(!flat_replay(&Args {
+            static_: false,
+            ..base()
+        }));
+        assert!(!flat_replay(&Args {
+            paged: true,
+            ..base()
+        }));
+        assert!(!flat_replay(&Args {
+            picker: Some("list".into()),
+            ..base()
+        }));
+        assert!(!flat_replay(&Args {
+            completions: Some("slash".into()),
+            ..base()
+        }));
     }
 }
