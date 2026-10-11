@@ -8,6 +8,7 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::ServerFailure;
 use contract::events::ToolSource;
+use contract::shapes::ContentPart;
 use contract::shapes::Effect;
 use fakes::Deadline;
 use serde_json::json;
@@ -661,4 +662,110 @@ fn a_lazy_prompt_run_starts_the_server_and_sends_its_arguments() {
         "the get sends the named arguments: {line}",
     );
     setup.stop(second.servers);
+}
+
+/// The `Saved` line a binary result writes for `bytes` of `mime`: the same
+/// content-addressed name the tool writes, so the tests pin the exact line.
+fn saved_line(mime: &str, bytes: &[u8]) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+    let hex: String = digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!(
+        "Saved {mime} content, {} bytes, to artifacts/mcp-{}.bin",
+        bytes.len(),
+        &hex[..16],
+    )
+}
+
+/// The file a `Saved` line names, under the setup's artifacts dir.
+fn saved_file(setup: &Setup, line: &str) -> std::path::PathBuf {
+    let name = line.split("to artifacts/").nth(1).expect("a Saved line");
+    setup.artifacts().join(name)
+}
+
+#[test]
+fn mixed_content_runs_through_start_and_saves_binary() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.result(
+        "echo",
+        r#"{"content":[{"type":"text","text":"hello"},{"type":"resource_link","uri":"file:///x","name":"x","mimeType":"text/plain"},{"type":"resource","resource":{"text":"from a file","uri":"file:///x","mimeType":"text/plain"}},{"type":"resource","resource":{"blob":"aGk=","mimeType":"application/pdf"}}]}"#,
+    );
+    std::fs::create_dir_all(setup.artifacts()).expect("artifacts dir");
+    let started = setup.start(vec![setup.spec("fx")]);
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let output = setup.run(&tool);
+    assert!(output.error.is_none());
+    assert_eq!(
+        output.content,
+        vec![
+            ContentPart::Text {
+                text: "hello".to_owned(),
+            },
+            ContentPart::Text {
+                text: "Resource link: file:///x (name: x, type: text/plain)".to_owned(),
+            },
+            ContentPart::Text {
+                text: "from a file".to_owned(),
+            },
+            ContentPart::Text {
+                text: saved_line("application/pdf", b"hi"),
+            },
+        ],
+    );
+    let ContentPart::Text { text } = &output.content[3] else {
+        panic!("one Saved line");
+    };
+    let read = std::fs::read(saved_file(&setup, text)).expect("the artifact is written");
+    assert_eq!(read, b"hi");
+    started.servers.stop();
+}
+
+#[test]
+fn audio_data_runs_through_start_and_saves_under_its_type() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.result(
+        "echo",
+        r#"{"content":[{"type":"audio","data":"aGk=","mimeType":"audio/mpeg"}]}"#,
+    );
+    std::fs::create_dir_all(setup.artifacts()).expect("artifacts dir");
+    let started = setup.start(vec![setup.spec("fx")]);
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let output = setup.run(&tool);
+    assert!(output.error.is_none());
+    assert_eq!(
+        output.content,
+        vec![ContentPart::Text {
+            text: saved_line("audio/mpeg", b"hi"),
+        }],
+    );
+    let ContentPart::Text { text } = &output.content[0] else {
+        panic!("one Saved line");
+    };
+    let read = std::fs::read(saved_file(&setup, text)).expect("the artifact is written");
+    assert_eq!(read, b"hi");
+    started.servers.stop();
+}
+
+#[test]
+fn audio_without_data_reports_through_start() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.result("echo", r#"{"content":[{"type":"audio"}]}"#);
+    std::fs::create_dir_all(setup.artifacts()).expect("artifacts dir");
+    let started = setup.start(vec![setup.spec("fx")]);
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let output = setup.run(&tool);
+    assert!(output.error.is_none());
+    assert_eq!(
+        output.content,
+        vec![ContentPart::Text {
+            text: "Could not save application/octet-stream content: no data".to_owned(),
+        }],
+    );
+    started.servers.stop();
 }
