@@ -1073,8 +1073,10 @@ fn suspended_form() -> (Session, Arc<AskTool>, Arc<FakeHooks>, String) {
     .inbox_woken();
     hook(Arc::clone(&hooks), &mut session);
     session.inbox.send(delivery("go")).unwrap();
-    let finished = run_turn(&mut session);
+    // The tap subscribes before the turn starts: the loop can raise its
+    // question before a later subscription would see it.
     let tap = Tap::new(&session.log);
+    let finished = run_turn(&mut session);
     let requested = tap.wait_for("interaction_requested");
     assert_eq!(requested.payload["resumes"], true);
     let request = request_id(&requested);
@@ -1110,8 +1112,9 @@ fn a_started_rewrite_runs_again_unhooked_with_its_result_line() {
     let asker = Arc::new(AskTool::loose());
     session.resume(vec![asker.clone() as Arc<dyn Tool>]);
     hook(Arc::clone(&hooks), &mut session);
-    let finished = run_turn(&mut session);
+    // As above: subscribe before the finishing turn re-raises its question.
     let tap = Tap::new(&session.log);
+    let finished = run_turn(&mut session);
     let raised = tap.wait_for("interaction_requested");
     assert_eq!(request_id(&raised), request);
     send_form(&session, &request);
