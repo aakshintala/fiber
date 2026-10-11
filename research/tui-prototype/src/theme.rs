@@ -115,7 +115,9 @@ fn light_for(dark: (u8, u8, u8), is_bg: bool) -> Option<((u8, u8, u8), Ramp)> {
     let (fg, bg, ramp) = match hex_of(dark) {
         // error, removed
         0xff5d73 => (0xcf222e, 0xcf222e, Ramp::Cube),
-        // accent, success, added, keyword
+        // added: green on both themes
+        0x73c991 => (0x1a7f37, 0x1a7f37, Ramp::Cube),
+        // accent, success, keyword
         0x6eaafe => (0x0969da, 0x0969da, Ramp::Cube),
         // heading, warning, attention as text; the current match behind
         0xff9f43 if !is_bg => (0xbc4c00, 0xbc4c00, Ramp::Cube),
@@ -301,6 +303,9 @@ pub(crate) fn map(look: Look, colour: Color, is_bg: bool) -> Color {
         // at 256 colours.
         Color::Reset if look.theme == Theme::Dark => return Color::Reset,
         Color::Reset if !is_bg => (hex(0x1f2328), Ramp::Either),
+        // The page is the cube's pure white (231), which the grey ramp
+        // lacks: its lightest grey (255) is then the first visible tint.
+        Color::Reset if look.depth == Depth::C256 => return Color::Indexed(231),
         Color::Reset => (hex(0xffffff), Ramp::Grey),
         // Ink never comes from the 16 ANSI colours: black stays black
         // in both themes, white stays white in dark and reads as the
@@ -339,7 +344,14 @@ pub(crate) fn map(look: Look, colour: Color, is_bg: bool) -> Color {
     if look.depth == Depth::True {
         Color::Rgb(v.0, v.1, v.2)
     } else {
-        Color::Indexed(nearest(v, ramp))
+        let n = nearest(v, ramp);
+        // A tint that quantizes to the page's white would vanish on it, so
+        // under light it steps to the lightest grey.
+        if is_bg && n == 231 && look.theme == Theme::Light {
+            Color::Indexed(255)
+        } else {
+            Color::Indexed(n)
+        }
     }
 }
 
@@ -496,7 +508,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "light-256",
         help: "the light theme forced to 256 colours",
-        check: "run `--static --theme light-256`: the light screen through the xterm palette; dark text on light tints, the alert still red.",
+        check: "run `--static --theme light-256`: the light screen through the xterm palette; dark text on light tints, the turn, panel and card tints each visibly off the white page, the alert still red.",
         build: || Look {
             theme: Theme::Light,
             depth: Depth::C256,
@@ -505,7 +517,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "dark-no-color",
         help: "the dark screen with colour off (also NO_COLOR=1)",
-        check: "run `--static --theme dark-no-color`, or with NO_COLOR=1: no colour anywhere, only bold, dim, reversed and underline; edges blank but rows kept.",
+        check: "run `--static --theme dark-no-color`, or with NO_COLOR=1: no colour anywhere, only bold, dim, reversed and underline; each turn, rail card and the panel in a thin dim box where its tint would be.",
         build: || Look {
             theme: Theme::Dark,
             depth: Depth::None,
@@ -524,6 +536,7 @@ pub(crate) const SURFACE: Surface = Surface {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Style;
 
     const LIGHT: Look = Look {
         theme: Theme::Light,
@@ -560,7 +573,7 @@ mod tests {
             ("warning", crate::ORANGE, false, 0xbc4c00),
             ("error", crate::RED, false, 0xcf222e),
             ("attention", crate::ORANGE, false, 0xbc4c00),
-            ("added", crate::BLUE, false, 0x0969da),
+            ("added", crate::GREEN, false, 0x1a7f37),
             ("removed", crate::RED, false, 0xcf222e),
             ("code_text", Color::Reset, false, 0x1f2328),
             ("keyword", crate::SX_KW, false, 0x0969da),
@@ -729,7 +742,41 @@ mod tests {
         // The light theme paints its own text and background, so at 256
         // colours Reset quantizes instead of staying the default.
         assert_eq!(map(LIGHT_256, Color::Reset, false), Color::Indexed(235));
-        assert_eq!(map(LIGHT_256, Color::Reset, true), Color::Indexed(255));
+        assert_eq!(map(LIGHT_256, Color::Reset, true), Color::Indexed(231));
+    }
+
+    #[test]
+    fn light_256_tints_stay_off_the_page() {
+        let page = map(LIGHT_256, Color::Reset, true);
+        for tint in [
+            crate::BP,
+            crate::BC,
+            crate::BW,
+            crate::BU,
+            crate::BK,
+            crate::BH,
+            crate::BI,
+            val(0x1e1e26),
+            val(0x262014),
+            val(0x121217),
+        ] {
+            assert_ne!(map(LIGHT_256, tint, true), page, "{tint:?} vanishes");
+        }
+        // Truecolour light keeps its page and tints.
+        assert_eq!(map(LIGHT, Color::Reset, true), val(0xffffff));
+        assert_eq!(map(LIGHT, crate::BW, true), val(0xf3f5f8));
+    }
+
+    #[test]
+    fn no_colour_boxes_a_surface() {
+        let rows = vec![crate::row(vec![crate::sp("hi", Style::new())])];
+        let out = crate::slab_for(NONE, rows, crate::BW, None, 8);
+        let text: Vec<String> = out.iter().map(crate::plain).collect();
+        assert_eq!(text, ["┌──────┐", "│hi    │", "└──────┘"]);
+        // Any other look keeps the tinted half-block edges.
+        let rows = vec![crate::row(vec![crate::sp("hi", Style::new())])];
+        let out = crate::slab_for(Look::DARK, rows, crate::BW, None, 8);
+        assert_eq!(crate::plain(&out[0]), "\u{2584}".repeat(8));
     }
 
     #[test]
@@ -801,7 +848,7 @@ mod tests {
         // At 256 colours it is painted quantized: a truecolour RGB SGR
         // at full depth, the 256 index at C256, nothing anywhere else.
         assert_eq!(clear_seq(LIGHT), Some("\x1b[48;2;255;255;255m".to_string()));
-        assert_eq!(clear_seq(LIGHT_256), Some("\x1b[48;5;255m".to_string()));
+        assert_eq!(clear_seq(LIGHT_256), Some("\x1b[48;5;231m".to_string()));
         assert_eq!(clear_seq(DARK_256), None);
         assert_eq!(clear_seq(Look::DARK), None);
         assert_eq!(clear_seq(NONE), None);
@@ -907,6 +954,7 @@ mod tests {
         let darks: HashSet<(u8, u8, u8)> = [
             0xff5d73u32,
             0x6eaafe,
+            0x73c991,
             0xff9f43,
             0xb39ddb,
             0x7dd3fc,
