@@ -20,7 +20,6 @@ mod support;
 use std::cell::Cell;
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
@@ -32,7 +31,7 @@ use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
     Deadline, HubProc, SessionGuard, Setup, Socket, close_session, connect_hub, hello, run_to_exit,
-    start_session, subscribe, until, write_json,
+    session_dir, start_session, subscribe, until, write_json,
 };
 
 /// Declares the MCP server `db` in the workspace's repository file.
@@ -451,10 +450,6 @@ fn fiber_ask_after_fiber_approve_loads_without_a_notice() {
 /// The `seq` of a line, 0 when it has none.
 fn seq(line: &Value) -> u64 {
     line["seq"].as_u64().unwrap_or(0)
-}
-
-fn session_dir(setup: &Setup, id: &str) -> PathBuf {
-    log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(id)
 }
 
 /// The kinds of every durable line in the session `id`'s log, in order.

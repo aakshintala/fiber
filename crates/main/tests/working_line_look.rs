@@ -16,15 +16,8 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use support::Setup;
 use support::pty::{Colour, Grid, Run};
-
-/// Truecolour on a terminal that draws stripes, as look.rs passes it.
-const TRUECOLOUR: [(&str, &str); 3] = [
-    ("TERM", "xterm-256color"),
-    ("COLORTERM", "truecolor"),
-    ("TERM_PROGRAM", "ghostty"),
-];
+use support::{Setup, TRUECOLOUR};
 
 /// The dark theme's attention, info and surface in truecolour.
 const ATTENTION: Colour = Colour::Rgb(255, 159, 67);

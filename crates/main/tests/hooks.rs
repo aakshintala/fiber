@@ -16,15 +16,17 @@
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::{ProviderServer, Response, Watchdog};
+use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::Deadline;
+use support::{
+    Deadline, KillGroup, function_call, hello_single_delta as hello, is_status, on_disk,
+    spawn_watched, stream,
+};
 
 /// The fixture extension's name.
 const FIXTURE: &str = "fiber.test/lua-fixture";
@@ -175,39 +177,11 @@ fn write(file: &Path, text: &str) {
 // the six other binary test files in this crate each do; move all seven
 // copies into `fakes` together when a change to one has to be made in all.
 
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group, which kills the group if this process dies first.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
-}
-
 /// One finished run: its exit code, stdout's lines parsed, and stderr.
 struct Run {
     code: Option<i32>,
     lines: Vec<Value>,
     stderr: String,
-}
-
-/// A `session_status` line: ephemeral, and written by an observer thread, so
-/// where it falls among the loop's own lines is not what these tests pin.
-/// `tests/socket.rs` reads it.
-fn is_status(line: &str) -> bool {
-    line.contains(r#""kind":"session_status""#)
 }
 
 impl From<Output> for Run {
@@ -265,23 +239,6 @@ impl Run {
     }
 }
 
-/// Every file's bytes under `dir`, as text, joined.
-fn on_disk(dir: &Path) -> String {
-    let mut all = String::new();
-    let mut dirs = vec![dir.to_path_buf()];
-    while let Some(dir) = dirs.pop() {
-        for entry in fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                dirs.push(path);
-            } else if path.is_file() {
-                all.push_str(&String::from_utf8_lossy(&fs::read(&path).unwrap()));
-            }
-        }
-    }
-    all
-}
-
 /// The tool output the second request carries.
 fn output_sent(server: &ProviderServer) -> String {
     let requests = server.requests();
@@ -296,47 +253,6 @@ fn output_sent(server: &ProviderServer) -> String {
         .as_str()
         .unwrap()
         .to_owned()
-}
-
-/// An `openai-responses` stream of `events`, then a completed reply.
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
-
-/// An `openai-responses` stream answering `Hello.`.
-fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hello."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
 }
 
 /// The complete event kinds of a run whose model reads the note, then

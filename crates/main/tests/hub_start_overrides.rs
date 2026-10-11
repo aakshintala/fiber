@@ -17,25 +17,9 @@ mod support;
 use std::sync::{Arc, Mutex};
 
 use fakes::{ProviderServer, Response};
-use serde_json::{Value, json};
+use serde_json::json;
+use support::kinds_without_attention as kinds;
 use support::*;
-
-/// The prompt a started session runs.
-const PROMPT: &str = "the-volume-of-the-meeting-room";
-
-/// The event kinds of `lines`, in order, without `session_status` or
-/// `attention`: an observer thread writes `session_status`, so where it
-/// falls among the loop's own lines is not what this test pins (as
-/// `tests/session_command.rs` filters it), and the hub's `attention` line
-/// derives from that status, so whether it comes and where is not pinned
-/// either.
-fn kinds(lines: &[Value]) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect()
-}
 
 /// The complete, ordered stream from the subscription through `fiber_exited`:
 /// the replayed start, the full retried turn, the `close` acknowledgement

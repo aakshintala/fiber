@@ -16,13 +16,16 @@ mod support;
 use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::Deadline;
+use support::{
+    Deadline, KillGroup, PIXEL, PIXEL_BASE64, SENT, function_call, hello, holds_marker, is_status,
+    spawn_watched, stream, text_reply, tool_names,
+};
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
@@ -341,30 +344,6 @@ fn write(file: &Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group. The watchdog's stdin is a pipe only this process holds: a newline
-/// means the child is reaped, and EOF means this process died, so the
-/// watchdog kills the group. The watchdog is started immediately after the
-/// child; a kill in the gap between the two spawns can still orphan it.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
-}
-
 /// Makes the FIFO `path` with `mkfifo`, run to its exit under the test's
 /// [`Deadline`].
 fn mkfifo(setup: &Setup, path: &Path) {
@@ -386,13 +365,6 @@ struct Run {
     stdout: String,
     lines: Vec<Value>,
     stderr: String,
-}
-
-/// A `session_status` line: ephemeral, and written by an observer thread, so
-/// where it falls among the loop's own lines is not what these tests pin.
-/// `tests/socket.rs` reads it.
-fn is_status(line: &str) -> bool {
-    line.contains(r#""kind":"session_status""#)
 }
 
 impl From<Output> for Run {
@@ -462,57 +434,6 @@ fn assert_preamble(run: &Run, reason: &str) {
     assert_eq!(sent, expected);
 }
 
-/// An `openai-responses` stream of `events`, then a completed reply.
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
-
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-fn hello() -> Response {
-    stream(&[
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-    ])
-}
-
-/// An `openai-responses` stream answering `text`: what a scripted
-/// reviewer verdict reads as. Reviewer replies are never streamed to
-/// watchers, so no delta is needed, only the finished message.
-fn text_reply(text: &str) -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "message", "content": [{"type": "output_text", "text": text}]
-    }})])
-}
-
 /// An `openai-responses` stream of a reasoning item, then the verdict
 /// `allow`, completed with 1,001 output tokens of which 1,000 are reasoning:
 /// what a reviewer that reasons before it answers sends.
@@ -546,16 +467,6 @@ fn reasoning_allow() -> Response {
         done["type"].as_str().unwrap()
     ));
     Response::stream(body)
-}
-
-fn tool_names(body: &[u8]) -> Vec<String> {
-    let body: Value = serde_json::from_slice(body).unwrap();
-    body["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|tool| tool["name"].as_str().unwrap().to_owned())
-        .collect()
 }
 
 /// The event kinds of a turn whose first reply calls one tool and whose
@@ -727,11 +638,6 @@ fn denied_kinds(calls: usize) -> Vec<&'static str> {
         "fiber_exited",
     ]);
     kinds
-}
-
-fn holds_marker(bytes: &[u8], marker: &str) -> bool {
-    let marker = marker.as_bytes();
-    bytes.windows(marker.len()).any(|window| window == marker)
 }
 
 fn assert_no_marker(label: &str, bytes: &[u8]) {
@@ -966,20 +872,6 @@ fn a_grep_that_follows_a_link_below_its_operand_into_the_credentials_is_reviewed
     }
     assert_session_has_no_marker(&run.session_dir(&setup));
 }
-
-/// A 1x1 PNG, 69 bytes: within every cap, so the image child stores it byte
-/// for byte.
-const PIXEL: [u8; 69] = [
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
-    0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
-    0x44, 0xae, 0x42, 0x60, 0x82,
-];
-
-/// [`PIXEL`] as base64.
-const PIXEL_BASE64: &str =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
 
 /// An `anthropic-messages` stream of `events`, then its end.
 fn anthropic(events: &[Value]) -> Response {
@@ -2707,9 +2599,6 @@ fn a_shell_read_of_proc_environ_is_reviewed_and_blocked() {
         );
     }
 }
-
-/// The result of an `ask_user` call whose questions went to the driver.
-const SENT: &str = "The questions went to the driver. The answers arrive as the next prompt.";
 
 /// The request's tool named `name`.
 fn tool_in<'a>(body: &'a Value, name: &str) -> &'a Value {

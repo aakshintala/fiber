@@ -14,15 +14,14 @@
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::{ProviderServer, Response, Watchdog};
+use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{Deadline, group_alive};
+use support::{Deadline, HELLO_KINDS, KillGroup, group_alive, is_status, spawn_watched};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
@@ -136,38 +135,11 @@ fn write_file(file: &std::path::Path, value: &Value) {
     fs::write(file, value.to_string()).unwrap();
 }
 
-/// Spawns `command` in a new process group beside a watchdog that kills the
-/// group if this process dies first.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
-}
-
 /// One finished run: its exit code and stdout's lines, parsed.
 struct Run {
     code: Option<i32>,
     lines: Vec<Value>,
     stderr: String,
-}
-
-/// A `session_status` line: ephemeral, and written by an observer thread, so
-/// where it falls among the loop's own lines is not what these tests pin.
-/// `tests/socket.rs` reads it.
-fn is_status(line: &str) -> bool {
-    line.contains(r#""kind":"session_status""#)
 }
 
 impl From<Output> for Run {
@@ -568,25 +540,6 @@ fn x_should_retry_true_retries_a_400() {
         3,
     );
 }
-
-/// The event kinds of an ask answered in two fragments with no retry.
-const HELLO_KINDS: [&str; 15] = [
-    "session_started",
-    "fiber_started",
-    "extensions_loaded",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "assistant_message_delta",
-    "assistant_message_delta",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
-    "fiber_exited",
-];
 
 /// The event kinds of a cold `ask --resume` that fails its first model
 /// call, then answers after one retry: the resumed process writes no

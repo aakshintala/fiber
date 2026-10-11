@@ -25,9 +25,6 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::*;
 
-/// The prompt a started session runs, and the marker the log must never hold.
-const PROMPT: &str = "the-volume-of-the-meeting-room";
-
 #[test]
 fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
     let setup = Setup::new();

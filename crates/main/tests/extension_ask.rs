@@ -23,18 +23,7 @@ use fakes::Client;
 use fakes::ProviderServer;
 use fakes::Watchdog;
 use serde_json::{Value, json};
-use support::{Deadline, group_alive};
-
-/// An `openai-responses` function call for `shell`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
+use support::{Deadline, function_call, group_alive};
 
 fn subscribe(deadline: Deadline, client: &Client) {
     client

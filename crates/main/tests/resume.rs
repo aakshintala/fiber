@@ -30,7 +30,10 @@ use contract::shapes::{ContentPart, DeclaredEffects, Origin, Sender};
 use contract::{ActionId, CommandId, SessionId, TurnId};
 use fakes::{ProviderServer, Request, Response};
 use serde_json::{Value, json};
-use support::{Deadline, group_alive};
+use support::{
+    Deadline, first_line, function_call, group_alive, hello_inline_completed as hello, is_status,
+    stream, text_reply,
+};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -179,13 +182,6 @@ struct Run {
     stderr: String,
 }
 
-/// A `session_status` line: ephemeral, and written by an observer thread, so
-/// where it falls among the loop's own lines is not what these tests pin.
-/// `tests/socket.rs` reads it.
-fn is_status(line: &str) -> bool {
-    line.contains(r#""kind":"session_status""#)
-}
-
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
@@ -234,65 +230,6 @@ impl Run {
             .map(|(raw, _)| format!("{raw}\n"))
             .collect()
     }
-}
-
-/// An `openai-responses` stream of `events`, then a completed reply.
-fn stream(events: &[Value]) -> Response {
-    let mut body = String::new();
-    for event in events {
-        body.push_str(&format!(
-            "event: {}\ndata: {event}\n\n",
-            event["type"].as_str().unwrap()
-        ));
-    }
-    let done = json!({"type": "response.completed", "response": {
-        "id": "resp_1", "status": "completed",
-        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-    }});
-    body.push_str(&format!(
-        "event: {}\ndata: {done}\n\n",
-        done["type"].as_str().unwrap()
-    ));
-    Response::stream(body)
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
-
-/// An `openai-responses` stream answering `text`: what a scripted
-/// reviewer verdict reads as.
-fn text_reply(text: &str) -> Response {
-    stream(&[json!({"type": "response.output_item.done", "item": {
-        "type": "message", "content": [{"type": "output_text", "text": text}]
-    }})])
-}
-
-/// An `openai-responses` stream answering `Hello.` in two fragments.
-fn hello() -> Response {
-    let events = [
-        json!({"type": "response.output_text.delta", "delta": "Hel"}),
-        json!({"type": "response.output_text.delta", "delta": "lo."}),
-        json!({"type": "response.output_item.done", "item": {
-            "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
-        }}),
-        json!({"type": "response.completed", "response": {
-            "id": "resp_1", "status": "completed",
-            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
-        }}),
-    ];
-    let body: String = events
-        .iter()
-        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
-        .collect();
-    Response::stream(body)
 }
 
 /// The one line stdout holds when the process failed before any session.
@@ -968,16 +905,6 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
         stderr: err_rx,
         deadline: setup.deadline,
     }
-}
-
-/// The first stdout line, waited for under the test's [`Deadline`].
-fn first_line(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
-    serde_json::from_str(
-        &stdout
-            .recv_timeout(deadline.left())
-            .expect("waited until the deadline for fiber_started"),
-    )
-    .unwrap()
 }
 
 /// Reads `stdout` until a `clients` line arrives, each line taking what

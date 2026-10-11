@@ -12,15 +12,13 @@
 mod support;
 
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fakes::Watchdog;
 use serde_json::{Value, json};
-use support::{Deadline, group_alive};
+use support::{Deadline, KillGroup, group_alive, spawn_watched};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 struct Setup {
@@ -89,25 +87,6 @@ struct Run {
     code: Option<i32>,
     stdout: String,
     stderr: String,
-}
-
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop. After the child is reaped and the
-/// group is empty, [`std::mem::forget`] skips that kill.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
-    }
 }
 
 #[test]

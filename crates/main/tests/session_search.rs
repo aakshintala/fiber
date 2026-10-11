@@ -26,10 +26,7 @@ use contract::{Envelope, SessionId};
 use fakes::ProviderServer;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
-use support::{Setup, hello, run_to_exit, stream};
-
-/// The query every test searches for.
-const QUERY: &str = "retry budget";
+use support::{QUERY, Setup, hello, kinds, run_to_exit, stream};
 
 /// An event from its kind and JSON payload.
 fn event(kind: &str, payload: Value) -> Event {
@@ -212,18 +209,6 @@ fn ask_configured(setup: &Setup, prompt: &str) -> Vec<Value> {
         .unwrap()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-        .collect()
-}
-
-/// The event kinds of every durable line `fiber ask` writes, in order.
-/// `session_status` lines are ephemeral, written by an observer thread, so
-/// where they fall among the loop's own lines is not pinned here, as in
-/// other `crates/main/tests` files.
-fn kinds(lines: &[Value]) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status")
-        .map(|line| line["kind"].as_str().unwrap())
         .collect()
 }
 

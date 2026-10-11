@@ -20,8 +20,6 @@ use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::*;
 
-const PROMPT: &str = "the-volume-of-the-meeting-room";
-
 /// Polls `sessions` until `live` names `session`, each poll under its own
 /// command id. Every wait takes what remains of the test's deadline;
 /// expiry names `what`.

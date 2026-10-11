@@ -13,18 +13,17 @@ mod support;
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Output, Stdio};
+use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
 use contract::shapes::ContentPart;
 use contract::tool::Tool;
+use fakes::CancelToken;
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, Watchdog};
 use serde_json::{Map, Value};
-use support::Deadline;
+use support::{Deadline, KillGroup, spawn_watched};
 
 /// A temporary workspace, removed on drop.
 struct Setup {
@@ -99,26 +98,6 @@ impl Setup {
         std::mem::forget(guard);
         watchdog.stand_down(self.deadline.cleanup());
         Run::from(output)
-    }
-}
-
-/// Spawns `command` in a new process group, then a watchdog in its own
-/// group.
-fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
-    let child = command.process_group(0).spawn().unwrap();
-    let group = child.id();
-    let guard = KillGroup(group);
-    let watchdog = Watchdog::group(group);
-    std::mem::forget(guard);
-    (child, watchdog)
-}
-
-/// Kills process group `group` on drop.
-struct KillGroup(u32);
-
-impl Drop for KillGroup {
-    fn drop(&mut self) {
-        support::kill_group_detached(self.0, "KILL");
     }
 }
 

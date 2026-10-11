@@ -22,7 +22,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::Deadline;
+use support::{Deadline, function_call};
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -361,17 +361,6 @@ fn hello() -> Response {
     stream(&[json!({"type": "response.output_item.done", "item": {
         "type": "message", "content": [{"type": "output_text", "text": "Hello."}]
     }})])
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
 }
 
 /// Stdout's event kinds are `kinds`, in order; its durable lines, byte for

@@ -18,19 +18,8 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use fakes::{ProviderServer, Watchdog};
-use serde_json::{Value, json};
+use serde_json::json;
 use support::*;
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
-}
 
 /// `fiber ask` with its stdout kept drained and its stderr kept for a failure.
 struct Running {
@@ -77,22 +66,6 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
         stderr: stderr_text,
         deadline: setup.deadline,
     }
-}
-
-fn first_line(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
-    serde_json::from_str(
-        &stdout
-            .recv_timeout(deadline.left())
-            .expect("waited until the deadline for fiber_started"),
-    )
-    .unwrap()
-}
-
-fn answered<'a>(lines: &'a [Value], id: &str) -> &'a Value {
-    lines
-        .iter()
-        .find(|line| line["payload"]["command_id"] == id)
-        .unwrap_or_else(|| panic!("no answer for {id}"))
 }
 
 fn finish(running: Running) {

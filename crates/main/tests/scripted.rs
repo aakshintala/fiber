@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex};
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{
-    HubProc, SessionGuard, Setup, connect_hub, hello, recv_reply, run_to_exit, subscribe, until,
-    write_json,
+    HubProc, SessionGuard, Setup, connect_hub, hello, kinds_without_attention as kinds, recv_reply,
+    run_to_exit, subscribe, until, write_json,
 };
 
 /// One `fiber` run: its exit code, every stdout line and stderr.
@@ -169,18 +169,6 @@ fn log_kinds(setup: &Setup, id: &str) -> Vec<String> {
     log_lines(setup, id)
         .iter()
         .map(|line| line["kind"].as_str().unwrap().to_owned())
-        .collect()
-}
-
-/// The event kinds of socket `lines`, in order, without `session_status`
-/// or `attention`: an observer thread writes `session_status`, and the
-/// hub's `attention` line derives from it, so neither's presence or
-/// position is pinned.
-fn kinds(lines: &[Value]) -> Vec<&str> {
-    lines
-        .iter()
-        .filter(|line| line["kind"] != "session_status" && line["kind"] != "attention")
-        .map(|line| line["kind"].as_str().unwrap())
         .collect()
 }
 

@@ -22,13 +22,12 @@ use std::thread;
 use std::time::Duration;
 
 use fakes::clock::FakeClock;
-use support::Deadline;
-use support::Setup;
 use support::pty::{
     Colour, FINISHED_TITLE, Grid, HOME_TITLE, MOTION, Reader, Run, Shared, Writer, contains,
     exact_end, hub_gone, hub_pids, list_processes, query_replies, sgr_params, until_hub_exits,
     until_hub_exits_with,
 };
+use support::{Deadline, Setup, TRUECOLOUR};
 
 /// Feeds `bytes` into an attached run's terminal side and returns the
 /// grid once the bytes are published: the raw wait proves the reader
@@ -803,13 +802,6 @@ fn no_color_sends_no_colour_and_blank_edges_keep_their_rows() {
         }
     }
 }
-
-/// Truecolour env for the layout runs.
-const TRUECOLOUR: [(&str, &str); 3] = [
-    ("TERM", "xterm-256color"),
-    ("COLORTERM", "truecolor"),
-    ("TERM_PROGRAM", "ghostty"),
-];
 
 const PANEL_RGB: Colour = Colour::Rgb(12, 12, 17);
 const RULE_RGB: Colour = Colour::Rgb(58, 58, 74);

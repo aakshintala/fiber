@@ -19,7 +19,7 @@ use std::process::Output;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Setup, hello, run_to_exit, stream};
+use support::{Setup, function_call, hello, run_to_exit, stream};
 
 /// A `session_status` line: ephemeral, and written by an observer thread, so
 /// where it falls among the loop's own lines is not what these tests pin.
@@ -94,17 +94,6 @@ impl Run {
             .map(|(raw, _)| format!("{raw}\n"))
             .collect()
     }
-}
-
-/// A finished `function_call` for `name` with `arguments`.
-fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
-    json!({"type": "response.output_item.done", "item": {
-        "type": "function_call",
-        "id": format!("fc_{call_id}"),
-        "call_id": call_id,
-        "name": name,
-        "arguments": arguments.to_string()
-    }})
 }
 
 /// The event kinds of a turn whose first reply calls one tool and whose
