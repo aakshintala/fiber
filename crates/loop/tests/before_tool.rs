@@ -310,6 +310,17 @@ fn a_rewritten_call_is_reviewed_as_the_call_that_will_run() {
     );
     assert!(lines.next().unwrap().starts_with("Workspace root: "));
     assert!(lines.next().is_none());
+    assert_eq!(
+        turn_kinds(&session.lines()),
+        first_turn_kinds(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed"
+            ],
+            2
+        )
+    );
 }
 
 #[test]
@@ -334,6 +345,17 @@ fn an_unrewritten_reviewed_call_has_no_rewrite_line() {
     let effects = user_text(users[users.len() - 2]);
     assert!(!effects.contains("rewrote"), "{effects}");
     assert_eq!(effects.lines().count(), 2);
+    assert_eq!(
+        turn_kinds(&session.lines()),
+        first_turn_kinds(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed"
+            ],
+            1
+        )
+    );
 }
 
 #[test]
@@ -377,6 +399,40 @@ fn a_second_review_renders_the_first_call_as_its_own_review_did() {
     // that item in the first call's own review, with no rewrite line.
     assert_eq!(second[second.len() - 4], first[first.len() - 3]);
     assert!(!user_text(second[second.len() - 4]).contains("rewrote"));
+    assert_eq!(
+        turn_kinds(&session.lines()),
+        vec![
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -400,10 +456,26 @@ fn a_blocked_call_renders_identically_after_a_resume() {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert!(tool.runs().is_empty());
+    assert_eq!(
+        turn_kinds(&session.lines()),
+        first_turn_kinds(&["permission_resolved", "tool_call_completed"], 2)
+    );
 
     let live = session.reviewer(reviewer_texts(&["allow"]));
     session.inbox.send(delivery("more")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(
+        turn_kinds(&session.lines()),
+        next_turn_kinds(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed"
+            ],
+            1,
+            false
+        )
+    );
     let live_request = live.requests()[0].conversation.clone();
     let _ = blocked;
 
@@ -412,6 +484,18 @@ fn a_blocked_call_renders_identically_after_a_resume() {
     let resumed = session.reviewer(reviewer_texts(&["allow"]));
     session.inbox.send(delivery("third")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(
+        turn_kinds(&session.lines()),
+        next_turn_kinds(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed"
+            ],
+            1,
+            true
+        )
+    );
     let resumed_request = resumed.requests()[0].conversation.clone();
 
     let live_call = live_request.iter().find(|input| {
@@ -431,6 +515,89 @@ fn user_text_or_none(input: &Input) -> Option<&str> {
         | Input::ToolCall { .. }
         | Input::ToolResult { .. } => None,
     }
+}
+
+/// The complete, ordered kinds of `lines`: every line the turn wrote, so
+/// a duplicated, missing or reordered line fails.
+fn turn_kinds(lines: &[contract::Envelope]) -> Vec<&str> {
+    lines.iter().map(|line| line.kind.as_str()).collect()
+}
+
+/// The complete kinds of a later turn whose reply says nothing and calls
+/// once: as [`first_turn_kinds`], without the session's opening lines.
+/// A resumed session's first turn rebuilds its preamble first.
+fn next_turn_kinds<'a>(middle: &[&'a str], reviews: usize, resumed: bool) -> Vec<&'a str> {
+    let mut kinds = Vec::new();
+    if resumed {
+        kinds.extend(["fiber_started", "preamble_built"].iter().copied());
+    }
+    kinds.extend(
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+        ]
+        .iter()
+        .copied(),
+    );
+    kinds.extend(std::iter::repeat_n("usage_recorded", reviews));
+    kinds.extend(middle.iter().copied());
+    kinds.extend(
+        [
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+        .iter()
+        .copied(),
+    );
+    kinds
+}
+/// The complete kinds of a first turn whose reply says nothing and calls
+/// once: the session opens, one reply segment runs, `reviews` reviewer
+/// usages follow the reply, `middle` decides the call, and the turn says
+/// "Done.".
+fn first_turn_kinds<'a>(middle: &[&'a str], reviews: usize) -> Vec<&'a str> {
+    let mut kinds = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "tool_call_arguments_delta",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+    ];
+    kinds.extend(std::iter::repeat_n("usage_recorded", reviews));
+    kinds.extend(middle.iter().copied());
+    kinds.extend(
+        [
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+        .iter()
+        .copied(),
+    );
+    kinds
 }
 
 fn probe_requested(path: &str) -> Event {
@@ -624,6 +791,78 @@ fn line<'a>(lines: &'a [contract::Envelope], kind: &str) -> &'a contract::Envelo
     lines.iter().find(|line| line.kind == kind).unwrap()
 }
 
+/// The complete, ordered kinds of `new`: every line the resumed turn
+/// wrote, so a duplicated, missing or reordered line fails.
+fn new_kinds(new: &[contract::Envelope]) -> Vec<&str> {
+    new.iter().map(|line| line.kind.as_str()).collect()
+}
+
+/// The complete kinds of a resumed turn that re-raises its request, runs
+/// the allowed call and says "Done.".
+fn allowed_kinds() -> Vec<&'static str> {
+    vec![
+        "preamble_built",
+        "opening_message",
+        "permission_requested",
+        "permission_resolved",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+}
+
+/// The complete kinds of a resumed turn whose call settles without its
+/// request raised again: the refused call completes denied, and the later
+/// call of the batch starts and runs.
+fn settled_kinds() -> Vec<&'static str> {
+    vec![
+        "preamble_built",
+        "opening_message",
+        "tool_call_started",
+        "tool_call_completed",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+}
+
+/// The complete kinds of a resumed turn refused without its request
+/// raised again: the decision line answers the recorded request, and the
+/// call completes without running.
+fn refused_kinds() -> Vec<&'static str> {
+    vec![
+        "preamble_built",
+        "opening_message",
+        "permission_resolved",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+}
+
+/// The complete kinds of a resumed turn that raises its request again and
+/// completes its call without running it: as [`allowed_kinds`], without
+/// `tool_call_started`.
+fn answered_kinds() -> Vec<&'static str> {
+    allowed_kinds()
+        .into_iter()
+        .filter(|kind| *kind != "tool_call_started")
+        .collect()
+}
+
 fn rewrite_line(names: &str, arguments: &str) -> String {
     format!("Extension {names} rewrote this call's arguments; it ran with {arguments}.")
 }
@@ -648,6 +887,7 @@ fn a_resumed_rewrite_is_raised_judged_and_run_again() {
     assert_eq!(raised.len(), 1);
     assert_eq!(raised[0].payload["request_id"], "r_9");
     assert_eq!(raised[0].payload["paths"], json!(["b.txt"]));
+    assert_eq!(new_kinds(&new), allowed_kinds());
     assert_eq!(raised[0].payload["standing_rule"]["prefix"], "run tests");
     assert_eq!(
         tool.runs(),
@@ -694,6 +934,7 @@ fn a_resumed_refusal_settles_without_raising_and_runs_the_rest() {
         !new.iter().any(|line| line.kind == "permission_resolved"),
         "no decision line answers it"
     );
+    assert_eq!(new_kinds(&new), settled_kinds());
     let completed: Vec<_> = new
         .iter()
         .filter(|line| line.kind == "tool_call_completed")
@@ -730,6 +971,7 @@ fn a_resumed_rewrite_into_credentials_is_refused_without_asking() {
     assert_eq!(resolved.payload["request_id"], "r_9");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "credential_deny");
+    assert_eq!(new_kinds(&new), refused_kinds());
     let completed = line(&new, "tool_call_completed");
     assert_eq!(completed.payload["status"], "denied");
     assert_eq!(completed.payload["reason"], "credentials");
@@ -757,6 +999,7 @@ fn a_call_gone_at_resume_raises_its_request_and_fails_on_allow() {
     assert_eq!(raised.len(), 1);
     assert_eq!(raised[0].payload["request_id"], "r_9");
     assert!(raised[0].payload.get("paths").is_none());
+    assert_eq!(new_kinds(&new), answered_kinds());
     let completed = line(&new, "tool_call_completed");
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "unknown_tool");
@@ -783,6 +1026,7 @@ fn a_headless_resume_denies_the_rebuilt_request_by_cancel() {
         resolved.payload["reason"],
         "The session was resumed with nobody to answer."
     );
+    assert_eq!(new_kinds(&new), answered_kinds());
     let completed = line(&new, "tool_call_completed");
     assert_eq!(completed.payload["status"], "denied");
     assert!(tool.runs().is_empty());
@@ -819,6 +1063,7 @@ fn a_resumed_review_rebuilds_its_rule_from_the_prepared_call() {
     assert_eq!(raised.payload["escalation"]["reason"], "too risky");
     assert_eq!(raised.payload["paths"], json!(["c.txt"]));
     assert_eq!(raised.payload["rule"]["subject"], "c.txt");
+    assert_eq!(new_kinds(&new), allowed_kinds());
     assert_eq!(
         tool.runs(),
         vec![json!({"path": "c.txt"}).as_object().unwrap().clone()]
@@ -1099,6 +1344,29 @@ fn suspended_form() -> (Session, Arc<AskTool>, Arc<FakeHooks>, String) {
         started[0].payload["changed_by"],
         json!(["fiber.test/guard"])
     );
+    assert_eq!(
+        turn_kinds(&lines),
+        vec![
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_started",
+            "interaction_requested",
+            "tool_call_completed",
+            "fiber_exited",
+        ]
+    );
     (session, asker, hooks, request)
 }
 
@@ -1125,6 +1393,24 @@ fn a_started_rewrite_runs_again_unhooked_with_its_result_line() {
     // No second start: the call runs again under its first one.
     let lines = session.lines();
     assert_eq!(of_kind(&lines, "tool_call_started").len(), 0);
+    assert_eq!(
+        turn_kinds(&lines),
+        vec![
+            "fiber_started",
+            "preamble_built",
+            "interaction_requested",
+            "interaction_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 
     // Neither hook ran again: the started arguments run as they were.
     assert_eq!(hooks.before_len(), 2);
@@ -1174,6 +1460,27 @@ fn a_started_rewrite_that_no_longer_checks_fails_without_running() {
     // The question is raised again, but its call never runs: Fiber
     // declines the re-raised request and the call fails its re-check.
     assert_eq!(of_kind(&lines, "tool_call_started").len(), 0);
+    // The question is raised again, but its call never runs: Fiber
+    // declines the re-raised request and the call fails its re-check.
+    assert_eq!(of_kind(&lines, "tool_call_started").len(), 0);
+    assert_eq!(
+        turn_kinds(&lines),
+        vec![
+            "fiber_started",
+            "preamble_built",
+            "interaction_requested",
+            "interaction_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let completed = of_kind(&lines, "tool_call_completed");
     let failed = completed
         .iter()

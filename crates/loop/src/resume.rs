@@ -407,7 +407,6 @@ impl Loop {
             .batch
             .iter()
             .find(|(id, _)| *id == suspended.action)
-            .map(|(_, call)| ((), call.clone()))
         else {
             return self.run_steps(&turn);
         };
@@ -416,7 +415,7 @@ impl Loop {
         // that will run. `Unchecked` keeps today's path below, with the
         // recorded request and the check's failure on allow. `Settled`
         // completes without raising the request again.
-        match self.prepared_suspended(&call, &turn, &request)? {
+        match self.prepared_suspended(call, &turn, &request)? {
             crate::before_tool::Again::Settled(completed) => {
                 // Armed first: a shutdown before it writes nothing more,
                 // so the next resume settles again.

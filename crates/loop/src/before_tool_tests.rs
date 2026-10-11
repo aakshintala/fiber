@@ -61,7 +61,6 @@ struct FakeHooks {
     notices_before: Mutex<Vec<contract::events::Notice>>,
     notices_check: Mutex<Vec<contract::events::Notice>>,
     shutdown: Option<Arc<TurnCancel>>,
-    rewrite_and_shutdown: bool,
     cancel_in_before: Option<Arc<TurnCancel>>,
 }
 
@@ -77,7 +76,6 @@ impl FakeHooks {
             notices_before: Mutex::new(Vec::new()),
             notices_check: Mutex::new(Vec::new()),
             shutdown: None,
-            rewrite_and_shutdown: false,
             cancel_in_before: None,
         }
     }
@@ -133,14 +131,8 @@ impl Hooks for FakeHooks {
         if let Some(cancel) = &self.cancel_in_before {
             assert!(cancel.cancel());
         }
-        if self.rewrite_and_shutdown
-            && let Some(cancel) = &self.shutdown
-        {
+        if let Some(cancel) = &self.shutdown {
             cancel.shutdown(143);
-        } else if let Some(cancel) = &self.shutdown
-            && !self.rewrite_and_shutdown
-        {
-            let _ = cancel;
         }
         let outcome = self
             .before_answers
@@ -195,7 +187,7 @@ impl Rules for NoRules {
 struct CountingTool {
     runs: Mutex<Vec<Map<String, Value>>>,
     effects_calls: Mutex<Vec<Map<String, Value>>>,
-    output: Mutex<Output>,
+    output: Output,
     bound: Bound,
 }
 
@@ -204,12 +196,12 @@ impl CountingTool {
         Self {
             runs: Mutex::new(Vec::new()),
             effects_calls: Mutex::new(Vec::new()),
-            output: Mutex::new(Output {
+            output: Output {
                 content: vec![ContentPart::Text {
                     text: output.to_owned(),
                 }],
                 ..Output::default()
-            }),
+            },
             bound: Bound::DEFAULT,
         }
     }
@@ -218,7 +210,7 @@ impl CountingTool {
         Self {
             runs: Mutex::new(Vec::new()),
             effects_calls: Mutex::new(Vec::new()),
-            output: Mutex::new(output),
+            output,
             bound: Bound::DEFAULT,
         }
     }
@@ -278,7 +270,7 @@ impl Tool for CountingTool {
 
     fn run(&self, arguments: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
         self.runs.lock().unwrap().push(arguments.clone());
-        self.output.lock().unwrap().clone()
+        self.output.clone()
     }
 
     fn bound(&self) -> Bound {
@@ -326,6 +318,12 @@ struct Ran {
 impl Ran {
     fn of_kind(&self, kind: &str) -> Vec<&Envelope> {
         self.lines.iter().filter(|l| l.kind == kind).collect()
+    }
+
+    /// The complete, ordered kinds of the durable lines: every event the
+    /// turn wrote, so a duplicated, missing or reordered event fails.
+    fn durable_kinds(&self) -> Vec<&str> {
+        self.lines.iter().map(|line| line.kind.as_str()).collect()
     }
 
     fn streamed_of_kind(&self, kind: &str) -> Vec<&Envelope> {
@@ -464,6 +462,76 @@ fn obj(arguments: Value) -> Map<String, Value> {
     arguments.as_object().unwrap().clone()
 }
 
+/// The complete durable kinds of a turn whose call ran and whose next
+/// step says "Done.".
+fn ran_kinds() -> Vec<&'static str> {
+    vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+}
+
+/// The complete durable kinds of a turn whose call never started and no
+/// permission line answers: as [`ran_kinds`], without `tool_call_started`.
+fn unstarted_kinds() -> Vec<&'static str> {
+    ran_kinds()
+        .into_iter()
+        .filter(|kind| *kind != "tool_call_started")
+        .collect()
+}
+
+/// The complete durable kinds of a turn whose rewritten call the
+/// credential deny refused: the `permission_resolved` line stands where
+/// `tool_call_started` would.
+fn credential_kinds() -> Vec<&'static str> {
+    ran_kinds()
+        .into_iter()
+        .map(|kind| {
+            if kind == "tool_call_started" {
+                "permission_resolved"
+            } else {
+                kind
+            }
+        })
+        .collect()
+}
+
+/// The complete durable kinds of a turn that ends with its batch: a
+/// shutdown or a cancel before the start leaves no second step after the
+/// completion.
+fn ended_kinds() -> Vec<&'static str> {
+    vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_completed",
+        "turn_completed",
+    ]
+}
+
 #[test]
 fn a_rewrite_that_fails_the_schema_fails_invalid_arguments_and_never_starts() {
     let tool = Arc::new(CountingTool::new("out"));
@@ -491,6 +559,7 @@ fn a_rewrite_that_fails_the_schema_fails_invalid_arguments_and_never_starts() {
     assert!(ran.of_kind("tool_call_started").is_empty());
     assert!(ran.of_kind("permission_resolved").is_empty());
     assert!(hooks.check_seen().is_empty());
+    assert_eq!(ran.durable_kinds(), unstarted_kinds());
 }
 
 #[test]
@@ -522,6 +591,7 @@ fn the_effects_function_sees_the_model_then_the_rewritten_arguments() {
         "Extension fiber.test/guard rewrote this call's arguments, and the tool could not classify them: the tool could not classify"
     );
     assert!(hooks.check_seen().is_empty());
+    assert_eq!(ran.durable_kinds(), unstarted_kinds());
 }
 
 #[test]
@@ -548,6 +618,7 @@ fn the_decision_judges_the_rewritten_call() {
     assert_eq!(completed.payload["status"], "denied");
     assert_eq!(completed.payload["reason"], "credentials");
     assert!(tool.runs().is_empty());
+    assert_eq!(ran.durable_kinds(), credential_kinds());
 }
 
 #[test]
@@ -575,6 +646,7 @@ fn a_rewrite_out_of_credentials_runs_with_the_rewritten_arguments() {
     let started = &ran.of_kind("tool_call_started")[0];
     assert_eq!(started.payload["arguments"], json!({"path": "a.txt"}));
     assert_eq!(started.payload["changed_by"], json!(["fiber.test/guard"]));
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -595,6 +667,7 @@ fn a_rewritten_start_carries_arguments_and_changed_by_and_an_unchanged_one_carri
     assert_eq!(started.payload["changed_by"], json!(["fiber.test/guard"]));
 
     let tool = Arc::new(CountingTool::new("out"));
+    assert_eq!(ran.durable_kinds(), ran_kinds());
     let hooks = Arc::new(FakeHooks::new());
     let ran = run(
         Arc::clone(&tool),
@@ -605,6 +678,7 @@ fn a_rewritten_start_carries_arguments_and_changed_by_and_an_unchanged_one_carri
     let started = &ran.of_kind("tool_call_started")[0];
     assert!(started.payload.get("arguments").is_none());
     assert!(started.payload.get("changed_by").is_none());
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -633,6 +707,7 @@ fn a_refusal_is_denied_hook_and_never_runs() {
     assert!(ran.of_kind("tool_call_started").is_empty());
     assert!(ran.of_kind("permission_resolved").is_empty());
     assert!(hooks.check_seen().is_empty());
+    assert_eq!(ran.durable_kinds(), unstarted_kinds());
 }
 
 #[test]
@@ -659,6 +734,7 @@ fn a_blocking_failure_fails_hook_failed_and_never_starts() {
     );
     assert!(tool.runs().is_empty());
     assert!(hooks.check_seen().is_empty());
+    assert_eq!(ran.durable_kinds(), unstarted_kinds());
 }
 
 #[test]
@@ -688,6 +764,7 @@ fn check_tool_sees_the_rewritten_call() {
     assert_eq!(hooks.check_seen()[0].paths, Some(vec!["b.txt".to_owned()]));
     assert!(ran.turn.is_ok());
     assert_eq!(tool.runs().len(), 1);
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -728,6 +805,7 @@ fn a_check_refusal_denies_and_a_check_failure_fails() {
             assert_eq!(completed.payload["error"]["code"], reason);
         }
         assert!(tool.runs().is_empty());
+        assert_eq!(ran.durable_kinds(), unstarted_kinds());
     }
 }
 
@@ -778,6 +856,7 @@ fn notices_from_both_stages_carry_no_action_id_and_come_first() {
     let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
     assert!(at("notice") < at("tool_call_started"));
     assert!(ran.of_kind("permission_resolved").is_empty());
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -795,6 +874,7 @@ fn unchanged_and_passed_run_with_the_models_arguments() {
         Value::Object(tool.runs()[0].clone()),
         json!({"path": "a.txt"})
     );
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 
     let tool = Arc::new(CountingTool::new("out"));
     let ran_no_hooks = run(
@@ -804,6 +884,7 @@ fn unchanged_and_passed_run_with_the_models_arguments() {
         Arc::new(TurnCancel::default()),
     );
     assert_eq!(ran.kinds(), ran_no_hooks.kinds());
+    assert_eq!(ran_no_hooks.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -883,7 +964,6 @@ fn a_before_tool_that_starts_a_shutdown_cancels_before_check_tool() {
         changed_by: vec!["fiber.test/guard".to_owned()],
     });
     fake.shutdown = Some(Arc::clone(&cancel));
-    fake.rewrite_and_shutdown = true;
     let hooks = Arc::new(fake);
     let ran = run(
         Arc::clone(&tool),
@@ -895,6 +975,7 @@ fn a_before_tool_that_starts_a_shutdown_cancels_before_check_tool() {
     assert!(ran.of_kind("tool_call_started").is_empty());
     let completed = completed_of(&ran);
     assert_eq!(completed.payload["status"], "cancelled");
+    assert_eq!(ran.durable_kinds(), ended_kinds());
 }
 
 fn rewritten(arguments: Value, changed_by: &[&str]) -> FakeHooks {
@@ -926,6 +1007,7 @@ fn a_rewritten_call_heads_its_result_with_the_rewrite_line() {
     assert_eq!(completion_text(completed), format!("{line}\nthe output"));
     // The call's single text part stays one part under the line.
     assert_eq!(completed.payload["content"].as_array().unwrap().len(), 1);
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -948,6 +1030,7 @@ fn two_extensions_share_the_plural_line_in_changed_by_order() {
         ),
         "{text}"
     );
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -971,6 +1054,7 @@ fn two_text_parts_are_joined_into_one_part_under_the_line() {
     assert_eq!(content.len(), 1);
     let line = "Extension fiber.test/guard rewrote this call's arguments; it ran with {\"path\":\"b.txt\"}.";
     assert_eq!(content[0]["text"], format!("{line}\none\ntwo"));
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -1004,6 +1088,7 @@ fn an_after_tool_change_keeps_the_line_first_and_sees_the_tools_output() {
         completion_text(completed_of(&ran)),
         format!("{line}\nredacted")
     );
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -1028,6 +1113,7 @@ fn a_withheld_result_keeps_only_the_withheld_line() {
         completed.payload["content"],
         json!([{"type": "text", "text": "Output withheld: the `after_tool` hook of extension fiber.test/scrub failed."}])
     );
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -1051,6 +1137,7 @@ fn a_rewritten_call_cancelled_before_it_starts_has_no_line() {
         .unwrap_or_default()
         .to_owned();
     assert!(!text.contains("rewrote this call's arguments"), "{text}");
+    assert_eq!(ran.durable_kinds(), ended_kinds());
 }
 
 #[test]
@@ -1065,6 +1152,7 @@ fn a_cut_result_keeps_the_whole_line_and_the_artifact_holds_it_all() {
     );
     let full = completion_text(completed_of(&uncut));
     let line = full.lines().next().unwrap().to_owned();
+    assert_eq!(uncut.durable_kinds(), ran_kinds());
     let start = line.len() + 1;
 
     let tool = Arc::new(CountingTool::with_bound(
@@ -1086,6 +1174,7 @@ fn a_cut_result_keeps_the_whole_line_and_the_artifact_holds_it_all() {
         std::fs::read_to_string(ran.session.join(artifact)).unwrap(),
         full
     );
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -1109,6 +1198,7 @@ fn a_one_byte_cap_cuts_the_line_itself() {
     let text = std::fs::read_to_string(ran.session.join(artifact)).unwrap();
     let line = "Extension fiber.test/guard rewrote this call's arguments; it ran with {\"path\":\"b.txt\"}.";
     assert_eq!(text, format!("{line}\nthe output"));
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -1142,6 +1232,7 @@ fn a_hooks_artifact_replaces_the_cut_artifact_but_not_the_lines_head() {
         "{}",
         completion_text(completed)
     );
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }
 
 #[test]
@@ -1187,4 +1278,5 @@ fn the_next_request_sends_the_models_call_with_the_lines_result() {
         result.starts_with(&format!("{line}\nthe output")),
         "{result}"
     );
+    assert_eq!(ran.durable_kinds(), ran_kinds());
 }

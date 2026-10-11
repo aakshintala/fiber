@@ -230,6 +230,16 @@ fn read_kinds(loading: &[&'static str], hooked: &[&'static str]) -> Vec<&'static
     .concat()
 }
 
+/// The complete event kinds of a run whose call never started: as
+/// [`read_kinds`] with no notices, without `tool_call_started`. A refused,
+/// failed or denied-before-permission call writes no permission line.
+fn unstarted_kinds() -> Vec<&'static str> {
+    read_kinds(&[], &[])
+        .into_iter()
+        .filter(|kind| *kind != "tool_call_started")
+        .collect()
+}
+
 /// An `after_tool` hook of `phase` that appends `|<tag>`.
 fn tagging(tag: &str, phase: &str) -> String {
     format!(
@@ -625,11 +635,7 @@ fn a_rewrite_that_fails_the_schema_fails_invalid_arguments_and_never_starts() {
     setup.provider_with_extra(&server, &json!({}));
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(
-        !run.kinds().contains(&"tool_call_started"),
-        "no start: {:?}",
-        run.kinds()
-    );
+    assert_eq!(run.kinds(), unstarted_kinds());
     let completed = run.completed();
     assert_eq!(completed["status"], "failed");
     assert_eq!(completed["error"]["code"], "invalid_arguments");
@@ -665,11 +671,7 @@ fn a_before_tool_refusal_is_denied_hook_and_the_tool_never_runs() {
     setup.provider_with_extra(&server, &json!({}));
     let run = setup.run(&["ask", "write it"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(
-        !run.kinds().contains(&"tool_call_started"),
-        "no start: {:?}",
-        run.kinds()
-    );
+    assert_eq!(run.kinds(), unstarted_kinds());
     let completed = run.completed();
     assert_eq!(completed["status"], "denied");
     assert_eq!(completed["reason"], "hook");
@@ -702,11 +704,7 @@ fn a_check_hook_that_returns_a_change_has_failed() {
     setup.provider_with_extra(&server, &json!({}));
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(
-        !run.kinds().contains(&"tool_call_started"),
-        "no start: {:?}",
-        run.kinds()
-    );
+    assert_eq!(run.kinds(), unstarted_kinds());
     let completed = run.completed();
     assert_eq!(completed["status"], "failed");
     assert_eq!(completed["error"]["code"], "hook_failed");
@@ -762,11 +760,7 @@ fn a_blocking_before_tool_failure_fails_the_call_hook_failed_and_never_starts() 
     setup.provider_with_extra(&server, &json!({}));
     let run = setup.run(&["ask", "read the note"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(
-        !run.kinds().contains(&"tool_call_started"),
-        "no start: {:?}",
-        run.kinds()
-    );
+    assert_eq!(run.kinds(), unstarted_kinds());
     let completed = run.completed();
     assert_eq!(completed["status"], "failed");
     assert_eq!(completed["error"]["code"], "hook_failed");
@@ -826,9 +820,25 @@ fn a_rewrite_survives_a_resume_while_its_approval_is_pending() {
     let exited = out.last().expect("fiber_exited is the last stdout line");
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["suspended_on"], request_id);
-    assert!(
-        !out.iter().any(|line| line["kind"] == "tool_call_started"),
-        "the call never started"
+    // The first process's complete stream: the approval hangs the call,
+    // so no `tool_call_started` follows the request.
+    assert_eq!(
+        session_kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "fiber_exited",
+        ]
     );
 
     fs::write(
