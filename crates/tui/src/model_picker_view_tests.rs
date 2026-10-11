@@ -344,11 +344,11 @@ fn the_filter_row_draws_the_query_bold_with_its_count() {
         [
             ("↑↓", "move"),
             ("←→", "levels"),
-            ("enter", "choose"),
-            ("tab", "all"),
-            ("ctrl+s", "session"),
-            ("ctrl+r", "refresh"),
-            ("esc", "close"),
+            ("Enter", "choose"),
+            ("Tab", "all"),
+            ("Ctrl+S", "session"),
+            ("Ctrl+R", "refresh"),
+            ("Esc", "close"),
         ]
     );
     // The drawn query reads bold after "› ".

@@ -14,9 +14,9 @@ expression: "screen(&app, 80, 24)"
 
                   1 session working
 
-                  › enter  leave them running
+                  › Enter  leave them running
                     c      close all
-                    esc    stay
+                    Esc    stay
 
                   click a choice · they keep running meanwhile
 

@@ -14,7 +14,7 @@ expression: "screen(&app, 160, 48)"
   Type to search shortcuts› █
   › Sessions                   Send a prompt, or a steering message during a turn                        Enter
     Sessions                   Insert a line break                                                       Shift+Enter · Ctrl+J
-    Sessions                   Close what is on top; interrupt the turn when nothing is open             Esc · click the overlay's ✕ or outside it; click "esc
+    Sessions                   Close what is on top; interrupt the turn when nothing is open             Esc · click the overlay's ✕ or outside it; click "Esc
                                                                                                          to interrupt"
     Sessions                   Clear the draft, then quit (twice within about a second on an empty box)  Ctrl+C · /quit
     Sessions                   Go home                                                                   ⌥0 · /home
@@ -45,7 +45,7 @@ expression: "screen(&app, 160, 48)"
     Steering                   Amend it                                                                  Enter · its mouse target
   ↓ Steering                   Drop it                                                                   ⌥X · its mouse target
 
-  ↑↓ move · ←→ tabs · esc closes
+  ↑↓ move · ←→ tabs · Esc closes
 
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄

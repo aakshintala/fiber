@@ -1826,7 +1826,7 @@ fn the_chip_defaults_to_the_launch_directory() {
             "[w]",
             "[test/model]",
             "[thinking: default]",
-            "enter starts a session",
+            "Enter starts a session",
         ]
     );
 }
@@ -3527,7 +3527,7 @@ fn the_switch_is_hidden_outside_git() {
             "[w]",
             "[test/model]",
             "[thinking: default]",
-            "enter starts a session",
+            "Enter starts a session",
         ]
     );
 }
@@ -3552,7 +3552,7 @@ fn a_chosen_row_workspace_takes_its_git_flag() {
             "[ ] new worktree",
             "[test/model]",
             "[thinking: default]",
-            "enter starts a session",
+            "Enter starts a session",
         ]
     );
     // Turning it on, then choosing the workspace without git: hidden,

@@ -138,7 +138,7 @@ fn the_barred_row_is_black_on_accent_with_its_gutter() {
         title: None,
         close: None,
         body: choices(
-            &[("enter", "leave them running"), ("c", "close all")],
+            &[("Enter", "leave them running"), ("c", "close all")],
             0,
             36,
         ),
@@ -176,7 +176,7 @@ fn the_barred_row_is_black_on_accent_with_its_gutter() {
 
 #[test]
 fn the_legend_is_keys_bold_labels_dim() {
-    let foot = legend(&[("↑↓", "move"), ("esc", "closes")]);
+    let foot = legend(&[("↑↓", "move"), ("Esc", "closes")]);
     let area = Rect::new(0, 0, 80, 24);
     let framed = super::Overlay {
         title: None,
@@ -190,7 +190,7 @@ fn the_legend_is_keys_bold_labels_dim() {
     let text: String = (slab.x..slab.right())
         .map(|x| buf[(x, row)].symbol().to_owned())
         .collect();
-    assert!(text.contains("↑↓ move · esc closes"), "{text}");
+    assert!(text.contains("↑↓ move · Esc closes"), "{text}");
     let key = &buf[(slab.x + 2, row)];
     assert_eq!(key.symbol(), "↑");
     assert!(key.modifier.contains(Modifier::BOLD));
@@ -461,7 +461,7 @@ fn a_short_body_only_area_keeps_its_first_row() {
 #[test]
 fn choices_keep_the_key_column_and_hang_wrapped_text() {
     let made = choices(
-        &[("enter", "leave them running"), ("c", "close all")],
+        &[("Enter", "leave them running"), ("c", "close all")],
         1,
         40,
     );
@@ -478,7 +478,7 @@ fn choices_keep_the_key_column_and_hang_wrapped_text() {
         .iter()
         .map(|span| span.content.to_string())
         .collect();
-    assert_eq!(first, "  enter  leave them running");
+    assert_eq!(first, "  Enter  leave them running");
     assert_eq!(second, "› c      close all");
     // A long description wraps under its own start.
     let wrapped = choices(&[("c", "close all the sessions now please")], 0, 20);
