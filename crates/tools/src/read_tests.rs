@@ -47,41 +47,6 @@ fn canonical(path: &Path) -> std::path::PathBuf {
 }
 
 #[test]
-fn the_schema_leaves_offset_and_limit_optional() {
-    let files = Files::new(Path::new("/ws").to_path_buf());
-    let schema = files.read().definition().input_schema;
-    let properties = schema.get("properties").unwrap().as_object().unwrap();
-    assert!(properties.contains_key("path"));
-    assert!(properties.contains_key("offset"));
-    assert!(properties.contains_key("limit"));
-    assert!(properties.contains_key("pages"));
-    assert_eq!(
-        properties.get("pages").and_then(|value| value.get("type")),
-        Some(&Value::String("string".to_owned()))
-    );
-    assert!(schema.get("pages").is_none());
-    assert!(
-        properties
-            .get("offset")
-            .and_then(|value| value.get("pages"))
-            .is_none()
-    );
-    let required: Vec<_> = schema
-        .get("required")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|value| value.as_str().unwrap())
-        .collect();
-    assert_eq!(required, ["path"]);
-    assert_eq!(
-        schema.get("additionalProperties"),
-        Some(&Value::Bool(false))
-    );
-}
-
-#[test]
 fn the_bound_sits_above_the_tools_own_cut() {
     let files = Files::new(Path::new("/ws").to_path_buf());
     assert_eq!(

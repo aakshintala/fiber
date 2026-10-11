@@ -14,10 +14,8 @@ fn search() -> HostedSearch {
 fn the_definition_is_the_vendors_type_and_the_name_with_no_description() {
     let definition = search().definition();
 
-    assert_eq!(definition.name, "web_search");
     assert_eq!(definition.hosted.as_deref(), Some("web_search_20250305"));
     assert_eq!(definition.description, "");
-    assert!(!definition.deferred);
 }
 
 #[test]

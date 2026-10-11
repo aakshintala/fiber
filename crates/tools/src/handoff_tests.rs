@@ -20,17 +20,9 @@ fn run(arguments: &Map<String, Value>) -> contract::tool::Output {
 }
 
 #[test]
-fn the_definition_names_the_note_and_the_cache_miss() {
+fn the_description_names_the_cache_miss() {
     let definition = Handoff.definition();
 
-    assert_eq!(definition.name, "handoff");
-    assert!(!definition.deferred);
-    assert_eq!(definition.input_schema["required"], json!(["note"]));
-    assert_eq!(
-        definition.input_schema["properties"]["note"]["type"],
-        "string"
-    );
-    assert_eq!(definition.input_schema["additionalProperties"], false);
     assert!(
         definition
             .description

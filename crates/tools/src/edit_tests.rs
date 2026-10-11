@@ -19,16 +19,6 @@ use crate::files::{hash_bytes, path_text};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
-const KEYWORDS: &[&str] = &[
-    "type",
-    "properties",
-    "required",
-    "additionalProperties",
-    "items",
-    "enum",
-    "description",
-];
-
 fn args(value: Value) -> Map<String, Value> {
     match value {
         Value::Object(map) => map,
@@ -99,38 +89,6 @@ fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
     );
 }
 
-fn strict(schema: &Value) {
-    let Some(map) = schema.as_object() else {
-        panic!("schema node is an object");
-    };
-    for key in map.keys() {
-        assert!(KEYWORDS.contains(&key.as_str()), "{key}");
-    }
-    match map.get("type").and_then(Value::as_str) {
-        Some("object") => {
-            let properties = map.get("properties").unwrap().as_object().unwrap();
-            let required: std::collections::BTreeSet<_> = map
-                .get("required")
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|value| value.as_str().unwrap())
-                .collect();
-            let names: std::collections::BTreeSet<_> =
-                properties.keys().map(String::as_str).collect();
-            assert_eq!(required, names);
-            assert_eq!(map.get("additionalProperties"), Some(&Value::Bool(false)));
-            for property in properties.values() {
-                strict(property);
-            }
-        }
-        Some("array") => strict(map.get("items").unwrap()),
-        Some("string" | "number" | "integer" | "boolean" | "null") => {}
-        _ => panic!("schema type"),
-    }
-}
-
 fn edit_of(dir: &Path, value: Value) -> contract::tool::Output {
     Files::new(dir.to_path_buf()).edit().run(
         &args(value),
@@ -153,14 +111,6 @@ fn a_pdf_is_unsupported_and_names_text_only() {
         "{}",
         text(&output)
     );
-}
-
-#[test]
-fn the_schema_fits_the_strict_shape() {
-    let files = Files::new(Path::new("/ws").to_path_buf());
-    let definition = files.edit().definition();
-    assert_eq!(definition.name, "edit");
-    strict(&definition.input_schema);
 }
 
 #[test]

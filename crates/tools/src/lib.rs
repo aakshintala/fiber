@@ -2,6 +2,8 @@
 //! (`docs/architecture.md`).
 
 mod ask_user;
+#[cfg(test)]
+mod definitions_tests;
 mod edit;
 mod files;
 mod guidelines;

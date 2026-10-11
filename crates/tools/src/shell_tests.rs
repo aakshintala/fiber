@@ -35,37 +35,6 @@ fn text(output: &contract::tool::Output) -> String {
     }
 }
 
-#[test]
-fn the_schema_is_command_workdir_and_timeout() {
-    let schema = shell().definition().input_schema;
-    assert_eq!(shell().definition().name, "shell");
-    assert!(shell().definition().description.contains("timeout_ms"));
-    assert_eq!(schema["type"], "object");
-    assert_eq!(schema["required"], json!(["command"]));
-    assert_eq!(schema["additionalProperties"], false);
-    let properties = schema["properties"].as_object().unwrap();
-    assert_eq!(
-        properties.keys().cloned().collect::<Vec<_>>(),
-        [
-            "command",
-            "deadline_ms",
-            "monitor",
-            "run_in_background",
-            "timeout_ms",
-            "tty",
-            "workdir"
-        ]
-    );
-    assert_eq!(properties["monitor"]["type"], "boolean");
-    assert_eq!(properties["deadline_ms"]["type"], "integer");
-    assert_eq!(properties["deadline_ms"]["minimum"], 0);
-    assert_eq!(properties["run_in_background"]["type"], "boolean");
-    assert_eq!(properties["command"]["type"], "string");
-    assert_eq!(properties["workdir"]["type"], "string");
-    assert_eq!(properties["timeout_ms"]["type"], "integer");
-    assert_eq!(properties["timeout_ms"]["minimum"], 0);
-}
-
 fn effects(shell: &Shell, command: &str) -> contract::tool::Effects {
     shell.effects(&args(command)).unwrap()
 }
