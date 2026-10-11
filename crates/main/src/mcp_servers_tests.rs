@@ -13,6 +13,7 @@ use super::specs;
 fn stdio(spec: &mcp::ServerSpec) -> &mcp::StdioSpec {
     match &spec.transport {
         mcp::Transport::Stdio(stdio) => stdio,
+        mcp::Transport::Http { .. } => panic!("a stdio-only test met a remote spec"),
     }
 }
 

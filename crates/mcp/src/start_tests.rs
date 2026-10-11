@@ -1071,3 +1071,249 @@ fn a_spec_debug_prints_no_argument_run_or_env_value() {
     assert!(!printed.contains(planted_run), "{printed}");
     assert!(!printed.contains("/run/program"), "{printed}");
 }
+
+/// The tool lists a remote start caches: `tools/list` answers one `echo`.
+fn remote_lists() -> Vec<crate::server_json::ListedTool> {
+    vec![
+        serde_json::from_value(json!({
+            "name": "echo",
+            "description": "Echoes.",
+            "inputSchema": {"type": "object"},
+        }))
+        .expect("listed"),
+    ]
+}
+
+/// A fake remote MCP server answering the handshake, one `echo` tool, and
+/// `echo` calls with `hi`, through `start_responding` keyed on the
+/// request's method.
+fn remote_server() -> fakes::ProviderServer {
+    fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
+        use serde_json::Value;
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result = |result: Value| {
+            json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
+        };
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => fakes::Response::status(
+                200,
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                })),
+            )
+            .header("mcp-session-id", "1868a90c"),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => fakes::Response::status(
+                200,
+                result(json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]})),
+            ),
+            Some("tools/call") => fakes::Response::status(
+                200,
+                result(json!({"content": [{"type": "text", "text": "hi"}]})),
+            ),
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_remote_server_starts_lists_and_caches_under_its_url() {
+    let setup = Setup::new();
+    let server = remote_server();
+    let url = format!("{}/mcp", server.url());
+    let spec = setup.remote_spec("fx", &url);
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty());
+    assert_eq!(names(&started), ["mcp__fx__echo"]);
+    assert!(
+        server
+            .requests()
+            .iter()
+            .any(|req| req.method == "POST" && req.path == "/mcp"),
+        "the start POSTs the session"
+    );
+    assert_eq!(
+        crate::cache::read(&setup.cache(), "fx", &crate::cache::url_key(&url))
+            .expect("the cache holds the remote lists")
+            .tools,
+        remote_lists(),
+    );
+}
+
+#[test]
+fn a_remote_server_with_a_matching_cache_starts_lazily() {
+    let setup = Setup::new();
+    let server = remote_server();
+    let url = format!("{}/mcp", server.url());
+    crate::cache::write(
+        &setup.cache(),
+        "fx",
+        &crate::cache::url_key(&url),
+        &crate::cache::Cached {
+            tools: remote_lists(),
+            prompts: Vec::new(),
+        },
+    );
+    let started = setup.start(vec![setup.remote_spec("fx", &url)]);
+    assert!(started.failed.is_empty());
+    assert_eq!(names(&started), ["mcp__fx__echo"]);
+    assert!(
+        server.requests().is_empty(),
+        "a cached server sends nothing until its first call: {:?}",
+        server.requests()
+    );
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let out = setup.run(&tool);
+    assert!(
+        out.error.is_none(),
+        "the first call starts and runs: {:?}",
+        out.error
+    );
+    assert!(
+        server.requests().iter().any(|req| {
+            serde_json::from_slice::<serde_json::Value>(&req.body)
+                .ok()
+                .and_then(|body| body.get("method").cloned())
+                == Some(json!("initialize"))
+        }),
+        "the first call starts a new session: {:?}",
+        server.requests()
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_remote_start_failure_points_at_its_url() {
+    // Nothing listens on port 1: the start fails, naming the `url`.
+    let setup = Setup::new();
+    let started = setup.start(vec![setup.remote_spec("fx", "http://127.0.0.1:1/mcp")]);
+    assert_eq!(started.failed.len(), 1);
+    let message = &started.failed[0].error.message;
+    assert!(
+        message.ends_with("Check its `url` under `mcp.servers` in your configuration."),
+        "{message}"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn every_remote_tool_declares_network_whatever_its_hints() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
+        use serde_json::Value;
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result =
+            |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => fakes::Response::status(
+                200,
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                })),
+            )
+            .header("mcp-session-id", "1868a90c"),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => fakes::Response::status(
+                200,
+                result(json!({"tools": [
+                    {"name": "closed", "annotations": {"openWorldHint": false}},
+                    {"name": "open"},
+                ]})),
+            ),
+            Some("tools/call") => fakes::Response::status(202, ""),
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap();
+    let url = format!("{}/mcp", server.url());
+    let mut spec = setup.remote_spec("fx", &url);
+    // The person's override drops `network` from a local tool; never from
+    // a remote one.
+    spec.hints.insert(
+        "open".to_owned(),
+        Hints {
+            open_world: Some(false),
+            ..Hints::default()
+        },
+    );
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty());
+    assert_eq!(names(&started), ["mcp__fx__closed", "mcp__fx__open"]);
+    for (_, tool) in &started.tools {
+        let effects = tool.effects(&Default::default()).expect("classifiable");
+        assert_eq!(
+            effects
+                .declared
+                .effects
+                .iter()
+                .filter(|effect| **effect == Effect::Network)
+                .count(),
+            1,
+            "{} declares network exactly once",
+            tool.definition().name
+        );
+    }
+    setup.stop(started.servers);
+}
+
+#[test]
+fn remote_limits_never_run_shorter_than_the_specs_deadlines() {
+    // Without the max the kernel idle bound would fire before Fiber's own
+    // deadline on a long silent call: each `max` arm is pinned here.
+    let setup = Setup::new();
+    let mut small = setup.remote_spec("fx", "http://127.0.0.1:9/mcp");
+    small.call_timeout = Duration::from_secs(11);
+    small.startup_timeout = Duration::from_secs(7);
+    assert_eq!(
+        super::limits(&small).idle(),
+        net::LIMITS.idle(),
+        "short deadlines keep the production idle bound"
+    );
+    assert_eq!(super::limits(&small).connect(), net::LIMITS.connect());
+    let mut large = setup.remote_spec("fx", "http://127.0.0.1:9/mcp");
+    large.call_timeout = Duration::from_secs(601);
+    large.startup_timeout = Duration::from_secs(7);
+    assert_eq!(
+        super::limits(&large).idle(),
+        Duration::from_secs(601),
+        "the idle bound covers the longest deadline"
+    );
+    let mut startup = setup.remote_spec("fx", "http://127.0.0.1:9/mcp");
+    startup.call_timeout = Duration::from_secs(7);
+    startup.startup_timeout = Duration::from_secs(602);
+    assert_eq!(
+        super::limits(&startup).idle(),
+        Duration::from_secs(602),
+        "the startup deadline counts too"
+    );
+}
+
+#[test]
+fn a_remote_spec_debug_hides_userinfo_query_and_unparsed_urls() {
+    let setup = Setup::new();
+    let spec = setup.remote_spec("fx", "https://token@host:8443/mcp?key=secret");
+    let printed = format!("{spec:?}");
+    assert!(printed.contains("host"), "{printed}");
+    assert!(printed.contains("8443"), "{printed}");
+    assert!(!printed.contains("token"), "{printed}");
+    assert!(!printed.contains("secret"), "{printed}");
+    let broken = setup.remote_spec("fx", "not a url");
+    assert!(format!("{broken:?}").contains("<unparsed>"), "{broken:?}");
+}

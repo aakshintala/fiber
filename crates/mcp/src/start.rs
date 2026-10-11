@@ -32,6 +32,11 @@ use crate::tool::McpTool;
 pub enum Transport {
     /// A child process Fiber starts.
     Stdio(StdioSpec),
+    /// A remote server over streamable HTTP.
+    Http {
+        /// The server's URL.
+        url: String,
+    },
 }
 
 /// A stdio server's declaration, and with `run` the pinned copy that runs
@@ -103,6 +108,9 @@ impl std::fmt::Debug for ServerSpec {
                     )
                     .field("run", &stdio.run);
             }
+            Transport::Http { url } => {
+                debug.field("url", &redacted_url(url));
+            }
         }
         debug
             .field("startup_timeout", &self.startup_timeout)
@@ -150,14 +158,55 @@ impl std::fmt::Debug for Program {
     }
 }
 
+/// The URL as it prints: with its userinfo and query removed, since a
+/// token can ride in either; unparsable as `"<unparsed>"`
+/// (`docs/code-quality.md`, "Errors").
+fn redacted_url(url: &str) -> String {
+    let uri: Result<ureq::http::Uri, _> = url.parse();
+    let Ok(uri) = uri else {
+        return "<unparsed>".to_owned();
+    };
+    let (Some(scheme), Some(host)) = (uri.scheme_str(), uri.host()) else {
+        return "<unparsed>".to_owned();
+    };
+    let port = uri
+        .port_u16()
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+    format!("{scheme}://{host}{port}{}", uri.path())
+}
+
 impl ServerSpec {
     /// The cache key of the declaration (`docs/mcp.md`, "Starting
     /// servers").
     pub(crate) fn key(&self) -> String {
         match &self.transport {
             Transport::Stdio(stdio) => cache::key(&stdio.command, &stdio.args, &stdio.env),
+            Transport::Http { url } => cache::url_key(url),
         }
     }
+
+    /// Whether it is a remote server.
+    pub(crate) fn remote(&self) -> bool {
+        match &self.transport {
+            Transport::Stdio(_) => false,
+            Transport::Http { .. } => true,
+        }
+    }
+}
+
+/// The socket limits of a remote server: the idle bound is never shorter
+/// than its own deadlines, so the kernel never fires before Fiber's own
+/// deadline on a long silent call, while a pump `POST` that never
+/// answers is still bounded.
+fn limits(spec: &ServerSpec) -> net::Limits {
+    net::Limits::new(
+        net::LIMITS.connect(),
+        spec.call_timeout
+            .max(spec.startup_timeout)
+            .max(net::LIMITS.idle()),
+    )
+    .unwrap_or(net::LIMITS)
 }
 
 /// Starts one spec on its transport and runs the handshake: the only
@@ -188,6 +237,14 @@ pub(crate) fn launch(
                 version,
             )
         }
+        Transport::Http { url } => crate::http::start(
+            url,
+            ureq::Proxy::try_from_env(),
+            limits(spec),
+            clock,
+            spec.startup_timeout,
+            version,
+        ),
     }
 }
 
@@ -397,17 +454,18 @@ pub(crate) fn open(
     let name = spec.name.clone();
     let required = spec.required;
     let timeout = spec.startup_timeout;
+    let remote = spec.remote();
     let open = match launch(&spec, workspace, clock, version) {
         Ok(open) => open,
         Err(error) => {
             return if required {
                 Opened::Down {
-                    failure: not_started(&name, &error, timeout, true),
+                    failure: not_started(&name, &error, timeout, true, remote),
                     required: true,
                 }
             } else {
                 Opened::Down {
-                    failure: not_started(&name, &error, timeout, false),
+                    failure: not_started(&name, &error, timeout, false, remote),
                     required: false,
                 }
             };
@@ -503,6 +561,7 @@ pub(crate) fn declare(
             tool.description.clone(),
             tool.schema.clone(),
             &hints,
+            spec.remote(),
             crate::tool::Target {
                 timeout: spec.call_timeout,
                 artifacts: artifacts.to_path_buf(),
@@ -527,8 +586,9 @@ pub(crate) fn not_started(
     error: &crate::server::StartError,
     startup: Duration,
     required: bool,
+    remote: bool,
 ) -> McpServerFailed {
-    let (reason, message) = fail_parts(server, error, startup, required);
+    let (reason, message) = fail_parts(server, error, startup, required, remote);
     McpServerFailed {
         server: server.to_owned(),
         reason,
@@ -542,18 +602,23 @@ fn fail_parts(
     error: &crate::server::StartError,
     startup: Duration,
     required: bool,
+    remote: bool,
 ) -> (ServerFailure, String) {
     let subject = if required {
         format!("The required MCP server `{server}`")
     } else {
         format!("The MCP server `{server}`")
     };
+    // A remote server has no `command` to check: its advice names its `url`.
+    let advice = if remote {
+        "Check its `url` under `mcp.servers` in your configuration."
+    } else {
+        "Check its `command` and `args` under `mcp.servers` in your configuration."
+    };
     match error {
         crate::server::StartError::StartFailed(detail) => (
             ServerFailure::StartFailed,
-            format!(
-                "{subject} failed to start: {detail} Check its `command` and `args` under `mcp.servers` in your configuration.",
-            ),
+            format!("{subject} failed to start: {detail} {advice}",),
         ),
         crate::server::StartError::Deadline => (
             ServerFailure::Deadline,

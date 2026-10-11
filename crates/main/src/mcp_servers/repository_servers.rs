@@ -220,7 +220,11 @@ pub(crate) fn pinned_spec(
             return Err(drifted);
         }
     }
-    let mcp::Transport::Stdio(stdio) = &candidate.spec.transport;
+    let stdio = match &candidate.spec.transport {
+        // A remote server pins nothing: its declaration runs as declared.
+        mcp::Transport::Http { .. } => return Ok(candidate.spec.clone()),
+        mcp::Transport::Stdio(stdio) => stdio,
+    };
     let command = if stdio.command.contains('/') {
         approved.arg(&stdio.command)
     } else {
@@ -239,21 +243,26 @@ pub(crate) fn pinned_spec(
     let guard = approved.guard(&given);
     let guard_name = name.clone();
     let mut spec = candidate.spec.clone();
-    let mcp::Transport::Stdio(pinned) = &mut spec.transport;
-    pinned.run = Some(mcp::Program {
-        command,
-        args,
-        guard: Arc::new(move || {
-            guard.check().map_err(|error| {
-                let why = if let extensions::Error::Pin { why, .. } = &error {
-                    why.clone()
-                } else {
-                    error.to_string()
-                };
-                format!("The MCP server `{guard_name}` was not started: {why}")
-            })
-        }),
-    });
+    match &mut spec.transport {
+        mcp::Transport::Stdio(pinned) => {
+            pinned.run = Some(mcp::Program {
+                command,
+                args,
+                guard: Arc::new(move || {
+                    guard.check().map_err(|error| {
+                        let why = if let extensions::Error::Pin { why, .. } = &error {
+                            why.clone()
+                        } else {
+                            error.to_string()
+                        };
+                        format!("The MCP server `{guard_name}` was not started: {why}")
+                    })
+                }),
+            });
+        }
+        // A remote spec returned above, so its clone is never here.
+        mcp::Transport::Http { .. } => {}
+    }
     Ok(spec)
 }
 

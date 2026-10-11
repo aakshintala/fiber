@@ -48,7 +48,7 @@ pub(crate) enum StartError {
 }
 
 /// A start refused because Fiber is shutting down.
-fn shutting_down() -> StartError {
+pub(crate) fn shutting_down() -> StartError {
     StartError::StartFailed("Fiber is shutting down.".to_owned())
 }
 
@@ -117,6 +117,10 @@ pub(crate) enum CallError {
         /// The error's message.
         message: String,
     },
+    /// The request failed over HTTP without ending the server; Fiber's sentence.
+    Http(String),
+    /// The remote server ended its session.
+    Expired,
 }
 
 /// A running server and its end of the wire.
@@ -142,6 +146,28 @@ struct Inner {
 pub(crate) enum Peer {
     /// The child and its process-group registration.
     Child(Mutex<Option<(Child, Listing)>>),
+    /// A remote server's session link.
+    Remote(std::sync::Arc<crate::http::Link>),
+}
+
+impl Peer {
+    /// The protocol version the `initialize` result negotiated: stored by
+    /// a remote link for every later request, ignored for a child.
+    fn negotiated(&self, version: &str) {
+        match self {
+            Peer::Child(_) => {}
+            Peer::Remote(link) => link.negotiated(version),
+        }
+    }
+
+    /// Shuts request `id`'s socket and refuses any it opens later: a
+    /// no-op for a child, whose pipe needs no interrupt.
+    fn abandon(&self, id: u64) {
+        match self {
+            Peer::Child(_) => {}
+            Peer::Remote(link) => link.abandon(id),
+        }
+    }
 }
 
 /// A server [`Server::start`] opened, with the tools and prompts it listed.
@@ -256,12 +282,17 @@ impl Server {
             ) {
                 Ok(value) if value.is_object() => value,
                 Err(CallError::Timeout) => return Err(StartError::Deadline),
+                Err(CallError::Http(detail)) => return Err(StartError::StartFailed(detail)),
                 Ok(_) | Err(_) => {
                     return Err(StartError::StartFailed(
                         "The server's `initialize` reply was not a result.".to_owned(),
                     ));
                 }
             };
+            // The negotiated version rides on every later request of a
+            // remote server; a child ignores it.
+            let version = crate::http::negotiated_version(&initialize);
+            server.inner.peer.negotiated(&version);
             server.notify("notifications/initialized", &serde_json::json!({}));
             // `tools/list` runs only when `initialize` advertises the
             // `tools` capability as an object: a server advertising only
@@ -344,6 +375,11 @@ impl Server {
         lock(&self.inner.shared.inner).gone
     }
 
+    /// Whether the remote server ended its session.
+    pub(crate) fn is_expired(&self) -> bool {
+        lock(&self.inner.shared.inner).expired
+    }
+
     /// Stops the server: closes stdin, sends SIGTERM to its process group,
     /// waits on the clock until its output ends or the grace passes, then
     /// kills and reaps the child (`docs/invocation.md`, "Shutdown"). Idempotent:
@@ -365,6 +401,9 @@ impl Server {
                     }
                 }
             }
+            // A remote server takes no signal: dropping the writer ends
+            // its pump, which closes its sockets.
+            Peer::Remote(_) => {}
         }
         inner.wait_gone();
         self.reap();
@@ -392,6 +431,11 @@ impl Server {
             if let Some(outcome) = view.response {
                 break Ok(outcome);
             }
+            // An expired session sets both flags: the expiry reads
+            // first, so it never reports as a death.
+            if view.expired {
+                break Err(CallError::Expired);
+            }
             if view.gone {
                 break Err(CallError::Gone);
             }
@@ -414,10 +458,15 @@ impl Server {
             );
         };
         drop(bridge);
+        // The slot is removed before the abandon: a socket error from the
+        // abandoned request then finds no waiter and never marks the
+        // server gone.
         inner.shared.remove(id);
+        inner.peer.abandon(id);
         match outcome {
             Ok(Outcome::Result(value)) => Ok(value),
             Ok(Outcome::Error { code, message }) => Err(CallError::JsonRpc { code, message }),
+            Ok(Outcome::Http(message)) => Err(CallError::Http(message)),
             Err(error) => Err(error),
         }
     }
@@ -434,25 +483,29 @@ impl Server {
 
     /// Kills and reaps the child exactly once; later calls find none.
     fn reap(&self) {
-        let taken = match &self.inner.peer {
+        match &self.inner.peer {
+            Peer::Remote(link) => link.close(),
             Peer::Child(child) => {
-                before_lock("child");
-                lock(child).take()
-            }
-        };
-        if let Some((mut child, listing)) = taken {
-            // The leader is taken but unreaped, so the group id cannot
-            // have been reused: the SIGKILL reaches this server's group.
-            match support::group::signal(child.id(), Signal::KILL) {
-                Ok(()) | Err(_) => {}
-            }
-            before_lock("live");
-            // Unlisted under the shared list's lock, before the wait
-            // frees the pid: a group the shutdown kill signals always
-            // has an unreaped leader.
-            support::group::live().unlist(listing);
-            match child.wait() {
-                Ok(_) | Err(_) => {}
+                let taken = {
+                    before_lock("child");
+                    lock(child).take()
+                };
+                if let Some((mut child, listing)) = taken {
+                    // The leader is taken but unreaped, so the group id
+                    // cannot have been reused: the SIGKILL reaches this
+                    // server's group.
+                    match support::group::signal(child.id(), Signal::KILL) {
+                        Ok(()) | Err(_) => {}
+                    }
+                    before_lock("live");
+                    // Unlisted under the shared list's lock, before the
+                    // wait frees the pid: a group the shutdown kill signals
+                    // always has an unreaped leader.
+                    support::group::live().unlist(listing);
+                    match child.wait() {
+                        Ok(_) | Err(_) => {}
+                    }
+                }
             }
         }
     }

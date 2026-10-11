@@ -7,6 +7,7 @@
 mod cache;
 mod effects;
 mod fail;
+mod http;
 mod name;
 mod pipes;
 mod prompt;
@@ -15,6 +16,7 @@ mod rpc;
 mod server;
 mod server_json;
 mod slot;
+mod sse;
 mod start;
 #[cfg(test)]
 mod test_support;

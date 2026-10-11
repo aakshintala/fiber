@@ -327,6 +327,14 @@ fn each_outcome_maps_to_its_sentence() {
             "was not run",
             0,
         ),
+        (
+            "expired",
+            None,
+            Err(Fault::Expired),
+            Some(ErrorCode::McpPromptFailed),
+            "was not run",
+            0,
+        ),
     ];
     for (name, appended, called, code, fragment, records) in rows {
         let out = super::output(&entry, appended.clone(), called, vec![]);

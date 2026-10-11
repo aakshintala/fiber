@@ -27,6 +27,7 @@ impl ServerSpec {
     pub(crate) fn stdio(&self) -> &StdioSpec {
         match &self.transport {
             Transport::Stdio(stdio) => stdio,
+            Transport::Http { .. } => panic!("a stdio-only test met a remote spec"),
         }
     }
 
@@ -34,6 +35,7 @@ impl ServerSpec {
     pub(crate) fn stdio_mut(&mut self) -> &mut StdioSpec {
         match &mut self.transport {
             Transport::Stdio(stdio) => stdio,
+            Transport::Http { .. } => panic!("a stdio-only test met a remote spec"),
         }
     }
 }
@@ -138,6 +140,22 @@ impl Setup {
     /// Writes one `prompt-<name>.json` result body.
     pub(crate) fn prompt_result(&self, name: &str, body: &str) {
         self.write(&format!("prompt-{name}.json"), body);
+    }
+
+    /// A remote spec for `url` on this directory's cache and clock.
+    pub(crate) fn remote_spec(&self, name: &str, url: &str) -> ServerSpec {
+        ServerSpec {
+            name: name.to_owned(),
+            transport: Transport::Http {
+                url: url.to_owned(),
+            },
+            startup_timeout: DEFAULT_STARTUP_TIMEOUT,
+            call_timeout: DEFAULT_CALL_TIMEOUT,
+            enabled: None,
+            disabled: Vec::new(),
+            hints: BTreeMap::new(),
+            required: false,
+        }
     }
 
     /// A spec running the shared fixture on this directory.

@@ -53,6 +53,19 @@ impl Hints {
             paths: None,
         }
     }
+
+    /// The declared effects of one tool of a remote server: [`Hints::declared`]
+    /// with `network` appended when absent, so neither a server hint nor a
+    /// person's `openWorldHint: false` override drops `network` from a
+    /// remote tool, and it is never listed twice (`docs/mcp.md`,
+    /// "Effects").
+    pub(crate) fn declared_for(&self, remote: bool) -> DeclaredEffects {
+        let mut declared = self.declared();
+        if remote && !declared.effects.contains(&Effect::Network) {
+            declared.effects.push(Effect::Network);
+        }
+        declared
+    }
 }
 
 fn hint(map: &Map<String, Value>, key: &str) -> Option<bool> {

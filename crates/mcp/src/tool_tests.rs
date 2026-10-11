@@ -31,6 +31,7 @@ fn declare(
         "Echoes.".to_owned(),
         json!({"type": "object"}),
         &hints,
+        false,
         super::Target {
             timeout: Duration::from_secs(30),
             artifacts: artifacts.to_path_buf(),
@@ -576,6 +577,24 @@ fn each_outcome_maps_to_its_code_sentence_and_servers() {
             vec![],
             Some(ErrorCode::McpServerUnavailable),
             Some("The MCP server `fx` did not start, or it has since exited."),
+            0,
+        ),
+        (
+            "http_refused",
+            &base,
+            Err(Fault::Refused("The server answered HTTP 500.".to_owned())),
+            vec![],
+            Some(ErrorCode::ToolError),
+            Some("The server answered HTTP 500."),
+            0,
+        ),
+        (
+            "expired",
+            &base,
+            Err(Fault::Expired),
+            vec![],
+            Some(ErrorCode::McpServerUnavailable),
+            Some("The MCP server `fx` ended its session; Fiber starts a new one on the next call."),
             0,
         ),
     ];
