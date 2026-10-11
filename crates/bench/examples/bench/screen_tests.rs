@@ -100,3 +100,56 @@ fn erase_in_display_clears_the_grid() {
     let screen = fed(&[b"hello\x1b[2J"]);
     assert!(!screen.holds("hello"), "screen:\n{}", screen.text());
 }
+
+#[test]
+fn find_reports_the_needle_row_and_column() {
+    let screen = fed(&[b"hello\x1b[3;5Hquokkas"]);
+    assert_eq!(screen.find("quokkas"), Some((2, 4)));
+}
+
+#[test]
+fn find_reports_a_hit_later_in_its_row() {
+    let screen = fed(&[b"hello"]);
+    assert_eq!(screen.find("llo"), Some((0, 2)));
+}
+
+#[test]
+fn find_counts_columns_in_cells_past_a_wide_char() {
+    let chunk: &[u8] = "▣ok".as_bytes();
+    let screen = fed(&[chunk]);
+    assert_eq!(screen.find("ok"), Some((0, 1)));
+}
+
+#[test]
+fn find_misses_what_is_not_on_screen() {
+    let screen = fed(&[b"hello"]);
+    assert_eq!(screen.find("bye"), None);
+}
+
+#[test]
+fn find_matches_nothing_for_an_empty_needle() {
+    let screen = fed(&[b"hello"]);
+    assert_eq!(screen.find(""), None);
+}
+
+#[test]
+fn columns_reads_each_row_over_the_range() {
+    let screen = fed(&[b"hello\x1b[2;1Hworld"]);
+    let text = screen.columns(1, 4);
+    let mut rows = text.split('\n');
+    assert_eq!(rows.next(), Some("ell"));
+    assert_eq!(rows.next(), Some("orl"));
+}
+
+#[test]
+fn columns_past_the_last_column_reads_short() {
+    let mut screen = Screen::new(3, 1);
+    screen.feed(b"abc");
+    assert_eq!(screen.columns(0, 9), "abc");
+}
+
+#[test]
+fn columns_with_a_backward_range_reads_empty_rows() {
+    let screen = fed(&[b"abc"]);
+    assert_eq!(screen.columns(2, 2), "\n\n\n\n\n\n\n\n\n\n\n");
+}

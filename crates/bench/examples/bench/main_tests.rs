@@ -44,7 +44,7 @@ fn a_usage_error_names_what_is_wrong() {
         ("--fiber f --out o --runs", "--runs needs a value"),
         ("--fiber f --out o --runs 0", "positive whole number"),
         ("--fiber f --out o --idle-secs ten", "positive whole number"),
-        ("--fiber f --out o --only some", "all or timing"),
+        ("--fiber f --out o --only some", "all, timing or wheel"),
         ("--fiber f --out o --fast 1", "unknown argument"),
         ("--fiber f --out o --paging", "--paging needs a value"),
     ] {
@@ -96,4 +96,23 @@ fn the_sampled_workloads_run_once_and_in_a_timing_run() {
         .map(|(_, runs)| *runs)
         .collect();
     assert_eq!(runs, [1, 1]);
+}
+
+#[test]
+fn only_wheel_parses_and_runs_just_the_wheel_workload() {
+    assert_eq!(
+        args("--fiber f --out o --only wheel").unwrap().only,
+        Only::Wheel
+    );
+    assert_eq!(names("--fiber f --out o --only wheel"), ["terminal wheel"]);
+    let timing = names("--fiber f --out o --only timing");
+    assert!(timing.contains(&"terminal wheel"), "{timing:?}");
+    let all = names("--fiber f --out o");
+    assert!(all.contains(&"terminal wheel"), "{all:?}");
+    let runs: Vec<u32> = selected(&args("--fiber f --out o --runs 3").unwrap())
+        .iter()
+        .filter(|(workload, _)| workload.name == "terminal wheel")
+        .map(|(_, runs)| *runs)
+        .collect();
+    assert_eq!(runs, [1]);
 }

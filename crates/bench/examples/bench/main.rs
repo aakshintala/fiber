@@ -4,7 +4,7 @@
 //! result file for `cargo xtask bench-report` to judge. It measures; it
 //! judges nothing.
 //!
-//! `bench --fiber <path> --out <file> [--runs 5] [--idle-secs 10] [--only all|timing] [--paging <jig>]`
+//! `bench --fiber <path> --out <file> [--runs 5] [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>]`
 //! (`--paging` names the `tui` crate's `paging` jig; without it that workload
 //! does not run)
 //! exits 0 once the file is written (a failed workload is recorded in it),
@@ -27,6 +27,7 @@ mod pty;
 mod resume;
 mod run;
 mod screen;
+mod wheel;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -36,7 +37,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage: bench --fiber <path> --out <file> [--runs 5] [--idle-secs 10] \
-     [--only all|timing] [--paging <jig>]";
+     [--only all|timing|wheel] [--paging <jig>]";
 
 /// The result file's format, which `cargo xtask bench-report` checks.
 const SCHEMA: u32 = 1;
@@ -47,6 +48,7 @@ const SCHEMA: u32 = 1;
 enum Only {
     All,
     Timing,
+    Wheel,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -84,7 +86,10 @@ fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                 only = match value.as_str() {
                     "all" => Only::All,
                     "timing" => Only::Timing,
-                    _ => return Err(format!("--only takes all or timing, not {value:?}")),
+                    "wheel" => Only::Wheel,
+                    _ => {
+                        return Err(format!("--only takes all, timing or wheel, not {value:?}"));
+                    }
                 };
             }
             _ => return Err(format!("unknown argument {flag:?}")),
@@ -114,11 +119,18 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32)> {
     let sampled = listing::SAMPLED
         .iter()
         .chain(attach::SAMPLED.iter())
+        .chain(wheel::SAMPLED.iter())
         .map(|workload| (workload, 1));
     repeated
         .chain(once)
         .chain(sampled)
-        .filter(|(workload, _)| args.only == Only::All || workload.timing)
+        .filter(|(workload, _)| match args.only {
+            Only::All => true,
+            Only::Timing => workload.timing,
+            Only::Wheel => wheel::SAMPLED
+                .first()
+                .is_some_and(|wheel| wheel.name == workload.name),
+        })
         .collect()
 }
 
@@ -198,7 +210,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    if !cfg!(target_os = "linux") {
+    if !cfg!(target_os = "linux") && args.only != Only::Wheel {
         eprintln!("bench: the benchmarks measure Linux only");
         return ExitCode::from(2);
     }

@@ -133,7 +133,12 @@ pub(crate) fn feed_step(line: &Value, id: &str, alive: bool) -> Step {
 
 /// Until the hub's feed lists `id` idle while its process runs: the session
 /// is live, idle, with no client.
-fn wait_listed(ctx: &Ctx<'_>, home: &Home, id: &str, proc: &mut Proc) -> Result<(), String> {
+pub(crate) fn wait_listed(
+    ctx: &Ctx<'_>,
+    home: &Home,
+    id: &str,
+    proc: &mut Proc,
+) -> Result<(), String> {
     let mut feed = Client::connect(&home.hub_socket())?;
     feed.send(r#"{"id":"c_feed","command":"feed"}"#)?;
     let until = ctx.clock.now() + READY;
@@ -148,7 +153,7 @@ fn wait_listed(ctx: &Ctx<'_>, home: &Home, id: &str, proc: &mut Proc) -> Result<
 }
 
 /// The session's `events.jsonl` path.
-fn log_path(home: &Home, id: &str) -> std::path::PathBuf {
+pub(crate) fn log_path(home: &Home, id: &str) -> std::path::PathBuf {
     log::sessions_dir(&home.home(), &doors::project(&home.workspace()))
         .join(id)
         .join("events.jsonl")

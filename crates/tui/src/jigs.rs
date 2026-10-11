@@ -15,7 +15,7 @@ use crate::app::App;
 use crate::event_loop::batch::HUB_BATCH;
 use crate::keys::Key;
 use crate::link::Line;
-use crate::screen::Screen;
+use crate::screen::{self, Screen};
 use crate::view;
 
 /// Folds `events`, one envelope per line as one session's stream, and
@@ -45,7 +45,7 @@ pub fn hover_frames(
     let mut app = fold(events, width, height)?;
     app.put_aside();
     let written = Counter::default();
-    let mut screen = Screen::new(CrosstermBackend::new(written.clone()), width, height)
+    let mut screen = Screen::new(screen::backend(written.clone()), width, height)
         .map_err(|error| error.to_string())?;
     screen
         .draw(&mut app, None)
@@ -141,7 +141,7 @@ pub fn measure_open(
 ) -> Result<OpenStages, String> {
     let mut app = App::new(PathBuf::new());
     app.set_size(width, height);
-    let mut screen = Screen::new(CrosstermBackend::new(Counter::default()), width, height)
+    let mut screen = Screen::new(screen::backend(Counter::default()), width, height)
         .map_err(|error| error.to_string())?;
     let mut stages = OpenStages {
         parse: Duration::ZERO,
@@ -218,7 +218,7 @@ pub fn measure_open(
 /// per batch at most.
 fn fold_batch(
     app: &mut App,
-    screen: &mut Screen<CrosstermBackend<Counter>>,
+    screen: &mut Screen<CrosstermBackend<screen::FrameWriter<Counter>>>,
     stages: &mut OpenStages,
     since_frame: &mut usize,
     frame_every: usize,
@@ -250,7 +250,7 @@ fn fold_batch(
 
 /// One frame through the loop's screen, and how long it took.
 fn draw_frame(
-    screen: &mut Screen<CrosstermBackend<Counter>>,
+    screen: &mut Screen<CrosstermBackend<screen::FrameWriter<Counter>>>,
     app: &mut App,
     clock: &Arc<dyn Clock>,
 ) -> Result<Duration, String> {

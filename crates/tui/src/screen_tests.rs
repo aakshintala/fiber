@@ -1,7 +1,9 @@
 //! Tests for the screen: its viewport size and the backend that reports it.
 
-use super::{Screen, SyncEmit};
+use super::{Screen, SyncEmit, backend};
 use crate::app::App;
+use crate::keys::{Mouse, MouseKind};
+use crate::link::Line;
 use crate::mouse::Target;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 
@@ -148,7 +150,99 @@ fn the_tty_sized_backend_passes_every_call_but_the_size_through() {
     assert_eq!(size, ratatui::layout::Size::new(40, 10));
 }
 
-/// A byte sink behind `CrosstermBackend` that keeps every byte written.
+/// A writer counting each `write` call, holding every byte written.
+#[derive(Clone, Default)]
+struct CountingWriter {
+    calls: std::rc::Rc<std::cell::Cell<usize>>,
+    bytes: std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
+}
+
+impl CountingWriter {
+    fn calls(&self) -> usize {
+        self.calls.get()
+    }
+
+    fn bytes(&self) -> Vec<u8> {
+        self.bytes.borrow().clone()
+    }
+}
+
+impl std::io::Write for CountingWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.calls.set(self.calls.get().saturating_add(1));
+        self.bytes.borrow_mut().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// One session line of `kind`, numbered `seq`.
+fn envelope(kind: &str, action: Option<&str>, payload: serde_json::Value, seq: u64) -> Line {
+    Line::Session(contract::Envelope {
+        kind: kind.to_owned(),
+        session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: action.map(|id| contract::ActionId(id.to_owned())),
+        seq: Some(contract::Seq(seq)),
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+#[test]
+fn a_wheel_frame_reaches_the_tty_in_one_write() {
+    let written = CountingWriter::default();
+    let mut screen = Screen::new(backend(written.clone()), 160, 48)
+        .unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut app = App::new(std::path::PathBuf::from("/w"));
+    app.set_size(160, 48);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    let mut seq = 0u64;
+    let mut line = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
+        let line = envelope(kind, action, payload, seq);
+        seq += 1;
+        line
+    };
+    for turn in 0..80 {
+        let message = format!("a_m{turn}");
+        app.on_line(line(
+            "turn_started",
+            None,
+            serde_json::json!({"input": [{"type": "message", "source": "driver",
+                "content": [{"type": "text", "text": format!("prompt {turn}")}]}]}),
+        ));
+        app.on_line(line(
+            "text_completed",
+            Some(&message),
+            serde_json::json!({"text": "a one-line reply"}),
+        ));
+        app.on_line(line(
+            "turn_completed",
+            None,
+            serde_json::json!({"outcome": "completed"}),
+        ));
+    }
+    screen
+        .draw(&mut app, None)
+        .unwrap_or_else(|err| panic!("draw: {err}"));
+    let bottom = app.scroll().0;
+    app.on_wheel(&Mouse {
+        kind: MouseKind::WheelUp,
+        col: 20,
+        row: 10,
+    });
+    assert_eq!(app.top(), Some(bottom - 3));
+    let calls = written.calls();
+    screen
+        .draw(&mut app, None)
+        .unwrap_or_else(|err| panic!("draw: {err}"));
+    assert_eq!(written.calls() - calls, 1);
+    assert!(written.bytes().ends_with(b"\x1b[?2026l"));
+}
 #[derive(Clone, Default)]
 struct Bytes(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
 

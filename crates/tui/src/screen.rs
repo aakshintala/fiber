@@ -206,6 +206,39 @@ impl<W: std::io::Write> SyncEmit for CrosstermBackend<W> {
     }
 }
 
+/// One frame's bytes on their way to the tty: every byte the backend
+/// writes waits here until the frame flushes, so the frame reaches the
+/// tty in one `write`. Once a `Screen` call returns `Ok`, every byte it
+/// produced has reached the tty, in order; once it returns `Err`, nothing
+/// it buffered is ever written later. It never writes on drop, so no
+/// byte can reach the tty after the restore bytes at exit.
+pub(crate) struct FrameWriter<W> {
+    inner: W,
+}
+
+impl<W: std::io::Write> FrameWriter<W> {
+    /// Ready to buffer `out`'s frame: every write passes straight
+    /// through until the frame buffers.
+    fn new(out: W) -> Self {
+        Self { inner: out }
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for FrameWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// A crossterm backend writing through the frame writer.
+pub(crate) fn backend<W: std::io::Write>(out: W) -> CrosstermBackend<FrameWriter<W>> {
+    CrosstermBackend::new(FrameWriter::new(out))
+}
+
 impl SyncEmit for TestBackend {
     fn emit(&mut self, _begin: bool) -> Result<(), Self::Error> {
         Ok(())

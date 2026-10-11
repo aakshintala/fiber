@@ -51,6 +51,7 @@ mod open_at;
 mod opener;
 mod osc;
 mod pages;
+mod paging_session;
 mod paste_image;
 #[cfg(test)]
 mod pty_watch;
@@ -110,6 +111,7 @@ pub use look::ThemeSetting;
 pub use keyset::KeysSetup;
 
 pub use jigs::{OpenStages, draw, hover_frames, measure_open, measure_paging};
+pub use paging_session::paging_session;
 
 pub use event_loop::run;
 

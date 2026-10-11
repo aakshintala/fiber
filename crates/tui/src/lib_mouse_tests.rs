@@ -94,6 +94,30 @@ fn following() -> super::Loop<TestBackend> {
     lp
 }
 
+/// How many synchronized-output blocks start in `bytes`: one per frame
+/// drawn.
+fn blocks(bytes: &[u8]) -> usize {
+    const BEGIN: &[u8] = b"\x1b[?2026h";
+    bytes
+        .windows(BEGIN.len())
+        .filter(|window| *window == BEGIN)
+        .count()
+}
+
+#[test]
+fn thirty_queued_wheel_ups_share_one_frame() {
+    let sink = Sink::default();
+    let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    feed(&mut lp, long_session(80));
+    let bottom = lp.app.scroll().0;
+    let drawn = blocks(&sink.bytes());
+    feed(&mut lp, (0..30).map(|_| wheel_up(10, 5)).collect());
+    assert_eq!(blocks(&sink.bytes()) - drawn, 1);
+    assert_eq!(lp.app.top(), Some(bottom - 90));
+}
+
 #[test]
 fn the_wheel_over_the_conversation_scrolls_it_three_rows() {
     let mut lp = following();

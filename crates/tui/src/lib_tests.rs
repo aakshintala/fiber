@@ -98,6 +98,13 @@ impl Sink {
     pub(super) fn len(&self) -> usize {
         self.0.lock().map_or(0, |bytes| bytes.len())
     }
+
+    /// Every byte the backend wrote, oldest first.
+    pub(super) fn bytes(&self) -> Vec<u8> {
+        self.0
+            .lock()
+            .map_or_else(|_| Vec::new(), |bytes| bytes.clone())
+    }
 }
 
 impl Write for Sink {

@@ -19,7 +19,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use contract::clock::Clock;
 use contract::{Envelope, Seq, SessionId};
-use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::backend::Backend;
 use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
 use signal_hook::iterator::Signals;
 
@@ -61,7 +61,7 @@ pub fn run(
     let Ok(out) = tty.try_clone() else {
         return 1;
     };
-    let Ok(mut screen) = Screen::new(CrosstermBackend::new(out), width, height) else {
+    let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
         return 1;
     };
     let mut app = App::new(launch.workspace.clone());

@@ -1,7 +1,9 @@
 //! The terminal in a pseudo-terminal, as `crates/main/tests/terminal.rs`
 //! runs it: bare `fiber` with standard input, output and error on the
-//! terminal side at 60x12, `TERM=xterm-256color`, and one reader thread
-//! feeding what it draws to the screen the waits read.
+//! terminal side, `TERM=xterm-256color`, and one reader thread feeding
+//! what it draws to the screen the waits read. While recording, the
+//! reader also cuts each synchronized-output frame out of the byte
+//! stream.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -13,7 +15,7 @@ use std::time::Instant;
 use contract::clock::Clock;
 
 use crate::home::Home;
-use crate::run::{Proc, left};
+use crate::run::{self, Proc, left};
 use crate::screen::Screen;
 
 /// The terminal under test and what it has drawn.
@@ -25,14 +27,120 @@ pub(crate) struct Terminal {
     wakes: mpsc::Receiver<()>,
 }
 
-/// What the terminal has drawn: the raw bytes and the screen they leave.
+/// What the terminal has drawn: the raw bytes, the screen they leave,
+/// and the recorded frames.
 struct Output {
     raw: Vec<u8>,
     screen: Screen,
+    recording: bool,
+    recorder: Recorder,
 }
 
 fn err(what: &str) -> impl Fn(rustix::io::Errno) -> String + '_ {
     move |errno| format!("{what}: {errno}")
+}
+
+/// One synchronized-output frame (mode 2026) drawn while recording:
+/// when the chunk holding its end marker was read, how many bytes the
+/// block held from its begin marker through its end marker, and the
+/// whole screen right after the end marker. The caller cuts the
+/// conversation column out of `text`: the grid keeps every column so one
+/// record serves every width.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Frame {
+    pub(crate) at: Instant,
+    pub(crate) bytes: usize,
+    pub(crate) text: String,
+}
+
+/// The mode-2026 blocks seen while recording: whether one is open, how
+/// many bytes it holds so far, the unsettled tail (at most one frame's
+/// worth, since every marker the scan needs arrives whole), and the
+/// frames completed. A marker split across two reads joins in `pending`:
+/// only whole markers move the state, so a prefix at the end of a chunk
+/// waits for the next one.
+struct Recorder {
+    cols: usize,
+    open: bool,
+    block_len: usize,
+    pending: Vec<u8>,
+    frames: Vec<Frame>,
+}
+
+/// One synchronized-output marker's length: begin and end are both 8
+/// bytes.
+const MARKER: usize = 8;
+
+/// The block's begin marker.
+const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
+
+/// The block's end marker.
+const SYNC_END: &[u8] = b"\x1b[?2026l";
+
+impl Recorder {
+    /// Ready to record on a `cols`-wide screen.
+    fn new(cols: usize) -> Self {
+        Self {
+            cols,
+            open: false,
+            block_len: 0,
+            pending: Vec::new(),
+            frames: Vec::new(),
+        }
+    }
+
+    /// Folds `chunk` into the blocks seen so far, feeding `screen` exactly
+    /// the settled bytes: up to and through each whole marker, so the
+    /// snapshot for a frame sees the screen right after its end marker
+    /// and before the next byte. Bytes outside any block feed the screen
+    /// but record nothing.
+    fn push(&mut self, screen: &mut Screen, chunk: &[u8], now: Instant) {
+        self.pending.extend_from_slice(chunk);
+        let mut cursor = 0usize;
+        let mut at = 0usize;
+        while at.saturating_add(MARKER) <= self.pending.len() {
+            let begin = self
+                .pending
+                .get(at..)
+                .is_some_and(|rest| rest.starts_with(SYNC_BEGIN));
+            let end = !begin
+                && self
+                    .pending
+                    .get(at..)
+                    .is_some_and(|rest| rest.starts_with(SYNC_END));
+            if !begin && !end {
+                at = at.saturating_add(1);
+                continue;
+            }
+            let through = at.saturating_add(MARKER);
+            if begin {
+                self.open = true;
+                self.block_len = MARKER;
+                if let Some(span) = self.pending.get(cursor..through) {
+                    screen.feed(span);
+                }
+            } else if self.open {
+                self.block_len = self
+                    .block_len
+                    .saturating_add(through.saturating_sub(cursor));
+                if let Some(span) = self.pending.get(cursor..through) {
+                    screen.feed(span);
+                }
+                self.frames.push(Frame {
+                    at: now,
+                    bytes: self.block_len,
+                    text: screen.columns(0, self.cols),
+                });
+                self.open = false;
+                self.block_len = 0;
+            } else if let Some(span) = self.pending.get(cursor..through) {
+                screen.feed(span);
+            }
+            cursor = through;
+            at = through;
+        }
+        self.pending.drain(..cursor);
+    }
 }
 
 /// The timeout error with what the terminal had drawn: its byte count, the
@@ -50,12 +158,26 @@ pub(crate) fn timeout_note(expired: String, bytes: &[u8], screen: &Screen) -> St
 }
 
 impl Terminal {
-    /// Starts `fiber` with `args` in `home`'s workspace on a new pty.
+    /// Starts `fiber` with `args` in `home`'s workspace on a new pty at
+    /// 60x12.
     pub(crate) fn spawn(
         home: &Home,
         args: &[&str],
         path: Option<&OsStr>,
         clock: &dyn Clock,
+    ) -> Result<Self, String> {
+        Self::spawn_sized(home, args, path, clock, 60, 12)
+    }
+
+    /// Starts `fiber` with `args` in `home`'s workspace on a new pty at
+    /// `cols` by `rows`.
+    pub(crate) fn spawn_sized(
+        home: &Home,
+        args: &[&str],
+        path: Option<&OsStr>,
+        clock: &dyn Clock,
+        cols: u16,
+        rows: u16,
     ) -> Result<Self, String> {
         let (main, name) = fakes::pty::open().map_err(|err| format!("opening a pty: {err}"))?;
         let terminal = fs::OpenOptions::new()
@@ -66,8 +188,8 @@ impl Terminal {
         rustix::termios::tcsetwinsize(
             &terminal,
             rustix::termios::Winsize {
-                ws_col: 60,
-                ws_row: 12,
+                ws_col: cols,
+                ws_row: rows,
                 ws_xpixel: 0,
                 ws_ypixel: 0,
             },
@@ -95,14 +217,26 @@ impl Terminal {
             .map_err(|e| format!("cloning the pty master: {e}"))?;
         let output = Arc::new(Mutex::new(Output {
             raw: Vec::new(),
-            screen: Screen::new(60, 12),
+            screen: Screen::new(cols.into(), rows.into()),
+            recording: false,
+            recorder: Recorder::new(cols.into()),
         }));
         let appended = Arc::clone(&output);
         let (tx, wakes) = mpsc::channel();
         fakes::pty::read_to_eof(reader, move |chunk| {
             if let Ok(mut out) = appended.lock() {
-                out.raw.extend_from_slice(chunk);
-                out.screen.feed(chunk);
+                let Output {
+                    raw,
+                    screen,
+                    recording,
+                    recorder,
+                } = &mut *out;
+                raw.extend_from_slice(chunk);
+                if *recording {
+                    recorder.push(screen, chunk, run::System.now());
+                } else {
+                    screen.feed(chunk);
+                }
             }
             tx.send(()).unwrap_or(());
         });
@@ -119,6 +253,15 @@ impl Terminal {
             .lock()
             .map(|output| output.screen.holds(needle))
             .unwrap_or(false)
+    }
+
+    /// The first row and column holding `needle` on the live screen, for
+    /// clicks on rows the waits locate: the screen's own position query.
+    pub(crate) fn find(&self, needle: &str) -> Option<(usize, usize)> {
+        self.output
+            .lock()
+            .ok()
+            .and_then(|output| output.screen.find(needle))
     }
 
     /// Waits until `until` for the screen to hold `needle`.
@@ -152,6 +295,22 @@ impl Terminal {
             }
         }
         Ok(())
+    }
+
+    /// Records each complete mode-2026 frame while `on`: the frames stay
+    /// available through [`Terminal::frames`]. Off by default.
+    pub(crate) fn record(&self, on: bool) {
+        if let Ok(mut out) = self.output.lock() {
+            out.recording = on;
+        }
+    }
+
+    /// The frames recorded so far, oldest first.
+    pub(crate) fn frames(&self) -> Vec<Frame> {
+        self.output
+            .lock()
+            .map(|out| out.recorder.frames.clone())
+            .unwrap_or_default()
     }
 
     /// Types `bytes` into the terminal.
