@@ -145,19 +145,19 @@ fn rerun_bounded(
     // The child is already spawned, so a watchdog that cannot start must
     // still leave nothing running: kill the group and wait for the waiter
     // before the panic continues.
-    let watchdog = match std::panic::catch_unwind(AssertUnwindSafe(|| crate::Watchdog::group(group)))
-    {
-        Ok(watchdog) => watchdog,
-        Err(payload) => {
-            match crate::kill_group(group, "KILL") {
-                Ok(_) | Err(_) => {}
+    let watchdog =
+        match std::panic::catch_unwind(AssertUnwindSafe(|| crate::Watchdog::group(group))) {
+            Ok(watchdog) => watchdog,
+            Err(payload) => {
+                match crate::kill_group(group, "KILL") {
+                    Ok(_) | Err(_) => {}
+                }
+                match Deadline::after(reap).recv(&finished) {
+                    Ok(_) | Err(_) => {}
+                }
+                std::panic::resume_unwind(payload);
             }
-            match Deadline::after(reap).recv(&finished) {
-                Ok(_) | Err(_) => {}
-            }
-            std::panic::resume_unwind(payload);
-        }
-    };
+        };
     match Deadline::after(within).recv(&finished) {
         Ok(Ok(output)) => {
             let cleanup = Deadline::after(reap);
@@ -171,7 +171,9 @@ fn rerun_bounded(
             let emptied = crate::group_empties(group, cleanup.left());
             // Dropping the watchdog closes its standard input, a second net
             // around the group.
-            panic!("`{test}` exited and left processes in its group (killed; group empty: {emptied})");
+            panic!(
+                "`{test}` exited and left processes in its group (killed; group empty: {emptied})"
+            );
         }
         Ok(Err(err)) => {
             let cleanup = Deadline::after(reap);

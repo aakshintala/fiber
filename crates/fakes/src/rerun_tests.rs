@@ -159,8 +159,7 @@ fn a_prepared_rerun_child_that_leaves_its_group_occupied_fails_and_the_group_is_
             |_| {},
         )
     });
-    let payload =
-        outcome.expect_err("a child that leaves its group occupied panics the caller");
+    let payload = outcome.expect_err("a child that leaves its group occupied panics the caller");
     let message = payload
         .downcast_ref::<String>()
         .expect("the panic carries a formatted message");
