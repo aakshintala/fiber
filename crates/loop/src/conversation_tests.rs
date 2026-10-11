@@ -2175,7 +2175,9 @@ mod from_log {
         reason = "test code; a failure is the test's"
     )]
 
-    use contract::events::{Event, InputItem, ReasoningCompleted, ToolCallCompleted, TurnStarted};
+    use contract::events::{
+        ContextAdded, Event, InputItem, ReasoningCompleted, ToolCallCompleted, TurnStarted,
+    };
     use contract::provider::Input;
     use contract::shapes::{ContentPart, Origin, Sender};
     use contract::{ActionId, CommandId, Envelope, SessionId};
@@ -2520,6 +2522,85 @@ mod from_log {
         assert_eq!(id.0, "a_1");
         assert_eq!(text, "It never ran.");
         assert!(matches!(&conversation[3], Input::User { .. }));
+    }
+
+    /// A hook's added context, as `context_added` carries it.
+    fn context_added(text: &str) -> Event {
+        Event::ContextAdded(ContextAdded {
+            text: text.into(),
+            extension: "fiber.test/redact".into(),
+            hook: "before_message".into(),
+        })
+    }
+
+    #[test]
+    fn context_added_renders_as_its_own_user_message_like_the_live_loop() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(context_added("ctx"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(completed_event("Sunny."), Some("a_1"));
+        log.append(steering("wait"), Some("a_9"));
+        log.append(context_added("later"), Some("a_9"));
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            [
+                "turn_started",
+                "context_added",
+                "tool_call_requested",
+                "tool_call_completed",
+                "steering_applied",
+                "context_added",
+            ]
+        );
+        let rebuilt = crate::conversation::rebuild(&lines, MODEL).unwrap();
+        // The same lines through `render`, as the live loop builds them.
+        let mut live = Vec::new();
+        let mut had = std::collections::BTreeMap::new();
+        let mut carry = crate::handoff::Carry::default();
+        for line in &lines {
+            let Some(event) = Event::from_envelope(line).unwrap() else {
+                panic!("a known kind: {}", line.kind);
+            };
+            crate::conversation::render(
+                &mut live,
+                &event,
+                line.action_id.as_ref(),
+                MODEL,
+                &mut had,
+                &mut carry,
+            );
+        }
+        assert_eq!(live, rebuilt);
+        assert_eq!(rebuilt.len(), 6);
+        assert_eq!([text_of(&rebuilt[0]), text_of(&rebuilt[1])], ["one", "ctx"]);
+        assert_eq!(
+            [text_of(&rebuilt[4]), text_of(&rebuilt[5])],
+            ["wait", "later"]
+        );
+    }
+
+    #[test]
+    fn a_call_without_a_result_is_fixed_before_a_context_as_before_a_steer() {
+        let log = LogLines::new();
+        log.append(user_turn("one"), None);
+        log.append(requested("read", "Paris"), Some("a_1"));
+        log.append(context_added("ctx"), None);
+
+        let lines = log.lines();
+        assert_eq!(
+            kinds_of(&lines),
+            ["turn_started", "tool_call_requested", "context_added"]
+        );
+        let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
+        assert_eq!(conversation.len(), 4);
+        let (id, text, is_error) = result_of(&conversation[2]);
+        assert_eq!(id.0, "a_1");
+        assert_eq!(text, "It never ran.");
+        assert!(is_error);
+        assert_eq!(text_of(&conversation[3]), "ctx");
     }
 
     #[test]

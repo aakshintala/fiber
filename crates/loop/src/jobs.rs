@@ -281,13 +281,21 @@ impl Loop {
         let mut steered = false;
         while let Some(piece) = self.queued.pop_front() {
             let event = match piece {
-                Queued::Steer(message, _hooked) => {
+                Queued::Steer(message, hooked) => {
                     steered = true;
-                    Event::SteeringApplied(contract::events::SteeringApplied {
-                        content: message.content,
-                        sender: message.sender,
-                        changed_by: None,
-                    })
+                    self.append(
+                        &Event::SteeringApplied(contract::events::SteeringApplied {
+                            content: message.content,
+                            sender: message.sender,
+                            changed_by: hooked.changed_by,
+                        }),
+                        turn,
+                        None,
+                    )?;
+                    for added in hooked.context {
+                        self.append(&Event::ContextAdded(added), turn, None)?;
+                    }
+                    continue;
                 }
                 Queued::Job(completed, delegate) => {
                     if let Some(finished) = delegate {
