@@ -235,9 +235,7 @@ fn slab_height(buf: &Buffer, width: u16, height: u16) -> u16 {
 /// The ▄ edge's run of edge cells in `buf`.
 fn edge_run(buf: &Buffer, width: u16, height: u16) -> usize {
     for y in 0..height {
-        let run = (0..width)
-            .filter(|x| buf[(*x, y)].symbol() == "▄")
-            .count();
+        let run = (0..width).filter(|x| buf[(*x, y)].symbol() == "▄").count();
         if run > 0 {
             return run;
         }
@@ -317,15 +315,27 @@ fn the_headings_are_dim_with_a_blank_row_between_the_groups() {
     let fake = fake_with(targets());
     let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
     let rows = text_of(&buf, 80, 24);
-    let providers = rows.iter().position(|row| row.contains("Providers")).expect("no heading");
+    let providers = rows
+        .iter()
+        .position(|row| row.contains("Providers"))
+        .expect("no heading");
     let x = rows[providers].find("Providers").expect("no heading");
     assert!(
-        buf[(u16::try_from(x).unwrap_or(u16::MAX), u16::try_from(providers).unwrap_or(u16::MAX))]
+        buf[(
+            u16::try_from(x).unwrap_or(u16::MAX),
+            u16::try_from(providers).unwrap_or(u16::MAX)
+        )]
             .modifier
             .contains(Modifier::DIM)
     );
-    let codex = rows.iter().position(|row| row.contains("codex")).expect("no codex");
-    let secrets = rows.iter().position(|row| row.contains("Secrets")).expect("no heading");
+    let codex = rows
+        .iter()
+        .position(|row| row.contains("codex"))
+        .expect("no codex");
+    let secrets = rows
+        .iter()
+        .position(|row| row.contains("Secrets"))
+        .expect("no heading");
     assert_eq!(secrets, codex + 2);
     assert!(rows[codex + 1].trim().is_empty());
 }
@@ -336,7 +346,8 @@ fn with_no_targets_the_note_pads_to_three_rows_with_no_bar() {
     let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
     let rows = text_of(&buf, 80, 24);
     assert!(
-        rows.iter().any(|row| row.contains("No provider is installed")),
+        rows.iter()
+            .any(|row| row.contains("No provider is installed")),
         "{}",
         rows.join("\n")
     );
@@ -378,7 +389,10 @@ fn after_a_store_the_window_clips_the_said_from_below() {
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
     // Nine rows tall the window holds only the focused target.
     let narrow = drawn(&login, 80, 9);
-    assert!(!narrow.contains("Stored credentials/acme/default."), "{narrow}");
+    assert!(
+        !narrow.contains("Stored credentials/acme/default."),
+        "{narrow}"
+    );
     assert!(narrow.lines().any(|row| row.contains("acme")), "{narrow}");
     let wide = drawn(&login, 80, 24);
     assert!(wide.contains("Stored credentials/acme/default."), "{wide}");

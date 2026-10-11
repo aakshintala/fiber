@@ -321,7 +321,8 @@ impl Login {
         // Each target row takes clicks over its whole row; headings,
         // the gap and the note carry none.
         for (row, (at, _, _)) in choices.iter_mut().zip(cut.iter()) {
-            row.targets.push((0, u16::MAX, TargetId::View(Spot::Row(*at))));
+            row.targets
+                .push((0, u16::MAX, TargetId::View(Spot::Row(*at))));
         }
         let mut choices = choices.into_iter();
         let dim = Style::new().add_modifier(Modifier::DIM);
@@ -359,7 +360,12 @@ impl Login {
         // never depends on which rows the window shows.
         let wide = body
             .iter()
-            .map(|row| row.spans.iter().map(|span| format::width(&span.content)).sum())
+            .map(|row| {
+                row.spans
+                    .iter()
+                    .map(|span| format::width(&span.content))
+                    .sum()
+            })
             .max()
             .unwrap_or(0);
         let mut footer = overlay::legend(&[("↑↓", "move"), ("Enter", "log in"), ("Esc", "close")]);
@@ -369,7 +375,9 @@ impl Login {
             .map(|span| format::width(&span.content))
             .sum();
         if wide > have {
-            footer.spans.push(Span::raw(" ".repeat(wide.saturating_sub(have))));
+            footer
+                .spans
+                .push(Span::raw(" ".repeat(wide.saturating_sub(have))));
         }
         let shown = shown_body_rows(usize::from(area.height));
         let start = window_start(self.selected, shown, body.len());
@@ -377,7 +385,11 @@ impl Login {
         let framed = overlay::Overlay {
             title: Some(("Log in".to_owned(), Some(Span::raw("✕")))),
             close: Some(TargetId::View(Spot::Close)),
-            body: body.into_iter().skip(start).take(end.saturating_sub(start)).collect(),
+            body: body
+                .into_iter()
+                .skip(start)
+                .take(end.saturating_sub(start))
+                .collect(),
             footer: Some(footer),
             prefer: 96,
         };
@@ -432,7 +444,11 @@ impl Login {
         let before = self.selected;
         if *key == Key::Up {
             // The nearest target above, clamped at the first.
-            self.selected = targets.iter().copied().rfind(|at| *at < before).unwrap_or(before);
+            self.selected = targets
+                .iter()
+                .copied()
+                .rfind(|at| *at < before)
+                .unwrap_or(before);
         } else if *key == Key::Down {
             // The nearest target below, clamped at the last.
             self.selected = targets
