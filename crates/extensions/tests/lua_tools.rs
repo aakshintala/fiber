@@ -676,14 +676,15 @@ impl contract::files::PathLock for NoLock {
     }
 }
 
-/// The session's extensions, loaded on a thread under `WAIT`.
+/// The session's extensions with these config overrides, loaded on a
+/// thread under `WAIT`.
 #[track_caller]
-fn session(setup: &Setup) -> Arc<SessionExtensions> {
+fn session_with(setup: &Setup, overrides: &[&str]) -> Arc<SessionExtensions> {
     let config = Config::load(Sources {
         home: setup.home(),
         workspace: setup.workspace(),
         project: ProjectKey::new("p").unwrap(),
-        overrides: Vec::new(),
+        overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
     })
     .unwrap();
     let home = setup.home();
@@ -692,6 +693,12 @@ fn session(setup: &Setup) -> Arc<SessionExtensions> {
         SessionExtensions::load(&home, &config, FakeClock::new(), locks, None)
     });
     Arc::new(loaded)
+}
+
+/// The session's extensions, loaded on a thread under `WAIT`.
+#[track_caller]
+fn session(setup: &Setup) -> Arc<SessionExtensions> {
+    session_with(setup, &[])
 }
 
 /// Each declared tool as `(extension, tool)`.
@@ -792,6 +799,200 @@ fn two_extensions_registering_one_tool_lose_it_and_keep_their_others() {
         "Extensions `fiber.test/a` and `fiber.test/b` both register the tool `dup`, so neither gets it."
     );
     assert_eq!(notices[0].extension, None);
+}
+
+#[test]
+fn a_disabled_tool_is_not_declared() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["one"]"#],
+    );
+    assert_eq!(
+        declared(&session),
+        [("fiber.test/a".to_owned(), "two".to_owned())]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn an_enabled_list_declares_only_those_tools() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.enabled=["one", "missing"]"#],
+    );
+    assert_eq!(
+        declared(&session),
+        [("fiber.test/a".to_owned(), "one".to_owned())]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn disabled_wins_over_enabled() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[
+            r#"extensions."fiber.test/a".tools.enabled=["one", "two"]"#,
+            r#"extensions."fiber.test/a".tools.disabled=["two"]"#,
+        ],
+    );
+    assert_eq!(
+        declared(&session),
+        [("fiber.test/a".to_owned(), "one".to_owned())]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn an_empty_enabled_list_declares_no_tool() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let session = session_with(&setup, &[r#"extensions."fiber.test/a".tools.enabled=[]"#]);
+    assert!(declared(&session).is_empty());
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn a_disabled_name_no_tool_has_is_ignored() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["missing"]"#],
+    );
+    assert_eq!(
+        declared(&session),
+        [
+            ("fiber.test/a".to_owned(), "one".to_owned()),
+            ("fiber.test/a".to_owned(), "two".to_owned())
+        ]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn a_disabled_tool_takes_no_part_in_a_clash() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("dup", "a"), tool_line("only_a", "a")),
+    );
+    install_lua(
+        &setup,
+        "b",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("dup", "b"), tool_line("only_b", "b")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["dup"]"#],
+    );
+    assert_eq!(
+        declared(&session),
+        [
+            ("fiber.test/a".to_owned(), "only_a".to_owned()),
+            ("fiber.test/b".to_owned(), "dup".to_owned()),
+            ("fiber.test/b".to_owned(), "only_b".to_owned())
+        ]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn reloading_with_a_disabled_list_declares_one_fewer_tool() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let first = session_with(&setup, &[]);
+    assert_eq!(declared(&first).len(), 2);
+    let second = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["one"]"#],
+    );
+    assert_eq!(
+        declared(&second),
+        [("fiber.test/a".to_owned(), "two".to_owned())]
+    );
+    assert_eq!(second.notices(), []);
+}
+
+#[test]
+fn an_extension_whose_tools_are_all_disabled_but_with_a_command_stays_loaded() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{HOOK_AND_COMMAND}", tool_line("one", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["one"]"#],
+    );
+    assert!(declared(&session).is_empty());
+    assert_eq!(loaded(&session), ["fiber.test/a"]);
+    assert!(session.commands().iter().any(|c| c.name == "mine"));
+    assert!(session.has_hooks());
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn an_extension_with_only_disabled_tools_declares_nothing_but_stays_listed() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &tool_line("one", "a"),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["one"]"#],
+    );
+    assert!(declared(&session).is_empty());
+    // The load record stays: the `has_tools` rule only drops the live VM
+    // from delivery, which has no other public signal.
+    assert_eq!(loaded(&session), ["fiber.test/a"]);
+    assert!(session.commands().is_empty());
+    assert!(!session.has_hooks());
+    assert_eq!(session.notices(), []);
 }
 
 #[test]
