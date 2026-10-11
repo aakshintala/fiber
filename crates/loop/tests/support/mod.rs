@@ -91,7 +91,6 @@ pub(crate) const REVIEWER_MODEL: &str = "fake/reviewer-1";
 /// is one [`DEADLINE`]: a turn that never asks fails naming the
 /// missing `permission_requested`, and the thread's end drops its inbox
 /// sender, releasing a loop still waiting for a reply.
-#[track_caller]
 pub(crate) fn on_request(
     session: &Session,
     send: impl FnOnce(RequestId) + Send + 'static,
@@ -327,7 +326,6 @@ impl Tool for TestTool {
         })
     }
 
-    #[track_caller]
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
         self.note("run");
         self.cancelled.lock().unwrap().push(cancel.is_cancelled());

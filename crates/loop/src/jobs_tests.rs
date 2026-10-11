@@ -1204,7 +1204,6 @@ fn a_notice_during_the_final_reply_continues_the_turn() {
 
 /// Watches the log for `permission_requested`, then runs `send` with its
 /// request id: the signal the loop is waiting for a reply.
-#[track_caller]
 fn on_request(log: &Log, send: impl FnOnce(RequestId) + Send + 'static) -> thread::JoinHandle<()> {
     let watcher = log.watch();
     thread::spawn(move || {

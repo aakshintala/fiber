@@ -671,7 +671,6 @@ impl History {
             .unwrap();
     }
 
-    #[track_caller]
     fn freeze(&mut self) {
         self.history_len = self.lines().len();
     }
@@ -737,7 +736,6 @@ impl History {
             .expect("the turn ended in time")
     }
 
-    #[track_caller]
     fn new_lines(&self) -> Vec<contract::Envelope> {
         self.lines()[self.history_len..].to_vec()
     }
@@ -746,7 +744,6 @@ impl History {
 /// A suspended history: one turn whose batch holds `probe` calls with
 /// `paths`, a standing ask `r_9` pending on the first, then the process
 /// exited on that request.
-#[track_caller]
 fn suspended_probes(paths: &[&str]) -> History {
     let mut history = History::new(vec![Scripted::text("Done.")]);
     history.write(user_turn("one"), None);
@@ -766,7 +763,6 @@ fn probe_tools(tool: &Arc<PathTool>) -> Vec<(String, Arc<dyn Tool>)> {
 }
 
 /// Runs `send` once the log holds the re-raised `permission_requested`.
-#[track_caller]
 fn on_reraise(history: &History, send: impl FnOnce() + Send + 'static) -> thread::JoinHandle<()> {
     let watcher = history.log.watch();
     thread::spawn(move || {
@@ -1248,7 +1244,6 @@ fn with_extra(arguments: Value) -> Value {
 
 type Finished = mpsc::Receiver<(r#loop::Loop, Result<Option<TurnOutcome>, r#loop::Error>)>;
 
-#[track_caller]
 fn run_turn(session: &mut Session) -> Finished {
     let mut looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();

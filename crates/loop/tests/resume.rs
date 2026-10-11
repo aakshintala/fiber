@@ -68,7 +68,6 @@ impl support::History {
     }
 
     /// Freezes the history: the lines a resume folds.
-    #[track_caller]
     fn freeze(&mut self) {
         self.history_len = self.lines().len();
     }
@@ -154,7 +153,6 @@ impl support::History {
     }
 
     /// The history's kinds, in order: the lines the resume folds.
-    #[track_caller]
     fn history_kinds(&self) -> Vec<String> {
         self.lines()[..self.history_len]
             .iter()
@@ -163,12 +161,10 @@ impl support::History {
     }
 
     /// The lines written since [`History::freeze`], and their kinds.
-    #[track_caller]
     fn new_lines(&self) -> Vec<Envelope> {
         self.lines()[self.history_len..].to_vec()
     }
 
-    #[track_caller]
     fn new_kinds(&self) -> Vec<String> {
         self.new_lines().iter().map(|l| l.kind.clone()).collect()
     }
@@ -1362,7 +1358,6 @@ impl support::History {
 
 /// A suspended history: one turn whose batch is `[a_1]` with a standing
 /// ask `r_9` pending on it, then the process exited on that request.
-#[track_caller]
 fn suspended_history(script: Vec<Scripted>) -> History {
     let mut history = History::new(script);
     history.write(user_turn("one"), None);
@@ -2271,7 +2266,6 @@ fn asking(name: &'static str) -> Arc<support::TestTool> {
 
 /// The one new `turn_completed` holds the asked question and no request
 /// was sent.
-#[track_caller]
 fn ended_on_the_question(history: &History) {
     let ended = new_of(history, "turn_completed");
     assert_eq!(ended.len(), 1, "{:?}", history.new_kinds());
@@ -2341,7 +2335,6 @@ fn a_resumed_credential_refusal_ends_the_turn_on_a_later_calls_questions() {
 /// The one new `turn_completed` ends the turn `failed` with code
 /// `blocked` and carries no `questions` key: the headless block budget
 /// ends the turn before the batch's questions are processed.
-#[track_caller]
 fn ended_blocked(history: &History) {
     let ended = new_of(history, "turn_completed");
     assert_eq!(ended.len(), 1, "{:?}", history.new_kinds());
@@ -3422,7 +3415,6 @@ impl Provider for ShutsDown {
 }
 
 /// `fiber_exited` under SIGTERM after the resumed process's lines.
-#[track_caller]
 fn exited_on_signal(history: &History) -> Envelope {
     let written =
         r#loop::fiber_exited(&history.log, &history.dir, Ok(()), true, Some(143)).unwrap();
@@ -3596,7 +3588,6 @@ use contract::commands::{Reply, ReplyAnswer};
 
 /// A suspended history whose batch is `names`, in order, as `a_1`, `a_2`,
 /// …, with a standing ask `r_9` pending on `a_<action>`.
-#[track_caller]
 fn suspended_batch(script: Vec<Scripted>, names: &[&str], action: usize) -> History {
     let mut history = History::new(script);
     history.write(user_turn("one"), None);
@@ -3629,7 +3620,6 @@ fn reply_delivery(request_id: &str, decision: Decision) -> (Delivery, Arc<Mutex<
 /// Runs `send` once the log holds the re-raised `permission_requested`:
 /// the signal the finishing turn is waiting for an answer. One
 /// [`support::DEADLINE`].
-#[track_caller]
 fn on_reraise(
     history: &History,
     send: impl FnOnce() + Send + 'static,
@@ -3644,7 +3634,6 @@ fn on_reraise(
 }
 
 /// The new lines of `kind`.
-#[track_caller]
 fn new_of(history: &History, kind: &str) -> Vec<Envelope> {
     history
         .new_lines()
