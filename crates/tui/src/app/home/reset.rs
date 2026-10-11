@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use super::super::App;
 use super::super::reconnect::UNANSWERED;
-use super::{Ask, Subs};
+use super::Ask;
 
 impl App {
     /// Clears the old connection's subscription state and open gate, and
@@ -20,8 +20,7 @@ impl App {
             return;
         };
         home.fed = false;
-        home.subs = Subs::default();
-        home.opening = None;
+        home.subs.reset();
         let mut deletes: Vec<String> = home
             .asks
             .iter()

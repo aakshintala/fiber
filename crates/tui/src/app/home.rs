@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
-use super::{App, Effect, Kind, Link, Phase, mint, session_command};
+use super::{App, Effect, Kind, Link, mint, session_command};
 use crate::focus::{Area, order};
 use crate::home::{
-    HomeScreen, Launch, Left, Level, QuitChoice, Sessions, Spot, State, Subs, cascade_line,
+    HomeScreen, Launch, Left, Level, QuitChoice, Sessions, Spot, State, cascade_line,
     delete_line, dependents, from_status, line, line_with, recent_rows, toggle_line,
 };
 use crate::keys::{Edit, Key};
@@ -22,10 +22,12 @@ use contract::SessionId;
 
 mod chips;
 mod exit;
+mod open;
 mod open_at;
 mod reset;
 mod workspace;
 
+use open::Subscriptions;
 use workspace::Chooser;
 
 /// Home's state: the launch description, and whether a `start` went out in
@@ -48,15 +50,9 @@ pub(super) struct Home {
     /// The latest `recent` command waiting for its answer, and whether it
     /// asked the first page.
     recent_ask: Option<(String, bool)>,
-    /// This connection's subscription level per session: the accepted
-    /// one, and every subscribe waiting for its answer.
-    subs: Subs,
-    /// The session being opened: lines for it fold into its row and are
-    /// dropped until the last subscribe's acknowledgement, which is the
-    /// first line at the new level.
-    opening: Option<Opening>,
-    /// Lowering lines reconciliation queued, sent from `on_line`'s tail.
-    outbox: Vec<String>,
+    /// This connection's subscriptions, the session opening and the
+    /// lowering lines queued.
+    subs: Subscriptions,
     /// `/resume` asks the next frame to focus the list.
     focus_list: bool,
     /// A rejected `start`'s message, above the box until the next `start`
@@ -112,15 +108,6 @@ impl Prompt {
     }
 }
 
-/// A session opening from home and its last subscribe, whose
-/// acknowledgement ends the gate.
-struct Opening {
-    /// The session opening.
-    session: SessionId,
-    /// The last subscribe's id: only its rejection fails the open.
-    ack: String,
-}
-
 impl App {
     /// Stores the launch description as home, keying prompt history by its
     /// project as the run argument did. The app keeps today's screen, so
@@ -138,9 +125,7 @@ impl App {
             fed: false,
             feed_id: None,
             recent_ask: None,
-            subs: Subs::default(),
-            opening: None,
-            outbox: Vec::new(),
+            subs: Subscriptions::default(),
             focus_list: false,
             last_chip: Spot::Workspace,
             blockers: Vec::new(),
@@ -316,7 +301,7 @@ impl App {
             return Vec::new();
         };
         if home.fed {
-            return std::mem::take(&mut home.outbox);
+            return home.subs.take_outbox();
         }
         home.fed = true;
         let feed = mint();
@@ -359,19 +344,8 @@ impl App {
                 "command_accepted" | "command_rejected" => {
                     let id = hub.payload.get("command_id").and_then(Value::as_str)?;
                     let accepted = hub.kind.as_str() == "command_accepted";
-                    if let Some(session) = self.answered(id, accepted) {
-                        if !accepted {
-                            let code = hub
-                                .payload
-                                .get("code")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            self.subscribe_refused(session, code, &refusal(&hub.payload));
-                        }
-                        if !accepted && self.is_ack(id) {
-                            return Some(self.fail_open(refusal(&hub.payload)));
-                        }
-                        return Some(Vec::new());
+                    if let Some(lines) = self.subscribe_answer(id, accepted, &hub.payload) {
+                        return Some(lines);
                     }
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &hub.payload));
@@ -462,12 +436,7 @@ impl App {
                     if was_left {
                         self.reconcile(&session);
                     }
-                    let gated = self
-                        .home
-                        .as_ref()
-                        .and_then(|home| home.opening.as_ref())
-                        .is_some_and(|opening| opening.session == session);
-                    if gated {
+                    if self.gated(&session) {
                         return Some(Vec::new());
                     }
                     return None;
@@ -478,106 +447,22 @@ impl App {
                 ) {
                     let accepted = envelope.kind == "command_accepted";
                     let id = envelope.payload.get("command_id").and_then(Value::as_str)?;
-                    if let Some(session) = self.answered(id, accepted) {
-                        if !accepted {
-                            let code = envelope
-                                .payload
-                                .get("code")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            self.subscribe_refused(
-                                session.clone(),
-                                code,
-                                &refusal(&envelope.payload),
-                            );
-                        }
-                        if !accepted && self.is_ack(id) {
-                            return Some(self.fail_open(refusal(&envelope.payload)));
-                        }
-                        let session = envelope.session_id.clone();
-                        if accepted
-                            && self
-                                .home
-                                .as_ref()
-                                .is_some_and(|home| home.subs.full(&session))
-                        {
-                            self.reconcile(&session);
-                        }
-                        if accepted && self.is_ack(id) {
-                            if let Some(home) = self.home.as_mut() {
-                                home.opening = None;
-                            }
-                            return None;
-                        }
-                        return Some(Vec::new());
+                    if let Some(lines) = self.subscribe_answer(id, accepted, &envelope.payload) {
+                        return if accepted {
+                            self.subscribe_accepted(&envelope.session_id, id)
+                        } else {
+                            Some(lines)
+                        };
                     }
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &envelope.payload));
                     }
                 }
-                let gated = self
-                    .home
-                    .as_ref()
-                    .and_then(|home| home.opening.as_ref())
-                    .is_some_and(|opening| opening.session == envelope.session_id);
-                if gated {
+                if self.gated(&envelope.session_id) {
                     return Some(Vec::new());
                 }
                 None
             }
-        }
-    }
-
-    /// A `subscribe` line for `session` at `level`, recorded as sent:
-    /// the expected level is the last in-flight one, so no path sends a
-    /// subscribe at the level already held or asked for.
-    pub(super) fn subscribe(&mut self, session: &SessionId, level: Level) -> String {
-        let (id, line) = subscribe_line(session, level);
-        if let Some(home) = self.home.as_mut() {
-            home.subs.sent(id, session.clone(), level);
-        }
-        line
-    }
-
-    /// The level this connection holds or asks for `session` at, if any:
-    /// a delegate is subscribed once per attachment (`docs/invocation.md`,
-    /// `subscribe`).
-    pub(super) fn subscribed_level(&self, session: &SessionId) -> Option<Level> {
-        self.home
-            .as_ref()
-            .and_then(|home| home.subs.expected(session))
-    }
-
-    /// Whether a subscribe for `session` waits for its answer.
-    pub(super) fn subscribe_pending(&self, session: &SessionId) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| home.subs.pending(session))
-    }
-
-    /// Leaves the session on screen for home: the conversation cleared
-    /// with the session left running, then lowered to `summary` when this
-    /// connection holds it at `full` and its row is live. `/close` keeps
-    /// `go_home` and lowers nothing: a command for an exited session
-    /// would resume it.
-    pub(super) fn leave(&mut self) -> Effect {
-        let attached = self.session().cloned();
-        self.go_home();
-        let Some(session) = attached else {
-            return Effect::None;
-        };
-        let lowers = self.link == Link::Up
-            && self.home.as_ref().is_some_and(|home| {
-                home.subs.expected(&session) == Some(Level::Full)
-                    && home
-                        .sessions
-                        .row(&session)
-                        .is_some_and(|row| row.left.is_none())
-            });
-        if lowers {
-            Effect::Send(vec![self.subscribe(&session, Level::Summary)])
-        } else {
-            Effect::None
         }
     }
 
@@ -1164,109 +1049,6 @@ impl App {
         }
     }
 
-    /// Opens the row with `key` while home draws.
-    fn open_row(&mut self, key: u64) -> Effect {
-        if !self.on_home() {
-            return Effect::None;
-        }
-        self.open_entry(key)
-    }
-
-    /// Opens the row with `key`: the subscribes its level needs, then the
-    /// session's commands. The conversation clears as going home does,
-    /// and the gate holds until the last subscribe is answered.
-    pub(super) fn open_entry(&mut self, key: u64) -> Effect {
-        if self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
-            return Effect::None;
-        }
-        let Some(row) = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-        else {
-            return Effect::None;
-        };
-        if row.state == crate::home::State::Unreadable {
-            self.notices.push(
-                "Cannot attach: this session's schema is newer than this terminal reads."
-                    .to_owned(),
-            );
-            return Effect::None;
-        }
-        let session = row.id.clone();
-        let expected = self
-            .home
-            .as_ref()
-            .and_then(|home| home.subs.expected(&session));
-        Effect::Send(self.open_session(session, expected))
-    }
-
-    /// Records the acknowledgement of the in-flight subscribe `id`:
-    /// the accepted level changes only on acceptance. Some with its
-    /// session when the id was in flight, either way.
-    fn answered(&mut self, id: &str, accepted: bool) -> Option<SessionId> {
-        self.home
-            .as_mut()
-            .and_then(|home| home.subs.answered(id, accepted))
-    }
-
-    /// Whether `id` is the open's last subscribe: only its rejection
-    /// fails the open, and only its acceptance ends the gate.
-    fn is_ack(&self, id: &str) -> bool {
-        self.home
-            .as_ref()
-            .and_then(|home| home.opening.as_ref())
-            .is_some_and(|opening| opening.ack == id)
-    }
-
-    /// Lowers `session` to `summary` when this connection holds it at
-    /// `full` without showing it: not the attached one, nothing in
-    /// flight, and its row live. Untouched live sessions get no
-    /// subscribe: their rows come from the hub's feed, which the hub
-    /// reads over its own connections, and subscribing each one would
-    /// send a command to every live session.
-    fn reconcile(&mut self, session: &SessionId) {
-        let lowers = self.link == Link::Up
-            && self.session() != Some(session)
-            && self.home.as_ref().is_some_and(|home| {
-                home.subs.full(session)
-                    && !home.subs.pending(session)
-                    && home
-                        .sessions
-                        .row(session)
-                        .is_some_and(|row| row.left.is_none())
-            });
-        if lowers {
-            let line = self.subscribe(session, Level::Summary);
-            if let Some(home) = self.home.as_mut() {
-                home.outbox.push(line);
-            }
-        }
-    }
-
-    /// A rejection of the open's last subscribe fails the open: home again
-    /// when still attached, with the message as the row's note and a
-    /// notice. A rejection of an earlier step changes nothing by itself.
-    fn fail_open(&mut self, message: String) -> Vec<String> {
-        let session = self
-            .home
-            .as_mut()
-            .and_then(|home| home.opening.take())
-            .map(|opening| opening.session);
-        let Some(session) = session else {
-            return Vec::new();
-        };
-        if let Some(home) = self.home.as_mut() {
-            home.sessions.note(&session, message.clone());
-        }
-        let attached = self.session() == Some(&session);
-        self.notices.push(message);
-        if attached {
-            self.go_home();
-        }
-        Vec::new()
-    }
-
     /// The `start` args: the picked workspace on home, else the launch
     /// workspace, and the launch directory as today. The new worktree
     /// switch adds `"worktree": true` only while it shows and is on.
@@ -1311,17 +1093,6 @@ fn recent_line(id: &str, before: Option<&str>, project: Option<&str>) -> String 
     } else {
         json!({"id": id, "command": "recent", "args": Value::Object(args)}).to_string()
     }
-}
-
-/// A `subscribe` line for `session` at `level`, with its id.
-fn subscribe_line(session: &SessionId, level: Level) -> (String, String) {
-    let id = mint();
-    let name = match level {
-        Level::Summary => "summary",
-        Level::Full => "full",
-    };
-    let line = session_command(&id, "subscribe", session, Some(json!({"level": name}))).to_string();
-    (id, line)
 }
 
 /// A refusal's code and message.

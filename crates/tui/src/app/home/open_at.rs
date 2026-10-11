@@ -6,7 +6,7 @@
 use contract::SessionId;
 
 use super::super::App;
-use super::{Opening, subscribe_line};
+use super::open::subscribe_line;
 use crate::OpenAt;
 use crate::home::{Level, opening};
 
@@ -38,7 +38,7 @@ impl App {
         }
         lines.push(self.ask_commands(&session));
         if let Some(home) = self.home.as_mut() {
-            home.opening = Some(Opening { session, ack });
+            home.subs.gate(session, ack);
         }
         lines
     }
