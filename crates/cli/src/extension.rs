@@ -15,6 +15,8 @@ use extensions::{Origin, Provenance, Request};
 
 use crate::{fail, failed};
 
+mod approve;
+
 /// What a command asks on and reports to: whether stdin is a terminal,
 /// stdin, and stderr.
 struct Io<'a> {
@@ -189,7 +191,7 @@ fn remove(home: &Path, typed: &str, clock: &dyn Clock, io: Io<'_>) -> Result<i32
         err,
     } = io;
     let removal = extensions::removal(home, typed, clock).map_err(|e| failed(e.code(), e))?;
-    let approved = doors::remove_approved(&removal.names, &removal.data, terminal, input, err)?;
+    let approved = approve::remove_approved(&removal.names, &removal.data, terminal, input, err)?;
     if !approved {
         writeln!(err, "fiber: nothing was removed.").unwrap_or(());
         return Ok(1);
@@ -253,9 +255,9 @@ fn commit_plan(
     input: &mut dyn BufRead,
     err: &mut dyn Write,
 ) -> Result<Option<Vec<String>>, Failure> {
-    let summaries: Vec<doors::InstallSummary> = plan
+    let summaries: Vec<approve::InstallSummary> = plan
         .items()
-        .map(|item| doors::InstallSummary {
+        .map(|item| approve::InstallSummary {
             name: item.name.clone(),
             source: item.source(),
             version: item.version.clone(),
@@ -283,7 +285,7 @@ fn commit_plan(
             staged: item.staged().to_path_buf(),
         })
         .collect();
-    if !doors::install_approved(&summaries, terminal, input, err)? {
+    if !approve::install_approved(&summaries, terminal, input, err)? {
         return Ok(None);
     }
     plan.commit().map(Some).map_err(|e| failed(e.code(), e))
