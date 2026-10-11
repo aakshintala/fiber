@@ -345,3 +345,36 @@ fn an_always_reviewed_call_offers_no_rule() {
     };
     assert!(rule_offer(&flagged).is_none());
 }
+
+#[test]
+fn a_started_rewrite_leaves_the_reviewers_history_as_it_was() {
+    let action = ActionId("a_9".into());
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&action),
+        Some(Seq(23)),
+    );
+    let before = reviewed.clone();
+    assert_eq!(before.len(), 1);
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallStarted(contract::events::ToolCallStarted {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: Some(vec!["b.txt".into()]),
+            },
+            arguments: Some({
+                let mut map = Map::new();
+                map.insert("city".into(), Value::String("Lyon".into()));
+                map
+            }),
+            changed_by: Some(vec!["fiber.test/guard".into()]),
+        }),
+        Some(&action),
+        Some(Seq(24)),
+    );
+    assert_eq!(reviewed, before);
+}

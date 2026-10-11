@@ -304,8 +304,7 @@ impl Loop {
             if self.review_over_budget() {
                 return Ok(StageReply::Budget);
             }
-            let (conversation, previous) =
-                self.review_conversation(under.id, &under.prepared.effects, stage, note.as_deref());
+            let (conversation, previous) = self.review_conversation(under, stage, note.as_deref());
             match self.send_review(
                 under.turn,
                 endpoint,
@@ -465,17 +464,19 @@ impl Loop {
 
     /// The reviewer's request: the transcript cut after the call, then its
     /// effects, then the stage item. Both stages match up to the stage item.
+    /// A rewritten call is judged as the call that will run: its effects
+    /// item names the rewritten call's declared effects and the arguments
+    /// it runs with. The history never changes after a line renders.
     fn review_conversation(
         &mut self,
-        id: &ActionId,
-        effects: &Effects,
+        under: &UnderReview<'_>,
         stage: &str,
         note: Option<&str>,
     ) -> (Vec<Input>, Option<usize>) {
         let cut = self
             .reviewed
             .iter()
-            .position(|item| matches!(&item.shown, shown::Shown::Call(call) if call == id))
+            .position(|item| matches!(&item.shown, shown::Shown::Call(call) if call == under.id))
             .map_or(self.reviewed.len(), |at| at + 1);
         let previous = self.reviewer_sent;
         self.reviewer_sent = Some(cut);
@@ -485,10 +486,21 @@ impl Loop {
             .take(cut)
             .map(|item| item.input.clone())
             .collect();
-        let declared = serde_json::to_string(&effects.declared).unwrap_or_default();
+        let declared = serde_json::to_string(&under.prepared.effects.declared).unwrap_or_default();
         let workspace = self.workspace_label.clone();
+        let effects = match &under.prepared.rewritten {
+            Some(changed_by) => {
+                let names = changed_by.join(", ");
+                let arguments =
+                    serde_json::to_string(&under.prepared.arguments).unwrap_or_default();
+                format!(
+                    "Declared effects: {declared}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}"
+                )
+            }
+            None => format!("Declared effects: {declared}\nWorkspace root: {workspace}"),
+        };
         conversation.push(Input::User {
-            text: format!("Declared effects: {declared}\nWorkspace root: {workspace}"),
+            text: effects,
             images: Vec::new(),
         });
         conversation.push(Input::User {
@@ -723,7 +735,7 @@ fn resolved(
 /// The rule an allow can remember: the call's subject and its prefix, absent
 /// when no rule can match the call (`docs/permissions.md`, "What a rule
 /// matches").
-fn rule_offer(effects: &Effects) -> Option<RuleOffer> {
+pub(crate) fn rule_offer(effects: &Effects) -> Option<RuleOffer> {
     if effects.always_reviewed {
         return None;
     }
