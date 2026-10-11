@@ -138,22 +138,14 @@ fn default_wire_tools_is_each_definition_as_an_object_in_name_order() {
 }
 
 #[test]
-fn a_user_without_images_serialises_without_the_key_and_reads_back() {
+fn a_user_s_images_are_absent_when_empty_and_read_back_when_full() {
     let plain = Input::User {
         text: "hi".into(),
         images: Vec::new(),
     };
     let value = serde_json::to_value(&plain).unwrap();
     assert_eq!(value, json!({"type": "user", "text": "hi"}));
-    assert!(value.get("images").is_none(), "{value}");
     assert_eq!(serde_json::from_value::<Input>(value).unwrap(), plain);
-    // A line written before the field existed has none.
-    let old = json!({"type": "user", "text": "hi"});
-    assert_eq!(serde_json::from_value::<Input>(old).unwrap(), plain);
-}
-
-#[test]
-fn a_user_with_images_round_trips() {
     let with = Input::User {
         text: "look".into(),
         images: vec![ImageRef {
@@ -169,7 +161,7 @@ fn a_user_with_images_round_trips() {
 }
 
 #[test]
-fn a_tool_result_without_images_serialises_without_the_key_and_reads_back() {
+fn a_tool_result_s_images_are_absent_when_empty_and_read_back_when_full() {
     let plain = Input::ToolResult {
         action_id: ActionId("a_1".into()),
         text: "ok".into(),
@@ -179,14 +171,8 @@ fn a_tool_result_without_images_serialises_without_the_key_and_reads_back() {
     };
     let value = serde_json::to_value(&plain).unwrap();
     assert!(value.get("images").is_none(), "{value}");
+    assert!(value.get("pdfs").is_none(), "{value}");
     assert_eq!(serde_json::from_value::<Input>(value).unwrap(), plain);
-    // A line written before the field existed has none.
-    let old = json!({"type": "tool_result", "action_id": "a_1", "text": "ok"});
-    assert_eq!(serde_json::from_value::<Input>(old).unwrap(), plain);
-}
-
-#[test]
-fn a_tool_result_with_images_round_trips() {
     let with = Input::ToolResult {
         action_id: ActionId("a_1".into()),
         text: "ok".into(),
@@ -216,9 +202,6 @@ fn an_empty_pdfs_is_absent_from_json_and_a_pdf_ref_round_trips() {
     let value = serde_json::to_value(&plain).unwrap();
     assert!(value.get("pdfs").is_none(), "{value}");
     assert_eq!(serde_json::from_value::<Input>(value).unwrap(), plain);
-    // A line written before the field existed has none.
-    let old = json!({"type": "tool_result", "action_id": "a_1", "text": "ok"});
-    assert_eq!(serde_json::from_value::<Input>(old).unwrap(), plain);
     let with = Input::ToolResult {
         action_id: ActionId("a_1".into()),
         text: "PDF: 2 pages.\n".into(),
