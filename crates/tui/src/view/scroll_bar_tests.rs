@@ -312,13 +312,7 @@ fn a_bar_below_the_top_row_draws_its_thumb_on_its_own_rows() {
     let covered = thumb(top, total, bar.height).expect("a thumb while taller");
     for y in 0..10u16 {
         let want = match y.checked_sub(bar.y) {
-            Some(at) if at < bar.height => {
-                if covered.contains(&at) {
-                    THUMB
-                } else {
-                    " "
-                }
-            }
+            Some(at) if at < bar.height && covered.contains(&at) => THUMB,
             _ => " ",
         };
         assert_eq!(buf[(bar.x, y)].symbol(), want, "row {y}");

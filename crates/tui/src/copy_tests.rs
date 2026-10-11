@@ -247,7 +247,13 @@ fn the_copy_cells_are_the_drawn_label_inside_the_padding() {
         .into_iter()
         .find_map(|(_, target)| match target {
             super::super::Target::Copy { .. } => Some(target),
-            _ => None,
+            super::super::Target::Group(_)
+            | super::super::Target::Call(_)
+            | super::super::Target::Thought(_)
+            | super::super::Target::Login
+            | super::super::Target::Note(_)
+            | super::super::Target::Image(_)
+            | super::super::Target::Orphans(_) => None,
         })
         .expect("a copy target");
     let cols = app.copy_cells(copy).expect("copy cells");
@@ -260,6 +266,7 @@ fn the_copy_cells_are_the_drawn_label_inside_the_padding() {
         .find(|line| line.contains("click to copy"))
         .expect("the drawn label");
     let start = row.find("click to copy").expect("the label's start");
-    assert_eq!(cols, start as u16..start as u16 + 13);
+    let start = u16::try_from(start).expect("a column");
+    assert_eq!(cols, start..start.saturating_add(13));
     assert_eq!(cols, 45..58);
 }

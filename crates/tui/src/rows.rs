@@ -133,26 +133,32 @@ impl Rows {
     pub(crate) fn pad(&mut self, from: usize, pad: u16, inner: u16) {
         let mut at = from;
         while at < self.rows.len() {
-            let ((line, target), text) = (self.rows[at].clone(), self.texts[at].clone());
+            let (Some((line, target)), Some(text)) = (
+                self.rows.get(at).cloned(),
+                self.texts.get(at).cloned(),
+            ) else {
+                break;
+            };
             let cells = cells_of(&line);
-            let total: usize = cells.iter().map(|cell| cell.width).sum();
+            let off = offsets(&cells);
+            let total = off.last().copied().unwrap_or(0);
             let room = usize::from(inner);
             let plans = plan(&cells, room);
             if total <= room || room == 0 {
-                prefix_row(&mut self.rows[at].0, &mut self.texts[at], pad);
+                if let (Some(row), Some(row_text)) =
+                    (self.rows.get_mut(at), self.texts.get_mut(at))
+                {
+                    prefix_row(&mut row.0, row_text, pad);
+                }
                 at += 1;
                 continue;
             }
-            debug_assert!(plans.len() >= 1);
+            debug_assert!(!plans.is_empty());
             let mut pieces = Vec::with_capacity(plans.len());
             for (index, planned) in plans.iter().enumerate() {
                 let (start, end) = (planned.start, planned.end);
-                let start_cell: usize = cells[..start].iter().map(|cell| cell.width).sum();
-                let end_cell: usize = start_cell
-                    + cells[start..end]
-                        .iter()
-                        .map(|cell| cell.width)
-                        .sum::<usize>();
+                let start_cell = off.get(start).copied().unwrap_or(total);
+                let end_cell = off.get(end).copied().unwrap_or(total);
                 let piece = build_piece(&line, &cells, planned, inner);
                 let mut piece_text = RowText {
                     join: if index == 0 { text.join } else { planned.join },
@@ -184,7 +190,7 @@ impl Rows {
                             spin.saturating_sub(u16::try_from(start_cell).unwrap_or(u16::MAX))
                         }),
                 };
-                let target = (index == 0).then(|| target.clone()).flatten();
+                let target = (index == 0).then_some(target).flatten();
                 let mut row = (piece, target);
                 prefix_row(&mut row.0, &mut piece_text, pad);
                 pieces.push((row, piece_text));
@@ -271,6 +277,18 @@ struct Planned {
     join: Join,
 }
 
+/// `cells`' starting cell offsets, with the total width last: cell `i`
+/// covers original cells `off[i]` on.
+fn offsets(cells: &[Cell]) -> Vec<usize> {
+    let mut off = Vec::with_capacity(cells.len().saturating_add(1));
+    let mut at: usize = 0;
+    off.push(at);
+    for cell in cells {
+        at = at.saturating_add(cell.width);
+        off.push(at);
+    }
+    off
+}
 /// `line` flattened to its glyphs with their widths and styles.
 fn cells_of(line: &Line<'_>) -> Vec<Cell> {
     let mut cells = Vec::new();
@@ -302,9 +320,12 @@ fn plan(cells: &[Cell], inner: usize) -> Vec<Planned> {
     while at < cells.len() {
         let mut end = at;
         let mut used = 0;
-        while end < cells.len() && used + cells[end].width <= inner {
-            used += cells[end].width;
-            end += 1;
+        while let Some(cell) = cells.get(end) {
+            if used + cell.width > inner {
+                break;
+            }
+            used = used.saturating_add(cell.width);
+            end = end.saturating_add(1);
         }
         if end == at {
             // One glyph wider than the room: it takes a piece of its
@@ -326,7 +347,9 @@ fn plan(cells: &[Cell], inner: usize) -> Vec<Planned> {
             });
             break;
         }
-        let space = cells[at..end]
+        let space = cells
+            .get(at..end)
+            .unwrap_or_default()
             .iter()
             .rposition(|cell| cell.ch == ' ')
             .map(|found| found + at);
@@ -361,7 +384,10 @@ fn build_piece(line: &Line<'_>, cells: &[Cell], planned: &Planned, inner: u16) -
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut current = (Style::default(), String::new());
     let mut started = false;
-    for cell in &cells[planned.start..planned.end] {
+    for cell in cells
+        .get(planned.start..planned.end)
+        .unwrap_or_default()
+    {
         let (text, style) = if cell.width > usize::from(inner) {
             (" ".to_owned(), cell.style)
         } else {
