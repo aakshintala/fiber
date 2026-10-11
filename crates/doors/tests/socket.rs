@@ -26,9 +26,9 @@ use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{
     CacheLifetime, CommandInfo, CommandResult, Empty, Event, ExtensionsLoaded, FiberExited,
-    InputItem, LoadedExtension, Notice, PreambleBuilt, PreambleReason, QueuedMessage, SentTool,
-    SessionState, SessionStatus, SkillInfo, SkillSource, SteeringQueue, ToolInfo, ToolSource,
-    ToolState, TurnStarted, UsageRecorded,
+    InputItem, LoadedExtension, NamedBy, Notice, PreambleBuilt, PreambleReason, QueuedMessage,
+    SentTool, SessionNamed, SessionState, SessionStatus, SkillInfo, SkillSource, SteeringQueue,
+    ToolInfo, ToolSource, ToolState, TurnStarted, UsageRecorded,
 };
 use contract::inbox::{Delivery, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, Opening, Stop};
@@ -162,6 +162,10 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("drop {}", id.0)
         }
+        Delivery::Message(message) => format!(
+            "message {} {}",
+            message.from_session_id.0, message.command_id.0
+        ),
         Delivery::Reply(reply, ack) => {
             ack.0(Ok(None));
             format!("reply {}", reply.request_id.0)
@@ -294,7 +298,6 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             );
 
             for name in [
-                "message",
                 "reload",
                 "name",
             ] {
@@ -1020,6 +1023,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
+                | Delivery::Message(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
@@ -1054,6 +1058,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
+                | Delivery::Message(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
@@ -1140,6 +1145,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
+                | Delivery::Message(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the credential arrives as a credential"),
             }
@@ -1199,6 +1205,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ExtensionExec(_)
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
+                | Delivery::Message(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -1236,6 +1243,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::ExtensionExec(_)
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
+                | Delivery::Message(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -3579,6 +3587,359 @@ fn close_now_with_a_non_boolean_is_invalid_and_starts_nothing() {
             assert_eq!(command_id(&answer), Some("c_close_now"));
             assert!(inbox.try_recv().is_err(), "no Close reached the loop");
             assert!(hook_rx.try_recv().is_err(), "no shutdown started");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+const SENDER: &str = "s_0123456789abcdef";
+const MESSAGE_CLOSED: &str = "The session is closing and takes no session message.";
+
+fn message_line(id: &str, from: &str, text: &str) -> String {
+    format!(
+        r#"{{"id":"{id}","command":"message","args":{{"from_session_id":"{from}","text":"{text}"}}}}"#
+    )
+}
+
+/// A sender log under the session's home holding `session_named` `name`,
+/// when `name` is one.
+fn named_sender(opened: &Opened, sender: &str, name: Option<&str>) {
+    let timed = Arc::clone(&opened.clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Log::create(&opened.sessions, SessionId(sender.into()), timed).unwrap();
+    if let Some(name) = name {
+        log.append(
+            &Event::SessionNamed(SessionNamed {
+                name: Some(name.into()),
+                by: NamedBy::Model,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn message_is_answered_without_waiting_for_the_loop_and_carries_the_senders_name() {
+    let opened = Opened::open(vec![]);
+    named_sender(&opened, SENDER, Some("builder"));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                &message_line("c_m1", SENDER, "Tests pass on main."),
+            );
+            // Answered before the test takes the inbox: the door answers,
+            // never the loop.
+            let accepted = response(&client, "c_m1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_m1"));
+            let Delivery::Message(message) = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the message is delivered")
+            else {
+                panic!("the message is delivered as a message");
+            };
+            assert_eq!(message.from_session_id.0, SENDER);
+            assert_eq!(message.command_id.0, "c_m1");
+            assert_eq!(message.text, "Tests pass on main.");
+            assert_eq!(message.name.as_deref(), Some("builder"));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn message_from_an_unknown_or_odd_sender_is_delivered_with_no_name() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                &message_line("c_m1", "s_ffffffffffffffff", "Hello."),
+            );
+            send(&client, &message_line("c_m2", "../x", "Hello."));
+            assert_eq!(kind(&response(&client, "c_m1")), "command_accepted");
+            assert_eq!(kind(&response(&client, "c_m2")), "command_accepted");
+            for id in ["c_m1", "c_m2"] {
+                let Delivery::Message(message) = Deadline::after(DEADLINE)
+                    .recv(&inbox)
+                    .expect("the message is delivered")
+                else {
+                    panic!("the message is delivered as a message");
+                };
+                assert_eq!(message.command_id.0, id);
+                assert_eq!(message.name, None);
+            }
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn message_to_itself_reads_its_own_name() {
+    let opened = Opened::open(vec![]);
+    opened
+        .log
+        .append(
+            &Event::SessionNamed(SessionNamed {
+                name: Some("selfish".into()),
+                by: NamedBy::Person,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let socket = opened.socket.clone();
+    let own = opened.id.0.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &message_line("c_m1", &own, "Note to self."));
+            assert_eq!(kind(&response(&client, "c_m1")), "command_accepted");
+            let Delivery::Message(message) = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the message is delivered")
+            else {
+                panic!("the message is delivered as a message");
+            };
+            assert_eq!(message.from_session_id.0, own);
+            assert_eq!(message.name.as_deref(), Some("selfish"));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn message_after_close_is_rejected_closing_and_reaches_no_inbox() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_close","command":"close"}"#);
+            // The close answers once the inbox takes it.
+            let Delivery::Close(ack) = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the close is delivered")
+            else {
+                panic!("the close is delivered as a close");
+            };
+            ack.0(Ok(None));
+            assert_eq!(kind(&response(&client, "c_close")), "command_accepted");
+            send(&client, &message_line("c_m2", SENDER, "Too late."));
+            let rejected = response(&client, "c_m2");
+            assert_eq!(rejection(&rejected), ("closing", MESSAGE_CLOSED));
+            assert_eq!(command_id(&rejected), Some("c_m2"));
+            send(&client, r#"{"id":"c_tools","command":"tools"}"#);
+            assert_eq!(kind(&response(&client, "c_tools")), "command_accepted");
+            assert!(
+                inbox.try_recv().is_err(),
+                "the refused message reached no inbox"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn message_after_close_now_is_rejected_closing() {
+    let opened = Opened::open(vec![]);
+    let shutdowns = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&shutdowns);
+    opened.session.close_now(Arc::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+    }));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_close","command":"close","args":{"now":true}}"#,
+            );
+            assert_eq!(kind(&response(&client, "c_close")), "command_accepted");
+            send(&client, &message_line("c_m1", SENDER, "Too late."));
+            let rejected = response(&client, "c_m1");
+            assert_eq!(rejection(&rejected), ("closing", MESSAGE_CLOSED));
+            assert!(
+                inbox.try_recv().is_err(),
+                "a `close` with `now` delivers nothing"
+            );
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(shutdowns.load(Ordering::SeqCst), 1);
+    opened.close();
+}
+
+#[test]
+fn message_after_the_stopper_is_rejected_closing() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let stopper = opened.session.stopper();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            stopper();
+            send(&client, &message_line("c_m1", SENDER, "Too late."));
+            let rejected = response(&client, "c_m1");
+            assert_eq!(rejection(&rejected), ("closing", MESSAGE_CLOSED));
+            assert!(
+                matches!(inbox.try_recv(), Ok(Delivery::Cancelled)),
+                "only the stopper's wake reached the inbox"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn message_after_quiesce_is_rejected_closing() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let session = &opened.session;
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            session.quiesce();
+            send(&client, &message_line("c_m1", SENDER, "Too late."));
+            let rejected = response(&client, "c_m1");
+            assert_eq!(rejection(&rejected), ("closing", MESSAGE_CLOSED));
+            assert!(
+                inbox.try_recv().is_err(),
+                "the refused message reached no inbox"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn message_after_the_loop_closed_admission_is_rejected_closing() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    let admission = opened.session.admission();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            // As the loop's idle exit does: look a last time, find nothing,
+            // and close admission.
+            admission.close_unless(|| None::<()>);
+            send(&client, &message_line("c_m1", SENDER, "Too late."));
+            let rejected = response(&client, "c_m1");
+            assert_eq!(rejection(&rejected), ("closing", MESSAGE_CLOSED));
+            assert!(
+                inbox.try_recv().is_err(),
+                "the refused message reached no inbox"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn message_to_an_ask_session_is_rejected_closing() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .ask("hi".into(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &message_line("c_m1", SENDER, "Too late."));
+            let rejected = response(&client, "c_m1");
+            assert_eq!(rejection(&rejected), ("closing", MESSAGE_CLOSED));
+            // `ask` queued its prompt and its close before any client.
+            let Delivery::Prompt(_, _) = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the prompt is delivered")
+            else {
+                panic!("the prompt is delivered as a prompt");
+            };
+            let Delivery::Close(_) = Deadline::after(DEADLINE)
+                .recv(&inbox)
+                .expect("the close is delivered")
+            else {
+                panic!("the close is delivered as a close");
+            };
+            assert!(inbox.try_recv().is_err(), "nothing follows close");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn message_once_the_inbox_is_gone_is_rejected_ended() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            drop(inbox);
+            send(&client, &message_line("c_m1", SENDER, "Nobody home."));
+            let rejected = response(&client, "c_m1");
+            assert_eq!(rejection(&rejected), ("closing", ENDED));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn message_before_subscribe_is_not_subscribed_and_without_text_is_invalid_arguments() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            send(&client, &message_line("c_m1", SENDER, "First."));
+            let rejected = response(&client, "c_m1");
+            assert_eq!(rejection(&rejected), ("not_subscribed", NOT_SUBSCRIBED));
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_bad","command":"message","args":{"from_session_id":"s_x"}}"#,
+            );
+            let bad = response(&client, "c_bad");
+            assert_eq!(rejection(&bad), ("invalid_arguments", UNFIT));
+            assert!(
+                inbox.try_recv().is_err(),
+                "neither refused message reached the inbox"
+            );
             Ok(())
         })
         .unwrap();

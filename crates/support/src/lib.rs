@@ -1,9 +1,12 @@
 //! Small shared mechanisms with no domain knowledge: the clock traits, the
 //! process clock and the clock-parked wait, the process-group guard, the
-//! poison-ignoring `lock` and the stoppable read (`docs/architecture.md`,
+//! poison-ignoring `lock`, the admission lock and the stoppable read (`docs/architecture.md`,
 //! "The modules").
 
 use std::sync::{Mutex, MutexGuard};
+
+/// The admission lock: a door that admits until it is closed, once and for good.
+pub mod admission;
 
 /// The clock seam, the process clock and the clock-parked wait
 /// (`docs/testing.md`, "Values that change every run").

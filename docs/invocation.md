@@ -522,8 +522,10 @@ started with, and they are ignored.
 
 **A session exits when it has been idle for `session.idle_exit_ms`**, 30 minutes
 by default (`docs/configuration.md`), whoever is connected. Idle means no turn
-running, no jobs running and no cache warming (`docs/prompt-cache.md`,
-"Warming while idle"). Waiting on an approval or a question is idle,
+running, no jobs running and no cache warming and no session message waiting
+to join a turn (`docs/prompt-cache.md`,
+"Warming while idle"). Waiting on an approval or a question is idle
+unless a session message is waiting to join the turn,
 because nothing is in flight. A question `ask_user` raised counts as idle
 only once every other call of its step has its result; until then the
 session waits for the answer. Connected clients do not keep a session alive: a
@@ -594,6 +596,11 @@ request.
 
 **A pending approval, question or repository offer does not keep a session
 alive past the idle delay** (an offer: `docs/events.md`, "Repository code").
+A session message waiting to join the turn does keep it alive: the session is
+not idle while one waits. An approval or question wait then ends only on its
+answer, a cancel or `close`; a repository offer's wait, which comes before
+the turn starts and so cannot be cancelled, ends only on its answer or
+`close`. Each of these runs the message.
 When the delay passes with any of them pending, the session exits, and
 `fiber_exited` names the request it stopped on, the approval or question when
 an offer is pending too. Resuming the session raises

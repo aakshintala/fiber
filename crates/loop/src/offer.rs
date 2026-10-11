@@ -205,6 +205,8 @@ impl Loop {
         let Some(first) = required.first() else {
             return Ok(());
         };
+        // A held session message dies with the failed run
+        // (`docs/tools.md`, "Messaging other sessions").
         let names: Vec<String> = required
             .iter()
             .map(|item| format!("the {} `{}`", kind_words(item.kind), item.name))
@@ -264,6 +266,7 @@ impl Loop {
                 held @ (Delivery::Prompt(..)
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
+                | Delivery::Message(_)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
                 | Delivery::Credential(..)

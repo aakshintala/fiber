@@ -45,6 +45,21 @@ impl fmt::Debug for Ack {
     }
 }
 
+/// A session message (`docs/tools.md`, "Messaging other sessions"),
+/// answered by the door once it is in the inbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionMessage {
+    /// The sending session's id.
+    pub from_session_id: crate::SessionId,
+    /// The `message` command that sent it.
+    pub command_id: crate::CommandId,
+    /// The message text, as sent.
+    pub text: String,
+    /// The latest `session_named` name in the sender's log; `None` when it
+    /// has none, cleared it, or its log could not be read.
+    pub name: Option<String>,
+}
+
 /// What the loop's inbox carries (`docs/invocation.md`, "Driver commands").
 #[allow(
     clippy::large_enum_variant,
@@ -61,6 +76,10 @@ pub enum Delivery {
     /// Removes the steering message sent by the `steer` command `CommandId`
     /// names, when that message is still unapplied.
     SteerDrop(crate::CommandId, Ack),
+    /// A session message from another session (`docs/tools.md`, "Messaging
+    /// other sessions"). Answered by the door once it is in the inbox;
+    /// the loop never answers it.
+    Message(SessionMessage),
     /// Switches model or thinking at the next turn boundary.
     Model(crate::commands::ModelArgs, Ack),
     /// Switches the credential label at the next turn boundary.

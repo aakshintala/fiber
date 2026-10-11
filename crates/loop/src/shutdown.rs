@@ -117,7 +117,7 @@ impl Loop {
             Delivery::SteerDrop(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_STEER),
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => accept(ack),
-            Delivery::JobLine(_) | Delivery::Cancelled => {}
+            Delivery::JobLine(_) | Delivery::Message(_) | Delivery::Cancelled => {}
         }
         Ok(())
     }

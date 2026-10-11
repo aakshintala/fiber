@@ -18,6 +18,7 @@ mod close;
 mod drive;
 pub mod hub;
 mod isolation;
+mod message;
 mod pasted;
 mod prompt_history;
 mod reply;

@@ -183,6 +183,11 @@ impl Loop {
             self.ending.ran = true;
             return None;
         }
+        // A session message waiting to join a turn keeps the session from
+        // being idle (`docs/invocation.md`, "Lifecycle").
+        if self.holds_message() {
+            return None;
+        }
         if std::mem::take(&mut self.ending.ran) {
             self.ending.quiet = self.idle_deadline();
         }

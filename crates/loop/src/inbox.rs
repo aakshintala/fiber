@@ -16,6 +16,7 @@ use crate::jobs::Queued;
 use crate::{Error, Loop};
 
 mod asked;
+pub(crate) mod session_message;
 
 /// A turn is running.
 const BUSY: &str = "A turn is running; send `steer` to add to it.";
@@ -154,7 +155,7 @@ impl Loop {
             // the three is set.
             let deadline = idle.or(due).or(warm);
             if idle.is_some_and(|until| clock.now() >= until) {
-                match self.inbox.try_recv() {
+                match self.last_idle_check() {
                     Ok(delivery) => return InboxRecv::Delivery(delivery),
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => return InboxRecv::Closed,
                     Err(std::sync::mpsc::TryRecvError::Empty) => return InboxRecv::Idle,
@@ -274,12 +275,23 @@ impl Loop {
             }
             if !input.pieces.is_empty() {
                 // The repository's offer resolves before the first request;
-                // what arrived while it waited joins this turn.
-                if !self.offer(None)? {
+                // what arrived while it waited joins this turn. A session
+                // message in the input keeps the session from being idle
+                // while the offer resolves (`docs/invocation.md`, "Lifecycle").
+                self.message_waiting = session_message::has_session_message(&input.pieces);
+                let offered = self.offer(None)?;
+                self.message_waiting = false;
+                if !offered {
                     return Ok(None);
                 }
                 for delivery in std::mem::take(&mut self.deferred) {
                     self.admit_idle(delivery, &mut input)?;
+                }
+                // A turn starting after `close` on a session message's back
+                // takes no person steer, as one `ending` starts does
+                // (`docs/tools.md`, "Messaging other sessions").
+                if self.closing && session_message::has_session_message(&input.pieces) {
+                    self.ending.after_close = true;
                 }
                 return Ok(Some(input));
             }
@@ -301,17 +313,26 @@ impl Loop {
     /// sender is gone. Without jobs, `None` at once. Steers still queued
     /// are not run, and no prompt or steer starts a turn.
     fn ending(&mut self) -> Result<Option<TurnInput>, Error> {
-        if !self.has_jobs() {
-            return Ok(None);
-        }
-        self.queued
-            .retain(|piece| !matches!(piece, Queued::Steer(_)));
+        // A session message still queued runs its turn after `close`; a
+        // person's steer never does (`docs/tools.md`, "Messaging other sessions").
+        self.queued.retain(|piece| {
+            !matches!(piece, Queued::Steer(message) if !session_message::is_session(message))
+        });
         let mut input = TurnInput::of(self.queued.drain(..).collect());
         for delivery in std::mem::take(&mut self.deferred) {
             self.admit_idle(delivery, &mut input)?;
         }
         // Every turn from here on starts after `close`.
         self.ending.after_close = true;
+        if session_message::has_session_message(&input.pieces) {
+            // The queue moved into `turn_started`: stop listing it, as
+            // `wait_for_turn` does for kept steers.
+            self.emit_queue(None)?;
+            return Ok(Some(input));
+        }
+        if !self.has_jobs() {
+            return Ok(None);
+        }
         loop {
             if !input.pieces.is_empty() {
                 return Ok(Some(input));
@@ -436,6 +457,7 @@ impl Loop {
             other @ (Delivery::Prompt(..)
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
+            | Delivery::Message(_)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
             | Delivery::Credential(..)
@@ -504,6 +526,8 @@ impl Loop {
                     reject(ack, ErrorCode::StaleRequest, STALE_STEER);
                 }
             }
+            // A session message joins the turn's input, after `close` too.
+            Delivery::Message(message) => self.admit_message_idle(message, input),
             // Like a steer, a handoff starts a turn while idle: one
             // `handoff` item per command, run at the turn's first step
             // boundary.
@@ -629,6 +653,9 @@ impl Loop {
                     reject(ack, ErrorCode::StaleRequest, STALE_STEER);
                 }
             }
+            // A session message queues for the next step boundary, in an
+            // after-`close` turn too.
+            Delivery::Message(message) => self.admit_message_running(message, turn)?,
             // Held until the next step boundary; not listed on
             // `steering_queue`, which holds steering messages only.
             Delivery::Handoff(id, args, ack) => {
@@ -721,7 +748,7 @@ fn has_message(input: &TurnInput) -> bool {
 /// steer, wherever it sits, so it is skipped.
 fn drop_piece(input: &mut TurnInput, id: &CommandId) -> bool {
     let found = input.pieces.iter().enumerate().position(|(index, piece)| {
-        matches!(piece, Queued::Steer(message) if message.sender.command_id.as_ref() == Some(id))
+        matches!(piece, Queued::Steer(message) if message.sender.command_id.as_ref() == Some(id) && !session_message::is_session(message))
             && !input.prompt_at.contains(&index)
     });
     let Some(index) = found else {
@@ -749,7 +776,7 @@ fn drop_queued(queued: &mut std::collections::VecDeque<Queued>, id: &CommandId) 
     queued
         .iter()
         .position(
-            |piece| matches!(piece, Queued::Steer(message) if message.sender.command_id.as_ref() == Some(id)),
+            |piece| matches!(piece, Queued::Steer(message) if message.sender.command_id.as_ref() == Some(id) && !session_message::is_session(message)),
         )
         .map(|index| queued.remove(index))
         .is_some()

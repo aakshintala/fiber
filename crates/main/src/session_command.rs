@@ -362,6 +362,7 @@ pub(crate) fn run_new(
         return Ok(code);
     }
     let inbox_wake = session.inbox_wake();
+    let admission = session.admission();
     // The fetch runs a prompt row through its server, starting a lazy
     // one as a first tool call does (`docs/mcp.md`, "Prompts and
     // resources"). No logic lives here beyond that call.
@@ -458,6 +459,7 @@ pub(crate) fn run_new(
                             fetch,
                         })
                         .inbox_wake(inbox_wake)
+                        .admission(admission)
                 }),
                 budget,
                 idle,

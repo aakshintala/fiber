@@ -12,6 +12,8 @@ use crate::client::{Conn, accept, inbox_ack};
 /// and nothing reaches the inbox, which keeps a pending approval pending
 /// and starts no ending-notice turn. Without either, an ordinary close.
 pub(crate) fn run(conn: &mut Conn, id: CommandId, now: bool) {
+    // No session message enters after this, whichever close this is.
+    conn.gate.mark_closed();
     if now {
         // Cloned out of the gate's lock, and called with no gate lock held.
         if let Some(start) = conn.gate.close_now() {

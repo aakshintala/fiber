@@ -250,6 +250,15 @@ pub struct Loop {
     chosen: Option<contract::ThinkingLevel>,
     /// Puts a wake in the inbox; `None` leaves tool interactions unanswerable.
     inbox_wake: Option<Arc<dyn contract::clock::Wake>>,
+    /// The admission the door and the loop share: once it closes, no session
+    /// message enters the inbox (`docs/tools.md`, "Messaging other sessions").
+    admission: Option<Arc<support::admission::Admission>>,
+    /// The turn's collected input holds a session message while the offer
+    /// step resolves, so the session is not idle meanwhile.
+    message_waiting: bool,
+    /// The loop thread's hook around the last idle check, in tests only.
+    #[cfg(test)]
+    window: Option<Box<dyn FnMut(crate::inbox::session_message::Window) + Send>>,
 }
 
 /// The one built preamble: what every request sends and what
@@ -512,6 +521,10 @@ impl Loop {
             pending: Vec::new(),
             chosen,
             inbox_wake: None,
+            admission: None,
+            message_waiting: false,
+            #[cfg(test)]
+            window: None,
         })
     }
 

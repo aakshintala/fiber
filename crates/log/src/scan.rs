@@ -115,41 +115,87 @@ pub fn last_ts(dir: &Path) -> Option<u64> {
 /// How far back one backward step reads.
 const STEP: u64 = 64 * 1024;
 
-/// The last complete line in `file` of `len` bytes, without its trailing
-/// newline: read backwards in [`STEP`] steps, the offset strictly
-/// decreasing on every step, stopping at 0.
-pub(crate) fn last_complete_line(mut file: File, len: u64) -> Option<Vec<u8>> {
-    let mut line_end = None;
-    let mut bounds = None;
-    let step_size = usize::try_from(STEP).ok()?;
+/// The first `Some` that `found` gives for the complete lines of
+/// `dir/events.jsonl`, read from the end backwards; bytes after the last
+/// newline are torn and skipped.
+pub fn last_line_where<T>(dir: &Path, found: impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
+    let path = dir.join(EVENTS);
+    let file = File::open(&path).ok()?;
+    let len = file.metadata().ok()?.len();
+    if len == 0 {
+        return None;
+    }
+    let mut found = found;
+    walk_back(file, len, &mut found)
+}
 
-    'scan: for last in (0..len).rev().step_by(step_size) {
-        let end = last + 1;
+/// Feeds the complete lines of `file`'s `len` bytes to `found` from the end
+/// backwards, stopping at its first `Some`. Read backwards in [`STEP`]
+/// steps, the offset strictly decreasing on every step, stopping at 0. A
+/// line spanning a step boundary is handed over whole; bytes after the
+/// last newline are torn and skipped, so a file with one line and no
+/// newline gives `None`.
+fn walk_back<T>(mut file: File, len: u64, found: &mut impl FnMut(&[u8]) -> Option<T>) -> Option<T> {
+    // Bytes after the last newline seen so far, with no newline in them:
+    // the torn tail, then each earlier window's partial head fused to it.
+    let mut carry: Vec<u8> = Vec::new();
+    let mut end = len;
+    while end != 0 {
         let start = end.saturating_sub(STEP);
         file.seek(SeekFrom::Start(start)).ok()?;
         let size = usize::try_from(end - start).ok()?;
         let mut chunk = vec![0_u8; size];
         file.read_exact(&mut chunk).ok()?;
-
-        for (index, byte) in chunk.iter().enumerate().rev() {
-            if *byte != b'\n' {
-                continue;
+        chunk.extend_from_slice(&std::mem::take(&mut carry));
+        let marks: Vec<usize> = chunk
+            .iter()
+            .enumerate()
+            .filter(|(_, byte)| **byte == b'\n')
+            .map(|(index, _)| index)
+            .collect();
+        if marks.is_empty() {
+            // No newline: the whole chunk continues an earlier line.
+            carry = chunk;
+        } else {
+            let (Some(first), Some(last)) = (marks.first(), marks.last()) else {
+                return None;
+            };
+            // Every segment between two newlines is complete; the head
+            // continues before `start`, the tail after the last newline.
+            for pair in marks.windows(2).rev() {
+                let &[from, to] = pair else {
+                    return None;
+                };
+                let line = chunk.get(from.checked_add(1)?..to)?;
+                if let Some(line) = found(line) {
+                    return Some(line);
+                }
             }
-            let newline = start + u64::try_from(index).ok()?;
-            if let Some(end) = line_end {
-                bounds = Some((newline + 1, end));
-                break 'scan;
+            if start == 0 {
+                // The head is the file's first line: complete.
+                return found(chunk.get(..*first)?);
             }
-            line_end = Some(newline);
+            // The head's line ends at the first newline: kept with its
+            // terminator, fused to the tail, which holds no newline, so
+            // the line completes once its start is read.
+            let (Some(end), Some(tail)) = (first.checked_add(1), chunk.get(last.checked_add(1)?..))
+            else {
+                return None;
+            };
+            let head = chunk.get(..end)?;
+            carry = head.to_vec();
+            carry.extend_from_slice(tail);
         }
+        end = start;
     }
+    None
+}
 
-    let (start, end) = bounds.or_else(|| line_end.map(|end| (0, end)))?;
-    let size = usize::try_from(end - start).ok()?;
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut line = vec![0_u8; size];
-    file.read_exact(&mut line).ok()?;
-    Some(line)
+/// The last complete line in `file` of `len` bytes, without its trailing
+/// newline: read backwards in [`STEP`] steps, the offset strictly
+/// decreasing on every step, stopping at 0.
+pub(crate) fn last_complete_line(file: File, len: u64) -> Option<Vec<u8>> {
+    walk_back(file, len, &mut |line: &[u8]| Some(line.to_owned()))
 }
 
 /// The logical bytes under `dir`: the sum of `symlink_metadata().len()`

@@ -25,6 +25,7 @@ use log::{Injector, Log, Watcher};
 
 mod accept;
 mod accepted;
+pub(crate) mod admit;
 mod clients;
 mod conns;
 mod event;
@@ -99,6 +100,13 @@ pub(crate) struct Gate {
     /// The project's `history.jsonl`, set by [`Session::serve`] alone, so
     /// `fiber ask` and a bare [`Session::run`] append no prompt.
     pub(crate) history: OnceLock<Option<PathBuf>>,
+    /// Fiber home: what the sender-name lookup reads (`docs/tools.md`,
+    /// "Messaging other sessions").
+    pub(crate) home: PathBuf,
+    /// The admission the door shares with the loop: once it closes, no
+    /// session message enters the inbox (`docs/tools.md`, "Messaging
+    /// other sessions").
+    pub(crate) admission: Arc<support::admission::Admission>,
     /// Driver shells running now, and whether shutdown has begun, which
     /// cancels a new one as it registers.
     pub(crate) shells: Shells,
@@ -159,6 +167,15 @@ impl Session {
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
         let (inbox, waiting) = mpsc::channel();
+        // A `Close` in `first` closes admission before anything is sent, so
+        // every later `message` is refused `closing`: `fiber ask` queues
+        // `Prompt` then `Close` (`docs/tools.md`, "Messaging other sessions").
+        if first
+            .iter()
+            .any(|delivery| matches!(delivery, Delivery::Close(_)))
+        {
+            self.gate.mark_closed();
+        }
         for delivery in first {
             // The receiver is still here, so the send cannot fail.
             match inbox.send(delivery) {
@@ -346,6 +363,8 @@ impl Session {
     pub fn stopper(&self) -> Arc<dyn Fn() + Send + Sync> {
         let gate = Arc::clone(&self.gate);
         Arc::new(move || {
+            // No session message enters once a shutdown starts.
+            gate.mark_closed();
             gate.cancel_shells();
             gate.deliver(Delivery::Cancelled);
         })
@@ -360,11 +379,20 @@ impl Session {
         Arc::new(InboxWake(Arc::downgrade(&self.gate)))
     }
 
+    /// The admission the door shares with the loop: the loop's idle exit
+    /// closes it, and the door refuses `message` once it is closed
+    /// (`docs/tools.md`, "Messaging other sessions").
+    pub fn admission(&self) -> Arc<support::admission::Admission> {
+        Arc::clone(&self.gate.admission)
+    }
+
     /// Makes `fiber_exited` the last line this process writes: no later
     /// `clients` line is emitted, no new driver shell runs, and every
     /// running one is cancelled and waited for. Called just before
     /// `fiber_exited`. Idempotent; [`Session::close`] behaves as before.
     pub fn quiesce(&self) {
+        // No session message enters once the session quiets.
+        self.gate.mark_closed();
         // An emission holds this lock, so one in flight finishes first.
         self.gate.clients.seal();
         if let Some(door) = self.gate.door() {
@@ -588,6 +616,8 @@ fn open_in(
         images: OnceLock::new(),
         pasting: Arc::new(crate::shell::ShellCancel::new()),
         history: OnceLock::new(),
+        home: home.to_owned(),
+        admission: Arc::new(support::admission::Admission::default()),
         shells: Shells::new(),
         #[cfg(test)]
         probe: Mutex::new(None),

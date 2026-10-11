@@ -13,6 +13,7 @@ mod export;
 #[cfg(test)]
 mod fixtures;
 mod history;
+mod name;
 mod offsets;
 mod rate;
 mod read;
@@ -31,11 +32,13 @@ use contract::{ErrorCode, SessionId};
 pub use dependents::dependents;
 pub use export::export;
 pub use history::{Segment, history, history_to, last_line};
+pub use name::session_name;
 pub use rate::{Rate, RateFold};
 pub use read::{Injector, Lines, Watcher, lines, read};
 pub use resolve::{most_recent, resolve};
 pub use scan::{
-    Hold, SessionLock, Started, last_ts, remaining, session_bytes, started_sessions, try_hold,
+    Hold, SessionLock, Started, last_line_where, last_ts, remaining, session_bytes,
+    started_sessions, try_hold,
 };
 pub use search::{Identity, SessionScan};
 pub use usage::usage;
