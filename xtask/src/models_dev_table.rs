@@ -241,6 +241,29 @@ const OPENAI: Package = Package {
     ],
 };
 
+/// Codex's models: the four subscription models models.dev lists under
+/// `openai`, all on `openai-responses` with the session cache-key header.
+const CODEX: Package = Package {
+    path: "providers/codex/providers/codex.json",
+    source: "openai",
+    provider: r#"{"headers":{"originator":"fiber"},"login":"browser","name":"codex","reviewer_model":"gpt-6-luna"}"#,
+    protocol: ProtocolRule::Fixed("openai-responses"),
+    base_url: "https://chatgpt.com/backend-api/codex",
+    drop_deprecated: false,
+    skip: &[],
+    only: &["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+    protocol_overrides: &[],
+    every_model: r#"{"compat":{"cache_key_header":"session_id","store":false},"subscription":true}"#,
+    by_protocol: &[],
+    by_model: &[],
+    thinking: &[
+        ("gpt-6.1-sol", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("low")),
+        ("gpt-6-sol", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("medium")),
+        ("gpt-6-astra", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("low")),
+        ("gpt-6-luna", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("medium")),
+    ],
+};
+
 /// Meta's models, all on `openai-responses` with its search tool.
 const MUSE: Package = Package {
     path: "providers/muse/providers/muse.json",
@@ -337,6 +360,6 @@ const OPENCODE_ZEN: Package = Package {
     thinking: &[],
 };
 
-/// The six first-party provider files generated from models.dev.
-pub(crate) const PACKAGES: [Package; 6] =
-    [ANTHROPIC, GEMINI, OPENAI, MUSE, OPENCODE_GO, OPENCODE_ZEN];
+/// The seven first-party provider files generated from models.dev.
+pub(crate) const PACKAGES: [Package; 7] =
+    [ANTHROPIC, GEMINI, OPENAI, CODEX, MUSE, OPENCODE_GO, OPENCODE_ZEN];
