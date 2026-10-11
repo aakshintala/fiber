@@ -164,8 +164,10 @@ fn a_prepared_rerun_child_that_leaves_its_group_occupied_fails_and_the_group_is_
         .downcast_ref::<String>()
         .expect("the panic carries a formatted message");
     assert!(
-        message.contains("left processes in its group") && message.contains(TEST),
-        "the panic names the leftover group and the test: {message}"
+        message.contains("left processes in its group")
+            && message.contains(TEST)
+            && message.contains("group empty: true"),
+        "the panic names the leftover group and the test, and reports the group already empty: {message}"
     );
     let pid: u32 = std::fs::read_to_string(&pid_file)
         .unwrap()
