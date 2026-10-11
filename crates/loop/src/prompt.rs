@@ -2,8 +2,9 @@
 //! `section` splitter every prompt file goes through, `fill` for its
 //! placeholders, and the system prompt assembly.
 
+use std::fmt::Display;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Re-reads `skills.disabled` at each turn start, with the check for
 /// added and removed skills (`docs/configuration.md`, "When Fiber
@@ -163,13 +164,64 @@ pub(crate) fn fill(template: &str, values: &[(&str, &str)]) -> String {
 
 /// The body of a `messages.md` section: its `## name` line dropped and
 /// blank lines at either end removed, ready to `fill`.
-pub(crate) fn body(md: &str, name: &str) -> String {
+fn body(md: &str, name: &str) -> String {
     section(md, name)
         .lines()
         .skip(1)
         .skip_while(|l| l.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Every `messages.md` section's body, parsed once: each distinct `##
+/// name` line in file order holds what [`body`] returns for it today,
+/// so the first of duplicates wins and a missing name reads `""`.
+pub(crate) fn message(name: &str) -> &'static str {
+    static MESSAGES: OnceLock<Vec<(&'static str, String)>> = OnceLock::new();
+    let table = MESSAGES.get_or_init(|| {
+        let mut names: Vec<&'static str> = Vec::new();
+        for line in MESSAGES_MD.lines() {
+            if let Some(at) = line.strip_prefix("## ")
+                && !names.contains(&at)
+            {
+                names.push(at);
+            }
+        }
+        names
+            .into_iter()
+            .map(|at| (at, body(MESSAGES_MD, at)))
+            .collect()
+    });
+    table
+        .iter()
+        .find(|(at, _)| *at == name)
+        .map(|(_, text)| text.as_str())
+        .unwrap_or("")
+}
+
+/// The `"Largest"` text of a size notice, when `total` bytes pass 10% of
+/// the `window`-token context window at four bytes a token: the three
+/// largest `sources` by bytes, ties in input order, as `"{name}
+/// ({bytes} bytes)"` joined with `", "`. Exactly 10% is not over. A
+/// total too big to multiply is over, as it must be.
+pub(crate) fn oversize<N: Display>(
+    total: u128,
+    window: u64,
+    sources: Vec<(N, u128)>,
+) -> Option<String> {
+    if total.saturating_mul(10) <= u128::from(window) * 4 {
+        return None;
+    }
+    let mut ranked = sources;
+    ranked.sort_by_key(|source| std::cmp::Reverse(source.1));
+    Some(
+        ranked
+            .into_iter()
+            .take(3)
+            .map(|(name, bytes)| format!("{name} ({bytes} bytes)"))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
 }
 
 fn present(text: &str) -> Option<String> {
@@ -197,8 +249,8 @@ pub(crate) fn system_prompt(
         None => SYSTEM_MD.trim_end().to_owned(),
     };
     // Part 2: the tools' guidelines in tool-name order.
-    let tool_template = body(MESSAGES_MD, "tool");
-    let tools_template = body(MESSAGES_MD, "tools");
+    let tool_template = message("tool").to_owned();
+    let tools_template = message("tools").to_owned();
     let mut ordered: Vec<&(String, Option<String>, bool)> = tools.iter().collect();
     ordered.sort_by(|a, b| a.0.cmp(&b.0));
     let mut filled_tools = Vec::new();
@@ -223,10 +275,10 @@ pub(crate) fn system_prompt(
         ))
     };
     // Part 3: the session section.
-    let session_template = body(MESSAGES_MD, "session");
+    let session_template = message("session").to_owned();
     let mut third = fill(&session_template, &[("model", model)]);
     if unattended {
-        let line = body(MESSAGES_MD, "unattended");
+        let line = message("unattended").to_owned();
         if !line.is_empty() {
             third.push_str("\n\n");
             third.push_str(&line);
@@ -237,7 +289,7 @@ pub(crate) fn system_prompt(
         third.push_str(&addendum);
     }
     // Part 4: each extension's text in extension-name order.
-    let extension_template = body(MESSAGES_MD, "extension");
+    let extension_template = message("extension").to_owned();
     let mut ordered_ext: Vec<&(String, String)> = inputs.extensions.iter().collect();
     ordered_ext.sort_by(|a, b| a.0.cmp(&b.0));
     let mut filled_ext = Vec::new();
@@ -346,29 +398,19 @@ pub(crate) fn build(
 pub(crate) fn definitions_notice(
     event: &contract::events::PreambleBuilt,
 ) -> Option<contract::events::Notice> {
-    let window = u128::from(event.context_window);
+    let window = event.context_window;
     let mut sources: std::collections::BTreeMap<&str, u128> = std::collections::BTreeMap::new();
     for tool in event.tools.iter().filter(|tool| !tool.deferred) {
         let bytes = serde_json::to_string(&tool.definition).map_or(0, |text| text.len() as u128);
         *sources.entry(tool.registered_by.as_str()).or_default() += bytes;
     }
     let total: u128 = sources.values().sum();
-    if total * 10 <= window * 4 {
-        return None;
-    }
-    let mut ranked: Vec<(&str, u128)> = sources.into_iter().collect();
-    ranked.sort_by_key(|source| std::cmp::Reverse(source.1));
-    let largest: Vec<String> = ranked
-        .into_iter()
-        .take(3)
-        .map(|(name, bytes)| format!("{name} ({bytes} bytes)"))
-        .collect();
+    let largest = oversize(total, window, sources.into_iter().collect())?;
     Some(contract::events::Notice {
         code: contract::ErrorCode::ToolDefinitionsLarge,
         message: format!(
-            "Tool definitions declared in full are about {} tokens, over 10% of the {window}-token context window. Largest: {}. Leave tools out with `tools.disabled` in an MCP server's or extension's configuration, or defer one with `tools.\"<name>\".deferred`.",
+            "Tool definitions declared in full are about {} tokens, over 10% of the {window}-token context window. Largest: {largest}. Leave tools out with `tools.disabled` in an MCP server's or extension's configuration, or defer one with `tools.\"<name>\".deferred`.",
             total / 4,
-            largest.join(", ")
         ),
         extension: None,
     })

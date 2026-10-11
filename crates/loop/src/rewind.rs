@@ -14,8 +14,7 @@ use contract::{ActionId, Seq};
 use log::Log;
 use serde_json::Value;
 
-use crate::conversation::MESSAGES_MD;
-use crate::prompt::{body, fill};
+use crate::prompt::{fill, message};
 use crate::{Error, Loop, Model, Permissions, Preamble, PromptInputs, variables};
 
 pub(crate) mod command;
@@ -211,7 +210,7 @@ pub fn rewind_note(dir: &Path, point: Seq) -> Result<String, Error> {
 /// The note text over `paths` written and `calls` run after the point.
 fn note(paths: &[String], calls: &[String]) -> String {
     let changes = match (paths.is_empty(), calls.is_empty()) {
-        (true, true) => body(MESSAGES_MD, "rewind-unchanged"),
+        (true, true) => message("rewind-unchanged").to_owned(),
         _ => {
             let mut parts = Vec::new();
             if !paths.is_empty() {
@@ -220,21 +219,15 @@ fn note(paths: &[String], calls: &[String]) -> String {
                     .map(|path| format!("- {path}"))
                     .collect::<Vec<_>>()
                     .join("\n");
-                parts.push(fill(
-                    &body(MESSAGES_MD, "rewind-written"),
-                    &[("paths", &listed)],
-                ));
+                parts.push(fill(message("rewind-written"), &[("paths", &listed)]));
             }
             if !calls.is_empty() {
-                parts.push(fill(
-                    &body(MESSAGES_MD, "rewind-ran"),
-                    &[("calls", &calls.join("\n"))],
-                ));
+                parts.push(fill(message("rewind-ran"), &[("calls", &calls.join("\n"))]));
             }
             parts.join("\n\n")
         }
     };
-    fill(&body(MESSAGES_MD, "rewind-note"), &[("changes", &changes)])
+    fill(message("rewind-note"), &[("changes", &changes)])
 }
 
 #[cfg(test)]

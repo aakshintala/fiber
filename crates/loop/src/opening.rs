@@ -14,7 +14,6 @@ use crate::prompt::{PromptInputs, fill};
 use crate::skills;
 
 const OPENING_MD: &str = include_str!("../prompt/opening.md");
-const MESSAGES_MD: &str = include_str!("../prompt/messages.md");
 
 /// A `CLAUDE.md` holding only this is never read: it points at `AGENTS.md`
 /// (`docs/system-prompt.md`, "Instruction files"; the measured case is a
@@ -119,7 +118,7 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
         },
     };
     let files = if message.instruction_files.is_empty() {
-        crate::prompt::body(MESSAGES_MD, "no-instruction-files")
+        crate::prompt::message("no-instruction-files").to_owned()
     } else {
         message
             .instruction_files
@@ -130,7 +129,7 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
                     .map(|parent| parent.display().to_string())
                     .unwrap_or_default();
                 fill(
-                    &crate::prompt::body(MESSAGES_MD, "instruction-file"),
+                    crate::prompt::message("instruction-file"),
                     &[
                         ("path", file.path.as_str()),
                         ("dir", dir.as_str()),
@@ -193,7 +192,7 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
 /// two never drift.
 pub(crate) fn budget_line(size: u64, budget: u64) -> String {
     fill(
-        &crate::prompt::body(MESSAGES_MD, "budget-line"),
+        crate::prompt::message("budget-line"),
         &[("size", &size.to_string()), ("budget", &budget.to_string())],
     )
 }
@@ -207,7 +206,7 @@ fn render_section(section: &ExtensionSectionSent) -> String {
         .iter()
         .map(|file| {
             fill(
-                &crate::prompt::body(MESSAGES_MD, "extension-file"),
+                crate::prompt::message("extension-file"),
                 &[
                     ("path", file.path.as_str()),
                     ("content", file.content.as_str()),
@@ -217,7 +216,7 @@ fn render_section(section: &ExtensionSectionSent) -> String {
         .collect::<Vec<_>>()
         .join("\n\n");
     let mut text = fill(
-        &crate::prompt::body(MESSAGES_MD, "extension-section"),
+        crate::prompt::message("extension-section"),
         &[
             ("extension", section.extension.as_str()),
             ("files", files.as_str()),
@@ -449,21 +448,12 @@ fn size_notice(inputs: &PromptInputs, message: &OpeningMessage) -> Option<Notice
         }
     }
     let total: u128 = sources.iter().map(|(_, bytes)| bytes).sum();
-    if total * 10 <= u128::from(window) * 4 {
-        return None;
-    }
-    sources.sort_by_key(|source| std::cmp::Reverse(source.1));
-    let largest: Vec<String> = sources
-        .into_iter()
-        .take(3)
-        .map(|(name, bytes)| format!("{name} ({bytes} bytes)"))
-        .collect();
+    let largest = crate::prompt::oversize(total, window, sources)?;
     Some(Notice {
         code: ErrorCode::InstructionsLarge,
         message: format!(
-            "Instruction text is about {} tokens, over 10% of the {window}-token context window. Largest: {}.",
+            "Instruction text is about {} tokens, over 10% of the {window}-token context window. Largest: {largest}.",
             total / 4,
-            largest.join(", ")
         ),
         extension: None,
     })

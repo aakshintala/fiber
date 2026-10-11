@@ -20,7 +20,7 @@ use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{CommandId, ErrorCode, JobId, TurnId};
 
-use crate::prompt::{body, fill};
+use crate::prompt::{fill, message};
 use crate::{Error, Loop};
 
 /// What an orphaned job's `job_completed` says.
@@ -396,13 +396,10 @@ impl Orphans {
 pub(crate) fn pending_text(job_ids: &[JobId], reason: PendingReason) -> String {
     let ids: Vec<&str> = job_ids.iter().map(|id| id.0.as_str()).collect();
     fill(
-        body(
-            crate::conversation::MESSAGES_MD,
-            match reason {
-                PendingReason::Ending => "jobs-pending",
-                PendingReason::Unattended => "jobs-check",
-            },
-        )
+        message(match reason {
+            PendingReason::Ending => "jobs-pending",
+            PendingReason::Unattended => "jobs-check",
+        })
         .trim_end(),
         &[("job_ids", ids.join(", ").as_str())],
     )
@@ -413,7 +410,7 @@ pub(crate) fn pending_text(job_ids: &[JobId], reason: PendingReason) -> String {
 /// so a resume renders the same bytes.
 pub(crate) fn line_text(line: &JobLine) -> String {
     let mut text = fill(
-        body(crate::conversation::MESSAGES_MD, "job-line").trim_end(),
+        message("job-line").trim_end(),
         &[
             ("job_id", line.job_id.0.as_str()),
             ("lines", line.lines.as_str()),
@@ -422,7 +419,7 @@ pub(crate) fn line_text(line: &JobLine) -> String {
     if let Some(suppressed) = line.suppressed {
         text.push('\n');
         text.push_str(&fill(
-            body(crate::conversation::MESSAGES_MD, "job-line-suppressed").trim_end(),
+            message("job-line-suppressed").trim_end(),
             &[("suppressed", suppressed.to_string().as_str())],
         ));
     }
@@ -434,7 +431,7 @@ pub(crate) fn line_text(line: &JobLine) -> String {
 /// Read from the line alone, so a resume renders the same bytes.
 pub(crate) fn delegate_text(finished: &DelegateFinished) -> String {
     let mut text = fill(
-        body(crate::conversation::MESSAGES_MD, "delegate-finished").trim_end(),
+        message("delegate-finished").trim_end(),
         &[
             ("job_id", finished.job_id.0.as_str()),
             ("text", finished.text.as_str()),
@@ -452,7 +449,7 @@ pub(crate) fn delegate_text(finished: &DelegateFinished) -> String {
             .join("\n");
         text.push('\n');
         text.push_str(&fill(
-            body(crate::conversation::MESSAGES_MD, "delegate-questions").trim_end(),
+            message("delegate-questions").trim_end(),
             &[("questions", rendered.as_str())],
         ));
     }
@@ -469,7 +466,7 @@ pub(crate) fn notice_text(completed: &JobCompleted) -> String {
         Outcome::Cancelled => "cancelled",
     };
     let mut text = fill(
-        body(crate::conversation::MESSAGES_MD, "job-completed").trim_end(),
+        message("job-completed").trim_end(),
         &[("job_id", completed.job_id.0.as_str()), ("status", status)],
     );
     let process = completed.process.as_ref();
