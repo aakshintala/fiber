@@ -93,13 +93,14 @@ fn the_posting_show_sends_open_and_code_with_the_ticket() {
     let shown = seam.login_show(0).expect("one login started");
     shown.open("https://auth.example/authorize?state=1");
     shown.show("https://auth.example/device", "ABCD-1234");
-    let (ticket, step) = next(&rx, &Deadline::after(WAIT));
+    let wait = Deadline::after(WAIT);
+    let (ticket, step) = next(&rx, &wait);
     assert_eq!(ticket, LoginTicket(7));
     assert!(
         matches!(step, LoginStep::Open(ref url) if url == "https://auth.example/authorize?state=1"),
         "{step:?}"
     );
-    let (ticket, step) = next(&rx, &Deadline::after(WAIT));
+    let (ticket, step) = next(&rx, &wait);
     assert_eq!(ticket, LoginTicket(7));
     assert!(
         matches!(step, LoginStep::Code { ref url, ref code }
