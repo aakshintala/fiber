@@ -87,6 +87,12 @@ const CASES: &[Case<Look>] = &[
             kind: Kind::Settings,
         },
     },
+    Case {
+        name: "skills",
+        help: "skills with sources, visibility and switches",
+        check: "one row per skill with its source, visibility, shadowed skill and switches, and the text and file hints.",
+        build: || Look { kind: Kind::Skills },
+    },
 ];
 
 /// `--view-case`, for `--help` and `check/views.md`.
@@ -108,6 +114,7 @@ enum Kind {
     Tools,
     Rules,
     Settings,
+    Skills,
 }
 
 struct Look {
@@ -458,6 +465,37 @@ fn settings_rows() -> Vec<super::Row> {
     ]
 }
 
+/// `/skills`: one row per skill with its name, one-line description, where
+/// it comes from, whether the model can see it, any skill it shadows, and
+/// its off/on switches for this project and everywhere.
+fn skills_rows() -> Vec<super::Row> {
+    vec![
+        row(vec![
+            sp(
+                "review · checks a diff · repo · seen · this project ",
+                Style::new(),
+            ),
+            switch(true),
+            sp(" · everywhere ", Style::new()),
+            switch(true),
+        ]),
+        row(vec![
+            sp(
+                "notes · personal notes · personal · hidden · shadows review · this project ",
+                Style::new(),
+            ),
+            switch(false),
+            sp(" · everywhere ", Style::new()),
+            switch(true),
+        ]),
+        super::Row::default(),
+        row(vec![sp(
+            "Enter shows the text · Ctrl+G opens its file",
+            dim(),
+        )]),
+    ]
+}
+
 fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
     match c.kind {
         Kind::Delegate => {
@@ -515,6 +553,12 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             let mut out = vec![view_header("Settings", "/settings")];
             out.push(super::Row::default());
             out.extend(settings_rows());
+            out
+        }
+        Kind::Skills => {
+            let mut out = vec![view_header("Skills", "/skills")];
+            out.push(super::Row::default());
+            out.extend(skills_rows());
             out
         }
         Kind::JobPty => {
@@ -717,7 +761,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 9);
+        assert_eq!(CASES.len(), 10);
         assert!(parse("nope").is_none());
     }
 
@@ -1076,6 +1120,33 @@ mod tests {
             assert!(t.contains("budget.usd · 20 · project"), "no budget row");
             assert!(t.contains("needs a reload"), "no reload note");
             assert!(t.contains("Ctrl+G opens the file"), "no file hint");
+        }
+    }
+
+    #[test]
+    fn skills_header_row() {
+        for cols in [160, NARROW] {
+            let c = parse_case("skills");
+            let buf = buffer(&c, cols, 48);
+            assert_header(&buf, "skills", "Skills", "/skills", cols);
+        }
+    }
+
+    #[test]
+    fn skills_shows_sources_visibility_and_switches() {
+        for cols in [160, NARROW] {
+            let c = parse_case("skills");
+            let t = text(&c, cols, 48);
+            assert!(
+                t.contains("review · checks a diff · repo · seen"),
+                "no repo row"
+            );
+            assert!(t.contains("notes · personal notes"), "no personal name");
+            assert!(t.contains("personal · hidden"), "no personal row");
+            assert!(t.contains("shadows review"), "no shadowed skill");
+            assert!(t.contains("[off]"), "no off switch");
+            assert!(t.contains("Enter shows the text"), "no text hint");
+            assert!(t.contains("Ctrl+G opens its file"), "no file hint");
         }
     }
 

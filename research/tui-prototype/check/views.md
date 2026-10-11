@@ -11,3 +11,4 @@ One run per case: `--view-case CASE`.
 - tools: tools by source with state and size, two on/off switches per MCP or extension tool, built-ins without a switch, and the reload cost.
 - rules: global rules then this project's, each with its prefix, when and from which session it was added, and its red ✕.
 - settings: the keys with their effective values and the layer each comes from, the reload cost, and the file hint.
+- skills: one row per skill with its source, visibility, shadowed skill and switches, and the text and file hints.
