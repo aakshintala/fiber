@@ -909,6 +909,63 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
     lines.extend(until(setup.deadline, &client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     }));
+    // The complete, ordered kinds, setting aside `clients` and
+    // `session_status`, which the contract writes on their own trigger
+    // (`docs/testing.md`, "Event streams").
+    let settled: Vec<&Value> = lines
+        .iter()
+        .filter(|line| !matches!(line["kind"].as_str(), Some("clients" | "session_status")))
+        .collect();
+    let kinds: Vec<&str> = settled
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "command_accepted",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "steering_queue",
+            "steering_applied",
+            "steering_queue",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "the complete ordered kinds: {lines:?}"
+    );
+    let accepts: Vec<&&Value> = settled
+        .iter()
+        .filter(|line| line["kind"] == "command_accepted")
+        .collect();
+    assert_eq!(accepts.len(), 2, "{lines:?}");
+    assert_eq!(accepts[0]["payload"]["command_id"], "c_prompt");
+    assert_eq!(accepts[1]["payload"]["command_id"], "c_msg");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1,
+        "one attach writes one clients line: {lines:?}"
+    );
     let from = lines
         .iter()
         .position(|line| line["kind"] == "turn_started")
@@ -942,11 +999,19 @@ fn a_message_to_its_own_socket_mid_turn_is_applied_as_steering() {
         &client,
         r#"{"id":"c_close","command":"close"}"#,
     );
-    until(setup.deadline, &client, "fiber_exited", |line| {
+    lines.extend(until(setup.deadline, &client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
-    });
+    }));
     drop(client);
     finish(running);
+    // The durable lines equal the log.
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let file = fs::read_to_string(sessions.join(id).join("events.jsonl")).unwrap();
+    let logged: Vec<Value> = file
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(durable(&lines), logged);
 }
 
 #[test]
@@ -1014,6 +1079,64 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
     lines.extend(until(setup.deadline, &client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     }));
+    // The complete, ordered kinds, setting aside `clients` and
+    // `session_status`, which the contract writes on their own trigger
+    // (`docs/testing.md`, "Event streams").
+    let settled: Vec<&Value> = lines
+        .iter()
+        .filter(|line| !matches!(line["kind"].as_str(), Some("clients" | "session_status")))
+        .collect();
+    let kinds: Vec<&str> = settled
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "command_accepted",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "steering_queue",
+            "steering_applied",
+            "steering_queue",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "the complete ordered kinds: {lines:?}"
+    );
+    let accepts: Vec<&&Value> = settled
+        .iter()
+        .filter(|line| line["kind"] == "command_accepted")
+        .collect();
+    assert_eq!(accepts.len(), 2, "{lines:?}");
+    assert_eq!(accepts[0]["payload"]["command_id"], "c_prompt");
+    assert_eq!(accepts[1]["payload"]["command_id"], "c_msg");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1,
+        "one attach writes one clients line: {lines:?}"
+    );
     let resolved = lines
         .iter()
         .find(|line| line["kind"] == "permission_resolved")
@@ -1066,9 +1189,17 @@ fn a_session_message_never_reaches_the_reviewer_as_the_persons_words() {
         &client,
         r#"{"id":"c_close","command":"close"}"#,
     );
-    until(setup.deadline, &client, "fiber_exited", |line| {
+    lines.extend(until(setup.deadline, &client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
-    });
+    }));
     drop(client);
     finish(running);
+    // The durable lines equal the log.
+    let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
+    let file = fs::read_to_string(sessions.join(id).join("events.jsonl")).unwrap();
+    let logged: Vec<Value> = file
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(durable(&lines), logged);
 }

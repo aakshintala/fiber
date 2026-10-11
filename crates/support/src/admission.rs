@@ -15,9 +15,7 @@ impl Admission {
         if *closed {
             return None;
         }
-        let out = send();
-        drop(closed);
-        Some(out)
+        Some(send())
     }
 
     /// Closes. Idempotent.

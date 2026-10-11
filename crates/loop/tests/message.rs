@@ -258,7 +258,7 @@ fn a_steer_drop_naming_a_queued_session_message_mid_turn_is_stale_and_the_messag
         vec![Scripted::text("Hi."), Scripted::text("Steered.")],
         vec![
             session_message(COMMAND, Some("builder"), TEXT),
-            Delivery::SteerDrop(CommandId("c_drop".into()), drop_ack),
+            Delivery::SteerDrop(CommandId(COMMAND.into()), drop_ack),
         ],
     );
     session.inbox.send(support::delivery("go")).unwrap();
