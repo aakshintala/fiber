@@ -13,6 +13,9 @@ name: Attach profile
 
 on:
   workflow_dispatch:
+  # TEMPORARY trial trigger (#1546); removed before merge.
+  push:
+    branches: [ci-attach-profile]
 
 permissions:
   contents: read
