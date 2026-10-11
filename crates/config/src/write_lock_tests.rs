@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
+use super::atomic::{Stage, before_rename, fail_at, waiting};
 use super::*;
 use fakes::Deadline;
 

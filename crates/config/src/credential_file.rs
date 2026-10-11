@@ -11,7 +11,8 @@ use serde_json::Value;
 
 use crate::error::ConfigError;
 use crate::home::{one_file_name, plain, read};
-use crate::write::{open_lock, write_atomic};
+use crate::write::atomic::open_lock;
+use crate::write::write_atomic;
 
 /// The lock file's mode: it holds nothing, but it is created beside a secret.
 const LOCK_MODE: u32 = 0o600;
