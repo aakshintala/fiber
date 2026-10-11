@@ -213,6 +213,11 @@ fn a_session_runs_with_the_login_shell_capture() {
     until(&client, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
+    // Until the session process is gone it still holds its connections
+    // and answers a command `closing`, so the prompt waits for it.
+    fakes::try_matching_exits(&workspace, setup.deadline.left()).unwrap_or_else(|err| {
+        panic!("waited until the deadline for the session process to exit: {err}")
+    });
     client.send(&format!(
         "{{\"id\":\"c_two\",\"session_id\":\"{session}\",\"command\":\"prompt\",\"args\":{{\"content\":[{{\"type\":\"text\",\"text\":\"two\"}}]}}}}"
     ));
