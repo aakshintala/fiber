@@ -66,9 +66,10 @@ pub struct SessionStarted {
     /// For a rewind, what rides after the history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewind: Option<Rewind>,
-    /// When the session runs in a worktree Fiber created for it: its path
-    /// and branch. The path is also `workspace` (`docs/invocation.md`,
-    /// "Isolation").
+    /// When the session runs in a worktree Fiber created for it: its path,
+    /// branch, and repository (the git common directory, absolute). The path
+    /// is also `workspace` (`docs/invocation.md`, "Isolation"). A session
+    /// that continues a rewind records the same worktree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<Worktree>,
 }
