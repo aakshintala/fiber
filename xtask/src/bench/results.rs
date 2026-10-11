@@ -28,6 +28,8 @@ pub(super) struct Results {
     pub(super) metric_runs: BTreeMap<String, usize>,
     /// The runner's CPU model; files the backstop wrote before it carry none.
     pub(super) cpu: Option<String>,
+    /// The stripped binary's size in bytes; files written before it carry none.
+    pub(super) binary_size_bytes: Option<u64>,
     pub(super) metrics: Map<String, Value>,
     pub(super) failures: Vec<String>,
 }
@@ -76,6 +78,13 @@ pub(super) fn parse_results(text: &str) -> Result<Results, String> {
         Some(Value::String(model)) => Some(model.clone()),
         Some(_) => return Err("cpu is not a string".to_owned()),
     };
+    let binary_size_bytes = match value.get("binary_size_bytes") {
+        None => None,
+        Some(size) => Some(
+            size.as_u64()
+                .ok_or("binary_size_bytes is not a whole number of bytes")?,
+        ),
+    };
     let idle_secs = value
         .get("idle_secs")
         .and_then(Value::as_u64)
@@ -102,6 +111,7 @@ pub(super) fn parse_results(text: &str) -> Result<Results, String> {
         timing_runs,
         metric_runs,
         cpu,
+        binary_size_bytes,
         metrics,
         failures,
     })

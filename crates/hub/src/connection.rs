@@ -525,6 +525,12 @@ fn on_command(
     match line.command.as_str() {
         "start" => on_start(&line.id, &line.args, hub, writer, relays),
         "status" => on_status(&line.id, &line.args, hub, writer),
+        "refresh" => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::environment::refresh(hub, &line.args),
+        ),
         "prompt_history" => match crate::prompt_history::answer(&hub.home, &line.args) {
             Ok(result) => accept_result(writer, hub, &line.id, result),
             Err((code, message)) => reject(writer, hub, Some(&line.id), &code, message),
@@ -702,6 +708,7 @@ fn on_status(
         running: true,
         fiber_version: hub.fiber_version.clone(),
         clients: hub.clients(),
+        variables: hub.environments.get().variables(),
     };
     accept_result(
         writer,

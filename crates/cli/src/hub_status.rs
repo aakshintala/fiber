@@ -24,6 +24,14 @@ use crate::{fail, failed};
 /// The `id` of the one command `fiber hub status` sends.
 const STATUS_ID: &str = "c_status";
 
+/// How long `fiber hub status` waits for the answer: the connect deadline
+/// plus the login-shell capture's 10-second limit, since a hub in its
+/// first seconds answers `status` only after its first capture
+/// (`docs/invocation.md`, "A session's environment"). `cli` declares it
+/// because `cli` may not depend on `hub`.
+pub(crate) const STATUS_WITHIN: Duration =
+    Duration::from_secs(doors::hub::CONNECT_DEADLINE.as_secs() + 10);
+
 /// What `fiber hub status` reports. `--json` prints it as is, its fields in
 /// this order.
 #[derive(Debug, PartialEq, Serialize)]
@@ -44,7 +52,7 @@ pub fn hub_status(json: bool, clock: &dyn Clock) -> i32 {
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
             let installed = installed(manager(), &home, &|key| std::env::var_os(key))?;
-            let status = probe(&home, clock, doors::hub::CONNECT_DEADLINE, installed)?;
+            let status = probe(&home, clock, STATUS_WITHIN, installed)?;
             let text = if json {
                 render_json(&status)?
             } else {

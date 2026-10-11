@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 
 use crate::events::{CallStatus, Notice};
 use crate::shapes::{ContentPart, DeclaredEffects, Process};
+use crate::tool::SpillFile;
 
 /// What an `after_tool` hook is given (`docs/extensions.md`, "The hook
 /// points"): a call that ran and has returned, before its output is cut,
@@ -27,6 +28,10 @@ pub struct AfterToolCall<'a> {
     pub details: Option<&'a Value>,
     /// How the call's process ended, when it ran one.
     pub process: Option<&'a Process>,
+    /// The call's artifact file, when the tool already wrote it
+    /// (`docs/tools.md`, "Result and output"): the hook rewrites it
+    /// through `host.fs` or returns artifact text that replaces it.
+    pub spilled: Option<&'a SpillFile>,
 }
 
 /// What the chain of `after_tool` hooks decided.

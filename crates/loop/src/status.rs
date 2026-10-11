@@ -16,7 +16,7 @@ use contract::events::{
     ContextFill, Event, Git, InputItem, Interaction, SessionState, SessionStatus, Waiting,
     WaitingKind,
 };
-use contract::shapes::{ContentPart, Tokens, Usage};
+use contract::shapes::{ContentPart, Origin, Tokens, Usage};
 use contract::{ActionId, Envelope, JobId, SessionId};
 use log::{Injector, Log, Watcher};
 
@@ -50,6 +50,8 @@ pub(crate) struct Fold {
     name: Option<String>,
     /// The first prompt, once the first `turn_started` was seen.
     first_prompt: Option<String>,
+    /// Whether a turn has started: only the first turn locks the name.
+    turn_seen: bool,
     workspace: String,
     project: String,
     parent: Option<SessionId>,
@@ -99,6 +101,7 @@ impl Fold {
         let mut fold = Self {
             name: None,
             first_prompt: None,
+            turn_seen: false,
             project,
             workspace,
             parent: None,
@@ -201,8 +204,21 @@ impl Fold {
             Event::ModelChanged(changed) => self.model.clone_from(&changed.after.model),
             Event::TurnStarted(started) => {
                 if self.first_prompt.is_none() {
-                    self.first_prompt = Some(prompt_of(&started.input));
+                    if let Some(prompt) = prompt_of(&started.input) {
+                        self.first_prompt = Some(prompt);
+                    } else if !self.turn_seen
+                        && !started
+                            .input
+                            .iter()
+                            .any(|item| matches!(item, InputItem::Message { .. }))
+                    {
+                        // A first turn with no message at all leaves no
+                        // name to fall back on; a turn of others'
+                        // messages waits for a driver prompt.
+                        self.first_prompt = Some(String::new());
+                    }
                 }
+                self.turn_seen = true;
                 self.turn_running = true;
                 self.retrying = false;
                 self.refresh_running();
@@ -455,24 +471,28 @@ impl Fold {
     }
 }
 
-/// The text of a turn's first message item, its text parts in order; empty
-/// when the turn started with no message.
-fn prompt_of(input: &[InputItem]) -> String {
+/// The text of a turn's first driver message, its text parts in order;
+/// `None` when the turn started with no driver message.
+fn prompt_of(input: &[InputItem]) -> Option<String> {
     let content = input.iter().find_map(|item| match item {
-        InputItem::Message { content, .. } => Some(content),
-        InputItem::ShellCommand { .. }
+        InputItem::Message {
+            content, sender, ..
+        } if sender.origin == Origin::Driver => Some(content),
+        InputItem::Message { .. }
+        | InputItem::ShellCommand { .. }
         | InputItem::Jobs { .. }
         | InputItem::Handoff { .. }
         | InputItem::Unknown => None,
     });
-    content
-        .into_iter()
-        .flatten()
-        .filter_map(|part| match part {
-            ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
-        })
-        .collect()
+    content.map(|content| {
+        content
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::Text { text } => Some(text.as_str()),
+                ContentPart::Image { .. } | ContentPart::Pdf(_) | ContentPart::Unknown => None,
+            })
+            .collect()
+    })
 }
 
 /// `text` on one line.

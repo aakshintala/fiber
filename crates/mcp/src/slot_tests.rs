@@ -28,6 +28,7 @@ impl Setup {
             &crate::cache::Cached {
                 tools: tools.to_vec(),
                 prompts: Vec::new(),
+                resources: false,
             },
         );
     }
@@ -983,6 +984,7 @@ fn a_prompt_run_the_guard_refuses_fails_without_a_spawn() {
         &crate::cache::Cached {
             tools: Setup::listed("echo"),
             prompts: vec![serde_json::from_value(json!({"name": "hello"})).expect("a prompt")],
+            resources: false,
         },
     );
     let started = setup.start(vec![spec]);

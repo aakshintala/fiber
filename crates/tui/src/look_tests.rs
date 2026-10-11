@@ -146,7 +146,7 @@ fn dark_at_256_known_entries() {
         (Role::Warning, 215),
         (Role::Error, 203),
         (Role::Attention, 215),
-        (Role::Added, 75),
+        (Role::Added, 78),
         (Role::Removed, 203),
         (Role::Keyword, 75),
         (Role::String, 174),

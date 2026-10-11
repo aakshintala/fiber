@@ -988,6 +988,7 @@ The hub:
   hub install [--port <port>]  Register the hub as a login service
   hub uninstall                Remove the hub's login service; running sessions carry on
   hub status [--json]          Print the hub's state: running, version, port, clients, devices, installed
+  hub refresh                  Rebuild the hub's environment for the sessions it starts from now on
 
 Flags:
   -h, --help     Print this menu
@@ -1764,7 +1765,7 @@ fn assert_weather(run: &Run) {
 #[test]
 fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
     let setup = Setup::new_with_started_deadline();
-    let server = ProviderServer::start(go_exchange()).unwrap();
+    let server = support::package::opencode_go_ask_server(go_exchange().to_vec());
     install(
         &setup,
         &setup.package("opencode", "https://opencode.ai", &server.url()),
@@ -1782,8 +1783,14 @@ fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
 
     assert_weather(&run);
     let requests = server.requests();
-    assert_eq!(requests.len(), 2);
-    for request in &requests {
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path == "/zen/go/v1/responses")
+        .collect();
+    assert_eq!(calls.len(), 2);
+    for request in &calls {
         assert_eq!(request.path, "/zen/go/v1/responses");
         assert_fingerprint(request, "authorization", "Bearer sk-test-opencode-go");
         assert_eq!(request.header("x-opencode-session"), Some(run.session_id()));

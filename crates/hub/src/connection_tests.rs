@@ -91,14 +91,24 @@ impl Client {
         self.write.flush().unwrap();
     }
 
-    /// The next line, parsed. Panics past the deadline naming the wait.
+    /// The next line, parsed: the blocking read runs on a thread and its
+    /// result is received under one deadline, never parking the test
+    /// thread past the wait. Panics past the deadline naming the wait.
     fn next(&mut self, what: &str) -> Value {
-        let mut text = String::new();
-        self.read
-            .read_line(&mut text)
-            .unwrap_or_else(|_| panic!("never received {what}"));
-        assert!(!text.is_empty(), "the hub closed before {what}");
-        serde_json::from_str(&text).unwrap()
+        let (done_tx, done_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut text = String::new();
+                let outcome = self.read.read_line(&mut text);
+                done_tx.send((outcome, text)).unwrap_or(());
+            });
+            let (outcome, text) = Deadline::after(DEADLINE)
+                .recv(&done_rx)
+                .unwrap_or_else(|_| panic!("never received {what}"));
+            outcome.unwrap_or_else(|_| panic!("never received {what}"));
+            assert!(!text.is_empty(), "the hub closed before {what}");
+            serde_json::from_str(&text).unwrap()
+        })
     }
 
     fn hello(&mut self) -> Value {
@@ -222,7 +232,8 @@ fn status_answers_running_version_and_clients() {
     assert_eq!(id, "c_1");
     assert_eq!(
         result,
-        json!({"running": true, "fiber_version": "0.0.0", "clients": 1})
+        json!({"running": true, "fiber_version": "0.0.0", "clients": 1,
+            "variables": {"path": "", "names": [], "source": "inherited"}})
     );
     let reread: contract::events::CommandAccepted =
         serde_json::from_value(json!({"command_id": "c_1", "result": result})).unwrap();
@@ -232,6 +243,11 @@ fn status_answers_running_version_and_clients() {
             running: true,
             fiber_version: "0.0.0".into(),
             clients: 1,
+            variables: contract::events::Variables {
+                path: "".into(),
+                names: Vec::new(),
+                source: contract::events::VariablesSource::Inherited,
+            },
         })
     );
     assert_eq!(
@@ -1420,4 +1436,138 @@ fn start_content_that_does_not_fit_a_prompt_is_invalid_arguments() {
     assert!(starter.received().is_empty());
     let sockets = fs::read_dir(temp.dir.join("run")).map_or(0, Iterator::count);
     assert_eq!(sockets, 0, "no session started");
+}
+
+#[test]
+fn status_carries_the_published_environments_variables() {
+    let temp = Temp::new();
+    let environments = crate::Environments::ready(crate::Environment {
+        vars: vec![
+            (
+                std::ffi::OsString::from("PATH"),
+                std::ffi::OsString::from("/usr/bin:/bin"),
+            ),
+            (
+                std::ffi::OsString::from("HOME"),
+                std::ffi::OsString::from("/home/u"),
+            ),
+        ],
+        source: contract::events::VariablesSource::LoginShell,
+    });
+    let expected = environments.get().variables();
+    let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let hub = Arc::new(
+        crate::testkit::hub(&temp.dir, Arc::new(FakeStarter::hang(&temp.dir)), timed)
+            .with_environments(environments),
+    );
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_1", "status", json!({})));
+    let (id, result) = accepted(&client.next("the acknowledgement"));
+    assert_eq!(id, "c_1");
+    assert_eq!(
+        result["variables"],
+        serde_json::to_value(&expected).unwrap()
+    );
+}
+
+#[test]
+fn status_waits_for_the_first_publish() {
+    let temp = Temp::new();
+    let pending = crate::Environments::new(Vec::new(), &temp.dir);
+    let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let hub = Arc::new(
+        crate::testkit::hub(
+            &temp.dir,
+            Arc::new(FakeStarter::hang(&temp.dir)),
+            Arc::clone(&timed),
+        )
+        .with_environments(Arc::clone(&pending)),
+    );
+    // Signal the `status` wait itself: nothing is published yet, so the
+    // admission proves the handler parks in `get` rather than passing
+    // because the command never arrived.
+    let (waiting_tx, waiting_rx) = mpsc::channel();
+    *pending.before_get_wait.lock().unwrap() = Some(Box::new(move || {
+        waiting_tx.send(()).unwrap_or(());
+    }));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_1", "status", json!({})));
+    let (id, result) = thread::scope(|scope| {
+        let (ack_tx, ack_rx) = mpsc::channel();
+        scope.spawn(move || {
+            let line = client.next("the acknowledgement");
+            ack_tx.send(line).unwrap_or(());
+        });
+        Deadline::after(DEADLINE)
+            .recv(&waiting_rx)
+            .expect("status waits for the first publish");
+        assert!(
+            matches!(ack_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+            "the pending status answers nothing yet"
+        );
+        let clock: Arc<fakes::clock::FakeClock> = fakes::clock::FakeClock::new();
+        let timed: Arc<dyn Clock> = clock.clone();
+        let pending = Arc::clone(&pending);
+        let diag = crate::diag::open(&temp.dir, timed);
+        let (first_tx, first_rx) = mpsc::channel();
+        scope.spawn(move || {
+            pending.first(&*clock, &diag);
+            first_tx.send(()).unwrap_or(());
+        });
+        Deadline::after(DEADLINE)
+            .recv(&first_rx)
+            .expect("first publishes");
+        let line = Deadline::after(DEADLINE)
+            .recv(&ack_rx)
+            .expect("the acknowledgement");
+        accepted(&line)
+    });
+    assert_eq!(id, "c_1");
+    assert_eq!(result["variables"]["source"], json!("inherited"));
+}
+
+#[test]
+fn refresh_without_args_is_accepted_with_no_result_and_publishes() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let before = hub.environments.get();
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send_raw("{\"id\":\"c_r\",\"command\":\"refresh\"}\n");
+    let line = client.next("the acknowledgement");
+    let (id, result) = accepted(&line);
+    assert_eq!(id, "c_r");
+    assert_eq!(result, Value::Null);
+    assert!(line.get("payload").unwrap().get("result").is_none());
+    let after = hub.environments.get();
+    assert!(!Arc::ptr_eq(&before, &after), "refresh publishes anew");
+}
+
+#[test]
+fn refresh_with_empty_args_is_accepted_with_no_result() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_r", "refresh", json!({})));
+    let line = client.next("the acknowledgement");
+    let (id, result) = accepted(&line);
+    assert_eq!(id, "c_r");
+    assert_eq!(result, Value::Null);
+    assert!(line.get("payload").unwrap().get("result").is_none());
+}
+
+#[test]
+fn refresh_with_an_argument_is_invalid_arguments() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    client.send(&command("c_r", "refresh", json!({"x": 1})));
+    let (code, id, message) = rejected(&client.next("the rejection"));
+    assert_eq!(code, "invalid_arguments");
+    assert_eq!(id.as_deref(), Some("c_r"));
+    assert_eq!(message, "The arguments do not fit this command.");
 }

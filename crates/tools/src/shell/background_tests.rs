@@ -21,10 +21,11 @@ use fakes::clock::FakeClock;
 use fakes::kill_pid;
 
 use super::super::Limit;
-use super::super::command::{Finished, MoveReason, StopKind};
+use super::super::command::{Finished, Kept, MoveReason, StopKind};
+use super::super::output::align_char_boundary;
 use super::{
-    JobCancel, MoveAsk, PS_BOUND, align_char_boundary, description_of, format_rows, group_members,
-    output_tail, parse_ps, receipt, shell_sentence, terminal_receipt, to_completed,
+    JobCancel, MoveAsk, PS_BOUND, description_of, format_rows, group_members, output_tail,
+    parse_ps, receipt, shell_sentence, terminal_receipt, to_completed, with_spill_line,
 };
 
 fn finished(
@@ -35,7 +36,7 @@ fn finished(
     held_open: bool,
 ) -> Finished {
     Finished {
-        output: Vec::new(),
+        output: Kept::Whole(Vec::new()),
         status,
         stop,
         indeterminate,
@@ -619,4 +620,30 @@ fn a_terminal_receipt_says_how_to_type_and_carries_the_output_so_far() {
         panic!("receipt text");
     };
     assert!(text.starts_with("Still running after 30 seconds"), "{text}");
+}
+
+#[test]
+fn the_receipt_gains_the_spills_extra_line() {
+    let started = JobStarted {
+        job_id: JobId("j_1".into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "echo hi".into(),
+        output_path: "j_1.log".into(),
+    };
+    let path = Path::new("/tmp/j_1.log");
+    let plain = receipt(&started, path, &MoveReason::StartedInBackground, None);
+    assert_eq!(with_spill_line(plain, None).content.len(), 1);
+    let plain = receipt(&started, path, &MoveReason::StartedInBackground, None);
+    let lined = with_spill_line(
+        plain,
+        Some("Output before the move is also in /s/s_1/artifacts/s_x.txt.".to_owned()),
+    );
+    let ContentPart::Text { text } = &lined.content[0] else {
+        panic!("receipt text");
+    };
+    assert!(
+        text.ends_with("Output before the move is also in /s/s_1/artifacts/s_x.txt.\n"),
+        "{text}"
+    );
 }

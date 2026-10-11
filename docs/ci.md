@@ -51,7 +51,10 @@ the docs check, below.
 
 A branch does not have to be up to date with `main` to merge, and there is no
 merge queue. The backstop on `main` catches two pull requests that each
-passed alone but break together.
+passed alone but break together. A pull request runs `main`'s workflow
+against its own head, so when a `main` commit changes `ci.yml` together with
+the code it calls, a branch from before that commit fails on what the
+workflow now passes, such as an unknown argument, until it merges `main`.
 
 A newer push to a pull request cancels that pull request's older run. A
 label, a change from draft to ready or a reopen at the same head cancels
@@ -106,6 +109,10 @@ A pull request runs only what its diff can affect.
   for every first-party package that has cases, not only the changed ones
   ("Testing an extension"). A change to Fiber's own code can break a package
   that did not change.
+- A diff that touches the code the release job runs, `crates/bench`,
+  `xtask/src/bench*`, `scripts/release-size` or `scripts/stored-results`,
+  also runs `release`, so a broken harness or judge fails its own pull request
+  rather than the backstop.
 
 The selector has its own tests.
 

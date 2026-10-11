@@ -728,3 +728,71 @@ fn a_changed_url_after_approval_fails_the_server() {
         failure.error.message
     );
 }
+
+/// The cache of the control server offering resources: the same JSON as
+/// `write_cache`, plus `"resources": true`, so the load declares lazily
+/// and spawns nothing.
+fn write_cache_offering_resources(setup: &Setup, name: &str, key: &str) {
+    let dir = setup.home().join("cache").join("mcp");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join(format!("{name}.json")),
+        json!({"version": 1, "key": key, "tools": [{"name": "echo"}], "prompts": [], "resources": true}).to_string(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn the_post_offer_load_skips_mcp_resources_when_the_session_declares_it() {
+    let setup = offer_ready("db");
+    let hash = setup.approve("db");
+    write_cache_offering_resources(&setup, "db", CONTROL_KEY);
+    let waiting = setup.repository();
+    // The session already declares `mcp_resources`: the load never offers
+    // a second registration for replacement.
+    let later = setup.later(waiting);
+    later.servers.mark_resources_declared();
+    let (declare, recorded) = declare_recorder();
+    let load = later.into_load(declare, BTreeMap::new());
+    let current = setup.key("db", &hash);
+    let approved = load(&outcome(Vec::new(), vec![current])).expect("no notice, no failure");
+    assert!(approved.events.is_empty());
+    let names: Vec<(String, String)> = approved
+        .tools
+        .iter()
+        .map(|(registered_by, tool)| (registered_by.clone(), tool.definition().name))
+        .collect();
+    assert_eq!(names, [("db".to_owned(), "mcp__db__echo".to_owned())]);
+    let recorded = recorded.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].0, "mcp__db__echo");
+}
+
+#[test]
+fn the_post_offer_load_declares_mcp_resources_when_the_session_has_none() {
+    let setup = offer_ready("db");
+    let hash = setup.approve("db");
+    write_cache_offering_resources(&setup, "db", CONTROL_KEY);
+    let waiting = setup.repository();
+    let (declare, recorded) = declare_recorder();
+    let load = setup.later(waiting).into_load(declare, BTreeMap::new());
+    let current = setup.key("db", &hash);
+    let approved = load(&outcome(Vec::new(), vec![current])).expect("no notice, no failure");
+    assert!(approved.events.is_empty());
+    let names: Vec<(String, String)> = approved
+        .tools
+        .iter()
+        .map(|(registered_by, tool)| (registered_by.clone(), tool.definition().name))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("db".to_owned(), "mcp__db__echo".to_owned()),
+            ("builtin".to_owned(), "mcp_resources".to_owned()),
+        ]
+    );
+    let recorded = recorded.lock().unwrap();
+    assert_eq!(recorded.len(), 2);
+    assert_eq!(recorded[0].0, "mcp__db__echo");
+    assert_eq!(recorded[1].0, "mcp_resources");
+}

@@ -5,7 +5,7 @@
 //! (`docs/invocation.md`, "A session's environment").
 //!
 //! [`serve`] listens on `run/hub`, answers `start`, `status`,
-//! `prompt_history`, `feed`, `dismiss`, `recent`, `sessions`, `delete` and
+//! `refresh`, `prompt_history`, `feed`, `dismiss`, `recent`, `sessions`, `delete` and
 //! `read_file`, and relays session commands to `run/<session_id>` (`docs/invocation.md`,
 //! "What the hub speaks"). It sends `attention` to every connection
 //! (`docs/invocation.md`, "Attention"). With `port` set, an installed hub

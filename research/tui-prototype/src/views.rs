@@ -14,7 +14,7 @@
 
 use super::input::{Ev, Key};
 use super::{Args, Term};
-use super::{BC, BI, BK, BW, ORANGE, RED};
+use super::{BC, BI, BK, BW, GREEN, ORANGE, RED};
 use super::{bold, dim, fg, paint, rgb, row, slab, sp, view_header};
 use crate::cases::{Case, Surface};
 use ratatui::style::{Color, Style};
@@ -40,7 +40,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "running",
         help: "the running delegates and jobs in start order",
-        check: "two rows per running delegate and one row per running job, in start order, each opening that item's view.",
+        check: "two rows per running delegate, the second ending in its spend and its context bar with the percent, and one row per running job, in start order, each opening that item's view.",
         build: || Look {
             kind: Kind::Running,
         },
@@ -54,7 +54,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "changed-files",
         help: "the files Fiber changed with one file's hunks",
-        check: "the changed files with the chosen file's hunks as a diff against HEAD, the untracked file wholly added, removals red.",
+        check: "the changed files with the chosen file's hunks as a diff against HEAD, the untracked file wholly added, removals red and additions green.",
         build: || Look {
             kind: Kind::ChangedFiles,
         },
@@ -82,7 +82,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "settings",
         help: "configuration keys with values and layers",
-        check: "the keys with their effective values and the layer each comes from, the reload cost, and the file hint.",
+        check: "the keys as aligned columns under a dim header row, key, effective value and the layer it comes from (global, project, repository or default), then the reload cost and the file hint.",
         build: || Look {
             kind: Kind::Settings,
         },
@@ -232,15 +232,30 @@ fn delegate_input(w: usize) -> Vec<super::Row> {
 /// The running delegates and jobs, in the order they started: two rows per
 /// delegate, one row per job. A row opens that item's view.
 fn running_rows() -> Vec<super::Row> {
+    // A delegate's detail row: the dim facts, then its spend and its
+    // context use as the rail cards draw them (bar, then percent).
+    let detail = |facts: &str, spend: &str, ctx: u8| {
+        let mut spans = vec![
+            sp(format!("  {facts} · "), dim()),
+            sp(format!("{spend} "), Style::new()),
+        ];
+        spans.extend(super::bar(
+            ctx as f64 / 100.0,
+            10,
+            super::rail_ctx_color(ctx),
+        ));
+        spans.push(sp(format!(" {ctx}%"), dim()));
+        row(spans)
+    };
     vec![
         row(vec![sp("Delegates · 2 running", bold())]),
         row(vec![sp("◆ docs: rail spec · 9m", Style::new())]),
-        row(vec![sp("  opus-5-5 · high · 3 calls · s_b82c1d", dim())]),
+        detail("opus-5-5 · high · 3 calls · s_b82c1d", "$0.84", 34),
         row(vec![sp(
             "◆ review: the wait_for_path sweep · 4m",
             Style::new(),
         )]),
-        row(vec![sp("  opus-5-5 · high · 12 calls · s_d417a0", dim())]),
+        detail("opus-5-5 · high · 12 calls · s_d417a0", "$2.31", 72),
         super::Row::default(),
         row(vec![sp("Jobs · 1 running", bold())]),
         row(vec![sp("◆ cargo test --watch · 2m · s_j42", Style::new())]),
@@ -291,7 +306,10 @@ fn changed_files_rows(w: usize) -> Vec<super::Row> {
     let mut out = vec![
         row(vec![
             sp("crates/tui/src/view.rs", bold()),
-            sp(" · +41 −12", dim()),
+            sp(" · ", dim()),
+            sp("+41", fg(GREEN)),
+            sp(" ", dim()),
+            sp("−12", fg(RED)),
         ]),
         row(vec![
             sp("notes/scratch.md", Style::new()),
@@ -313,6 +331,8 @@ fn changed_files_rows(w: usize) -> Vec<super::Row> {
             .map(|l| {
                 if l.starts_with('-') {
                     row(vec![sp(l.to_string(), fg(RED))])
+                } else if l.starts_with('+') {
+                    row(vec![sp(l.to_string(), fg(GREEN))])
                 } else if l.starts_with("@@") {
                     row(vec![sp(l.to_string(), dim())])
                 } else {
@@ -452,10 +472,18 @@ fn rules_rows() -> Vec<super::Row> {
 /// layer each comes from. Editing follows `fiber config set`; the view says
 /// when a change needs a reload and what that costs.
 fn settings_rows() -> Vec<super::Row> {
+    // key | value | layer, each padded to its column so they line up.
+    let line = |key: &str, value: &str, layer: &str, style: Style| {
+        row(vec![sp(format!("{key:<20}{value:<14}{layer}"), style)])
+    };
     vec![
-        row(vec![sp("model · opus-5-5 · global", Style::new())]),
-        row(vec![sp("thinking · high · project", Style::new())]),
-        row(vec![sp("budget.usd · 20 · project", Style::new())]),
+        line("key", "value", "layer", dim()),
+        line("model", "opus-5-5", "global", Style::new()),
+        line("thinking", "high", "project", Style::new()),
+        line("budget.usd", "20", "project", Style::new()),
+        line("tui.theme", "dark", "global", Style::new()),
+        line("permissions.mode", "auto", "repository", Style::new()),
+        line("tools.timeout_s", "120", "default", Style::new()),
         super::Row::default(),
         row(vec![sp(
             "changing model needs a reload (~84k tokens)",
@@ -1018,12 +1046,12 @@ mod tests {
             })
             .unwrap();
         assert_eq!(removal.spans[0].style.fg, Some(crate::RED));
-        // Additions keep the default colour: the palette names no green.
+        // Additions take the added role.
         let addition = rows
             .iter()
             .find(|r| r.spans.iter().any(|s| s.content.contains("+    let line")))
             .unwrap();
-        assert_eq!(addition.spans[0].style.fg, None);
+        assert_eq!(addition.spans[0].style.fg, Some(crate::GREEN));
         let hunk = rows
             .iter()
             .find(|r| r.spans.iter().any(|s| s.content.starts_with("@@")))
@@ -1206,9 +1234,27 @@ mod tests {
         for cols in [160, NARROW] {
             let c = parse_case("settings");
             let t = text(&c, cols, 48);
-            assert!(t.contains("model · opus-5-5 · global"), "no model row");
-            assert!(t.contains("thinking · high · project"), "no thinking row");
-            assert!(t.contains("budget.usd · 20 · project"), "no budget row");
+            assert!(t.contains("key"), "no header row");
+            assert!(
+                t.contains("model               opus-5-5      global"),
+                "no model row"
+            );
+            assert!(
+                t.contains("thinking            high          project"),
+                "no thinking row"
+            );
+            assert!(
+                t.contains("budget.usd          20            project"),
+                "no budget row"
+            );
+            assert!(
+                t.contains("permissions.mode    auto          repository"),
+                "no repository row"
+            );
+            assert!(
+                t.contains("tools.timeout_s     120           default"),
+                "no default row"
+            );
             assert!(t.contains("needs a reload"), "no reload note");
             assert!(t.contains("Ctrl+G opens the file"), "no file hint");
         }

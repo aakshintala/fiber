@@ -3,8 +3,14 @@
 //! model's `name_session`, until the person clears it.
 
 use contract::ErrorCode;
+use contract::commands::Name;
 use contract::events::{CallStatus, Control, Event, NamedBy, SessionNamed};
+use contract::inbox::Ack;
+
+use crate::inbox::accept;
 use contract::shapes::Failure;
+
+use crate::{Error, Loop};
 
 /// What a pinned call tells the model.
 pub(crate) const PINNED: &str = "the person named this session";
@@ -24,6 +30,31 @@ pub(crate) enum Named {
     Write(SessionNamed),
     /// Fail the call `name_pinned` while the person's name pins it.
     Pinned(Failure),
+}
+
+/// The `session_named` the person's `name` command writes: only the
+/// exact empty string clears, to `name: null`; every other text,
+/// whitespace included, is kept exactly as sent.
+pub(crate) fn by_person(text: String) -> SessionNamed {
+    SessionNamed {
+        name: (!text.is_empty()).then_some(text),
+        by: NamedBy::Person,
+    }
+}
+
+impl Loop {
+    /// Writes the person's `name` command as `session_named` by `person`,
+    /// with no turn and no action: the session's name is about the
+    /// session, not a turn. The fold pins the name before the ack runs,
+    /// so a `name_session` call judged after answers `name_pinned`. A
+    /// failed append returns before folding or acknowledging.
+    pub(crate) fn take_name(&mut self, name: Name, ack: Ack) -> Result<(), Error> {
+        let event = Event::SessionNamed(by_person(name.text));
+        self.log.append(&event, None, None)?;
+        self.naming.fold(&event);
+        accept(ack);
+        Ok(())
+    }
 }
 
 impl Naming {

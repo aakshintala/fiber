@@ -2,7 +2,9 @@
 //! against the budget table in `docs/performance.md` and writes the pull
 //! request comment. Memory and exact budgets fail the run; timing budgets
 //! are advisory and show the head and base medians ("When a budget is
-//! exceeded"). Ceilings are read from the table at run time; an exact row's
+//! exceeded"). The comment also names the stripped binary's size each
+//! compared file records, and the head-minus-base change when both record
+//! one. Ceilings are read from the table at run time; an exact row's
 //! formula is code here, so its cell text is pinned. On a pull request the
 //! live base feeds only the timing columns; memory and exact rows compare
 //! against the backstop's stored results for the base commit.
@@ -164,6 +166,14 @@ pub(crate) fn report(
     }
 
     let idle_secs = head.as_ref().map(|h| h.idle_secs);
+    let mut cpus = cpu_lines(
+        head.as_ref(),
+        &base,
+        base_commit,
+        stored_results.as_ref(),
+        stored_commit,
+    );
+    cpus.extend(size_lines(head.as_ref(), &base, base_commit));
     let comment = comment(
         &lines,
         &failures,
@@ -177,13 +187,7 @@ pub(crate) fn report(
             event,
         )
         .as_deref(),
-        &cpu_lines(
-            head.as_ref(),
-            &base,
-            base_commit,
-            stored_results.as_ref(),
-            stored_commit,
-        ),
+        &cpus,
     );
     Report { failures, comment }
 }
@@ -265,6 +269,36 @@ fn cpu_lines(
             "- Stored results CPU ({stored_commit}): {}",
             results.cpu.as_deref().unwrap_or("not recorded")
         ));
+    }
+    lines
+}
+
+/// The stripped binary sizes each compared file records, in order: the
+/// head's, the live base's, and the head-minus-base change when both
+/// record a size. A file without one shows `not recorded`; a file that
+/// did not parse shows no line.
+fn size_lines(head: Option<&results::Results>, base: &Base, base_commit: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let head_size = head.and_then(|results| results.binary_size_bytes);
+    if head.is_some() {
+        match head_size {
+            Some(size) => lines.push(format!("- Head size: {size} bytes")),
+            None => lines.push("- Head size: not recorded".to_owned()),
+        }
+    }
+    if let Base::Ok(results) = base {
+        let shown = results
+            .binary_size_bytes
+            .map_or("not recorded".to_owned(), |size| format!("{size} bytes"));
+        if base_commit.is_empty() {
+            lines.push(format!("- Base size: {shown}"));
+        } else {
+            lines.push(format!("- Base size ({base_commit}): {shown}"));
+        }
+        if let (Some(head), Some(base)) = (head_size, results.binary_size_bytes) {
+            let change = i128::from(head) - i128::from(base);
+            lines.push(format!("- Size change, head - base: {change:+} bytes"));
+        }
     }
     lines
 }

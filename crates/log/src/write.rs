@@ -300,26 +300,16 @@ impl Log {
         let head = full.floor_char_boundary(bound.start);
         let tail = full.ceil_char_boundary(full.len().saturating_sub(bound.end).max(head));
         let removed = tail.saturating_sub(head);
+        let removed = u64::try_from(removed).unwrap_or(u64::MAX);
         let (notice, artifact) = match self.write_artifact(name, full.as_bytes()) {
-            Ok((relative, path)) => (
-                format!(
-                    "[{removed} bytes cut. The full output is in {}; read it with `read`.]",
-                    path.display()
-                ),
-                Some(relative),
-            ),
-            Err(e) => (
-                format!("[{removed} bytes cut. The full output could not be saved: {e}.]"),
-                None,
-            ),
+            Ok((relative, path)) => (cut_notice(removed, Ok(&path)), Some(relative)),
+            Err(e) => (cut_notice(removed, Err(&e.to_string())), None),
         };
-        let mut kept = full.get(..head).unwrap_or_default().to_owned();
-        kept.push('\n');
-        kept.push_str(&notice);
-        if tail < full.len() {
-            kept.push('\n');
-            kept.push_str(full.get(tail..).unwrap_or_default());
-        }
+        let kept = cut_joined(
+            full.get(..head).unwrap_or_default(),
+            &notice,
+            full.get(tail..).unwrap_or_default(),
+        );
         (kept, artifact)
     }
 
@@ -386,6 +376,34 @@ impl Emit for Log {
             Ok(_) | Err(_) => {}
         }
     }
+}
+
+/// A cut's notice: how many bytes were cut and where the whole text is.
+/// `Ok(path)` is the saved file's path, shown as given; `Err(message)`
+/// is why it could not be saved.
+pub fn cut_notice(removed: u64, saved: Result<&Path, &str>) -> String {
+    match saved {
+        Ok(path) => format!(
+            "[{removed} bytes cut. The full output is in {}; read it with `read`.]",
+            path.display()
+        ),
+        Err(message) => {
+            format!("[{removed} bytes cut. The full output could not be saved: {message}.]")
+        }
+    }
+}
+
+/// `head`, the cut `notice` and `tail` joined: the notice sits between
+/// the ends, and an empty tail adds no trailing newline.
+pub fn cut_joined(head: &str, notice: &str, tail: &str) -> String {
+    let mut kept = head.to_owned();
+    kept.push('\n');
+    kept.push_str(notice);
+    if !tail.is_empty() {
+        kept.push('\n');
+        kept.push_str(tail);
+    }
+    kept
 }
 
 /// A queue registered on a log, before [`Log::watch_all`] reads the file.

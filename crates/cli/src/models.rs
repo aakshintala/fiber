@@ -36,7 +36,6 @@ fn spawn_refresh(exe: &Path, providers: Vec<String>) -> io::Result<std::process:
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         command.process_group(0);

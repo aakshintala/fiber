@@ -181,8 +181,10 @@ stated invariants rather than a fixed expected output. For example:
 - `log`: durable output equals the log; a session killed at each fsync
   boundary, or after a half-written line, reopens intact, and a tool call whose
   fate is unknown is never run again
-- `loop`: no turn is lost; nothing a cancelled call produces is admitted after
-  the cancel; results return in request order
+- `loop`: no turn is lost; a cancelled call ends in one completion with status
+  `cancelled`, and nothing from it follows: no delta after that completion, no
+  `control` acted on, nothing after `turn_completed`; results return in request
+  order
 
 `web_fetch`'s HTML converter carries property tests too. Generated pages mix
 nesting, broken markup, entities, scripts and huge attributes, and each is
@@ -395,7 +397,10 @@ signal the wrong process or lose data, such as the `kill(-1)` refusal
 ("Running tests"). Elsewhere a mutant that changes no behaviour a consumer
 sees takes an exemption in the code, with a written reason, instead of a test
 that pins it. The exemption goes on a function, since an exemption on a
-statement or block is not reliably honoured. How many runners share the
+statement or block is not reliably honoured. It is written
+`#[cfg_attr(false, mutants::skip)]`, with the reason in a comment above it:
+cargo-mutants silently ignores the attribute when it carries a `reason`
+argument. How many runners share the
 mutants is CI's to set.
 
 Mutants run on Linux, so code compiled only on macOS, or on any platform other

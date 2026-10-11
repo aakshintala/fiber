@@ -718,7 +718,7 @@ calls exactly as for the model's ("Running a tool").
 | `turn_start` | A turn has started, before its first model request | the turn's input and what started it | context to add |
 | `before_tool` | A call has passed its schema check and its effects function, before permission is decided | the tool's name, the arguments, the declared effects, paths and reversibility | replacement arguments, a refusal with a reason |
 | `before_model_call` | A step's model request is built and the budget allows it, before it is sent (`docs/loop.md`, "Spending budget") | the model reference, and the session's `usage` so far, its delegates included (`docs/events.md`) | a refusal with a reason |
-| `after_tool` | A call that ran has returned, before its output is cut, its artifact is written or it is logged; and each job delivery, before it joins the conversation or is logged | the tool's name, the arguments, `status`, the full output, `details`, `process`, and `delivery` for a job delivery | replacement `content`, replacement `details`, text for the artifact |
+| `after_tool` | A call that ran has returned, before its output is cut, its artifact is written or it is logged (a tool that already wrote its output to the call's artifact file has cut it first); and each job delivery, before it joins the conversation or is logged | the tool's name, the arguments, `status`, the full output, or the cut output with its artifact file's `path` and `size` when the tool already wrote that file, `details`, `process`, and `delivery` for a job delivery | replacement `content`, replacement `details`, text for the artifact |
 | `turn_end` | The model has replied without calling a tool, so the turn would complete, before `turn_completed` is written | the model's final reply | a message to continue the turn with |
 | `before_handoff` | A handoff has started, before the note request | the trigger, the person's instructions, and the conversation as Fiber's messages of content parts, without the note request | a handoff note (a string) |
 
@@ -777,8 +777,18 @@ secret too. It does not run on a call that never started. What the hook
 returns is what the rest of the pipeline sees: the size cap applies to the
 returned `content` (`docs/tools.md`, "Bounded results"), and the artifact holds
 the hook's artifact text when it returns one, or the returned output when it
-does not. So a redaction hook removes a secret from the model's view and from
+does not, unless the tool already wrote the artifact file, as below. So a redaction hook removes a secret from the model's view and from
 disk in one pass, and the original output is never stored.
+
+A foreground `shell` call whose output passes 1 MiB has already written it to
+the call's artifact file (`docs/tools.md`, "Result and output"), so its
+original output is stored until a hook rewrites the file. The hook gets the
+cut output, as the model would be sent it, with the file's `path` and `size`,
+and rewrites the file through `host.fs` under the per-path lock or returns
+artifact text that replaces it, as for an `output_file`. Every hook in the
+chain gets the same `path` and `size`. The file is the call's artifact: with
+no artifact text returned it keeps what the tool or a hook wrote there, and a
+returned `content` over the cap is cut with a notice naming it.
 
 `after_tool` also runs on every job delivery: a job's completion notice, each
 batch of a monitor's lines, and a delegate's final message (`docs/tools.md`,
@@ -789,8 +799,8 @@ job ends, it runs once more on the job's whole output file, with `delivery`
 delegate's `events.jsonl` is another session's log, so the `output_file` pass
 skips it. `delivery`
 is absent for an ordinary call. A `completion` delivery hands the hook, as
-`output`, the notice as the model would be sent it, with the job's `status`.
-An output file of at most 1 MiB is handed as `output`; a larger one is handed
+`content`, the notice as the model would be sent it, with the job's `status`.
+An output file of at most 1 MiB is handed as `content`; a larger one is handed
 as `path` and `size`, and the hook rewrites it through `host.fs` under the
 per-path lock or returns artifact text that replaces it. When an
 `output_file` hook fails `blocking`, the file is replaced with a one-line note
@@ -798,8 +808,9 @@ that the output was withheld; a `non-blocking` failure keeps the file and
 gives a `notice`. Apart from that large-file case, a redaction hook can ignore
 `delivery` and treat every input alike, so job output takes the same path as
 every other tool output.
-One window remains: while a job runs, its output file is written directly by
-the program, so it holds raw output until the job ends. An extension that
+Two windows remain: while a job runs, its output file is written directly by
+the program, so it holds raw output until the job ends; and a foreground
+`shell` call's artifact file holds raw output past 1 MiB until the hook runs. An extension that
 compacts build and test output returns a short summary as `content` and the
 full log as the artifact text. The hook cannot change `status`: whether a call
 succeeded is the tool's answer.
@@ -901,7 +912,7 @@ What a `blocking` failure stops, at each point:
 | `turn_start` | The turn completes `failed` with code `hook_failed`, before any model request. |
 | `before_tool` | The call completes `failed` with code `hook_failed` and never starts. |
 | `before_model_call` | The request is not sent, and the turn completes `failed` with code `hook_failed`. |
-| `after_tool` | The call keeps the status the tool reported, since it ran. Its only content is a line saying its output was withheld because the extension's hook failed, and no artifact is written. A job delivery is withheld the same way. |
+| `after_tool` | The call keeps the status the tool reported, since it ran. Its only content is a line saying its output was withheld because the extension's hook failed, and no artifact is written. A job delivery is withheld the same way. A foreground `shell` call's artifact file is replaced with the same line, as an `output_file` is. |
 | `turn_end` | The turn completes `failed` with code `hook_failed`. |
 | `before_handoff` | The handoff completes `failed` with code `hook_failed`, as a failed note request does. |
 

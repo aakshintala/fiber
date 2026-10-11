@@ -15,7 +15,6 @@ serde_json.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
-image.workspace = true
 lopdf.workspace = true
 
 [lints]

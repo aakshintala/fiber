@@ -345,3 +345,128 @@ fn a_session_without_a_shell_runs_with_the_inherited_environment() {
     );
     finish(&hub, guard, client, &session);
 }
+
+/// The successful capture's body exporting `mark`, for the refresh tests:
+/// a session started after a refresh records the new mark's name.
+fn mark_body(other_home: &Path, mark: &str) -> String {
+    let nonce = match fakes::check_run() {
+        Some((name, value)) => format!("export {name}='{}'\n", value.to_string_lossy()),
+        None => String::new(),
+    };
+    format!(
+        "export FIBER_TEST_FAKE_KEY='sk-test'\nexport PATH='{}'\nexport {mark}='1'\nexport FIBER_HOME='{}'\n{}exec /bin/sh -c \"$4\"\n",
+        std::env::var_os("PATH")
+            .unwrap_or_default()
+            .to_string_lossy(),
+        other_home.display(),
+        nonce,
+    )
+}
+
+impl FakeShell {
+    /// Rewrites the fake shell's body at the same path: the hub's next
+    /// capture runs the new body.
+    fn rewrite(&self, body: &str) {
+        fakes::script(self._held.path(), "shell", body);
+    }
+}
+
+/// Waits under the test's [`Deadline`] until `socket` is gone, naming
+/// `what`.
+#[track_caller]
+fn until_absent(deadline: Deadline, socket: &Path, what: &str) {
+    while socket.exists() {
+        if deadline.left().is_zero() {
+            panic!("waited until the deadline for {what}");
+        }
+        thread::yield_now();
+    }
+}
+
+#[test]
+fn hub_refresh_rebuilds_the_environment_for_new_sessions() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let other_home = setup.root.path().join("other-home");
+    let fake = FakeShell::new(&mark_body(&other_home, "REFRESH_MARK_ONE"));
+    let hub = Arc::new(Mutex::new(None));
+    let client = connect_hub(&setup, &hub, Some(&fake.shell));
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+    // The first session runs with the first capture.
+    let first = start_session(&client, &workspace, PROMPT);
+    subscribe(&client, &first);
+    until(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let names = names_of(&started_variables(&setup, &first));
+    assert!(names.contains(&"REFRESH_MARK_ONE".to_owned()), "{names:?}");
+    // Its close is accepted, so nothing holds the workspace for the
+    // sessions after the refresh.
+    client.send(&format!(
+        "{{\"id\":\"c_close\",\"session_id\":\"{first}\",\"command\":\"close\"}}"
+    ));
+    until(&client, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+    // A rewritten shell and `fiber hub refresh`: exit 0 with the login
+    // shell's line.
+    fake.rewrite(&mark_body(&other_home, "REFRESH_MARK_TWO"));
+    let output = run_to_exit(
+        setup.deadline,
+        "fiber hub refresh",
+        setup.fiber(&["hub", "refresh"]),
+    );
+    assert!(
+        output.status.success(),
+        "refresh exits 0: {:?}",
+        output.status
+    );
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        out.contains("sessions now start with the login shell's environment"),
+        "{out:?}"
+    );
+    // A session started after it records the new mark, not the old one.
+    let second = start_session(&client, &workspace, PROMPT);
+    subscribe(&client, &second);
+    until(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let variables = started_variables(&setup, &second);
+    assert_eq!(variables["source"], "login_shell");
+    let names = names_of(&variables);
+    assert!(names.contains(&"REFRESH_MARK_TWO".to_owned()), "{names:?}");
+    assert!(!names.contains(&"REFRESH_MARK_ONE".to_owned()), "{names:?}");
+    finish(&hub, guard, client, &second);
+}
+
+#[test]
+fn hub_refresh_starts_a_hub_when_none_runs() {
+    let setup = Setup::new();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"hub": {"idle_exit_ms": 200}}),
+    );
+    let other_home = setup.root.path().join("other-home");
+    let fake = FakeShell::new(&mark_body(&other_home, "REFRESH_MARK_ONE"));
+    // No hub runs: `fiber hub refresh` starts one through the connect
+    // every client uses, with the fake shell for its first capture.
+    let mut command = setup.fiber(&["hub", "refresh"]);
+    command.env("SHELL", &fake.shell);
+    let output = run_to_exit(setup.deadline, "fiber hub refresh", command);
+    assert!(
+        output.status.success(),
+        "refresh exits 0: {:?}",
+        output.status
+    );
+    let out = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        out.contains("sessions now start with the login shell's environment"),
+        "{out:?}"
+    );
+    // The hub it started idles out soon after the refresh's connection
+    // closes, so none lingers past the test.
+    until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
