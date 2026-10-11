@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 base64.workspace = true
 contract = { path = "../contract" }
+libc = "0.2"
 log = { path = "../log" }
 # SHA-1 for the websocket handshake and SHA-256 for device-token hashes.
 ring = "0.17"

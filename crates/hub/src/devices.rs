@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::io::Read as _;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::Path;
 
 use ring::digest;
@@ -16,8 +16,9 @@ use serde_json::Value;
 /// `token`. Anything that is not a regular file holding that hash is
 /// skipped, fail closed: a missing directory, an unreadable file, a
 /// directory or a symlink, non-JSON, a missing or non-string hash, or
-/// uppercase hex. Symlinks are never followed: the opened file's own
-/// device and inode must equal the entry's.
+/// uppercase hex. Records open with `O_NOFOLLOW`, so a symlink is refused
+/// at open even when an entry is swapped between the directory read and
+/// the open.
 pub(crate) fn holds(home: &Path, token: &str) -> bool {
     let want = sha256_hex(token.as_bytes());
     let entries = match fs::read_dir(home.join("hub").join("devices")) {
@@ -26,17 +27,17 @@ pub(crate) fn holds(home: &Path, token: &str) -> bool {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let own = match fs::symlink_metadata(&path) {
-            Ok(meta) if meta.is_file() => meta,
-            Ok(_) | Err(_) => continue,
-        };
         #[cfg(test)]
-        BETWEEN_STAT_AND_OPEN.with(|slot| {
+        BEFORE_OPEN.with(|slot| {
             if let Some(hook) = slot.take() {
                 hook();
             }
         });
-        let mut file = match fs::File::open(&path) {
+        let mut file = match fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+        {
             Ok(file) => file,
             Err(_) => continue,
         };
@@ -44,7 +45,7 @@ pub(crate) fn holds(home: &Path, token: &str) -> bool {
             Ok(meta) => meta,
             Err(_) => continue,
         };
-        if !opened.is_file() || opened.dev() != own.dev() || opened.ino() != own.ino() {
+        if !opened.is_file() {
             continue;
         }
         let mut contents = String::new();
@@ -73,17 +74,17 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 thread_local! {
-    /// Runs once between a record's lstat and its open, so the swap test
-    /// can replace the record with a symlink there.
-    static BETWEEN_STAT_AND_OPEN: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+    /// Runs once before a record's open, so the swap test can replace the
+    /// record with a symlink there.
+    static BEFORE_OPEN: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// Arms the one-shot hook between the next record's lstat and its open.
+/// Arms the one-shot hook before the next record's open.
 /// Test only: production has no seam there.
 #[cfg(test)]
-pub(crate) fn between_stat_and_open(hook: impl FnOnce() + 'static) {
-    BETWEEN_STAT_AND_OPEN.with(|slot| slot.set(Some(Box::new(hook))));
+pub(crate) fn before_open(hook: impl FnOnce() + 'static) {
+    BEFORE_OPEN.with(|slot| slot.set(Some(Box::new(hook))));
 }
 
 #[cfg(test)]

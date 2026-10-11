@@ -127,23 +127,17 @@ fn a_directory_and_a_symlink_named_like_devices_hold_nothing() {
 }
 
 #[test]
-fn a_record_swapped_for_a_symlink_between_stat_and_open_is_refused() {
+fn a_record_swapped_for_a_symlink_before_open_is_refused() {
     let temp = Temp::new();
     write_record(&temp.dir, "phone", "t0k3n");
-    // A valid record elsewhere, for the same token: without the dev/ino
-    // comparison the swapped read would match.
-    let elsewhere = temp.dir.join("elsewhere");
-    fs::create_dir_all(&elsewhere).unwrap();
-    fs::write(
-        elsewhere.join("real"),
-        format!("{{\"token_sha256\":\"{}\"}}", sha256_hex(b"t0k3n")),
-    )
-    .unwrap();
     let record = temp.devices().join("phone");
-    let target = elsewhere.join("real");
-    between_stat_and_open(move || {
-        fs::remove_file(&record).unwrap();
-        std::os::unix::fs::symlink(&target, &record).unwrap();
+    let moved = temp.dir.join("moved-record");
+    before_open(move || {
+        // The original inode leaves hub/devices/; its path becomes a
+        // symlink to that same inode. The open follows it to the same
+        // dev/ino, so only refusing symlinks at open refuses it.
+        fs::rename(&record, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &record).unwrap();
     });
     assert!(!holds(&temp.dir, "t0k3n"));
 }
