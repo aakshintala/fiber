@@ -142,6 +142,18 @@ const MEASURED: &[(&str, Check)] = &[
         },
     ),
     (
+        "Terminal, attaching a 10 MiB session",
+        Check::Memory(&["terminal_attach_rss_kib"]),
+    ),
+    (
+        "Session, memory kept after the busy turn",
+        Check::Memory(&["busy_turn_retained_kib"]),
+    ),
+    (
+        "Terminal, memory kept after attaching a 10 MiB session",
+        Check::Memory(&["terminal_attach_retained_kib"]),
+    ),
+    (
         "Listing 1,000 sessions in one project, warm cache",
         Check::Timing("sessions_list_ms"),
     ),
