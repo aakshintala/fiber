@@ -218,6 +218,29 @@ fn a_persons_command_with_a_repositorys_args_is_repository_code() {
 }
 
 #[test]
+fn a_persons_command_with_repository_args_stays_gated_after_declaration_removed() {
+    // With the declaration gone, args are the only effective program
+    // field supplied by the repository.
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"args": ["run.sh"]}}}}));
+    let config = setup.rig.config(Vec::<String>::new());
+    setup.repository(&json!({}));
+    let specs = specs(&config).expect("the specs read");
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's through args provenance alone");
+    };
+    assert_eq!(gated.spec.name, "fx");
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
+    assert_eq!(stdio(&gated.spec).args, vec!["run.sh".to_owned()]);
+    assert_eq!(gated.fields.command, None);
+    assert_eq!(gated.fields.args, Some(json!(["run.sh"])));
+    assert!(gated.fields.env.is_empty());
+    assert_eq!(gated.fields.url, None);
+}
+
+#[test]
 fn a_repositorys_hints_never_reach_the_spec() {
     let setup = Setup::new();
     setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
@@ -230,21 +253,26 @@ fn a_repositorys_hints_never_reach_the_spec() {
 }
 
 #[test]
-fn a_declaration_removed_after_load_still_gates_through_command_provenance() {
+fn a_persons_command_overridden_by_repository_stays_gated_after_declaration_removed() {
     // The declaration is removed between `Config::load` and `specs`:
-    // the merged `command` still comes from the repository's layer, so
-    // the fail-closed provenance fallback keeps the server the
-    // repository's even though the declaration read no longer names it.
+    // only the effective command's repository provenance keeps the
+    // person's server behind approval.
     let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/sh"}}}}));
     setup.repository(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
     let config = setup.rig.config(Vec::<String>::new());
     setup.repository(&json!({}));
     let specs = specs(&config).expect("the specs read");
     assert!(specs.specs.is_empty());
     let [gated] = specs.repository.as_slice() else {
-        panic!("the server is the repository's through provenance alone");
+        panic!("the server is the repository's through command provenance alone");
     };
     assert_eq!(gated.spec.name, "fx");
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
+    assert_eq!(gated.fields.command, Some(json!("/bin/bash")));
+    assert_eq!(gated.fields.args, None);
+    assert!(gated.fields.env.is_empty());
+    assert_eq!(gated.fields.url, None);
 }
 
 #[test]
