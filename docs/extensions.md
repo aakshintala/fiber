@@ -486,7 +486,12 @@ declares, and why, is `docs/model-routing.md`. The file is
 A provider may have five pieces of Lua:
 
 - `models()`, which discovers its models
-- `quota()`, which reports its quota (`docs/model-routing.md`, "Quota")
+- `quota()`, which receives `{ label, credential }` and reports its quota
+  (`docs/model-routing.md`, "Quota"): `{ windows = { { name, used_percent,
+  resets_at } } }` with `resets_at` in Unix seconds where the vendor reports
+  one, `{ credit = { remaining, limit } }` with `limit` where there is one,
+  or nothing when the label reports no quota. Anything else is a failed
+  fetch, reported as `unreachable`.
 - `credential()`, which receives `{ label, credential }` and returns
   `{ token = <string>, expires_at = <Unix seconds> }`,
   and optionally `headers` sent with the token and the login's `email`, for a

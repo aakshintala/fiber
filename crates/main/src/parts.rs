@@ -197,7 +197,13 @@ pub(crate) fn parts_in(
         workspace: workspace.clone(),
         clock: Arc::clone(&clock),
     };
-    let provider = connect(model, key, signer, lua, &here)?;
+    let provider = connect(
+        model,
+        key,
+        signer,
+        lua.map(|lua| (lua, label.as_str())),
+        &here,
+    )?;
     // The credentials read at startup, seeding `Switching`'s keys: the
     // session's entry first, so a reviewer on its provider reuses them.
     let mut credentials: switch::Credentials = BTreeMap::new();
@@ -207,8 +213,8 @@ pub(crate) fn parts_in(
     );
     let reviewer = {
         let mut lookup =
-            |provider: &config::ProviderData| -> Result<lua_providers::Access, Failure> {
-                scripted::access(provider, || {
+            |provider: &config::ProviderData| -> Result<(String, lua_providers::Access), Failure> {
+                let access = scripted::access(provider, || {
                     let lua = providers.lua(&provider.name);
                     if let Some((_, read)) = credentials.get(&provider.name) {
                         return Ok(lua_providers::Access::new(lua, read.clone()));
@@ -220,7 +226,15 @@ pub(crate) fn parts_in(
                     })?;
                     credentials.insert(provider.name.clone(), (label, read.clone()));
                     Ok(lua_providers::Access::new(lua, read))
-                })
+                })?;
+                // The label the access was read for: the startup map's, else the
+                // provider's configured one. A scripted reviewer reads no
+                // credential, so its label is only the configured default.
+                let label = credentials
+                    .get(&provider.name)
+                    .map(|(label, _)| label.clone())
+                    .unwrap_or_else(|| config.credentials().credential_label(provider));
+                Ok((label, access))
             };
         choose_reviewer(&providers, &config, &model, &here, &mut lookup)
     };
@@ -372,13 +386,17 @@ pub(crate) fn reviewer_reference(
 /// provider's configured label, so a reviewer on the session's own provider
 /// reuses the session's key and signer, and a `command` credential runs once
 /// per process; a switch passes the access its read returned
-/// (`docs/model-routing.md`, "Keys, tokens and OAuth").
+/// (`docs/model-routing.md`, "Keys, tokens and OAuth"). The lookup returns
+/// the label beside the access, so the reviewer's quota is fetched for the
+/// account the lookup read (`docs/tools.md`, "Provider quota").
 pub(crate) fn choose_reviewer(
     providers: &Providers,
     config: &Config,
     session: &extensions::Model<'_>,
     here: &Here,
-    credential: &mut dyn FnMut(&config::ProviderData) -> Result<lua_providers::Access, Failure>,
+    credential: &mut impl FnMut(
+        &config::ProviderData,
+    ) -> Result<(String, lua_providers::Access), Failure>,
 ) -> Result<r#loop::Reviewer, Failure> {
     let typed = reviewer_reference(config, session)?;
     let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
@@ -386,11 +404,17 @@ pub(crate) fn choose_reviewer(
     // Another provider's reviewer goes through the same path, so a Lua
     // reviewer model works: the token when it registered `credential`,
     // else the key.
-    let access = credential(model.provider)?;
+    let (label, access) = credential(model.provider)?;
     // The token is read once, so a failing `credential()` fails here:
     // not a startup error, the loop gets it and every reviewed call
     // escalates it (`docs/permissions.md`, "How it runs").
-    let provider = connect(model, access.key, access.signer, access.lua.as_ref(), here)?;
+    let provider = connect(
+        model,
+        access.key,
+        access.signer,
+        access.lua.as_ref().map(|lua| (lua, label.as_str())),
+        here,
+    )?;
     Ok(r#loop::Reviewer {
         provider,
         model: Model {
