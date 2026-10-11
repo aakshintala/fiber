@@ -344,13 +344,8 @@ fn a_scripted_content_length_past_the_body_without_stall_is_sent_and_closed() {
     assert!(text.ends_with("ok"), "{text}");
     assert!(!server.await_partial(1, Duration::from_millis(200)));
     assert!(!server.await_closed(1, Duration::from_millis(200)));
-}
-
-#[test]
-fn fewer_than_ends_exactly_at_the_count() {
-    assert!(fewer_than(0, 1));
-    assert!(!fewer_than(1, 1));
-    assert!(!fewer_than(2, 1));
+    // Past the count the wait is already over, as at it.
+    assert!(server.await_closed(0, READ_WITHIN), "zero closes needed");
 }
 
 #[test]
@@ -385,6 +380,8 @@ fn await_partial_needs_every_counted_partial() {
         server.await_partial(1, READ_WITHIN),
         "the one partial arrived"
     );
+    // Past the count the wait is already over, as at it.
+    assert!(server.await_partial(0, READ_WITHIN), "zero partials needed");
     assert!(
         !server.await_partial(2, Duration::from_millis(200)),
         "no second partial is coming"

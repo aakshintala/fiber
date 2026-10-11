@@ -32,9 +32,8 @@ impl Watchdog {
         reason = "a watchdog that cannot start cannot protect the test"
     )]
     pub fn group(group: u32) -> Self {
-        crate::process_group::checked(group, "process group").unwrap_or_else(|_| {
-            panic!("a watchdog group past the pid range cannot be signalled")
-        });
+        crate::process_group::checked(group, "process group")
+            .unwrap_or_else(|_| panic!("a watchdog group past the pid range cannot be signalled"));
         let group_arg = group.to_string();
         let mut shell = Command::new("sh");
         shell.args(["-c", crate::WATCHDOG_SCRIPT, "watchdog", group_arg.as_str()]);

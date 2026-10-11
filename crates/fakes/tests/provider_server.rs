@@ -190,8 +190,7 @@ fn a_request_past_the_end_of_the_script_gets_a_500_naming_why() {
 
 #[test]
 fn a_request_past_the_script_gets_the_configured_fallback() {
-    let server =
-        ProviderServer::start_with_fallback([], Response::status(503, "busy")).unwrap();
+    let server = ProviderServer::start_with_fallback([], Response::status(503, "busy")).unwrap();
 
     let first = post(&server, "/a", &[], b"");
     let second = post(&server, "/b", &[], b"");
@@ -351,7 +350,10 @@ fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
     ] {
         assert_eq!(reply.status, 400, "{name}");
         let why = String::from_utf8(reply.body).unwrap();
-        assert!(why.contains("ends before its framing does"), "{name}: {why}");
+        assert!(
+            why.contains("ends before its framing does"),
+            "{name}: {why}"
+        );
     }
     // The script kept its response for the next well-formed request.
     assert_eq!((next.status, next.body), (200, b"ok".to_vec()));

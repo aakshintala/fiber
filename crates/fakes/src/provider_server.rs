@@ -359,7 +359,7 @@ impl ProviderServer {
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived
-            .wait_timeout_while(guard, within, |state| fewer_than(state.partial, count))
+            .wait_timeout_while(guard, within, |state| state.partial < count)
             .unwrap_or_else(PoisonError::into_inner);
         guard.partial >= count
     }
@@ -371,7 +371,7 @@ impl ProviderServer {
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived
-            .wait_timeout_while(guard, within, |state| fewer_than(state.closed, count))
+            .wait_timeout_while(guard, within, |state| state.closed < count)
             .unwrap_or_else(PoisonError::into_inner);
         guard.closed >= count
     }
@@ -412,13 +412,6 @@ fn stop(addr: SocketAddr, accept: JoinHandle<()>, deadline: Duration) -> bool {
         }
     });
     Deadline::after(deadline).recv(&joined).is_ok()
-}
-
-/// Whether `have` arrivals are still fewer than the `count` waited for.
-/// The boundary is exact: below the count the wait continues, at it the
-/// wait is already over, so `==`, `>` and `<=` here each read differently.
-fn fewer_than(have: usize, count: usize) -> bool {
-    have < count
 }
 
 /// A lock that outlives a panicked holder: the state is plain data, and a
