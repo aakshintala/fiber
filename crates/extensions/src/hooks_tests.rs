@@ -1450,3 +1450,74 @@ fn a_disabled_extensions_backend_is_not_counted() {
         session.notices()
     );
 }
+
+#[test]
+fn a_lua_provider_its_manifest_does_not_declare_fails_the_extension() {
+    let home = Home::new();
+    home.install(
+        "rogue",
+        Some(&format!(
+            "{}{}",
+            tagging("h", "transform"),
+            crediting("rogue")
+        )),
+    );
+    home.edit_manifest("rogue", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    home.install("good", Some(&crediting("acme")));
+    home.edit_manifest("good", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    let session = home.load(&[]);
+    let names: Vec<String> = session.loaded().iter().map(|e| e.name.clone()).collect();
+    assert!(!names.iter().any(|n| n == "fiber.test/rogue"), "{names:?}");
+    assert!(names.iter().any(|n| n == "fiber.test/good"), "{names:?}");
+    assert!(session.lua_providers().is_empty() || session.lua_providers().iter().all(|(e, _)| e != "fiber.test/rogue"));
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/rogue"));
+    assert!(notices[0].message.contains("rogue"), "{}", notices[0].message);
+    assert_eq!(after_tool(&session, "c").outcome, AfterToolOutcome::Unchanged);
+}
+
+#[test]
+fn a_declared_lua_provider_loads() {
+    let home = Home::new();
+    home.install("good", Some(&crediting("acme")));
+    home.edit_manifest("good", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    assert_eq!(session.lua_providers().len(), 1);
+    assert_eq!(session.lua_providers()[0].1.name(), "acme");
+}
+
+#[test]
+fn start_provider_fails_when_a_fresh_vm_registers_an_undeclared_provider() {
+    let home = Home::new();
+    let flag = home.root.path().join("flag");
+    let flag_str = flag.display().to_string();
+    home.install(
+        "prov",
+        Some(&format!(
+            "local ok = pcall(host.fs.read, \"{flag_str}\")\n\
+             if ok then {rogue} end\n{acme}",
+            rogue = crediting("rogue"),
+            acme = crediting("acme"),
+        )),
+    );
+    home.edit_manifest("prov", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    std::fs::write(&flag, "").unwrap();
+    let err = start(&home, &session, "fiber.test/prov", "acme")
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    assert!(err.to_string().contains("rogue"), "{err}");
+}

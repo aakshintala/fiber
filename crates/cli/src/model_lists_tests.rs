@@ -82,21 +82,19 @@ impl Setup {
     }
 
     /// Installs a Lua extension with this `init.lua`, the way
-    /// `fiber extension install <path>` does.
-    fn install_lua(&self, extension: &str, init: &str) {
+    /// `fiber extension install <path>` does. `providers` is merged into
+    /// its manifest (the base build ignores it).
+    fn install_lua(&self, extension: &str, init: &str, providers: &Value) {
         let source = self.root.path().join("src").join(extension);
         std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(
-            source.join("extension.json"),
-            json!({
-                "name": extension,
-                "version": "v1.0.0",
-                "fiber": "0.1.0",
-                "api": extensions::API,
-            })
-            .to_string(),
-        )
-        .unwrap();
+        let mut manifest = json!({
+            "name": extension,
+            "version": "v1.0.0",
+            "fiber": "0.1.0",
+            "api": extensions::API,
+        });
+        manifest["providers"] = providers.clone();
+        std::fs::write(source.join("extension.json"), manifest.to_string()).unwrap();
         std::fs::write(source.join("init.lua"), init).unwrap();
         extensions::plan(
             &self.home(),
@@ -383,7 +381,7 @@ fn stale_refreshes_with_the_age_check_and_every_without() {
     let server =
         fakes::ProviderServer::start_with_fallback([listing(&["m1"])], listing(&["m1", "m2"]))
             .unwrap();
-    setup.install_lua("acme-ext", &server_models(&server.url()));
+    setup.install_lua("acme-ext", &server_models(&server.url()), &json!({}));
     let clock = Arc::new(fakes::clock::FakeClock::new());
     // No cached copy: the first read runs `models()` at once.
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
@@ -407,7 +405,7 @@ fn every_refreshes_whatever_the_cache_holds() {
     let server =
         fakes::ProviderServer::start_with_fallback([listing(&["m1"])], listing(&["m1", "m2"]))
             .unwrap();
-    setup.install_lua("acme-ext", &server_models(&server.url()));
+    setup.install_lua("acme-ext", &server_models(&server.url()), &json!({}));
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
@@ -422,7 +420,7 @@ fn a_failed_refresh_is_a_notice_and_the_cached_list_stays() {
     let setup = Setup::new("fiber-model-list-failed");
     // The script holds one answer: the refresh past it fails.
     let server = fakes::ProviderServer::start([listing(&["m1"])]).unwrap();
-    setup.install_lua("acme-ext", &server_models(&server.url()));
+    setup.install_lua("acme-ext", &server_models(&server.url()), &json!({}));
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
@@ -443,7 +441,7 @@ fn a_failed_refresh_is_a_notice_and_the_cached_list_stays() {
 fn a_cached_lua_only_provider_lists_without_loading() {
     let setup = Setup::new("fiber-model-list-lua-only");
     let server = fakes::ProviderServer::start([listing(&["m1"])]).unwrap();
-    setup.install_lua("acme-ext", &server_models(&server.url()));
+    setup.install_lua("acme-ext", &server_models(&server.url()), &json!({}));
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
@@ -610,4 +608,93 @@ fn a_placeholder_failure_keeps_its_code_and_text() {
     assert!(!matches!(error, ModelListsError::Config(_)), "{error:?}");
     assert_eq!(error.to_string(), "`1.x` is not a version such as `0.3.0`.",);
     assert_eq!(error.code(), contract::ErrorCode::ConfigInvalid);
+}
+
+#[test]
+fn a_cached_read_leaves_out_a_cached_model_at_an_unlisted_url() {
+    let setup = Setup::new("fiber-model-list-unlisted-cache");
+    setup.install_lua(
+        "acme-ext",
+        &server_models("http://127.0.0.1:1"),
+        &json!({"acme": ["http://127.0.0.1:1/v1"]}),
+    );
+    config::write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([
+            {"id": "m1", "protocol": "openai-responses",
+             "base_url": "http://127.0.0.1:1/v1", "context_window": 1000},
+            {"id": "m2", "protocol": "openai-responses",
+             "base_url": "http://127.0.0.1:2/v1", "context_window": 1000},
+        ]),
+    )
+    .unwrap();
+    let called = Cell::new(false);
+    let catalogue = listed(
+        model_lists(
+            &setup.home(),
+            &setup.workspace(),
+            ModelLists::Cached,
+            &unloaded(&called),
+        )
+        .unwrap(),
+    );
+    assert_eq!(references(&catalogue), ["acme/m1"]);
+    assert_eq!(catalogue.notices.len(), 1);
+    assert!(catalogue.notices[0].contains("acme/m2"), "{:?}", catalogue.notices);
+}
+
+#[test]
+fn a_cached_list_no_installed_extension_declares_is_not_listed() {
+    let setup = Setup::new("fiber-model-list-ghost-cache");
+    config::write_model_cache(
+        &setup.home(),
+        "ghost",
+        &json!([{"id": "m1", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
+    )
+    .unwrap();
+    let called = Cell::new(false);
+    let catalogue = listed(
+        model_lists(
+            &setup.home(),
+            &setup.workspace(),
+            ModelLists::Cached,
+            &unloaded(&called),
+        )
+        .unwrap(),
+    );
+    assert!(catalogue.models.is_empty(), "{:?}", catalogue.models);
+    assert!(catalogue.notices.is_empty(), "{:?}", catalogue.notices);
+}
+
+#[test]
+fn a_refreshed_list_leaves_out_a_model_at_an_unlisted_url() {
+    let setup = Setup::new("fiber-model-list-unlisted-refresh");
+    let base = "http://127.0.0.1:1";
+    let init = format!(
+        r#"
+fiber.provider("acme", {{
+  credential = {{ timeout = 60000, run = function(who)
+    return {{ token = "t", expires_at = 4102444800 }}
+  end }},
+  models = {{ timeout = 60000, run = function()
+    return {{
+      {{ id = "m1", protocol = "openai-responses", base_url = "{base}/v1", context_window = 1000 }},
+      {{ id = "m2", protocol = "openai-responses", base_url = "http://127.0.0.1:2/v1", context_window = 1000 }},
+    }}
+  end }},
+}})
+"#,
+    );
+    setup.install_lua(
+        "acme-ext",
+        &init,
+        &json!({"acme": [format!("{base}/v1")]}),
+    );
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: false }).unwrap();
+    assert_eq!(references(&catalogue), ["acme/m1"]);
+    assert_eq!(catalogue.notices.len(), 1);
+    assert!(catalogue.notices[0].contains("acme/m2"), "{:?}", catalogue.notices);
 }

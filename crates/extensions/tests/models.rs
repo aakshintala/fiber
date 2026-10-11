@@ -1329,3 +1329,166 @@ fn set_models_inserts_an_unheld_provider_and_refuses_scripted() {
     providers.set_models("scripted", vec![cached("m1")]);
     assert!(providers.get("scripted").is_none());
 }
+
+fn declared_manifest(name: &str, providers: serde_json::Value) -> serde_json::Value {
+    let mut m = manifest(name);
+    m["providers"] = providers;
+    m
+}
+
+fn model_at(id: &str, base: &str) -> serde_json::Value {
+    serde_json::json!({"id": id, "protocol": "openai-responses",
+        "base_url": base, "context_window": 1000})
+}
+
+fn data_with(name: &str, models: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({"name": name,
+        "credential": { "env": "FIBER_TEST_UNSET_KEY" }, "models": models})
+}
+
+#[test]
+fn an_extension_whose_data_names_an_undeclared_provider_loads_none_of_its_providers() {
+    let setup = Setup::new();
+    let a_manifest =
+        declared_manifest("a-ext", serde_json::json!({"a1": ["http://127.0.0.1:1/v1"]}));
+    let source = setup.source(
+        "a",
+        &a_manifest,
+        &[
+            data_with("a1", vec![model_at("m", "http://127.0.0.1:1/v1")]),
+            data_with("a2", vec![model_at("m", "http://127.0.0.1:1/v1")]),
+        ],
+    );
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let b_source = setup.source(
+        "b",
+        &declared_manifest("b-ext", serde_json::json!({"b": ["http://127.0.0.1:1/v1"]})),
+        &[data_with("b", vec![model_at("m", "http://127.0.0.1:1/v1")])],
+    );
+    install(&setup.home(), &b_source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["b"]);
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("a-ext"));
+    assert!(notices[0].message.contains("a2"), "{}", notices[0].message);
+}
+
+#[test]
+fn a_model_whose_base_url_its_entry_does_not_list_is_left_out_with_extension_failed() {
+    let setup = Setup::new();
+    let source = setup.source(
+        "a",
+        &declared_manifest("acme-ext", serde_json::json!({"acme": ["http://127.0.0.1:1/v1"]})),
+        &[data_with(
+            "acme",
+            vec![
+                model_at("m1", "http://127.0.0.1:1/v1"),
+                model_at("m2", "http://127.0.0.1:1/v1/"),
+            ],
+        )],
+    );
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(providers.resolve("acme/m1").is_ok());
+    assert!(providers.resolve("acme/m2").is_err());
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
+    assert!(notices[0].message.contains("acme/m2"), "{}", notices[0].message);
+}
+
+#[test]
+fn a_listed_pattern_admits_its_template_and_the_filled_url_is_not_compared() {
+    let setup = Setup::new();
+    let source = setup.source(
+        "a",
+        &declared_manifest(
+            "tmpl-ext",
+            serde_json::json!({"acme": ["https://{workspace}/v1"]}),
+        ),
+        &[data_with("acme", vec![model_at("m", "https://{workspace}/v1")])],
+    );
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(providers.resolve("acme/m").is_ok());
+    assert!(notices.is_empty(), "{notices:?}");
+
+    let setup2 = Setup::new();
+    let source2 = setup2.source(
+        "a",
+        &declared_manifest(
+            "filled-ext",
+            serde_json::json!({"acme": ["https://adb.example/v1"]}),
+        ),
+        &[data_with("acme", vec![model_at("m", "https://{workspace}/v1")])],
+    );
+    install(&setup2.home(), &source2, "0.1.0").unwrap();
+    let (providers2, notices2) = Providers::load(&setup2.home()).unwrap();
+    assert!(providers2.resolve("acme/m").is_err());
+    assert_eq!(notices2.len(), 1);
+}
+
+#[test]
+fn an_empty_entry_admits_no_model() {
+    let setup = Setup::new();
+    let source = setup.source(
+        "a",
+        &declared_manifest("e-ext", serde_json::json!({"acme": []})),
+        &[data_with("acme", vec![model_at("m", "http://127.0.0.1:1/v1")])],
+    );
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(providers.resolve("acme/m").is_err());
+    assert_eq!(notices.len(), 1);
+}
+
+#[test]
+fn a_cached_list_that_replaces_the_data_is_checked_too() {
+    let setup = Setup::new();
+    let source = setup.source(
+        "a",
+        &declared_manifest("acme-ext", serde_json::json!({"acme": ["http://127.0.0.1:1/v1"]})),
+        &[data_with("acme", vec![model_at("a", "http://127.0.0.1:1/v1")])],
+    );
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "b", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:2/v1", "context_window": 1000}]),
+    )
+    .unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(providers.resolve("acme/b").is_err());
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+}
+
+#[test]
+fn add_lua_leaves_out_a_models_result_at_an_unlisted_url() {
+    let setup = Setup::new();
+    let source = setup.source(
+        "a",
+        &declared_manifest("acme-ext", serde_json::json!({"acme": ["http://127.0.0.1:1/v1"]})),
+        &[],
+    );
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (mut providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    let lua = lua_named(
+        &setup,
+        "ext",
+        "acme",
+        "{ { id = \"listed\", protocol = \"openai-responses\", \
+           base_url = \"http://127.0.0.1:1/v1\", context_window = 1000 }, \
+           { id = \"rogue\", protocol = \"openai-responses\", \
+           base_url = \"http://127.0.0.1:2/v1\", context_window = 1000 } }",
+    );
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
+    assert!(providers.resolve("acme/listed").is_ok());
+    assert!(providers.resolve("acme/rogue").is_err());
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
+}

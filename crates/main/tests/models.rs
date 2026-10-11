@@ -557,3 +557,110 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     await_refresh_exit(setup.deadline, &setup.refresh_pattern());
     refresh_guard.stand_down(setup.deadline.cleanup());
 }
+
+fn install_data(home: &std::path::Path, name: &str, providers: &Value, datas: &[(&str, Value)]) {
+    let dir = home.join("extensions").join(name);
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
+    std::fs::write(
+        dir.join("extension.json"),
+        json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": providers}).to_string(),
+    )
+    .unwrap();
+    write_record(&dir);
+    for (pname, data) in datas {
+        std::fs::write(
+            dir.join("providers").join(format!("{pname}.json")),
+            data.to_string(),
+        )
+        .unwrap();
+    }
+}
+
+fn data_with(name: &str, models: Value) -> Value {
+    json!({"name": name, "models": models})
+}
+
+fn model_at(id: &str, base: &str) -> Value {
+    json!({"id": id, "protocol": "openai-responses",
+        "base_url": base, "context_window": 1000,
+        "cost": {"input": 1.0, "output": 2.0}})
+}
+
+#[test]
+fn models_skips_an_extension_whose_data_names_an_undeclared_provider() {
+    let setup = Setup::new();
+    install_data(
+        &setup.home(),
+        "a-ext",
+        &json!({"a1": ["http://127.0.0.1:9/v1"]}),
+        &[
+            ("a1", data_with("a1", json!([model_at("m", "http://127.0.0.1:9/v1")]))),
+            ("a2", data_with("a2", json!([model_at("m", "http://127.0.0.1:9/v1")]))),
+        ],
+    );
+    install_data(
+        &setup.home(),
+        "b-ext",
+        &json!({"b": ["http://127.0.0.1:9/v1"]}),
+        &[("b", data_with("b", json!([model_at("m", "http://127.0.0.1:9/v1")])) )],
+    );
+    let run = setup.fiber(&["models"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(run.stdout.contains("b/m"), "stdout: {}", run.stdout);
+    assert!(!run.stdout.contains("a1/m") && !run.stdout.contains("a2/m"), "stdout: {}", run.stdout);
+    assert_eq!(run.stderr.matches("a2").count(), 1, "stderr: {}", run.stderr);
+}
+
+#[test]
+fn models_skips_an_extension_whose_lua_registers_an_undeclared_provider() {
+    let setup = Setup::new();
+    install_data(
+        &setup.home(),
+        "c-ext",
+        &json!({"c": ["http://127.0.0.1:9/v1"]}),
+        &[("c", data_with("c", json!([model_at("m", "http://127.0.0.1:9/v1")])) )],
+    );
+    let src = setup.root.path().join("src-lua");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("extension.json"),
+        json!({"name": "c-ext", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+               "providers": {"c": ["http://127.0.0.1:9/v1"]}}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("init.lua"),
+        "fiber.provider(\"rogue\", { credential = { timeout = 1000, run = function() return { token = \"t\", expires_at = 4102444800 } end } })\n",
+    )
+    .unwrap();
+    // Install over the data extension dir is not supported; install as a second copy is
+    // skipped: instead rewrite the installed init.lua in place.
+    std::fs::write(
+        setup.home().join("extensions").join("c-ext").join("init.lua"),
+        "fiber.provider(\"rogue\", { credential = { timeout = 1000, run = function() return { token = \"t\", expires_at = 4102444800 } end } })\n",
+    )
+    .unwrap();
+    let run = setup.fiber(&["models"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!run.stdout.contains("c/m"), "stdout: {}", run.stdout);
+    assert_eq!(run.stderr.matches("rogue").count(), 1, "stderr: {}", run.stderr);
+}
+
+#[test]
+fn models_leaves_out_a_model_whose_base_url_is_not_listed() {
+    let setup = Setup::new();
+    install_data(
+        &setup.home(),
+        "fake-ext",
+        &json!({"fake": ["http://127.0.0.1:9/v1"]}),
+        &[("fake", data_with("fake", json!([
+            model_at("m", "http://127.0.0.1:9/v1"),
+            model_at("n", "http://127.0.0.1:9/v1/"),
+        ])))],
+    );
+    let run = setup.fiber(&["models"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(run.stdout.contains("fake/m"), "stdout: {}", run.stdout);
+    assert!(!run.stdout.contains("fake/n"), "stdout: {}", run.stdout);
+    assert!(run.stderr.contains("fake/n"), "stderr: {}", run.stderr);
+}

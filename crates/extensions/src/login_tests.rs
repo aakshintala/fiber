@@ -156,3 +156,45 @@ fn login_provider_without_an_installed_package_is_a_config_error() {
     };
     assert!(matches!(&error, Error::Config(_)), "{error:?}");
 }
+
+#[test]
+fn login_provider_fails_when_the_vm_registers_an_undeclared_provider() {
+    let root = fakes::TempDir::new("fiber-login-undeclared");
+    let home = root.path().join("home");
+    install(&home, "acme-ext", "acme");
+    let dir = home.join("extensions").join("acme-ext");
+    fs::write(
+        dir.join("extension.json"),
+        json!({ "name": "acme-ext", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
+                "providers": {"acme": ["http://127.0.0.1:1/v1"]} })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("init.lua"),
+        r#"fiber.provider("acme", {
+          credential = { timeout = 60000, run = function(arg)
+            return { token = "t", expires_at = 4102444800 }
+          end }
+        })
+        fiber.provider("rogue", {
+          credential = { timeout = 60000, run = function(arg)
+            return { token = "t", expires_at = 4102444800 }
+          end }
+        })"#,
+    )
+    .unwrap();
+    let (providers, _) = Providers::load(&home).unwrap();
+    let err = match login_provider(
+        &home,
+        &providers,
+        "acme",
+        Arc::new(SystemBrowser::default()),
+        FakeClock::new(),
+    ) {
+        Ok(_) => panic!("a VM registering an undeclared provider logs in"),
+        Err(err) => err,
+    };
+    assert_eq!(err.code(), contract::ErrorCode::ExtensionFailed);
+    assert!(err.to_string().contains("rogue"), "{err}");
+}
