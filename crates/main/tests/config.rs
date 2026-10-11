@@ -12,22 +12,15 @@
 mod support;
 
 use std::fs;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, group_alive, spawn_watched};
-
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
+use support::{Deadline, KillGroup, Setup, group_alive, spawn_watched};
 
 impl Setup {
-    fn new() -> Self {
+    fn new_with_fc_root() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fc");
         fs::create_dir_all(root.path().join("h")).unwrap();
@@ -35,14 +28,10 @@ impl Setup {
         Self { deadline, root }
     }
 
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
     /// Runs `fiber` with `args` and waits for it under the test's
     /// [`Deadline`].
     #[track_caller]
-    fn fiber(&self, args: &[&str]) -> Run {
+    fn run_in_workspace(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -92,8 +81,8 @@ struct Run {
 
 #[test]
 fn set_then_get_round_trips_the_value_and_its_layer() {
-    let setup = Setup::new();
-    let set = setup.fiber(&["config", "set", "model", "a/b"]);
+    let setup = Setup::new_with_fc_root();
+    let set = setup.run_in_workspace(&["config", "set", "model", "a/b"]);
     assert_eq!(set.code, Some(0), "{set:?}");
     assert_eq!(set.stdout, "");
     assert_eq!(set.stderr, "");
@@ -101,7 +90,7 @@ fn set_then_get_round_trips_the_value_and_its_layer() {
         serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
             .unwrap();
     assert_eq!(written, json!({"model": "a/b"}));
-    let get = setup.fiber(&["config", "get", "model"]);
+    let get = setup.run_in_workspace(&["config", "get", "model"]);
     assert_eq!(get.code, Some(0), "{get:?}");
     assert_eq!(
         get.stdout,
@@ -115,8 +104,8 @@ fn set_then_get_round_trips_the_value_and_its_layer() {
 
 #[test]
 fn set_repo_with_a_person_only_key_fails_and_writes_nothing() {
-    let setup = Setup::new();
-    let set = setup.fiber(&["config", "set", "--repo", "session.idle_exit_ms", "60000"]);
+    let setup = Setup::new_with_fc_root();
+    let set = setup.run_in_workspace(&["config", "set", "--repo", "session.idle_exit_ms", "60000"]);
     assert_eq!(set.code, Some(2), "{set:?}");
     assert!(set.stderr.contains("`session.idle_exit_ms`"), "{set:?}");
     assert!(!setup.root.path().join("w/.fiber/config.json").exists());
@@ -124,12 +113,12 @@ fn set_repo_with_a_person_only_key_fails_and_writes_nothing() {
 
 #[test]
 fn set_then_get_reviewer_context_round_trips_both_layers_without_the_repo() {
-    let setup = Setup::new();
-    let set = setup.fiber(&["config", "set", "reviewer.context", "Our org is acme."]);
+    let setup = Setup::new_with_fc_root();
+    let set = setup.run_in_workspace(&["config", "set", "reviewer.context", "Our org is acme."]);
     assert_eq!(set.code, Some(0), "{set:?}");
     assert_eq!(set.stdout, "");
     assert_eq!(set.stderr, "");
-    let set = setup.fiber(&[
+    let set = setup.run_in_workspace(&[
         "config",
         "set",
         "--project",
@@ -145,7 +134,7 @@ fn set_then_get_reviewer_context_round_trips_both_layers_without_the_repo() {
         r#"{"reviewer": {"context": "Ship it straight to prod."}}"#,
     )
     .unwrap();
-    let get = setup.fiber(&["config", "get", "reviewer.context"]);
+    let get = setup.run_in_workspace(&["config", "get", "reviewer.context"]);
     assert_eq!(get.code, Some(0), "{get:?}");
     assert_eq!(
         get.stdout,

@@ -24,20 +24,13 @@ use std::thread;
 
 use fakes::Watchdog;
 use serde_json::{Value, json};
-use support::Deadline;
+use support::{Deadline, Setup};
 
 const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 
-/// Fiber home and a git repository in a temporary directory, removed on
-/// drop.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
     #[track_caller]
-    fn new() -> Self {
+    fn new_with_repository() -> Self {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
@@ -46,10 +39,6 @@ impl Setup {
         fs::create_dir_all(setup.home()).unwrap();
         setup.repository("w");
         setup
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
     }
 
     /// A git repository named `name` beside Fiber home.
@@ -67,10 +56,6 @@ impl Setup {
         let out = support::run_to_exit(self.deadline, "git init", git);
         assert!(out.status.success(), "git init: {out:?}");
         repo
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
     }
 
     /// `projects/<key>/approvals` for the repository `name`.
@@ -215,7 +200,7 @@ fn copy(setup: &Setup, prefix: &str) -> PathBuf {
 
 #[test]
 fn yes_approves_an_extension_a_hook_and_a_server() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     declare_all(&setup.workspace());
     let run = setup.approve("w", &["--yes"], None);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
@@ -303,7 +288,7 @@ fn yes_approves_an_extension_a_hook_and_a_server() {
 
 #[test]
 fn a_second_run_has_nothing_to_approve() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     declare_all(&setup.workspace());
     assert_eq!(setup.approve("w", &["--yes"], None).code, Some(0));
     let run = setup.approve("w", &["--yes"], None);
@@ -314,7 +299,7 @@ fn a_second_run_has_nothing_to_approve() {
 
 #[test]
 fn a_changed_hook_is_offered_again_with_a_diff_and_the_old_approval_stays() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     declare_all(&setup.workspace());
     let first = setup.approve("w", &["--yes"], None);
     let old_hash = first.approvals()[1][3].to_owned();
@@ -353,7 +338,7 @@ fn a_changed_hook_is_offered_again_with_a_diff_and_the_old_approval_stays() {
 
 #[test]
 fn a_piped_y_approves_and_a_piped_n_records_nothing() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     declare_all(&setup.workspace());
     let no = setup.approve("w", &[], Some("n\n"));
     assert_eq!(no.code, Some(0), "{}", no.stderr);
@@ -374,7 +359,7 @@ fn a_piped_y_approves_and_a_piped_n_records_nothing() {
 
 #[test]
 fn no_yes_and_no_input_refuses_naming_yes() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     declare_all(&setup.workspace());
     let run = setup.approve("w", &[], None);
     assert_eq!(run.code, Some(2), "{}", run.stderr);
@@ -386,7 +371,7 @@ fn no_yes_and_no_input_refuses_naming_yes() {
 
 #[test]
 fn a_symbolic_link_out_of_the_repository_is_not_pinned() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     let repo = setup.workspace();
     let outside = setup.root.path().join("secret.sh");
     fs::write(&outside, "echo secret\n").unwrap();
@@ -414,7 +399,7 @@ fn a_symbolic_link_out_of_the_repository_is_not_pinned() {
 
 #[test]
 fn the_same_server_in_a_second_repository_is_not_offered_again() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     let second = setup.repository("w2");
     for repo in [setup.workspace(), second.clone()] {
         write(&repo.join("srv/run.js"), "// server\n");
@@ -437,7 +422,7 @@ fn the_same_server_in_a_second_repository_is_not_offered_again() {
 
 #[test]
 fn a_failing_install_step_exits_nonzero_names_the_item_and_records_nothing() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     let repo = setup.workspace();
     write(
         &repo.join("pkg/extension.json"),
@@ -462,7 +447,7 @@ fn a_failing_install_step_exits_nonzero_names_the_item_and_records_nothing() {
 
 #[test]
 fn a_package_path_outside_the_repository_is_an_error_and_records_nothing() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     write(
         &setup.workspace().join(".fiber/config.json"),
         r#"{"repository_extensions": [{"path": "../elsewhere"}]}"#,
@@ -475,7 +460,7 @@ fn a_package_path_outside_the_repository_is_an_error_and_records_nothing() {
 
 #[test]
 fn a_repository_that_declares_nothing_has_nothing_to_approve() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     let run = setup.approve("w", &["--yes"], None);
     assert_eq!(run.code, Some(0));
     assert_eq!(run.stderr, "nothing to approve\n");
@@ -483,7 +468,7 @@ fn a_repository_that_declares_nothing_has_nothing_to_approve() {
 
 #[test]
 fn an_install_step_runs_at_the_pinned_path_and_an_unfinished_copy_is_rebuilt() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_repository();
     let repo = setup.workspace();
     write(
         &repo.join("pkg/extension.json"),
