@@ -628,24 +628,16 @@ fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
 // too long or not at all changes when a pass runs, never what it decides.
 #[cfg_attr(false, mutants::skip)]
 fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
-    let mut slot = Some(lock(&shared.inner));
-    clock.wait_until(until, &mut |bound| {
-        let Some(guard) = slot.take() else {
-            return;
-        };
-        let timeout = bound.map_or(GROUP_POLL, |b| b.min(GROUP_POLL));
-        if guard.seq != seen {
-            slot = Some(guard);
-            return;
-        }
-        slot = Some(
-            shared
-                .cv
-                .wait_timeout(guard, timeout)
-                .unwrap_or_else(PoisonError::into_inner)
-                .0,
-        );
-    });
+    // The guard is held from the check into the condvar wait, so a wake
+    // under the same lock is never missed.
+    let _guard = support::clock::park(
+        clock,
+        until,
+        Some(GROUP_POLL),
+        &shared.cv,
+        lock(&shared.inner),
+        |guard| guard.seq != seen,
+    );
 }
 
 fn read_into(

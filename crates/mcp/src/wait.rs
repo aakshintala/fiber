@@ -2,7 +2,7 @@
 //! waits, cancellation and gone notifications (`docs/mcp.md`, "Calls").
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
@@ -120,31 +120,16 @@ pub(crate) fn park(
     until: Instant,
     seen: u64,
 ) {
-    // Taken before `wait_until`, and held until the condvar wait, so a wake
-    // blocks on this lock instead of notifying nobody.
-    let mut slot = Some(lock(&shared.inner));
-    clock.wait_until(Some(until), &mut |bound| {
-        let Some(guard) = slot.take() else {
-            return;
-        };
-        if should_stop(guard.seq, seen, cancel.is_cancelled()) {
-            slot = Some(guard);
-            return;
-        }
-        slot = Some(match bound {
-            Some(bound) => {
-                shared
-                    .cv
-                    .wait_timeout(guard, bound)
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .0
-            }
-            None => shared
-                .cv
-                .wait(guard)
-                .unwrap_or_else(PoisonError::into_inner),
-        });
-    });
+    // The guard is held from the check into the condvar wait, so a wake
+    // under the same lock is never missed.
+    let _guard = support::clock::park(
+        clock,
+        Some(until),
+        None,
+        &shared.cv,
+        lock(&shared.inner),
+        |guard| should_stop(guard.seq, seen, cancel.is_cancelled()),
+    );
 }
 
 /// The call's cancel reaches the wait through this bridge. It holds the

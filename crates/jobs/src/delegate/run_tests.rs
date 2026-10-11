@@ -33,12 +33,13 @@ use fakes::clock::FakeClock;
 use fakes::{Recorder, TempDir, Watchdog, group_empties, kill_pid, pids_exit, within};
 
 use super::{
-    Fold, Launch, Launched, POLL, Parker, Runner, Shared, Stat, Watch, Watched, Watcher, cap_due,
-    kill_due, mint_session_id, note_seq, over_len, park_due,
+    Fold, Launch, Launched, POLL, Runner, Shared, Stat, Watch, Watched, Watcher, cap_due, kill_due,
+    mint_session_id, note_seq, over_len, park_due,
 };
 use crate::delegate::outcome::Termination;
 use crate::registry::Registry;
 use crate::support::{exited, usage};
+use support::clock::Parker;
 
 /// How long a test waits on the wall clock before it fails.
 const DEADLINE: Duration = Duration::from_secs(3);
@@ -1502,10 +1503,7 @@ fn run_watch(
         }
         Ok(Watched::Closed)
     });
-    let waker: Arc<dyn contract::clock::Wake> = Arc::new(Parker {
-        seq: Mutex::new(0),
-        cv: Condvar::new(),
-    });
+    let waker: Arc<dyn contract::clock::Wake> = Arc::new(Parker::new());
     Watcher {
         watch,
         session_id: SessionId("s_child".into()),

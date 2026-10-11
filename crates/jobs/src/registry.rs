@@ -22,7 +22,8 @@ use contract::{ErrorCode, JobId};
 #[path = "registry/park.rs"]
 mod park;
 
-use park::{Parked, Parker};
+use park::{Parked, park_until};
+use support::clock::Parker;
 
 use crate::delegate::outcome::empty;
 
@@ -566,8 +567,13 @@ impl Registry {
         cancel: &dyn Cancel,
     ) -> Parked {
         let wake = Arc::clone(self) as Arc<dyn Wake>;
-        self.park
-            .park_until(self.clock.as_ref(), cancel, until, &wake, || {
+        park_until(
+            &self.park,
+            self.clock.as_ref(),
+            cancel,
+            until,
+            &wake,
+            || {
                 let inner = lock(&self.inner);
                 if ended(&inner, id) {
                     return Some(Parked::Ended);
@@ -579,7 +585,8 @@ impl Registry {
                     return Some(Parked::Timeout);
                 }
                 None
-            })
+            },
+        )
     }
 }
 

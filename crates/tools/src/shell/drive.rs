@@ -1,7 +1,7 @@
 //! Driving a command through running, stopping, draining and finishing.
 
 use std::process::ExitStatus;
-use std::sync::{Arc, PoisonError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
@@ -280,37 +280,16 @@ pub(super) fn park(
     wake_on_cancel: bool,
     seen: u64,
 ) {
-    // Taken before `wait_until`, and held until the condvar wait, so a wake
-    // blocks on this lock instead of notifying nobody. `FnMut` cannot move
-    // the guard out and back; the slot holds it across the one call.
-    let mut slot = Some(lock(&shared.inner));
-    clock.wait_until(until, &mut |bound| {
-        let Some(guard) = slot.take() else {
-            return;
-        };
-        let timeout = match (bound, poll) {
-            (Some(bound), true) => Some(bound.min(support::group::GROUP_POLL)),
-            (None, true) => Some(support::group::GROUP_POLL),
-            (bound, false) => bound,
-        };
-        if already_woken(guard.seq, seen, wake_on_cancel, cancel.is_cancelled()) {
-            slot = Some(guard);
-            return;
-        }
-        slot = Some(match timeout {
-            Some(timeout) => {
-                shared
-                    .cv
-                    .wait_timeout(guard, timeout)
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .0
-            }
-            None => shared
-                .cv
-                .wait(guard)
-                .unwrap_or_else(PoisonError::into_inner),
-        });
-    });
+    // The guard is held from the check into the condvar wait, so a wake
+    // under the same lock is never missed.
+    let _guard = support::clock::park(
+        clock,
+        until,
+        poll.then_some(support::group::GROUP_POLL),
+        &shared.cv,
+        lock(&shared.inner),
+        |guard| already_woken(guard.seq, seen, wake_on_cancel, cancel.is_cancelled()),
+    );
 }
 
 /// The sequence moved, or a cancel should wake a run that is still going.

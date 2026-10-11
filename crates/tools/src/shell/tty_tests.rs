@@ -14,7 +14,7 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 
-use super::{Nudge, lock_writer, open, output_so_far, wait_first_output, write_chunks};
+use super::{lock_writer, open, output_so_far, wait_first_output, write_chunks};
 use crate::shell::output::{Shared, lock, note_eof};
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -163,16 +163,6 @@ fn output_arriving_does_not_end_the_wait() {
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("the wait to end at 250 ms");
-}
-
-#[test]
-fn a_nudge_counts_its_wakes() {
-    let nudge = Nudge::default();
-    assert_eq!(nudge.seen(), 0);
-    nudge.wake();
-    assert_eq!(nudge.seen(), 1);
-    nudge.wake();
-    assert_eq!(nudge.seen(), 2);
 }
 
 /// A writer that answers each write from a script. Once the script is

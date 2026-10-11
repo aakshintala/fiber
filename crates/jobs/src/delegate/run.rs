@@ -11,7 +11,7 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,7 @@ use rustix::process::Signal;
 use super::group;
 use super::outcome::{Termination, outcome};
 use crate::registry::Unreported;
+use support::clock::Parker;
 use support::group::Listing;
 
 /// Resolves a `fiber:` model reference to the `provider/model[:level]` the
@@ -167,32 +168,6 @@ fn kill_due(kill_at: Option<Instant>, now: Instant) -> bool {
     kill_at.is_some_and(|kill_at| now >= kill_at)
 }
 
-/// What wakes the runner's parks: bumped on every clock move, as the
-/// registry's `seq` is, so a wake that lands before the wait is still
-/// visible.
-struct Parker {
-    seq: Mutex<u64>,
-    cv: Condvar,
-}
-
-impl Wake for Parker {
-    fn wake(&self) {
-        let mut seq = self.seq.lock().unwrap_or_else(PoisonError::into_inner);
-        *seq = seq.wrapping_add(1);
-        self.cv.notify_all();
-    }
-}
-
-impl Parker {
-    /// The current generation, for the wait's change check. The runner
-    /// snapshots it before reading the fold, the clock and the child,
-    /// and parks only while it still equals the snapshot, so a watcher
-    /// poke or clock move in between is never slept through.
-    fn generation(&self) -> u64 {
-        *self.seq.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
 /// What the watch feeds the fold, shared with the watcher thread: the
 /// last new `seq`, the socket's `fiber_exited` when it received one, and
 /// the one-shot result of the running watch.
@@ -264,10 +239,7 @@ impl Runner {
         let shared = Shared::new(Arc::clone(&clock), bound);
         let stopping = Arc::clone(&shared);
         let stop = Stop(Box::new(move || stopping.stop()));
-        let park = Arc::new(Parker {
-            seq: Mutex::new(0),
-            cv: Condvar::new(),
-        });
+        let park = Arc::new(Parker::new());
         let wake = Arc::clone(&park) as Arc<dyn Wake>;
         clock.subscribe(Arc::downgrade(&wake));
         (
@@ -313,37 +285,6 @@ impl Runner {
             })?;
         self.shared.set_pgid(child.id());
         Ok((child, listing))
-    }
-
-    /// One wait on the clock, taken only while the generation still
-    /// equals the snapshot read before the loop's checks: a poke or clock
-    /// move after the snapshot trips the check below instead of being
-    /// slept through.
-    fn park(&self, until: Option<Instant>, seen: u64) {
-        let mut slot = Some(self.park.seq.lock().unwrap_or_else(PoisonError::into_inner));
-        self.clock.wait_until(until, &mut |bound| {
-            let Some(seq) = slot.take() else {
-                return;
-            };
-            if *seq != seen {
-                slot = Some(seq);
-                return;
-            }
-            slot = Some(match bound {
-                Some(timeout) => {
-                    self.park
-                        .cv
-                        .wait_timeout(seq, timeout)
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .0
-                }
-                None => self
-                    .park
-                    .cv
-                    .wait(seq)
-                    .unwrap_or_else(PoisonError::into_inner),
-            });
-        });
     }
 
     /// Drives the delegate to its end and reports it once: the watch loop
@@ -456,7 +397,7 @@ impl Runner {
                 next_retry,
                 self.shared.kill_at(),
             );
-            self.park(Some(due), seen);
+            self.park.park(self.clock.as_ref(), Some(due), seen);
         }
     }
 
@@ -479,7 +420,7 @@ impl Runner {
             if self.clock.now() >= deadline {
                 return None;
             }
-            self.park(Some(deadline), seen);
+            self.park.park(self.clock.as_ref(), Some(deadline), seen);
         }
     }
 
@@ -499,7 +440,11 @@ impl Runner {
             if kill_due(self.shared.kill_at(), self.clock.now()) {
                 group::signal(pgid, Signal::KILL);
             }
-            self.park(Some(later(self.clock.as_ref(), POLL)), seen);
+            self.park.park(
+                self.clock.as_ref(),
+                Some(later(self.clock.as_ref(), POLL)),
+                seen,
+            );
         }
     }
 }

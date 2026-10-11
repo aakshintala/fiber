@@ -15,7 +15,8 @@ use std::time::Duration;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, within};
 
-use super::{Parked, Parker};
+use super::{Parked, park_until};
+use support::clock::Parker;
 
 /// How long a test waits on the wall clock before it fails.
 const DEADLINE: Duration = Duration::from_secs(3);
@@ -26,16 +27,6 @@ struct NoopWake;
 
 impl contract::clock::Wake for NoopWake {
     fn wake(&self) {}
-}
-
-#[test]
-fn the_generation_counts_every_bump() {
-    let parker = Parker::new();
-    assert_eq!(parker.generation(), 0);
-    parker.bump();
-    parker.bump();
-    parker.bump();
-    assert_eq!(parker.generation(), 3);
 }
 
 #[test]
@@ -53,7 +44,7 @@ fn a_bump_between_check_and_park_returns_at_once() {
         move || {
             let cancel = CancelToken::new();
             let checks = AtomicUsize::new(0);
-            parker.park_until(clock.as_ref(), &cancel, None, &wake, || {
+            park_until(&parker, clock.as_ref(), &cancel, None, &wake, || {
                 if checks.fetch_add(1, Ordering::SeqCst) == 0 {
                     parker.bump();
                     return None;
