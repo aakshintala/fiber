@@ -245,7 +245,11 @@ fn level(v: u8) -> u8 {
 /// distance throughout.
 fn nearest((r, g, b): (u8, u8, u8), ramp: Ramp) -> u8 {
     let dist = |v: u8| {
-        let (dr, dg, db) = (r as i32 - v as i32, g as i32 - v as i32, b as i32 - v as i32);
+        let (dr, dg, db) = (
+            r as i32 - v as i32,
+            g as i32 - v as i32,
+            b as i32 - v as i32,
+        );
         (dr * dr + dg * dg + db * db) as u32
     };
     let grey = (0..=23)
@@ -256,8 +260,16 @@ fn nearest((r, g, b): (u8, u8, u8), ramp: Ramp) -> u8 {
     let (lr, lg, lb) = (level(r), level(g), level(b));
     let cube = 16 + 36 * lr + 6 * lg + lb;
     let cubed = {
-        let (cr, cg, cb) = (LEVELS[lr as usize], LEVELS[lg as usize], LEVELS[lb as usize]);
-        let (dr, dg, db) = (r as i32 - cr as i32, g as i32 - cg as i32, b as i32 - cb as i32);
+        let (cr, cg, cb) = (
+            LEVELS[lr as usize],
+            LEVELS[lg as usize],
+            LEVELS[lb as usize],
+        );
+        let (dr, dg, db) = (
+            r as i32 - cr as i32,
+            g as i32 - cg as i32,
+            b as i32 - cb as i32,
+        );
         (dr * dr + dg * dg + db * db) as u32
     };
     match ramp {
@@ -312,7 +324,7 @@ pub(crate) fn map(look: Look, colour: Color, is_bg: bool) -> Color {
                 v
             };
             (out, ramp)
-        },
+        }
         // Already indexed: nothing to quantize.
         other => return other,
     };
@@ -366,9 +378,8 @@ where
         if look == Look::DARK {
             return self.0.draw(content);
         }
-        let cells: Vec<(u16, u16, Cell)> = content
-            .map(|(x, y, c)| (x, y, map_cell(look, c)))
-            .collect();
+        let cells: Vec<(u16, u16, Cell)> =
+            content.map(|(x, y, c)| (x, y, map_cell(look, c))).collect();
         self.0.draw(cells.iter().map(|(x, y, c)| (*x, *y, c)))
     }
 
@@ -403,15 +414,11 @@ where
     }
 
     fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> Result<(), Self::Error> {
-        if needs_clear(get())
-            && matches!(clear_type, ratatui::backend::ClearType::All)
-        {
+        if needs_clear(get()) && matches!(clear_type, ratatui::backend::ClearType::All) {
             write!(self.0, "\x1b[48;2;255;255;255m")?;
         }
         self.0.clear_region(clear_type)?;
-        if needs_clear(get())
-            && matches!(clear_type, ratatui::backend::ClearType::All)
-        {
+        if needs_clear(get()) && matches!(clear_type, ratatui::backend::ClearType::All) {
             write!(self.0, "\x1b[49m")?;
         }
         Ok(())
@@ -787,14 +794,12 @@ mod tests {
         c.bg = crate::BC;
         c.underline_color = crate::RED;
         c.modifier = Modifier::BOLD | Modifier::DIM | Modifier::ITALIC | Modifier::REVERSED;
-        c.skip = true;
         let m = map_cell(LIGHT, &c);
         assert_eq!(m.symbol(), "x");
         assert_eq!(
             m.modifier,
             Modifier::BOLD | Modifier::DIM | Modifier::ITALIC | Modifier::REVERSED
         );
-        assert!(m.skip);
         assert_eq!(m.fg, val(0x0969da));
         assert_eq!(m.bg, val(0xeaeef2));
         assert_eq!(m.underline_color, val(0xcf222e));
@@ -891,7 +896,10 @@ mod tests {
             let m = map_cell(LIGHT, &c);
             for col in [m.fg, m.bg, m.underline_color] {
                 if let Color::Rgb(r, g, b) = col {
-                    assert!(!darks.contains(&(r, g, b)), "dark {r:02x}{g:02x}{b:02x} survives");
+                    assert!(
+                        !darks.contains(&(r, g, b)),
+                        "dark {r:02x}{g:02x}{b:02x} survives"
+                    );
                 }
             }
         }
