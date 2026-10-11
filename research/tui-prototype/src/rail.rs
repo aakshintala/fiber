@@ -53,7 +53,7 @@ const CASES: &[Case<Look>] = &[
     Case {
         name: "hidden",
         help: "the hidden rail's grip with N waiting on the Session card",
-        check: "a 1-column handle with the dim ⋮ grip at the screen's left edge, and the Session card ending `! 2 waiting · rail hidden …` in orange: the `· show` hint clips at the default panel width, as on screen.",
+        check: "a 1-column handle with the dim ⋮ grip at the screen's left edge, and the Session card ending `! 2 waiting · hidden · show` in orange, whole at the default panel width.",
         build: || Look { kind: Kind::Hidden },
     },
 ];
@@ -855,6 +855,20 @@ mod tests {
     }
 
     #[test]
+    fn rail_labels_draw_whole_at_every_case_width() {
+        // The density chips and the project header are labels, not data: neither
+        // is cut with … at the 22-column floor or the 24-column default.
+        for w in [FLOOR_W, 24, CEIL_W] {
+            let t = rows_text(&width_rows(w));
+            assert!(t.contains("full med three compact"), "chips cut at {w}");
+            assert!(t.contains("$2.45 · 2 ✓"), "project header cut at {w}");
+        }
+        let t = text(&parse("all-states").unwrap(), 160, 48);
+        assert!(t.contains("$1.51 · 0 ✓"), "pi-rig header cut at 24");
+        assert!(!t.contains("compa…"));
+    }
+
+    #[test]
     fn ceiling_keeps_its_bar() {
         let t = rows_text(&width_rows(CEIL_W));
         assert!(t.contains('▆'), "the ceiling lost its bar");
@@ -864,7 +878,7 @@ mod tests {
     fn hidden_shows_the_grip_and_the_waiting_line() {
         let c = parse("hidden").unwrap();
         let t = text(&c, 160, 48);
-        assert!(t.contains("2 waiting · rail hidden …"));
+        assert!(t.contains("2 waiting · hidden · show"));
         // The dim ⋮ grip stands at the screen's left edge on 3 centred rows.
         let lines: Vec<&str> = t.split('\n').collect();
         let mid = 48 / 2;
