@@ -317,7 +317,7 @@ impl Theme {
             Shade::Rgb((0xff, 0x9f, 0x43)), // warning
             Shade::Rgb((0xff, 0x5d, 0x73)), // error
             Shade::Rgb((0xff, 0x9f, 0x43)), // attention
-            Shade::Rgb((0x6e, 0xaa, 0xfe)), // added
+            Shade::Rgb((0x73, 0xc9, 0x91)), // added
             Shade::Rgb((0xff, 0x5d, 0x73)), // removed
             Shade::Terminal,                // code_text
             Shade::Rgb((0x6e, 0xaa, 0xfe)), // keyword
