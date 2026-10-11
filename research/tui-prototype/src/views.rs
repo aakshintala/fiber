@@ -79,6 +79,14 @@ const CASES: &[Case<Look>] = &[
         check: "global rules then this project's, each with its prefix, when and from which session it was added, and its red ✕.",
         build: || Look { kind: Kind::Rules },
     },
+    Case {
+        name: "settings",
+        help: "configuration keys with values and layers",
+        check: "the keys with their effective values and the layer each comes from, the reload cost, and the file hint.",
+        build: || Look {
+            kind: Kind::Settings,
+        },
+    },
 ];
 
 /// `--view-case`, for `--help` and `check/views.md`.
@@ -99,6 +107,7 @@ enum Kind {
     SearchResults,
     Tools,
     Rules,
+    Settings,
 }
 
 struct Look {
@@ -432,6 +441,23 @@ fn rules_rows() -> Vec<super::Row> {
     ]
 }
 
+/// `/settings`: the configuration keys, their effective values and the
+/// layer each comes from. Editing follows `fiber config set`; the view says
+/// when a change needs a reload and what that costs.
+fn settings_rows() -> Vec<super::Row> {
+    vec![
+        row(vec![sp("model · opus-5-5 · global", Style::new())]),
+        row(vec![sp("thinking · high · project", Style::new())]),
+        row(vec![sp("budget.usd · 20 · project", Style::new())]),
+        super::Row::default(),
+        row(vec![sp(
+            "changing model needs a reload (~84k tokens)",
+            dim(),
+        )]),
+        row(vec![sp("Ctrl+G opens the file", dim())]),
+    ]
+}
+
 fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
     match c.kind {
         Kind::Delegate => {
@@ -483,6 +509,12 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             let mut out = vec![view_header("Rules", "/rules")];
             out.push(super::Row::default());
             out.extend(rules_rows());
+            out
+        }
+        Kind::Settings => {
+            let mut out = vec![view_header("Settings", "/settings")];
+            out.push(super::Row::default());
+            out.extend(settings_rows());
             out
         }
         Kind::JobPty => {
@@ -685,7 +717,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 8);
+        assert_eq!(CASES.len(), 9);
         assert!(parse("nope").is_none());
     }
 
@@ -1023,6 +1055,28 @@ mod tests {
             }
         }
         assert_eq!(marks, 2, "not one ✕ per rule");
+    }
+
+    #[test]
+    fn settings_header_row() {
+        for cols in [160, NARROW] {
+            let c = parse_case("settings");
+            let buf = buffer(&c, cols, 48);
+            assert_header(&buf, "settings", "Settings", "/settings", cols);
+        }
+    }
+
+    #[test]
+    fn settings_shows_keys_values_and_layers() {
+        for cols in [160, NARROW] {
+            let c = parse_case("settings");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("model · opus-5-5 · global"), "no model row");
+            assert!(t.contains("thinking · high · project"), "no thinking row");
+            assert!(t.contains("budget.usd · 20 · project"), "no budget row");
+            assert!(t.contains("needs a reload"), "no reload note");
+            assert!(t.contains("Ctrl+G opens the file"), "no file hint");
+        }
     }
 
     #[test]
