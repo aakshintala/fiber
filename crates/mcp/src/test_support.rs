@@ -138,12 +138,26 @@ impl Setup {
     /// Starts `specs` through the public `start`, with a deadline naming the wait.
     #[track_caller]
     pub(crate) fn start(&self, specs: Vec<ServerSpec>) -> Started {
+        self.start_with_images(specs, FakeImages::ok())
+    }
+
+    /// Starts `specs` through the public `start` with `images` as the
+    /// image child, with a deadline naming the wait.
+    #[track_caller]
+    pub(crate) fn start_with_images(
+        &self,
+        specs: Vec<ServerSpec>,
+        images: std::sync::Arc<FakeImages>,
+    ) -> Started {
         let workspace = self.workspace();
         let artifacts = self.artifacts();
         let cache = self.cache();
         let clock = self.clock();
+        let images: std::sync::Arc<dyn contract::images::Images> = images;
         fakes::within("the start", WITHIN, move || {
-            crate::start::start(specs, &workspace, &artifacts, &cache, &clock, "0.0.0")
+            crate::start::start(
+                specs, &workspace, &artifacts, images, &cache, &clock, "0.0.0",
+            )
         })
     }
 
@@ -296,6 +310,56 @@ impl Setup {
         await_until(&format!("pid {pid} to be reaped"), move || {
             !fakes::kill_pid(pid, "0").expect("probe")
         });
+    }
+}
+
+/// One fake image child: records the bytes each call was given and answers
+/// the configured result immediately, so no test waits on a child process.
+pub(crate) struct FakeImages {
+    calls: std::sync::Mutex<Vec<Vec<u8>>>,
+    result: std::sync::Mutex<Result<contract::provider::ImageRef, contract::images::ImageError>>,
+}
+
+impl FakeImages {
+    /// One that answers `result`.
+    pub(crate) fn with(
+        result: Result<contract::provider::ImageRef, contract::images::ImageError>,
+    ) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            calls: std::sync::Mutex::new(Vec::new()),
+            result: std::sync::Mutex::new(result),
+        })
+    }
+
+    /// One that answers a 2x3 PNG reference.
+    pub(crate) fn ok() -> std::sync::Arc<Self> {
+        Self::with(Ok(contract::provider::ImageRef {
+            path: "artifacts/mcp-fake.png".to_owned(),
+            mime_type: "image/png".to_owned(),
+            width: 2,
+            height: 3,
+        }))
+    }
+
+    /// The bytes each call was given, in order.
+    pub(crate) fn calls(&self) -> Vec<Vec<u8>> {
+        self.calls.lock().expect("fake images").clone()
+    }
+
+    /// How many calls the image child saw.
+    pub(crate) fn call_count(&self) -> usize {
+        self.calls.lock().expect("fake images").len()
+    }
+}
+
+impl contract::images::Images for FakeImages {
+    fn process(
+        &self,
+        bytes: &[u8],
+        _cancel: &dyn contract::tool::Cancel,
+    ) -> Result<contract::provider::ImageRef, contract::images::ImageError> {
+        self.calls.lock().expect("fake images").push(bytes.to_vec());
+        self.result.lock().expect("fake images").clone()
     }
 }
 

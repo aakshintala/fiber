@@ -15,7 +15,7 @@ use serde_json::json;
 
 use super::{DEFAULT_STARTUP_TIMEOUT, ServerSpec, start};
 use crate::effects::Hints;
-use crate::test_support::{Setup, WITHIN};
+use crate::test_support::{FakeImages, Setup, WITHIN};
 
 fn names(started: &super::Started) -> Vec<String> {
     started
@@ -235,6 +235,7 @@ fn a_server_that_misses_its_deadline_is_left_out() {
                 vec![spec],
                 &workspace,
                 &artifacts,
+                FakeImages::ok(),
                 &cache,
                 &clock,
                 "0.0.0",
@@ -306,7 +307,13 @@ fn servers_stop_at_once() {
     std::thread::spawn(move || {
         opened
             .send(start(
-                specs, &workspace, &artifacts, &cache, &clock, "0.0.0",
+                specs,
+                &workspace,
+                &artifacts,
+                FakeImages::ok(),
+                &cache,
+                &clock,
+                "0.0.0",
             ))
             .expect("collected");
     });
@@ -468,6 +475,7 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
             vec![spec],
             &workspace,
             &artifacts,
+            FakeImages::ok(),
             &cache,
             &clock,
             "0.0.0",

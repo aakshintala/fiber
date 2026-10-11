@@ -16,6 +16,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{McpServerFailed, ServerFailure, ToolInfo, ToolSource, ToolState};
+use contract::images::Images;
 use contract::tool::Tool;
 
 use crate::cache;
@@ -131,11 +132,13 @@ pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_millis(600_000);
 /// the tools of the servers that answered, declaring the rest from their
 /// cached lists in `cache` (`<home>/cache/mcp`) without spawning them.
 /// `version` is Fiber's own version, sent as `clientInfo`. Binary content
-/// a tool answers is written to the session artifacts dir `artifacts`.
+/// a tool answers is written to the session artifacts dir `artifacts`, and
+/// an image is processed once through `images`.
 pub fn start(
     specs: Vec<ServerSpec>,
     workspace: &Path,
     artifacts: &Path,
+    images: Arc<dyn Images>,
     cache: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
@@ -164,13 +167,16 @@ pub fn start(
         let done = done.clone();
         let workspace = workspace.to_path_buf();
         let artifacts = artifacts.to_path_buf();
+        let images = Arc::clone(&images);
         let cache = cache.to_path_buf();
         let clock = Arc::clone(clock);
         let version = version.to_owned();
         thread::spawn(move || {
             done.send((
                 index,
-                open(spec, &workspace, &artifacts, &cache, &clock, &version),
+                open(
+                    spec, &workspace, &artifacts, &images, &cache, &clock, &version,
+                ),
             ))
             .unwrap_or(());
         });
@@ -221,7 +227,7 @@ pub fn start(
             &link,
             spec.call_timeout,
         ));
-        tools.extend(declare(&spec, &cached.tools, &link, artifacts));
+        tools.extend(declare(&spec, &cached.tools, &link, artifacts, &images));
     }
     tools.sort_by(|left, right| left.1.definition().name.cmp(&right.1.definition().name));
     let (pairs, infos): (Vec<_>, Vec<_>) = tools
@@ -252,6 +258,7 @@ pub(crate) fn open(
     spec: ServerSpec,
     workspace: &Path,
     artifacts: &Path,
+    images: &Arc<dyn Images>,
     cache: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
@@ -303,7 +310,7 @@ pub(crate) fn open(
     );
     let link: Weak<Slot> = Arc::downgrade(&slot);
     let listed = sources_of(&name, &listed_prompts, &link, spec.call_timeout);
-    let declared = declare(&spec, &tools, &link, artifacts);
+    let declared = declare(&spec, &tools, &link, artifacts, images);
     Opened::Up(slot, declared, listed)
 }
 
@@ -360,6 +367,7 @@ pub(crate) fn declare(
     tools: &[ListedTool],
     link: &Weak<Slot>,
     artifacts: &Path,
+    images: &Arc<dyn Images>,
 ) -> Vec<Declaration> {
     let mut declared = Vec::new();
     for tool in tools {
@@ -380,6 +388,7 @@ pub(crate) fn declare(
             crate::tool::Target {
                 timeout: spec.call_timeout,
                 artifacts: artifacts.to_path_buf(),
+                images: Arc::clone(images),
                 slot: link.clone(),
             },
         );

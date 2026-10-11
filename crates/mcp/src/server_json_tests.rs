@@ -180,6 +180,13 @@ fn audio(data: Option<Value>, mime_type: Option<&str>) -> Content {
     }
 }
 
+fn image(data: Option<Value>, mime_type: Option<&str>) -> Content {
+    Content::Image {
+        data,
+        mime_type: mime_type.map(str::to_owned),
+    }
+}
+
 fn resource_link(uri: Option<&str>, name: Option<&str>, mime_type: Option<&str>) -> Content {
     Content::ResourceLink {
         uri: uri.map(str::to_owned),
@@ -211,6 +218,7 @@ fn content_parses_each_shape() {
             {"type": "text", "text": "hi"},
             {"type": "text"},
             {"type": "image"},
+            {"type": "image", "data": "aGk=", "mimeType": "image/png"},
             {"type": "audio"},
             {"type": "audio", "data": "aGk=", "mimeType": "audio/mpeg"},
             {"type": "resource", "resource": {"text": "from a file"}},
@@ -236,7 +244,8 @@ fn content_parses_each_shape() {
                 text: Some("hi".to_owned())
             },
             Content::Text { text: None },
-            Content::Image,
+            image(None, None),
+            image(Some(Value::from("aGk=")), Some("image/png")),
             audio(None, None),
             audio(Some(Value::from("aGk=")), Some("audio/mpeg")),
             resource(Some("from a file"), None, None, None),
@@ -317,6 +326,27 @@ fn new_content_fields_read_present_absent_and_wrong() {
             "resource uri and type wrong read as absent",
             json!({"type": "resource", "resource": {"uri": 7, "mimeType": 7}}),
             resource(None, None, None, None),
+        ),
+        ("image absent", json!({"type": "image"}), image(None, None)),
+        (
+            "image null",
+            json!({"type": "image", "data": null, "mimeType": null}),
+            image(None, None),
+        ),
+        (
+            "image present",
+            json!({"type": "image", "data": "aGk=", "mimeType": "image/png"}),
+            image(Some(Value::from("aGk=")), Some("image/png")),
+        ),
+        (
+            "image array data and numeric type read as absent",
+            json!({"type": "image", "data": ["aGk="], "mimeType": 7}),
+            image(None, None),
+        ),
+        (
+            "image numeric data stays a value",
+            json!({"type": "image", "data": 7}),
+            image(Some(Value::from(7)), None),
         ),
     ] {
         let result: CallResult =

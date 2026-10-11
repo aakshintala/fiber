@@ -5,7 +5,7 @@
 //! KiB cut and writes the artifact, so [`Tool::bound`] stays default.
 
 use std::path::{Path, PathBuf};
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -13,6 +13,7 @@ use base64::engine::general_purpose::STANDARD;
 
 use contract::ErrorCode;
 use contract::emit::Emit;
+use contract::images::{ImageError, Images};
 use contract::provider::ToolDefinition;
 use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Effects, Output, ServerRecord, Tool};
@@ -41,6 +42,8 @@ struct Call {
     timeout: Duration,
     /// The session artifacts dir: binary content is written here.
     artifacts: PathBuf,
+    /// The image child's driver: an image is processed once through it.
+    images: Arc<dyn Images>,
     /// The server's slot. A dead link means the session is gone.
     slot: Weak<Slot>,
 }
@@ -52,6 +55,8 @@ pub(crate) struct Target {
     pub timeout: Duration,
     /// The session artifacts dir: binary content is written here.
     pub artifacts: PathBuf,
+    /// The image child's driver: an image is processed once through it.
+    pub images: Arc<dyn Images>,
     /// The server's slot. A dead link means the session is gone.
     pub slot: Weak<Slot>,
 }
@@ -95,6 +100,7 @@ impl McpTool {
                 tool: tool.to_owned(),
                 timeout: target.timeout,
                 artifacts: target.artifacts,
+                images: target.images,
                 slot: target.slot,
             },
         }
@@ -143,18 +149,23 @@ impl Tool for McpTool {
                 let called = slot.call(&server, TOOLS_CALL, &params, self.call.timeout, cancel);
                 // The call is never replayed: the next call restarts
                 // the server, if a restart is left.
-                output(&self.call, called, servers)
+                output(&self.call, called, servers, cancel)
             }
         }
     }
 }
 
 /// Maps one call outcome to its output.
-fn output(call: &Call, called: Result<Value, Fault>, servers: Vec<ServerRecord>) -> Output {
+fn output(
+    call: &Call,
+    called: Result<Value, Fault>,
+    servers: Vec<ServerRecord>,
+    cancel: &dyn Cancel,
+) -> Output {
     match called {
         Ok(result) => {
             let result: CallResult = from_object(result).unwrap_or_default();
-            let mut answered = answer(call, &result);
+            let mut answered = answer(call, &result, cancel);
             answered.servers = servers;
             answered
         }
@@ -191,53 +202,62 @@ fn output(call: &Call, called: Result<Value, Fault>, servers: Vec<ServerRecord>)
     }
 }
 
-/// Reads a `tools/call` result: every part becomes its own text block in
+/// Reads a `tools/call` result: every part becomes content in server
 /// order. Text stays text; a resource link becomes one line giving its
 /// URI, name and MIME type; an embedded text resource becomes its text;
 /// and binary content (a blob resource or audio data) is written to the
 /// session artifacts dir, with one line giving its MIME type, size and
-/// path. Images are dropped, and anything else becomes
-/// `Unsupported content.`. A result the server marks as an error ends
-/// failed with code `tool_error`, with the message built from its text
-/// parts only. `structuredContent` is dropped in this slice.
-fn answer(call: &Call, result: &CallResult) -> Output {
-    let mut lines = Vec::new();
+/// path. An image is processed once through the image child and becomes
+/// a text line and an image part; an embedded image resource takes the
+/// same path. An image that cannot be processed ends the call failed,
+/// and anything else becomes `Unsupported content.`. A result the server
+/// marks as an error ends failed with code `tool_error`, with the message
+/// built from its text parts only. `structuredContent` is dropped in this
+/// slice.
+fn answer(call: &Call, result: &CallResult, cancel: &dyn Cancel) -> Output {
+    let mut content: Vec<ContentPart> = Vec::new();
     let mut error_texts = Vec::new();
     for part in &result.content {
         match part {
             Content::Text { text: Some(text) } => {
                 error_texts.push(text.clone());
-                lines.push(text.clone());
+                content.push(ContentPart::Text { text: text.clone() });
             }
             Content::Text { text: None } => {}
             Content::ResourceLink {
                 uri,
                 name,
                 mime_type,
-            } => lines.push(resource_link_line(uri, name, mime_type)),
-            Content::Resource { resource } => {
-                lines.push(resource_line(&call.artifacts, resource));
-            }
+            } => content.push(ContentPart::Text {
+                text: resource_link_line(uri, name, mime_type),
+            }),
+            Content::Resource { resource } => match resource_text(call, resource, cancel) {
+                Ok(mut parts) => content.append(&mut parts),
+                Err((code, message)) => return fail::failed(code, message),
+            },
             Content::Audio { data, mime_type } => {
-                lines.push(match data {
-                    Some(encoded) => saved_line(&call.artifacts, mime_type, encoded),
-                    None => format!(
-                        "Could not save {} content: no data",
-                        mime_type.as_deref().unwrap_or(DEFAULT_MIME_TYPE),
-                    ),
+                content.push(ContentPart::Text {
+                    text: match data {
+                        Some(encoded) => saved_line(&call.artifacts, mime_type, encoded),
+                        None => format!(
+                            "Could not save {} content: no data",
+                            mime_type.as_deref().unwrap_or(DEFAULT_MIME_TYPE),
+                        ),
+                    },
                 });
             }
-            Content::Image => {}
+            Content::Image { data, .. } => match image_content(call, data.as_ref(), cancel) {
+                Ok(mut parts) => content.append(&mut parts),
+                Err((code, message)) => return fail::failed(code, message),
+            },
             Content::Other | Content::Unreadable => {
-                lines.push("Unsupported content.".to_owned());
+                content.push(ContentPart::Text {
+                    text: "Unsupported content.".to_owned(),
+                });
             }
         }
     }
     let text = error_texts.join("");
-    let content = lines
-        .into_iter()
-        .map(|text| ContentPart::Text { text })
-        .collect();
     if result.is_error {
         let message = if text.is_empty() {
             format!(
@@ -285,13 +305,89 @@ fn resource_link_line(
     }
 }
 
-/// One line for an embedded resource: its text, or its blob saved to the
-/// session artifacts dir. A resource with neither reads as unreadable.
-fn resource_line(artifacts: &Path, resource: &Resource) -> String {
+/// One embedded resource's content: its text, an embedded image processed
+/// once through the image child, or its blob saved to the session artifacts
+/// dir. A resource with neither reads as unreadable. An image failure ends
+/// the call failed, with no content.
+fn resource_text(
+    call: &Call,
+    resource: &Resource,
+    cancel: &dyn Cancel,
+) -> Result<Vec<ContentPart>, (ErrorCode, String)> {
     match (&resource.text, &resource.blob) {
-        (Some(text), _) => text.clone(),
-        (None, Some(blob)) => saved_line(artifacts, &resource.mime_type, blob),
-        (None, None) => "An unreadable resource.".to_owned(),
+        (Some(text), _) => Ok(vec![ContentPart::Text { text: text.clone() }]),
+        (None, Some(blob)) if is_image(&resource.mime_type) => {
+            image_content(call, Some(blob), cancel)
+        }
+        (None, Some(blob)) => Ok(vec![ContentPart::Text {
+            text: saved_line(&call.artifacts, &resource.mime_type, blob),
+        }]),
+        (None, None) => Ok(vec![ContentPart::Text {
+            text: "An unreadable resource.".to_owned(),
+        }]),
+    }
+}
+
+/// Whether the resource's MIME type names an image: `image/*` takes the
+/// path `read` takes for an image, while anything else (a PDF included)
+/// is saved to the session artifacts dir.
+fn is_image(mime_type: &Option<String>) -> bool {
+    mime_type
+        .as_deref()
+        .is_some_and(|mime| mime.starts_with("image/"))
+}
+
+/// One image part's content: the decoded bytes processed once through the
+/// image child, becoming a text line and an image part. Anything that
+/// cannot be decoded, or that the child refuses, ends the call failed,
+/// with no content.
+fn image_content(
+    call: &Call,
+    data: Option<&Value>,
+    cancel: &dyn Cancel,
+) -> Result<Vec<ContentPart>, (ErrorCode, String)> {
+    let Some(encoded) = data else {
+        return Err((
+            ErrorCode::UnsupportedFile,
+            "image content: no data".to_owned(),
+        ));
+    };
+    let Some(text) = encoded.as_str() else {
+        return Err((
+            ErrorCode::UnsupportedFile,
+            "image content: expected a base64 string".to_owned(),
+        ));
+    };
+    let bytes = match STANDARD.decode(text) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Err((
+                ErrorCode::UnsupportedFile,
+                format!("image content: {error}"),
+            ));
+        }
+    };
+    match call.images.process(&bytes, cancel) {
+        Ok(reference) => Ok(vec![
+            ContentPart::Text {
+                text: format!(
+                    "Image: {}x{} {}.\n",
+                    reference.width, reference.height, reference.mime_type,
+                ),
+            },
+            ContentPart::Image {
+                path: reference.path,
+                mime_type: reference.mime_type,
+                width: reference.width,
+                height: reference.height,
+            },
+        ]),
+        Err(ImageError::Unreadable(message)) => Err((
+            ErrorCode::UnsupportedFile,
+            format!("The image cannot be read as an image: {message}"),
+        )),
+        Err(ImageError::Failed(message)) => Err((ErrorCode::ToolError, message)),
+        Err(ImageError::Cancelled) => Err((ErrorCode::McpCancelRequested, cancelled(call))),
     }
 }
 

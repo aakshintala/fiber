@@ -109,6 +109,7 @@ pub(crate) fn session_tools(
         specs,
         workspace,
         artifacts,
+        std::sync::Arc::clone(&images),
         &home.join("cache").join("mcp"),
         clock,
         env!("CARGO_PKG_VERSION"),
