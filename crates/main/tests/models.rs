@@ -90,7 +90,8 @@ impl Setup {
         fs::create_dir_all(dir.join("providers")).unwrap();
         fs::write(
             dir.join("extension.json"),
-            json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
+            json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+                   "providers": {"acme": ["http://127.0.0.1:9/v1"]}}).to_string(),
         )
         .unwrap();
         write_record(&dir);
@@ -502,7 +503,7 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
         let mut installed: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("extension.json")).unwrap())
                 .unwrap();
-        installed["providers"] = json!({"fixture": [format!("{}/v1", server.url())]});
+        installed["providers"] = json!({"fixture": [format!("{}/v1", server.url()), "http://127.0.0.1:9/v1"]});
         write(&dir.join("extension.json"), &installed);
     }
     config::store_secret(
@@ -521,6 +522,8 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     // `model_lists.refresh_after`, without reading the clock.
     let file = setup.home().join("cache/models/fixture.json");
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    // The stale copy's URL is declared beside the server's, so the first
+    // run lists it with no notice.
     std::fs::write(
         &file,
         json!([{ "id": "old", "protocol": "openai-responses",
