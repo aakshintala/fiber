@@ -19,7 +19,6 @@ use super::*;
 use crate::fake::FakeStarter;
 use crate::testkit::args;
 use crate::{Environments, Mode, Settings};
-use contract::clock::Clock;
 use fakes::Deadline;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Write};
