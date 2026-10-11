@@ -1153,6 +1153,10 @@ fn lua_fixture_home(
     .unwrap()
     .commit()
     .unwrap();
+    crate::test_support::declare(
+        &home.join("extensions").join("fiber.test-lua-fixture"),
+        serde_json::json!({"fixture": [format!("{}/v1", server.url())]}),
+    );
     config::store_secret(&home, "fixture.url", &config::Secret::new(server.url())).unwrap();
     config::store_secret(&home, "fixture.api_key", &config::Secret::new("k1".into())).unwrap();
     if let Some(cache) = cache {

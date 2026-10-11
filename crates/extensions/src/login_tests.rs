@@ -18,11 +18,11 @@ use crate::providers::Providers;
 fn install(home: &std::path::Path, name: &str, provider: &str) {
     let dir = home.join("extensions").join(name);
     fs::create_dir_all(dir.join("providers")).unwrap();
-    fs::write(
-        dir.join("extension.json"),
-        json!({ "name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1 }).to_string(),
-    )
-    .unwrap();
+    let mut manifest = json!({ "name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1 });
+    manifest["providers"] = serde_json::Value::Object(
+        [(provider.to_owned(), json!(["http://127.0.0.1:1/v1"]))].into_iter().collect(),
+    );
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     write_record(&dir);
     fs::write(
         dir.join("providers").join(format!("{provider}.json")),

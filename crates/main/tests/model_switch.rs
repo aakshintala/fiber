@@ -66,10 +66,19 @@ fn install_hosted_provider(setup: &Setup, server: &ProviderServer, configured: &
 /// from `FIBER_TEST_FAKE_KEY`, and makes `configured` the configured model.
 fn install_models(setup: &Setup, models: &Value, configured: &str) {
     let source = setup.root.path().join("src");
-    write_json(
-        &source.join("extension.json"),
-        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-    );
+    let mut urls: Vec<&str> = models
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.get("base_url").and_then(Value::as_str))
+        .collect();
+    urls.sort();
+    urls.dedup();
+    let mut providers = serde_json::Map::new();
+    providers.insert("fake".to_owned(), json!(urls));
+    let mut manifest = json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    manifest["providers"] = Value::Object(providers);
+    write_json(&source.join("extension.json"), &manifest);
     write_json(
         &source.join("providers/fake.json"),
         &json!({
@@ -1781,7 +1790,7 @@ fn install_labeled_provider(setup: &Setup, server: &ProviderServer) {
     let source = setup.root.path().join("src");
     write_json(
         &source.join("extension.json"),
-        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
     );
     write_json(
         &source.join("providers/fake.json"),

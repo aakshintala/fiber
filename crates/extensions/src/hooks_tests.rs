@@ -45,16 +45,32 @@ impl Home {
     }
 
     /// Installs `fiber.test/<short>`, whose entry script is `init`, or a
-    /// data-only extension when `init` is `None`.
+    /// data-only extension when `init` is `None`. The manifest declares
+    /// every `fiber.provider` the script registers, with no URLs, so the
+    /// helper builds a well-formed package; a test of an undeclared
+    /// package rewrites the declaration with `edit_manifest`.
     fn install(&self, short: &str, init: Option<&str>) {
         let src = self.root.path().join("src").join(short);
         fs::create_dir_all(&src).unwrap();
-        fs::write(
-            src.join("extension.json"),
-            json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1})
-                .to_string(),
-        )
-        .unwrap();
+        let mut manifest = json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1});
+        if let Some(init) = init {
+            let mut seen: Vec<&str> = Vec::new();
+            for part in init.split("fiber.provider(\"").skip(1) {
+                if let Some(registered) = part.split('"').next()
+                    && !seen.contains(&registered)
+                {
+                    seen.push(registered);
+                }
+            }
+            if !seen.is_empty() {
+                let declared: serde_json::Map<String, serde_json::Value> = seen
+                    .iter()
+                    .map(|registered| ((*registered).to_owned(), json!([])))
+                    .collect();
+                manifest["providers"] = serde_json::Value::Object(declared);
+            }
+        }
+        fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
         if let Some(init) = init {
             fs::write(src.join("init.lua"), init).unwrap();
         }

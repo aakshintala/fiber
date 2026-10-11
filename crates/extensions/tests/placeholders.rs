@@ -448,7 +448,12 @@ fn the_cache_keeps_the_template() {
 #[test]
 fn lua_models_are_filled_and_the_cache_keeps_the_template() {
     let setup = Setup::new();
-    let mut providers = Providers::default();
+    let mut declared = manifest("acme-ext");
+    declared["providers"] = json!({"acme": ["https://{workspace}/v1"]});
+    let source = setup.source("acme-ext", &declared, &[]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (mut providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
     let lua = lua_named(
         &setup,
         "ext",

@@ -2,5 +2,10 @@
   "name": "github.com/aakshintala/fiber/providers/gemini",
   "version": "0.0.0",
   "fiber": "0.0.0",
-  "api": 1
+  "api": 1,
+  "providers": {
+    "gemini": [
+      "https://generativelanguage.googleapis.com/v1beta"
+    ]
+  }
 }

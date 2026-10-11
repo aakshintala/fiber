@@ -44,6 +44,7 @@ impl Setup {
 
     /// Installs a data-only extension registering `name` with these model
     /// ids, each on `openai-responses` with `extra` merged into each model.
+    /// The manifest declares the data's distinct `base_url`s.
     fn install_data(&self, extension: &str, name: &str, ids: &[&str], extra: &Value) {
         let dir = self.home().join("extensions").join(extension);
         let models: Vec<Value> = ids
@@ -62,17 +63,22 @@ impl Setup {
             })
             .collect();
         std::fs::create_dir_all(dir.join("providers")).unwrap();
-        std::fs::write(
-            dir.join("extension.json"),
-            json!({
-                "name": extension,
-                "version": "v1.0.0",
-                "fiber": "0.1.0",
-                "api": extensions::API,
-            })
-            .to_string(),
-        )
-        .unwrap();
+        let mut urls: Vec<&str> = models
+            .iter()
+            .filter_map(|m| m.get("base_url").and_then(Value::as_str))
+            .collect();
+        urls.sort();
+        urls.dedup();
+        let mut providers = serde_json::Map::new();
+        providers.insert(name.to_owned(), json!(urls));
+        let mut manifest = json!({
+            "name": extension,
+            "version": "v1.0.0",
+            "fiber": "0.1.0",
+            "api": extensions::API,
+        });
+        manifest["providers"] = Value::Object(providers);
+        std::fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
         write_record(&dir);
         std::fs::write(
             dir.join("providers").join(format!("{name}.json")),

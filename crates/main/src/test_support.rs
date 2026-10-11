@@ -99,13 +99,34 @@ pub(crate) fn config(
 /// `extension.json` and one `providers/<name>.json` per provider: the way
 /// `fiber extension install <path>` leaves a data-only extension.
 /// `providers/` is created only when `providers` is non-empty, so an
-/// extension with no provider keeps its layout.
+/// extension with no provider keeps its layout. When the manifest has no
+/// `providers` key, the matching declaration is derived from the data's
+/// provider names and their models' distinct `base_url`s.
 pub(crate) fn install_extension(
     home: &Path,
     dir: &str,
     manifest: serde_json::Value,
     providers: &[(&str, serde_json::Value)],
 ) {
+    let mut manifest = manifest;
+    if manifest.get("providers").is_none() {
+        let mut map = serde_json::Map::new();
+        for (name, data) in providers {
+            let mut urls = Vec::new();
+            for model in data.get("models").and_then(|m| m.as_array()).into_iter().flatten() {
+                if let Some(url) = model.get("base_url").and_then(|u| u.as_str())
+                    && !urls.contains(&url)
+                {
+                    urls.push(url);
+                }
+            }
+            map.insert(
+                (*name).to_owned(),
+                serde_json::Value::Array(urls.into_iter().map(serde_json::Value::from).collect()),
+            );
+        }
+        manifest["providers"] = serde_json::Value::Object(map);
+    }
     let dir = home.join(dir);
     if providers.is_empty() {
         std::fs::create_dir_all(&dir).unwrap();
@@ -121,4 +142,13 @@ pub(crate) fn install_extension(
         )
         .unwrap();
     }
+}
+
+/// Merges `providers` into the installed `extension.json` at `dir`.
+pub(crate) fn declare(dir: &Path, providers: serde_json::Value) {
+    let file = dir.join("extension.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    manifest["providers"] = providers;
+    std::fs::write(&file, manifest.to_string()).unwrap();
 }

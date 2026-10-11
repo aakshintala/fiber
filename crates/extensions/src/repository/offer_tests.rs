@@ -48,6 +48,7 @@ fn an_extension_summary_shows_what_an_install_shows_and_where_it_is() {
             "install": ["npm", "ci"],
             "process": {"program": "node", "args": ["server.js"]},
             "prompt": "prompt.md",
+            "providers": {"acme": ["https://api.acme.dev/v1", "https://eu.acme.dev/v1"]},
         }),
     );
     repo.write("tools/acme/skills/deploy/SKILL.md", "s");

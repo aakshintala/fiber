@@ -250,6 +250,14 @@ fn models_runs_a_lua_providers_models_with_no_cached_copy() {
     .unwrap()
     .commit()
     .unwrap();
+    {
+        let dir = setup.home().join("extensions").join("fiber.test-lua-fixture");
+        let mut installed: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("extension.json")).unwrap())
+                .unwrap();
+        installed["providers"] = json!({"fixture": [format!("{}/v1", server.url())]});
+        write(&dir.join("extension.json"), &installed);
+    }
     config::store_secret(
         &setup.home(),
         "fixture.url",
@@ -489,6 +497,14 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     .unwrap()
     .commit()
     .unwrap();
+    {
+        let dir = setup.home().join("extensions").join("fiber.test-lua-fixture");
+        let mut installed: Value =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("extension.json")).unwrap())
+                .unwrap();
+        installed["providers"] = json!({"fixture": [format!("{}/v1", server.url())]});
+        write(&dir.join("extension.json"), &installed);
+    }
     config::store_secret(
         &setup.home(),
         "fixture.url",

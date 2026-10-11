@@ -61,25 +61,32 @@ impl Setup {
     }
 
     /// Installs the extension `extension` registering the provider `name`
-    /// with these models.
+    /// with these models. The manifest declares the models' distinct
+    /// `base_url`s.
     fn install(&self, extension: &str, name: &str, models: &Value) {
         let dir = self.home().join("extensions").join(extension);
         let data = json!({
             "name": name,
             "models": models,
         });
+        let mut urls: Vec<&str> = models
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| m.get("base_url").and_then(Value::as_str))
+            .collect();
+        urls.sort();
+        urls.dedup();
+        let mut manifest = json!({
+            "name": extension,
+            "version": "v0.0.0",
+            "fiber": "0.0.0",
+            "api": extensions::API,
+        });
+        manifest["providers"] =
+            Value::Object([(name.to_owned(), json!(urls))].into_iter().collect());
         fs::create_dir_all(dir.join("providers")).unwrap();
-        fs::write(
-            dir.join("extension.json"),
-            json!({
-                "name": extension,
-                "version": "v0.0.0",
-                "fiber": "0.0.0",
-                "api": extensions::API,
-            })
-            .to_string(),
-        )
-        .unwrap();
+        fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
         write_record(&dir);
         fs::write(
             dir.join("providers").join(format!("{name}.json")),
@@ -132,21 +139,29 @@ impl Setup {
     }
 
     /// Installs the Lua extension `extension` registering the provider
-    /// `name` whose `models()` returns the Lua list `models`.
+    /// `name` whose `models()` returns the Lua list `models`. The manifest
+    /// declares `name` with every `base_url` literal the list holds.
     fn install_lua(&self, extension: &str, name: &str, models: &str) {
         let src = self.root.path().join("src").join(extension);
         fs::create_dir_all(&src).unwrap();
-        fs::write(
-            src.join("extension.json"),
-            json!({
-                "name": extension,
-                "version": "v0.0.0",
-                "fiber": "0.0.0",
-                "api": extensions::API,
-            })
-            .to_string(),
-        )
-        .unwrap();
+        let mut urls: Vec<&str> = Vec::new();
+        for part in models.split("base_url = \"").skip(1) {
+            if let Some(url) = part.split('"').next()
+                && !urls.contains(&url)
+            {
+                urls.push(url);
+            }
+        }
+        urls.sort();
+        let mut manifest = json!({
+            "name": extension,
+            "version": "v0.0.0",
+            "fiber": "0.0.0",
+            "api": extensions::API,
+        });
+        manifest["providers"] =
+            Value::Object([(name.to_owned(), json!(urls))].into_iter().collect());
+        fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
         fs::write(
             src.join("init.lua"),
             format!(

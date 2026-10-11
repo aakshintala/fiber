@@ -20,7 +20,7 @@ use contract::hook::{AfterToolCall, AfterToolOutcome, Hooks};
 use extensions::{Providers, SessionExtensions};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use serde_json::{Map, json};
+use serde_json::{Map, Value, json};
 
 /// The session's per-path lock, offered to `host.fs`: these tests never
 /// take it.
@@ -182,6 +182,11 @@ fn an_extension_with_a_provider_and_secrets_lists_both() {
         &dir.join("providers/acme.json"),
         &provider("acme", &["m"]).to_string(),
     );
+    let manifest_file = dir.join("extension.json");
+    let mut installed: Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_file).unwrap()).unwrap();
+    installed["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    std::fs::write(&manifest_file, installed.to_string()).unwrap();
     let (providers, _) = Providers::load(&setup.home()).unwrap();
     assert_eq!(providers.names().collect::<Vec<_>>(), ["acme"]);
     assert_eq!(providers.secrets().collect::<Vec<_>>(), ["acme.api_key"]);

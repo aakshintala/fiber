@@ -1332,7 +1332,9 @@ fn set_models_inserts_an_unheld_provider_and_refuses_scripted() {
 
 fn declared_manifest(name: &str, providers: serde_json::Value) -> serde_json::Value {
     let mut m = manifest(name);
-    m["providers"] = providers;
+    if let Some(into) = m.as_object_mut() {
+        into.insert("providers".to_owned(), providers);
+    }
     m
 }
 

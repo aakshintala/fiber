@@ -199,8 +199,17 @@ impl Setup {
     }
 
     /// An extension source directory named `dir` with this manifest and
-    /// these provider files.
+    /// these provider files. When the manifest has no `providers` key, the
+    /// matching declaration is derived from the data's provider names and
+    /// their models' distinct `base_url`s, so the helper builds a
+    /// well-formed package.
     pub(crate) fn source(&self, dir: &str, manifest: &Value, providers: &[Value]) -> PathBuf {
+        let mut manifest = manifest.clone();
+        if manifest.get("providers").is_none()
+            && let Some(into) = manifest.as_object_mut()
+        {
+            into.insert("providers".to_owned(), declared_map(providers));
+        }
         let path = self.root.path().join("src").join(dir);
         write(&path.join("extension.json"), &manifest.to_string());
         for provider in providers {
@@ -230,6 +239,27 @@ pub(crate) fn provider(name: &str, ids: &[&str]) -> Value {
         .map(|id| json!({ "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1", "context_window": 1000 }))
         .collect();
     json!({ "name": name, "credential": { "env": "FIBER_TEST_UNSET_KEY" }, "models": models })
+}
+
+/// The `providers` declaration matching these data files: each provider
+/// name to its models' distinct `base_url`s, in first-seen order.
+fn declared_map(providers: &[Value]) -> Value {
+    let mut map = serde_json::Map::new();
+    for data in providers {
+        let Some(name) = data.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let mut urls = Vec::new();
+        for model in data.get("models").and_then(Value::as_array).into_iter().flatten() {
+            if let Some(url) = model.get("base_url").and_then(Value::as_str)
+                && !urls.contains(&url)
+            {
+                urls.push(url);
+            }
+        }
+        map.insert(name.to_owned(), Value::Array(urls.into_iter().map(Value::from).collect()));
+    }
+    Value::Object(map)
 }
 
 /// Installs the extension in `source` the way `fiber extension install <path>` does
