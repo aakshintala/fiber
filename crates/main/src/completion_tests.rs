@@ -257,7 +257,7 @@ fn the_fish_script_offers_commands_and_ends_without_file_names() {
     );
     assert!(
         lines.contains(
-            &"complete -c fiber -n \"__fish_fiber_using_subcommand extension; and not __fish_seen_subcommand_from install update remove list test\" -f -a \"install\" -d 'Install an extension and its dependencies'"
+            &"complete -c fiber -n \"__fish_fiber_using_subcommand extension; and not __fish_seen_subcommand_from install update remove reinstall list test\" -f -a \"install\" -d 'Install an extension and its dependencies'"
         ),
         "{text}"
     );

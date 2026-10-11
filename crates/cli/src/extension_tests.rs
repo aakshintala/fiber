@@ -245,8 +245,7 @@ fn install_fixture(home: &Path, source: &Path) {
 const BROKEN_SKIPPED: &str = "`broken` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension reinstall broken`.";
 
 /// The damaged line `list` prints for the same directory.
-const BROKEN_DISPLAY: &str =
-    "`broken` is damaged; run `fiber extension reinstall broken`.";
+const BROKEN_DISPLAY: &str = "`broken` is damaged; run `fiber extension reinstall broken`.";
 
 #[test]
 fn install_from_a_path_without_a_terminal_installs_and_names_it() {
@@ -395,6 +394,67 @@ fn install_by_name_without_git_is_a_usage_failure() {
     );
     let failure = got.unwrap_err();
     assert_eq!(failure.code, ErrorCode::Usage);
+}
+
+#[test]
+fn reinstall_of_a_path_extension_without_a_terminal_reinstalls_and_names_it() {
+    let setup = Setup::new();
+    let source = setup.source(
+        "aaa",
+        &manifest(NAME_A),
+        &[provider("p", &["http://127.0.0.1:1/v1"])],
+    );
+    install_fixture(&setup.home(), &source);
+    let mut unread = Unread;
+    let (err, got) = run_install(
+        &setup.home(),
+        Request::Reinstall(NAME_A.into()),
+        &Origin::github(),
+        false,
+        &mut unread,
+    );
+    assert_eq!(got.unwrap(), 0);
+    assert_eq!(err, format!("fiber: installed {NAME_A}\n"));
+}
+
+#[test]
+fn reinstall_names_each_other_damaged_directory_before_the_summary() {
+    let setup = Setup::new();
+    fs::create_dir_all(setup.home().join("extensions").join("broken")).unwrap();
+    let source = setup.source(
+        "aaa",
+        &manifest(NAME_A),
+        &[provider("p", &["http://127.0.0.1:1/v1"])],
+    );
+    install_fixture(&setup.home(), &source);
+    let mut unread = Unread;
+    let (err, got) = run_install(
+        &setup.home(),
+        Request::Reinstall(NAME_A.into()),
+        &Origin::github(),
+        false,
+        &mut unread,
+    );
+    assert_eq!(got.unwrap(), 0);
+    assert_eq!(
+        err,
+        format!("fiber: {BROKEN_SKIPPED}\nfiber: installed {NAME_A}\n")
+    );
+}
+
+#[test]
+fn reinstall_of_a_name_not_installed_fails() {
+    let setup = Setup::new();
+    let mut unread = Unread;
+    let (_, got) = run_install(
+        &setup.home(),
+        Request::Reinstall(NAME_A.into()),
+        &Origin::github(),
+        false,
+        &mut unread,
+    );
+    let failure = got.unwrap_err();
+    assert_eq!(failure.code, ErrorCode::ExtensionMissing);
 }
 
 #[test]
@@ -690,6 +750,7 @@ fn child_test_name(case: &str) -> &'static str {
         "update-one" => "update_one_command_gives_its_exit_code",
         "update-all" => "update_all_commands_give_their_exit_code",
         "remove" => "remove_command_gives_its_exit_code",
+        "reinstall" => "reinstall_command_gives_its_exit_code",
         "install-by-name" => "install_by_name_command_gives_its_exit_code",
         unknown => panic!("unknown extension child case: {unknown}"),
     }
@@ -710,6 +771,7 @@ fn run_case(case: &str) {
             "update-one" => super::extension_update(Some(NAME_A), FIBER_VERSION, &*clock),
             "update-all" => super::extension_update(None, FIBER_VERSION, &*clock),
             "remove" => super::extension_remove(NAME_A, &*clock),
+            "reinstall" => super::extension_reinstall(NAME_A, FIBER_VERSION, &*clock),
             "install-by-name" => {
                 super::extension_install("github.com/acme/fiber-acme", FIBER_VERSION, &*clock)
             }
@@ -767,7 +829,7 @@ fn run_case(case: &str) {
                     .exists()
             );
         }
-        "update-one" | "update-all" => {
+        "update-one" | "update-all" | "reinstall" => {
             assert_eq!(output.status.code(), Some(0), "{case}: {stderr}");
             assert_eq!(stdout, "");
             assert_eq!(stderr, format!("fiber: installed {NAME_A}\n"));
@@ -809,6 +871,11 @@ fn update_all_commands_give_their_exit_code() {
 #[test]
 fn remove_command_gives_its_exit_code() {
     run_case("remove");
+}
+
+#[test]
+fn reinstall_command_gives_its_exit_code() {
+    run_case("reinstall");
 }
 
 #[test]

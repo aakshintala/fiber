@@ -197,6 +197,9 @@ fn run() -> i32 {
             cli::ExtensionCommands::Remove { name } => {
                 ::cli::extension_remove(&name, clock.as_ref())
             }
+            cli::ExtensionCommands::Reinstall { name } => {
+                ::cli::extension_reinstall(&name, env!("CARGO_PKG_VERSION"), clock.as_ref())
+            }
             cli::ExtensionCommands::List => ::cli::extension_list(clock.as_ref()),
             cli::ExtensionCommands::Test { path } => ::cli::extension_test(path.as_deref(), fiber),
         },

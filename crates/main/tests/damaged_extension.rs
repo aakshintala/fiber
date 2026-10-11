@@ -26,8 +26,7 @@ use support::{Deadline, Setup};
 /// The damaged extension's full name and directory.
 const BROKEN: &str = "github.com/aakshintala/fiber/providers/opencode";
 /// The fix sentence `list` prints first on stdout.
-const FIX: &str =
-    "`opencode` is damaged; run `fiber extension reinstall opencode`.";
+const FIX: &str = "`opencode` is damaged; run `fiber extension reinstall opencode`.";
 /// The skip line `install` and `update` print once on stderr.
 const SKIP: &str = "fiber: `opencode` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension reinstall opencode`.";
 
