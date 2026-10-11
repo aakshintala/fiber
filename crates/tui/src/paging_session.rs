@@ -115,12 +115,7 @@ impl Log {
 /// Words, `len` characters of them.
 fn words(len: usize, seed: usize) -> String {
     let source = "the session log holds every durable line and the terminal pages it by seq ";
-    source
-        .chars()
-        .cycle()
-        .skip(seed)
-        .take(len)
-        .collect()
+    source.chars().cycle().skip(seed).take(len).collect()
 }
 
 /// The heavy session, repeated `scale` times, then a turn still running.
