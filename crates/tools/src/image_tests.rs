@@ -115,7 +115,17 @@ cat > "$3/$4.png"
 echo ran >> "$(dirname "$0")/markers"
 printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#,
     );
-    let output = run_with(dir.path(), &fiber, "a.png");
+    let output = {
+        // On a thread, so a hang fails at the limit instead of hanging.
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let root = dir.path().to_path_buf();
+        let call = std::thread::spawn(move || drop(done_tx.send(run_with(&root, &fiber, "a.png"))));
+        let output = Deadline::after(LIMIT)
+            .recv(&done_rx)
+            .expect("the call ends");
+        call.join().unwrap();
+        output
+    };
     assert_eq!(code(&output), None);
     let markers = fs::read_to_string(dir.path().join("markers")).unwrap();
     assert_eq!(markers.lines().count(), 1, "{markers}");

@@ -154,17 +154,16 @@ impl Tool for BackendSearch {
                 "`query` must be a non-empty string.".to_owned(),
             );
         }
-        if args.allowed_domains.is_some() && args.blocked_domains.is_some() {
-            return failed(
-                ErrorCode::InvalidArguments,
-                "Pass either `allowed_domains` or `blocked_domains`, never both.".to_owned(),
-            );
-        }
         let domains = match (args.allowed_domains, args.blocked_domains) {
+            (Some(_), Some(_)) => {
+                return failed(
+                    ErrorCode::InvalidArguments,
+                    "Pass either `allowed_domains` or `blocked_domains`, never both.".to_owned(),
+                );
+            }
             (Some(allowed), None) => Domains::Allowed(allowed),
             (None, Some(blocked)) => Domains::Blocked(blocked),
             (None, None) => Domains::Any,
-            (Some(_), Some(_)) => unreachable!("both filters were rejected above"),
         };
         match self.backend.search(&args.query, &domains, cancel) {
             Ok(None) => Output::default(),
