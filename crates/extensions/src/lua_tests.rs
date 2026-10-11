@@ -1,6 +1,4 @@
 use std::collections::BTreeMap;
-use std::io::Read;
-use std::net::TcpListener;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
 use std::thread;
@@ -439,7 +437,9 @@ fn stop(hub: &Hub) {
 /// call queued behind it never starts.
 #[test]
 fn the_thread_quits_once_stopped_with_a_callback_parked() {
-    let (url, accepted_rx, _release) = hold_server();
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
     let dir = extension(
         "parked",
         &format!(
@@ -449,9 +449,10 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     );
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
-    Deadline::after(WAIT_UNTIL)
-        .recv(&accepted_rx)
-        .expect("waited for hold to reach the server");
+    assert!(
+        server.await_requests(1, WAIT_UNTIL),
+        "waited for hold to reach the server"
+    );
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
         Some(Progress::Started { parked: true, .. })
@@ -472,7 +473,9 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
 /// thread judged the queue with the command in front of it.
 #[test]
 fn a_command_queued_behind_a_parked_command_does_not_start() {
-    let (url, accepted_rx, _release) = hold_server();
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
     let dir = extension(
         "parked-second",
         &format!(
@@ -483,9 +486,10 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
     );
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
-    Deadline::after(WAIT_UNTIL)
-        .recv(&accepted_rx)
-        .expect("waited for hold to reach the server");
+    assert!(
+        server.await_requests(1, WAIT_UNTIL),
+        "waited for hold to reach the server"
+    );
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
         Some(Progress::Started { parked: true, .. })
@@ -559,21 +563,6 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
     ));
 }
 
-/// Reads an HTTP head, through the blank line that ends it.
-fn read_head(sock: &mut impl Read) {
-    let mut buf = [0; 1];
-    let mut seen = Vec::new();
-    loop {
-        match sock.read(&mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => seen.push(buf[0]),
-        }
-        if seen.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
-}
-
 /// `require("go_<name>")` is a signal, not a barrier. Opening the fifo for
 /// write returns only once the loader has opened it for read; the writer
 /// reports that and closes the fifo at once, so `require` reads an empty
@@ -595,36 +584,16 @@ fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
     rx
 }
 
-/// Accepts one connection, reads its head, signals, and then holds the
-/// socket until the test sends on the returned sender or drops it, so the
-/// call stays parked. The caller keeps the sender alive until the test is
-/// done.
-fn hold_server() -> (String, mpsc::Receiver<()>, mpsc::Sender<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut sock = listener.accept().unwrap().0;
-        read_head(&mut sock);
-        match accepted_tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        match release_rx.recv() {
-            Ok(()) | Err(mpsc::RecvError) => {}
-        }
-        drop(sock);
-    });
-    (url, accepted_rx, release_tx)
-}
-
 /// When a running callback abandons the VM, every other waiter, queued or
 /// parked, command or provider call, gets `Stopped` at once rather than at
 /// its own deadline.
 #[test]
 fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
-    let (park_url, park_accepted, _park_release) = hold_server();
-    let (models_url, models_accepted, _models_release) = hold_server();
+    let park = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    park.hold();
+    let models = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    models.hold();
+    let (park_url, models_url) = (park.url(), models.url());
     let dir = extension(
         "abandon",
         &format!(
@@ -653,13 +622,15 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     };
     let asked = clock.now();
     run("park", |e| e.command("park", "").map(Value::String));
-    Deadline::after(WAIT_SERVER)
-        .recv(&park_accepted)
-        .expect("waited for park to reach the server");
+    assert!(
+        park.await_requests(1, WAIT_SERVER),
+        "waited for park to reach the server"
+    );
     run("models", |e| e.provider_call("p", "models", Value::Null));
-    Deadline::after(WAIT_SERVER)
-        .recv(&models_accepted)
-        .expect("waited for models to reach the server");
+    assert!(
+        models.await_requests(1, WAIT_SERVER),
+        "waited for models to reach the server"
+    );
     run("queued", |e| e.command("queued", "").map(Value::String));
     run("sign", |e| e.provider_call("p", "sign", Value::Null));
     Deadline::after(WAIT)
@@ -846,7 +817,9 @@ fn timer_end_reschedules_an_uncancelled_every_and_removes_the_rest() {
 /// stream, in the order they happened.
 #[test]
 fn a_hook_queued_behind_a_parked_command_does_not_start() {
-    let (url, accepted_rx, _release) = hold_server();
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
     let dir = extension(
         "hook-behind-parked-command",
         &format!(
@@ -857,9 +830,10 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
     );
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
-    Deadline::after(WAIT_UNTIL)
-        .recv(&accepted_rx)
-        .expect("waited for hold to reach the server");
+    assert!(
+        server.await_requests(1, WAIT_UNTIL),
+        "waited for hold to reach the server"
+    );
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
         Some(Progress::Started { parked: true, .. })
@@ -910,7 +884,9 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
 /// A command queued while a hook is parked likewise waits for the hook.
 #[test]
 fn a_command_queued_behind_a_parked_hook_does_not_start() {
-    let (url, accepted_rx, _release) = hold_server();
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
     let dir = extension(
         "command-behind-parked-hook",
         &format!(
@@ -955,9 +931,10 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
     });
-    Deadline::after(WAIT_UNTIL)
-        .recv(&accepted_rx)
-        .expect("waited for the hook to reach the server");
+    assert!(
+        server.await_requests(1, WAIT_UNTIL),
+        "waited for the hook to reach the server"
+    );
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hook),
         Some(Progress::Started { parked: true, .. })
