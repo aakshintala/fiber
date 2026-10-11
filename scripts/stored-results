@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Looks up the backstop's stored benchmark results for a pull request's base:
+# the nearest first-parent ancestor of the base commit, the base itself
+# first, with a `benchmarks-<sha>` artifact from a `main` run in this
+# repository (docs/ci.md, "On every pull request that changes code").
+# `cargo xtask bench-report` judges memory and exact rows against them.
+#
+# Usage: scripts/stored-results BASE_COMMIT
+# On a match the stored `head.json` and the full commit hash go to
+# $RUNNER_TEMP/stored/head.json and $RUNNER_TEMP/stored/commit, and the
+# commit's short hash is printed. Anything else prints why and exits 0 with
+# no files, and bench-report judges memory and exact rows against the table
+# alone: an API or download failure, an unreadable listing, no stored
+# results among the base and its 9 nearest first-parent ancestors, or a base
+# whose history cannot be walked. Only a missing argument is a usage error.
+set -euo pipefail
+shopt -s inherit_errexit 2> /dev/null || true # bash 4.4; macOS ships 3.2
+cd "$(git rev-parse --show-toplevel)"
+
+if [ $# -ne 1 ]; then
+  echo "usage: scripts/stored-results BASE_COMMIT" >&2
+  exit 2
+fi
+base=$1
+out="${RUNNER_TEMP:?}/stored"
+
+# Prints $* and adds it to the job summary.
+note() {
+  echo "stored-results: $*"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    echo "$*" >> "$GITHUB_STEP_SUMMARY"
+  fi
+}
+
+if ! commits=$(git rev-list --first-parent -n 10 "$base"); then
+  echo "stored-results: cannot walk the history of $base; \
+memory and exact rows are judged against the table alone"
+  exit 0
+fi
+# The base and its 9 nearest first-parent ancestors, nearest first.
+for sha in $commits; do
+  name="benchmarks-$sha"
+  short=$(git rev-parse --short "$sha")
+  if ! listing=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$name&per_page=100"); then
+    echo "stored-results: looking up $name failed; \
+memory and exact rows are judged against the table alone"
+    exit 0
+  fi
+  if ! run=$(jq -r '[(.artifacts // [])[] |
+    select(.expired == false and .workflow_run.head_branch == "main" and
+      .workflow_run.head_repository_id == .workflow_run.repository_id)
+    ][0].workflow_run.id // empty' <<<"$listing"); then
+    echo "stored-results: reading the artifact listing for $name failed; \
+memory and exact rows are judged against the table alone"
+    exit 0
+  fi
+  if [ -z "$run" ]; then
+    continue
+  fi
+  tmp=$(mktemp -d)
+  if gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "$name" --dir "$tmp" &&
+    [ -f "$tmp/head.json" ]; then
+    mkdir -p "$out"
+    cp "$tmp/head.json" "$out/head.json"
+    printf '%s\n' "$sha" > "$out/commit"
+    echo "stored-results: the stored results for $short stand in for the base"
+    exit 0
+  fi
+  echo "stored-results: downloading $name failed; \
+memory and exact rows are judged against the table alone"
+  exit 0
+done
+short=$(git rev-parse --short "$base")
+note "No stored results for the base $short or its 9 nearest first-parent ancestors."
