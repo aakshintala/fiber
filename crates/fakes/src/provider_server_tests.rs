@@ -394,6 +394,63 @@ fn await_partial_needs_every_counted_partial() {
     );
 }
 
+#[test]
+fn waits_started_before_the_event_return_true_once_it_happens() {
+    use std::io::BufRead;
+    // Longer than the receive bound below, so a wait that never ends fails
+    // at the receive, not by returning false.
+    let event_within = Duration::from_secs(30);
+    let server =
+        Arc::new(ProviderServer::start([Response::stall(200, b"partial".to_vec(), 100)]).unwrap());
+    // Both waits start before the client connects.
+    let (partial_tx, partial_rx) = mpsc::channel();
+    let waiting = Arc::clone(&server);
+    thread::spawn(move || {
+        partial_tx
+            .send(waiting.await_partial(1, event_within))
+            .unwrap();
+    });
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let waiting = Arc::clone(&server);
+    thread::spawn(move || {
+        closed_tx
+            .send(waiting.await_closed(1, event_within))
+            .unwrap();
+    });
+
+    let mut stream = TcpStream::connect(server.addr).unwrap();
+    stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .unwrap_or_else(|e| panic!("the head line arrives within {READ_WITHIN:?}: {e}"));
+        if line.trim_end_matches(['\r', '\n']).is_empty() {
+            break;
+        }
+    }
+    let mut prefix = vec![0u8; 7];
+    reader
+        .read_exact(&mut prefix)
+        .unwrap_or_else(|e| panic!("the stall's body prefix arrives within {READ_WITHIN:?}: {e}"));
+
+    let partial = Deadline::after(READ_WITHIN)
+        .recv(&partial_rx)
+        .unwrap_or_else(|_| panic!("await_partial returns within {READ_WITHIN:?}"));
+    assert!(partial, "the wait returns true once the partial arrives");
+
+    drop(reader);
+    drop(stream);
+    let closed = Deadline::after(READ_WITHIN)
+        .recv(&closed_rx)
+        .unwrap_or_else(|_| panic!("await_closed returns within {READ_WITHIN:?}"));
+    assert!(closed, "the wait returns true once the client closes");
+}
+
 /// A thread that finishes only once the returned sender drops.
 fn held_thread() -> (JoinHandle<()>, mpsc::Sender<()>) {
     let (release, released) = mpsc::channel::<()>();
