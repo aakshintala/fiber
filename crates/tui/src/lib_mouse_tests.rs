@@ -667,10 +667,10 @@ fn grouped<B: ratatui::backend::Backend + crate::screen::SyncEmit>(backend: B) -
 #[test]
 fn clicks_open_the_ledger_then_a_call_then_the_thought() {
     let mut lp = grouped(TestBackend::new(60, 12));
-    assert!(!shown(&lp).contains("read src/a.rs"), "{}", shown(&lp));
+    assert!(!shown(&lp).contains("src/a.rs"), "{}", shown(&lp));
     let group = row_of(&lp, "● Read");
     feed(&mut lp, vec![click(40, group)]);
-    let read = row_of(&lp, "read src/a.rs");
+    let read = row_of(&lp, "✓ read");
     assert!(!shown(&lp).contains("fn body_of_a"), "{}", shown(&lp));
     feed(&mut lp, vec![click(50, read)]);
     assert!(shown(&lp).contains("fn body_of_a"), "{}", shown(&lp));
@@ -681,7 +681,7 @@ fn clicks_open_the_ledger_then_a_call_then_the_thought() {
     // A second click on the summary closes the ledger again.
     let group = row_of(&lp, "● Read");
     feed(&mut lp, vec![click(0, group)]);
-    assert!(!shown(&lp).contains("read src/a.rs"), "{}", shown(&lp));
+    assert!(!shown(&lp).contains("src/a.rs"), "{}", shown(&lp));
 }
 
 #[test]
@@ -1254,7 +1254,7 @@ fn a_click_queued_after_wheel_ups_opens_the_scrolled_group() {
     feed(&mut lp, inputs);
     // Move the opened ledger row above the pill so the screen shows it.
     feed(&mut lp, vec![wheel_down(10, 5)]);
-    assert!(shown(&lp).contains("read src/a0.rs"), "{}", shown(&lp));
+    assert!(shown(&lp).contains("src/a0.rs"), "{}", shown(&lp));
 }
 
 #[test]
@@ -1271,7 +1271,7 @@ fn queued_page_ups_keep_their_frames_and_fresh_targets() {
     // Move the opened ledger row above the pill so the screen shows it.
     feed(&mut shown_lp, vec![wheel_down(10, 5)]);
     assert!(
-        shown(&shown_lp).contains("read src/a1.rs"),
+        shown(&shown_lp).contains("src/a1.rs"),
         "{}",
         shown(&shown_lp)
     );

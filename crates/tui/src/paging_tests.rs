@@ -669,7 +669,7 @@ fn ctrl_o_reaches_pages_loaded_later() {
     frame(&mut app, &lines);
     let texts = page_texts(&app, 0);
     assert!(
-        texts.iter().any(|line| line.starts_with("   2 read")),
+        texts.iter().any(|line| line.starts_with("     2 ")),
         "{texts:?}"
     );
 }

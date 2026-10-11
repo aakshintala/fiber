@@ -2291,8 +2291,9 @@ fn ledger_rows_show_parsed_arguments_never_json() {
     }
     app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
     let shown = screen(&app);
-    assert!(shown.contains("ask_user 4 questions"), "{shown}");
-    assert!(shown.contains("web_fetch https://example.com/x"), "{shown}");
-    assert!(shown.contains("search rust errors"), "{shown}");
+    // The kind cells name the kind; the targets show the parsed form.
+    assert!(shown.contains("ask      4 questions"), "{shown}");
+    assert!(shown.contains("https://example.com/x"), "{shown}");
+    assert!(shown.contains("rust errors"), "{shown}");
     assert!(!shown.contains("{\""), "{shown}");
 }

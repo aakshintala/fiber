@@ -336,6 +336,26 @@ pub(crate) enum Kind {
     Other,
 }
 
+impl Kind {
+    /// The ledger's kind word: the call's kind in `info`, padded to nine
+    /// columns by the draw site (`docs/tui.md`, "Tool groups and the
+    /// ledger").
+    pub(crate) fn word(&self) -> &'static str {
+        match self {
+            Kind::Read => "read",
+            Kind::Search => "search",
+            Kind::List => "list",
+            Kind::Edit => "edit",
+            Kind::Write => "write",
+            Kind::Shell => "shell",
+            Kind::Delegate => "delegate",
+            Kind::Jobs => "jobs",
+            Kind::Ask(_) => "ask",
+            Kind::Other => "other",
+        }
+    }
+}
+
 pub(crate) fn kind(name: &str, arguments: &Value) -> Kind {
     match name {
         "read" => Kind::Read,

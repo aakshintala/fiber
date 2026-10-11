@@ -537,3 +537,32 @@ fn summaries_show_parsed_arguments_never_json() {
     let raw = summary("ask_user", &serde_json::Value::String("{\"q".to_owned()));
     assert_eq!(raw, "");
 }
+
+#[test]
+fn kinds_name_the_ledgers_kind_word() {
+    let word = |name: &str, arguments: serde_json::Value| kind(name, &arguments).word();
+    assert_eq!(word("read", json!({})), "read");
+    assert_eq!(word("shell", json!({"command": "rg x"})), "search");
+    assert_eq!(word("shell", json!({"command": "fd x"})), "list");
+    assert_eq!(word("edit", json!({})), "edit");
+    assert_eq!(word("write", json!({})), "write");
+    assert_eq!(word("shell", json!({"command": "cargo t"})), "shell");
+    assert_eq!(word("delegate_spawn", json!({})), "delegate");
+    assert_eq!(word("delegate_fork", json!({})), "delegate");
+    assert_eq!(word("jobs", json!({})), "jobs");
+    assert_eq!(word("ask_user", json!({"questions": [{}]})), "ask");
+    assert_eq!(word("mystery", json!({})), "other");
+    // Every word fits the nine-column kind cell.
+    for name in [
+        "read",
+        "shell",
+        "edit",
+        "write",
+        "delegate_spawn",
+        "jobs",
+        "ask_user",
+        "mystery",
+    ] {
+        assert!(word(name, json!({"command": "cargo t", "questions": [{}]})).len() <= 9);
+    }
+}

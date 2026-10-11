@@ -64,6 +64,12 @@ pub(crate) struct Call {
     pub(crate) changes: Vec<FileChange>,
     /// What opening the call shows.
     pub(crate) detail: String,
+    /// The process's exit code, when it ran one
+    /// (`tool_call_completed`'s `process.exit_code`).
+    pub(crate) exit: Option<i32>,
+    /// How many lines the result's text parts hold, a trailing newline
+    /// adding none (`str::lines`).
+    pub(crate) lines: u64,
     /// The image parts of its result: each draws as its one line under
     /// its ledger row (`docs/tui.md`, "Images").
     pub(crate) images: Vec<crate::image::Part>,
@@ -282,7 +288,7 @@ impl Group {
     ) {
         if !running && !self.has_ledger() {
             for thought in self.thoughts() {
-                thought_rows(thought, "", out);
+                thought_rows(thought, "", width, out);
             }
             return;
         }
@@ -420,79 +426,158 @@ impl Group {
         }
     }
 
-    /// One row per call, split by step: the step's number in the gutter on
-    /// its first row, the model calls that failed first, then its thinking.
-    /// Each call's images draw under its row, before its opened detail.
+    /// One row per call, split by step: the step's number right-aligned in
+    /// a five-column dim gutter on its first row, then a glyph, the call's
+    /// kind in `info` padded to nine columns, its target, and its result
+    /// right-aligned to end at `width` (`docs/tui.md`, "Tool groups and
+    /// the ledger"). The model calls that failed come first, then the
+    /// step's thinking. Each call's images draw under its row, before its
+    /// opened detail.
     fn ledger(&self, width: u16, layout: &crate::image::Layout, out: &mut Rows) {
+        let max = usize::from(width);
         for section in &self.sections {
-            let mut gutter = format!("{:>3} ", section.step);
+            let mut gutter = format!("{:>5} ", section.step);
             for (code, attempt) in &section.failed {
-                let gutter = std::mem::replace(&mut gutter, GAP.to_owned());
+                let gutter = std::mem::replace(&mut gutter, GUTTER_BLANK.to_owned());
                 let row = format!("{gutter}model call failed · {code} · attempt {attempt}");
                 out.push((dim(row), None));
             }
             for thought in &section.thoughts {
                 thought_rows(
                     thought,
-                    &std::mem::replace(&mut gutter, GAP.to_owned()),
+                    &std::mem::replace(&mut gutter, GUTTER_BLANK.to_owned()),
+                    width,
                     out,
                 );
             }
             for call in &section.calls {
-                let mut row = format!(
-                    "{}{}",
-                    std::mem::replace(&mut gutter, GAP.to_owned()),
-                    label(&call.name, &summary(&call.name, &call.arguments))
-                );
-                let (added, removed) = call.changes.iter().fold((0u64, 0u64), |(a, r), c| {
-                    (a.saturating_add(c.added), r.saturating_add(c.removed))
-                });
-                // The person's answer to a form replaces the status.
-                let status = match call.status {
-                    None if self.cut && call.started => " · ? may have run; not run again",
-                    None => " · running",
-                    Some(CallStatus::Completed) => "",
-                    Some(CallStatus::Failed) => " · failed",
-                    Some(CallStatus::Denied) => " · denied",
-                    Some(CallStatus::Cancelled) => " · cancelled",
+                let gutter = std::mem::replace(&mut gutter, GUTTER_BLANK.to_owned());
+                let kind = kind(&call.name, &call.arguments);
+                // The glyph: what the call is doing, or how it ended. A
+                // call that started and never completed may have run.
+                let (glyph, glyph_style) = match call.status {
+                    None if self.cut && call.started => ("?", style(Role::Attention)),
+                    None => ("○", style(Role::Attention)),
+                    Some(CallStatus::Completed) => ("✓", style(Role::Success)),
+                    Some(CallStatus::Cancelled) => {
+                        ("⊘", Style::default().add_modifier(Modifier::DIM))
+                    }
+                    Some(CallStatus::Failed) | Some(CallStatus::Denied) => {
+                        ("✗", Style::default().add_modifier(Modifier::DIM))
+                    }
                 };
-                let status = call
-                    .asked
-                    .as_ref()
-                    .and_then(|asked| asked.suffix())
-                    .unwrap_or(status);
-                // A call that changed a file stands out: bold, its counts in
-                // the added and removed colours (`docs/tui.md`, "Tool groups
-                // and the ledger").
-                let line = if call.changes.is_empty() {
-                    row.push_str(status);
-                    dim(row)
+                let result = self.result(call);
+                // Six columns of gutter, the glyph, one space and nine of
+                // kind leave the target and the result `max - 19` cells.
+                // The target is cut with "…" to what the result leaves;
+                // with no room for even one cell the target is left out
+                // and the result is cut instead.
+                let room = max.saturating_sub(19 + spans_width(&result));
+                let mut row = vec![
+                    dim_span(gutter),
+                    Span::styled(glyph, glyph_style),
+                    Span::raw(" "),
+                    Span::styled(format!("{:<9}", kind.word()), style(Role::Info)),
+                ];
+                if room >= 1 {
+                    row.push(Span::raw(pad_target(
+                        &summary(&call.name, &call.arguments),
+                        room,
+                    )));
+                    row.push(Span::raw("  "));
+                    row.extend(result);
                 } else {
-                    Line::from(vec![
-                        Span::raw(row),
-                        Span::styled(format!(" +{added}"), style(Role::Added)),
-                        Span::styled(format!(" −{removed}"), style(Role::Removed)),
-                        Span::raw(status.to_owned()),
-                    ])
-                    .style(Style::default().add_modifier(Modifier::BOLD))
-                };
-                out.push((line, Some(Target::Call(call.id))));
+                    row.push(Span::raw("  "));
+                    row.extend(fit(result, max.saturating_sub(19)));
+                }
+                // Below twenty columns the gutter, the glyph, the kind,
+                // the gap and one result cell do not fit. The row is cut
+                // to `width` with "…" as its last step, so no row is
+                // wider than `width` whatever the step number.
+                let row = fit(row, max);
+                out.push((Line::from(row), Some(Target::Call(call.id))));
                 crate::turn::images::call_rows(&call.images, width, layout, out);
                 if out.open_scope(Target::Call(call.id), call.open) {
                     if call.changes.is_empty() {
-                        opened(&call.detail, GAP, out);
+                        opened(&call.detail, INDENT, out);
                     } else {
-                        opened_diff(&call.detail, GAP, out);
+                        opened_diff(&call.detail, INDENT, out);
                     }
                 }
                 out.end_scope();
             }
         }
     }
+
+    /// A call's result: what the ledger row ends with (`docs/tui.md`,
+    /// "Tool groups and the ledger"). An edit's counts are in the added
+    /// and removed colours; every other result is dim, except a running
+    /// call and an ask waiting on the person, which are in `attention`.
+    fn result(&self, call: &Call) -> Vec<Span<'static>> {
+        // The person's answer to a form replaces the status.
+        if let Some(answered) = call.asked.as_ref().and_then(|asked| asked.suffix()) {
+            return vec![dim_span(
+                answered.strip_prefix(" · ").unwrap_or(answered).to_owned(),
+            )];
+        }
+        match call.status {
+            None => {
+                if self.cut && call.started {
+                    return vec![dim_span("? may have run; not run again".to_owned())];
+                }
+                if matches!(kind(&call.name, &call.arguments), Kind::Ask(_)) {
+                    return vec![Span::styled("waiting on you", style(Role::Attention))];
+                }
+                return vec![Span::styled("running", style(Role::Attention))];
+            }
+            Some(CallStatus::Cancelled) => return vec![dim_span("cancelled".to_owned())],
+            Some(CallStatus::Denied) => return vec![dim_span("denied".to_owned())],
+            Some(CallStatus::Failed) => {
+                let first = call.detail.lines().next().unwrap_or("").to_owned();
+                return vec![dim_span(first)];
+            }
+            Some(CallStatus::Completed) => {}
+        }
+        if matches!(kind(&call.name, &call.arguments), Kind::Edit | Kind::Write)
+            && !call.changes.is_empty()
+        {
+            let (added, removed) = call.changes.iter().fold((0u64, 0u64), |(a, r), c| {
+                (a.saturating_add(c.added), r.saturating_add(c.removed))
+            });
+            return vec![
+                Span::styled(format!("+{added}"), style(Role::Added)),
+                Span::raw(" "),
+                Span::styled(format!("−{removed}"), style(Role::Removed)),
+            ];
+        }
+        match kind(&call.name, &call.arguments) {
+            Kind::Read => vec![dim_span(count(call.lines, "line", "lines"))],
+            Kind::Search => vec![dim_span(count(call.lines, "match", "matches"))],
+            Kind::List => vec![dim_span(count(call.lines, "path", "paths"))],
+            Kind::Shell if call.exit.is_some() => {
+                let exit = call.exit.unwrap_or(0);
+                vec![dim_span(format!(
+                    "exit {exit} · {}",
+                    count(call.lines, "line", "lines")
+                ))]
+            }
+            Kind::Edit
+            | Kind::Write
+            | Kind::Shell
+            | Kind::Delegate
+            | Kind::Jobs
+            | Kind::Ask(_)
+            | Kind::Other => vec![dim_span(first_result_line(&call.detail))],
+        }
+    }
 }
 
-/// The gutter left blank.
-const GAP: &str = "    ";
+/// The gutter left blank: six columns, as `"{:>5} "` is.
+const GUTTER_BLANK: &str = "      ";
+
+/// An opened call or thought's indent: eight columns (`docs/tui.md`,
+/// "Tool groups and the ledger").
+const INDENT: &str = "        ";
 
 /// A dim span.
 fn dim_span(text: String) -> Span<'static> {
@@ -534,17 +619,78 @@ fn fit(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     out
 }
 
-/// A thought's line after `gutter`, and its text when open.
-fn thought_rows(thought: &Thought, gutter: &str, out: &mut Rows) {
-    let span = thought
-        .ended
-        .map(|ended| ended.saturating_sub(thought.started));
-    let line = crate::format::thought(gutter, &thought.text, span);
-    out.push((line, Some(Target::Thought(thought.id))));
+/// A thought's row after `gutter`, dim and italic, cut to `width` with
+/// "…", and its text when open: "○ Thinking: <latest heading>" while
+/// the thought streams, "+ Thought: <first heading> · <span>" once
+/// ended. With no gutter the row is a thinking-only group's line, without
+/// the "○ ". An opened thought's text sits eight columns in inside the
+/// ledger and at the line's own indent outside it (`docs/tui.md`,
+/// "Thinking", "Tool groups and the ledger").
+fn thought_rows(thought: &Thought, gutter: &str, width: u16, out: &mut Rows) {
+    let max = usize::from(width);
+    let row = match thought.ended {
+        None => {
+            let heading = heading(&thought.text, true)
+                .map(|found| format!(": {found}"))
+                .unwrap_or_default();
+            let mark = if gutter.is_empty() {
+                "Thinking"
+            } else {
+                "○ Thinking"
+            };
+            vec![
+                dim_span(gutter.to_owned()),
+                Span::styled(
+                    format!("{mark}{heading}"),
+                    Style::default()
+                        .add_modifier(Modifier::DIM)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]
+        }
+        Some(_) => {
+            let span = thought
+                .ended
+                .map(|ended| ended.saturating_sub(thought.started));
+            let mut line = crate::format::thought("", &thought.text, span);
+            // The line's dim lives on its spans from here, italic too.
+            let base = line.style;
+            let mut text = std::mem::take(&mut line.spans);
+            for span in &mut text {
+                span.style = base.patch(span.style).add_modifier(Modifier::ITALIC);
+            }
+            let mut spans = vec![dim_span(gutter.to_owned())];
+            spans.extend(text);
+            spans
+        }
+    };
+    out.push((Line::from(fit(row, max)), Some(Target::Thought(thought.id))));
     if out.open_scope(Target::Thought(thought.id), thought.open) {
-        opened(&thought.text, &" ".repeat(gutter.len()), out);
+        let indent = if gutter.is_empty() { "" } else { INDENT };
+        opened(&thought.text, indent, out);
     }
     out.end_scope();
+}
+
+/// `target` cut with "…" to `room` cells, else padded with spaces to it,
+/// so the result ends at the row's last cell.
+fn pad_target(target: &str, room: usize) -> String {
+    let cells = crate::format::width(target);
+    if cells > room {
+        format!("{}…", crate::format::cut(target, room.saturating_sub(1)))
+    } else {
+        format!("{target}{}", " ".repeat(room - cells))
+    }
+}
+
+/// The first non-empty line of a completed call's output, or "done" when
+/// there is none.
+fn first_result_line(detail: &str) -> String {
+    detail
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("done")
+        .to_owned()
 }
 
 #[cfg(test)]

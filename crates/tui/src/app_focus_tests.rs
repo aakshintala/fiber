@@ -590,7 +590,7 @@ fn global_keys_still_work_while_navigating() {
     assert_eq!(app.focused(), Some(group));
     app.on_key(Key::CtrlO, now());
     assert!(
-        screen(&app).contains("read src/"),
+        screen(&app).contains("src/"),
         "the ledgers opened: {}",
         screen(&app)
     );

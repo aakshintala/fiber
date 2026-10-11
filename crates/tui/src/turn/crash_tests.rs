@@ -116,7 +116,10 @@ fn a_resumed_process_closes_the_cut_short_turn() {
     // While the turn runs, a started call is running.
     let summary = texts(&app)[7].clone();
     open(&mut app, &summary);
-    assert_eq!(texts(&app)[8], "   1 read a.rs · running");
+    assert_eq!(
+        texts(&app)[8],
+        "     1 ○ read     a.rs                                                 running"
+    );
     // Opening flips the toggle, so the row is read again to close it.
     let summary = texts(&app)[7].clone();
     open(&mut app, &summary);
@@ -134,9 +137,9 @@ fn a_resumed_process_closes_the_cut_short_turn() {
     assert_eq!(
         texts(&app)[8..11],
         [
-            "   1 read a.rs · ? may have run; not run again",
-            "     read b.rs · running",
-            "     read c.rs",
+            "     1 ? read     a.rs                           ? may have run; not run again",
+            "       ○ read     b.rs                                                 running",
+            "       ✓ read     c.rs                                                 0 lines",
         ]
     );
     // The rule fires once: a second resume finds no open turn.

@@ -341,3 +341,610 @@ fn an_empty_body_draws_no_summary_row() {
     let (rows, _) = summary_row(&group, true, 60);
     assert!(rows.is_empty());
 }
+
+fn shell_call(id: usize, command: &str, exit: Option<i32>, lines: u64, detail: &str) -> Call {
+    Call {
+        id,
+        action: format!("a_{id}"),
+        name: "shell".to_owned(),
+        arguments: json!({"command": command}),
+        status: Some(CallStatus::Completed),
+        detail: detail.to_owned(),
+        exit,
+        lines,
+        started: true,
+        ..Call::default()
+    }
+}
+
+fn failed_call(id: usize) -> Call {
+    Call {
+        id,
+        action: format!("a_{id}"),
+        name: "shell".to_owned(),
+        arguments: json!({"command": "cargo t"}),
+        status: Some(CallStatus::Failed),
+        detail: "nonzero_exit: exit 101".to_owned(),
+        started: true,
+        ..Call::default()
+    }
+}
+
+fn denied_call(id: usize) -> Call {
+    Call {
+        id,
+        action: format!("a_{id}"),
+        name: "web_fetch".to_owned(),
+        arguments: json!({"url": "u"}),
+        status: Some(CallStatus::Denied),
+        detail: "not allowed".to_owned(),
+        started: true,
+        ..Call::default()
+    }
+}
+
+fn cancelled_call(id: usize) -> Call {
+    Call {
+        id,
+        action: format!("a_{id}"),
+        name: "custom".to_owned(),
+        arguments: json!("raw text"),
+        status: Some(CallStatus::Cancelled),
+        detail: "x".to_owned(),
+        started: true,
+        ..Call::default()
+    }
+}
+
+fn ask_call(id: usize) -> Call {
+    Call {
+        id,
+        action: format!("a_{id}"),
+        name: "ask_user".to_owned(),
+        arguments: json!({"questions": [{}, {}]}),
+        status: None,
+        started: true,
+        ..Call::default()
+    }
+}
+
+/// The ledger rows of an open group at `width`: the summary row first.
+fn ledger_rows(group: &Group, width: u16) -> Vec<ratatui::text::Line<'static>> {
+    let (rows, _) = summary_row(group, false, width);
+    assert!(!rows.is_empty());
+    rows.into_iter().skip(1).map(|row| row.0).collect()
+}
+
+fn cells(line: &ratatui::text::Line<'_>) -> usize {
+    crate::format::width(&line.to_string())
+}
+
+/// The doc mock's ledger at width 76: the step's number right-aligned in
+/// five columns, the glyph, the kind padded to nine, the target, and the
+/// result right-aligned to the last cell.
+#[test]
+fn the_ledger_matches_the_doc_mock_column_for_column() {
+    let group = Group {
+        key: Some("a_0".to_owned()),
+        first: 0,
+        last: 1_000,
+        open: true,
+        sections: vec![
+            Section {
+                step: 3,
+                thoughts: vec![Thought {
+                    id: 1,
+                    action: "t".to_owned(),
+                    text: "# Finding the flaky lock".to_owned(),
+                    started: 0,
+                    ended: Some(8_000),
+                    ..Thought::default()
+                }],
+                calls: vec![
+                    Call {
+                        lines: 212,
+                        ..read_call(2, "crates/hub/src/lock.rs")
+                    },
+                    Call {
+                        lines: 9,
+                        ..search_call(3, "rg -n try_lock")
+                    },
+                ],
+                ..Section::default()
+            },
+            Section {
+                step: 4,
+                calls: vec![
+                    edit_call(4, "crates/hub/src/lock.rs", 12, 4),
+                    running_call(5, "shell", json!({"command": "cargo test -p hub lock"})),
+                ],
+                ..Section::default()
+            },
+        ],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    assert_eq!(rows.len(), 5);
+    let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
+    assert_eq!(text[0], "    3 + Thought: Finding the flaky lock · 8s");
+    // A step's later rows carry a blank six-column gutter, and every row
+    // is exactly 76 cells with its result at the last cell.
+    let cases = [
+        ("      ", '✓', "read", "crates/hub/src/lock.rs", "212 lines"),
+        ("      ", '✓', "search", "rg -n try_lock", "9 matches"),
+        // Step 4's first row carries its number in the gutter.
+        ("    4 ", '✓', "edit", "crates/hub/src/lock.rs", "+12 −4"),
+        ("      ", '○', "shell", "cargo test -p hub lock", "running"),
+    ];
+    for (index, (gutter, glyph, kind, target, result)) in cases.into_iter().enumerate() {
+        let row = &text[index + 1];
+        let kind_cell = format!("{kind:<9}");
+        let gap = " ".repeat(
+            76 - 6 - 1 - 1 - 9 - crate::format::width(target) - 2 - crate::format::width(result),
+        );
+        assert_eq!(
+            *row,
+            format!("{gutter}{glyph} {kind_cell}{target}{gap}  {result}"),
+            "{kind}"
+        );
+        assert_eq!(cells(&rows[index + 1]), 76);
+    }
+    assert!(text[4].starts_with("      ○ shell"));
+    // The glyphs: ✓ in success, ○ in attention.
+    let success = crate::markdown::style(Role::Success);
+    let attention = crate::markdown::style(Role::Attention);
+    let info = crate::markdown::style(Role::Info);
+    for row in &rows[1..4] {
+        assert_eq!(row.spans[1].style.fg, success.fg, "{row:?}");
+        assert_eq!(row.spans[3].style.fg, info.fg, "{row:?}");
+    }
+    assert_eq!(rows[4].spans[1].style.fg, attention.fg);
+    // The gutter is dim; the kind is in info; the target is the text
+    // colour; the edit's counts are added and removed, every other
+    // result dim.
+    for row in &rows[1..] {
+        assert!(is_dim(&row.spans[0]), "{row:?} gutter dim");
+    }
+    assert_eq!(rows[1].spans[4].style.fg, None);
+    assert!(!is_dim(&rows[1].spans[4]), "the target is the text colour");
+    assert!(is_dim(&rows[1].spans[6]), "212 lines dim");
+    assert_eq!(
+        rows[3].spans[6].style.fg,
+        crate::markdown::style(Role::Added).fg
+    );
+    assert_eq!(
+        rows[3].spans[8].style.fg,
+        crate::markdown::style(Role::Removed).fg
+    );
+    let running = &rows[4].spans[6];
+    assert_eq!(running.content.as_ref(), "running");
+    assert_eq!(running.style.fg, attention.fg);
+}
+
+/// Every glyph: ○ and "running" in attention, ✓ in success, ⊘ dim when
+/// cancelled, ✗ dim for failed and denied, and "?" in attention on a cut
+/// turn.
+#[test]
+fn ledger_glyphs_name_what_each_call_is_doing() {
+    let attention = crate::markdown::style(Role::Attention);
+    let success = crate::markdown::style(Role::Success);
+    let section = |calls: Vec<Call>| Section {
+        step: 1,
+        calls,
+        ..Section::default()
+    };
+    // Running, completed, cancelled, failed and denied.
+    let group = Group {
+        open: true,
+        sections: vec![section(vec![
+            running_call(1, "read", json!({"path": "a.rs"})),
+            read_call(2, "b.rs"),
+            cancelled_call(3),
+            failed_call(4),
+            denied_call(5),
+        ])],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    assert_eq!(rows.len(), 5);
+    let glyph = |row: &ratatui::text::Line<'static>| row.spans[1].clone();
+    assert_eq!(glyph(&rows[0]).content.as_ref(), "○");
+    assert_eq!(glyph(&rows[0]).style.fg, attention.fg);
+    assert_eq!(glyph(&rows[1]).content.as_ref(), "✓");
+    assert_eq!(glyph(&rows[1]).style.fg, success.fg);
+    assert_eq!(glyph(&rows[2]).content.as_ref(), "⊘");
+    assert!(is_dim(&glyph(&rows[2])));
+    assert_eq!(glyph(&rows[3]).content.as_ref(), "✗");
+    assert!(is_dim(&glyph(&rows[3])));
+    assert_eq!(glyph(&rows[4]).content.as_ref(), "✗");
+    assert!(is_dim(&glyph(&rows[4])));
+    // A call that started and never completed may have run.
+    let group = Group {
+        open: true,
+        cut: true,
+        sections: vec![section(vec![running_call(
+            1,
+            "shell",
+            json!({"command": "./smoke.sh"}),
+        )])],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 76);
+    assert_eq!(rows[0].spans[1].content.as_ref(), "?");
+    assert_eq!(rows[0].spans[1].style.fg, attention.fg);
+    assert!(
+        rows[0]
+            .to_string()
+            .ends_with("? may have run; not run again")
+    );
+}
+
+/// Every result branch: reads count lines, searches matches, listings
+/// paths, edits colour their counts, commands name their exit, and
+/// anything else shows its first line or "done".
+#[test]
+fn ledger_results_name_what_each_call_did() {
+    let section = |calls: Vec<Call>| Section {
+        step: 1,
+        calls,
+        ..Section::default()
+    };
+    let group = Group {
+        open: true,
+        sections: vec![section(vec![
+            Call {
+                lines: 1,
+                ..read_call(1, "a.rs")
+            },
+            Call {
+                lines: 2,
+                ..read_call(2, "b.rs")
+            },
+            Call {
+                lines: 1,
+                ..search_call(3, "rg x")
+            },
+            Call {
+                lines: 4,
+                ..Call {
+                    id: 4,
+                    action: "a_4".to_owned(),
+                    name: "shell".to_owned(),
+                    arguments: json!({"command": "fd x"}),
+                    status: Some(CallStatus::Completed),
+                    started: true,
+                    ..Call::default()
+                }
+            },
+            shell_call(5, "cargo test", Some(0), 2, "ok\nmore"),
+            // A shell with no process shows its first line, or "done".
+            shell_call(6, "echo hi", None, 0, "a\nb"),
+            shell_call(7, "true", None, 0, ""),
+            Call {
+                detail: "\n\nfirst\nsecond".to_owned(),
+                ..shell_call(8, "echo hi", None, 0, "\n\nfirst\nsecond")
+            },
+            failed_call(9),
+            denied_call(10),
+            cancelled_call(11),
+            ask_call(12),
+            edit_call(13, "e.rs", 2, 0),
+            // An edit with no changes shows its first line like any
+            // other call.
+            Call {
+                detail: "wrote it".to_owned(),
+                changes: vec![],
+                ..edit_call(14, "f.rs", 0, 0)
+            },
+        ])],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 100);
+    let result_of = |row: &ratatui::text::Line<'static>| {
+        row.spans[6..]
+            .iter()
+            .map(|span| span.content.as_ref().to_owned())
+            .collect::<String>()
+    };
+    let results: Vec<String> = rows.iter().map(result_of).collect();
+    assert_eq!(
+        results,
+        vec![
+            "1 line",
+            "2 lines",
+            "1 match",
+            "4 paths",
+            "exit 0 · 2 lines",
+            "a",
+            "done",
+            "first",
+            "nonzero_exit: exit 101",
+            "denied",
+            "cancelled",
+            "waiting on you",
+            "+2 −0",
+            "wrote it",
+        ]
+    );
+    // Singulars read as one; every result but the waiting ask and the
+    // edit's counts is dim.
+    for (index, row) in rows.iter().enumerate() {
+        if index == 11 || index == 12 {
+            continue;
+        }
+        for span in &row.spans[6..] {
+            assert!(is_dim(span), "{span:?} is dim");
+        }
+    }
+    assert_eq!(
+        rows[12].spans[6].style.fg,
+        crate::markdown::style(Role::Added).fg
+    );
+    // An ask waiting on the person is in attention.
+    assert_eq!(
+        rows[11].spans[6].style.fg,
+        crate::markdown::style(Role::Attention).fg
+    );
+}
+
+/// The target is cut with "…" to what the result leaves: one column more
+/// shows one target cell more.
+#[test]
+fn a_long_target_is_cut_to_what_its_result_leaves() {
+    let target = "src/some/very/long/file/name/that/runs/on.rs";
+    let group = Group {
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![Call {
+                lines: 5,
+                ..read_call(1, target)
+            }],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    // "5 lines" is 7 cells: the target's room is width − 26.
+    let row_at = |width: u16| ledger_rows(&group, width)[0].to_string();
+    let (narrow, wide) = (row_at(40), row_at(41));
+    assert_eq!(cells(&ledger_rows(&group, 40)[0]), 40);
+    assert_eq!(cells(&ledger_rows(&group, 41)[0]), 41);
+    assert!(narrow.ends_with("5 lines") && wide.ends_with("5 lines"));
+    let room = |width: usize| width - 26;
+    assert!(narrow.contains(&format!("{}…", crate::format::cut(target, room(40) - 1))));
+    assert!(wide.contains(&format!("{}…", crate::format::cut(target, room(41) - 1))));
+}
+
+/// With no room for the target it is left out and the result is cut
+/// with "…" instead. "12345 lines" is 11 cells, so at 31 the target
+/// is one "…", at 30 the whole result keeps the row's end, and at 25
+/// the result itself is cut.
+#[test]
+fn a_long_result_without_target_room_is_cut_itself() {
+    let group = Group {
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![Call {
+                lines: 12345,
+                ..read_call(1, "a/very/long/target/name.rs")
+            }],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    // With no room for the target it is left out: at 31 the target is
+    // one "…", at 30 the whole result keeps the row's end.
+    let rows = ledger_rows(&group, 31);
+    assert!(
+        rows[0].to_string().ends_with("…  12345 lines"),
+        "{}",
+        rows[0].to_string()
+    );
+    assert!(!rows[0].to_string().contains("target"));
+    assert_eq!(cells(&rows[0]), 31);
+    let rows = ledger_rows(&group, 30);
+    assert!(
+        rows[0].to_string().ends_with("  12345 lines"),
+        "{}",
+        rows[0].to_string()
+    );
+    assert!(!rows[0].to_string().contains('…'));
+    assert!(!rows[0].to_string().contains("target"));
+    assert_eq!(cells(&rows[0]), 30);
+    // Step 1's first row carries its number in the gutter.
+    let rows = ledger_rows(&group, 25);
+    assert_eq!(rows[0].to_string(), "    1 ✓ read       12345…");
+    assert_eq!(cells(&rows[0]), 25);
+}
+
+/// No ledger row is wider than its width, down to one column; a step of
+/// 99,999 keeps the six-column gutter.
+#[test]
+fn ledger_rows_never_pass_their_width() {
+    let group = Group {
+        open: true,
+        sections: vec![
+            Section {
+                step: 99_999,
+                thoughts: vec![Thought {
+                    id: 1,
+                    action: "t".to_owned(),
+                    text: "# Look".to_owned(),
+                    started: 0,
+                    ended: Some(1_000),
+                    ..Thought::default()
+                }],
+                calls: vec![
+                    Call {
+                        lines: 212,
+                        ..read_call(2, "crates/hub/src/lock.rs")
+                    },
+                    running_call(3, "shell", json!({"command": "cargo test -p hub lock"})),
+                ],
+                ..Section::default()
+            },
+            Section {
+                step: 100_000,
+                calls: vec![read_call(4, "a.rs")],
+                ..Section::default()
+            },
+        ],
+        ..Group::default()
+    };
+    for width in [1u16, 10, 19, 20, 21, 40, 76] {
+        let rows = ledger_rows(&group, width);
+        for row in &rows {
+            assert!(cells(row) <= usize::from(width), "{width}: {row:?}");
+        }
+    }
+    let rows = ledger_rows(&group, 76);
+    assert!(rows[0].to_string().starts_with("99999 "));
+    assert!(rows[1].to_string().starts_with("      ✓ read"));
+    // Past five digits the gutter grows, and the row is still cut to
+    // the width.
+    assert!(rows[3].to_string().starts_with("100000 "));
+}
+
+/// Thinking rows are dim and italic, cut to the width: "○ Thinking" while
+/// the thought streams, "+ Thought" once ended. A thinking-only group's
+/// line reads the same without the "○ ".
+#[test]
+fn thinking_rows_stream_and_end_in_italic() {
+    let thought = |id: usize, text: &str, ended: Option<u64>| Thought {
+        id,
+        action: format!("t{id}"),
+        text: text.to_owned(),
+        started: 0,
+        ended,
+        ..Thought::default()
+    };
+    let group = Group {
+        open: true,
+        sections: vec![Section {
+            step: 2,
+            thoughts: vec![
+                thought(1, "# Fixing the lock", None),
+                thought(2, "# Finding the lock", Some(22_000)),
+            ],
+            // A call, so the thoughts draw as ledger rows.
+            calls: vec![read_call(3, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    // A thinking-only group draws no summary row: its lines are the rows.
+    let (rows, _) = summary_row(
+        &Group {
+            sections: vec![Section {
+                step: 2,
+                thoughts: vec![thought(1, "# Fixing the lock", None)],
+                ..Section::default()
+            }],
+            ..Group::default()
+        },
+        false,
+        60,
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.to_string(), "Thinking: Fixing the lock");
+    // In the ledger the streaming row carries the "○ ", and the
+    // section's first row its number in the gutter.
+    let rows = ledger_rows(&group, 60);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].to_string(), "    2 ○ Thinking: Fixing the lock");
+    assert_eq!(
+        rows[1].to_string(),
+        "      + Thought: Finding the lock · 22s"
+    );
+    for row in &rows[..2] {
+        for span in &row.spans {
+            assert!(is_dim(span), "{span:?} is dim");
+        }
+    }
+    // Only the thinking text is italic; the gutter is dim alone.
+    for row in &rows[..2] {
+        assert!(
+            row.spans[1..]
+                .iter()
+                .all(|span| span.style.add_modifier.contains(Modifier::ITALIC)),
+            "{row:?} is italic"
+        );
+        assert!(
+            !row.spans[0].style.add_modifier.contains(Modifier::ITALIC),
+            "gutter is not italic"
+        );
+    }
+    // A 200-character heading is cut to the width with "…", in the ledger
+    // and on the thinking-only line.
+    let long = format!("# {}", "h".repeat(198));
+    assert_eq!(crate::format::width(&long), 200);
+    let group = Group {
+        open: true,
+        sections: vec![Section {
+            step: 2,
+            thoughts: vec![thought(1, &long, Some(1_000))],
+            // A call, so the thought draws as a ledger row.
+            calls: vec![read_call(2, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 60);
+    assert_eq!(cells(&rows[0]), 60);
+    assert!(rows[0].to_string().contains('…'));
+    // The thinking-only line is cut the same way, without the "○ ".
+    let (rows, _) = summary_row(
+        &Group {
+            sections: vec![Section {
+                step: 2,
+                thoughts: vec![thought(1, &long, Some(1_000))],
+                ..Section::default()
+            }],
+            ..Group::default()
+        },
+        false,
+        60,
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(cells(&rows[0].0), 60);
+    assert!(rows[0].0.to_string().contains('…'));
+    assert!(!rows[0].0.to_string().contains('○'));
+}
+
+/// Thinking rows without a heading show the bare form: "○ Thinking"
+/// while streaming, "+ Thought · <span>" once ended.
+#[test]
+fn thinking_rows_without_a_heading_show_the_bare_form() {
+    let group = Group {
+        open: true,
+        sections: vec![Section {
+            step: 2,
+            thoughts: vec![
+                Thought {
+                    id: 1,
+                    action: "t1".to_owned(),
+                    text: "".to_owned(),
+                    started: 0,
+                    ended: None,
+                    ..Thought::default()
+                },
+                Thought {
+                    id: 2,
+                    action: "t2".to_owned(),
+                    text: "   ".to_owned(),
+                    started: 0,
+                    ended: Some(2_000),
+                    ..Thought::default()
+                },
+            ],
+            calls: vec![read_call(3, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let rows = ledger_rows(&group, 60);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].to_string(), "    2 ○ Thinking");
+    assert_eq!(rows[1].to_string(), "      + Thought · 2s");
+}
