@@ -1,0 +1,28 @@
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "quota",
+    "arg": {
+      "key": "sk-test"
+    }
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://openrouter.ai/api/v1/key",
+          "headers": {"authorization": "Bearer sk-test"}
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"data\":null}"
+        }
+      }
+    ]
+  },
+  "error": {
+    "code": "extension_failed",
+    "message": "`github.com/aakshintala/fiber/providers/openrouter`: openrouter quota: the reply holds no key"
+  }
+}

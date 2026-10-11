@@ -1,0 +1,25 @@
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "quota",
+    "arg": {
+      "key": "sk-test"
+    }
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://openrouter.ai/api/v1/key",
+          "headers": {"authorization": "Bearer sk-test"}
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"data\":{\"label\":\"<redacted>\",\"is_management_key\":false,\"is_provisioning_key\":false,\"limit\":10,\"limit_reset\":null,\"limit_remaining\":9.9832021,\"include_byok_in_limit\":false,\"budgets\":[{\"scope\":\"key_limit\",\"guardrail_id\":null,\"budget_id\":null,\"limit_usd\":10,\"spend_usd\":0.0167979,\"remaining_usd\":9.9832021,\"reset_interval\":null,\"resets_at\":null,\"include_byok\":false}],\"effective_budget\":{\"scope\":\"key_limit\",\"guardrail_id\":null,\"budget_id\":null,\"limit_usd\":10,\"spend_usd\":0.0167979,\"remaining_usd\":9.9832021,\"reset_interval\":null,\"resets_at\":null,\"include_byok\":false},\"usage\":0.0167979,\"usage_daily\":0,\"usage_weekly\":0.0167979,\"usage_monthly\":0.0167979,\"byok_usage\":0,\"byok_usage_daily\":0,\"byok_usage_weekly\":0,\"byok_usage_monthly\":0,\"is_free_tier\":false,\"expires_at\":\"<redacted>\",\"creator_user_id\":\"<redacted>\",\"organization_id\":\"<redacted>\",\"workspace_id\":\"<redacted>\",\"allowed_data_regions\":[\"global\"],\"free_model_daily_requests\":{\"used\":0,\"limit\":1000,\"remaining\":1000},\"rate_limit\":{\"requests\":-1,\"interval\":\"10s\",\"note\":\"This field is deprecated and safe to ignore.\"}}}"
+        }
+      }
+    ]
+  },
+  "returns": {"credit": {"remaining": 9.9832021, "limit": 10}}
+}

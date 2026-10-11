@@ -1,0 +1,25 @@
+{
+  "call": {
+    "provider": "openrouter",
+    "function": "quota",
+    "arg": {
+      "key": "sk-test"
+    }
+  },
+  "host": {
+    "http": [
+      {
+        "request": {
+          "method": "GET",
+          "url": "https://openrouter.ai/api/v1/key",
+          "headers": {"authorization": "Bearer sk-test"}
+        },
+        "reply": {
+          "status": 200,
+          "body": "{\"data\":{\"label\":\"unlimited\",\"limit\":null,\"limit_remaining\":null}}"
+        }
+      }
+    ]
+  },
+  "returns": null
+}
