@@ -710,13 +710,7 @@ fn open_read_call(
     terminal.wait_for(clock, spawned + READY, "Read 1 file")?;
     terminal.write(b"\x0f")?;
     let until = clock.now() + READY;
-    let (row, col) = wait_text(
-        clock,
-        terminal,
-        until,
-        "the read's ledger row",
-        "read notes.txt",
-    )?;
+    let (row, col) = wait_text(clock, terminal, until, "the read's ledger row", "notes.txt")?;
     terminal.write(click(col, row).as_bytes())?;
     terminal.wait_for(clock, clock.now() + READY, OUTPUT_MARK)?;
     Ok(())

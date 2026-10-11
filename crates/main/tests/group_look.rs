@@ -168,8 +168,11 @@ fn the_group_line_and_the_ledger_match_the_doc() {
     let hold = workspace.join("hold");
     fs::write(&hold, "").unwrap();
     let command = format!(
-        "i=0; while [ -e '{}' ] && [ $i -lt 2400 ]; do sleep 0.05; i=$((i+1)); done",
-        hold.display()
+        "i=0; while [ -e '{}' ] && [ $i -lt 2400 ]; do sleep 0.05; i=$((i+1)); done # {}",
+        hold.display(),
+        // Longer than the 160-column row on any runner's temp path, so the
+        // ledger must cut it.
+        "x".repeat(120)
     );
     script(&setup, &command);
     write_json(
