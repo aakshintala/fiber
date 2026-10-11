@@ -133,10 +133,9 @@ impl Rows {
     pub(crate) fn pad(&mut self, from: usize, pad: u16, inner: u16) {
         let mut at = from;
         while at < self.rows.len() {
-            let (Some((line, target)), Some(text)) = (
-                self.rows.get(at).cloned(),
-                self.texts.get(at).cloned(),
-            ) else {
+            let (Some((line, target)), Some(text)) =
+                (self.rows.get(at).cloned(), self.texts.get(at).cloned())
+            else {
                 break;
             };
             let cells = cells_of(&line);
@@ -145,8 +144,7 @@ impl Rows {
             let room = usize::from(inner);
             let plans = plan(&cells, room);
             if total <= room || room == 0 {
-                if let (Some(row), Some(row_text)) =
-                    (self.rows.get_mut(at), self.texts.get_mut(at))
+                if let (Some(row), Some(row_text)) = (self.rows.get_mut(at), self.texts.get_mut(at))
                 {
                     prefix_row(&mut row.0, row_text, pad);
                 }
@@ -384,10 +382,7 @@ fn build_piece(line: &Line<'_>, cells: &[Cell], planned: &Planned, inner: u16) -
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut current = (Style::default(), String::new());
     let mut started = false;
-    for cell in cells
-        .get(planned.start..planned.end)
-        .unwrap_or_default()
-    {
+    for cell in cells.get(planned.start..planned.end).unwrap_or_default() {
         let (text, style) = if cell.width > usize::from(inner) {
             (" ".to_owned(), cell.style)
         } else {
