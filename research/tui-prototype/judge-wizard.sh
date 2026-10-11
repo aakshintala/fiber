@@ -208,6 +208,11 @@ for s in "${SETS[@]}"; do
   TOTAL_STAGES=$(( TOTAL_STAGES + $(cases "$file" | wc -l) ))
 done
 
+if [[ -n "${CLAUDECODE:-}" || ! -t 0 || ! -t 1 ]]; then
+  printf 'Run this in its own Ghostty window, not through Claude Code: the cases need the keyboard.\n' >&2
+  exit 1
+fi
+
 banner "Fiber TUI prototype: judge the cases"
 
 stage "Build and window size"
@@ -230,7 +235,7 @@ pause
 judged=0; skipped=0
 for s in "${SETS[@]}"; do
   read -r ticket flag file <<<"$s"
-  while IFS=$'\t' read -r name look; do
+  while IFS=$'\t' read -r -u 3 name look; do
     if grep -q "^#$ticket	$flag $name	" "$VERDICTS"; then
       _STAGE_INDEX=$(( _STAGE_INDEX + 1 )); continue
     fi
@@ -239,12 +244,12 @@ for s in "${SETS[@]}"; do
     printf '%s\n' "$look" | fold -s -w 100 | sed 's/^/    /'
     printf '\n'
     pause "Press Enter to show it."
-    "$BIN" "$FIXTURE" --static "$flag" "$name" </dev/tty || warn "the prototype exited with an error"
+    "$BIN" "$FIXTURE" --static "$flag" "$name" || warn "the prototype exited with an error"
     _clear
     v=""
     while :; do
       printf '  %s#%s %s %s%s  [f]ine  [c]hange  [s]kip for now: ' "$BOLD" "$ticket" "$flag" "$name" "$RESET"
-      read -r v </dev/tty || v=s
+      read -r v || v=s
       case "$v" in f|F) v=fine; break;; c|C) v=change; break;; s|S) v=skip; break;; esac
     done
     [[ "$v" == skip ]] && { skipped=$(( skipped + 1 )); continue; }
@@ -252,15 +257,15 @@ for s in "${SETS[@]}"; do
     if [[ "$v" == change ]]; then
       while [[ -z "$n" ]]; do
         printf '  %sWhat should change?%s ' "$BOLD" "$RESET"
-        read -r n </dev/tty || break
+        read -r n || break
       done
     else
       printf '  %sNote (Enter for none):%s ' "$DIM" "$RESET"
-      read -r n </dev/tty || true
+      read -r n || true
     fi
     printf '#%s\t%s %s\t%s\t%s\n' "$ticket" "$flag" "$name" "$v" "$n" >> "$VERDICTS"
     judged=$(( judged + 1 ))
-  done < <(cases "$file")
+  done 3< <(cases "$file")
 done
 
 _clear
