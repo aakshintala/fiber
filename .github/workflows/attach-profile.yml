@@ -39,11 +39,9 @@ jobs:
       # C code (lua-src, ring) compiles against musl's headers (ci.yml's Release job).
       CC_x86_64_unknown_linux_musl: musl-gcc
       # perf's DWARF unwinder gave every user sample of the static musl binary
-      # an empty stack (run 38109358642); frame pointers unwind it. perf resolves no
-      # symbols in a static-pie binary (run 38112545576, where addr2line resolved them),
-      # so the binary is static, not PIE. Job-wide, so the paging jig reuses fiber's
-      # dependency builds.
-      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: -C force-frame-pointers=yes -C relocation-model=static
+      # an empty stack (run 38109358642); frame pointers unwind it. Job-wide, so the
+      # paging jig reuses fiber's dependency builds.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: -C force-frame-pointers=yes
       FIBER_TARGET: x86_64-unknown-linux-musl
     steps:
       - name: Check out
@@ -126,6 +124,15 @@ jobs:
           # The harness exits 0 with a failed workload recorded in its file, so only a
           # missing file is a failed run here.
           test -s "$out/bench.json"
+          # The harness runs a copy of fiber in a temporary root (bench's home.rs) and
+          # deletes the root, so perf finds no file to read symbols from. Put the built
+          # binary back at each copy's path.
+          perf script -i "$out/perf.data" --show-mmap-events |
+            grep -oE '/[^ ()]*/fb[^/ ()]*/fiber' | sort -u |
+            while read -r copy; do
+              mkdir -p "$(dirname "$copy")"
+              cp "target/$FIBER_TARGET/release/fiber" "$copy"
+            done
           # Stacks of every process, then of the fiber processes alone with all their
           # threads: --comm matches thread names (hub-relay, writer, tui-hub, ...), so
           # select the process ids of any sample whose thread is named fiber (the main thread).
