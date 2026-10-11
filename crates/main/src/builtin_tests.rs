@@ -622,6 +622,11 @@ const NOT_STRICT: &[&str] = &[
 /// object listing each property once in `required` and closing with
 /// `additionalProperties: false`, and no keyword outside the subset.
 fn strict(schema: &serde_json::Value) -> bool {
+    schema.get("type").and_then(serde_json::Value::as_str) == Some("object") && strict_node(schema)
+}
+
+fn strict_node(schema: &serde_json::Value) -> bool {
+    use serde_json::Value;
     let Some(map) = schema.as_object() else {
         return false;
     };
@@ -631,28 +636,27 @@ fn strict(schema: &serde_json::Value) -> bool {
     {
         return false;
     }
-    match map.get("type").and_then(serde_json::Value::as_str) {
+    match map.get("type").and_then(Value::as_str) {
         Some("object") => {
-            let Some(properties) = map.get("properties").and_then(serde_json::Value::as_object)
-            else {
+            let Some(properties) = map.get("properties").and_then(Value::as_object) else {
                 return false;
             };
-            let mut required: Vec<&str> = map
-                .get("required")
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .collect();
-            required.sort_unstable();
-            let mut names: Vec<&str> = properties.keys().map(String::as_str).collect();
+            let Some(required) = map.get("required").and_then(Value::as_array) else {
+                return false;
+            };
+            let mut names: Vec<&str> = required.iter().filter_map(Value::as_str).collect();
             names.sort_unstable();
-            required == names
-                && map.get("additionalProperties") == Some(&serde_json::Value::Bool(false))
-                && properties.values().all(strict)
+            names.dedup();
+            names.len() == required.len()
+                && names.len() == properties.len()
+                && names.iter().all(|name| properties.contains_key(*name))
+                && map.get("additionalProperties") == Some(&Value::Bool(false))
+                && properties.values().all(strict_node)
         }
-        Some("array") => map.get("items").is_some_and(strict),
-        Some("string" | "number" | "integer" | "boolean" | "null") => true,
+        Some("array") => map.get("items").is_some_and(strict_node),
+        Some("string" | "number" | "integer" | "boolean" | "null") => {
+            !map.contains_key("properties") && !map.contains_key("items")
+        }
         _ => false,
     }
 }
@@ -685,6 +689,18 @@ fn the_strict_walker_rejects_what_the_wire_rejects() {
             "open object",
             json!({"type": "object", "properties": {"name":
             {"type": "string"}}, "required": ["name"]}),
+        ),
+        ("scalar root", json!({"type": "string"})),
+        (
+            "non-string required entry",
+            json!({"type": "object", "properties": {"name": {"type": "string"}},
+            "required": ["name", 1], "additionalProperties": false}),
+        ),
+        (
+            "properties on a scalar",
+            json!({"type": "object", "properties": {"name":
+            {"type": "string", "properties": {}}}, "required": ["name"],
+            "additionalProperties": false}),
         ),
     ] {
         assert!(!strict(&schema), "{label}");
