@@ -256,8 +256,6 @@ enum Request {
     },
 }
 
-impl Request {}
-
 /// Reads the arguments: `action` is required; `read` needs `server` and
 /// `uri`; `cursor` is used only by `list` with a `server`, and anywhere
 /// else `cursor` and `uri` are ignored. A missing or non-string required
