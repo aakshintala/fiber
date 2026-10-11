@@ -277,7 +277,7 @@ fn only_an_acknowledgement_of_the_replayed_id_is_dropped() {
     ));
 }
 
-/// Maps `acknowledgement` to the `(id, verdict)` its old shape returned.
+/// Extracts the acknowledged command's id and verdict for assertions.
 fn verdict(line: &[u8]) -> Option<(String, Verdict)> {
     acknowledgement(line).map(|ack| (ack.id, ack.verdict))
 }
