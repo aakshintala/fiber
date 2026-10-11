@@ -3685,38 +3685,11 @@ fn login_with_an_unknown_key_prints_its_notice_first() {
 
 /// Installs an inline extension `name` with `init_lua`, and makes `name/m1`
 /// the configured model.
-fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {
+fn inline_extension(setup: &Setup, name: &str, init_lua: &str, base_url: &str) {
     let source = setup.root.path().join(format!("src-{name}"));
-    // The manifest declares every `fiber.provider` the script registers
-    // with every `base_url` literal it serves.
-    let mut urls: Vec<&str> = Vec::new();
-    for part in init_lua.split("base_url = \"").skip(1) {
-        if let Some(url) = part.split('"').next()
-            && !urls.contains(&url)
-        {
-            urls.push(url);
-        }
-    }
-    urls.sort();
-    let mut seen: Vec<&str> = Vec::new();
-    for part in init_lua.split("fiber.provider(\"").skip(1) {
-        if let Some(registered) = part.split('"').next()
-            && !seen.contains(&registered)
-        {
-            seen.push(registered);
-        }
-    }
-    let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
-    if let Some(into) = manifest.as_object_mut() {
-        let declared: Vec<(String, Value)> = seen
-            .iter()
-            .map(|registered| ((*registered).to_owned(), json!(urls)))
-            .collect();
-        into.insert(
-            "providers".to_owned(),
-            Value::Object(declared.into_iter().collect()),
-        );
-    }
+    // The manifest declares the URL the script's `models()` serves.
+    let manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+        "providers": {name: [base_url]}});
     write(&source.join("extension.json"), &manifest);
     fs::write(source.join("init.lua"), init_lua).unwrap();
     extensions::plan(
@@ -3739,13 +3712,14 @@ fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {
 fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provider() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
+    let base_url = format!("{}/v1", server.url());
     inline_extension(
         &setup,
         "acme",
         &format!(
-            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
-            server.url()
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{base_url}\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
         ),
+        &base_url,
     );
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);
@@ -3767,13 +3741,14 @@ fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provid
 fn a_sign_error_keeps_the_token_out_of_every_line() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
+    let base_url = format!("{}/v1", server.url());
     inline_extension(
         &setup,
         "acme",
         &format!(
-            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
-            server.url()
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{base_url}\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
         ),
+        &base_url,
     );
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);

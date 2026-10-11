@@ -418,9 +418,8 @@ pub fn provider_files(dir: &Path) -> Result<Vec<PathBuf>, ConfigError> {
 /// Reads every `providers/<name>.json` in an extension's directory, in name
 /// order. A file whose `name` is not its file name is invalid.
 pub fn read_providers(dir: &Path) -> Result<Vec<ProviderData>, ConfigError> {
-    provider_files(dir)
+    provider_files(dir)?
         .into_iter()
-        .flatten()
         .map(|file| {
             let data: ProviderData = read_typed(&file, "a provider's data")?;
             if file

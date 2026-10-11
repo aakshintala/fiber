@@ -686,6 +686,16 @@ fn a_providers_value_that_is_not_a_map_of_lists_is_a_shape_error() {
 }
 
 #[test]
+fn a_providers_path_that_is_not_a_directory_is_an_io_error() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("providers"), "{}").unwrap();
+    let err = read_providers(&dir).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::IoFailed);
+}
+
+#[test]
 fn provider_files_lists_json_files_in_name_order_and_none_without_the_directory() {
     let setup = Setup::new();
     let dir = setup.root().join("ext");
