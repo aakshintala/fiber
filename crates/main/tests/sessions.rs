@@ -372,6 +372,22 @@ fn the_list_is_the_repositorys_project_inside_one_and_every_project_outside() {
 }
 
 #[test]
+fn an_answer_is_taken_by_its_command_id_and_the_lines_before_it_are_kept() {
+    // The hub's `start` answer and the feed's lines come in no fixed order
+    // (docs/invocation.md): here the feed's line is first.
+    use std::io::Write;
+    let (mut hub, client) = std::os::unix::net::UnixStream::pair().unwrap();
+    let status =
+        json!({"kind": "session_status", "session_id": "s_1", "payload": {"state": "idle"}});
+    let answer = json!({"kind": "command_accepted", "payload": {"command_id": "c_start"}});
+    writeln!(hub, "{status}\n{answer}").unwrap();
+    let client = support::Socket::from(Deadline::start(), client);
+    let got = support::recv_answer(&client, "c_start", "the start acknowledgement");
+    assert_eq!(got, answer);
+    assert_eq!(support::recv(&client, "the kept status line"), status);
+}
+
+#[test]
 fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
     let (setup, _server) = listing_setup(2);
     let exited = asked(&fiber_in(&setup, &setup.workspace(), &["ask", "one"]));
