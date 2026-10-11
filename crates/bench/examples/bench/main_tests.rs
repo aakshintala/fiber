@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::brand_string;
 #[cfg(target_os = "linux")]
 use super::host_cpu;
-use super::{Args, Only, document, measure_all, model_name, parse, selected};
+use super::{Args, Only, bench, document, measure_all, model_name, parse, selected};
 
 fn args(line: &str) -> Result<Args, String> {
     parse(line.split_whitespace().map(str::to_owned))
@@ -229,6 +229,7 @@ fn the_results_document_carries_cpu_and_counts() {
     let document = document(
         &parsed,
         "CPU-X",
+        None,
         metrics.clone(),
         metric_runs.clone(),
         vec![],
@@ -244,6 +245,63 @@ fn the_results_document_carries_cpu_and_counts() {
     );
     assert_eq!(document["metric_runs"]["session_start_ms"], json!(3));
     assert_eq!(document["failures"], json!([]));
+}
+
+#[test]
+fn a_missing_fiber_records_no_size_and_both_failures() {
+    let dir = fakes::TempDir::new("bench-size");
+    let missing = dir.path().join("fiber");
+    let parsed = parse(
+        [
+            "--fiber".to_owned(),
+            missing.display().to_string(),
+            "--out".to_owned(),
+            "o".to_owned(),
+        ]
+        .into_iter(),
+    )
+    .unwrap();
+    let result = bench(&parsed, "CPU-X");
+    assert!(result.get("binary_size_bytes").is_none());
+    let failures = result["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    let first = failures[0].as_str().unwrap();
+    assert!(
+        first.starts_with("binary size of ") && first.contains(&missing.display().to_string()),
+        "{first}"
+    );
+    assert!(
+        failures[1].as_str().unwrap().starts_with("setup: "),
+        "{failures:?}"
+    );
+}
+
+#[test]
+fn a_fiber_that_cannot_be_copied_is_still_measured() {
+    let dir = fakes::TempDir::new("bench-size");
+    let parsed = parse(
+        [
+            "--fiber".to_owned(),
+            dir.path().display().to_string(),
+            "--out".to_owned(),
+            "o".to_owned(),
+        ]
+        .into_iter(),
+    )
+    .unwrap();
+    let result = bench(&parsed, "CPU-X");
+    let size = std::fs::metadata(dir.path()).unwrap().len();
+    assert!(size > 1, "{size}");
+    assert_eq!(result["binary_size_bytes"], json!(size));
+    assert!(
+        result.to_string().contains("\"binary_size_bytes\":"),
+        "{result}"
+    );
+    let failures = result["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    let only = failures[0].as_str().unwrap();
+    assert!(only.starts_with("setup: "), "{only}");
+    assert!(!only.contains("binary size of"), "{only}");
 }
 
 #[test]

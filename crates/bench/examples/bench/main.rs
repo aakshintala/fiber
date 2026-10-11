@@ -1,8 +1,8 @@
 //! The benchmark harness behind the Linux x86_64 budgets in
 //! `docs/performance.md`: runs a `fiber` binary through each workload and
-//! writes the measurements, and every self-check that failed, as one
-//! result file for `cargo xtask bench-report` to judge. It measures; it
-//! judges nothing.
+//! writes the measurements, the stripped binary's size in bytes, and every
+//! self-check that failed, as one result file for
+//! `cargo xtask bench-report` to judge. It measures; it judges nothing.
 //!
 //! `bench --fiber <path> --out <file> [--runs 5] [--timing-runs <runs>] [--idle-secs 10] [--only all|timing|wheel] [--paging <jig>]`
 //! (`--paging` names the `tui` crate's `paging` jig; without it that workload
@@ -192,15 +192,17 @@ fn measure_all(
 }
 
 /// The result file: the schema, the run counts, the runner's CPU model,
-/// the metrics with each id's count, and every failure the run noted.
+/// the stripped binary's size in bytes when it could be read, the metrics
+/// with each id's count, and every failure the run noted.
 fn document(
     args: &Args,
     cpu: &str,
+    binary_size: Option<u64>,
     metrics: Metrics,
     metric_runs: BTreeMap<&'static str, u32>,
     failures: Vec<String>,
 ) -> Value {
-    json!({
+    let mut result = json!({
         "schema": SCHEMA,
         "runs": args.runs,
         "timing_runs": args.timing_runs,
@@ -209,7 +211,13 @@ fn document(
         "metric_runs": metric_runs,
         "metrics": metrics,
         "failures": failures,
-    })
+    });
+    if let Some(size) = binary_size
+        && let Value::Object(map) = &mut result
+    {
+        map.insert("binary_size_bytes".to_owned(), json!(size));
+    }
+    result
 }
 
 /// The first `model name` value in Linux's `/proc/cpuinfo`, trimmed; `None`
@@ -273,6 +281,13 @@ fn host_cpu() -> String {
 fn bench(args: &Args, cpu: &str) -> Value {
     let clock = run::System;
     let mut failures = Vec::new();
+    let binary_size = match std::fs::metadata(&args.fiber) {
+        Ok(metadata) => Some(metadata.len()),
+        Err(err) => {
+            failures.push(format!("binary size of {}: {err}", args.fiber.display()));
+            None
+        }
+    };
     let (metrics, metric_runs) = match home::Home::new(&args.fiber) {
         Err(err) => {
             failures.push(format!("setup: {err}"));
@@ -296,7 +311,7 @@ fn bench(args: &Args, cpu: &str) -> Value {
             measured
         }
     };
-    document(args, cpu, metrics, metric_runs, failures)
+    document(args, cpu, binary_size, metrics, metric_runs, failures)
 }
 
 fn repeat(
