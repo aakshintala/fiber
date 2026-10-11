@@ -14,6 +14,7 @@ mod overlays;
 mod paged;
 mod panel;
 mod rail;
+mod views;
 
 use crossterm::{execute, terminal};
 use input::{Ev, Key, Mouse};
@@ -4797,6 +4798,7 @@ const SURFACES: &[cases::Surface] = &[
     completions::SURFACE,
     login::SURFACE,
     rail::SURFACE,
+    views::SURFACE,
 ];
 
 // ============================================================ main
@@ -4828,6 +4830,8 @@ struct Args {
     overlay: Option<String>,
     /// the rail case (`--rail-case`), drawn instead of the conversation
     rail_case: Option<String>,
+    /// the swapped-view case (`--view-case`), drawn instead of the conversation
+    view_case: Option<String>,
     /// the rail design at start: 0 list, 1 cards, 2 tabs
     rail: u8,
     /// the B card density at start: 0 full, 1 medium, 2 compact
@@ -4893,6 +4897,7 @@ fn args() -> Args {
         home: None,
         overlay: None,
         rail_case: None,
+        view_case: None,
         rail: 1,
         density: 2,
         rail_share: 15.0,
@@ -4950,6 +4955,7 @@ fn args() -> Args {
             }
             "--overlay" => a.overlay = it.next(),
             "--rail-case" => a.rail_case = it.next(),
+            "--view-case" => a.view_case = it.next(),
             "--rail" => {
                 a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
                     Some("A") => 0,
@@ -4992,7 +4998,7 @@ fn args() -> Args {
             "--login" => a.login = it.next(),
             "-h" | "--help" => {
                 print!(
-                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
                     cases::help(SURFACES)
                 );
                 std::process::exit(0);
@@ -5177,6 +5183,8 @@ fn main() -> io::Result<()> {
         login::run_login(&a, &mut term)
     } else if a.rail_case.is_some() {
         rail::run_rail(&a, &mut term)
+    } else if a.view_case.is_some() {
+        views::run_view(&a, &mut term)
     } else {
         run(
             &a, &events, &mut f, &mut next, &mut term, t0, pager, open_index,
@@ -5196,10 +5204,14 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    // Home, the overlays, the login and the rail cases draw no session, so there is nothing to
-    // resume, unless home switched to the conversation, whose replayed
+    // Home, the overlays, the login, the rail cases and the swapped views draw no session,
+    // so there is nothing to resume, unless home switched to the conversation, whose replayed
     // session resumes as usual.
-    if a.home.is_none() && a.overlay.is_none() && a.login.is_none() && a.rail_case.is_none()
+    if a.home.is_none()
+        && a.overlay.is_none()
+        && a.login.is_none()
+        && a.rail_case.is_none()
+        && a.view_case.is_none()
         || home_switched
     {
         println!(
@@ -7077,6 +7089,7 @@ mod tests {
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
+                "--view-case delegate-view",
             ]
         );
         let h = cases::help(SURFACES);
