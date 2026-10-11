@@ -30,6 +30,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/skills/using-fiber/SKILL.md", "main"),
     ("crates/tools/prompt/guidelines.md", "tools"),
     ("providers/codex/tests/quota-two-windows.json", "main"),
+    ("providers/opencode/init.lua", "main"),
     ("providers/openrouter/init.lua", "main"),
     (
         "providers/openrouter/tests/quota-limited-key-returns-credit-and-limit.json",
