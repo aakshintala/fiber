@@ -30,14 +30,6 @@ use super::{ENTRY, GRACE, Target, expired};
 pub(super) use super::declared::CallbackTimeouts;
 pub(crate) use super::declared::{DeclaredHooks, HookPhase};
 
-/// How many deliveries ending before any inbox are kept, newest first:
-/// an extension that ends more runs before any sender still delivers its
-/// latest lines in call order.
-pub(super) const MAX_PENDING_DELIVERIES: usize = 1024;
-
-/// How many ephemeral events emitted before any emitter are kept, newest
-/// first, flushed in call order on the first emitter.
-pub(super) const MAX_PENDING_EVENTS: usize = 1024;
 pub(super) use super::errors::{StopReason, not_registered, stopped, timed_out};
 
 pub(crate) struct Hub {
@@ -172,7 +164,7 @@ impl Hub {
     }
 
     #[cfg(test)]
-    fn at_window(&self, at: Window) {
+    pub(super) fn at_window(&self, at: Window) {
         let hook = self
             .window
             .lock()
@@ -202,133 +194,6 @@ impl Hub {
         self.notify();
     }
 
-    /// Hands the session loop's inbox to the extension's deliveries: one
-    /// that ended before any sender is buffered and sent on the first
-    /// sender; a later sender replaces the last. A delivery routed after
-    /// the extension is dropped is dropped, as is a sender that arrives
-    /// after it. Routing holds one lock, so a delivery ending against
-    /// `deliver_to` is sent, never stranded: an `mpsc` send never blocks,
-    /// so sending under the lock is safe.
-    pub(crate) fn set_inbox(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
-        // Whatever is not sent is moved out and dropped only after the
-        // lock is released: a dropped `Resolved` answers its driver,
-        // which may re-enter this hub.
-        let unsent: VecDeque<Delivery> = {
-            let mut shared = self.lock();
-            if shared.disposed {
-                return;
-            }
-            if shared.sealed {
-                // set_inbox_on_a_sealed_hub_sends_nothing: the buffer is
-                // moved out, never flushed, so no extension line follows
-                // `fiber_exited`.
-                std::mem::take(&mut shared.buffer)
-            } else {
-                shared.inbox = Some(inbox.clone());
-                let buffered = std::mem::take(&mut shared.buffer);
-                #[cfg(test)]
-                self.at_window(Window::Flushing);
-                let mut unsent = VecDeque::new();
-                let mut failed = false;
-                for delivery in buffered {
-                    // `send` on an `mpsc` Sender never blocks; held under
-                    // the hub lock so sender choice, buffering and
-                    // flushing serialize.
-                    if !failed {
-                        match inbox.send(delivery) {
-                            Ok(()) => continue,
-                            Err(failed_send) => {
-                                failed = true;
-                                unsent.push_back(failed_send.0);
-                                continue;
-                            }
-                        }
-                    }
-                    unsent.push_back(delivery);
-                }
-                unsent
-            }
-        };
-        drop(unsent);
-    }
-
-    /// Sets the ephemeral emitter `host.status`, `host.widget` and `host.emit`
-    /// write through, flushing what was buffered before it in call order.
-    /// A later emitter replaces the last, as `set_inbox` does. Holds the hub
-    /// lock through the flush, so `seal` cannot return between the choice
-    /// and the last write: `fiber_exited` follows every flushed line. The
-    /// emitter is the log, which takes only its own lock and never calls
-    /// back into the hub, so the order hub-then-log never reverses.
-    pub(crate) fn set_emit(&self, emit: std::sync::Arc<dyn contract::emit::Emit>) {
-        let mut shared = self.lock();
-        if shared.disposed || shared.sealed {
-            return;
-        }
-        shared.emitter = Some(emit.clone());
-        let buffered = std::mem::take(&mut shared.emit_buffer);
-        #[cfg(test)]
-        self.at_window(Window::EmitFlushing);
-        for event in buffered {
-            // Ephemeral only, so the log takes its own lock and fans out
-            // without file I/O and never calls back into the hub; held
-            // under the hub lock so a concurrent `seal` cannot interleave.
-            emit.emit(&event);
-        }
-    }
-
-    /// Emits an ephemeral `event` through the late-bound emitter, or buffers
-    /// it in call order when none arrived yet. After the drop or `seal`,
-    /// it is dropped. Holds the hub lock through the emission, so `seal`
-    /// under the same lock drops every later emission and `fiber_exited`
-    /// follows every emitted line. The emitter is the log, which takes only
-    /// its own lock and never calls back into the hub, so the order
-    /// hub-then-log never reverses.
-    pub(crate) fn emit(&self, event: contract::events::Event) {
-        let mut shared = self.lock();
-        if shared.disposed || shared.sealed {
-            return;
-        }
-        let Some(emitter) = shared.emitter.clone() else {
-            shared.emit_buffer.push_back(event);
-            if shared.emit_buffer.len() > MAX_PENDING_EVENTS {
-                drop(shared.emit_buffer.pop_front());
-            }
-            return;
-        };
-        #[cfg(test)]
-        self.at_window(Window::Emitting);
-        // Held under the hub lock so a concurrent `seal` cannot slip in
-        // between the choice and the write; `shared` drops after.
-        emitter.emit(&event);
-    }
-
-    /// Hands the in-process driver to this extension's `host.drive`.
-    /// A later driver replaces the last, as `set_inbox` does.
-    pub(crate) fn set_driver(&self, drive: std::sync::Arc<dyn contract::extension::Drive>) {
-        let mut shared = self.lock();
-        if shared.disposed {
-            return;
-        }
-        shared.driver = Some(drive);
-    }
-
-    /// The driver `host.drive` sends through: none before `drive_to`, once
-    /// dropped, or once sealed, so no drive follows `fiber_exited`.
-    pub(crate) fn driver(&self) -> Option<std::sync::Arc<dyn contract::extension::Drive>> {
-        let shared = self.lock();
-        if shared.disposed || shared.sealed {
-            return None;
-        }
-        shared.driver.clone()
-    }
-
-    /// Drops every later emission and delivery from this extension; called by
-    /// `Session::quiesce` before `fiber_exited`. A running callback is not
-    /// stopped; only its output is dropped.
-    pub(crate) fn seal(&self) {
-        self.lock().sealed = true;
-    }
-
     /// Releases a held queued call, so the stream may start it.
     pub(crate) fn release(&self, id: u64) {
         {
@@ -345,7 +210,7 @@ impl Hub {
     pub(crate) fn dispose(&self, _name: &str) {
         let unsent = {
             let mut shared = self.lock();
-            shared.disposed = true;
+            shared.router.dispose();
             if !matches!(shared.phase, Phase::Stopped(_)) {
                 shared.stop(StopReason::Stopped)
             } else {
@@ -356,55 +221,6 @@ impl Hub {
         self.notify();
     }
 
-    /// Registers a timer `host.after` or `host.every` set: `every` holds
-    /// its period for rescheduling, `None` for a one-shot `after`.
-    /// Returns its id, assigned in set order from 0.
-    pub(crate) fn add_timer(
-        &self,
-        every: Option<Duration>,
-        due: Instant,
-        timeout: Duration,
-    ) -> u64 {
-        let mut shared = self.lock();
-        let id = shared.next_timer;
-        shared.next_timer = shared.next_timer.wrapping_add(1);
-        shared.timers.insert(
-            id,
-            Timer {
-                id,
-                every,
-                due,
-                timeout,
-                cancelled: false,
-                firing: false,
-            },
-        );
-        drop(shared);
-        self.notify();
-        id
-    }
-
-    /// Stops a timer: a due firing never starts, and a mid-firing `every`
-    /// does not fire again. Unknown or finished ids are a no-op.
-    pub(crate) fn cancel_timer(&self, id: u64) {
-        let mut shared = self.lock();
-        // A listed timer is never both cancelled and idle: an idle cancel
-        // removes it, and a cancelled firing leaves at its end.
-        let remove = match shared.timers.get_mut(&id) {
-            Some(timer) => {
-                timer.cancelled = true;
-                !timer.firing
-            }
-            None => false,
-        };
-        if remove {
-            shared.timers.remove(&id);
-            shared.timer_cleanup.push(id);
-        }
-        drop(shared);
-        self.notify();
-    }
-
     /// Ends a timer firing: an `every` that was not cancelled fires again
     /// `ms` after its end; anything else is removed. The callback's result
     /// goes nowhere, and a failure is silent.
@@ -412,27 +228,7 @@ impl Hub {
         let now = self.clock.now();
         let mut shared = self.lock();
         shared.calls.remove(&call_id);
-        shared.timer_end(timer_id, now);
-    }
-
-    /// The timer ids whose Lua functions the extension's thread frees.
-    pub(super) fn take_timer_cleanup(&self) -> Vec<u64> {
-        std::mem::take(&mut self.lock().timer_cleanup)
-    }
-
-    /// Routes an extension delivery to the loop's inbox, or buffers it in
-    /// call order when no sender arrived yet. One routed after the drop
-    /// or after `seal` is dropped instead; routing holds one lock, so nothing is stranded.
-    pub(crate) fn send(&self, delivery: Delivery) {
-        let unsent = {
-            let mut shared = self.lock();
-            #[cfg(test)]
-            self.at_window(Window::Selected);
-            shared.route(delivery)
-        };
-        // Dropped only after the lock is released: a dropped `Resolved`
-        // answers its driver, which may re-enter this hub.
-        drop(unsent);
+        shared.timers.end_firing(timer_id, now);
     }
 }
 
@@ -453,31 +249,10 @@ pub(crate) struct Shared {
     /// Whether a client can answer a `host.ask`: set by the session, false
     /// until it is. An ask with no answerer returns declined at once.
     pub(super) answerable: bool,
-    /// The loop's inbox for the extension's deliveries, set by `deliver_to`.
-    pub(super) inbox: Option<std::sync::mpsc::Sender<Delivery>>,
-    /// Deliveries that ended before any inbox, in call order, sent on the
-    /// first one: at most [`MAX_PENDING_DELIVERIES`], oldest dropped first.
-    pub(super) buffer: VecDeque<Delivery>,
-    /// The extension was dropped: anything routed after this is dropped,
-    /// under the same lock that routes deliveries.
-    pub(super) disposed: bool,
-    /// `seal` was called: every later emission and delivery is dropped,
-    /// under the same lock that routes them.
-    pub(super) sealed: bool,
-    /// The ephemeral emitter `host.status`, `host.widget` and `host.emit`
-    /// write through, set late by `emit_to`.
-    pub(super) emitter: Option<std::sync::Arc<dyn contract::emit::Emit>>,
-    /// The in-process driver `host.drive` sends through, set late by
-    /// `drive_to`. None before it, or once the extension is sealed.
-    pub(super) driver: Option<std::sync::Arc<dyn contract::extension::Drive>>,
-    /// Ephemeral events emitted before any emitter, in call order, flushed
-    /// on the first one: at most [`MAX_PENDING_EVENTS`], oldest dropped
-    /// first.
-    pub(super) emit_buffer: VecDeque<contract::events::Event>,
-    /// The timers `host.after` and `host.every` set, by id.
-    pub(crate) timers: HashMap<u64, Timer>,
-    /// Timer ids whose Lua functions the extension's thread still frees.
-    pub(crate) timer_cleanup: Vec<u64>,
+    /// Where the extension's deliveries, ephemeral events and drives go.
+    pub(super) router: super::router::Router,
+    /// The timers `host.after` and `host.every` set.
+    pub(crate) timers: super::timers::Timers,
     next_id: u64,
     /// Started calls whose caller cancelled them (`docs/tools.md`,
     /// "Cancellation"), until the thread ends them.
@@ -487,26 +262,6 @@ pub(crate) struct Shared {
     /// Raised into running Lua by the deadline hook while a cancelled call
     /// runs; set and cleared only under this lock.
     pub(super) interrupt: Arc<std::sync::atomic::AtomicBool>,
-    /// The next timer's id, assigned in set order from 0.
-    pub(crate) next_timer: u64,
-}
-
-/// A timer `host.after` or `host.every` set: when its callback fires next,
-/// on the extension's clock (`docs/extensions.md`, "Host calls").
-#[derive(Debug)]
-pub(crate) struct Timer {
-    /// Assigned in set order from 0.
-    pub(crate) id: u64,
-    /// The period an `every` reschedules with; `None` for an `after`.
-    pub(crate) every: Option<Duration>,
-    /// When the callback fires next.
-    pub(crate) due: Instant,
-    /// The firing's timeout, from its start.
-    pub(crate) timeout: Duration,
-    /// `:cancel()` stopped it; a mid-firing cancel finishes the firing.
-    pub(crate) cancelled: bool,
-    /// A firing is running; one firing at a time.
-    pub(crate) firing: bool,
 }
 
 #[derive(Default)]
@@ -616,50 +371,6 @@ impl Shared {
             timeout,
             deadline,
         )
-    }
-
-    /// Starts the earliest due timer, when one waits: due, neither
-    /// cancelled nor firing. Marks it firing and returns its id and
-    /// timeout. One firing at a time.
-    pub(super) fn timer_fire(&mut self, now: Instant) -> Option<(u64, Duration)> {
-        let timer = self
-            .timers
-            .values_mut()
-            .filter(|timer| !timer.cancelled && !timer.firing && timer.due <= now)
-            .min_by_key(|timer| (timer.due, timer.id))?;
-        timer.firing = true;
-        Some((timer.id, timer.timeout))
-    }
-
-    /// Ends a timer firing at `now`: an `every` that was not cancelled
-    /// fires again `ms` after its end; anything else leaves, freeing its
-    /// Lua function on the extension's thread.
-    pub(super) fn timer_end(&mut self, id: u64, now: Instant) {
-        let reschedule = match self.timers.get_mut(&id) {
-            Some(timer) if !timer.cancelled => timer.every,
-            Some(_) | None => None,
-        };
-        match reschedule {
-            Some(every) => {
-                if let Some(timer) = self.timers.get_mut(&id) {
-                    timer.due = now.checked_add(every).unwrap_or(now);
-                    timer.firing = false;
-                }
-            }
-            None => {
-                self.timers.remove(&id);
-                self.timer_cleanup.push(id);
-            }
-        }
-    }
-
-    /// The earliest a waiting timer fires, for the thread's next wake.
-    pub(super) fn timer_wake(&self) -> Option<Instant> {
-        self.timers
-            .values()
-            .filter(|timer| !timer.cancelled && !timer.firing)
-            .map(|timer| timer.due)
-            .min()
     }
 
     /// Whether registration is done, still running, or has stopped the
@@ -805,7 +516,3 @@ impl Wake for Hub {
         self.changed.notify_all();
     }
 }
-
-#[cfg(test)]
-#[path = "hub_tests.rs"]
-mod tests;

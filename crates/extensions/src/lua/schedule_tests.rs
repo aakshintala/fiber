@@ -11,7 +11,10 @@
 
 use std::time::Duration;
 
+use super::super::CredentialFor;
+use super::super::host_calls::{Pause, pause_settle, unpause_settle};
 use super::*;
+use crate::host::{Request, exec};
 use fakes::Deadline;
 
 /// One parked callback with `id`: the thread is a real Lua coroutine, so
@@ -128,7 +131,10 @@ fn a_stopped_extension_starts_no_exec_for_a_suspended_callback() {
     );
     assert!(parked.is_empty(), "nothing is parked");
     assert_eq!(script.unmet().len(), 1, "the scripted run is unused");
-    assert!(hub.lock().buffer.is_empty(), "no extension_exec is routed");
+    assert!(
+        hub.lock().router.buffer().is_empty(),
+        "no extension_exec is routed"
+    );
 }
 
 /// The caller's result for the tool call `id`.
@@ -617,7 +623,7 @@ fn a_cancel_before_admission_starts_no_host_work_and_ends_the_call() {
                 Target::Provider {
                     name: format!("cancel-{id}"),
                     function: "credential",
-                    credential: Some(super::CredentialFor::Stored(pair)),
+                    credential: Some(CredentialFor::Stored(pair)),
                 },
                 Request::Lock,
             ),
@@ -701,7 +707,7 @@ fn oauth_starts_under_the_admission_lock_so_no_cancel_or_stop_precedes_it() {
         let target = Target::Provider {
             name: name.clone(),
             function: "credential",
-            credential: Some(super::CredentialFor::Stored(crate::CredentialPair {
+            credential: Some(CredentialFor::Stored(crate::CredentialPair {
                 credential: "acme".to_owned(),
                 label: "default".to_owned(),
             })),
@@ -853,7 +859,7 @@ fn a_failed_oauth_start_delivers_its_failure_after_releasing_the_lock() {
                 Target::Provider {
                     name: "fail-oauth".to_owned(),
                     function: "credential",
-                    credential: Some(super::CredentialFor::Stored(crate::CredentialPair {
+                    credential: Some(CredentialFor::Stored(crate::CredentialPair {
                         credential: "acme".to_owned(),
                         label: "default.lock".to_owned(),
                     })),

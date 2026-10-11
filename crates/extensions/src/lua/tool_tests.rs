@@ -15,7 +15,7 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
-use super::super::schedule::Pause;
+use super::super::host_calls::Pause;
 use super::*;
 
 /// Wall-clock bound on every wait for the extension.
@@ -529,7 +529,7 @@ struct SettleGuard;
 
 impl Drop for SettleGuard {
     fn drop(&mut self) {
-        super::super::schedule::unpause_settle();
+        super::super::host_calls::unpause_settle();
     }
 }
 
@@ -563,7 +563,7 @@ fn a_cancel_before_exec_admission_ends_the_call_and_keeps_the_extension() {
     ));
     let cancel = fakes::CancelToken::new();
     let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    super::super::schedule::pause_settle({
+    super::super::host_calls::pause_settle({
         let ext = Arc::clone(&ext);
         let cancel = cancel.clone();
         Arc::new(move |target: &Target, pause: Pause| {
