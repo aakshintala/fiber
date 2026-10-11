@@ -140,9 +140,64 @@ fn text_part(text: Option<&str>) -> Content {
     }
 }
 
+fn link_part(uri: Option<&str>, name: Option<&str>, mime_type: Option<&str>) -> Content {
+    Content::ResourceLink {
+        uri: uri.map(str::to_owned),
+        name: name.map(str::to_owned),
+        mime_type: mime_type.map(str::to_owned),
+    }
+}
+
+fn resource_part(
+    text: Option<&str>,
+    blob: Option<Value>,
+    uri: Option<&str>,
+    mime_type: Option<&str>,
+) -> Content {
+    Content::Resource {
+        resource: Resource {
+            text: text.map(str::to_owned),
+            blob,
+            uri: uri.map(str::to_owned),
+            mime_type: mime_type.map(str::to_owned),
+        },
+    }
+}
+
+fn audio_part(data: Option<Value>, mime_type: Option<&str>) -> Content {
+    Content::Audio {
+        data,
+        mime_type: mime_type.map(str::to_owned),
+    }
+}
+
+fn text_line(text: &str) -> ContentPart {
+    ContentPart::Text {
+        text: text.to_owned(),
+    }
+}
+
+/// The `Saved` line `answer` writes for `bytes` of `mime`: the same
+/// content-addressed name, so the table pins the exact line.
+fn saved_line(mime: &str, bytes: &[u8]) -> ContentPart {
+    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+    let hex: String = digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    text_line(&format!(
+        "Saved {mime} content, {} bytes, to artifacts/mcp-{}.bin",
+        bytes.len(),
+        &hex[..16],
+    ))
+}
+
 #[test]
 #[allow(clippy::type_complexity, reason = "one table pins every answer shape")]
-fn answer_reads_text_in_order_and_drops_the_rest() {
+fn answer_maps_each_part_to_its_own_text_in_order() {
+    let dir = fakes::TempDir::new("mcp-tool-answer");
+    let call = call(dir.path());
     let rows: &[(
         &str,
         CallResult,
@@ -155,14 +210,7 @@ fn answer_reads_text_in_order_and_drops_the_rest() {
                 content: vec![text_part(Some("a")), text_part(Some("b"))],
                 is_error: false,
             },
-            vec![
-                ContentPart::Text {
-                    text: "a".to_owned(),
-                },
-                ContentPart::Text {
-                    text: "b".to_owned(),
-                },
-            ],
+            vec![text_line("a"), text_line("b")],
             None,
         ),
         (
@@ -171,9 +219,7 @@ fn answer_reads_text_in_order_and_drops_the_rest() {
                 content: vec![text_part(Some("seen")), text_part(None)],
                 is_error: false,
             },
-            vec![ContentPart::Text {
-                text: "seen".to_owned(),
-            }],
+            vec![text_line("seen")],
             None,
         ),
         (
@@ -182,69 +228,175 @@ fn answer_reads_text_in_order_and_drops_the_rest() {
                 content: vec![text_part(Some(""))],
                 is_error: false,
             },
-            vec![ContentPart::Text {
-                text: String::new(),
-            }],
+            vec![text_line("")],
             None,
         ),
         (
-            "non-text is dropped",
+            "an image is dropped",
             CallResult {
                 content: vec![text_part(Some("seen")), Content::Image],
                 is_error: false,
             },
-            vec![ContentPart::Text {
-                text: "seen".to_owned(),
-            }],
+            vec![text_line("seen")],
             None,
         ),
         (
-            "an error carries its text",
+            "other and unreadable become unsupported",
             CallResult {
-                content: vec![text_part(Some("no such thing"))],
+                content: vec![Content::Other, Content::Unreadable],
+                is_error: false,
+            },
+            vec![
+                text_line("Unsupported content."),
+                text_line("Unsupported content."),
+            ],
+            None,
+        ),
+        (
+            "a link names its uri, name and type",
+            CallResult {
+                content: vec![link_part(Some("file:///x"), Some("x"), Some("text/plain"))],
+                is_error: false,
+            },
+            vec![text_line(
+                "Resource link: file:///x (name: x, type: text/plain)",
+            )],
+            None,
+        ),
+        (
+            "a link omits an absent name and type",
+            CallResult {
+                content: vec![link_part(Some("file:///x"), None, None)],
+                is_error: false,
+            },
+            vec![text_line("Resource link: file:///x")],
+            None,
+        ),
+        (
+            "a link omits an empty name",
+            CallResult {
+                content: vec![link_part(Some("file:///x"), Some(""), Some("text/plain"))],
+                is_error: false,
+            },
+            vec![text_line("Resource link: file:///x (type: text/plain)")],
+            None,
+        ),
+        (
+            "a link without a uri says so",
+            CallResult {
+                content: vec![link_part(None, Some("x"), Some("text/plain"))],
+                is_error: false,
+            },
+            vec![text_line("Resource link: (no uri)")],
+            None,
+        ),
+        (
+            "a text resource becomes its text",
+            CallResult {
+                content: vec![resource_part(
+                    Some("from a file"),
+                    None,
+                    Some("file:///x"),
+                    Some("text/plain"),
+                )],
+                is_error: false,
+            },
+            vec![text_line("from a file")],
+            None,
+        ),
+        (
+            "text wins over a blob",
+            CallResult {
+                content: vec![resource_part(
+                    Some("seen"),
+                    Some(Value::from("aGk=")),
+                    None,
+                    None,
+                )],
+                is_error: false,
+            },
+            vec![text_line("seen")],
+            None,
+        ),
+        (
+            "a blob resource is saved",
+            CallResult {
+                content: vec![resource_part(None, Some(Value::from("aGk=")), None, None)],
+                is_error: false,
+            },
+            vec![saved_line("application/octet-stream", b"hi")],
+            None,
+        ),
+        (
+            "audio data is saved under its type",
+            CallResult {
+                content: vec![audio_part(Some(Value::from("aGk=")), Some("audio/mpeg"))],
+                is_error: false,
+            },
+            vec![saved_line("audio/mpeg", b"hi")],
+            None,
+        ),
+        (
+            "audio without data is dropped",
+            CallResult {
+                content: vec![text_part(Some("seen")), audio_part(None, None)],
+                is_error: false,
+            },
+            vec![text_line("seen")],
+            None,
+        ),
+        (
+            "a non-string blob is reported",
+            CallResult {
+                content: vec![resource_part(None, Some(Value::from(7)), None, None)],
+                is_error: false,
+            },
+            vec![text_line(
+                "Could not save application/octet-stream content: expected a base64 string",
+            )],
+            None,
+        ),
+        (
+            "a resource with neither text nor blob is unreadable",
+            CallResult {
+                content: vec![resource_part(None, None, None, None)],
+                is_error: false,
+            },
+            vec![text_line("An unreadable resource.")],
+            None,
+        ),
+        (
+            "an error carries its text parts only",
+            CallResult {
+                content: vec![
+                    text_part(Some("no such thing")),
+                    link_part(Some("file:///x"), None, None),
+                    resource_part(None, None, None, None),
+                ],
                 is_error: true,
             },
-            vec![ContentPart::Text {
-                text: "no such thing".to_owned(),
-            }],
+            vec![
+                text_line("no such thing"),
+                text_line("Resource link: file:///x"),
+                text_line("An unreadable resource."),
+            ],
             Some((ErrorCode::ToolError, "no such thing")),
         ),
         (
             "an empty error names the tool",
             CallResult {
-                content: vec![],
+                content: vec![link_part(Some("file:///x"), None, None)],
                 is_error: true,
             },
-            vec![],
+            vec![text_line("Resource link: file:///x")],
             Some((
                 ErrorCode::ToolError,
                 "The MCP server `fx` reported an error for `echo`.",
             )),
         ),
-        (
-            "a resource is dropped",
-            CallResult {
-                content: vec![
-                    text_part(Some("seen")),
-                    Content::Resource {
-                        resource: Resource {
-                            text: Some("file".to_owned()),
-                            blob: None,
-                            uri: None,
-                            mime_type: None,
-                        },
-                    },
-                ],
-                is_error: false,
-            },
-            vec![ContentPart::Text {
-                text: "seen".to_owned(),
-            }],
-            None,
-        ),
     ];
     for (name, result, content, error) in rows {
-        let out = answer("fx", "echo", result);
+        let out = answer(&call, result);
         assert_eq!(&out.content, content, "row: {name}");
         match error {
             None => assert!(out.error.is_none(), "row: {name}"),
@@ -254,6 +406,82 @@ fn answer_reads_text_in_order_and_drops_the_rest() {
                 assert_eq!(failure.message, *message, "row: {name}");
             }
         }
+    }
+}
+
+/// The saved file's name, read back from its `Saved` line: the line
+/// gives the path from the session directory, and the test directory
+/// stands in for the artifacts dir itself.
+fn saved_path(line: &str) -> &str {
+    line.strip_prefix("Saved ")
+        .and_then(|line| line.split_once(", ").map(|(_, rest)| rest))
+        .and_then(|line| line.split_once(", to ").map(|(_, rest)| rest))
+        .and_then(|path| path.strip_prefix("artifacts/"))
+        .expect("a Saved line")
+}
+
+#[test]
+fn binary_content_is_written_to_a_content_addressed_file() {
+    use base64::Engine as _;
+    let dir = fakes::TempDir::new("mcp-tool-artifacts-write");
+    let call = call(dir.path());
+    let encoded = base64::engine::general_purpose::STANDARD.encode(b"hi");
+    let result = CallResult {
+        content: vec![resource_part(None, Some(Value::from(encoded)), None, None)],
+        is_error: false,
+    };
+    let out = answer(&call, &result);
+    assert!(out.error.is_none());
+    assert_eq!(out.content.len(), 1);
+    let ContentPart::Text { text } = &out.content[0] else {
+        panic!("one text line");
+    };
+    let path = dir.path().join(saved_path(text));
+    let read = std::fs::read(&path).expect("the artifact is written");
+    assert_eq!(read, b"hi");
+    // A repeated result rewrites the same file.
+    let again = answer(&call, &result);
+    assert_eq!(again.content, out.content);
+    let read = std::fs::read(&path).expect("the artifact is rewritten");
+    assert_eq!(read, b"hi");
+}
+
+#[test]
+fn binary_failures_report_without_failing_the_call() {
+    let dir = fakes::TempDir::new("mcp-tool-artifacts-unwritable");
+    let blocker = dir.path().join("file");
+    std::fs::write(&blocker, "in the way").expect("the blocker exists");
+    let rows: &[(&str, Call, CallResult, &str)] = &[
+        (
+            "bad base64",
+            call(dir.path()),
+            CallResult {
+                content: vec![resource_part(None, Some(Value::from("!!!")), None, None)],
+                is_error: false,
+            },
+            "Could not save application/octet-stream content: ",
+        ),
+        (
+            "a write failure",
+            call(&blocker),
+            CallResult {
+                content: vec![audio_part(Some(Value::from("aGk=")), Some("audio/mpeg"))],
+                is_error: false,
+            },
+            "Could not save audio/mpeg content: ",
+        ),
+    ];
+    for (name, call, result, prefix) in rows {
+        let out = answer(call, result);
+        assert!(out.error.is_none(), "row: {name}");
+        assert_eq!(out.content.len(), 1, "row: {name}");
+        let ContentPart::Text { text } = &out.content[0] else {
+            panic!("one text line, row: {name}");
+        };
+        assert!(
+            text.starts_with(prefix) && text.len() > prefix.len(),
+            "row: {name}, line: {text}",
+        );
     }
 }
 
