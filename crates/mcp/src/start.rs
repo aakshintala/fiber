@@ -9,7 +9,8 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Arc, Weak, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -274,9 +275,12 @@ pub struct Started {
 }
 
 /// The servers: running ones and ones declared from the cache that start on
-/// their first call.
+/// their first call. The list is shared, so a tool declared from one start
+/// reaches the servers another start adopted into it; adopting copies the
+/// slot handles, and a slot in two lists stops once.
 pub struct Servers {
-    pub(crate) slots: std::sync::Mutex<Vec<Arc<Slot>>>,
+    pub(crate) slots: Arc<Mutex<Vec<Arc<Slot>>>>,
+    resources_declared: AtomicBool,
 }
 
 impl Servers {
@@ -298,17 +302,29 @@ impl Servers {
 
     /// Takes in servers another start began: the adopted servers stop with
     /// this stop, after the loop has returned, so nothing is adopted
-    /// after it.
+    /// after it. The adopted handles are copied onto this list's end,
+    /// leaving the other list intact; neither declared flag is touched.
     pub fn adopt(&self, other: Servers) {
-        let mut slots = self
+        let more = other
             .slots
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut more = other
-            .slots
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        self.slots
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        slots.append(&mut more);
+            .unwrap_or_else(PoisonError::into_inner)
+            .extend(more);
+    }
+
+    /// Records that this session already declares `mcp_resources`, so a
+    /// later load never offers a second registration for it.
+    pub fn mark_resources_declared(&self) {
+        self.resources_declared.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether [`Servers::mark_resources_declared`] has run.
+    pub fn resources_declared(&self) -> bool {
+        self.resources_declared.load(Ordering::SeqCst)
     }
 }
 
@@ -425,7 +441,8 @@ pub fn start(
         infos,
         failed,
         servers: Servers {
-            slots: std::sync::Mutex::new(slots),
+            slots: Arc::new(Mutex::new(slots)),
+            resources_declared: AtomicBool::new(false),
         },
         prompts: Prompts::collect(sources),
         required_failed,

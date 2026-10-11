@@ -2,6 +2,7 @@
 //! public [`start`].
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -1317,4 +1318,110 @@ fn a_remote_spec_debug_hides_userinfo_query_and_unparsed_urls() {
     assert!(!printed.contains("secret"), "{printed}");
     let broken = setup.remote_spec("fx", "not a url");
     assert!(format!("{broken:?}").contains("<unparsed>"), "{broken:?}");
+}
+
+/// A lazy spec for `name` whose cache offers resources when `resources`.
+fn lazy_spec(setup: &Setup, name: &str, resources: bool) -> super::ServerSpec {
+    let spec = setup.spec(name);
+    crate::cache::write(
+        &setup.cache(),
+        name,
+        &spec.key(),
+        &crate::cache::Cached {
+            tools: Vec::new(),
+            prompts: Vec::new(),
+            resources,
+        },
+    );
+    spec
+}
+
+#[test]
+fn a_lazy_slot_offers_resources_as_its_cache_says() {
+    for resources in [true, false] {
+        let setup = Setup::new();
+        let started = setup.start(vec![lazy_spec(&setup, "fx", resources)]);
+        assert!(started.failed.is_empty());
+        assert!(
+            !setup.spawned(),
+            "declaring from the cache spawns nothing, resources: {resources}",
+        );
+        let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
+        assert_eq!(slot.offers_resources(), resources, "resources: {resources}",);
+        assert_eq!(slot.spec().name, "fx");
+        setup.stop(started.servers);
+    }
+}
+
+#[test]
+fn adopt_copies_the_adopted_slots_and_leaves_them_reachable() {
+    let setup = Setup::new();
+    let a = setup.start(vec![lazy_spec(&setup, "a", false)]);
+    let b = setup.start(vec![lazy_spec(&setup, "b", true)]);
+    let a_slot = Arc::clone(&a.servers.slots.lock().unwrap()[0]);
+    let b_slot = Arc::clone(&b.servers.slots.lock().unwrap()[0]);
+    // Held across the move, so the test still sees the adopted list after.
+    let b_list = Arc::clone(&b.servers.slots);
+    a.servers.adopt(b.servers);
+    let held = a.servers.slots.lock().unwrap();
+    assert_eq!(held.len(), 2);
+    assert!(Arc::ptr_eq(&held[0], &a_slot));
+    assert!(Arc::ptr_eq(&held[1], &b_slot));
+    drop(held);
+    let kept = b_list.lock().unwrap();
+    assert_eq!(kept.len(), 1, "the adopted list is left intact");
+    assert!(Arc::ptr_eq(&kept[0], &b_slot));
+    drop(kept);
+    setup.stop(a.servers);
+}
+
+#[test]
+fn nested_adoption_reaches_every_slot() {
+    let setup = Setup::new();
+    let a = setup.start(vec![lazy_spec(&setup, "a", false)]);
+    let b = setup.start(vec![lazy_spec(&setup, "b", true)]);
+    let c = setup.start(vec![lazy_spec(&setup, "c", false)]);
+    let c_slot = Arc::clone(&c.servers.slots.lock().unwrap()[0]);
+    let a_slot = Arc::clone(&a.servers.slots.lock().unwrap()[0]);
+    let b_slot = Arc::clone(&b.servers.slots.lock().unwrap()[0]);
+    // Held across both moves, so the test still sees each list after.
+    let a_list = Arc::clone(&a.servers.slots);
+    a.servers.adopt(b.servers);
+    c.servers.adopt(a.servers);
+    let reached = c.servers.slots.lock().unwrap();
+    assert_eq!(reached.len(), 3);
+    assert!(Arc::ptr_eq(&reached[0], &c_slot));
+    assert!(Arc::ptr_eq(&reached[1], &a_slot));
+    assert!(Arc::ptr_eq(&reached[2], &b_slot));
+    drop(reached);
+    let kept = a_list.lock().unwrap();
+    assert_eq!(kept.len(), 2);
+    assert!(Arc::ptr_eq(&kept[0], &a_slot));
+    assert!(Arc::ptr_eq(&kept[1], &b_slot));
+    drop(kept);
+    assert!(b_slot.offers_resources());
+    assert!(!a_slot.offers_resources());
+    setup.stop(c.servers);
+}
+
+#[test]
+fn the_declared_flag_starts_false_and_marks_once() {
+    let setup = Setup::new();
+    let plain = setup.start(vec![]);
+    assert!(!plain.servers.resources_declared());
+    plain.servers.mark_resources_declared();
+    assert!(plain.servers.resources_declared());
+    // Adopting a marked list leaves the adopter's own flag alone.
+    let marked = setup.start(vec![]);
+    marked.servers.mark_resources_declared();
+    plain.servers.adopt(marked.servers);
+    assert!(plain.servers.resources_declared());
+    let fresh = setup.start(vec![]);
+    assert!(!fresh.servers.resources_declared());
+    fresh.servers.adopt(plain.servers);
+    assert!(
+        !fresh.servers.resources_declared(),
+        "adopting a marked list never touches the adopter's flag",
+    );
+    setup.stop(fresh.servers);
 }
