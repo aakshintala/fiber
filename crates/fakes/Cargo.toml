@@ -12,7 +12,7 @@ publish.workspace = true
 [dependencies]
 contract = { path = "../contract" }
 support = { path = "../support" }
-ring = "0.17"
+ring.workspace = true
 rustix.workspace = true
 # gzip for the release fixtures `ustar` builds.
 flate2.workspace = true
