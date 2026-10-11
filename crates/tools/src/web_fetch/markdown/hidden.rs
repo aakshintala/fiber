@@ -328,19 +328,16 @@ impl Hidden {
     }
 
     /// Keeps the stack's memory bounded: at most `max(64, 4 × open)`.
-    /// One halving per close is enough: before a close the capacity is at
-    /// most `max(64, 4L)` for `L` open elements, and after it `L - 1` are
-    /// open. Halving a capacity over `4(L - 1)` gives at most `2L`, within
-    /// `4(L - 1)` for `L >= 2`; at `L = 1` the earlier closes already
-    /// reached the 64 floor.
-    #[cfg_attr(
-        false,
-        mutants::skip,
-        reason = "the bound `max(64, 4 × open)` holds on either side of the quarter and the floor, so a flipped comparison changes nothing a consumer sees; `the_hidden_stack_shrinks_back_after_deep_nesting` checks the bound itself"
-    )]
+    /// Compare against the final length after a close, then retain at most
+    /// `max(64, 2 × open)` bytes so later closes do not reallocate each time.
     fn shrink(&mut self) {
-        if self.stack.capacity() > 64 && self.stack.len() * 4 < self.stack.capacity() {
-            self.stack.shrink_to(self.stack.capacity() / 2);
+        let open = self.stack.len();
+        let bound = open.saturating_mul(4).max(64);
+        if matches!(
+            self.stack.capacity().cmp(&bound),
+            std::cmp::Ordering::Greater
+        ) {
+            self.stack.shrink_to(open.saturating_mul(2).max(64));
         }
     }
 }
