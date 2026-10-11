@@ -273,94 +273,93 @@ struct Preamble {
     thinking: Option<contract::ThinkingLevel>,
 }
 
+/// What every new loop runs on: the log, the provider and model, the
+/// prompt inputs, the inbox, the tools and the permissions.
+pub struct Session {
+    /// The session's log.
+    pub log: Arc<Log>,
+    /// The provider answering the session's calls.
+    pub provider: Arc<dyn Provider>,
+    /// The model the session runs, and how its calls are priced.
+    pub model: Model,
+    /// What the one preamble build reads, once.
+    pub prompt: PromptInputs,
+    /// The session's inbox, which the loop blocks on while idle.
+    pub inbox: Receiver<Delivery>,
+    /// Registered by name, each with who registered it; a later one replaces
+    /// an earlier one of the same name (`docs/architecture.md`, "Tool seam").
+    pub tools: Vec<(String, Arc<dyn Tool>)>,
+    /// The workspace, the credentials and the standing rules.
+    pub permissions: Permissions,
+}
+
+/// What a new loop starts from that only a resume folds: the preamble
+/// reason, the session and root ids, the folded state, and the registered
+/// tools with the workspace and credentials the loop runs on.
+struct Seed {
+    reason: PreambleReason,
+    session: String,
+    root: String,
+    suspended: Option<resume::Suspended>,
+    held: Vec<Input>,
+    conversation: Vec<Input>,
+    sent: Option<usize>,
+    grants: Vec<Grant>,
+    reviewed: Vec<reviewer::Reviewed>,
+    session_blocks: u64,
+    repository: offer::State,
+    context: Option<Vec<contract::Envelope>>,
+    ledger: usage::Ledger,
+    carry: handoff::Carry,
+    chosen: Option<contract::ThinkingLevel>,
+    tools: BTreeMap<String, calls::Registered>,
+    replaced: Vec<ToolReplaced>,
+    workspace: PathBuf,
+    credentials: PathBuf,
+}
+
+/// The failure step 7 escalates without a reviewer, with the default limits.
+fn no_model() -> Failure {
+    Failure {
+        code: ErrorCode::NoModel,
+        message: NO_MODEL_MESSAGE.to_owned(),
+        retry_after_ms: None,
+        provider: None,
+    }
+}
+
 impl Loop {
-    /// Starts a new session's loop, writing `session_started`. `tools` are
-    /// registered by name, each with who registered it: `builtin`, or the
-    /// extension or MCP server. A later one replaces an earlier one of the
-    /// same name (`docs/architecture.md`, "Tool seam"). `worktree` is the
-    /// worktree the session runs in, when Fiber created one for it.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the session's whole start: its parent and worktree ride last"
-    )]
-    pub fn start(
-        log: Arc<Log>,
-        provider: Arc<dyn Provider>,
-        model: Model,
-        prompt: prompt::PromptInputs,
-        inbox: Receiver<Delivery>,
-        tools: Vec<(String, Arc<dyn Tool>)>,
-        permissions: Permissions,
-        worktree: Option<Worktree>,
-    ) -> Result<Self, Error> {
-        Self::open(
-            log,
-            provider,
-            model,
-            prompt,
-            inbox,
-            tools,
-            permissions,
-            None,
-            worktree,
-        )
+    /// Starts a new session's loop, writing `session_started` with no
+    /// parent. `worktree` is the worktree the session runs in, when Fiber
+    /// created one for it.
+    pub fn start(session: Session, worktree: Option<Worktree>) -> Result<Self, Error> {
+        Self::open(session, None, worktree)
     }
 
     /// A Fiber delegate's loop: as [`Loop::start`], but the session's
     /// `session_started` names its parent (`docs/delegates.md`, "Events").
     /// A delegate never runs in a worktree of its own.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the session's whole start: its parent rides last"
-    )]
-    pub fn delegate(
-        log: Arc<Log>,
-        provider: Arc<dyn Provider>,
-        model: Model,
-        prompt: prompt::PromptInputs,
-        inbox: Receiver<Delivery>,
-        tools: Vec<(String, Arc<dyn Tool>)>,
-        permissions: Permissions,
-        parent: Parent,
-    ) -> Result<Self, Error> {
-        Self::open(
-            log,
-            provider,
-            model,
-            prompt,
-            inbox,
-            tools,
-            permissions,
-            Some(parent),
-            None,
-        )
+    pub fn delegate(session: Session, parent: Parent) -> Result<Self, Error> {
+        Self::open(session, Some(parent), None)
     }
 
     /// [`Loop::start`] and [`Loop::delegate`] through one writer: the
     /// session's `session_started` carries `parent` (`None` for a plain
     /// start) and `worktree` (`None` for a delegate).
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the session's whole start: its parent and worktree ride last"
-    )]
     fn open(
-        log: Arc<Log>,
-        provider: Arc<dyn Provider>,
-        model: Model,
-        prompt: prompt::PromptInputs,
-        inbox: Receiver<Delivery>,
-        tools: Vec<(String, Arc<dyn Tool>)>,
-        permissions: Permissions,
+        mut session: Session,
         parent: Option<Parent>,
         worktree: Option<Worktree>,
     ) -> Result<Self, Error> {
-        let (tools, replaced) = calls::register(tools);
-        let workspace = PathBuf::from(&permissions.workspace);
+        // Registered before `session_started`: a `Tool::definition()` may
+        // read the log.
+        let (tools, replaced) = calls::register(std::mem::take(&mut session.tools));
+        let workspace = PathBuf::from(&session.permissions.workspace);
         let workspace = workspace.canonicalize().unwrap_or(workspace);
-        let credentials = permission::resolved(permissions.credentials);
-        let started = log.append(
+        let credentials = permission::resolved(session.permissions.credentials.clone());
+        let started = session.log.append(
             &Event::SessionStarted(SessionStarted {
-                workspace: permissions.workspace.clone(),
+                workspace: session.permissions.workspace.clone(),
                 variables: variables(),
                 parent,
                 forked_from: None,
@@ -370,16 +369,87 @@ impl Loop {
             None,
             None,
         )?;
-        // Nothing read yet: the first turn writes the opening message
-        // and rebuilds the state from it.
-        let changes = changes::State::empty(&prompt.home);
+        Self::new(
+            session,
+            Seed {
+                reason: PreambleReason::Start,
+                // A new session is its own root (`docs/prompt-cache.md`,
+                // "Cache markers and keys").
+                session: started.session_id.0.clone(),
+                root: started.session_id.0.clone(),
+                suspended: None,
+                held: Vec::new(),
+                conversation: Vec::new(),
+                sent: None,
+                grants: Vec::new(),
+                reviewed: Vec::new(),
+                session_blocks: 0,
+                repository: offer::State::default(),
+                context: None,
+                ledger: usage::Ledger::default(),
+                carry: handoff::Carry::default(),
+                chosen: None,
+                tools,
+                replaced,
+                workspace,
+                credentials,
+            },
+        )
+    }
+
+    /// The one constructor: every entry builds its [`Session`] and `Seed`
+    /// and builds through here, so the struct literal is written once.
+    /// Writes nothing to the session log.
+    fn new(session: Session, seed: Seed) -> Result<Self, Error> {
+        let Session {
+            log,
+            provider,
+            model,
+            prompt,
+            inbox,
+            permissions,
+            ..
+        } = session;
+        let Seed {
+            reason,
+            session: session_id,
+            root,
+            suspended,
+            held,
+            conversation,
+            sent,
+            grants,
+            reviewed,
+            session_blocks,
+            repository,
+            context,
+            ledger,
+            carry,
+            chosen,
+            tools,
+            replaced,
+            workspace,
+            credentials,
+        } = seed;
+        // The tracked state the log's lines describe, when the log holds
+        // an opening message; without one the first turn writes it fresh
+        // and rebuilds the state from it. Only the current context's
+        // lines: a completed handoff starts the tracked state afresh, as
+        // it does live.
+        let skills = skill_set::SkillSet::new(prompt.clone(), &workspace);
+        let changes = match &context {
+            Some(context) => {
+                skills.resumed(context)?;
+                changes::State::resumed(context, &workspace, &prompt)?
+            }
+            None => changes::State::empty(&prompt.home),
+        };
         // `session_started` renders nothing into the conversation.
         let diag = diag::SessionDiag::new(
             &prompt.home,
-            started.session_id.clone(),
+            contract::SessionId(session_id.clone()),
             Arc::clone(log.clock()),
         );
-        let skills = skill_set::SkillSet::new(prompt.clone(), &workspace);
         Ok(Self {
             log,
             diag,
@@ -387,22 +457,20 @@ impl Loop {
             model,
             prompt,
             skills,
-            preamble_reason: PreambleReason::Start,
+            preamble_reason: reason,
             preamble: None,
             inbox,
             cancel: Arc::new(TurnCancel::default()),
-            // A new session is its own root (`docs/prompt-cache.md`, "Cache
-            // markers and keys").
-            cache_key: started.session_id.0.clone(),
-            reviewer_key: format!("{}:reviewer", started.session_id.0),
+            cache_key: root,
+            reviewer_key: format!("{session_id}:reviewer"),
             queued: VecDeque::new(),
             closing: false,
             rewound: false,
-            suspended: None,
+            suspended,
             deferred: VecDeque::new(),
-            held: Vec::new(),
-            conversation: Vec::new(),
-            sent: None,
+            held,
+            conversation,
+            sent,
             tools,
             replaced,
             workspace,
@@ -413,41 +481,36 @@ impl Loop {
                 .map(permission::resolved)
                 .collect(),
             rules: permissions.rules,
-            grants: Vec::new(),
-            reviewer: Err(Failure {
-                code: ErrorCode::NoModel,
-                message: NO_MODEL_MESSAGE.to_owned(),
-                retry_after_ms: None,
-                provider: None,
-            }),
+            grants,
+            reviewer: Err(no_model()),
             limits: BlockLimits::default(),
             reviewer_notes: String::new(),
-            reviewed: Vec::new(),
+            reviewed,
             reviewer_sent: None,
             consecutive: 0,
-            session_blocks: 0,
+            session_blocks,
             no_model_noticed: false,
             turn_blocked: None,
             workspace_label: permissions.workspace,
             answerable: true,
             server_prompts: None,
-            repository: offer::State::default(),
-            opened: false,
+            repository,
+            opened: context.is_some(),
             changes,
             cut_off: false,
-            ledger: usage::Ledger::default(),
+            ledger,
             late_cost: late_cost::LateCost::default(),
             budget: None,
             retry: Retry::default(),
             idle_exit: None,
             idle_left: false,
             hooks: None,
-            handoff: handoff::State::new(handoff::Carry::default()),
+            handoff: handoff::State::new(carry),
             ending: jobs::Ending::default(),
             warming: warm::Warming::default(),
             switcher: None,
             pending: Vec::new(),
-            chosen: None,
+            chosen,
             inbox_wake: None,
         })
     }

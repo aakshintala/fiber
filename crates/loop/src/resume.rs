@@ -5,30 +5,23 @@
 //! refuses it as headless when no person can answer), finishes the turn,
 //! and then runs the prompt as the next turn.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::mpsc::Receiver;
 
 use contract::events::{
     DecidedBy, Decision, Event, Grant, JobCompleted, ModelSettings, ToolCallRequested,
     TurnCompleted, TurnOutcome,
 };
-use contract::inbox::Delivery;
-use contract::provider::Provider;
-use contract::shapes::Failure;
-use contract::tool::Tool;
-use contract::{ActionId, Envelope, ErrorCode, TurnId};
-use log::Log;
+use contract::{ActionId, Envelope, TurnId};
 
 use crate::calls::{self, Asked, Decided};
 use crate::cancel::Commit;
 use crate::completion::resolved;
 use crate::handoff::Carry;
-use crate::retry::Retry;
-use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewed};
+use crate::reviewer::Reviewed;
 use crate::suspend::Pending;
-use crate::{Error, Loop, Model, Permissions, Step};
+use crate::{Error, Loop, Session, Step};
 
 /// The denial's reason for a request re-raised in a session nobody can
 /// answer (`docs/events.md`, `permission_resolved`).
@@ -231,28 +224,16 @@ impl Loop {
     /// the pass saw, so lines written since (`fiber_started` and the
     /// like) are not in it. The only lines written are one `job_completed`
     /// per job a crash left running, marked `orphaned`; `session_started`
-    /// is the first line's, and `seq` carries on. Every other argument is
-    /// [`Loop::start`]'s.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "#302's resume interface: the folded log rides with Loop::start's arguments"
-    )]
-    pub fn resume(
-        log: Arc<Log>,
-        resumed: Resumed,
-        provider: Arc<dyn Provider>,
-        model: Model,
-        prompt: crate::prompt::PromptInputs,
-        inbox: Receiver<Delivery>,
-        tools: Vec<(String, Arc<dyn Tool>)>,
-        permissions: Permissions,
-    ) -> Result<Self, Error> {
+    /// is the first line's, and `seq` carries on. Everything a new loop
+    /// runs on rides [`crate::Session`].
+    pub fn resume(session: Session, resumed: Resumed) -> Result<Self, Error> {
+        let mut session = session;
         let Resumed {
-            session,
+            session: session_id,
             root,
             window,
             end,
-            seed,
+            seed: carry,
             ledger,
             grants,
             session_blocks,
@@ -263,7 +244,7 @@ impl Loop {
             settings,
             ..
         } = resumed;
-        let lines = crate::history::read_window(&log, window, end)?;
+        let mut lines = crate::history::read_window(&session.log, window, end)?;
         // The suspended turn, if any: its batch stays open, so the rebuild
         // writes no fixed result for it; the finishing turn completes it.
         let halted = suspended(&lines)?;
@@ -276,11 +257,13 @@ impl Loop {
         // the cache markers. Notices the log holds behind the open batch
         // are released after its results, as the finishing turn writes them.
         let (conversation, sent, held, carry) =
-            crate::conversation::rebuild_and_sent(&lines, &model.reference, &open, seed)?;
-        let (tools, replaced) = calls::register(tools);
-        let workspace = PathBuf::from(&permissions.workspace);
+            crate::conversation::rebuild_and_sent(&lines, &session.model.reference, &open, carry)?;
+        // Registered where a new loop registers: a `Tool::definition()`
+        // may read the log.
+        let (tools, replaced) = calls::register(std::mem::take(&mut session.tools));
+        let workspace = PathBuf::from(&session.permissions.workspace);
         let workspace = workspace.canonicalize().unwrap_or(workspace);
-        let credentials = crate::permission::resolved(permissions.credentials);
+        let credentials = crate::permission::resolved(session.permissions.credentials.clone());
         // A log that already holds an opening message keeps it: the
         // conversation rebuild renders it from the log, so the first turn
         // writes none. A log with none gets one at its first turn.
@@ -296,101 +279,44 @@ impl Loop {
                 opened = false;
             }
         }
-        // The tracked state the log's lines describe, when the log holds
-        // an opening message; without one the first turn writes it fresh
-        // and rebuilds the state from it.
         // Only the current context's lines: a completed handoff starts the
         // tracked state afresh, as it does live.
-        let skills = crate::skill_set::SkillSet::new(prompt.clone(), &workspace);
-        let changes = if opened {
-            let context = lines
+        let context = if opened {
+            let start = lines
                 .iter()
                 .rposition(|line| line.kind == "opening_message")
                 .unwrap_or(0);
-            let context = lines.get(context..).unwrap_or_default();
-            skills.resumed(context)?;
-            crate::changes::State::resumed(context, &workspace, &prompt)?
+            Some(lines.split_off(start))
         } else {
-            crate::changes::State::empty(&prompt.home)
+            None
         };
-        // debt: copies `Loop::start`'s literal apart from five fields; a
-        // shared constructor once a third constructor needs the same fields.
-        let diag = crate::diag::SessionDiag::new(
-            &prompt.home,
-            contract::SessionId(session.clone()),
-            Arc::clone(log.clock()),
-        );
-        let mut resumed = Self {
-            log,
-            diag,
-            provider,
-            model,
-            prompt,
-            skills,
-            preamble_reason: contract::events::PreambleReason::Resume,
-            preamble: None,
-            inbox,
-            cancel: std::sync::Arc::new(crate::TurnCancel::default()),
-            // The root session's id: every session on a rewind chain
-            // shares the root's cache key (`docs/prompt-cache.md`, "Cache
-            // markers and keys").
-            reviewer_key: format!("{session}:reviewer"),
-            cache_key: root,
-            queued: VecDeque::new(),
-            closing: false,
-            rewound: false,
-            suspended: halted,
-            deferred: VecDeque::new(),
-            held,
-            conversation,
-            sent,
-            tools,
-            replaced,
-            workspace,
-            credentials,
-            credential_files: (permissions.credential_files.into_iter())
-                .map(crate::permission::resolved)
-                .collect(),
-            rules: permissions.rules,
-            grants,
-            reviewer: Err(Failure {
-                code: ErrorCode::NoModel,
-                message: NO_MODEL_MESSAGE.to_owned(),
-                retry_after_ms: None,
-                provider: None,
-            }),
-            limits: BlockLimits::default(),
-            reviewer_notes: String::new(),
-            reviewed,
-            reviewer_sent: None,
-            consecutive: 0,
-            session_blocks,
-            no_model_noticed: false,
-            turn_blocked: None,
-            workspace_label: permissions.workspace,
-            answerable: true,
-            server_prompts: None,
-            repository: crate::offer::State::resumed(offers),
-            inbox_wake: None,
-            opened,
-            changes,
-            cut_off: false,
-            ledger,
-            budget: None,
-            retry: Retry::default(),
-            idle_exit: None,
-            idle_left: false,
-            hooks: None,
-            handoff: crate::handoff::State::new(carry),
-            ending: crate::jobs::Ending::default(),
-            // The log does not hold requests: a resumed loop warms only
-            // after its own first step.
-            warming: crate::warm::Warming::default(),
-            switcher: None,
-            pending: Vec::new(),
-            chosen: thinking.and_then(|level| level.parse().ok()),
-            late_cost: crate::late_cost::LateCost::default(),
-        };
+        let mut resumed = Self::new(
+            session,
+            crate::Seed {
+                reason: contract::events::PreambleReason::Resume,
+                session: session_id,
+                // The root session's id: every session on a rewind chain
+                // shares the root's cache key (`docs/prompt-cache.md`,
+                // "Cache markers and keys").
+                root,
+                suspended: halted,
+                held,
+                conversation,
+                sent,
+                tools,
+                replaced,
+                workspace,
+                credentials,
+                grants,
+                reviewed,
+                session_blocks,
+                repository: crate::offer::State::resumed(offers),
+                context,
+                ledger,
+                carry,
+                chosen: thinking.and_then(|level| level.parse().ok()),
+            },
+        )?;
         resumed.mark_orphans(orphans)?;
         // After any orphaned `job_completed` lines, before the first
         // `preamble_built`: a resume that switches the credential label
