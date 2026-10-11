@@ -26,7 +26,7 @@ type SessionTools = (
     Arc<dyn contract::images::Images>,
 );
 
-/// `ask_user`, `delegate_models`, `delegate_spawn`, `edit`, `handoff`, `read`, `session_search`, `shell`,
+/// `ask_user`, `delegate_models`, `delegate_spawn`, `edit`, `handoff`, `name_session`, `read`, `session_search`, `shell`,
 /// `skill`, `web_fetch`, `write` and `jobs`, each registered by `builtin`, and
 /// `web_search` as `web_search` chose it: the hosted search of the session's
 /// model when it has one, else Fiber's own over the installed backend, else
@@ -80,6 +80,7 @@ pub(crate) fn builtin(
         registered(delegates.tool())?,
         registered(files.edit())?,
         registered(tools::Handoff)?,
+        registered(tools::NameSession)?,
         registered(files.read())?,
         registered(tools::SessionSearch::new(Arc::new(log::SessionScan::new(
             home,
