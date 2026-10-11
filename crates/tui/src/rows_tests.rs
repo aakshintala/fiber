@@ -417,7 +417,11 @@ fn pad_redistributes_skip_tail_links_and_spin() {
         RowText {
             skip: 2,
             tail: 3,
-            links: vec![(8..14, "https://x".to_owned())],
+            links: vec![
+                (8..14, "https://x".to_owned()),
+                (0..6, "https://boundary".to_owned()),
+                (5..7, "https://adjacent".to_owned()),
+            ],
             spin: Some(15),
             ..RowText::plain()
         },
@@ -441,8 +445,14 @@ fn pad_redistributes_skip_tail_links_and_spin() {
             .map(|text| text.links.clone())
             .collect::<Vec<_>>(),
         [
-            Vec::new(),
-            vec![(3..7, "https://x".to_owned())],
+            vec![
+                (1..7, "https://boundary".to_owned()),
+                (6..7, "https://adjacent".to_owned()),
+            ],
+            vec![
+                (3..7, "https://x".to_owned()),
+                (1..2, "https://adjacent".to_owned()),
+            ],
             vec![(1..3, "https://x".to_owned())],
             Vec::new(),
         ]
@@ -502,6 +512,135 @@ fn pad_blanks_a_glyph_wider_than_the_inner_width() {
         lines[0].0
     );
     assert_eq!(texts[0].skip, 1);
+}
+
+#[test]
+fn pad_respects_the_row_start_and_width_boundaries() {
+    let expected = ["first", "second", " third"];
+    for (from, want) in [
+        (2, expected.to_vec()),
+        (3, vec!["first", "second", "third"]),
+        (4, vec!["first", "second", "third"]),
+    ] {
+        let mut rows = Rows::default();
+        rows.extend([row("first"), row("second"), row("third")]);
+        rows.pad(from, 1, 20);
+        let (lines, _) = rows.into_parts();
+        let shown: Vec<String> = lines.iter().map(|(line, _)| line.to_string()).collect();
+        assert_eq!(shown, want, "from {from}");
+    }
+
+    for (inner, want) in [(2, vec!["ab", "c"]), (3, vec!["abc"]), (4, vec!["abc"])] {
+        let mut rows = Rows::default();
+        rows.push(row("abc"));
+        rows.pad(0, 0, inner);
+        let (lines, _) = rows.into_parts();
+        let shown: Vec<String> = lines.iter().map(|(line, _)| line.to_string()).collect();
+        assert_eq!(shown, want, "inner {inner}");
+    }
+
+    let mut rows = Rows::default();
+    rows.push(row("abc"));
+    rows.pad(0, 1, 0);
+    let (lines, _) = rows.into_parts();
+    assert_eq!(lines[0].0.to_string(), " abc");
+}
+
+#[test]
+fn pad_keeps_an_exact_fit_line_intact() {
+    let empty = ratatui::text::Span::styled(
+        "",
+        ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::BOLD),
+    );
+    let mut rows = Rows::default();
+    rows.push((
+        Line::from(vec![empty, ratatui::text::Span::raw("abc")]),
+        None,
+    ));
+    rows.pad(0, 0, 3);
+    let (lines, _) = rows.into_parts();
+    assert_eq!(lines[0].0.spans.len(), 2);
+    assert_eq!(lines[0].0.spans[0].content, "");
+    assert_eq!(lines[0].0.spans[1].content, "abc");
+}
+
+#[test]
+fn pad_keeps_exact_width_glyphs_and_spaces_at_split_boundaries() {
+    for (inner, expected) in [(1, " "), (2, "界"), (3, "界")] {
+        let mut rows = Rows::default();
+        rows.push(row("界"));
+        rows.pad(0, 0, inner);
+        let (lines, _) = rows.into_parts();
+        assert_eq!(
+            lines
+                .iter()
+                .map(|(line, _)| line.to_string())
+                .collect::<Vec<_>>(),
+            [expected],
+            "inner {inner}"
+        );
+    }
+
+    let mut rows = Rows::default();
+    rows.push(row("ab"));
+    rows.pad(0, 0, 1);
+    let (lines, _) = rows.into_parts();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+
+    let mut rows = Rows::default();
+    rows.push(row(" abcde"));
+    rows.pad(0, 0, 3);
+    let (lines, _) = rows.into_parts();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect::<Vec<_>>(),
+        [" ab", "cde"]
+    );
+
+    let mut rows = Rows::default();
+    rows.push(row("ab cd "));
+    rows.pad(0, 0, 4);
+    let (lines, _) = rows.into_parts();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect::<Vec<_>>(),
+        ["ab", "cd "]
+    );
+}
+
+#[test]
+fn a_spin_on_a_piece_boundary_belongs_to_the_next_piece_only() {
+    for (spin, expected) in [
+        (5, [Some(6), None, None]),
+        (6, [None, Some(1), None]),
+        (7, [None, Some(2), None]),
+    ] {
+        let mut rows = Rows::default();
+        rows.push_text(
+            row("0123456789abcdefgh"),
+            RowText {
+                spin: Some(spin),
+                ..RowText::plain()
+            },
+        );
+        rows.pad(0, 1, 6);
+        let (_, texts) = rows.into_parts();
+        assert_eq!(
+            texts.iter().map(|text| text.spin).collect::<Vec<_>>(),
+            expected,
+            "spin at {spin}"
+        );
+    }
 }
 
 #[test]

@@ -61,6 +61,7 @@ fn the_rule_reads_steer_and_the_time() {
 fn the_rule_fills_the_width_after_one_space() {
     // The label is 14 cells; past it the rule fills the width, and with
     // no room left no rule span draws (`docs/tui.md`, "Turns").
+    assert_eq!(drawn("use x", 0, 13, &TimeZone::UTC)[0], "steer · 00:00 ");
     assert_eq!(drawn("use x", 0, 14, &TimeZone::UTC)[0], "steer · 00:00 ");
     assert_eq!(drawn("use x", 0, 15, &TimeZone::UTC)[0], "steer · 00:00 ─");
     assert_eq!(

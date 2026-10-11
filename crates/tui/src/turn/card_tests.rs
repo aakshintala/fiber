@@ -606,6 +606,25 @@ fn rows_reports_which_pieces_drew() {
 }
 
 #[test]
+fn a_later_band_does_not_change_whether_the_first_piece_drew() {
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    band(&mut cards);
+    handed_off(&mut cards);
+    text(&mut cards, "a_1", "middle");
+    band(&mut cards);
+    handed_off(&mut cards);
+    text(&mut cards, "a_2", "last");
+    assert_eq!(
+        draw(&cards.turns[0], WIDTH, Edges::BOTH).2,
+        Pieces {
+            first: false,
+            last: true
+        }
+    );
+}
+
+#[test]
 fn whether_a_piece_draws_does_not_depend_on_the_width() {
     // Every entry draws at least one row at any width of 1 or more, or
     // none at every width (`docs/tui.md`, "History and paging").
@@ -1005,6 +1024,70 @@ fn an_opened_edit_group_wraps_inside_the_padding() {
         .find(|span| span.style.fg == Some(Role::Removed.color()))
         .expect("the removed count keeps its span");
     assert!(removed.content.contains("−1"), "{removed:?}");
+}
+
+#[test]
+fn a_group_stays_collapsed_after_text_closes_it_in_an_open_turn() {
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    step(&mut cards);
+    requested(&mut cards, "a_1", "read", json!({"path": "a.rs"}));
+    completed(&mut cards, "a_1", json!({}));
+    text(&mut cards, "a_m", "finished the read");
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert!(
+        shown.iter().any(|row| row.contains("Read 1 file")),
+        "{shown:?}"
+    );
+    assert!(
+        !shown.iter().any(|row| row.contains("read a.rs")),
+        "{shown:?}"
+    );
+}
+
+#[test]
+fn an_open_turn_with_no_prompt_or_card_has_no_rows() {
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    cards.turns[0].prompts.clear();
+    let (rows, _, pieces) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    assert_eq!(
+        pieces,
+        Pieces {
+            first: false,
+            last: false
+        }
+    );
+    assert!(rows.is_empty());
+}
+
+#[test]
+fn an_open_card_or_a_handoff_does_not_get_a_trailing_gap() {
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    text(&mut cards, "a_1", "hi");
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert_eq!(shown[shown.len() - 2], " hi");
+    assert_eq!(shown[shown.len() - 1], "▀".repeat(60));
+
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    band(&mut cards);
+    let (rows, _, pieces) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    assert_eq!(
+        pieces,
+        Pieces {
+            first: false,
+            last: false
+        }
+    );
+    assert!(
+        shown_rows(&rows)
+            .last()
+            .is_some_and(|row| row.starts_with("⇄ Handoff"))
+    );
 }
 
 #[test]

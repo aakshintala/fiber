@@ -132,7 +132,7 @@ impl Rows {
     /// [`Rows::on_surface`], whose edge rows are never padded.
     pub(crate) fn pad(&mut self, from: usize, pad: u16, inner: u16) {
         let mut at = from;
-        while at < self.rows.len() {
+        loop {
             let (Some((line, target)), Some(text)) =
                 (self.rows.get(at).cloned(), self.texts.get(at).cloned())
             else {
@@ -143,12 +143,12 @@ impl Rows {
             let total = off.last().copied().unwrap_or(0);
             let room = usize::from(inner);
             let plans = plan(&cells, room);
-            if total <= room || room == 0 {
+            if plans.is_empty() || total <= room {
                 if let (Some(row), Some(row_text)) = (self.rows.get_mut(at), self.texts.get_mut(at))
                 {
                     prefix_row(&mut row.0, row_text, pad);
                 }
-                at += 1;
+                at = at.saturating_add(1);
                 continue;
             }
             debug_assert!(!plans.is_empty());
@@ -198,7 +198,7 @@ impl Rows {
                 .splice(at..end, pieces.iter().map(|(row, _)| row.clone()));
             self.texts
                 .splice(at..end, pieces.iter().map(|(_, text)| text.clone()));
-            at += pieces.len();
+            at = at.saturating_add(pieces.len());
         }
     }
 
@@ -325,7 +325,8 @@ fn plan(cells: &[Cell], inner: usize) -> Vec<Planned> {
             used = used.saturating_add(cell.width);
             end = end.saturating_add(1);
         }
-        if end == at {
+        let end = end.max(at.saturating_add(1));
+        if cells.get(at).is_some_and(|cell| cell.width > inner) {
             // One glyph wider than the room: it takes a piece of its
             // own and draws as one blank cell.
             plans.push(Planned {
@@ -333,7 +334,7 @@ fn plan(cells: &[Cell], inner: usize) -> Vec<Planned> {
                 end: at + 1,
                 join: Join::Wrap,
             });
-            at += 1;
+            at = at.saturating_add(1);
             join = Join::Wrap;
             continue;
         }
@@ -358,7 +359,7 @@ fn plan(cells: &[Cell], inner: usize) -> Vec<Planned> {
                     end: found,
                     join,
                 });
-                at = found + 1;
+                at = found.saturating_add(1);
                 join = Join::WrapSpace;
             }
             _ => {

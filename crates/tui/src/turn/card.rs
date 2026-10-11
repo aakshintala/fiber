@@ -178,7 +178,7 @@ impl Turn {
         // running: the blank row one fold has ahead of its card, in the
         // same place the blank before the card takes once it draws
         // (`docs/tui.md`, "Turns", "History and paging").
-        if led && !first && !last && !after_band && self.is_open() {
+        if led && !last && !after_band {
             out.gap(out.len());
         }
         Pieces { first, last }
