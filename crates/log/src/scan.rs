@@ -178,10 +178,8 @@ fn walk_back<T>(mut file: File, len: u64, found: &mut impl FnMut(&[u8]) -> Optio
             // The head's line ends at the first newline: kept with its
             // terminator, fused to the tail, which holds no newline, so
             // the line completes once its start is read.
-            let (Some(end), Some(tail)) = (
-                first.checked_add(1),
-                chunk.get(last.checked_add(1)?..),
-            ) else {
+            let (Some(end), Some(tail)) = (first.checked_add(1), chunk.get(last.checked_add(1)?..))
+            else {
                 return None;
             };
             let head = chunk.get(..end)?;

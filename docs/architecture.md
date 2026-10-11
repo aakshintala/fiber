@@ -47,7 +47,7 @@ ephemeral event where it is display-only.
 | Module | Job |
 |---|---|
 | `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do, and the clock seam, re-exported from `support`. It contains no behaviour beyond checking that a value fits the vocabulary, and pure conversions of its own values, such as a wall time to milliseconds or to a UTC date. Parsing a command line (`CommandLine::deserialize`) and matching an answer to an interaction (`Interaction::fit`) count as checking that a value fits. |
-| `support` | Small shared mechanisms with no domain knowledge: the `Clock` and `Wake` traits, which `contract::clock` re-exports, the process clock, the clock-parked wait, the process-group guard, the poison-ignoring `lock` and the stoppable read. |
+| `support` | Small shared mechanisms with no domain knowledge: the `Clock` and `Wake` traits, which `contract::clock` re-exports, the process clock, the clock-parked wait, the process-group guard, the poison-ignoring `lock`, the admission lock and the stoppable read. |
 | `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching, and writes the diagnostic files in `logs/`. |
 | `loop` | Runs turns and steps (`docs/loop.md`). The only thing that decides what happens next. |
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
@@ -306,7 +306,7 @@ except `shell`, which it starts on a thread of its own (the "one per running
 tool call" row in "The threads") before it reads on, so a `cancel` on the
 same connection reaches it.
 `job_stop` stops the job at once, and its `job_completed` is logged at the
-next step boundary. Every other command waits for the drain.
+next step boundary. Every other command waits for the drain, except `message`, which is answered once it is in the inbox (`docs/tools.md`, "Messaging other sessions").
 
 ### Streaming
 

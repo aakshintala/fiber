@@ -1107,11 +1107,13 @@ the target's socket, sends the driver command `message`, reads the answer and
 closes the connection at once, so it never keeps the target alive
 (`docs/invocation.md`, "Lifecycle"). The target runs `before_message` before
 it answers, so the call answers `delivered` only once the message is in the
-target's inbox. Otherwise it fails with one of:
+target's inbox. `delivered` means the message is in the target's inbox. A
+shutdown or a rewind of the target before it runs the message drops it, as
+it drops queued steers. Otherwise it fails with one of:
 
 - `unreachable`: no running session has this id, whether it exited or never
   existed
-- `closing`: the target was sent `close` (`docs/invocation.md`)
+- `closing`: the target was sent `close` or is exiting (`docs/invocation.md`); a `fiber ask` session is, from its start
 - `message_refused`: the target's `before_message` refused it, with the
   hook's reason (`docs/extensions.md`, "Hooks")
 - `hook_failed`: the target's `blocking` `before_message` failed
@@ -1133,9 +1135,13 @@ refuse every message from outside its own tree. It is logged with `source` `sess
 (`docs/events.md`, "Where a message came from"). A session message is not a
 person's or a driver's prompt, so it never makes an unattended session
 attended (`docs/invocation.md`, "Lifecycle"). The model sees it framed
-with the sender's id and name. The target reads the sender's name from the
-sender's latest `session_status`, as `session_list` does; when the sender has
-already exited, the framing gives its id alone. The framing is a fixed
+with the sender's id and name. The name is the one the sender was given:
+the latest `session_named` in the sender's log, read from the end of the
+log backwards, set by the model or the person. A sender with no name, or
+whose log the target cannot read, is given by its id alone, never by its
+first prompt, which is long text written for a different session. The
+target reads the name as the message arrives and logs the framed text, so a
+resume sends the model the same bytes. The framing is a fixed
 template in `crates/loop/prompt/messages.md` (`docs/system-prompt.md`, "The
 texts").
 
