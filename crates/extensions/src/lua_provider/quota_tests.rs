@@ -1047,7 +1047,8 @@ fn a_model_call_fetches_with_the_bound_key() {
 }
 
 #[test]
-fn fetch_quota_reports_a_bad_return_and_a_raise_as_errors() {    let root = fakes::TempDir::new("fiber-quota-bad-return");
+fn fetch_quota_reports_a_bad_return_and_a_raise_as_errors() {
+    let root = fakes::TempDir::new("fiber-quota-bad-return");
     let provider = quota_provider_on(&root, "{ credit = \"x\" }", FakeClock::new());
     let err = {
         let provider = Arc::clone(&provider);
@@ -1099,10 +1100,7 @@ fn fetch_quota_passes_the_current_token_and_headers() {
         Some(percent("tok-1/acct-1", 0.0, None)),
         "the credential() token and headers did not reach quota()"
     );
-    assert_eq!(
-        raw["windows"][0]["name"],
-        serde_json::json!("tok-1/acct-1")
-    );
+    assert_eq!(raw["windows"][0]["name"], serde_json::json!("tok-1/acct-1"));
 }
 
 #[test]
