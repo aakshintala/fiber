@@ -73,6 +73,7 @@ fn run(call: Box<dyn ModelCall>) -> Result<Reply, CallError> {
         .expect("waited for the call to return")
 }
 
+#[track_caller]
 fn failed(call: Box<dyn ModelCall>) -> (contract::shapes::Failure, Option<bool>) {
     let Err(CallError::Failed {
         failure,

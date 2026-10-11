@@ -1742,6 +1742,7 @@ fn hosted_assistant(model: &str, item: Value) -> Input {
     }
 }
 
+#[track_caller]
 fn sent_input(conversation: Vec<Input>) -> Value {
     let server = ProviderServer::start([Response::stream(stream(&[completed(
         "completed",

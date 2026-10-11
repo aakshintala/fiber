@@ -658,6 +658,7 @@ fn after(reply: &Reply, model: &str) -> Vec<Input> {
     conversation
 }
 
+#[track_caller]
 fn sent_contents(conversation: Vec<Input>) -> (Value, String) {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {

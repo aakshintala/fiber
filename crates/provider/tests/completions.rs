@@ -158,6 +158,7 @@ fn completed_reply() -> Response {
     ]))
 }
 
+#[track_caller]
 fn send(endpoint: Endpoint, request: &ModelRequest) {
     run(Box::new(Completions::new(endpoint).request(request)))
         .0

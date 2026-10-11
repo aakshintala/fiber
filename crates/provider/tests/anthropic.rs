@@ -1537,6 +1537,7 @@ fn png_ref(path: &str) -> contract::provider::ImageRef {
 }
 
 /// The request bodies the server saw for `request`, sent `times` times.
+#[track_caller]
 fn bodies_of(request: &ModelRequest, times: usize) -> Vec<Vec<u8>> {
     let server = ProviderServer::start((0..times).map(|_| completed_reply())).unwrap();
     for _ in 0..times {
@@ -2091,6 +2092,7 @@ fn hosted_conversation(model: &str) -> Vec<Input> {
     conversation
 }
 
+#[track_caller]
 fn sent_messages(conversation: Vec<Input>) -> Value {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let request = ModelRequest {
