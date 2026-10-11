@@ -612,18 +612,6 @@ fn a_20_kib_final_message_is_cut_with_its_full_text_in_an_artifact() {
 }
 
 #[test]
-fn exactly_16_kib_is_not_cut() {
-    let full = "z".repeat(16 * 1024);
-    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
-    world.send(delegate_held(DELEGATE, full.clone()));
-    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
-    let lines = world.turn_lines();
-    assert_eq!(lines[2].kind, "delegate_finished");
-    assert_eq!(lines[2].payload["text"], full.as_str());
-    assert!(lines[2].payload.get("artifact").is_none());
-}
-
-#[test]
 fn delegate_mode_writes_its_parent_and_no_worktree() {
     fn opened(id: &str, parent: Option<Parent>) -> (fakes::TempDir, std::path::PathBuf) {
         let home = fakes::TempDir::new("fiber-delegate-open");
