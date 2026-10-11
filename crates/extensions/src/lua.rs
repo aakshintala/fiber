@@ -747,6 +747,7 @@ fn timeout_ms(timeout: Duration) -> u64 {
 pub(crate) mod asks;
 mod declared;
 mod errors;
+mod host_calls;
 mod hub;
 mod router;
 mod schedule;
