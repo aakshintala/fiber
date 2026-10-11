@@ -26,7 +26,11 @@ use contract::emit::Emit;
 use contract::events::{
     Answer, CacheLifetime, Event, Interaction, InteractionRequested, Progress, TurnOutcome,
 };
-use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
+use contract::hook::{
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
+    BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
+    CheckOutcome, Hooks,
+};
 use contract::inbox::{Ack, Delivery};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::provider::{Provider, ToolDefinition};
@@ -1294,6 +1298,30 @@ impl Hooks for ArtifactHook {
         AfterToolAnswer {
             outcome,
             changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_tool(&self, _call: &BeforeToolCall<'_>) -> BeforeToolAnswer {
+        BeforeToolAnswer {
+            outcome: BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(&self, _call: &BeforeToolCall<'_>) -> CheckAnswer {
+        CheckAnswer {
+            outcome: CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(&self, _message: &BeforeMessage<'_>) -> BeforeMessageAnswer {
+        BeforeMessageAnswer {
+            outcome: BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
             notices: Vec::new(),
         }
     }
