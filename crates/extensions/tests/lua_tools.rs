@@ -822,6 +822,89 @@ fn a_disabled_tool_is_not_declared() {
 }
 
 #[test]
+fn an_enabled_list_declares_only_those_tools() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.enabled=["one", "missing"]"#],
+    );
+    assert_eq!(
+        declared(&session),
+        [("fiber.test/a".to_owned(), "one".to_owned())]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn disabled_wins_over_enabled() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[
+            r#"extensions."fiber.test/a".tools.enabled=["one", "two"]"#,
+            r#"extensions."fiber.test/a".tools.disabled=["two"]"#,
+        ],
+    );
+    assert_eq!(
+        declared(&session),
+        [("fiber.test/a".to_owned(), "one".to_owned())]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn an_empty_enabled_list_declares_no_tool() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.enabled=[]"#],
+    );
+    assert!(declared(&session).is_empty());
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn a_disabled_name_no_tool_has_is_ignored() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{}", tool_line("one", "a"), tool_line("two", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["missing"]"#],
+    );
+    assert_eq!(
+        declared(&session),
+        [
+            ("fiber.test/a".to_owned(), "one".to_owned()),
+            ("fiber.test/a".to_owned(), "two".to_owned())
+        ]
+    );
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
 fn an_extension_with_only_tools_stays_loaded_and_delivers() {
     let setup = Setup::new();
     install_lua(
