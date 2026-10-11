@@ -18,7 +18,8 @@ use serde_json::Value;
 /// directory or a symlink, non-JSON, a missing or non-string hash, or
 /// uppercase hex. Records open with `O_NOFOLLOW`, so a symlink is refused
 /// at open even when an entry is swapped between the directory read and
-/// the open.
+/// the open. `O_NONBLOCK` prevents a FIFO from stalling authentication
+/// before its opened-file metadata can reject it.
 pub(crate) fn holds(home: &Path, token: &str) -> bool {
     let want = sha256_hex(token.as_bytes());
     let entries = match fs::read_dir(home.join("hub").join("devices")) {
@@ -35,7 +36,7 @@ pub(crate) fn holds(home: &Path, token: &str) -> bool {
         });
         let mut file = match fs::OpenOptions::new()
             .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(&path)
         {
             Ok(file) => file,

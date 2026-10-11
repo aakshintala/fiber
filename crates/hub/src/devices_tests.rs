@@ -10,8 +10,15 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use fakes::Deadline;
 
 use super::*;
+
+const FIFO_DEADLINE: Duration = Duration::from_secs(2);
 
 struct Temp {
     dir: PathBuf,
@@ -108,6 +115,31 @@ fn each_skipped_shape_alone_holds_nothing() {
         fs::write(temp.devices().join(name), contents).unwrap();
         assert!(!holds(&temp.dir, "t0k3n"), "{name} holds nothing");
     }
+}
+
+#[test]
+fn a_fifo_does_not_hold_authentication_open() {
+    let temp = Temp::new();
+    fs::create_dir_all(temp.devices()).unwrap();
+    let path = temp.devices().join("pipe");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .unwrap()
+            .success(),
+        "create test FIFO at {path:?}"
+    );
+
+    let home = temp.dir.clone();
+    let (done, returned) = mpsc::channel();
+    thread::spawn(move || {
+        done.send(holds(&home, "t0k3n")).unwrap_or(());
+    });
+    let held = Deadline::after(FIFO_DEADLINE)
+        .recv(&returned)
+        .expect("authentication lookup returns while a FIFO is present");
+    assert!(!held, "a FIFO does not hold a device token");
 }
 
 #[test]
