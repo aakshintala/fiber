@@ -78,7 +78,7 @@ fn pair_with(label: &str) -> CredentialPair {
 fn read(provider: &Arc<LuaProvider>) -> QuotaEntry {
     let provider = Arc::clone(provider);
     let pair = pair();
-    within(move || provider.quota(&pair))
+    within(move || provider.quota(&pair, None))
 }
 
 fn percent(name: &str, used: f64, resets_at: Option<u64>) -> Quota {
@@ -406,7 +406,7 @@ fn denied() -> fakes::Response {
 fn read_label(provider: &Arc<LuaProvider>, label: &str) -> QuotaEntry {
     let provider = Arc::clone(provider);
     let pair = pair_with(label);
-    within(move || provider.quota(&pair))
+    within(move || provider.quota(&pair, None))
 }
 
 #[test]
@@ -466,7 +466,7 @@ fn concurrent_readers_share_one_fetch() {
     for _ in 0..2 {
         let provider = Arc::clone(&provider);
         let tx = tx.clone();
-        std::thread::spawn(move || tx.send(provider.quota(&pair())));
+        std::thread::spawn(move || tx.send(provider.quota(&pair(), None)));
     }
     drop(tx);
     assert!(
@@ -508,7 +508,7 @@ fn a_fetch_times_out_at_exactly_eight_seconds() {
     let (tx, rx) = mpsc::channel();
     {
         let provider = Arc::clone(&provider);
-        std::thread::spawn(move || tx.send(provider.quota(&pair())));
+        std::thread::spawn(move || tx.send(provider.quota(&pair(), None)));
     }
     assert!(
         server.await_requests(2, WAIT),
@@ -654,7 +654,7 @@ fn a_reader_reports_its_own_flight_when_the_flight_is_replaced() {
     {
         let provider = Arc::clone(&provider);
         let pair = pair.clone();
-        std::thread::spawn(move || tx.send(provider.quota(&pair)));
+        std::thread::spawn(move || tx.send(provider.quota(&pair, None)));
     }
     assert!(
         clock.await_parked(t0 + Duration::from_secs(8), WAIT),
@@ -718,7 +718,7 @@ fn quoted(
     let lua = Arc::clone(lua);
     let inner = inner as Arc<dyn contract::provider::Provider>;
     let pair = pair();
-    within(move || lua.with_quota(inner, pair)).unwrap()
+    within(move || lua.with_quota(inner, pair, None)).unwrap()
 }
 
 #[test]
@@ -732,7 +732,7 @@ fn with_quota_without_quota_is_the_inner_provider_itself() {
     let wrapped = {
         let inner = Arc::clone(&inner);
         let pair = pair();
-        within(move || lua.with_quota(inner, pair)).unwrap()
+        within(move || lua.with_quota(inner, pair, None)).unwrap()
     };
     assert!(std::ptr::addr_eq(
         Arc::as_ptr(&wrapped),
@@ -853,7 +853,7 @@ fn quoted_forwards_calls_tools_warms_and_cost_lookup() {
         let wrapped = {
             let lua = Arc::clone(&lua);
             let pair = pair();
-            within(move || lua.with_quota(priced, pair)).unwrap()
+            within(move || lua.with_quota(priced, pair, None)).unwrap()
         };
         let tools = [ToolDefinition {
             name: "b".into(),
@@ -925,4 +925,150 @@ fn sign_runs_while_a_quota_fetch_is_held() {
     });
     assert!(found.is_ok(), "sign never returned: {found:?}");
     server.release();
+}
+
+/// A provider `p` whose `quota()` names the label, credential and key it
+/// was given, so a test can tell the argument reached it.
+fn arg_echo_provider(root: &fakes::TempDir) -> Arc<LuaProvider> {
+    verbatim_provider(
+        root,
+        "fiber.provider(\"p\", { quota = { timeout = 60000, run = function(a)\n\
+         return { windows = { { name = a.label .. \"/\" .. a.credential .. \"/\" .. tostring(a.key), used_percent = 0 } } }\n\
+         end } })\n",
+    )
+}
+
+#[test]
+fn fetch_quota_passes_label_credential_and_key() {
+    let root = fakes::TempDir::new("fiber-quota-arg");
+    let provider = arg_echo_provider(&root);
+    let key = Secret::new("sk-test".to_owned());
+    let (quota, raw) = {
+        let provider = Arc::clone(&provider);
+        within(move || provider.fetch_quota(&pair(), Some(&key)))
+    }
+    .unwrap();
+    assert_eq!(
+        quota,
+        Some(percent("work/codex/sk-test", 0.0, None)),
+        "the key did not reach quota()"
+    );
+    assert_eq!(
+        raw["windows"][0]["name"],
+        serde_json::json!("work/codex/sk-test"),
+        "the raw return is not the checked value"
+    );
+    let (quota, raw) = {
+        let provider = Arc::clone(&provider);
+        within(move || provider.fetch_quota(&pair(), None))
+    }
+    .unwrap();
+    assert_eq!(
+        quota,
+        Some(percent("work/codex/nil", 0.0, None)),
+        "an absent key did not arrive absent"
+    );
+    assert_eq!(raw["windows"][0]["name"], serde_json::json!("work/codex/nil"));
+}
+
+#[test]
+fn a_read_passes_its_key() {
+    let root = fakes::TempDir::new("fiber-quota-read-key");
+    let provider = arg_echo_provider(&root);
+    let key = Secret::new("sk-test".to_owned());
+    let found = {
+        let provider = Arc::clone(&provider);
+        within(move || provider.quota(&pair(), Some(&key)))
+    };
+    assert_eq!(
+        found,
+        QuotaEntry::Reported(percent("work/codex/sk-test", 0.0, None)),
+        "the reader's key did not reach quota()"
+    );
+}
+
+#[test]
+fn a_model_call_fetches_with_the_bound_key() {
+    let root = fakes::TempDir::new("fiber-quota-bound-key");
+    let server = fakes::ProviderServer::start([ok(windows_body("primary", 10.0, None))])
+        .unwrap();
+    server.hold();
+    let home = root.path().join("home");
+    let dir = root.path().join("ext");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    let url = server.url();
+    fs::write(
+        dir.join("init.lua"),
+        format!(
+            "fiber.provider(\"p\", {{ quota = {{ timeout = 60000, run = function(a)\n\
+             local reply = host.http({{ url = \"{url}/\" .. a.label .. \"/\" .. tostring(a.key) }})\n\
+             if reply.status ~= 200 then error(\"denied \" .. reply.status) end\n\
+             return json.decode(reply.body)\n\
+             end }} }})"
+        ),
+    )
+    .unwrap();
+    let clock = FakeClock::new();
+    let extension = Arc::new(LuaExtension::new("ext", dir, home, clock));
+    let lua = LuaProvider::new(extension, "p");
+    let inner = Arc::new(crate::test_support::Inner::default());
+    let key = Secret::new("sk-test".to_owned());
+    let wrapped = {
+        let lua = Arc::clone(&lua);
+        let inner = inner as Arc<dyn contract::provider::Provider>;
+        within(move || lua.with_quota(inner, pair(), Some(key))).unwrap()
+    };
+    let _call = wrapped.call(&crate::test_support::request());
+    assert!(
+        server.await_requests(1, WAIT),
+        "the model call never started the fetch"
+    );
+    assert_eq!(
+        server.requests()[0].path, "/work/sk-test",
+        "the bound key did not make the fetch"
+    );
+    server.release();
+    // A reader with no key reads the bound fetch from the cache, starting
+    // no fetch of its own.
+    let found = {
+        let lua = Arc::clone(&lua);
+        within(move || lua.quota(&pair(), None))
+    };
+    assert_eq!(
+        found,
+        QuotaEntry::Reported(percent("primary", 10.0, None))
+    );
+    assert_eq!(
+        server.requests().len(),
+        1,
+        "the read fetched with its own key instead of reading the cache"
+    );
+}
+
+#[test]
+fn fetch_quota_reports_a_bad_return_and_a_raise_as_errors() {
+    let root = fakes::TempDir::new("fiber-quota-bad-return");
+    let provider = quota_provider_on(
+        &root,
+        "{ credit = \"x\" }",
+        FakeClock::new(),
+    );
+    let err = {
+        let provider = Arc::clone(&provider);
+        within(move || provider.fetch_quota(&pair(), None))
+    }
+    .unwrap_err();
+    let Error::BadReturn { callback, .. } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(callback, "p.quota");
+    let root = fakes::TempDir::new("fiber-quota-raise");
+    let provider = quota_provider_on(&root, "error(\"boom\")", FakeClock::new());
+    let err = {
+        let provider = Arc::clone(&provider);
+        within(move || provider.fetch_quota(&pair(), None))
+    }
+    .unwrap_err();
+    assert_eq!(err.code(), contract::ErrorCode::ExtensionFailed);
 }
