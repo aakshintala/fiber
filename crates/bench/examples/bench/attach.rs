@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use crate::busy::{self, BYTES_PER_TOKEN, READY, TRIGGER_TOKENS, in_home};
 use crate::home::Home;
 use crate::idle::{self, Ctx, HubExit, Samples, Workload, ms};
+use crate::linux;
 use crate::pty::Terminal;
 use crate::resume::{self, Fixture};
 use crate::run::{self, Client, Proc, Session};
@@ -287,6 +288,27 @@ fn attach_once(
     shown
 }
 
+/// The fixture whose attaches report terminal memory: the 10 MiB
+/// session. The 1 MiB fixture keeps its timing rows alone, so the peak
+/// and retained medians describe one log size.
+pub(crate) const MEMORY_FIXTURE: &str = "10 MiB";
+
+/// One attach's terminal memory rows for `label`'s fixture: the terminal
+/// process's peak RSS and the anon RSS still resident once its freed
+/// pages settle. Only the [`MEMORY_FIXTURE`] fixture reports them, so
+/// each median is over five attaches of the same log size; any other
+/// label reports nothing, never a zero.
+pub(crate) fn memory_rows(label: &str, peak: u64, retained: u64) -> Samples {
+    if label == MEMORY_FIXTURE {
+        vec![
+            ("terminal_attach_rss_kib", json!(peak)),
+            ("terminal_attach_retained_kib", json!(retained)),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
 /// One timed attach: the log's size just before the spawn, then spawn to the
 /// tail on screen.
 fn sample(
@@ -300,10 +322,21 @@ fn sample(
     let log_bytes = read_log_bytes(home, id)?;
     let terminal = Terminal::spawn(home, &["resume", id], ctx.path.as_deref(), ctx.clock)?;
     let started = terminal.proc.spawned;
+    let pid = terminal.proc.pid();
     let shown = terminal.wait_for(ctx.clock, started + READY, ATTACH_TAIL);
     let took = ms(ctx.clock, started);
+    // The attach's terminal memory, read while it still runs: the peak,
+    // then the retained anon RSS once freed pages settle. A failed attach
+    // reads nothing and keeps only its error.
+    let memory: Result<(u64, u64), String> = shown.clone().and_then(|()| {
+        linux::peak_rss_kib(pid).and_then(|peak| {
+            busy::retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait))
+                .map(|retained| (peak, retained))
+        })
+    });
     idle::quit(ctx, terminal, notes, HubExit::Keep)?;
     shown?;
+    let (peak, retained) = memory?;
     if let Some(note) = size_note(label, log_bytes) {
         notes.push(note);
     }
@@ -312,6 +345,7 @@ fn sample(
         fixture.metric,
         json!({"fixture": label, "log_bytes": log_bytes, "ms": took}),
     )];
+    samples.extend(memory_rows(label, peak, retained));
     let hub_ms = hub_replay(ctx, home, id)?;
     if ctx.paging.is_none() {
         // Without the release-built jig the log's stages stay unmeasured;

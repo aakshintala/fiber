@@ -64,6 +64,9 @@ a 20-thousand-token one fit the same ceiling.
 | Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked |
 | Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |
+| Terminal, attaching a 10 MiB session | 81,392 KiB peak RSS | Linux x86_64 | measured |
+| Session, memory kept after the busy turn | 16,176 KiB RssAnon | Linux x86_64 | measured |
+| Terminal, memory kept after attaching a 10 MiB session | 12,048 KiB RssAnon | Linux x86_64 | measured |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |
 | `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |
 | `paging` jig, its session at scale 1 and 160 by 48 | 17,592 KiB peak RSS | Linux x86_64 | measured |
@@ -134,7 +137,11 @@ rules out a derived database, and the ruling stands while this budget holds.
 ## Measuring
 
 Each number is the median of 5 runs. Memory is peak RSS on Linux and peak
-footprint on macOS, by the method in `docs/dependencies.md`. Idle CPU is the
+footprint on macOS, by the method in `docs/dependencies.md`. The retained rows
+read RssAnon from `/proc/<pid>/status` 10 s after the work ends, once freed
+pages have settled: 10 s after the 429-call turn completes, and 10 s after the
+attached terminal shows the session's last reply. Their ceilings gate RssAnon,
+not peak RSS. Idle CPU is the
 voluntary and involuntary context switch counts in
 `/proc/<pid>/task/*/status`, read before and after the idle window: 10
 seconds on a pull request, the "Release build and size" job included, and 60
@@ -156,7 +163,10 @@ repository whose project holds 1,000 exited sessions to its output closing,
 with the hub running and one listing before the timed ones. Attaching is timed
 from spawning `fiber resume <id>` in a pseudo-terminal to the session's last
 reply on screen, for a live, idle session whose log is 1 MiB and one whose log
-is 10 MiB, with the hub running. The same run splits each attach into stages,
+is 10 MiB, with the hub running. The same run records the attaching terminal's
+peak RSS and its RssAnon 10 s after the last reply appears, for the 10 MiB
+session; the busy turn records its session's RssAnon 10 s after the turn
+completes. The same run splits each attach into stages,
 reported as `attach_stage_ms` but never gated. `terminal` is the spawn-to-tail
 time above; `hub_replay` replays it with no terminal, timing a `subscribe` at
 `full` over a raw hub-socket client from the send to its acknowledgement.

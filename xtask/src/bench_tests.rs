@@ -17,6 +17,9 @@ const DOC: &str = concat!(
     "| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |\n",
     "| Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked |\n",
     "| Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |\n",
+    "| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked |\n",
+    "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked |\n",
+    "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked |\n",
     "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |\n",
     "| `session_list`, waiting for every running session's status | 2 s for the whole call | Linux x86_64 | picked |\n",
     "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked |\n",
@@ -60,6 +63,9 @@ fn head() -> Value {
             "terminal_first_frame_ms": [18.2, 17.9, 18.0, 18.4, 18.1],
             "sessions_list_ms": [12.1, 12.4, 11.9, 12.0, 12.2],
             "terminal_attach_ms": attach_metric(),
+            "terminal_attach_rss_kib": [51200, 51210, 51190, 51205, 51195],
+            "terminal_attach_retained_kib": [48000, 48010, 47990, 48005, 47995],
+            "busy_turn_retained_kib": [19000, 19010, 18990, 19005, 18995],
             "busy_turn_rss_kib": [20480, 20490, 20470, 20485, 20475],
             "resume_20k_rss_kib": [11000, 11010, 10990, 11005, 10995],
             "resume_2m_rss_kib": [14000, 14010, 13990, 14005, 13995],
@@ -665,6 +671,51 @@ fn every_gated_row_but_one_is_measured() {
         let line = row(&comment, budget);
         assert!(line.ends_with("| advisory |"), "{line}");
     }
+}
+
+#[test]
+fn the_attach_and_retained_memory_rows_gate_their_medians() {
+    for (budget, id) in [
+        (
+            "Terminal, attaching a 10 MiB session",
+            "terminal_attach_rss_kib",
+        ),
+        (
+            "Session, memory kept after the busy turn",
+            "busy_turn_retained_kib",
+        ),
+        (
+            "Terminal, memory kept after attaching a 10 MiB session",
+            "terminal_attach_retained_kib",
+        ),
+    ] {
+        // At the 200 MiB ceiling passes, one KiB over fails naming the
+        // row and the metric.
+        let limit = 200 * 1024;
+        let at = with_metric(head(), id, json!(vec![limit; 5]));
+        assert_eq!(failures_of(&at), Vec::<String>::new(), "{id}");
+        let over = with_metric(head(), id, json!(vec![limit + 1; 5]));
+        let failures = failures_of(&over);
+        assert!(has(&failures, budget), "{id}: {failures:?}");
+        assert!(has(&failures, id), "{id}: {failures:?}");
+        // Missing entirely fails naming the metric.
+        let mut missing = head();
+        missing["metrics"].as_object_mut().unwrap().remove(id);
+        assert!(has(&failures_of(&missing), id), "{id}");
+    }
+    let comment = judge(&head(), Some(&base()), Event::PullRequest).comment;
+    let attach = row(&comment, "Terminal, attaching a 10 MiB");
+    assert!(
+        attach.contains("terminal_attach_rss_kib: 51200 KiB"),
+        "{attach}"
+    );
+    let busy = row(&comment, "Session, memory kept");
+    assert!(busy.contains("busy_turn_retained_kib: 19000 KiB"), "{busy}");
+    let retained = row(&comment, "Terminal, memory kept");
+    assert!(
+        retained.contains("terminal_attach_retained_kib: 48000 KiB"),
+        "{retained}"
+    );
 }
 
 #[test]

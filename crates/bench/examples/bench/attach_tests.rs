@@ -3,9 +3,9 @@ use serde_json::json;
 use crate::busy::filler;
 
 use super::{
-    ATTACH_TAIL, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures, PROBE_A, PROBE_B, Step, TURN_REPLY_BYTES,
-    attach_stage_rows, feed_step, open_command, open_error_samples, parse_open_line, plan_turns,
-    replay_finished, size_note, stage_rows,
+    ATTACH_TAIL, MEMORY_FIXTURE, OPEN_HEIGHT, OPEN_WIDTH, OpenFigures, PLANS, PROBE_A, PROBE_B,
+    Step, TURN_REPLY_BYTES, attach_stage_rows, feed_step, memory_rows, open_command,
+    open_error_samples, parse_open_line, plan_turns, replay_finished, size_note, stage_rows,
 };
 
 fn status(id: &str, state: &str) -> serde_json::Value {
@@ -21,6 +21,39 @@ fn left(id: &str, how: &str) -> serde_json::Value {
         "kind": "session_left",
         "payload": {"session_id": id, "how": how},
     })
+}
+
+#[test]
+fn only_the_10_mib_fixture_reports_terminal_memory() {
+    // Each fixture of the plan, with a fake terminal process's peak and
+    // retained readings: only the 10 MiB attach reports them.
+    assert_eq!(MEMORY_FIXTURE, "10 MiB");
+    for (label, _) in PLANS {
+        let rows = memory_rows(label, 51200, 48000);
+        if label == "10 MiB" {
+            assert_eq!(rows.len(), 2);
+        } else {
+            assert!(rows.is_empty(), "{label}: {rows:?}");
+        }
+    }
+    // An unknown fixture reports nothing, never a zero.
+    assert!(memory_rows("2 MiB", 51200, 48000).is_empty());
+}
+
+#[test]
+fn the_attach_memory_rows_carry_the_terminals_peak_and_retained() {
+    let rows = memory_rows("10 MiB", 51200, 48000);
+    let value = |id: &str| {
+        rows.iter()
+            .find(|(metric, _)| *metric == id)
+            .unwrap_or_else(|| panic!("{id} is not sampled"))
+            .1
+            .clone()
+    };
+    assert_eq!(value("terminal_attach_rss_kib"), json!(51200));
+    assert_eq!(value("terminal_attach_retained_kib"), json!(48000));
+    // A different retained reading is a different sample.
+    assert_ne!(rows, memory_rows("10 MiB", 51200, 48001));
 }
 
 #[test]
