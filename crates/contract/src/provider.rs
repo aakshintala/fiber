@@ -236,7 +236,6 @@ pub enum Input {
         /// Whether the call's `tool_call_completed` is `failed`. A protocol
         /// sends it as its error flag (`docs/tools.md`, "What a result
         /// carries").
-        #[serde(default)]
         is_error: bool,
         /// The result's image parts, in order. A protocol that carries an
         /// image inside a tool result sends each after the text.

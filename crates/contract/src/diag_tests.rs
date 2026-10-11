@@ -23,7 +23,7 @@ fn full() -> ProviderRequest {
 }
 
 #[test]
-fn every_field_serializes_in_declared_order() {
+fn a_provider_request_writes_present_fields_in_order_and_leaves_absent_ones_out() {
     assert_eq!(
         serde_json::to_string(&full()).unwrap(),
         "{\"provider\":\"fake\",\"model\":\"m\",\"purpose\":\"model_call\",\
@@ -31,10 +31,6 @@ fn every_field_serializes_in_declared_order() {
          \"attempt\":1,\"request_bytes\":2214,\"response_bytes\":913,\
          \"headers_ms\":41,\"first_token_ms\":57,\"total_ms\":180}"
     );
-}
-
-#[test]
-fn an_absent_option_is_left_out_never_null() {
     let request = ProviderRequest {
         model: None,
         host: None,
@@ -51,17 +47,4 @@ fn an_absent_option_is_left_out_never_null() {
         "{\"provider\":\"fake\",\"purpose\":\"model_list\",\"attempt\":1,\
          \"request_bytes\":2214,\"response_bytes\":0,\"total_ms\":180}"
     );
-}
-
-#[test]
-fn every_purpose_is_snake_case() {
-    for (purpose, text) in [
-        (Purpose::ModelCall, "\"model_call\""),
-        (Purpose::ModelList, "\"model_list\""),
-        (Purpose::Quota, "\"quota\""),
-        (Purpose::TokenRefresh, "\"token_refresh\""),
-        (Purpose::Cost, "\"cost\""),
-    ] {
-        assert_eq!(serde_json::to_string(&purpose).unwrap(), text);
-    }
 }

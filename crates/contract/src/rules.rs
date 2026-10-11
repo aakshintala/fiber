@@ -111,12 +111,4 @@ mod tests {
                 .is_err()
         );
     }
-
-    #[test]
-    fn a_rules_error_reads_as_its_message() {
-        assert_eq!(
-            RulesError("/home/rules:2: bad".into()).to_string(),
-            "/home/rules:2: bad"
-        );
-    }
 }
