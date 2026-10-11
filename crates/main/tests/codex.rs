@@ -47,6 +47,7 @@ impl Setup {
 
     /// Installs the codex package copy with the ChatGPT origin rewritten to
     /// `server`, with `fiber extension install`.
+    #[track_caller]
     fn install(&self, server: &ProviderServer) {
         let to = self.root.path().join("pkg-codex");
         support::package::copy_package("codex", &to, "https://chatgpt.com", &server.url());
@@ -88,6 +89,7 @@ impl Setup {
 
     /// Runs `fiber` with `args` to completion under the deadline, in its own
     /// process group with a watchdog beside it.
+    #[track_caller]
     fn fiber(&self, args: &[&str], input: &str) -> Run {
         let mut command = self.command(args);
         command
@@ -101,7 +103,7 @@ impl Setup {
         feed(&mut child, input);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,

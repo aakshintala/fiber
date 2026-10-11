@@ -118,6 +118,7 @@ pub(crate) fn read_line(
 /// Writes all of `bytes` to `stream` in chunks of at most 4 KiB, each
 /// bounded by what remains of `deadline.left()`. At zero it returns a
 /// `TimedOut` error naming `what` without writing.
+#[track_caller]
 pub(crate) fn write_line(
     stream: &mut UnixStream,
     deadline: Deadline,
@@ -459,6 +460,7 @@ impl Socket {
         )
     }
 
+    #[track_caller]
     pub(crate) fn send(&self, line: &str) {
         let mut bytes = line.as_bytes().to_vec();
         if !line.ends_with('\n') {
@@ -583,6 +585,7 @@ impl Clock for StretchedClock {
         wait(bound);
     }
 
+    #[track_caller]
     fn subscribe(&self, _waker: std::sync::Weak<dyn contract::clock::Wake>) {}
 }
 
@@ -737,6 +740,7 @@ impl Drop for SessionGuard {
 
 /// Starts a session through the hub with `content`, and returns its id.
 /// The caller arms a [`SessionGuard`] first.
+#[track_caller]
 pub(crate) fn start_session(client: &Socket, workspace: &str, content: &str) -> String {
     client.send(&format!(
         "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\",\"content\":[{{\"type\":\"text\",\"text\":\"{content}\"}}]}}}}"
@@ -750,6 +754,7 @@ pub(crate) fn start_session(client: &Socket, workspace: &str, content: &str) -> 
 }
 
 /// Subscribes `full` to `session` through the hub.
+#[track_caller]
 pub(crate) fn subscribe(client: &Socket, session: &str) {
     client.send(&format!(
         "{{\"id\":\"c_sub\",\"session_id\":\"{session}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
@@ -759,6 +764,7 @@ pub(crate) fn subscribe(client: &Socket, session: &str) {
 }
 
 /// Closes the session on the direct socket, and waits for it to leave.
+#[track_caller]
 pub(crate) fn close_session(socket: &Socket) {
     socket.send(r#"{"id":"c_close_sub","command":"subscribe","args":{"level":"full"}}"#);
     let ack = recv(socket, "the subscribe acknowledgement");
@@ -858,10 +864,11 @@ pub(crate) fn tool_names(body: &[u8]) -> Vec<String> {
 }
 
 /// The first stdout line, waited for under the test's [`Deadline`].
+#[track_caller]
 pub(crate) fn first_line(deadline: Deadline, stdout: &mpsc::Receiver<String>) -> Value {
     serde_json::from_str(
-        &stdout
-            .recv_timeout(deadline.left())
+        &deadline
+            .recv(stdout)
             .expect("waited until the deadline for fiber_started"),
     )
     .unwrap()
@@ -986,6 +993,7 @@ pub(crate) fn session_dir(setup: &Setup, id: &str) -> PathBuf {
 
 /// Runs the system `git` in `dir`, in its own process group, to its exit
 /// under the test's [`Deadline`].
+#[track_caller]
 pub(crate) fn git(deadline: Deadline, dir: &Path, args: &[&str]) -> String {
     let mut command = Command::new("git");
     command

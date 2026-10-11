@@ -172,11 +172,12 @@ impl Meet {
     }
 
     /// Arrives, then waits for the other side, naming `what` on failure.
+    #[track_caller]
     fn meet(&self, what: &str) {
         match self.arrived.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
-        match self.other.recv_timeout(self.deadline.left()) {
+        match self.deadline.recv(&self.other) {
             Ok(()) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 panic!("waited until the deadline for the other client at {what}")

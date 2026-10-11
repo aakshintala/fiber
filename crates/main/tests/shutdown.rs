@@ -84,6 +84,7 @@ impl Setup {
     /// Starts `fiber` with `args` in its own process group, its stdout read
     /// line by line, and a watchdog that kills the group if this process
     /// dies first.
+    #[track_caller]
     fn start(&self, args: &[&str], stdin: Stdio) -> Fiber {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -217,29 +218,29 @@ struct Ended {
 
 impl Fiber {
     /// Reads stdout until a line of `kind`, the `nth` of it (from 1).
+    #[track_caller]
     fn wait_for(&mut self, kind: &str, nth: usize) {
         loop {
             if self.seen.iter().filter(|line| line["kind"] == kind).count() >= nth {
                 return;
             }
-            let line = self
-                .lines
-                .recv_timeout(self.deadline.left())
-                .unwrap_or_else(|_| {
-                    panic!("waited until the deadline for {kind}; saw {:?}", self.seen)
-                });
+            let line = self.deadline.recv(&self.lines).unwrap_or_else(|_| {
+                panic!("waited until the deadline for {kind}; saw {:?}", self.seen)
+            });
             self.seen.push(serde_json::from_slice(&line).unwrap());
             self.raw.push(line);
         }
     }
 
     /// Sends `signal` to `fiber`'s pid alone.
+    #[track_caller]
     fn signal(&self, signal: &'static str) {
         assert!(support::kill_pid(self.deadline, self.child.id(), signal).unwrap());
     }
 
     /// Waits for the exit under the test's [`Deadline`], reads the rest of
     /// stdout, and asserts nothing is left in the group.
+    #[track_caller]
     fn end(self) -> Ended {
         let Fiber {
             mut child,
@@ -256,13 +257,13 @@ impl Fiber {
         drop(stdin);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
-        let status = match finished.recv_timeout(deadline.left()) {
+        let status = match deadline.recv(&finished) {
             Ok(status) => status.unwrap(),
             Err(_) => support::expired(deadline, group, &finished, "fiber to exit"),
         };
         // The pipe's end comes once the process is gone.
         loop {
-            match lines.recv_timeout(deadline.left()) {
+            match deadline.recv(&lines) {
                 Ok(line) => {
                     seen.push(serde_json::from_slice(&line).unwrap());
                     raw.push(line);
@@ -288,7 +289,7 @@ impl Fiber {
                 .map(|(text, _)| text)
                 .collect(),
             lines: seen.into_iter().filter(|line| !is_status(line)).collect(),
-            stderr: match stderr.recv_timeout(deadline.left()) {
+            stderr: match deadline.recv(&stderr) {
                 Ok(text) => text,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     panic!("waited until the deadline for the session's stderr")
@@ -303,6 +304,7 @@ impl Fiber {
 
 /// Makes the FIFO `path` with `mkfifo`, run to its exit under the test's
 /// [`Deadline`].
+#[track_caller]
 fn mkfifo(setup: &Setup, path: &Path) {
     let mut command = Command::new("mkfifo");
     command
@@ -317,6 +319,7 @@ fn mkfifo(setup: &Setup, path: &Path) {
 
 /// `ready.fifo` in the test's root, read as a [`fakes::children::Ready`]
 /// whose open takes what remains of the test's [`Deadline`].
+#[track_caller]
 fn ready_fifo(setup: &Setup) -> fakes::children::Ready {
     let fifo = setup.root.path().join("ready.fifo");
     mkfifo(setup, &fifo);
@@ -399,6 +402,7 @@ fn assert_exited(setup: &Setup, ended: &Ended, code: i32, kinds: &[&str], before
 
 /// `fiber ask` whose model request the fake server holds open, signalled
 /// with `signal` once the request arrived.
+#[track_caller]
 fn held_ask(signal: &'static str, code: i32) {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
@@ -569,8 +573,9 @@ fn sigterm_while_the_prompt_is_read_exits_143_writing_nothing() {
         let outcome = stdin.write_all(&vec![b'x'; 1 << 20]);
         written.send((stdin, outcome)).unwrap();
     });
-    let (stdin, outcome) = result
-        .recv_timeout(setup.deadline.left())
+    let (stdin, outcome) = setup
+        .deadline
+        .recv(&result)
         .expect("fiber read stdin in time");
     outcome.unwrap();
     fiber.signal("TERM");
@@ -686,7 +691,9 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     fiber.signal("TERM");
     // Before `end`, whose group check would otherwise catch a server
     // left alive first: this wait is the one that pins the stop's kill.
-    died.recv_timeout(setup.deadline.left())
+    setup
+        .deadline
+        .recv(&died)
         .expect("the MCP server outlived fiber");
     let ended = fiber.end();
 
@@ -754,8 +761,9 @@ fn sigterm_while_an_mcp_server_starts_sends_it_sigterm() {
     let _pid = ready.wait(setup.deadline.left())[0];
     // The server's `read` opened the FIFO, so the write end is open:
     // holding it parks the server until the signal or the test's end.
-    let _writer = writing
-        .recv_timeout(setup.deadline.left())
+    let _writer = setup
+        .deadline
+        .recv(&writing)
         .expect("the hold FIFO opened for writing");
     fiber.signal("TERM");
     // The group check inside fails first when a server is left alive.

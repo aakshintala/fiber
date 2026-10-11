@@ -76,6 +76,7 @@ impl Reader {
     /// read error, a failed reply write, the stop pipe, or the poll
     /// timing out at the deadline: it never ticks, and every thread this
     /// harness spawns ends by the test's deadline.
+    #[track_caller]
     pub(crate) fn start(
         master: fs::File,
         shared: Arc<Mutex<Shared>>,
@@ -102,6 +103,7 @@ impl Reader {
     /// Drains `master` on a thread as in [`Reader::start`], sharing the
     /// run's state instead of a new one and dropping its wakes: nothing
     /// reads them after `wait` restores the drain.
+    #[track_caller]
     pub(crate) fn start_on(
         master: fs::File,
         shared: Arc<Mutex<Shared>>,
@@ -125,6 +127,7 @@ impl Reader {
     /// deadlocks. Nothing in this critical section panics: an expired
     /// reply write is an error that ends the reader, so `Shared` is
     /// never poisoned and waiters are always woken.
+    #[track_caller]
     fn drain(
         master: OwnedFd,
         stop: std::io::PipeReader,
@@ -208,7 +211,7 @@ impl Reader {
     /// a broken deadline or end-of-file path fails loudly instead of
     /// hanging the suite.
     pub(crate) fn ended(&self, within: Duration) -> bool {
-        self.done.recv_timeout(within).is_ok()
+        Deadline::after(within).recv(&self.done).is_ok()
     }
 
     /// Wakes the reader and waits for its thread, within
@@ -218,7 +221,7 @@ impl Reader {
     pub(crate) fn stop(mut self) -> bool {
         use std::io::Write;
         self.stop.write_all(b"x").unwrap_or(());
-        self.done.recv_timeout(self.deadline.cleanup()).is_ok()
+        self.deadline.cleanup_phase().recv(&self.done).is_ok()
     }
 }
 
@@ -238,6 +241,7 @@ pub(crate) struct Terminal {
 /// Opens a `cols` by `rows` pty. The main side stays open while the run
 /// uses the terminal side, and is never inherited: a hub `fiber` starts
 /// would hold the master open.
+#[track_caller]
 pub(crate) fn open(cols: u16, rows: u16) -> Terminal {
     let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
     rustix::io::fcntl_setfd(&main, rustix::io::FdFlags::CLOEXEC).unwrap();
@@ -480,6 +484,7 @@ pub(crate) type Writer = Arc<Mutex<fs::File>>;
 /// what remains of `deadline.left()`: expiry is a `TimedOut` error, and
 /// the thread is never joined. It never panics, so the reader can hold
 /// the `Shared` lock across it.
+#[track_caller]
 pub(crate) fn write_within(writer: &Writer, bytes: &[u8], deadline: Deadline) -> io::Result<()> {
     let writer = Arc::clone(writer);
     let bytes = bytes.to_vec();
@@ -495,7 +500,7 @@ pub(crate) fn write_within(writer: &Writer, bytes: &[u8], deadline: Deadline) ->
             done.send(result).unwrap_or(());
         })
         .map_err(io::Error::other)?;
-    match finished.recv_timeout(deadline.left()) {
+    match deadline.recv(&finished) {
         Ok(result) => result,
         Err(_) => Err(io::Error::new(
             ErrorKind::TimedOut,
@@ -595,6 +600,7 @@ impl Run {
     /// binary never reads the ambient terminal's kind or theme. The
     /// slave is dropped after the spawn, and the master is CLOEXEC, so
     /// no hub `fiber` starts holds it open.
+    #[track_caller]
     pub(crate) fn spawn(
         setup: &Setup,
         cols: u16,
@@ -672,6 +678,7 @@ impl Run {
     /// Types bytes into the terminal through the one shared writer, so a
     /// reply and typed input never interleave. It panics naming the
     /// typing on failure, holding no lock.
+    #[track_caller]
     pub(crate) fn write(&mut self, bytes: &[u8]) {
         write_within(&self.writer, bytes, self.deadline).expect("typing on the terminal");
     }
@@ -697,6 +704,7 @@ impl Run {
     /// matches, however many frames arrive, and returns the matching
     /// grid. When the terminal ends first the panic names the wait and
     /// shows the last grid, so a stall says how far the journey got.
+    #[track_caller]
     pub(crate) fn wait_screen(&mut self, what: &str, mut done: impl FnMut(&Grid) -> bool) -> Grid {
         loop {
             let (grid, ended) = {
@@ -712,7 +720,7 @@ impl Run {
                     grid.contents
                 );
             }
-            if self.wakes.recv_timeout(self.deadline.left()).is_err() {
+            if self.deadline.recv(&self.wakes).is_err() {
                 panic!(
                     "waited until the deadline for {what}; screen:\n{}",
                     self.screen().contents
@@ -729,6 +737,7 @@ impl Run {
     /// title, the OSC 9 desktop notification, a bell and the
     /// mode-enable sequences, are waited for here instead of on the
     /// grid.
+    #[track_caller]
     pub(crate) fn wait_bytes(&mut self, from: usize, needle: &[u8], what: &str) -> usize {
         assert!(!needle.is_empty(), "a byte wait names its bytes");
         loop {
@@ -742,7 +751,7 @@ impl Run {
             if ended {
                 panic!("the terminal ended while waiting for {what}");
             }
-            if self.wakes.recv_timeout(self.deadline.left()).is_err() {
+            if self.deadline.recv(&self.wakes).is_err() {
                 panic!(
                     "waited until the deadline for {what}; output: {:?}",
                     String::from_utf8_lossy(&self.output())
@@ -756,6 +765,7 @@ impl Run {
     /// starts the input reader and the resize thread
     /// (`crates/tui/src/event_loop.rs`), so input after it is never too
     /// early for its receiver.
+    #[track_caller]
     pub(crate) fn ready(&mut self) -> usize {
         self.wait_bytes(0, TITLE, "the end of the first frame")
     }
@@ -765,6 +775,7 @@ impl Run {
     /// grid, and the finished title on the raw output at or after
     /// `from`. Each wait searches from its own start, never from the
     /// other's match, so the pair is order-free (see #1775).
+    #[track_caller]
     pub(crate) fn turn_finished(&mut self, from: usize) {
         self.wait_screen("the completed turn", |grid| {
             grid.contents.contains("completed")
@@ -775,6 +786,7 @@ impl Run {
     /// Resizes the terminal to `cols` by `rows`: the size is recorded
     /// before the signal, so the next chunk the reader takes parses at
     /// the new size. A run with no child signals nothing.
+    #[track_caller]
     pub(crate) fn resize(&mut self, cols: u16, rows: u16) {
         self.shared.lock().unwrap().pending_size = Some((cols, rows));
         (self.cols, self.rows) = (cols, rows);
@@ -812,6 +824,7 @@ impl Run {
     /// reader to end at end of file so every queued byte is read, stands
     /// the watchdog down and waits for the hub process to exit. Returns
     /// the exit and every byte read from the master since spawn.
+    #[track_caller]
     pub(crate) fn wait(mut self) -> Exited {
         if self.reader.is_none() {
             let main = self.writer.lock().unwrap().try_clone().unwrap();
@@ -827,7 +840,7 @@ impl Run {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => expired(self.deadline, group, &finished, "`fiber` to exit"),
         };
@@ -906,6 +919,7 @@ impl Drop for Run {
 /// the deadline into every listing, and stops at zero, so the wait ends
 /// at the deadline however the listing below behaves. The loop lives in
 /// [`until_hub_exits_with`], so tests pin it with a fake lister.
+#[track_caller]
 pub(crate) fn until_hub_exits(deadline: Deadline, socket: &Path, hub_home: &Path, what: &str) {
     let home = hub_home.to_string_lossy();
     until_hub_exits_with(deadline, socket, &home, what, &mut || {
@@ -979,6 +993,7 @@ pub(crate) fn hub_pids(table: &str, home: &str) -> Vec<u32> {
 /// on macOS and `e` on Linux. It runs with a cleared environment holding
 /// only `PATH`, never the check-run nonce and never `FIBER_HOME`, so its
 /// own row holds no token and it can never match itself.
+#[track_caller]
 pub(crate) fn list_processes(within: Duration) -> String {
     let user = std::env::var("USER").expect("USER names the test's user");
     let mut command = Command::new("ps");

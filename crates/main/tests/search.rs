@@ -55,6 +55,7 @@ impl Setup {
     /// Runs `fiber` with `args` in the workspace, `stdin` piped in, waiting
     /// under the test's [`Deadline`] in its own process group with a watchdog beside
     /// it, and asserts that nothing it started is left behind.
+    #[track_caller]
     fn fiber(&self, args: &[&str], stdin: Option<&str>) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -82,7 +83,7 @@ impl Setup {
         }
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,

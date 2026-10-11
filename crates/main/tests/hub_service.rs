@@ -38,6 +38,7 @@ const MANAGER_VARS: [&str; 4] = [
 
 /// `fiber <args>` for the test's Fiber home, with the real `HOME` and the
 /// manager's variables.
+#[track_caller]
 fn fiber(setup: &Setup, args: &[&str]) -> Command {
     let mut command = setup.fiber(args);
     command.env("HOME", std::env::var_os("HOME").expect("HOME is set"));
@@ -63,6 +64,7 @@ fn host(program: &str, args: &[&str]) -> Command {
 }
 
 /// Runs `command` to its exit and returns its stdout, asserting exit 0.
+#[track_caller]
 fn succeeds(setup: &Setup, what: &str, command: Command) -> String {
     let output = run_to_exit(setup.deadline, what, command);
     assert_eq!(
@@ -94,6 +96,7 @@ fn wait_for<T>(setup: &Setup, what: &str, mut look: impl FnMut() -> Option<T>) -
 /// through `doors::hub::connect`'s own retry on the process clock: the
 /// retry sleeps in product code, the test only receives it with the one
 /// deadline and never sleeps itself.
+#[track_caller]
 fn hub_client(setup: &Setup) -> Socket {
     let deadline = setup.deadline;
     let home = setup.home();
@@ -118,6 +121,7 @@ fn hub_client(setup: &Setup) -> Socket {
 
 /// The hub's pid as the manager reports it, once it reports one.
 #[cfg(target_os = "linux")]
+#[track_caller]
 fn hub_pid(setup: &Setup, name: &str) -> u32 {
     let unit = format!("{name}.service");
     wait_for(setup, "systemd to report the hub's pid", || {
@@ -134,6 +138,7 @@ fn hub_pid(setup: &Setup, name: &str) -> u32 {
 }
 
 #[cfg(target_os = "macos")]
+#[track_caller]
 fn hub_pid(setup: &Setup, name: &str) -> u32 {
     let target = format!("{}/{name}", domain(setup));
     wait_for(setup, "launchd to report the hub's pid", || {
@@ -150,6 +155,7 @@ fn hub_pid(setup: &Setup, name: &str) -> u32 {
 }
 
 #[cfg(target_os = "macos")]
+#[track_caller]
 fn domain(setup: &Setup) -> String {
     format!(
         "gui/{}",
@@ -159,6 +165,7 @@ fn domain(setup: &Setup) -> String {
 
 /// Restarts the hub through the manager, as `fiber update` does.
 #[cfg(target_os = "linux")]
+#[track_caller]
 fn restart(setup: &Setup, name: &str) {
     succeeds(
         setup,
@@ -171,6 +178,7 @@ fn restart(setup: &Setup, name: &str) {
 }
 
 #[cfg(target_os = "macos")]
+#[track_caller]
 fn restart(setup: &Setup, name: &str) {
     let target = format!("{}/{name}", domain(setup));
     succeeds(
@@ -200,7 +208,7 @@ impl Drop for Uninstall {
             }
         });
         if spawned.is_ok() {
-            match finished.recv_timeout(self.deadline.cleanup()) {
+            match self.deadline.cleanup_phase().recv(&finished) {
                 Ok(_) | Err(_) => {}
             }
         }
@@ -209,6 +217,7 @@ impl Drop for Uninstall {
 
 /// Install, idempotency, a restart and uninstall, with a session that
 /// outlives the restart and the uninstall.
+#[track_caller]
 fn the_login_service_round_trip() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();

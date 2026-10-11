@@ -45,6 +45,7 @@ struct Setup {
 }
 
 impl Setup {
+    #[track_caller]
     fn new() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fl");
@@ -113,6 +114,7 @@ impl Setup {
     }
 
     /// Runs `fiber` with `args` and `input` on a closed pipe for stdin.
+    #[track_caller]
     fn fiber(&self, args: &[&str], input: &str) -> Run {
         let mut command = self.command(args);
         command
@@ -125,7 +127,7 @@ impl Setup {
         feed(&mut child, input);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,
@@ -264,6 +266,7 @@ struct Terminal {
 }
 
 impl Terminal {
+    #[track_caller]
     fn open() -> Self {
         let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
         pty::grantpt(&main).unwrap();
@@ -290,6 +293,7 @@ impl Terminal {
     /// Waits until the terminal stops echoing, which is when `fiber` has
     /// begun reading the key. A thread polls the flag, so the wait has a
     /// deadline without this test reading a clock.
+    #[track_caller]
     fn wait_for_echo_off(&self, deadline: Deadline) {
         let terminal = self.terminal.try_clone().unwrap();
         let stop = Arc::new(AtomicBool::new(false));
@@ -304,7 +308,7 @@ impl Terminal {
                 thread::yield_now();
             }
         });
-        if is_off.recv_timeout(deadline.left()).is_err() {
+        if deadline.recv(&is_off).is_err() {
             stop.store(true, Ordering::Relaxed);
             panic!("waited until the deadline for `fiber` to turn echo off");
         }
@@ -328,6 +332,7 @@ struct Screen {
 }
 
 impl Screen {
+    #[track_caller]
     fn new(terminal: &Terminal, deadline: Deadline) -> Self {
         let reader = fs::File::from(terminal.main.try_clone().unwrap());
         let (send, chunks) = mpsc::channel();
@@ -348,11 +353,12 @@ impl Screen {
 
     /// Reads until `text` has appeared, and returns everything read since
     /// the last wait.
+    #[track_caller]
     fn wait_for(&mut self, text: &str) -> String {
         let mark = self.seen.len();
         while !self.seen[mark..].contains(text) {
             // Each chunk has the deadline: a terminal that goes quiet fails.
-            match self.chunks.recv_timeout(self.deadline.left()) {
+            match self.deadline.recv(&self.chunks) {
                 Ok(chunk) => self.seen.push_str(&chunk),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!(
@@ -372,6 +378,7 @@ impl Screen {
     }
 
     /// Types `text` on a thread bounded by the test's [`Deadline`].
+    #[track_caller]
     fn type_text(&mut self, text: &str) {
         let mut typed = self.typed.try_clone().unwrap();
         let text = text.to_owned();
@@ -396,11 +403,12 @@ struct OnTerminal {
 impl OnTerminal {
     /// Waits for `fiber` to exit under the test's [`Deadline`], and asserts
     /// that nothing it started is left in its group, after a timeout too.
+    #[track_caller]
     fn finish(&mut self) -> ExitStatus {
         let mut child = self.child.take().unwrap();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
-        let status = match finished.recv_timeout(self.deadline.left()) {
+        let status = match self.deadline.recv(&finished) {
             Ok(status) => status.unwrap(),
             Err(_) => support::expired(self.deadline, self.group, &finished, "`fiber` to exit"),
         };
@@ -771,6 +779,7 @@ fn codex_exchange(email: &str) -> String {
 
 /// Runs `fiber login codex --device`, reading stderr until `needle`
 /// shows, then waiting for the exit under the deadline.
+#[track_caller]
 fn login_device(setup: &Setup, args: &[&str], needle: &str) -> Run {
     let mut command = setup.command(args);
     command
@@ -801,11 +810,9 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str) -> Run {
     });
     let mut stderr = Vec::new();
     loop {
-        let chunk = received
-            .recv_timeout(setup.deadline.left())
-            .unwrap_or_else(|_| {
-                panic!("`fiber login codex --device` showed no device code within the deadline")
-            });
+        let chunk = setup.deadline.recv(&received).unwrap_or_else(|_| {
+            panic!("`fiber login codex --device` showed no device code within the deadline")
+        });
         stderr.extend_from_slice(&chunk);
         if String::from_utf8_lossy(&stderr).contains(needle) {
             break;
@@ -813,7 +820,7 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str) -> Run {
     }
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(setup.deadline.left()) {
+    let output = match setup.deadline.recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => support::expired(
             setup.deadline,

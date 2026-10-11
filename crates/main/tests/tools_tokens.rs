@@ -31,6 +31,7 @@ struct Running {
     deadline: Deadline,
 }
 
+#[track_caller]
 fn start(setup: &Setup, args: &[&str]) -> Running {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -68,6 +69,7 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
     }
 }
 
+#[track_caller]
 fn finish(running: Running) {
     let Running {
         mut child,
@@ -79,7 +81,7 @@ fn finish(running: Running) {
     } = running;
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(deadline.left()) {
+    let status = match deadline.recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             expired(deadline, group, &finished, "fiber to exit")

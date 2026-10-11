@@ -82,6 +82,7 @@ fn session(setup: &Setup, id: &str, from: Option<&str>, ts: u64) -> PathBuf {
 
 /// Diagnostic file `name` in `kind` (`logs` or `crashes`) with `bytes`,
 /// its mtime set to `at`.
+#[track_caller]
 fn diag(home: &Path, kind: &str, name: &str, bytes: &[u8], at: SystemTime) {
     let dir = home.join(kind);
     fs::create_dir_all(&dir).unwrap();
@@ -95,6 +96,7 @@ fn diag(home: &Path, kind: &str, name: &str, bytes: &[u8], at: SystemTime) {
 }
 
 /// Runs `fiber sessions prune` with `args` in the workspace, stdin null.
+#[track_caller]
 fn prune(setup: &Setup, args: &[&str]) -> std::process::Output {
     let mut all = vec!["sessions", "prune"];
     all.extend_from_slice(args);
@@ -105,6 +107,7 @@ fn prune(setup: &Setup, args: &[&str]) -> std::process::Output {
 
 /// Waits under the test's [`Deadline`] until `socket` is gone, naming
 /// `what`.
+#[track_caller]
 fn until_absent(deadline: Deadline, socket: &Path, what: &str) {
     let socket = socket.to_owned();
     let (done, reached) = mpsc::channel();
@@ -115,7 +118,7 @@ fn until_absent(deadline: Deadline, socket: &Path, what: &str) {
         done.send(()).unwrap_or(());
     });
     assert!(
-        reached.recv_timeout(deadline.left()).is_ok(),
+        deadline.recv(&reached).is_ok(),
         "waited until the deadline for {what}"
     );
 }
@@ -293,6 +296,7 @@ fn git_command() -> Command {
 
 /// Runs `git` with `args` in `dir`, as the worktree tests do, under the
 /// test's [`Deadline`].
+#[track_caller]
 fn git(deadline: Deadline, dir: &Path, args: &[&str]) {
     let mut command = git_command();
     command
@@ -312,6 +316,7 @@ fn git(deadline: Deadline, dir: &Path, args: &[&str]) {
 
 /// Makes the workspace a git repository with one commit: `file.txt` and a
 /// `.gitignore` matching `target/`, `.env` and `local.secret`.
+#[track_caller]
 fn repo(setup: &Setup) {
     let workspace = setup.workspace();
     git(setup.deadline, &workspace, &["init", "--quiet"]);
@@ -331,6 +336,7 @@ fn repo(setup: &Setup) {
 
 /// A kept worktree `id` on branch `fiber/<id>` under the project's
 /// `worktrees/`, returned canonicalized.
+#[track_caller]
 fn kept(setup: &Setup, id: &str) -> PathBuf {
     let path = project(setup).join("worktrees").join(id);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -345,6 +351,7 @@ fn kept(setup: &Setup, id: &str) -> PathBuf {
 }
 
 /// Whether `refs/heads/fiber/<id>` still exists in the workspace.
+#[track_caller]
 fn branch_exists(setup: &Setup, id: &str) -> bool {
     let mut command = git_command();
     command.arg("-C").arg(setup.workspace()).args([

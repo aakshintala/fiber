@@ -134,6 +134,7 @@ struct Watchdog {
 impl Watchdog {
     /// Tells the watchdog to exit without signalling, and reaps it within
     /// `within`.
+    #[track_caller]
     fn stand_down(mut self, within: Duration) {
         if let Some(mut stdin) = self.stdin.take() {
             match writeln!(stdin) {
@@ -146,7 +147,7 @@ impl Watchdog {
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait()).unwrap());
         assert!(
-            finished.recv_timeout(within).is_ok(),
+            Deadline::after(within).recv(&finished).is_ok(),
             "waited until the deadline for the watchdog to exit"
         );
     }
@@ -179,6 +180,7 @@ fn recv(deadline: Deadline, client: &Client) -> Value {
 
 /// Connects a client to the session socket `path`, on a thread bounded by
 /// the test's [`Deadline`].
+#[track_caller]
 fn client(deadline: Deadline, path: &Path) -> Client {
     let target = path.to_owned();
     support::bounded(
@@ -229,6 +231,7 @@ struct Running {
     deadline: Deadline,
 }
 
+#[track_caller]
 fn start(setup: &Setup) -> Running {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
     command
@@ -278,6 +281,7 @@ fn start(setup: &Setup) -> Running {
     }
 }
 
+#[track_caller]
 fn finish(running: Running) {
     let Running {
         mut child,
@@ -290,7 +294,7 @@ fn finish(running: Running) {
     } = running;
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait()).unwrap());
-    let status = match finished.recv_timeout(deadline.left()) {
+    let status = match deadline.recv(&finished) {
         Ok(status) => status.unwrap(),
         Err(_) => support::expired(deadline, group, &finished, "fiber to exit"),
     };
@@ -503,9 +507,9 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
     let mut out = Vec::new();
     loop {
         let line: Value = serde_json::from_str(
-            &running
-                .stdout
-                .recv_timeout(setup.deadline.left())
+            &setup
+                .deadline
+                .recv(&running.stdout)
                 .expect("waited for fiber_exited"),
         )
         .unwrap();
@@ -516,7 +520,7 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
         }
     }
     assert_eq!(
-        running.stdout.recv_timeout(setup.deadline.left()),
+        setup.deadline.recv(&running.stdout),
         Err(mpsc::RecvTimeoutError::Disconnected),
         "nothing follows fiber_exited"
     );
@@ -679,9 +683,9 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     // `fiber_exited` is the last line on stdout, as the existing test does.
     loop {
         let line: Value = serde_json::from_str(
-            &running
-                .stdout
-                .recv_timeout(setup.deadline.left())
+            &setup
+                .deadline
+                .recv(&running.stdout)
                 .expect("waited for fiber_exited"),
         )
         .unwrap();
@@ -796,7 +800,7 @@ fn cancel_on_the_same_socket_stops_a_driver_shell() {
         .to_string(),
     );
     assert_eq!(
-        started.recv_timeout(setup.deadline.left()),
+        setup.deadline.recv(&started),
         Ok(true),
         "waited until the deadline for the shell to start"
     );

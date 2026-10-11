@@ -117,6 +117,7 @@ impl Setup {
 
     /// Runs `fiber` with `args` and waits for it under the test's
     /// [`Deadline`].
+    #[track_caller]
     fn fiber(&self, args: &[&str]) -> Run {
         let mut command = Command::new(self.exe());
         command
@@ -135,7 +136,7 @@ impl Setup {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,
@@ -455,6 +456,7 @@ fn models_lists_every_first_party_model_and_drops_none() {
 /// a rewritten cache alone never proves it did. On expiry it kills the
 /// child and its group, checks they are gone before the cleanup deadline,
 /// and fails.
+#[track_caller]
 fn await_refresh_exit(deadline: Deadline, pattern: &str) {
     if fakes::matching_exits(pattern, deadline.left()) {
         return;

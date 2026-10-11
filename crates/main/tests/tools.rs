@@ -52,6 +52,7 @@ struct Setup {
 }
 
 impl Setup {
+    #[track_caller]
     fn new() -> Self {
         Self::within(Deadline::start())
     }
@@ -189,6 +190,7 @@ impl Setup {
     /// [`Deadline`], and asserts that nothing it started is left in the
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
     /// A watchdog beside it kills that group if this process dies first.
+    #[track_caller]
     fn run(&self, args: &[&str]) -> Run {
         let home = self.home();
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -209,7 +211,7 @@ impl Setup {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,
@@ -231,6 +233,7 @@ impl Setup {
     /// written, and calls `act` once the lines so far satisfy `when`: two
     /// waits under the test's [`Deadline`]: for the lines `when` needs, then
     /// for the exit.
+    #[track_caller]
     fn run_then(
         &self,
         args: &[&str],
@@ -294,7 +297,7 @@ impl Setup {
                 Ok(()) | Err(_) => {}
             }
         });
-        match matched.recv_timeout(self.deadline.left()) {
+        match self.deadline.recv(&matched) {
             Ok(()) => act(),
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!(
@@ -315,7 +318,7 @@ impl Setup {
                 )
             }
         }
-        let (status, stdout, lines, stderr) = match finished.recv_timeout(self.deadline.left()) {
+        let (status, stdout, lines, stderr) = match self.deadline.recv(&finished) {
             Ok(done) => done,
             Err(_) => support::expired(
                 self.deadline,
@@ -346,6 +349,7 @@ fn write(file: &Path, value: &Value) {
 
 /// Makes the FIFO `path` with `mkfifo`, run to its exit under the test's
 /// [`Deadline`].
+#[track_caller]
 fn mkfifo(setup: &Setup, path: &Path) {
     let mut command = Command::new("mkfifo");
     command

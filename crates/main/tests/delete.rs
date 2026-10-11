@@ -64,6 +64,7 @@ fn session(setup: &Setup, id: &str, from: Option<&str>) -> PathBuf {
 }
 
 /// Runs `fiber sessions delete` with `args` in the workspace, stdin null.
+#[track_caller]
 fn delete(setup: &Setup, args: &[&str]) -> std::process::Output {
     let mut all = vec!["sessions", "delete"];
     all.extend_from_slice(args);
@@ -74,6 +75,7 @@ fn delete(setup: &Setup, args: &[&str]) -> std::process::Output {
 
 /// Waits under the test's [`Deadline`] until `socket` is gone, naming
 /// `what`.
+#[track_caller]
 fn until_absent(deadline: Deadline, socket: &Path, what: &str) {
     let socket = socket.to_owned();
     let (done, reached) = mpsc::channel();
@@ -84,7 +86,7 @@ fn until_absent(deadline: Deadline, socket: &Path, what: &str) {
         done.send(()).unwrap_or(());
     });
     assert!(
-        reached.recv_timeout(deadline.left()).is_ok(),
+        deadline.recv(&reached).is_ok(),
         "waited until the deadline for {what}"
     );
 }

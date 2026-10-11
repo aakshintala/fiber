@@ -54,6 +54,7 @@ impl Setup {
         path.to_str().unwrap().to_owned()
     }
 
+    #[track_caller]
     fn extension(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -72,7 +73,7 @@ impl Setup {
         let group = child.id();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,

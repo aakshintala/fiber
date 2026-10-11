@@ -124,6 +124,7 @@ impl Setup {
     /// Runs `/bin/dash scripts/install.sh --base-url <release>` on `host`,
     /// with `FIBER_INSTALL_DIR` set to `dest` and then each of `env`, and
     /// waits for it under the test's [`Deadline`].
+    #[track_caller]
     fn install(&self, host: &Host, env: &[(&str, &str)]) -> Run {
         let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/install.sh");
         let path = format!("{}:/usr/bin:/bin", fixture().join("bin").display());
@@ -151,7 +152,7 @@ impl Setup {
         let watchdog = Watchdog::group(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(self.deadline, group, &finished, "install.sh to exit"),
         };

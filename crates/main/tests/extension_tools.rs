@@ -129,6 +129,7 @@ impl Run {
 /// waits for it under the test's deadline, and asserts that nothing it
 /// started is left in the group. A watchdog kills the group if this
 /// process dies first.
+#[track_caller]
 fn ask(setup: &Setup, prompt: &str) -> Run {
     let mut command = setup.fiber(&["ask", prompt]);
     command.current_dir(setup.workspace());
@@ -137,7 +138,7 @@ fn ask(setup: &Setup, prompt: &str) -> Run {
     let watchdog = Watchdog::group(group);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(setup.deadline.left()) {
+    let output = match setup.deadline.recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => support::expired(setup.deadline, group, &finished, "`fiber ask` to exit"),
     };

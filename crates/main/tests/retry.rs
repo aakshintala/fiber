@@ -30,6 +30,7 @@ struct Setup {
 }
 
 impl Setup {
+    #[track_caller]
     fn new() -> Self {
         Self::within(Deadline::start())
     }
@@ -86,12 +87,14 @@ impl Setup {
     /// Runs `fiber ask hi` in its own process group, waits for it under the
     /// test's [`Deadline`], and asserts that nothing it started is left in the
     /// group (`docs/testing.md`, "Running tests").
+    #[track_caller]
     fn ask(&self) -> Run {
         self.ask_with(&[])
     }
 
     /// Runs `fiber ask <extra...> hi`: `extra` holds flags such as `-c`,
     /// between `ask` and the prompt.
+    #[track_caller]
     fn ask_with(&self, extra: &[&str]) -> Run {
         let mut argv = vec!["ask"];
         argv.extend_from_slice(extra);
@@ -116,7 +119,7 @@ impl Setup {
         drop(child.stdin.take());
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(self.deadline, group, &finished, &what),
         };
@@ -337,6 +340,7 @@ const RETRIED_HELLO_KINDS: [&str; 19] = [
 /// Installs `fake/m` speaking `protocol` at `server` with `attempts`
 /// retries, runs `fiber ask hi` against `[failure, success]`, and asserts
 /// the ask succeeds after exactly one retry.
+#[track_caller]
 fn succeeds_after_one_retry(
     deadline: Deadline,
     protocol: &str,
@@ -608,6 +612,7 @@ const FAILED_AT_ONCE_KINDS: [&str; 12] = [
 ];
 
 /// A failure that is never retried fails the ask with one request only.
+#[track_caller]
 fn fails_at_once(deadline: Deadline, failure: Response, code: &str) {
     let setup = Setup::within(deadline);
     let server = ProviderServer::start([failure]).unwrap();

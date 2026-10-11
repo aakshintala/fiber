@@ -75,6 +75,7 @@ impl Setup {
 
     /// Runs `fiber extension` with `args` and no terminal, so it does not
     /// ask.
+    #[track_caller]
     fn extension(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
@@ -93,7 +94,7 @@ impl Setup {
         let group = child.id();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,
@@ -134,6 +135,7 @@ struct Run {
 
 /// The installed directory, and what the step recorded there: its path is
 /// the canonical installed path, and its script reads the payload.
+#[track_caller]
 fn assert_step_at_final_path(setup: &Setup, payload: &str) {
     let dir = setup.installed();
     let canonical = fs::canonicalize(&dir).unwrap();
@@ -147,6 +149,7 @@ fn assert_step_at_final_path(setup: &Setup, payload: &str) {
 
 /// What the script the install step left prints, run with a deadline in its
 /// own process group, so a hung script fails naming what it waited for.
+#[track_caller]
 fn script_output(deadline: Deadline, script: &Path) -> String {
     let mut command = Command::new("sh");
     command
@@ -158,7 +161,7 @@ fn script_output(deadline: Deadline, script: &Path) -> String {
     let group = child.id();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-    let output = match finished.recv_timeout(deadline.left()) {
+    let output = match deadline.recv(&finished) {
         Ok(output) => output.unwrap(),
         Err(_) => support::expired(
             deadline,

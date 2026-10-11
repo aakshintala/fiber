@@ -137,6 +137,7 @@ impl Setup {
     /// The fixture server runs detached from Fiber's group; the setup's
     /// guard kills it and its grandchild with the setup when the test
     /// ends, after the asserts below.
+    #[track_caller]
     fn run(&self, args: &[&str]) -> Run {
         let home = self.home();
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
@@ -157,7 +158,7 @@ impl Setup {
         let guard = KillGroup(group);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(self.deadline.left()) {
+        let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
             Err(_) => support::expired(
                 self.deadline,
