@@ -13,9 +13,8 @@ mod attach;
 mod results;
 
 use self::attach::per_mib;
-// `median` keeps its `bench::median` path: the tests name it through `super::*`.
-#[allow(unused_imports, reason = "only the tests' `use super::*` names it")]
-pub(crate) use self::results::median;
+#[cfg(test)]
+use self::results::median;
 use self::results::{RUNS, Results, field, metric, parse_results, run_median, runs};
 
 /// The comment's first line, which the posting job finds it by.

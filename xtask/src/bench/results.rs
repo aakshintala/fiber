@@ -5,7 +5,7 @@ pub(super) const SCHEMA: u64 = 1;
 pub(super) const RUNS: usize = 5;
 
 /// The median of exactly `RUNS` values.
-pub(crate) fn median(values: &[f64]) -> Result<f64, String> {
+pub(super) fn median(values: &[f64]) -> Result<f64, String> {
     if values.len() != RUNS {
         return Err(format!("{} runs, expected {RUNS}", values.len()));
     }
