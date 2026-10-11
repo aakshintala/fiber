@@ -957,6 +957,48 @@ fn reloading_with_a_disabled_list_declares_one_fewer_tool() {
 }
 
 #[test]
+fn an_extension_whose_tools_are_all_disabled_but_with_a_command_stays_loaded() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &format!("{}{HOOK_AND_COMMAND}", tool_line("one", "a")),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["one"]"#],
+    );
+    assert!(declared(&session).is_empty());
+    assert_eq!(loaded(&session), ["fiber.test/a"]);
+    assert!(session.commands().iter().any(|c| c.name == "mine"));
+    assert!(session.has_hooks());
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
+fn an_extension_with_only_disabled_tools_declares_nothing_but_stays_listed() {
+    let setup = Setup::new();
+    install_lua(
+        &setup,
+        "a",
+        &json!({"replaces": []}),
+        &tool_line("one", "a"),
+    );
+    let session = session_with(
+        &setup,
+        &[r#"extensions."fiber.test/a".tools.disabled=["one"]"#],
+    );
+    assert!(declared(&session).is_empty());
+    // The load record stays: the `has_tools` rule only drops the live VM
+    // from delivery, which has no other public signal.
+    assert_eq!(loaded(&session), ["fiber.test/a"]);
+    assert!(session.commands().is_empty());
+    assert!(!session.has_hooks());
+    assert_eq!(session.notices(), []);
+}
+
+#[test]
 fn an_extension_with_only_tools_stays_loaded_and_delivers() {
     let setup = Setup::new();
     install_lua(
