@@ -99,6 +99,7 @@ jobs:
       # cpu-clock, not the default hardware event: a runner's VM has no PMU counters.
       # -g --call-graph dwarf unwinds through the binaries' line tables; perf follows
       # the child processes the harness spawns. A failed run still uploads what it wrote.
+      # Two runs, not five: a profile needs samples, not a median.
       - name: Profile the timing benchmarks
         run: |
           out="$RUNNER_TEMP/attach-profile"
@@ -107,7 +108,7 @@ jobs:
           perf record -e cpu-clock -F 499 -g --call-graph dwarf -o "$out/perf.data" -- \
             target/debug/examples/bench \
             --fiber "$PWD/target/$FIBER_TARGET/release/fiber" \
-            --out "$out/bench.json" --only timing || status=$?
+            --out "$out/bench.json" --only timing --runs 2 || status=$?
           echo "bench exited $status"
           # The harness exits 0 with a failed workload recorded in its file, so only a
           # missing file is a failed run here.
@@ -121,6 +122,10 @@ jobs:
             awk '$1 == "fiber" { print $2 }' | sort -u | paste -sd, -)
           test -n "$pids"
           perf script -i "$out/perf.data" --pid "$pids" | inferno-collapse-perf > "$out/fiber-folded.txt"
+          # Where the fiber samples land by binary, and their raw stacks: a profile with
+          # no fiber frames shows here whether the user samples or their symbols are missing.
+          perf report -i "$out/perf.data" --pid "$pids" --sort comm,dso --stdio > "$out/fiber-dso.txt"
+          perf script -i "$out/perf.data" --pid "$pids" | head -n 400 > "$out/fiber-script-head.txt"
           inferno-flamegraph < "$out/folded.txt" > "$out/flamegraph.svg"
           inferno-flamegraph < "$out/fiber-folded.txt" > "$out/fiber-flamegraph.svg"
           exit "$status"
