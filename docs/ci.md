@@ -337,7 +337,7 @@ from what the generator writes.
 
 ## Manually dispatched workflows
 
-Two workflows never run on a push or a pull request. Someone starts them with
+Three workflows never run on a push or a pull request. Someone starts them with
 `gh workflow run <file> --ref <branch>`, and GitHub allows that only once the
 workflow file is on `main`.
 
@@ -348,6 +348,12 @@ workflow file is on `main`.
   `dependency-rss` (the default; `docs/dependencies.md`, "Measuring memory")
   or `session-search` (`research/session-search/run.sh`), e.g.
   `gh workflow run dependency-probe.yml --ref main -f probe=session-search`.
+- `attach-profile.yml` runs `bench --only timing` on Linux x86_64 under
+  `perf record`, with fiber built with symbols, and uploads one artifact:
+  `perf.data`, the folded stacks and flamegraph SVGs for every process and for
+  the fiber processes alone, and the harness's JSON. Its timings run under perf,
+  so they are not budget evidence: the 60 and 150 ms attach ceilings are judged
+  by the Release job's "Print the attach stages" only.
 
 ## Job time limits
 

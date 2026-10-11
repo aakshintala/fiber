@@ -1,0 +1,128 @@
+name: Attach profile
+
+# Profiles the attach benchmark on Linux x86_64 with perf and writes flamegraphs
+# (fiber #1546: the attach is over its 150 ms budget on Linux, and macOS numbers
+# do not show where Linux spends the time). It runs `bench --only timing` under
+# `perf record`, so the fiber processes the harness spawns are sampled too, and
+# uploads perf.data, the folded stacks, the SVGs and the harness's JSON as one
+# artifact. Manual only: `gh workflow run attach-profile.yml --ref <branch>`,
+# never on a push or a pull request. Its timings run under perf and are not
+# budget evidence: the 60 and 150 ms attach ceilings are judged by the Release
+# job's "Print the attach stages" only (docs/ci.md, "Manually dispatched
+# workflows").
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Every apt-get call retries and gives up on a silent mirror (ci.yml).
+  APT_OPTS: -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  profile:
+    runs-on: ubuntu-24.04
+    # No history yet; generous until a few runs set a median. The job builds
+    # fiber, the paging jig and inferno cold, then runs the timing benchmarks
+    # under perf.
+    timeout-minutes: 60
+    env:
+      # C code (lua-src, ring) compiles against musl's headers (ci.yml's Release job).
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      FIBER_TARGET: x86_64-unknown-linux-musl
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the toolchain and the musl target
+        run: |
+          rustup toolchain install
+          rustup target add "$FIBER_TARGET"
+
+      - name: Install perf and the C compiler
+        # A mirror that stops answering must fail the step, not hold the job to its bound.
+        timeout-minutes: 5
+        run: |
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS update
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS install -y --no-install-recommends musl-tools linux-tools-common linux-tools-generic
+          # The kernel's own tools package is preferred; the generic one is the fallback.
+          # shellcheck disable=SC2086 # APT_OPTS is a list of options
+          sudo apt-get $APT_OPTS install -y --no-install-recommends "linux-tools-$(uname -r)" ||
+            echo "::warning::no linux-tools package for kernel $(uname -r); using linux-tools-generic"
+          # ubuntu's /usr/bin/perf wrapper wants a tools package for the running kernel, so
+          # link the newest installed perf binary directly.
+          perf_bin=$(find /usr/lib/linux-tools -mindepth 2 -maxdepth 2 -name perf -type f | sort -V | tail -n 1)
+          sudo ln -sf "$perf_bin" /usr/local/bin/perf
+          perf --version
+
+      - name: Install inferno
+        # Pinned: the flamegraph tools' output format is the one this job reads.
+        timeout-minutes: 20
+        run: cargo install inferno --version 0.12.7 --locked
+
+      - name: Allow perf for an unprivileged user
+        run: |
+          sudo sysctl -w kernel.perf_event_paranoid=1
+          sudo sysctl -w kernel.kptr_restrict=0
+
+      # The release profile with debug info and symbols (Cargo.toml is not
+      # edited): the same target and build as scripts/release-size, so the
+      # profile is of the shipped code generation.
+      - name: Build fiber with symbols
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+          CARGO_PROFILE_RELEASE_STRIP: none
+        run: cargo build --release --locked --target "$FIBER_TARGET" --bin fiber
+
+      - name: Build the paging jig
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+          CARGO_PROFILE_RELEASE_STRIP: none
+        run: cargo build --release --locked --target "$FIBER_TARGET" -p tui --example paging
+
+      # The harness is built in the debug profile, as the Release job builds it.
+      - name: Build the benchmark harness
+        run: cargo build -p bench --example bench
+
+      # cpu-clock, not the default hardware event: a runner's VM has no PMU counters.
+      # -g --call-graph dwarf unwinds through the binaries' line tables; perf follows
+      # the child processes the harness spawns. A failed run still uploads what it wrote.
+      - name: Profile the timing benchmarks
+        run: |
+          out="$RUNNER_TEMP/attach-profile"
+          mkdir -p "$out"
+          status=0
+          perf record -e cpu-clock -F 499 -g --call-graph dwarf -o "$out/perf.data" -- \
+            target/debug/examples/bench \
+            --fiber "$PWD/target/$FIBER_TARGET/release/fiber" \
+            --paging "$PWD/target/$FIBER_TARGET/release/examples/paging" \
+            --out "$out/bench.json" --only timing || status=$?
+          echo "bench exited $status"
+          # The harness exits 0 with a failed workload recorded in its file, so only a
+          # missing file is a failed run here.
+          test -s "$out/bench.json"
+          # Stacks of every process, then of the fiber processes alone (the harness
+          # and the paging jig are the other comms).
+          perf script -i "$out/perf.data" | inferno-collapse-perf > "$out/folded.txt"
+          perf script -i "$out/perf.data" --comm fiber | inferno-collapse-perf > "$out/fiber-folded.txt"
+          inferno-flamegraph < "$out/folded.txt" > "$out/flamegraph.svg"
+          inferno-flamegraph < "$out/fiber-folded.txt" > "$out/fiber-flamegraph.svg"
+          exit "$status"
+
+      - name: Upload the profile
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: attach-profile-${{ github.sha }}
+          path: ${{ runner.temp }}/attach-profile/
+          if-no-files-found: warn
