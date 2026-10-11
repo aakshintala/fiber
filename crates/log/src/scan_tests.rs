@@ -379,3 +379,62 @@ fn try_hold_holds_through_another_descriptor_and_creates_a_missing_lock() {
     drop(file);
     assert!(matches!(try_hold(&dir).unwrap(), Hold::Held(_)));
 }
+
+#[test]
+fn last_line_where_with_a_missing_or_empty_log_gives_none() {
+    let home = fakes::TempDir::new("log-scan-where-missing");
+    assert_eq!(
+        last_line_where::<()>(home.path().join("s").as_path(), |_| Some(())),
+        None
+    );
+    let dir = home.path().join("s");
+    write_log(&dir, b"");
+    assert_eq!(last_line_where::<()>(&dir, |_| Some(())), None);
+}
+
+#[test]
+fn last_line_where_with_one_line_and_no_newline_gives_none() {
+    let home = fakes::TempDir::new("log-scan-where-torn");
+    let dir = home.path().join("s");
+    write_log(&dir, b"only a torn tail");
+    assert_eq!(last_line_where::<()>(&dir, |_| Some(())), None);
+}
+
+#[test]
+fn last_line_where_reads_complete_lines_last_first_and_stops_at_its_first_some() {
+    let home = fakes::TempDir::new("log-scan-where-order");
+    let dir = home.path().join("s");
+    write_log(&dir, b"one\ntwo\nthree\n");
+    let mut seen = Vec::new();
+    let found = last_line_where(&dir, |line| {
+        seen.push(line.to_owned());
+        (line == b"two").then_some(line.len())
+    });
+    assert_eq!(found, Some(3));
+    assert_eq!(seen, [b"three".to_vec(), b"two".to_vec()]);
+}
+
+#[test]
+fn last_line_where_hands_a_line_longer_than_one_step_over_whole() {
+    let home = fakes::TempDir::new("log-scan-where-long");
+    let dir = home.path().join("s");
+    let big = "x".repeat(70 * 1024);
+    write_log(&dir, format!("first\n{big}\nlast\n").as_bytes());
+    let found = last_line_where(&dir, |line| (line.len() > 64 * 1024).then_some(line.len()));
+    assert_eq!(found, Some(big.len()));
+}
+
+#[test]
+fn last_line_where_finds_a_match_more_than_one_step_before_the_end() {
+    let home = fakes::TempDir::new("log-scan-where-far");
+    let dir = home.path().join("s");
+    let filler = "{\"kind\":\"x\"}\n".repeat(6000);
+    write_log(&dir, format!("match-me\n{filler}").as_bytes());
+    let mut calls = 0;
+    let found = last_line_where(&dir, |line| {
+        calls += 1;
+        (line == b"match-me").then_some(())
+    });
+    assert_eq!(found, Some(()));
+    assert_eq!(calls, 6001);
+}

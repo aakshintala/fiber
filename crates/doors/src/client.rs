@@ -217,6 +217,7 @@ pub(crate) fn built(command: &str) -> bool {
             | "prompt"
             | "steer"
             | "steer_drop"
+            | "message"
             | "reply"
             | "cancel"
             | "tools"
@@ -312,6 +313,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id.clone());
             conn.gate.deliver(Delivery::SteerDrop(args.command_id, ack));
         }
+        Command::Message(args) => crate::message::run(conn, id, args),
         Command::Reply(reply) => crate::reply::route(conn, id, reply),
         Command::Cancel => cancel(conn, id),
         Command::Shell(args) => shell(conn, id, &args, name),
@@ -339,7 +341,7 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             answer(conn, id, moving, NO_CALL);
         }
         Command::Command(args) => crate::run_command::run(conn, id, &args),
-        Command::Message(_) | Command::Reload | Command::Name(_) => unknown(conn, id, name),
+        Command::Reload | Command::Name(_) => unknown(conn, id, name),
     }
 }
 

@@ -135,6 +135,10 @@ pub(crate) enum Probe {
     SubscribeSeeded,
     /// A `full` subscribe's acknowledgement is written.
     SubscribeAcknowledged,
+    /// `deliver_message` holds the admission lock while sending.
+    MessageLocked,
+    /// `mark_closed` holds the admission lock while closing.
+    CloseLocked,
 }
 
 /// What [`Gate::probe`] calls at each [`Probe`] point.
@@ -1753,7 +1757,11 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
             lock(&resume_rx).recv().expect("the test resumes close");
         }
         Probe::ShellsWaiting => if let Ok(()) = waiting_tx.send(()) {},
-        Probe::SubscribeSeeded | Probe::SubscribeAcknowledged | Probe::PrinterStopQueued => {}
+        Probe::SubscribeSeeded
+        | Probe::SubscribeAcknowledged
+        | Probe::PrinterStopQueued
+        | Probe::MessageLocked
+        | Probe::CloseLocked => {}
     }));
     let socket = opened.socket.clone();
     let mut connected = None;
@@ -2974,4 +2982,197 @@ fn close_prints_durable_lines_dropped_before_stop() {
         lines.last().expect("stdout holds fiber_exited")["kind"],
         "fiber_exited"
     );
+}
+
+/// A session message and a close racing for the admission lock, in both
+/// orders: the lock decides which the inbox yields first, and a `Close`
+/// queued before any client admits refuses a message.
+#[test]
+fn message_and_close_race_in_both_lock_orders() {
+    // (i) The message holds the lock while the close blocks in it.
+    {
+        reset();
+        let opened = Opened::open(Vec::new());
+        let gate = Arc::clone(&opened.session.gate);
+        let (entered_tx, entered) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel::<()>();
+        let release = Mutex::new(release);
+        let (closed_tx, closed) = mpsc::channel();
+        *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
+            Probe::MessageLocked => {
+                if let Ok(()) = entered_tx.send(()) {}
+                lock(&release)
+                    .recv_timeout(DEADLINE)
+                    .expect("the test releases the message");
+            }
+            Probe::CloseLocked => if let Ok(()) = closed_tx.send(()) {},
+            Probe::FirstShellWaitDone
+            | Probe::PrinterStopQueued
+            | Probe::ShellsWaiting
+            | Probe::SubscribeSeeded
+            | Probe::SubscribeAcknowledged => {}
+        }));
+        let socket = opened.socket.clone();
+        opened
+            .session
+            .run(Vec::new(), Arc::new(|| false), |inbox| {
+                let first = Client::connect(&socket).unwrap();
+                first.send(&subscribe_line("c_sub", "full")).unwrap();
+                let _ack = recv(&first);
+                first
+                    .send(
+                        r#"{"id":"c_m1","command":"message","args":{"from_session_id":"s_1","text":"race"}}"#,
+                    )
+                    .unwrap();
+                Deadline::after(DEADLINE)
+                    .recv(&entered)
+                    .expect("the message holds the lock");
+                let second = Client::connect(&socket).unwrap();
+                second.send(&subscribe_line("c_two", "full")).unwrap();
+                let _ack = recv(&second);
+                second.send(r#"{"id":"c_close","command":"close"}"#).unwrap();
+                release_tx.send(()).unwrap();
+                // The message was admitted under the lock the close waited
+                // for: accepted, ahead of the close.
+                let accepted = support::response(&first, "c_m1");
+                assert_eq!(support::kind(&accepted), "command_accepted");
+                Deadline::after(DEADLINE)
+                    .recv(&closed)
+                    .expect("the close took the lock next");
+                let Delivery::Message(message) = Deadline::after(DEADLINE)
+                    .recv(&inbox)
+                    .expect("the message is delivered")
+                else {
+                    panic!("the message is delivered as a message");
+                };
+                assert_eq!(message.command_id.0, "c_m1");
+                let Delivery::Close(ack) = Deadline::after(DEADLINE)
+                    .recv(&inbox)
+                    .expect("the close is delivered")
+                else {
+                    panic!("the close is delivered as a close");
+                };
+                ack.0(Ok(None));
+                let closed = support::response(&second, "c_close");
+                assert_eq!(support::kind(&closed), "command_accepted");
+                Ok(())
+            })
+            .unwrap();
+        opened.close();
+    }
+    // (ii) The close holds the lock while the message blocks in it.
+    {
+        reset();
+        let opened = Opened::open(Vec::new());
+        let gate = Arc::clone(&opened.session.gate);
+        let (entered_tx, entered) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel::<()>();
+        let release = Mutex::new(release);
+        *super::lock(&gate.probe) = Some(Arc::new(move |point| match point {
+            Probe::CloseLocked => {
+                if let Ok(()) = entered_tx.send(()) {}
+                lock(&release)
+                    .recv_timeout(DEADLINE)
+                    .expect("the test releases the close");
+            }
+            Probe::MessageLocked
+            | Probe::FirstShellWaitDone
+            | Probe::PrinterStopQueued
+            | Probe::ShellsWaiting
+            | Probe::SubscribeSeeded
+            | Probe::SubscribeAcknowledged => {}
+        }));
+        let socket = opened.socket.clone();
+        opened
+            .session
+            .run(Vec::new(), Arc::new(|| false), |inbox| {
+                let first = Client::connect(&socket).unwrap();
+                first.send(&subscribe_line("c_sub", "full")).unwrap();
+                let _ack = recv(&first);
+                first.send(r#"{"id":"c_close","command":"close"}"#).unwrap();
+                Deadline::after(DEADLINE)
+                    .recv(&entered)
+                    .expect("the close holds the lock");
+                let second = Client::connect(&socket).unwrap();
+                second.send(&subscribe_line("c_two", "full")).unwrap();
+                let _ack = recv(&second);
+                second
+                    .send(
+                        r#"{"id":"c_m1","command":"message","args":{"from_session_id":"s_1","text":"race"}}"#,
+                    )
+                    .unwrap();
+                release_tx.send(()).unwrap();
+                // The close closed admission under the lock the message
+                // waited for: the message is refused, and only the close
+                // reaches the inbox.
+                let refused = support::response(&second, "c_m1");
+                assert_eq!(support::kind(&refused), "command_rejected");
+                assert_eq!(
+                    support::rejection(&refused),
+                    (
+                        "closing",
+                        "The session is closing and takes no session message."
+                    )
+                );
+                let Delivery::Close(ack) = Deadline::after(DEADLINE)
+                    .recv(&inbox)
+                    .expect("the close is delivered")
+                else {
+                    panic!("the close is delivered as a close");
+                };
+                ack.0(Ok(None));
+                let closed = support::response(&first, "c_close");
+                assert_eq!(support::kind(&closed), "command_accepted");
+                assert!(
+                    inbox.try_recv().is_err(),
+                    "the refused message reached no inbox"
+                );
+                Ok(())
+            })
+            .unwrap();
+        opened.close();
+    }
+    // (iii) A `Close` queued before any client admits refuses a message.
+    {
+        reset();
+        let opened = Opened::open(Vec::new());
+        let socket = opened.socket.clone();
+        let (taken_tx, taken) = mpsc::channel();
+        opened
+            .session
+            .run(
+                vec![Delivery::Close(contract::inbox::Ack(Box::new(move |_| {})))],
+                Arc::new(|| false),
+                |inbox| {
+                    taken_tx.send(()).unwrap();
+                    let first = Client::connect(&socket).unwrap();
+                    first.send(&subscribe_line("c_sub", "full")).unwrap();
+                    let _ack = recv(&first);
+                    first
+                        .send(
+                            r#"{"id":"c_m1","command":"message","args":{"from_session_id":"s_1","text":"race"}}"#,
+                        )
+                        .unwrap();
+                    let refused = support::response(&first, "c_m1");
+                    assert_eq!(support::kind(&refused), "command_rejected");
+                    assert_eq!(
+                        support::rejection(&refused),
+                        (
+                            "closing",
+                            "The session is closing and takes no session message."
+                        )
+                    );
+                    assert!(
+                        matches!(inbox.try_recv(), Ok(Delivery::Close(_))),
+                        "only the queued close is waiting"
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
+        Deadline::after(DEADLINE)
+            .recv(&taken)
+            .expect("the run closure ran");
+        opened.close();
+    }
 }
