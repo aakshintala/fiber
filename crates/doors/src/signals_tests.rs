@@ -57,6 +57,41 @@ fn started_shuts_down_once_and_a_second_term_or_int_kills_the_groups() {
     assert_eq!(decide(Phase::Started, SIGHUP, 1), Action::Nothing);
 }
 
+#[test]
+fn committing_defers_the_first_signal_and_a_second_term_or_int_kills_the_groups() {
+    for (signal, code) in [(SIGTERM, 143), (SIGINT, 130), (SIGHUP, 129)] {
+        assert_eq!(
+            decide(Phase::Committing { deferred: None }, signal, 0),
+            Action::Defer(code)
+        );
+    }
+    assert_eq!(
+        decide(Phase::Committing { deferred: None }, SIGTERM, 1),
+        Action::KillGroups
+    );
+    assert_eq!(
+        decide(
+            Phase::Committing {
+                deferred: Some(143)
+            },
+            SIGINT,
+            2
+        ),
+        Action::KillGroups
+    );
+    // The doc names only SIGTERM and SIGINT for a second signal.
+    assert_eq!(
+        decide(
+            Phase::Committing {
+                deferred: Some(129)
+            },
+            SIGHUP,
+            1
+        ),
+        Action::Nothing
+    );
+}
+
 /// Everything the signals did, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Did {
@@ -92,6 +127,19 @@ fn arm_with(signals: &Signals, record_did: &Sender<Did>, bound_did: &Sender<Did>
 }
 
 fn start(signals: &Signals, did: &Sender<Did>) -> Option<i32> {
+    let on_signal = sender(did);
+    let on_second = sender(did);
+    let started = signals.start(
+        Box::new(move |code| on_signal.lock().unwrap().send(Did::Signal(code)).unwrap()),
+        Box::new(move || on_second.lock().unwrap().send(Did::Second).unwrap()),
+    );
+    if started.is_some() {
+        return started;
+    }
+    signals.commit(|| ()).err()
+}
+
+fn start_only(signals: &Signals, did: &Sender<Did>) -> Option<i32> {
     let on_signal = sender(did);
     let on_second = sender(did);
     signals.start(
@@ -372,17 +420,27 @@ fn a_first_signal_once_started_does_not_run_on_record() {
     );
 }
 
-/// A `close` with `now` shuts down only once started with no signal seen.
+/// A `close` with `now` records while armed, defers while committing, and
+/// shuts down once started, each only with no signal seen yet.
 #[test]
 fn decide_close_shuts_down_only_once_started() {
     assert_eq!(decide_close(Phase::Started, 0), Action::Shutdown(0));
     assert_eq!(decide_close(Phase::Started, 1), Action::Nothing);
-    assert_eq!(decide_close(Phase::Armed, 0), Action::Nothing);
+    assert_eq!(decide_close(Phase::Armed, 0), Action::Record(0));
+    assert_eq!(decide_close(Phase::Armed, 1), Action::Nothing);
+    assert_eq!(
+        decide_close(Phase::Committing { deferred: None }, 0),
+        Action::Defer(0)
+    );
+    assert_eq!(
+        decide_close(Phase::Committing { deferred: Some(0) }, 1),
+        Action::Nothing
+    );
     assert_eq!(decide_close(Phase::Booting, 0), Action::Nothing);
 }
 
 #[test]
-fn close_now_while_booting_or_armed_does_nothing() {
+fn close_now_while_booting_does_nothing_and_while_armed_records_0() {
     let clock = FakeClock::new();
     let (signals, did) = recorded(&clock);
     let (tx, calls) = mpsc::channel();
@@ -402,16 +460,30 @@ fn close_now_while_booting_or_armed_does_nothing() {
     let (signals, did) = recorded(&clock);
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
+    let on_signal = sender(&tx);
+    let on_second = sender(&tx);
+    assert_eq!(
+        signals.start(
+            Box::new(move |code| on_signal.lock().unwrap().send(Did::Signal(code)).unwrap()),
+            Box::new(move || on_second.lock().unwrap().send(Did::Second).unwrap()),
+        ),
+        None,
+        "the session stays armed until the commit"
+    );
     signals.close_now();
-    assert!(calls.try_recv().is_err(), "no shutdown ran while armed");
-    assert!(did.try_recv().is_err(), "nothing exited while armed");
-    assert_eq!(start(&signals, &tx), None);
-    signals.handle(SIGTERM);
     assert_eq!(
         calls.try_recv().unwrap(),
-        Did::Signal(143),
-        "close_now while armed leaves the first signal available"
+        Did::Signal(-1),
+        "a close with now while armed runs on_record"
     );
+    assert!(did.try_recv().is_err(), "nothing exited while armed");
+    assert_eq!(signals.commit(|| ()), Err(0));
+    signals.handle(SIGTERM);
+    assert!(
+        calls.try_recv().is_err(),
+        "a signal after the recorded close does nothing"
+    );
+    assert!(did.try_recv().is_err(), "nothing exited before the bound");
 }
 
 #[test]
@@ -564,7 +636,7 @@ fn a_signal_between_start_and_commit_is_recorded_and_nothing_is_written() {
     let (signals, did) = recorded(&clock);
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
-    assert_eq!(start(&signals, &tx), None);
+    assert_eq!(start_only(&signals, &tx), None);
     let until = clock.now() + SHUTDOWN_BOUND;
     signals.handle(SIGTERM);
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
@@ -585,7 +657,10 @@ fn a_signal_between_start_and_commit_is_recorded_and_nothing_is_written() {
     );
     clock.advance(SHUTDOWN_BOUND);
     assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
-    assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), Did::Exit(143));
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&did).unwrap(),
+        Did::Exit(143)
+    );
 }
 
 #[test]
@@ -594,7 +669,7 @@ fn a_close_now_between_start_and_commit_is_recorded_with_code_0() {
     let (signals, did) = recorded(&clock);
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
-    assert_eq!(start(&signals, &tx), None);
+    assert_eq!(start_only(&signals, &tx), None);
     let until = clock.now() + SHUTDOWN_BOUND;
     signals.close_now();
     assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
@@ -624,7 +699,7 @@ fn a_signal_during_commit_is_handled_once_the_write_returns() {
     let (signals, did) = recorded(&clock);
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
-    assert_eq!(start(&signals, &tx), None);
+    assert_eq!(start_only(&signals, &tx), None);
     let until = clock.now() + SHUTDOWN_BOUND;
     let commit = signals.commit(|| {
         signals.handle(SIGTERM);
@@ -656,7 +731,10 @@ fn a_signal_during_commit_is_handled_once_the_write_returns() {
     );
     clock.advance(SHUTDOWN_BOUND);
     assert_eq!(Deadline::after(DEADLINE).recv(&calls).unwrap(), Did::Bound);
-    assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), Did::Exit(143));
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&did).unwrap(),
+        Did::Exit(143)
+    );
 }
 
 #[test]
@@ -665,7 +743,7 @@ fn a_close_now_during_commit_shuts_down_with_code_0_after_the_write() {
     let (signals, did) = recorded(&clock);
     let (tx, calls) = mpsc::channel();
     arm(&signals, &tx);
-    assert_eq!(start(&signals, &tx), None);
+    assert_eq!(start_only(&signals, &tx), None);
     let until = clock.now() + SHUTDOWN_BOUND;
     let commit = signals.commit(|| {
         signals.close_now();
