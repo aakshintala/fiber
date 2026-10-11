@@ -203,3 +203,76 @@ fn a_queue_with_no_writer_marks_the_server_gone() {
     super::queue(&writer, b"hi".to_vec(), &shared);
     assert!(crate::registry::lock(&shared.inner).gone, "gone turns true");
 }
+
+#[test]
+fn route_delivers_a_response_to_its_slot() {
+    let shared = super::super::wait::Shared::default();
+    let (writer, _incoming) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
+    let writer = std::sync::Arc::new(writer);
+    let weak = std::sync::Arc::downgrade(&writer);
+    shared.insert(7);
+    super::route(
+        r#"{"jsonrpc":"2.0","id":7,"result":{"ok":true}}"#,
+        &shared,
+        &weak,
+    );
+    let cancel = super::super::wait::NoCancel;
+    let view = shared.view(7, &cancel);
+    assert_eq!(
+        view.response,
+        Some(super::super::rpc::Outcome::Result(
+            serde_json::json!({"ok": true})
+        )),
+        "the response lands in its slot"
+    );
+}
+
+#[test]
+fn route_answers_ping_with_an_empty_result() {
+    let shared = super::super::wait::Shared::default();
+    let (writer, incoming) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
+    let writer = std::sync::Arc::new(writer);
+    let weak = std::sync::Arc::downgrade(&writer);
+    super::route(
+        r#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#,
+        &shared,
+        &weak,
+    );
+    let answer: serde_json::Value =
+        serde_json::from_slice(&incoming.try_recv().expect("the ping answer is queued"))
+            .expect("valid JSON");
+    assert_eq!(answer["id"], serde_json::json!(3), "the id echoes");
+    assert_eq!(answer["result"], serde_json::json!({}), "ping answers {{}}");
+}
+
+#[test]
+fn route_answers_an_unknown_method_with_method_not_found() {
+    let shared = super::super::wait::Shared::default();
+    let (writer, incoming) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
+    let writer = std::sync::Arc::new(writer);
+    let weak = std::sync::Arc::downgrade(&writer);
+    super::route(
+        r#"{"jsonrpc":"2.0","id":"abc","method":"elicitation/create"}"#,
+        &shared,
+        &weak,
+    );
+    let answer: serde_json::Value =
+        serde_json::from_slice(&incoming.try_recv().expect("the error answer is queued"))
+            .expect("valid JSON");
+    assert_eq!(answer["id"], serde_json::json!("abc"), "the id echoes");
+    assert_eq!(answer["error"]["code"], serde_json::json!(-32601));
+}
+
+#[test]
+fn route_ignores_a_non_object_line() {
+    let shared = super::super::wait::Shared::default();
+    let (writer, incoming) = std::sync::mpsc::sync_channel::<Vec<u8>>(8);
+    let writer = std::sync::Arc::new(writer);
+    let weak = std::sync::Arc::downgrade(&writer);
+    super::route("not json at all", &shared, &weak);
+    assert!(incoming.try_recv().is_err(), "nothing is queued");
+    assert!(
+        !crate::registry::lock(&shared.inner).gone,
+        "an ignored line never marks the server gone"
+    );
+}

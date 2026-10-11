@@ -24,7 +24,7 @@ impl Setup {
         crate::cache::write(
             &self.cache(),
             &spec.name,
-            &crate::cache::key(&spec.command, &spec.args, &spec.env),
+            &spec.key(),
             &crate::cache::Cached {
                 tools: tools.to_vec(),
                 prompts: Vec::new(),
@@ -224,8 +224,8 @@ fn two_concurrent_first_calls_spawn_once() {
 fn a_cached_server_whose_command_fails_dies_on_the_first_call() {
     let setup = Setup::new();
     let mut spec = setup.spec("bad");
-    spec.command = "/no/such/command".to_owned();
-    spec.args = Vec::new();
+    spec.stdio_mut().command = "/no/such/command".to_owned();
+    spec.stdio_mut().args = Vec::new();
     setup.write_cache(&spec, &Setup::listed("echo"));
     let started = setup.start(vec![spec]);
     assert!(started.failed.is_empty());
@@ -273,8 +273,8 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
     let watchdog = fakes::Watchdog::matching(&marker);
     let quoted = marker.replace('\'', "'\\''");
     let mut spec = setup.spec("slow");
-    spec.command = "/bin/bash".to_owned();
-    spec.args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
+    spec.stdio_mut().command = "/bin/bash".to_owned();
+    spec.stdio_mut().args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
     setup.write_cache(&spec, &Setup::listed("echo"));
     let started = setup.start(vec![spec]);
     let tool = setup.tool(&started, "mcp__slow__echo");
@@ -881,9 +881,9 @@ fn declared_spec(
     gate: &Arc<std::sync::atomic::AtomicBool>,
 ) -> ServerSpec {
     let mut spec = setup.spec(name);
-    spec.command = "/no/such/declared".to_owned();
-    spec.args = vec![format!("--declared-{name}")];
-    spec.run = Some(refusing_run(setup, gate));
+    spec.stdio_mut().command = "/no/such/declared".to_owned();
+    spec.stdio_mut().args = vec![format!("--declared-{name}")];
+    spec.stdio_mut().run = Some(refusing_run(setup, gate));
     spec
 }
 
@@ -979,7 +979,7 @@ fn a_prompt_run_the_guard_refuses_fails_without_a_spawn() {
     crate::cache::write(
         &setup.cache(),
         &spec.name,
-        &crate::cache::key(&spec.command, &spec.args, &spec.env),
+        &spec.key(),
         &crate::cache::Cached {
             tools: Setup::listed("echo"),
             prompts: vec![serde_json::from_value(json!({"name": "hello"})).expect("a prompt")],
@@ -1004,5 +1004,311 @@ fn a_prompt_run_the_guard_refuses_fails_without_a_spawn() {
         error.message
     );
     assert!(!setup.spawned(), "a refused prompt run spawns nothing");
+    setup.stop(started.servers);
+}
+
+/// The JSON-RPC method of a recorded fake HTTP request.
+fn http_method(req: &fakes::Request) -> String {
+    serde_json::from_slice::<serde_json::Value>(&req.body)
+        .ok()
+        .and_then(|body| {
+            body.get("method")
+                .and_then(|method| method.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_default()
+}
+
+/// How many recorded requests carry `method`.
+fn http_count(server: &fakes::ProviderServer, method: &str) -> usize {
+    server
+        .requests()
+        .iter()
+        .filter(|req| http_method(req) == method)
+        .count()
+}
+
+/// A fake remote MCP server: the handshake with one `echo` tool, and
+/// `echo` calls answered by `calls` from the request.
+fn remote_server(
+    calls: impl Fn(&fakes::Request) -> fakes::Response + Send + Sync + 'static,
+) -> fakes::ProviderServer {
+    fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
+        use serde_json::Value;
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result = |result: Value| {
+            json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
+        };
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => fakes::Response::status(
+                200,
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                })),
+            )
+            .header("mcp-session-id", "1868a90c"),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => fakes::Response::status(
+                200,
+                result(json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]})),
+            ),
+            Some("tools/call") => calls(req),
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap()
+}
+
+/// An `echo` answer to the request's own id with `hi`.
+fn echo_call(req: &fakes::Request) -> fakes::Response {
+    use serde_json::Value;
+    let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+    let id = body.get("id").cloned().unwrap_or(Value::Null);
+    fakes::Response::status(
+        200,
+        json!({"jsonrpc": "2.0", "id": id, "result": {"content": [{"type": "text", "text": "hi"}]}}).to_string(),
+    )
+}
+
+#[test]
+fn a_remote_death_restarts_once_then_stays_dead() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let setup = Setup::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let server = remote_server({
+        let calls = Arc::clone(&calls);
+        move |req: &fakes::Request| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                echo_call(req)
+            } else {
+                fakes::Response::drop_connection()
+            }
+        }
+    });
+    let url = format!("{}/mcp", server.url());
+    let started = setup.start(vec![setup.remote_spec("fx", &url)]);
+    assert!(started.failed.is_empty());
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    // The first call's connection drops: the death, with a restart left.
+    let first = setup.run(&tool);
+    assert_eq!(lines(&first.servers), ["failed died restart"]);
+    assert_eq!(
+        first.error.as_ref().expect("failed").message,
+        "The MCP server `fx` stopped answering; Fiber reconnects on the next call."
+    );
+    // The next call restarts with a new `initialize`, and is recorded.
+    let second = setup.run(&tool);
+    assert!(
+        second.error.is_none(),
+        "the restart runs: {:?}",
+        second.error
+    );
+    assert_eq!(lines(&second.servers), ["ready"]);
+    assert_eq!(http_count(&server, "initialize"), 2);
+    // A second death leaves it dead with its tools declared.
+    let third = setup.run(&tool);
+    assert_eq!(lines(&third.servers), ["failed died final"]);
+    assert_eq!(
+        third.error.as_ref().expect("failed").message,
+        "The MCP server `fx` stopped answering again; its tools fail until the next session."
+    );
+    let fourth = setup.run(&tool);
+    assert_eq!(
+        fourth.error.as_ref().expect("failed").message,
+        "The MCP server `fx` stopped answering again; its tools fail until the next session."
+    );
+    assert!(
+        fourth.servers.is_empty(),
+        "a dead slot records nothing more"
+    );
+    assert_eq!(http_count(&server, "tools/call"), 3, "no call is replayed");
+    setup.stop(started.servers);
+}
+
+#[test]
+fn an_expired_remote_session_renews_without_a_record_or_a_restart() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let setup = Setup::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let server = remote_server({
+        let calls = Arc::clone(&calls);
+        move |req: &fakes::Request| match calls.fetch_add(1, Ordering::SeqCst) {
+            0 => fakes::Response::status(404, "ended"),
+            1 => echo_call(req),
+            _ => fakes::Response::drop_connection(),
+        }
+    });
+    let url = format!("{}/mcp", server.url());
+    let started = setup.start(vec![setup.remote_spec("fx", &url)]);
+    assert!(started.failed.is_empty());
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    // The proven session ends: the call fails, and nothing is recorded.
+    let first = setup.run(&tool);
+    assert_eq!(
+        first.error.as_ref().expect("failed").code,
+        ErrorCode::McpServerUnavailable
+    );
+    assert_eq!(
+        first.error.as_ref().expect("failed").message,
+        "The MCP server `fx` ended its session; Fiber starts a new one on the next call."
+    );
+    assert!(first.servers.is_empty(), "an expiry records nothing");
+    // The next call starts a new session without using the restart.
+    let second = setup.run(&tool);
+    assert!(
+        second.error.is_none(),
+        "the renewal runs: {:?}",
+        second.error
+    );
+    assert!(second.servers.is_empty(), "a renewal records no ready");
+    assert_eq!(http_count(&server, "initialize"), 2);
+    // The restart is still unused: the next death restarts.
+    let third = setup.run(&tool);
+    assert_eq!(lines(&third.servers), ["failed died restart"]);
+    setup.stop(started.servers);
+}
+
+#[test]
+fn an_idle_expired_server_renews_on_its_next_call_without_a_record() {
+    let setup = Setup::new();
+    let server = remote_server(|_| fakes::Response::status(404, "ended"));
+    let url = format!("{}/mcp", server.url());
+    let started = setup.start(vec![setup.remote_spec("fx", &url)]);
+    assert!(started.failed.is_empty());
+    // The running server, out from under its slot: a direct call sees the
+    // expiry, but the slot still runs it.
+    let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
+    let live = match &*super::lock(&slot.state) {
+        State::Running { server, .. } => Arc::clone(server),
+        State::NotStarted { .. } | State::Down { .. } | State::Dead { .. } => {
+            panic!("the server runs")
+        }
+    };
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let arguments = serde_json::Map::new();
+        let params = crate::rpc::Named {
+            arguments: &arguments,
+            name: "echo",
+        };
+        let answer = live.call(
+            "tools/call",
+            &params,
+            std::time::Duration::from_secs(60),
+            &fakes::CancelToken::new(),
+        );
+        done.send(answer).expect("collected");
+    });
+    let answer = Deadline::after(WITHIN)
+        .recv(&result)
+        .unwrap_or_else(|_| panic!("the direct call answers within {WITHIN:?}"));
+    assert_eq!(answer, Err(crate::server::CallError::Expired));
+    // The idle check finds the expired server and renews it with no record
+    // and no failed call.
+    match setup.serve(&slot) {
+        Served::Up(_, records) => assert!(records.is_empty(), "no record on renewal"),
+        Served::Failed(failed) => panic!("the renewal serves: {:?}", failed.error),
+    }
+    assert_eq!(http_count(&server, "initialize"), 2);
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_failed_renewal_after_a_restart_leaves_the_slot_dead() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let setup = Setup::new();
+    let inits = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let server = fakes::ProviderServer::start_responding({
+        let inits = Arc::clone(&inits);
+        let calls = Arc::clone(&calls);
+        move |req: &fakes::Request| {
+            use serde_json::Value;
+            if req.method == "DELETE" {
+                return fakes::Response::status(200, "");
+            }
+            let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+            let id = body.get("id").cloned().unwrap_or(Value::Null);
+            let result = |result: Value| {
+                json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
+            };
+            match body.get("method").and_then(Value::as_str) {
+                Some("initialize") => match inits.fetch_add(1, Ordering::SeqCst) {
+                    0 | 1 => fakes::Response::status(
+                        200,
+                        result(json!({
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "remote", "version": "1"},
+                        })),
+                    )
+                    .header("mcp-session-id", "1868a90c"),
+                    _ => fakes::Response::status(500, "down"),
+                },
+                Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                    fakes::Response::status(202, "")
+                }
+                Some("tools/list") => fakes::Response::status(
+                    200,
+                    result(json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]})),
+                ),
+                Some("tools/call") => match calls.fetch_add(1, Ordering::SeqCst) {
+                    0 => fakes::Response::drop_connection(),
+                    _ => fakes::Response::status(404, "ended"),
+                },
+                Some(other) => panic!("unexpected method {other}"),
+            }
+        }
+    })
+    .unwrap();
+    let url = format!("{}/mcp", server.url());
+    let started = setup.start(vec![setup.remote_spec("fx", &url)]);
+    assert!(started.failed.is_empty());
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    // The first death restarts; the renewed session expires with no
+    // record; the re-initialize fails as a death with no restart left.
+    let first = setup.run(&tool);
+    assert_eq!(lines(&first.servers), ["failed died restart"]);
+    // The restart runs and is recorded, then its call sees the expiry:
+    // the expiry itself records nothing.
+    let second = setup.run(&tool);
+    assert_eq!(
+        second.error.as_ref().expect("failed").message,
+        "The MCP server `fx` ended its session; Fiber starts a new one on the next call."
+    );
+    assert_eq!(lines(&second.servers), ["ready"]);
+    // The re-initialize fails: a death with no restart left.
+    let third = setup.run(&tool);
+    assert_eq!(lines(&third.servers), ["failed start_failed final"]);
+    assert!(
+        third
+            .error
+            .as_ref()
+            .expect("failed")
+            .message
+            .contains("Check its `url` under `mcp.servers`"),
+        "the renewal failure names the url: {}",
+        third.error.as_ref().expect("failed").message
+    );
+    let fourth = setup.run(&tool);
+    assert_eq!(
+        fourth.error.as_ref().expect("failed").message,
+        third.error.as_ref().expect("failed").message,
+        "a dead slot repeats the renewal failure"
+    );
+    assert!(
+        fourth.servers.is_empty(),
+        "a dead slot records nothing more"
+    );
+    assert_eq!(http_count(&server, "initialize"), 3);
+    assert_eq!(http_count(&server, "tools/call"), 2, "no call is replayed");
     setup.stop(started.servers);
 }

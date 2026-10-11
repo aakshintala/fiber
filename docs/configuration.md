@@ -210,6 +210,10 @@ lists:
 | `tools.enabled`, `tools.disabled` | lists of tool names |
 | `tools."<tool>".hints` | overrides of that tool's MCP hints |
 
+A server that declares both `command` and `url` is not started, and a
+`notice` with code `config_invalid` says so; a `required` one fails the
+session with `config_invalid`.
+
 A repository may declare a server, subject to approval of its declaration and
 of each file its `command` or `args` names inside the repository
 (`docs/extensions.md`, "Code a repository ships"). `tools."<tool>".hints`

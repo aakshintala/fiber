@@ -241,8 +241,7 @@ A stdio server starts in the session's workspace, in its own process session
 and process group, so a terminal's Ctrl+C never reaches it and a shutdown
 signals everything it started (`docs/invocation.md`, "Shutdown").
 
-Each server pipe takes one parked thread, as `docs/architecture.md` ("The
-threads") already budgets.
+Each server pipe takes one parked thread, and a remote server one, plus one for each request in flight, as `docs/architecture.md` ("The threads") already budgets.
 
 ## When a server dies
 
@@ -252,6 +251,14 @@ brings it back as `mcp_server_ready`. If it dies again, it
 stays dead for the rest of the session. Its tools
 stay declared, so the prompt cache holds, and every call to them fails with code
 `mcp_server_unavailable`.
+
+A remote server dies when a request's connection fails, or a response ends
+without its answer or runs past 4 MiB. A remote server that ends its
+session, answering HTTP 404 to a request that carries the session it gave,
+has not died: the call that saw it fails with `mcp_server_unavailable`, and
+the next call starts a new session without using the restart. A 404 to the
+first request of a new session counts as a death, so a server that answers
+404 to everything does not start new sessions forever.
 
 A server's notice that its tool list changed is ignored until reload. A tool the
 server removed fails with code `mcp_tool_removed`. A tool the server added is
@@ -324,7 +331,9 @@ first model request, showing the server's declaration, and any client can
 answer (`docs/tui.md`, "Approving what a repository ships"). With nobody to
 ask, an unapproved server is skipped with a `notice`, and a `required` one
 fails the run with `mcp_server_unapproved`. `fiber approve`, run in the
-repository, approves it outside a session.
+repository, approves it outside a session. A remote server a repository
+declares is approved the same way; its approval covers its declaration, URL
+included.
 
 An approved server starts with the session as any server does. One approved
 in the session's own offer starts once the offer is answered, before the

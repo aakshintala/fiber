@@ -37,6 +37,23 @@ pub(crate) fn key(command: &str, args: &[String], env: &BTreeMap<String, String>
         .collect()
 }
 
+/// The key of a remote server's `url`: the lowercase hex SHA-256 of the
+/// JSON serialisation of its URL, in a shape the stdio key never takes,
+/// so the two never share a cache file (`docs/mcp.md`, "Starting
+/// servers").
+pub(crate) fn url_key(url: &str) -> String {
+    let declaration = serde_json::json!({
+        "url": url,
+    });
+    let bytes = serde_json::to_vec(&declaration).unwrap_or_default();
+    let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);
+    digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 /// The cache file of `server` under `cache`: `None` when the name has no
 /// safe file. An empty name, one starting with `.`, or one holding `/`,
 /// `\\` or NUL always counts as a miss and nothing is written.

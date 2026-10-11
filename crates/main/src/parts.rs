@@ -318,7 +318,7 @@ pub(crate) fn parts_in(
     prompt.thinking = thinking;
     // The startup notices are written with the MCP notices, after
     // `fiber_started`.
-    let mut mcp = mcp_servers::specs(&config);
+    let mut mcp = mcp_servers::specs(&config)?;
     mcp.notices.splice(0..0, startup_notices);
     Ok(Parts {
         sessions,

@@ -236,3 +236,21 @@ fn unknown_fields_survive_a_write_and_read() {
         "the cache holds the raw entry"
     );
 }
+
+#[test]
+fn url_key_is_stable_and_shares_nothing_with_the_stdio_key() {
+    // Without its own shape a URL and a command of the same text would
+    // share a cache file: the inequality mutants fail here.
+    let url = "http://127.0.0.1:1/mcp";
+    assert_eq!(super::url_key(url), super::url_key(url), "stable");
+    assert_ne!(
+        super::url_key(url),
+        super::url_key("http://127.0.0.1:2/mcp"),
+        "URLs differ"
+    );
+    assert_ne!(
+        super::url_key(url),
+        super::key(url, &[], &std::collections::BTreeMap::new()),
+        "never the stdio key of the same text"
+    );
+}

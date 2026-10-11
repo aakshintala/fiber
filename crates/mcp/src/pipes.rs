@@ -12,7 +12,7 @@ use crate::wait::Shared;
 
 /// A stdout line past this long ends the reader, and the server counts as
 /// gone: a flood cannot grow memory without bound.
-const MAX_LINE: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_LINE: usize = 4 * 1024 * 1024;
 
 /// Writes request lines to stdin. A write that never finishes blocks only
 /// this thread: the waiting call still times out or cancels on the clock.
@@ -51,26 +51,36 @@ pub(crate) fn read_stdout(
     let mut reader = BufReader::new(stdout);
     loop {
         match read_line(&mut reader) {
-            ReadLine::Line(line) => match decode_line(&line) {
-                Incoming::Response(response) => {
-                    shared.deliver(response.id, response.outcome);
-                }
-                Incoming::ServerRequest(request) => {
-                    let answer = match request.method.as_str() {
-                        "ping" => encode_result(&request.id, &serde_json::json!({})),
-                        _ => encode_error(&request.id, -32601, "Method not found"),
-                    };
-                    if let Some(writer) = writer.upgrade() {
-                        queue(&writer, answer.into_bytes(), shared);
-                    }
-                }
-                Incoming::Ignored => {}
-            },
+            ReadLine::Line(line) => route(&line, shared, writer),
             ReadLine::Eof | ReadLine::TooLong => {
                 shared.gone();
                 return;
             }
         }
+    }
+}
+
+/// Routes one received JSON-RPC message: a response to its id's slot, a
+/// server request answered on `writer` (`ping` answered `{}`, any other
+/// server method answered `-32601`). A line that is not a JSON object is
+/// ignored. Both transports feed every received message through here, so
+/// server requests behave the same on either (`docs/mcp.md`, "What Fiber
+/// does with MCP").
+pub(crate) fn route(line: &str, shared: &Shared, writer: &Weak<SyncSender<Vec<u8>>>) {
+    match decode_line(line) {
+        Incoming::Response(response) => {
+            shared.deliver(response.id, response.outcome);
+        }
+        Incoming::ServerRequest(request) => {
+            let answer = match request.method.as_str() {
+                "ping" => encode_result(&request.id, &serde_json::json!({})),
+                _ => encode_error(&request.id, -32601, "Method not found"),
+            };
+            if let Some(writer) = writer.upgrade() {
+                queue(&writer, answer.into_bytes(), shared);
+            }
+        }
+        Incoming::Ignored => {}
     }
 }
 
