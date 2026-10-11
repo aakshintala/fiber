@@ -161,7 +161,7 @@ impl std::fmt::Debug for Program {
 /// The URL as it prints: with its userinfo and query removed, since a
 /// token can ride in either; unparsable as `"<unparsed>"`
 /// (`docs/code-quality.md`, "Errors").
-fn redacted_url(url: &str) -> String {
+pub(crate) fn redacted_url(url: &str) -> String {
     let uri: Result<ureq::http::Uri, _> = url.parse();
     let Ok(uri) = uri else {
         return "<unparsed>".to_owned();

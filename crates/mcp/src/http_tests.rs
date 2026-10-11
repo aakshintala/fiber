@@ -1666,3 +1666,34 @@ fn the_pump_posts_in_order_before_starting_exchanges() {
         .expect("the held start opens");
     assert_eq!(listed_names(&opened.listed), ["echo"]);
 }
+
+#[test]
+fn link_debug_redacts_url_secrets_and_the_session_id() {
+    let link = super::Link::new(
+        "https://deploy:s3cr3t-t0k3n@example.com:8443/mcp?access_token=qu3ry-t0k3n".to_owned(),
+        None,
+        net::LIMITS,
+    );
+    link.set_session("sess-abc-123".to_owned());
+    let printed = format!("{:?}", link);
+    for secret in ["deploy", "s3cr3t-t0k3n", "qu3ry-t0k3n", "sess-abc-123"] {
+        assert!(!printed.contains(secret), "no secret prints: {printed}");
+    }
+    assert!(
+        printed.contains("<redacted>"),
+        "a secret redacts: {printed}"
+    );
+    let state = super::LinkState {
+        session: Some("sess-abc-123".to_owned()),
+        ..Default::default()
+    };
+    let printed = format!("{:?}", state);
+    assert!(
+        !printed.contains("sess-abc-123"),
+        "no session id prints: {printed}"
+    );
+    assert!(
+        printed.contains("<redacted>"),
+        "a secret redacts: {printed}"
+    );
+}

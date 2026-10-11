@@ -27,6 +27,7 @@ use crate::pipes::MAX_LINE;
 use crate::registry::{Stopping, lock};
 use crate::rpc::Outcome;
 use crate::server::{OpenServer, StartError, shutting_down};
+use crate::start::redacted_url;
 use crate::wait::Shared;
 
 /// Starts the remote server at `url` over `proxy` under `limits`, and runs
@@ -98,7 +99,6 @@ pub(crate) fn negotiated_version(result: &Value) -> String {
 /// A remote server's session: its URL, and the state every exchange thread
 /// shares. No lock is held across a connect, a read, a write or a join:
 /// every method takes the lock, copies what it needs, and drops it.
-#[derive(Debug)]
 pub(crate) struct Link {
     url: String,
     proxy: Option<ureq::Proxy>,
@@ -106,7 +106,21 @@ pub(crate) struct Link {
     state: Mutex<LinkState>,
 }
 
-#[derive(Debug, Default)]
+// The URL's userinfo and query can carry a token, and the session id
+// travels as a header value, so both print redacted
+// (`docs/code-quality.md`, "Errors").
+impl std::fmt::Debug for Link {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Link")
+            .field("url", &redacted_url(&self.url))
+            .field("proxy", &self.proxy)
+            .field("limits", &self.limits)
+            .field("state", &lock(&self.state))
+            .finish()
+    }
+}
+
+#[derive(Default)]
 struct LinkState {
     session: Option<String>,
     version: Option<String>,
@@ -114,6 +128,21 @@ struct LinkState {
     sockets: BTreeMap<u64, TcpStream>,
     abandoned: BTreeSet<u64>,
     closing: bool,
+}
+
+// The session id travels as the `mcp-session-id` header value, so only
+// its presence prints (`docs/code-quality.md`, "Errors").
+impl std::fmt::Debug for LinkState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinkState")
+            .field("session", &self.session.as_ref().map(|_| "<redacted>"))
+            .field("version", &self.version)
+            .field("proven", &self.proven)
+            .field("sockets", &self.sockets)
+            .field("abandoned", &self.abandoned)
+            .field("closing", &self.closing)
+            .finish()
+    }
 }
 
 impl Link {
