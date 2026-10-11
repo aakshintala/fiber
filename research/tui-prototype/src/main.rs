@@ -15,6 +15,7 @@ mod overlays;
 mod paged;
 mod panel;
 mod rail;
+mod theme;
 mod views;
 
 use crossterm::{execute, terminal};
