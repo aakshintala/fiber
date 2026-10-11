@@ -36,9 +36,6 @@ const DEADLINE: Duration = Duration::from_secs(5);
 /// How long a hub-state wait lasts, in wall time.
 const WITHIN: Duration = Duration::from_secs(5);
 
-/// A wait that must time out: the hub stays silent.
-const STILL: Duration = Duration::from_millis(200);
-
 /// The smallest step of fake time.
 const TICK: Duration = Duration::from_nanos(1);
 
@@ -357,10 +354,14 @@ fn the_handshake_gives_101_then_one_hub_hello() {
     let clock = FakeClock::new();
     let (port, _hub, _got, _done) = serve_with_port(&temp, Vec::new(), clock);
     let client = helloed(port, None);
-    assert!(
-        Deadline::after(STILL).recv(&client.rx).is_err(),
-        "nothing follows hub_hello"
+    // The pong proves the hub reached its first-message read: a duplicate
+    // hello would arrive before it, on the same channel.
+    client.ping(b"ack");
+    assert_eq!(
+        client.next("the pong after hub_hello"),
+        Item::Pong(b"ack".to_vec())
     );
+    assert!(client.rx.try_recv().is_err(), "nothing follows hub_hello");
 }
 
 #[test]
@@ -662,9 +663,13 @@ fn a_stalled_sink_bounds_the_stop_but_still_shuts_down() {
         clock.await_parked(start + STOP_CLOSE_WAIT, WITHIN),
         "the stop waits out its bound"
     );
-    clock.advance(STOP_CLOSE_WAIT.checked_sub(TICK).unwrap());
+    let mark = clock.advance_marked(STOP_CLOSE_WAIT.checked_sub(TICK).unwrap());
     assert!(
-        Deadline::after(STILL).recv(&done).is_err(),
+        clock.await_parked_since(&mark, Some(start + STOP_CLOSE_WAIT), WITHIN),
+        "the stop reparks at its bound after the advance"
+    );
+    assert!(
+        done.try_recv().is_err(),
         "the hub has not stopped before its bound"
     );
     clock.advance(TICK);
