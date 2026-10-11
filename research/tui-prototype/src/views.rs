@@ -36,6 +36,14 @@ const CASES: &[Case<Look>] = &[
         check: "the live 80x24 screen from attach with applied output, the job's status with its stop target, and the input box typing into the job.",
         build: || Look { kind: Kind::JobPty },
     },
+    Case {
+        name: "running",
+        help: "the running delegates and jobs in start order",
+        check: "two rows per running delegate and one row per running job, in start order, each opening that item's view.",
+        build: || Look {
+            kind: Kind::Running,
+        },
+    },
 ];
 
 /// `--view-case`, for `--help` and `check/views.md`.
@@ -50,6 +58,7 @@ pub(crate) const SURFACE: Surface = Surface {
 enum Kind {
     Delegate,
     JobPty,
+    Running,
 }
 
 struct Look {
@@ -164,6 +173,26 @@ fn delegate_input(w: usize) -> Vec<super::Row> {
     )
 }
 
+/// The running delegates and jobs, in the order they started: two rows per
+/// delegate, one row per job. A row opens that item's view.
+fn running_rows() -> Vec<super::Row> {
+    vec![
+        row(vec![sp("Delegates · 2 running", bold())]),
+        row(vec![sp(
+            "◆ review: the wait_for_path sweep · 4m",
+            Style::new(),
+        )]),
+        row(vec![sp("  opus-5-5 · high · 12 calls · s_d417a0", dim())]),
+        row(vec![sp("◆ docs: rail spec · 9m", Style::new())]),
+        row(vec![sp("  opus-5-5 · high · 3 calls · s_b82c1d", dim())]),
+        super::Row::default(),
+        row(vec![sp("Jobs · 1 running", bold())]),
+        row(vec![sp("◆ cargo test --watch · 2m · s_j42", Style::new())]),
+        super::Row::default(),
+        row(vec![sp("a row opens that item's view", dim())]),
+    ]
+}
+
 fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
     match c.kind {
         Kind::Delegate => {
@@ -179,6 +208,12 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             out.extend(delegate_transcript(cols));
             out.push(super::Row::default());
             out.extend(delegate_input(cols));
+            out
+        }
+        Kind::Running => {
+            let mut out = vec![view_header("Running", "delegates · jobs")];
+            out.push(super::Row::default());
+            out.extend(running_rows());
             out
         }
         Kind::JobPty => {
@@ -381,7 +416,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 2);
+        assert_eq!(CASES.len(), 3);
         assert!(parse("nope").is_none());
     }
 
@@ -464,6 +499,40 @@ mod tests {
             .find(|r| r.spans.iter().any(|s| s.content.contains("flaky_close")))
             .unwrap();
         assert_eq!(ok.spans[0].style.fg, None);
+    }
+
+    #[test]
+    fn running_header_row() {
+        for cols in [160, NARROW] {
+            let c = parse_case("running");
+            let buf = buffer(&c, cols, 48);
+            assert_header(&buf, "running", "Running", "delegates · jobs", cols);
+        }
+    }
+
+    #[test]
+    fn running_lists_delegates_and_jobs_in_start_order() {
+        for cols in [160, NARROW] {
+            let c = parse_case("running");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("2 running"), "no delegate count");
+            assert!(t.contains("1 running"), "no job count");
+            // Two rows per delegate: the row, then its dim detail.
+            let review = t.find("◆ review:").unwrap();
+            let detail = t.find("12 calls").unwrap();
+            assert!(
+                detail > review,
+                "the delegate's detail is not under its row"
+            );
+            // One row per job.
+            assert!(t.contains("◆ cargo test --watch · 2m"), "no job row");
+            // Start order: the first delegate reads before the second.
+            assert!(
+                t.find("◆ review:").unwrap() < t.find("◆ docs:").unwrap(),
+                "delegates are not in start order"
+            );
+            assert!(t.contains("opens that item's view"), "no row hint");
+        }
     }
 
     #[test]
