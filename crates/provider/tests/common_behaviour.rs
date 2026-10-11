@@ -210,7 +210,7 @@ fn unnamed(server: &ProviderServer) -> CallUsage {
 
 /// Every call in order under one [`DEADLINE`], each of which must fail:
 /// one deadline however many calls the protocol needs.
-fn failures(calls: Vec<Box<dyn ModelCall>>) -> Vec<(contract::shapes::Failure, Option<bool>)> {
+fn failures(protocol: &'static str, calls: Vec<Box<dyn ModelCall>>) -> Vec<(contract::shapes::Failure, Option<bool>)> {
     fakes::within("the calls to fail", DEADLINE, move || {
         calls
             .into_iter()
@@ -223,7 +223,7 @@ fn failures(calls: Vec<Box<dyn ModelCall>>) -> Vec<(contract::shapes::Failure, O
                     ..
                 }) = reply
                 else {
-                    panic!("expected a failure");
+                    panic!("{protocol}: expected a failure");
                 };
                 (failure, should_retry)
             })
@@ -477,16 +477,27 @@ fn timeout_conflict_and_server_errors_are_provider_unavailable() {
             .iter()
             .map(|_| (wire.protocol.call)(&endpoint, &harness::request()))
             .collect();
-        let got = failures(calls);
+        let got = failures(wire.protocol.name, calls);
         for (index, status) in [408, 409, 500, 503].into_iter().enumerate() {
             let (failure, should_retry) = &got[index];
-            assert_eq!(failure.code, ErrorCode::ProviderUnavailable, "{status}");
-            assert_eq!(should_retry, &None, "{status}");
-            assert_eq!(failure.retry_after_ms, None, "{status}");
+            assert_eq!(
+                failure.code,
+                ErrorCode::ProviderUnavailable,
+                "{}: {status}",
+                wire.protocol.name
+            );
+            assert_eq!(should_retry, &None, "{}: {status}", wire.protocol.name);
+            assert_eq!(
+                failure.retry_after_ms,
+                None,
+                "{}: {status}",
+                wire.protocol.name
+            );
             assert_eq!(
                 failure.provider.as_ref().unwrap().status.unwrap(),
                 status,
-                "{status}"
+                "{}: {status}",
+                wire.protocol.name
             );
         }
     }
@@ -505,15 +516,35 @@ fn a_503_carries_retry_after_and_a_500_carries_x_should_retry() {
             .iter()
             .map(|_| (wire.protocol.call)(&endpoint, &harness::request()))
             .collect();
-        let got = failures(calls);
+        let got = failures(wire.protocol.name, calls);
         let (failure, should_retry) = &got[0];
-        assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
-        assert_eq!(should_retry, &None);
-        assert_eq!(failure.retry_after_ms, Some(7000));
+        assert_eq!(
+            failure.code,
+            ErrorCode::ProviderUnavailable,
+            "{}",
+            wire.protocol.name
+        );
+        assert_eq!(should_retry, &None, "{}", wire.protocol.name);
+        assert_eq!(
+            failure.retry_after_ms,
+            Some(7000),
+            "{}",
+            wire.protocol.name
+        );
         let (failure, should_retry) = &got[1];
-        assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
-        assert_eq!(should_retry, &Some(true));
-        assert_eq!(failure.retry_after_ms, None);
+        assert_eq!(
+            failure.code,
+            ErrorCode::ProviderUnavailable,
+            "{}",
+            wire.protocol.name
+        );
+        assert_eq!(should_retry, &Some(true), "{}", wire.protocol.name);
+        assert_eq!(
+            failure.retry_after_ms,
+            None,
+            "{}",
+            wire.protocol.name
+        );
     }
 }
 
@@ -524,7 +555,10 @@ fn a_429_with_retry_after_2_records_retry_after_ms_2000() {
             ProviderServer::start([Response::status(429, "{}").header("retry-after", "2")])
                 .unwrap();
         let endpoint = harness::endpoint(wire.protocol.name, &server);
-        let got = failures(vec![(wire.protocol.call)(&endpoint, &harness::request())]);
+        let got = failures(
+            wire.protocol.name,
+            vec![(wire.protocol.call)(&endpoint, &harness::request())],
+        );
         let (failure, _) = &got[0];
         assert_eq!(
             failure.code,
@@ -547,10 +581,18 @@ fn a_429_with_retry_after_2_records_retry_after_ms_2000() {
 fn a_refused_connection_is_connection_failed() {
     for wire in wires() {
         let endpoint = refused_endpoint(wire.protocol.name);
-        let got = failures(vec![(wire.protocol.call)(&endpoint, &harness::request())]);
+        let got = failures(
+            wire.protocol.name,
+            vec![(wire.protocol.call)(&endpoint, &harness::request())],
+        );
         let (failure, should_retry) = &got[0];
-        assert_eq!(failure.code, ErrorCode::ConnectionFailed);
-        assert_eq!(should_retry, &None);
+        assert_eq!(
+            failure.code,
+            ErrorCode::ConnectionFailed,
+            "{}",
+            wire.protocol.name
+        );
+        assert_eq!(should_retry, &None, "{}", wire.protocol.name);
     }
 }
 
