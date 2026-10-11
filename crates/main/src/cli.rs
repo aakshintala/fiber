@@ -489,6 +489,12 @@ pub(crate) struct SessionArgs {
         requires = "parent"
     )]
     pub(crate) delegate_id: Option<String>,
+
+    /// Passed by the hub when the session's environment came from the
+    /// login-shell capture (`docs/invocation.md`, "A session's
+    /// environment").
+    #[arg(long = "login-shell", hide = true)]
+    pub(crate) login_shell: bool,
 }
 
 #[derive(Debug, clap::Args)]
