@@ -5,23 +5,22 @@
 //! `response.failed`.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Read};
-use std::sync::Arc;
+use std::io::BufRead;
 
 use contract::events::{
     ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
 };
 use contract::provider::{
-    CallError, CallUsage, Delta, Finish, HostedCall, Input, InputSize, ModelCall, ModelRequest,
-    Provider, Reply, ReplyAction, ToolDefinition,
+    CallUsage, Delta, Finish, HostedCall, Input, InputSize, ModelCall, ModelRequest, Provider,
+    Reply, ReplyAction, ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ProviderCallId};
 use serde_json::{Map, Value, json};
 
-use crate::http::{self, Cancel};
-use crate::redact::Secrets;
+pub use crate::call::Call;
 use crate::unfinished::named;
+use crate::wire::str_at;
 use crate::{Endpoint, Error, sse, strict};
 
 /// One model reached over `openai-responses`.
@@ -51,38 +50,31 @@ impl Responses {
 
     /// Builds the call for `request`. Two calls built from the same inputs
     /// send the same bytes (`docs/prompt-cache.md`, "Bytes").
+    #[allow(
+        clippy::result_large_err,
+        reason = "the decode carries its partial alongside the error for the call's usage"
+    )]
     pub fn request(&self, request: &ModelRequest) -> Call {
         let endpoint = &self.endpoint;
-        let mut headers = vec![
-            ("content-type".to_owned(), "application/json".to_owned()),
-            ("accept".to_owned(), "text/event-stream".to_owned()),
-            (
-                "user-agent".to_owned(),
-                concat!("fiber/", env!("CARGO_PKG_VERSION")).to_owned(),
-            ),
-        ];
-        if let Some(key) = &endpoint.key {
-            headers.push((
-                "authorization".to_owned(),
-                format!("Bearer {}", key.expose()),
-            ));
-        }
-        headers.extend(endpoint.headers.iter().cloned());
-        if let Some(name) = &self.cache_key_header {
-            headers.push((name.clone(), request.cache_key.clone()));
-        }
+        let headers = crate::call::base_headers(
+            endpoint,
+            &[],
+            endpoint
+                .key
+                .as_ref()
+                .map(|key| ("authorization", format!("Bearer {}", key.expose()))),
+            self.cache_key_header.as_deref(),
+            &request.cache_key,
+        );
         let body = body(endpoint, request);
-        Call {
-            url: format!("{}/responses", endpoint.base_url.trim_end_matches('/')),
+        Call::new(
+            endpoint,
+            request,
+            format!("{}/responses", endpoint.base_url.trim_end_matches('/')),
             headers,
-            input_size: crate::images::input_size(&body, request, endpoint.text_only),
             body,
-            provider: endpoint.provider.clone(),
-            signer: endpoint.signer.clone(),
-            route: http::Route::of(endpoint),
-            cancel: Arc::default(),
-            secrets: endpoint.secrets(),
-        }
+            |stream, _, sink| decode_tracked(stream, sink),
+        )
     }
 }
 
@@ -96,108 +88,26 @@ impl Provider for Responses {
     }
 }
 
-/// One `openai-responses` call, ready to send.
-pub struct Call {
-    url: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-    input_size: InputSize,
-    provider: String,
-    signer: Option<Arc<dyn contract::signing::Signer>>,
-    route: http::Route,
-    cancel: Arc<Cancel>,
-    secrets: Secrets,
-}
-
-impl Call {
-    /// Sends the request and returns the reply's bytes, unread.
-    pub fn open(&self) -> Result<impl Read + use<>, Error> {
-        let mut secrets = self.secrets.clone();
-        http::post_signed(
-            &self.url,
-            &self.headers,
-            &self.body,
-            self.signer.as_deref(),
-            &self.route,
-            &self.cancel,
-            &mut secrets,
-        )
-        .map(|(body, _)| body)
-    }
-}
-
-impl ModelCall for Call {
-    fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let mut secrets = self.secrets.clone();
-        let (decoded, should_retry) = match http::post_signed(
-            &self.url,
-            &self.headers,
-            &self.body,
-            self.signer.as_deref(),
-            &self.route,
-            &self.cancel,
-            &mut secrets,
-        ) {
-            Ok((stream, should_retry)) => {
-                (decode_tracked(BufReader::new(stream), sink), should_retry)
-            }
-            Err(e) => {
-                let should_retry = e.should_retry();
-                (Err((e, None)), should_retry)
-            }
-        };
-        // Whatever a cancelled call returns, the cancel ended it.
-        if self.cancel.is_cancelled() {
-            return Err(CallError::Cancelled {
-                usage: crate::unfinished::carried(&decoded, self.input_size),
-            });
-        }
-        let usage = crate::unfinished::carried(&decoded, self.input_size);
-        match decoded {
-            Ok(mut reply) => {
-                reply.input_size = self.input_size;
-                Ok(reply)
-            }
-            Err((error, _)) => Err(CallError::Failed {
-                failure: error.failure(&self.provider, &secrets),
-                should_retry,
-                usage,
-            }),
-        }
-    }
-
-    fn cancel(&self) {
-        self.cancel.cancel();
-    }
-}
-
 /// Each tool in Responses' shape, in name order: a hosted tool is the
 /// vendor's own type alone, with no name or schema (`docs/tools.md`,
 /// "Hosted by the provider"). This is the tools Fiber builds.
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let sorted = crate::wire::sorted_by_name(tools);
     sorted
         .into_iter()
         .map(|tool| {
             if let Some(kind) = &tool.hosted {
-                return json!({"type": kind})
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default();
+                return crate::wire::object(json!({"type": kind}));
             }
             // debt: deferred tools are sent in full until tool search is built
             // (#368); nothing defers a tool yet.
-            json!({
+            crate::wire::object(json!({
                 "type": "function",
                 "name": tool.name,
                 "description": tool.description,
                 "parameters": tool.input_schema,
                 "strict": strict::fits(&tool.input_schema),
-            })
-            .as_object()
-            .cloned()
-            .unwrap_or_default()
+            }))
         })
         .collect()
 }
@@ -762,11 +672,6 @@ fn tokens(usage: &Value) -> Tokens {
         cache_write: BTreeMap::new(),
         output: count("/output_tokens"),
     }
-}
-
-/// The string at `key`, or `""`.
-fn str_at<'a>(value: &'a Value, key: &str) -> &'a str {
-    value.get(key).and_then(Value::as_str).unwrap_or("")
 }
 
 #[cfg(test)]

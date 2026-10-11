@@ -5,8 +5,8 @@ use contract::ErrorCode;
 use contract::shapes::{Failure, ProviderFailure};
 use serde_json::Value;
 
-use crate::google_generative_ai::str_at;
 use crate::redact::Secrets;
+use crate::wire::str_at;
 
 /// A failed model call. Each message is a phrase that follows the
 /// provider's name, as [`Error::failure`] writes it.

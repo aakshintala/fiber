@@ -12,9 +12,9 @@ use contract::provider::{CallUsage, Delta, Finish, HostedCall, InputSize, Reply,
 use contract::shapes::{ContentPart, Tokens};
 use serde_json::{Value, json};
 
-use crate::google_generative_ai::str_at;
 use crate::google_generative_ai_request::with;
 use crate::unfinished::named;
+use crate::wire::str_at;
 use crate::{Error, sse};
 
 /// Reads a reply stream, passing each fragment to `sink` as it arrives, and
@@ -492,16 +492,10 @@ fn place_grounding(actions: &mut [ReplyAction], grounding: &Value) {
 /// counted; no probe's `usageMetadata` reported that field.
 fn tokens(usage: &Value) -> Result<Tokens, Error> {
     let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
-    let cached = count("cachedContentTokenCount");
-    let output = count("candidatesTokenCount")
+    count("candidatesTokenCount")
         .checked_add(count("thoughtsTokenCount"))
         .ok_or_else(|| Error::StreamIncomplete("its usageMetadata token counts overflow".into()))?;
-    Ok(Tokens {
-        input: count("promptTokenCount").saturating_sub(cached),
-        cache_read: cached,
-        cache_write: BTreeMap::new(),
-        output,
-    })
+    Ok(partial_tokens(usage))
 }
 
 /// `usageMetadata` as a partial's tokens: as [`tokens`], except an
