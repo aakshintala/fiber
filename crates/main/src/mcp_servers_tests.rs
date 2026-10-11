@@ -634,3 +634,237 @@ fn a_dotted_name_reads_its_own_url() {
     };
     assert_eq!(url, "https://example.com/mcp");
 }
+
+#[test]
+fn declares_resources_finds_the_tool_by_name() {
+    assert!(!super::declares_resources(&[pair("builtin", "read")]));
+    assert!(super::declares_resources(&[
+        pair("builtin", "read"),
+        pair("builtin", "mcp_resources"),
+    ]));
+    assert!(super::declares_resources(&[
+        pair("docs", "search"),
+        pair("fiber.test/x", "mcp_resources"),
+    ]));
+}
+
+/// The delegates the `builtin` calls declare tools for: no model
+/// resolves, so `delegate_spawn` is declared but never runs one. A local
+/// copy of `builtin_tests`' helper, which is `pub(super)` there.
+fn delegates() -> crate::delegates::Delegates {
+    let root = fakes::TempDir::new("fiber-mcp-resources-delegate");
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        std::sync::Arc::clone(&clock),
+        std::sync::Arc::new(fakes::Recorder::default()),
+    );
+    crate::delegates::Delegates::new(
+        root.path().join("fiber-stub"),
+        root.path().join("home"),
+        contract::SessionId("s_test".into()),
+        root.path().to_path_buf(),
+        root.path().join("sessions"),
+        jobs,
+        clock,
+        jobs::Resolve {
+            lookup: std::sync::Arc::new(|_| Err(String::new())),
+            catalogue: std::sync::Arc::from(""),
+        },
+    )
+}
+
+/// The skills the `builtin` calls load through: none are listed. A local
+/// copy of `builtin_tests`' helper, which is `pub(super)` there.
+struct NoSkills;
+
+impl contract::skills::Skills for NoSkills {
+    fn file(&self, _name: &str) -> Option<std::path::PathBuf> {
+        None
+    }
+
+    fn body(
+        &self,
+        _name: &str,
+        _file: &std::path::Path,
+    ) -> Result<String, contract::skills::SkillRead> {
+        Err(contract::skills::SkillRead::Invalid)
+    }
+}
+
+fn skills() -> std::sync::Arc<dyn contract::skills::Skills> {
+    std::sync::Arc::new(NoSkills)
+}
+
+/// How long the wiring waits for a session build and a post-offer load,
+/// in real time: neither spawns, so a passing run never waits on it.
+const WIRING_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A rig whose repository declares `db` and nothing else: `db` is
+/// unapproved, so `session_tools` leaves it for the post-offer load.
+fn offer_rig() -> crate::test_support::Rig {
+    let rig = crate::test_support::Rig::new("fiber-mcp-resources-wiring");
+    std::fs::create_dir_all(rig.workspace.join("srv")).unwrap();
+    std::fs::write(rig.workspace.join("srv/run.sh"), "echo\n").unwrap();
+    std::fs::create_dir_all(rig.workspace.join(".fiber")).unwrap();
+    std::fs::write(
+        rig.workspace.join(".fiber/config.json"),
+        serde_json::json!({"mcp": {"servers": {"db": {"command": "./srv/run.sh", "args": ["srv/run.sh"]}}}}).to_string(),
+    )
+    .unwrap();
+    rig
+}
+
+/// The session's tools and servers, built inside a deadline: `db` waits
+/// for the post-offer load, and `extension_tools` ride after the rest.
+fn wired(
+    rig: &crate::test_support::Rig,
+    extension_tools: Vec<(String, std::sync::Arc<dyn contract::tool::Tool>)>,
+) -> (
+    Vec<(String, std::sync::Arc<dyn contract::tool::Tool>)>,
+    super::SessionServers,
+) {
+    let config = rig.config(Vec::<String>::new());
+    let specs = super::specs(&config).expect("the specs read");
+    assert!(specs.specs.is_empty(), "no person server");
+    assert_eq!(specs.repository.len(), 1);
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let artifacts = rig.root.path().join("artifacts");
+    let jobs = jobs::Registry::new(
+        artifacts.clone(),
+        std::sync::Arc::clone(&clock),
+        std::sync::Arc::new(fakes::Recorder::default()),
+    );
+    let locks = std::sync::Arc::new(tools::PathLocks::new());
+    let project = config::ProjectKey::new("test").unwrap();
+    let fiber = rig.root.path().join("fiber-stub");
+    let home = rig.home.clone();
+    let workspace = rig.workspace.clone();
+    let delegates = delegates();
+    let skills = skills();
+    let (tools, _infos, _driver, servers) =
+        fakes::within("the session tools", WIRING_WITHIN, move || {
+            super::session_tools(
+                Ok(fiber),
+                &home,
+                &workspace,
+                &artifacts,
+                &clock,
+                &jobs,
+                &locks,
+                &project,
+                Vec::new(),
+                specs.repository,
+                &[],
+                None,
+                &delegates,
+                skills,
+                extension_tools,
+            )
+            .expect("the session builds")
+        });
+    (tools, servers)
+}
+
+/// Approves `db`'s current content and writes its cache offering
+/// resources under its declaration key, so the load declares lazily and
+/// spawns nothing. Returns the offer key the load reports.
+fn approve_db(
+    rig: &crate::test_support::Rig,
+    clock: &std::sync::Arc<dyn contract::clock::Clock>,
+) -> r#loop::OfferKey {
+    let item = extensions::declared_items(&rig.workspace, clock.as_ref())
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind == contract::events::OfferedKind::McpServer && item.name == "db")
+        .unwrap();
+    let project = config::ProjectKey::new("test").unwrap();
+    let mut index = extensions::Index::load(&rig.home);
+    let hash = extensions::hash(&mut index, &item).unwrap();
+    extensions::Store::new(&rig.home, &project, std::sync::Arc::clone(clock))
+        .approve(&item, &hash)
+        .unwrap();
+    // The declaration key of `./srv/run.sh` with `srv/run.sh` and no env
+    // (the control key of the post-offer tests, recomputed with:
+    // `python3 -c "import hashlib, json; d={'command': './srv/run.sh',
+    // 'args': ['srv/run.sh'], 'env': {}}; b=json.dumps(d, separators=
+    // (',', ':'), sort_keys=True).encode(); print(hashlib.sha256(b).
+    // hexdigest())"`).
+    const KEY: &str = "0ba916b9bc9a4a82a34bfed3afb9cfe35680e96196f23e08af5dc68832b1d0dc";
+    let dir = rig.home.join("cache").join("mcp");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("db.json"),
+        serde_json::json!({"version": 1, "key": KEY, "tools": [{"name": "echo"}], "prompts": [], "resources": true}).to_string(),
+    )
+    .unwrap();
+    r#loop::OfferKey {
+        kind: contract::events::OfferedKind::McpServer,
+        name: "db".to_owned(),
+        hash,
+    }
+}
+
+/// Runs the post-offer load inside a deadline, stops the servers, and
+/// returns the approved tool names in `(registered_by, name)` order.
+fn loaded(session: super::SessionServers, key: r#loop::OfferKey) -> Vec<(String, String)> {
+    let super::SessionServers { later, servers, .. } = session;
+    let declare: doors::Declare = std::sync::Arc::new(move |_name: &str, _info| {});
+    let load = later.into_load(declare, std::collections::BTreeMap::new());
+    let approved = fakes::within("the post-offer load", WIRING_WITHIN, move || {
+        load(&r#loop::OfferOutcome {
+            skipped: vec![],
+            reported: vec![key],
+        })
+        .expect("the load runs")
+    });
+    let names: Vec<(String, String)> = approved
+        .tools
+        .iter()
+        .map(|(registered_by, tool)| (registered_by.clone(), tool.definition().name))
+        .collect();
+    servers.stop();
+    names
+}
+
+#[test]
+fn an_extensions_mcp_resources_survives_the_post_offer_load() {
+    let rig = offer_rig();
+    let (tools, session) = wired(&rig, vec![pair("fiber.test/res", "mcp_resources")]);
+    assert!(
+        tools.iter().any(|(registered_by, tool)| {
+            registered_by == "fiber.test/res" && tool.definition().name == "mcp_resources"
+        }),
+        "the session holds the extension's registration",
+    );
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let key = approve_db(&rig, &clock);
+    let names = loaded(session, key);
+    assert_eq!(
+        names,
+        [("db".to_owned(), "mcp__db__echo".to_owned())],
+        "nothing replaces the extension's registration",
+    );
+}
+
+#[test]
+fn the_post_offer_load_adds_mcp_resources_when_the_session_has_none() {
+    let rig = offer_rig();
+    let (tools, session) = wired(&rig, Vec::new());
+    assert!(
+        tools
+            .iter()
+            .all(|(_, tool)| tool.definition().name != "mcp_resources"),
+        "the session declares no mcp_resources",
+    );
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let key = approve_db(&rig, &clock);
+    let names = loaded(session, key);
+    assert_eq!(
+        names,
+        [
+            ("db".to_owned(), "mcp__db__echo".to_owned()),
+            ("builtin".to_owned(), "mcp_resources".to_owned()),
+        ],
+    );
+}
