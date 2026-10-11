@@ -805,7 +805,7 @@ fn a_failed_clone_counts_nothing_and_serves_nothing() {
     let hub = hub_on(&temp, &clock);
     let failed: std::io::Result<UnixStream> = Err(std::io::Error::other("no fd"));
     let mut conns = lock(&hub.conns);
-    assert!(hub.register_with(|| failed, &mut conns).is_none());
+    assert!(hub.register_with(|| failed.map(Closer::Local), &mut conns).is_none());
     drop(conns);
     assert_eq!(hub.clients(), 0);
     assert_eq!(hub.zero_since(), Some(clock.origin()), "the timer runs on");
