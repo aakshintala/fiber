@@ -309,7 +309,9 @@ impl ProviderServer {
 
     /// Holds every response until [`ProviderServer::release`]. A request is
     /// still recorded first, so [`ProviderServer::await_requests`] sees it
-    /// while the client waits for the body.
+    /// while the client waits for the body. A held response never counts
+    /// toward [`ProviderServer::await_closed`], which counts only stalled
+    /// responses whose client closed.
     ///
     /// The default limit is `BUDGET`, longer than any wait (`WAITS`) a
     /// test makes, so the test's own deadline fails a hold nobody releases

@@ -96,6 +96,8 @@ pub(crate) enum Fault {
     Refused(String),
     /// This call observed the death and carries its record.
     Died(McpServerFailed),
+    /// This call saw the remote session expire; nothing is recorded.
+    Expired,
     /// The slot had already moved on: it was stopped or replaced, and
     /// nothing is recorded.
     Gone,
@@ -186,57 +188,60 @@ impl Slot {
     pub(crate) fn serve(&self) -> Served {
         let mut state = lock(&self.state);
         let mut records = Vec::new();
-        let (listed, restart) = match &*state {
+        // What the next start is: a first start, a restart after a
+        // death, or a renewal after an expiry. Only a restart is
+        // recorded as ready; a renewal keeps the restart it replaces.
+        let (listed, restart, ready) = match &*state {
             State::Running {
                 server,
                 listed,
                 restarted,
                 ..
             } => {
-                if !server.is_gone() {
+                if server.is_expired() {
+                    // The session expired while idle: the next call starts
+                    // a new one, keeping the restart, with no record.
+                    (listed.clone(), *restarted, false)
+                } else if !server.is_gone() {
                     return Served::Up(Arc::clone(server), records);
+                } else {
+                    // It died while idle: this call is the first to see it.
+                    let record = died(&self.spec.name, !*restarted, self.spec.remote());
+                    records.push(ServerRecord::Failed(record.clone()));
+                    if *restarted {
+                        *state = State::Dead {
+                            error: record.error.clone(),
+                        };
+                        return Served::Failed(Box::new(RunFailed {
+                            error: record.error,
+                            records,
+                        }));
+                    }
+                    (listed.clone(), true, true)
                 }
-                // It died while idle: this call is the first to see it.
-                let record = died(&self.spec.name, !*restarted);
-                records.push(ServerRecord::Failed(record.clone()));
-                if *restarted {
-                    *state = State::Dead {
-                        error: record.error.clone(),
-                    };
-                    return Served::Failed(Box::new(RunFailed {
-                        error: record.error,
-                        records,
-                    }));
-                }
-                (listed.clone(), true)
             }
-            State::Down { listed } => (listed.clone(), true),
+            State::Down { listed } => (listed.clone(), true, true),
             State::Dead { error } => {
                 return Served::Failed(Box::new(RunFailed {
                     error: error.clone(),
                     records,
                 }));
             }
-            State::NotStarted { cached } => (cached.clone(), false),
+            State::NotStarted { cached } => (cached.clone(), false, false),
         };
         let timeout = self.spec.startup_timeout;
         let name = self.spec.name.clone();
         // Every spawn runs the spec's guard first: a cached server keeps
         // its spec unspawned until its first call, so a check at
         // preparation alone would run a file created in between unapproved.
-        match crate::start::spawn(&self.spec, &self.workspace, &self.clock, &self.version) {
+        match crate::start::launch(&self.spec, &self.workspace, &self.clock, &self.version) {
             Ok(open) => {
                 // The session keeps the tools it declared, because a tool
                 // set that changes mid-session misses the whole prompt
                 // cache; the cache is updated for the next session.
                 let live = open.listed;
                 if live != listed {
-                    cache::write(
-                        &self.cache,
-                        &name,
-                        &cache::key(&self.spec.command, &self.spec.args, &self.spec.env),
-                        &live,
-                    );
+                    cache::write(&self.cache, &name, &self.spec.key(), &live);
                 }
                 let tools = names(&live.tools);
                 let server = Arc::new(open.server);
@@ -246,15 +251,16 @@ impl Slot {
                     listed: live,
                     restarted: restart,
                 };
-                if restart {
+                if ready {
                     records.push(ServerRecord::Ready(McpServerReady { server: name }));
                 }
                 Served::Up(server, records)
             }
             Err(error) => {
                 // A failed first start is the server's one death; a failed
-                // restart is its second.
-                let mut record = not_started(&name, &error, timeout, false);
+                // restart is its second. A failed renewal is a death of
+                // the server it replaces, keeping the restart it held.
+                let mut record = not_started(&name, &error, timeout, false, self.spec.remote());
                 record.will_restart = !restart;
                 let failure = record.error.clone();
                 records.push(ServerRecord::Failed(record));
@@ -335,6 +341,8 @@ impl Slot {
             Err(CallError::Timeout) => Err(Fault::Timeout),
             Err(CallError::Cancelled) => Err(Fault::Cancelled),
             Err(CallError::JsonRpc { message, .. }) => Err(Fault::Refused(message)),
+            Err(CallError::Http(message)) => Err(Fault::Refused(message)),
+            Err(CallError::Expired) => Err(Fault::Expired),
             Err(CallError::Gone) => match self.died(server) {
                 Some(record) => Err(Fault::Died(record)),
                 None => Err(Fault::Gone),
@@ -360,7 +368,7 @@ impl Slot {
         if !Arc::ptr_eq(server, gone) {
             return None;
         }
-        let record = died(&self.spec.name, !*restarted);
+        let record = died(&self.spec.name, !*restarted, self.spec.remote());
         *state = if *restarted {
             State::Dead {
                 error: record.error.clone(),
@@ -402,9 +410,20 @@ fn names(listed: &[ListedTool]) -> HashSet<String> {
 }
 
 /// The record of a server that exited: Fiber restarts it on the next call
-/// when `will_restart`, and otherwise its tools fail for the session.
-fn died(server: &str, will_restart: bool) -> McpServerFailed {
-    let message = if will_restart {
+/// when `will_restart`, and otherwise its tools fail for the session. A
+/// remote server stopped answering instead of exiting.
+fn died(server: &str, will_restart: bool, remote: bool) -> McpServerFailed {
+    let message = if remote {
+        if will_restart {
+            format!(
+                "The MCP server `{server}` stopped answering; Fiber reconnects on the next call."
+            )
+        } else {
+            format!(
+                "The MCP server `{server}` stopped answering again; its tools fail until the next session."
+            )
+        }
+    } else if will_restart {
         format!("The MCP server `{server}` exited; Fiber restarts it on the next call.")
     } else {
         format!("The MCP server `{server}` exited again; its tools fail until the next session.")
@@ -421,6 +440,13 @@ fn died(server: &str, will_restart: bool) -> McpServerFailed {
 /// failed, or it has since exited.
 pub(crate) fn unavailable(server: &str) -> String {
     format!("The MCP server `{server}` did not start, or it has since exited.")
+}
+
+/// The message of a call that saw the remote session expire: the next
+/// call starts a new session, with no record (`docs/mcp.md`, "When a
+/// server dies").
+pub(crate) fn expired(server: &str) -> String {
+    format!("The MCP server `{server}` ended its session; Fiber starts a new one on the next call.")
 }
 
 /// The `mcp_tool_removed` message: the call never reaches the server, and

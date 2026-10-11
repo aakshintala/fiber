@@ -1078,7 +1078,7 @@ first prompt.
   prompt, and to rename it when the work's topic changes, a handoff included.
 - A name the person set with the `name` command pins it. While pinned, the
   call fails with `name_pinned` and the message "the person named this
-  session". Clearing the person's name unpins it.
+  session". Clearing the person's name unpins it. A rewind carries the name and its pin (`docs/events.md`, "Rewind"); a fork starts unnamed.
 - The tool declares no effect and never reaches a reviewer.
 - It is declared in every session, so the tool set never differs between
   sessions. Its definition counts toward the built-in budget ("Size budget in

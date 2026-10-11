@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use contract::SessionId;
 use contract::clock::Clock;
+use contract::events::VariablesSource;
 
 /// How large a delegate's `events.jsonl` may grow before the runner stops
 /// it as `failed` `output_cap`: the 5 GB every job's output file gets
@@ -288,6 +289,12 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
         "--delegate-id",
         &launched.job_id.0,
     ]);
+    // A delegate carries its parent's environment, so it carries the
+    // parent's source too (`docs/invocation.md`, "A session's
+    // environment").
+    if r#loop::variables_source() == VariablesSource::LoginShell {
+        command.arg("--login-shell");
+    }
     command
 }
 

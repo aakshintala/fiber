@@ -323,6 +323,17 @@ fn the_launch_runs_the_child_session_with_its_ids_model_and_prompt() {
     );
 }
 
+#[test]
+fn a_delegate_of_a_login_shell_session_carries_the_flag() {
+    r#loop::set_variables_source(contract::events::VariablesSource::LoginShell);
+    let launched = launched();
+    let argv: Vec<_> = launcher(std::path::Path::new("/bin/fiber"))(&launched)
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(argv.last().map(String::as_str), Some("--login-shell"));
+}
+
 /// Serves one subscription on the socket `home/run/<id>`: acknowledges it,
 /// then either sends one `fiber_exited` line or closes without one. The
 /// thread owns the listener and ends once it served the one connection.

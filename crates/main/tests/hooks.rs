@@ -1,5 +1,5 @@
-//! Binary-level tests of a Lua extension's `after_tool` and `before_tool`
-//! hooks through `fiber ask` and `fiber session` (`docs/extensions.md`,
+//! Binary-level tests of a Lua extension's `after_tool`, `before_tool` and
+//! `before_message` hooks through `fiber ask` and `fiber session` (`docs/extensions.md`,
 //! "Hooks"; `docs/testing.md`, "Levels"): the built `fiber` runs in its
 //! own process group with its own `FIBER_HOME`, holding an ordinary
 //! provider whose base URL is the fake server, and the extensions under
@@ -928,6 +928,318 @@ fn a_rewrite_survives_a_resume_while_its_approval_is_pending() {
             "fiber_exited",
         ]
     );
+}
+
+/// A `before_message` hook that redacts the secret and adds context.
+fn sanitize() -> String {
+    "fiber.hook(\"before_message\", { timeout = 30000, on_failure = \"blocking\",\n\
+       run = function(call)\n\
+         local text = call.content[1].text:gsub(\"sk%-123\", \"[redacted]\")\n\
+         return { content = { { type = \"text\", text = text } }, context = \"ctx\" }\n\
+       end })\n"
+        .into()
+}
+
+/// The complete event kinds of a `fiber ask` whose model answers with text:
+/// as `mcp.rs`'s `hello_kinds`, with the hook's `extra` after `turn_started`.
+fn ask_text_kinds(extra: &[&'static str]) -> Vec<&'static str> {
+    let mut kinds = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    kinds.extend(extra.iter().copied());
+    kinds.extend(
+        [
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+        .iter()
+        .copied(),
+    );
+    kinds
+}
+
+#[test]
+fn a_before_message_hook_replaces_the_prompt_and_only_the_replacement_is_logged_and_sent() {
+    let setup = Setup::new();
+    setup.lua("sanitize", &sanitize());
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "my key is sk-123"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), ask_text_kinds(&["context_added"]));
+
+    let started = run.first("turn_started");
+    assert_eq!(
+        started["payload"]["input"][0]["content"][0]["text"],
+        "my key is [redacted]"
+    );
+    assert_eq!(
+        started["payload"]["input"][0]["changed_by"],
+        json!(["fiber.test/sanitize"])
+    );
+    let added = run.first("context_added");
+    assert_eq!(added["payload"]["text"], "ctx");
+    assert_eq!(added["payload"]["extension"], "fiber.test/sanitize");
+    assert_eq!(added["payload"]["hook"], "before_message");
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(body.contains("[redacted]"), "{body}");
+    assert!(body.contains("ctx"), "{body}");
+    assert!(!body.contains("sk-123"), "the secret is never sent: {body}");
+
+    assert!(!run.stderr.contains("sk-123"), "stderr: {}", run.stderr);
+    let stdout: String = run.lines.iter().map(|line| line.to_string()).collect();
+    assert!(!stdout.contains("sk-123"), "stdout: {stdout}");
+    let dir = run.session_dir(&setup);
+    assert!(
+        !on_disk(&dir).contains("sk-123"),
+        "no file holds the secret"
+    );
+    assert!(on_disk(&dir).contains("[redacted]"));
+}
+
+#[test]
+fn a_refused_first_prompt_exits_1_message_refused_with_the_reason() {
+    let setup = Setup::new();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"before_message\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return { refuse = \"no keys\" } end })\n",
+    );
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "my key is sk-123"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ]
+    );
+    let exited = run.lines.last().expect("fiber_exited is last");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(
+        exited["payload"]["error"],
+        json!({
+            "code": "message_refused",
+            "message": "Extension fiber.test/guard refused the message: no keys",
+        })
+    );
+    assert!(
+        run.stderr
+            .contains("fiber: Extension fiber.test/guard refused the message: no keys"),
+        "stderr names the refusal: {}",
+        run.stderr
+    );
+    assert!(server.requests().is_empty(), "the model is never called");
+}
+
+#[test]
+fn a_blocking_before_message_failure_exits_1_hook_failed() {
+    let setup = Setup::new();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"before_message\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) error(\"boom\") end })\n",
+    );
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "hello"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ]
+    );
+    let exited = run.lines.last().expect("fiber_exited is last");
+    assert_eq!(exited["payload"]["error"]["code"], "hook_failed");
+    assert!(
+        run.stderr.starts_with(
+            "fiber: The `before_message` hook of extension fiber.test/guard failed, \
+             so the message was not sent: "
+        ) && run.stderr.contains("boom"),
+        "stderr names the failure: {}",
+        run.stderr
+    );
+    assert!(server.requests().is_empty(), "the model is never called");
+}
+
+#[test]
+fn a_non_blocking_before_message_failure_gives_a_notice_and_runs_the_original() {
+    let setup = Setup::new();
+    setup.lua(
+        "soft",
+        "fiber.hook(\"before_message\", { timeout = 30000, on_failure = \"non-blocking\",\n\
+           run = function(call) error(\"soft failure\") end })\n",
+    );
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "original"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut kinds = ask_text_kinds(&[]);
+    kinds.insert(3, "notice");
+    assert_eq!(run.kinds(), kinds);
+    let started = run.first("turn_started");
+    assert_eq!(
+        started["payload"]["input"][0]["content"][0]["text"],
+        "original"
+    );
+    assert!(started["payload"]["input"][0].get("changed_by").is_none());
+}
+
+#[test]
+fn a_check_before_message_hook_that_replaces_has_failed() {
+    let setup = Setup::new();
+    setup.lua(
+        "checker",
+        "fiber.hook(\"before_message\", { phase = \"check\", timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return { content = call.content } end })\n",
+    );
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "hello"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ]
+    );
+    let exited = run.lines.last().expect("fiber_exited is last");
+    assert_eq!(exited["payload"]["error"]["code"], "hook_failed");
+    assert!(server.requests().is_empty(), "the model is never called");
+}
+
+#[test]
+fn a_refused_steer_and_prompt_over_the_socket_are_rejected_message_refused() {
+    use extension_harness::{send as session_send, until as session_until};
+
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    setup.lua(
+        "guard",
+        "fiber.hook(\"before_message\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call)\n\
+             if call.content[1].text == \"second\" then return end\n\
+             return { refuse = \"no keys\" }\n\
+           end })\n",
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    session_send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    session_send(
+        &client,
+        r#"{"id":"c_s1","command":"steer","args":{"content":[{"type":"text","text":"aside"}]}}"#,
+    );
+    let refused = session_until(&client, "the refused steer", |line| {
+        line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_s1"
+    });
+    assert_eq!(
+        refused.last().unwrap()["payload"]["code"],
+        "message_refused"
+    );
+    assert_eq!(
+        refused.last().unwrap()["payload"]["message"],
+        "Extension fiber.test/guard refused the message: no keys"
+    );
+    session_send(
+        &client,
+        r#"{"id":"c_p1","command":"prompt","args":{"content":[{"type":"text","text":"first"}]}}"#,
+    );
+    let refused = session_until(&client, "the refused prompt", |line| {
+        line["kind"] == "command_rejected" && line["payload"]["command_id"] == "c_p1"
+    });
+    assert_eq!(
+        refused.last().unwrap()["payload"]["code"],
+        "message_refused"
+    );
+    assert_eq!(
+        refused.last().unwrap()["payload"]["message"],
+        "Extension fiber.test/guard refused the message: no keys"
+    );
+    session_send(
+        &client,
+        r#"{"id":"c_p2","command":"prompt","args":{"content":[{"type":"text","text":"second"}]}}"#,
+    );
+    let turned = session_until(&client, "the accepted prompt's turn", |line| {
+        line["kind"] == "turn_started"
+    });
+    let input = turned.last().unwrap()["payload"]["input"].clone();
+    assert_eq!(input.as_array().unwrap().len(), 1);
+    assert_eq!(input[0]["content"][0]["text"], "second");
+    session_send(&client, r#"{"id":"c_close","command":"close"}"#);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn a_redacted_socket_prompt_joins_the_history_redacted() {
+    use extension_harness::{send as session_send, until as session_until};
+    use support::session_dir;
+
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    setup.lua("redact", &sanitize());
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    session_send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    session_send(
+        &client,
+        r#"{"id":"c_1","command":"prompt","args":{"content":[{"type":"text","text":"my key is sk-123"}]}}"#,
+    );
+    session_until(&client, "the prompt's acceptance", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
+    });
+    session_send(&client, r#"{"id":"c_close","command":"close"}"#);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+
+    let history = session_dir(&setup, &id).join("../../history.jsonl");
+    let text = fs::read_to_string(&history).unwrap();
+    assert_eq!(text.lines().count(), 1);
+    let line: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(
+        line["content"],
+        json!([{"type": "text", "text": "my key is [redacted]"}])
+    );
+    assert!(!text.contains("sk-123"), "the history holds no secret");
 }
 
 #[test]

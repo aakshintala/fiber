@@ -13,7 +13,7 @@ use contract::shapes::Effect;
 use fakes::Deadline;
 use serde_json::json;
 
-use super::{DEFAULT_STARTUP_TIMEOUT, ServerSpec, start};
+use super::{DEFAULT_STARTUP_TIMEOUT, start};
 use crate::effects::Hints;
 use crate::test_support::{FakeImages, Setup, WITHIN};
 
@@ -194,8 +194,8 @@ fn a_failing_command_leaves_the_other_servers_tools_declared() {
     good.result("echo", r#"{"content":[]}"#);
     let bad = Setup::new();
     let mut failing = bad.spec("bad");
-    failing.command = "/no/such/command".to_owned();
-    failing.args = Vec::new();
+    failing.stdio_mut().command = "/no/such/command".to_owned();
+    failing.stdio_mut().args = Vec::new();
     let started = good.start(vec![good.spec("good"), failing]);
     assert_eq!(names(&started), ["mcp__good__echo"]);
     assert_eq!(started.failed.len(), 1);
@@ -217,8 +217,8 @@ fn a_server_that_misses_its_deadline_is_left_out() {
     let watchdog = fakes::Watchdog::matching(&marker);
     let quoted = marker.replace('\'', "'\\''");
     let mut spec = setup.spec("slow");
-    spec.command = "/bin/bash".to_owned();
-    spec.args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
+    spec.stdio_mut().command = "/bin/bash".to_owned();
+    spec.stdio_mut().args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
     let deadline = setup
         .fake
         .now()
@@ -286,16 +286,17 @@ fn servers_stop_at_once() {
             // SIGTERM: the fixture directory rides along as its argument,
             // so each setup's guard covers it.
             let script = "trap '' TERM\n\"$1\" \"$2\"\nwhile :; do sleep 0.05; done\n".to_owned();
-            ServerSpec {
-                command: "/bin/bash".to_owned(),
-                args: vec![
+            {
+                let mut spec = setup.spec(&format!("s{index}"));
+                spec.stdio_mut().command = "/bin/bash".to_owned();
+                spec.stdio_mut().args = vec![
                     "-c".to_owned(),
                     script,
                     "lingering".to_owned(),
                     fakes::mcp_fixture().display().to_string(),
                     setup.dir.path().display().to_string(),
-                ],
-                ..setup.spec(&format!("s{index}"))
+                ];
+                spec
             }
         })
         .collect();
@@ -377,7 +378,7 @@ fn a_changed_arg_misses_the_cache_and_spawns() {
     setup.stop(first.servers);
     std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
     let mut changed = setup.spec("fx");
-    changed.args.push("changed".to_owned());
+    changed.stdio_mut().args.push("changed".to_owned());
     let second = setup.start(vec![changed]);
     assert_eq!(names(&second), ["mcp__fx__echo"]);
     assert!(
@@ -415,8 +416,8 @@ fn a_required_server_with_a_cache_starts_and_declares_live() {
 fn a_required_server_that_fails_to_start_yields_required_failed() {
     let setup = Setup::new();
     let mut failing = setup.spec("bad");
-    failing.command = "/no/such/command".to_owned();
-    failing.args = Vec::new();
+    failing.stdio_mut().command = "/no/such/command".to_owned();
+    failing.stdio_mut().args = Vec::new();
     failing.required = true;
     let started = setup.start(vec![failing]);
     assert!(started.tools.is_empty());
@@ -455,8 +456,8 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
     let watchdog = fakes::Watchdog::matching(&marker);
     let quoted = marker.replace('\'', "'\\''");
     let mut spec = setup.spec("slow");
-    spec.command = "/bin/bash".to_owned();
-    spec.args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
+    spec.stdio_mut().command = "/bin/bash".to_owned();
+    spec.stdio_mut().args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
     spec.required = true;
     let deadline = setup
         .fake
@@ -508,8 +509,8 @@ fn a_required_server_that_misses_its_deadline_yields_required_failed() {
 fn a_session_start_failure_carries_what_to_do() {
     let setup = Setup::new();
     let mut failing = setup.spec("bad");
-    failing.command = "/no/such/command".to_owned();
-    failing.args = Vec::new();
+    failing.stdio_mut().command = "/no/such/command".to_owned();
+    failing.stdio_mut().args = Vec::new();
     let started = setup.start(vec![failing]);
     assert_eq!(started.failed.len(), 1);
     let failure = &started.failed[0];
@@ -536,12 +537,12 @@ fn a_session_start_failure_carries_what_to_do() {
 fn the_first_failing_required_server_in_spec_order_wins() {
     let setup = Setup::new();
     let mut first = setup.spec("first");
-    first.command = "/no/such/command".to_owned();
-    first.args = Vec::new();
+    first.stdio_mut().command = "/no/such/command".to_owned();
+    first.stdio_mut().args = Vec::new();
     first.required = true;
     let mut second = setup.spec("second");
-    second.command = "/no/such/command".to_owned();
-    second.args = Vec::new();
+    second.stdio_mut().command = "/no/such/command".to_owned();
+    second.stdio_mut().args = Vec::new();
     second.required = true;
     let started = setup.start(vec![first, second]);
     assert!(started.failed.is_empty());
@@ -554,9 +555,10 @@ fn the_first_failing_required_server_in_spec_order_wins() {
 fn a_spec_debug_prints_no_env_value() {
     let setup = Setup::new();
     let planted = "ghp_planted4c1e9b";
-    let spec = ServerSpec {
-        env: BTreeMap::from([("GITHUB_TOKEN".to_owned(), planted.to_owned())]),
-        ..setup.spec("github")
+    let spec = {
+        let mut spec = setup.spec("github");
+        spec.stdio_mut().env = BTreeMap::from([("GITHUB_TOKEN".to_owned(), planted.to_owned())]);
+        spec
     };
     let printed = format!("{spec:?}");
     assert!(printed.contains("github"), "{printed}");
@@ -881,17 +883,21 @@ fn a_run_starts_lists_and_caches_under_the_declaration() {
     let setup = Setup::with_tools(&json!([{"name": "echo"}]));
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let mut spec = setup.spec("fx");
-    (spec.command, spec.args) = declared_only("fx");
-    spec.run = Some(run_program(&setup, &gate));
+    {
+        let __declared = declared_only("fx");
+        spec.stdio_mut().command = __declared.0;
+        spec.stdio_mut().args = __declared.1;
+    }
+    spec.stdio_mut().run = Some(run_program(&setup, &gate));
     let started = setup.start(vec![spec.clone()]);
     assert!(started.failed.is_empty());
     assert_eq!(names(&started), ["mcp__fx__echo"]);
     assert!(setup.spawned(), "the run spawns at session start");
     assert!(setup.cache().join("fx.json").is_file());
-    let declared = crate::cache::key(&spec.command, &spec.args, &spec.env);
+    let declared = spec.key();
     assert!(crate::cache::read(&setup.cache(), "fx", &declared).is_some());
-    let (command, args) = spec.program();
-    let running = crate::cache::key(command, args, &spec.env);
+    let (command, args) = spec.stdio().program();
+    let running = crate::cache::key(command, args, &spec.stdio().env);
     assert_ne!(
         declared, running,
         "the pinned paths never enter the cache key"
@@ -905,8 +911,12 @@ fn a_second_start_with_a_different_run_hits_the_declaration_cache() {
     let setup = Setup::with_tools(&json!([{"name": "echo"}]));
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let mut spec = setup.spec("fx");
-    (spec.command, spec.args) = declared_only("fx");
-    spec.run = Some(run_program(&setup, &gate));
+    {
+        let __declared = declared_only("fx");
+        spec.stdio_mut().command = __declared.0;
+        spec.stdio_mut().args = __declared.1;
+    }
+    spec.stdio_mut().run = Some(run_program(&setup, &gate));
     let first = setup.start(vec![spec.clone()]);
     assert!(first.failed.is_empty());
     setup.stop(first.servers);
@@ -914,7 +924,7 @@ fn a_second_start_with_a_different_run_hits_the_declaration_cache() {
     // The same declaration with a different program: the cached list still
     // declares, lazily, and nothing spawns.
     let mut again = spec.clone();
-    again.run = Some(super::Program {
+    again.stdio_mut().run = Some(super::Program {
         command: "/no/such/other".to_owned(),
         args: Vec::new(),
         guard: std::sync::Arc::new(|| Ok(())),
@@ -930,17 +940,46 @@ fn a_second_start_with_a_different_run_hits_the_declaration_cache() {
 fn program_is_the_run_when_set_and_the_declaration_otherwise() {
     let setup = Setup::new();
     let plain = setup.spec("fx");
-    let (command, args) = plain.program();
-    assert_eq!(command, plain.command.as_str());
-    assert_eq!(args, plain.args.as_slice());
+    let (command, args) = plain.stdio().program();
+    assert_eq!(command, plain.stdio().command.as_str());
+    assert_eq!(args, plain.stdio().args.as_slice());
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let mut run = setup.spec("fx");
-    (run.command, run.args) = declared_only("fx");
-    run.run = Some(run_program(&setup, &gate));
-    let (command, args) = run.program();
-    let program = run.run.as_ref().expect("a run");
+    {
+        let __declared = declared_only("fx");
+        run.stdio_mut().command = __declared.0;
+        run.stdio_mut().args = __declared.1;
+    }
+    run.stdio_mut().run = Some(run_program(&setup, &gate));
+    let (command, args) = run.stdio().program();
+    let program = run.stdio().run.as_ref().expect("a run");
     assert_eq!(command, program.command.as_str());
     assert_eq!(args, program.args.as_slice());
+}
+
+#[test]
+fn a_stdio_spec_key_is_its_declaration_never_its_run() {
+    // Without the dispatch the key would follow the pinned program:
+    // the `run` mutant changes the key here.
+    let setup = Setup::new();
+    let spec = setup.spec("fx");
+    assert_eq!(
+        spec.key(),
+        crate::cache::key(&spec.stdio().command, &spec.stdio().args, &spec.stdio().env),
+        "the key is the declaration's"
+    );
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mut run = setup.spec("fx");
+    let declared = declared_only("fx");
+    run.stdio_mut().command = declared.0;
+    run.stdio_mut().args = declared.1;
+    run.stdio_mut().run = Some(run_program(&setup, &gate));
+    let stdio = run.stdio();
+    assert_eq!(
+        run.key(),
+        crate::cache::key(&stdio.command, &stdio.args, &stdio.env),
+        "the key stays the declaration's with a run set"
+    );
 }
 
 #[test]
@@ -948,8 +987,12 @@ fn a_session_start_whose_guard_refuses_reports_start_failed() {
     let setup = Setup::with_tools(&json!([{"name": "echo"}]));
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut spec = setup.spec("fx");
-    (spec.command, spec.args) = declared_only("fx");
-    spec.run = Some(run_program(&setup, &gate));
+    {
+        let __declared = declared_only("fx");
+        spec.stdio_mut().command = __declared.0;
+        spec.stdio_mut().args = __declared.1;
+    }
+    spec.stdio_mut().run = Some(run_program(&setup, &gate));
     let images: std::sync::Arc<dyn contract::images::Images> = FakeImages::ok();
     let opened = super::open(
         spec,
@@ -1013,11 +1056,13 @@ fn a_spec_debug_prints_no_argument_run_or_env_value() {
         args: vec![planted_run.to_owned()],
         guard: std::sync::Arc::clone(&run_program(&setup, &gate).guard),
     };
-    let spec = ServerSpec {
-        args: vec![planted_arg.to_owned()],
-        env: BTreeMap::from([("GITHUB_TOKEN".to_owned(), planted_env.to_owned())]),
-        run: Some(run),
-        ..setup.spec("github")
+    let spec = {
+        let mut spec = setup.spec("github");
+        spec.stdio_mut().args = vec![planted_arg.to_owned()];
+        spec.stdio_mut().env =
+            BTreeMap::from([("GITHUB_TOKEN".to_owned(), planted_env.to_owned())]);
+        spec.stdio_mut().run = Some(run);
+        spec
     };
     let printed = format!("{spec:?}");
     assert!(printed.contains("github"), "{printed}");
@@ -1025,4 +1070,250 @@ fn a_spec_debug_prints_no_argument_run_or_env_value() {
     assert!(!printed.contains(planted_arg), "{printed}");
     assert!(!printed.contains(planted_run), "{printed}");
     assert!(!printed.contains("/run/program"), "{printed}");
+}
+
+/// The tool lists a remote start caches: `tools/list` answers one `echo`.
+fn remote_lists() -> Vec<crate::server_json::ListedTool> {
+    vec![
+        serde_json::from_value(json!({
+            "name": "echo",
+            "description": "Echoes.",
+            "inputSchema": {"type": "object"},
+        }))
+        .expect("listed"),
+    ]
+}
+
+/// A fake remote MCP server answering the handshake, one `echo` tool, and
+/// `echo` calls with `hi`, through `start_responding` keyed on the
+/// request's method.
+fn remote_server() -> fakes::ProviderServer {
+    fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
+        use serde_json::Value;
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result = |result: Value| {
+            json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
+        };
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => fakes::Response::status(
+                200,
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                })),
+            )
+            .header("mcp-session-id", "1868a90c"),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => fakes::Response::status(
+                200,
+                result(json!({"tools": [{"name": "echo", "description": "Echoes.", "inputSchema": {"type": "object"}}]})),
+            ),
+            Some("tools/call") => fakes::Response::status(
+                200,
+                result(json!({"content": [{"type": "text", "text": "hi"}]})),
+            ),
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap()
+}
+
+#[test]
+fn a_remote_server_starts_lists_and_caches_under_its_url() {
+    let setup = Setup::new();
+    let server = remote_server();
+    let url = format!("{}/mcp", server.url());
+    let spec = setup.remote_spec("fx", &url);
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty());
+    assert_eq!(names(&started), ["mcp__fx__echo"]);
+    assert!(
+        server
+            .requests()
+            .iter()
+            .any(|req| req.method == "POST" && req.path == "/mcp"),
+        "the start POSTs the session"
+    );
+    assert_eq!(
+        crate::cache::read(&setup.cache(), "fx", &crate::cache::url_key(&url))
+            .expect("the cache holds the remote lists")
+            .tools,
+        remote_lists(),
+    );
+}
+
+#[test]
+fn a_remote_server_with_a_matching_cache_starts_lazily() {
+    let setup = Setup::new();
+    let server = remote_server();
+    let url = format!("{}/mcp", server.url());
+    crate::cache::write(
+        &setup.cache(),
+        "fx",
+        &crate::cache::url_key(&url),
+        &crate::cache::Cached {
+            tools: remote_lists(),
+            prompts: Vec::new(),
+        },
+    );
+    let started = setup.start(vec![setup.remote_spec("fx", &url)]);
+    assert!(started.failed.is_empty());
+    assert_eq!(names(&started), ["mcp__fx__echo"]);
+    assert!(
+        server.requests().is_empty(),
+        "a cached server sends nothing until its first call: {:?}",
+        server.requests()
+    );
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let out = setup.run(&tool);
+    assert!(
+        out.error.is_none(),
+        "the first call starts and runs: {:?}",
+        out.error
+    );
+    assert!(
+        server.requests().iter().any(|req| {
+            serde_json::from_slice::<serde_json::Value>(&req.body)
+                .ok()
+                .and_then(|body| body.get("method").cloned())
+                == Some(json!("initialize"))
+        }),
+        "the first call starts a new session: {:?}",
+        server.requests()
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_remote_start_failure_points_at_its_url() {
+    // Nothing listens on port 1: the start fails, naming the `url`.
+    let setup = Setup::new();
+    let started = setup.start(vec![setup.remote_spec("fx", "http://127.0.0.1:1/mcp")]);
+    assert_eq!(started.failed.len(), 1);
+    let message = &started.failed[0].error.message;
+    assert!(
+        message.ends_with("Check its `url` under `mcp.servers` in your configuration."),
+        "{message}"
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn every_remote_tool_declares_network_whatever_its_hints() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
+        use serde_json::Value;
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result =
+            |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => fakes::Response::status(
+                200,
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                })),
+            )
+            .header("mcp-session-id", "1868a90c"),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => fakes::Response::status(
+                200,
+                result(json!({"tools": [
+                    {"name": "closed", "annotations": {"openWorldHint": false}},
+                    {"name": "open"},
+                ]})),
+            ),
+            Some("tools/call") => fakes::Response::status(202, ""),
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap();
+    let url = format!("{}/mcp", server.url());
+    let mut spec = setup.remote_spec("fx", &url);
+    // The person's override drops `network` from a local tool; never from
+    // a remote one.
+    spec.hints.insert(
+        "open".to_owned(),
+        Hints {
+            open_world: Some(false),
+            ..Hints::default()
+        },
+    );
+    let started = setup.start(vec![spec]);
+    assert!(started.failed.is_empty());
+    assert_eq!(names(&started), ["mcp__fx__closed", "mcp__fx__open"]);
+    for (_, tool) in &started.tools {
+        let effects = tool.effects(&Default::default()).expect("classifiable");
+        assert_eq!(
+            effects
+                .declared
+                .effects
+                .iter()
+                .filter(|effect| **effect == Effect::Network)
+                .count(),
+            1,
+            "{} declares network exactly once",
+            tool.definition().name
+        );
+    }
+    setup.stop(started.servers);
+}
+
+#[test]
+fn remote_limits_never_run_shorter_than_the_specs_deadlines() {
+    // Without the max the kernel idle bound would fire before Fiber's own
+    // deadline on a long silent call: each `max` arm is pinned here.
+    let setup = Setup::new();
+    let mut small = setup.remote_spec("fx", "http://127.0.0.1:9/mcp");
+    small.call_timeout = Duration::from_secs(11);
+    small.startup_timeout = Duration::from_secs(7);
+    assert_eq!(
+        super::limits(&small).idle(),
+        net::LIMITS.idle(),
+        "short deadlines keep the production idle bound"
+    );
+    assert_eq!(super::limits(&small).connect(), net::LIMITS.connect());
+    let mut large = setup.remote_spec("fx", "http://127.0.0.1:9/mcp");
+    large.call_timeout = Duration::from_secs(601);
+    large.startup_timeout = Duration::from_secs(7);
+    assert_eq!(
+        super::limits(&large).idle(),
+        Duration::from_secs(601),
+        "the idle bound covers the longest deadline"
+    );
+    let mut startup = setup.remote_spec("fx", "http://127.0.0.1:9/mcp");
+    startup.call_timeout = Duration::from_secs(7);
+    startup.startup_timeout = Duration::from_secs(602);
+    assert_eq!(
+        super::limits(&startup).idle(),
+        Duration::from_secs(602),
+        "the startup deadline counts too"
+    );
+}
+
+#[test]
+fn a_remote_spec_debug_hides_userinfo_query_and_unparsed_urls() {
+    let setup = Setup::new();
+    let spec = setup.remote_spec("fx", "https://token@host:8443/mcp?key=secret");
+    let printed = format!("{spec:?}");
+    assert!(printed.contains("host"), "{printed}");
+    assert!(printed.contains("8443"), "{printed}");
+    assert!(!printed.contains("token"), "{printed}");
+    assert!(!printed.contains("secret"), "{printed}");
+    let broken = setup.remote_spec("fx", "not a url");
+    assert!(format!("{broken:?}").contains("<unparsed>"), "{broken:?}");
 }

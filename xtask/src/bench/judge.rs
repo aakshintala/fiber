@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use super::attach::per_mib;
-use super::results::{RUNS, Results, field, metric, run_median, runs};
+use super::results::{Results, field, metric, run_median, runs};
 
 /// The threads every idle headless session runs with no client.
 const SESSION_THREADS: u64 = 5;
@@ -236,7 +236,12 @@ fn exact(rule: Rule, head: Option<&Results>) -> (Vec<String>, String) {
         Rule::IdleSwitches(ids) => per_thread(List::Switches, ids, head),
         Rule::Threads(id) => per_thread(List::Threads, &[id], head),
         Rule::Fsyncs(id) => per_entry(id, FSYNC_RUNS, head, fsyncs),
-        Rule::LogBytes(id) => per_entry(id, RUNS, head, log_bytes),
+        Rule::LogBytes(id) => {
+            // `per_entry` fails on the missing metric first, so the count
+            // is only read when results exist.
+            let count = head.map(|results| results.runs_of(id)).unwrap_or(0);
+            per_entry(id, count, head, log_bytes)
+        }
     }
 }
 
@@ -402,8 +407,8 @@ pub(super) struct Line {
     pub(super) result: &'static str,
 }
 
-/// The head's results, the base's when they parsed, and the commit the base
-/// binary is from.
+/// The head's results, the stored results when they parsed, and the commit
+/// the stored results are from.
 pub(super) type Measured<'a> = (Option<&'a Results>, Option<&'a Results>, &'a str);
 
 /// Starts each failure that is a measurement over its budget, as opposed to

@@ -211,6 +211,11 @@ pub(crate) fn pinned_spec(
     {
         return Err(drifted);
     }
+    if let Some(url) = candidate.fields.url.as_ref()
+        && entry.and_then(|entry| entry.get("url")) != Some(url)
+    {
+        return Err(drifted);
+    }
     for (key, value) in &candidate.fields.env {
         if entry
             .and_then(|entry| entry.get("env"))
@@ -220,43 +225,49 @@ pub(crate) fn pinned_spec(
             return Err(drifted);
         }
     }
-    let command = if candidate.spec.command.contains('/') {
-        approved.arg(&candidate.spec.command)
-    } else {
-        candidate.spec.command.clone()
+    let stdio = match &candidate.spec.transport {
+        // A remote server pins nothing: its declaration runs as declared.
+        mcp::Transport::Http { .. } => return Ok(candidate.spec.clone()),
+        mcp::Transport::Stdio(stdio) => stdio,
     };
-    let args: Vec<String> = candidate
-        .spec
-        .args
-        .iter()
-        .map(|arg| approved.arg(arg))
-        .collect();
+    let command = if stdio.command.contains('/') {
+        approved.arg(&stdio.command)
+    } else {
+        stdio.command.clone()
+    };
+    let args: Vec<String> = stdio.args.iter().map(|arg| approved.arg(arg)).collect();
     // What the guard re-checks at every spawn: the command when it names a
     // path, and the merged arguments. A string the declaration named is
     // frozen and never given to it; a bare-word command is looked up on
     // the `PATH`.
     let mut given = Vec::new();
-    if candidate.spec.command.contains('/') {
-        given.push(candidate.spec.command.clone());
+    if stdio.command.contains('/') {
+        given.push(stdio.command.clone());
     }
-    given.extend(candidate.spec.args.iter().cloned());
+    given.extend(stdio.args.iter().cloned());
     let guard = approved.guard(&given);
     let guard_name = name.clone();
     let mut spec = candidate.spec.clone();
-    spec.run = Some(mcp::Program {
-        command,
-        args,
-        guard: Arc::new(move || {
-            guard.check().map_err(|error| {
-                let why = if let extensions::Error::Pin { why, .. } = &error {
-                    why.clone()
-                } else {
-                    error.to_string()
-                };
-                format!("The MCP server `{guard_name}` was not started: {why}")
-            })
-        }),
-    });
+    match &mut spec.transport {
+        mcp::Transport::Stdio(pinned) => {
+            pinned.run = Some(mcp::Program {
+                command,
+                args,
+                guard: Arc::new(move || {
+                    guard.check().map_err(|error| {
+                        let why = if let extensions::Error::Pin { why, .. } = &error {
+                            why.clone()
+                        } else {
+                            error.to_string()
+                        };
+                        format!("The MCP server `{guard_name}` was not started: {why}")
+                    })
+                }),
+            });
+        }
+        // A remote spec returned above, so its clone is never here.
+        mcp::Transport::Http { .. } => {}
+    }
     Ok(spec)
 }
 

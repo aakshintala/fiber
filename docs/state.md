@@ -236,7 +236,10 @@ What is recorded:
   with `process` `session`, `code` `extension_log`, the extension's name and
   the message as the extension wrote it.
 - **The hub's operations:** `hub_started` and `hub_stopped`;
-  `client_connected`, `client_disconnected` and `client_unauthenticated`;
+  `environment_built`, `info` when the login-shell capture succeeded and
+  `warn` with the reason it failed (`docs/invocation.md`, "A session's
+  environment");
+  `client_connected`, `client_disconnected` and `client_unauthenticated`;;
   `device_paired` and `device_revoked`, naming the device and the client that
   acted; `session_started` and `session_resumed`, naming the session and the
   device that asked.

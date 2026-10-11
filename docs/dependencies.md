@@ -274,8 +274,8 @@ it connects through the fallback.
 ### Proxies
 
 Every HTTP request Fiber makes goes through a proxy when the environment names
-one, as curl does: model calls, `host.http`, an extension's prepare step and
-`web_fetch`. Fiber reads the variables ureq reads, in this order, and uses the
+one, as curl does: model calls, `host.http`, an extension's prepare step,
+`web_fetch` and a remote MCP server. Fiber reads the variables ureq reads, in this order, and uses the
 first one set: `ALL_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY`, each in upper or
 lower case. `NO_PROXY` (or `no_proxy`) lists the hosts that bypass it, as exact
 names, `*.` or `.` suffixes, or `*` for every host. There is no configuration

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Stands in for gh in the stored-results test. Artifact listings come from
+# $FAKE_GH_DIR/<sha>.json, named by the commit in the listing's query; a
+# commit with no file lists no artifacts. A download writes a head.json
+# naming its artifact, beside a bench-comment.md as the backstop's upload
+# holds. FAKE_GH_FAIL=api fails a listing, =download fails a download; each
+# call is appended to $FAKE_GH_LOG.
+case "${1:-}" in
+  api)
+    echo "api $2" >> "$FAKE_GH_LOG"
+    if [ "${FAKE_GH_FAIL:-}" = api ]; then
+      echo "stub gh: HTTP 403 listing $2" >&2
+      exit 1
+    fi
+    sha="${2#*name=benchmarks-}"
+    sha="${sha%%&*}"
+    if [ -f "$FAKE_GH_DIR/$sha.json" ]; then
+      cat "$FAKE_GH_DIR/$sha.json"
+    else
+      echo '{"total_count":0,"artifacts":[]}'
+    fi
+    ;;
+  run)
+    if [ "${2:-}" != download ]; then
+      echo "stub gh: unexpected $*" >&2
+      exit 1
+    fi
+    echo "download $3 $7" >> "$FAKE_GH_LOG"
+    if [ "${FAKE_GH_FAIL:-}" = download ]; then
+      echo "stub gh: HTTP 404 downloading $7" >&2
+      exit 1
+    fi
+    mkdir -p "$9"
+    echo "{\"from\":\"$7\"}" > "$9/head.json"
+    echo "comment" > "$9/bench-comment.md"
+    ;;
+  *)
+    echo "stub gh: unexpected $*" >&2
+    exit 1
+    ;;
+esac

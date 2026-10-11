@@ -461,6 +461,10 @@ fn start_runs_the_recorded_path() {
     let (_, workspace) = home_and_workspace(&root);
     let starter = SpawnStarter {
         exe: stub_binary(&root, "recorded start"),
+        environments: hub::Environments::ready(hub::Environment {
+            vars: Vec::new(),
+            source: contract::events::VariablesSource::Inherited,
+        }),
     };
     let started = hub::Starter::start(
         &starter,
@@ -522,9 +526,138 @@ fn resume_runs_the_recorded_path() {
     let (_, workspace) = home_and_workspace(&root);
     let starter = SpawnStarter {
         exe: stub_binary(&root, "recorded resume"),
+        environments: hub::Environments::ready(hub::Environment {
+            vars: Vec::new(),
+            source: contract::events::VariablesSource::Inherited,
+        }),
     };
     let started = hub::Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace).unwrap();
     assert_eq!(exit_of(started).message, "recorded resume");
+}
+
+/// A stand-in for the session binary: it reports its arguments and the
+/// environment it ran with, then prints a `fiber_exited` line so the
+/// starter's drain ends.
+fn recording_binary(root: &fakes::TempDir) -> std::path::PathBuf {
+    let dir = root.path().to_path_buf();
+    let line = exited_line("io_failed", "recorded").replace('\'', "'\\''");
+    let body = format!(
+        "printf '%s\\n' \"$@\" > '{dir}/args'\nprintf '%s\\n' \"${{MARK-unset}} ${{FIBER_HOME-unset}} ${{CARGO_MANIFEST_DIR-unset}}\" > '{dir}/env'\nprintf '%s\\n' '{line}'\n",
+        dir = dir.display(),
+    );
+    fakes::script(&dir, "fiber-stub", &body)
+}
+
+/// The starter over a published environment holding `MARK`.
+fn starter_with(
+    exe: std::path::PathBuf,
+    source: contract::events::VariablesSource,
+) -> SpawnStarter {
+    SpawnStarter {
+        exe,
+        environments: hub::Environments::ready(hub::Environment {
+            vars: vec![
+                ("MARK".into(), "start".into()),
+                ("FIBER_HOME".into(), "/h".into()),
+                ("PATH".into(), "/usr/bin:/bin".into()),
+            ],
+            source,
+        }),
+    }
+}
+
+/// The stand-in's reported arguments and environment.
+fn reported(root: &fakes::TempDir) -> (Vec<String>, String) {
+    let args = std::fs::read_to_string(root.path().join("args")).unwrap_or_default();
+    let env = std::fs::read_to_string(root.path().join("env")).unwrap_or_default();
+    (
+        args.lines().map(str::to_owned).collect(),
+        env.trim_end().to_owned(),
+    )
+}
+
+#[test]
+fn start_runs_with_the_published_environment_and_the_flag() {
+    let root = fakes::TempDir::new("hstartenv");
+    let (_, workspace) = home_and_workspace(&root);
+    let starter = starter_with(
+        recording_binary(&root),
+        contract::events::VariablesSource::LoginShell,
+    );
+    let started = hub::Starter::start(
+        &starter,
+        &SessionId("s1".to_owned()),
+        &workspace,
+        None,
+        &[],
+        false,
+    )
+    .unwrap();
+    assert_eq!(exit_of(started).message, "recorded");
+    let (args, env) = reported(&root);
+    assert_eq!(args.last().map(String::as_str), Some("--login-shell"));
+    assert_eq!(env, "start /h unset");
+}
+
+#[test]
+fn resume_runs_with_the_published_environment_and_the_flag() {
+    let root = fakes::TempDir::new("hresumeenv");
+    let (_, workspace) = home_and_workspace(&root);
+    let starter = starter_with(
+        recording_binary(&root),
+        contract::events::VariablesSource::LoginShell,
+    );
+    let started = hub::Starter::resume(&starter, &SessionId("s1".to_owned()), &workspace).unwrap();
+    assert_eq!(exit_of(started).message, "recorded");
+    let (args, env) = reported(&root);
+    assert_eq!(args.last().map(String::as_str), Some("--login-shell"));
+    assert!(args.contains(&"--resume".to_owned()));
+    assert_eq!(env, "start /h unset");
+}
+
+#[test]
+fn rewind_runs_with_the_published_environment_and_the_flag() {
+    let root = fakes::TempDir::new("hrewindenv");
+    let (_, workspace) = home_and_workspace(&root);
+    let starter = starter_with(
+        recording_binary(&root),
+        contract::events::VariablesSource::LoginShell,
+    );
+    let started = hub::Starter::rewind(
+        &starter,
+        &SessionId("s1".to_owned()),
+        &workspace,
+        &SessionId("s0".to_owned()),
+    )
+    .unwrap();
+    assert_eq!(exit_of(started).message, "recorded");
+    let (args, env) = reported(&root);
+    assert_eq!(args.last().map(String::as_str), Some("--login-shell"));
+    assert!(args.contains(&"--rewound-from".to_owned()));
+    assert_eq!(env, "start /h unset");
+}
+
+#[test]
+fn an_inherited_environment_runs_without_the_flag() {
+    let root = fakes::TempDir::new("hstartinh");
+    let (_, workspace) = home_and_workspace(&root);
+    let starter = starter_with(
+        recording_binary(&root),
+        contract::events::VariablesSource::Inherited,
+    );
+    let started = hub::Starter::start(
+        &starter,
+        &SessionId("s1".to_owned()),
+        &workspace,
+        None,
+        &[],
+        false,
+    )
+    .unwrap();
+    assert_eq!(exit_of(started).message, "recorded");
+    let (args, env) = reported(&root);
+    assert!(!args.contains(&"--login-shell".to_owned()));
+    assert_eq!(env, "start /h unset");
 }
 
 #[test]

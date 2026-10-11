@@ -675,7 +675,7 @@ Durable. The envelope's `action_id` is the tool call.
 |---|---|---|---|
 | `request_id` | string | no | the request it answers; absent when the decision raised none |
 | `decision` | string | yes | `allow` or `deny`; a closed set |
-| `decided_by` | string | yes | `credential_deny`, `person`, `standing_rule`, `session_grant`, `reviewer`, `no_reviewer`, a reviewed call denied when no reviewer could be set up, such as with no reviewer model (`no_model`; `docs/permissions.md`, "How it runs"), and no person could answer, `budget`, a call that needed review once the spend reached `budget.usd`, denied without another reviewer request (`docs/loop.md`, "Spending budget"), or `cancel`, the turn cancelled (`docs/architecture.md`, "Cancellation"), the session closing on `close` (`docs/invocation.md`) or a resumed session with nobody to answer, while the request was pending, with `reason` saying which; a closed set |
+| `decided_by` | string | yes | `credential_deny`, `person`, `standing_rule`, `session_grant`, `reviewer`, `no_reviewer`, a reviewed call denied when no reviewer could be set up, such as with no reviewer model (`no_model`; `docs/permissions.md`, "How it runs"), and no person could answer, `budget`, a call that needed review once the spend reached `budget.usd`, denied without another reviewer request (`docs/loop.md`, "Spending budget"), `hook`, a call whose request was pending when the session exited, refused by a `before_tool` hook on resume, stopped by that hook's failure, or stopped because the arguments it rewrote no longer fit the tool, before permission was decided again; `reason` names the extension, or `cancel`, the turn cancelled (`docs/architecture.md`, "Cancellation"), the session closing on `close` (`docs/invocation.md`) or a resumed session with nobody to answer, while the request was pending, with `reason` saying which; a closed set |
 | `reason` | string | no | why, in words, such as the reviewer's reason |
 | `feedback` | string | no | what the person typed with a denial, which the model receives |
 | `grant` | object | no | on a person's `allow` that added a session grant: `tool` and `prefix` (strings), the later calls it allows (`docs/permissions.md`, "What a rule matches") |
@@ -1419,6 +1419,7 @@ earlier point. A person starts one from the terminal, a driver with the
   (`docs/invocation.md`). The client lists them from the log before it sends
   the command, so no interaction is raised. Stopping is the normal job stop. An adopted job's later `job_line` and
   `job_completed` go to the new session's log.
+- **It keeps the name.** The new session's first lines after `session_started` include the parent's latest `session_named`, unchanged, when there is one. A fork does not.
 - **It never starts a turn.** The new session waits for a prompt, whichever
   point it continues from, including one just after the person's input or
   after a step.
