@@ -1,7 +1,8 @@
-//! The conversation's scroll bar: a thumb on a track in the column's
-//! last column, showing where the rows on screen sit among every row.
-//! The thumb's rows are a pure function of the top row, the total rows
-//! and the drawn rows, so the geometry is tested with a boundary table.
+//! The conversation's scroll bar: a thumb in the column's last column,
+//! showing where the rows on screen sit among every row. The cells off
+//! the thumb stay blank: there is no track. The thumb's rows are a pure
+//! function of the top row, the total rows and the drawn rows, so the
+//! geometry is tested with a boundary table.
 
 use std::ops::Range;
 
@@ -12,9 +13,7 @@ use crate::app::App;
 use crate::markdown::{Role, style};
 
 /// The thumb's glyph.
-pub(crate) const THUMB: &str = "█";
-/// The track's glyph.
-pub(crate) const TRACK: &str = "│";
+pub(crate) const THUMB: &str = "┃";
 
 /// Splits the conversation's area into the rows' area and the scroll bar's
 /// column: the last column, once the area is at least 2 columns wide. Below
@@ -55,7 +54,8 @@ pub(crate) fn thumb(top: usize, total: usize, track: u16) -> Option<Range<u16>> 
 }
 
 /// Draws the bar in `bar`, the column `split` gave: nothing when `bar` is
-/// empty or the conversation fits.
+/// empty or the conversation fits, else the thumb's cells alone, so the
+/// cells off the thumb stay as they were.
 pub(crate) fn draw(app: &App, bar: Rect, buf: &mut Buffer) {
     if bar.is_empty() {
         return;
@@ -65,11 +65,12 @@ pub(crate) fn draw(app: &App, bar: Rect, buf: &mut Buffer) {
     let Some(rows) = thumb(top, total, bar.height) else {
         return;
     };
-    let ink = style(Role::Muted);
+    let ink = style(Role::Scroll);
     for y in bar.top()..bar.bottom() {
         let at = y - bar.y;
-        let glyph = if rows.contains(&at) { THUMB } else { TRACK };
-        buf.set_string(bar.x, y, glyph, ink);
+        if rows.contains(&at) {
+            buf.set_string(bar.x, y, THUMB, ink);
+        }
     }
 }
 
