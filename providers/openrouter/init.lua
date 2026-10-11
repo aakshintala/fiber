@@ -76,6 +76,9 @@ fiber.provider("openrouter", {
             base_url = "https://openrouter.ai/api/v1",
             compat = { cache_key_field = "session_id" },
           }
+          if type(m.name) == "string" and m.name ~= "" then
+            entry.name = m.name
+          end
           if contains(m.supported_parameters, "reasoning") then
             entry.compat.reasoning_object = true
           end
