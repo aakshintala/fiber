@@ -21,7 +21,7 @@ use std::thread;
 
 use fakes::Watchdog;
 use serde_json::json;
-use support::Deadline;
+use support::{Deadline, Setup};
 
 /// The damaged extension's full name and directory.
 const BROKEN: &str = "github.com/aakshintala/fiber/providers/opencode";
@@ -31,14 +31,8 @@ const FIX: &str =
 /// The skip line `install` and `update` print once on stderr.
 const SKIP: &str = "fiber: `opencode` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension remove opencode`, then install it again.";
 
-/// A temporary root holding Fiber home and the extension sources.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
-    fn new() -> Self {
+    fn new_with_sources() -> Self {
         let deadline = Deadline::start();
         let setup = Self {
             deadline,
@@ -49,10 +43,6 @@ impl Setup {
         setup.source("broken", BROKEN);
         setup.source("fresh", "example.com/acme/fresh");
         setup
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
     }
 
     fn broken_dir(&self) -> PathBuf {
@@ -144,7 +134,7 @@ fn skips(run: &Run) -> usize {
 
 #[track_caller]
 fn damaged_flow(invalid: bool) {
-    let setup = Setup::new();
+    let setup = Setup::new_with_sources();
     let installed = setup.extension(&["install", &setup.src("healthy")]);
     assert_eq!(installed.code, Some(0), "{}", installed.stderr);
     let installed = setup.extension(&["install", &setup.src("broken")]);
