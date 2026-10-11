@@ -25,6 +25,7 @@ use contract::tool::Tool;
 use log::Log;
 use serde_json::{Map, Value};
 pub(crate) use util::{ended, mint, variables};
+pub use util::{set_variables_source, variables_source};
 
 mod answer;
 mod asking;
