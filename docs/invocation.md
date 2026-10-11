@@ -791,15 +791,14 @@ raises the request again.
 A signal that arrives before `fiber_started` is written exits with the code
 and writes no durable event; an ephemeral `clients` line already sent to a
 client that attached stays sent. Once `fiber_started` is written,
-`fiber_exited` always is, unless the process dies or passes the bound.
+`fiber_exited` always is, unless the process dies or reaches its kill point.
 
 **The bound is 5 seconds** from the signal to exit, per process. The
 command stage is at most 2.8 s (800 ms grace plus 2 s drain), the levels of
 a tree run concurrently, and the rest is margin. It sits under the
 supervisors Fiber runs under: Docker sends SIGKILL 10 s after SIGTERM,
 Kubernetes 30 s, systemd 90 s (each one's documented default, not measured).
-Past the bound, every group still
-alive gets SIGKILL and the process exits at once with the same code, writing
+At 4.9 s, every group still alive gets SIGKILL, one diagnostic line with code `timeout` goes to the process's own diagnostic log (`docs/state.md`, "What each part holds"), with at most 100 ms allowed for it, and the process exits with the same code, writing
 nothing more: the loop may be stuck holding the log, so no other thread
 writes to it. The log ends as a process that died leaves it, with no
 `fiber_exited`, and a resume reads it as it reads any such log: a call left
