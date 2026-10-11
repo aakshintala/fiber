@@ -6,7 +6,9 @@
 //! `prompt_history`, `feed`, `dismiss`, `recent`, `sessions`, `delete` and
 //! `read_file`, and relays session commands to `run/<session_id>` (`docs/invocation.md`,
 //! "What the hub speaks"). It sends `attention` to every connection
-//! (`docs/invocation.md`, "Attention"). A hub a client started exits once no
+//! (`docs/invocation.md`, "Attention"). With `port` set, an installed hub
+//! also serves websockets on `127.0.0.1:<port>` (`docs/invocation.md`,
+//! "The hub"). A hub a client started exits once no
 //! client has been connected for `hub.idle_exit_ms`
 //! (`docs/configuration.md`); an installed hub never exits for being idle.
 
@@ -14,6 +16,7 @@ mod attention;
 mod closed;
 mod connection;
 mod delete;
+mod devices;
 mod diag;
 mod error;
 #[cfg(test)]
@@ -22,6 +25,7 @@ mod feed;
 mod first;
 mod idle;
 mod listen;
+mod port;
 mod prompt_history;
 mod read_file;
 mod recent;
@@ -55,12 +59,27 @@ pub use crate::error::StartError;
 pub use crate::recent::{Left, RecentRow, append};
 
 /// What the hub reads from the configuration when it starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     /// `hub.idle_exit_ms`.
     pub idle_exit: Duration,
     /// `diagnostics.level`, read once: a changed value reaches the next hub.
     pub level: log::diag::Level,
+    /// The `127.0.0.1` port an installed hub also listens on, from Fiber
+    /// home's global `config.json` only; unset, it listens on its local
+    /// socket only (`docs/configuration.md`, "Keys").
+    pub port: Option<PortSettings>,
+}
+
+/// What an installed hub serves on `127.0.0.1:<number>`
+/// (`docs/invocation.md`, "The hub").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortSettings {
+    /// The port of `127.0.0.1` the hub listens on (`hub.port`).
+    pub number: u16,
+    /// The web page origins whose websockets the hub accepts
+    /// (`hub.allowed_origins`).
+    pub allowed_origins: Vec<String>,
 }
 
 /// How the hub was started (`docs/invocation.md`, "The hub").
@@ -178,6 +197,35 @@ pub fn serve(
         Mode::Installed => Duration::MAX,
     };
     let held = Held::new(lock, bound);
+    // Only an installed hub listens on the port, which it reads from
+    // Fiber home's global `config.json` only (`Settings::port`): a hub a
+    // client started ignores it.
+    let held = match mode {
+        Mode::Installed => match &settings.port {
+            Some(port) => match listen::bind_port(port.number) {
+                Ok(tcp) => held.with_port(crate::port::Listener {
+                    tcp,
+                    origins: Arc::from(port.allowed_origins.clone()),
+                }),
+                Err(source) => {
+                    let error = StartError::Port {
+                        port: port.number,
+                        source,
+                    };
+                    diag.line(
+                        Severity::Error,
+                        None,
+                        &start::code_name(&error.code()),
+                        &error.to_string(),
+                    );
+                    held.stop();
+                    return Err(error);
+                }
+            },
+            None => held,
+        },
+        Mode::OnDemand => held,
+    };
     let diag = diag.with_level(settings.level);
     let hub = Arc::new(Hub::new(home, fiber_version, starter, clock, diag));
     // The feed starts a rewound session even when no client relayed the

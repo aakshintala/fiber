@@ -135,7 +135,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | clap_complete | the shell completion scripts `fiber completion` prints (`docs/invocation.md`, "Commands and flags") | 796 | 1,020 | 1,136 | 18 | 967 |
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
-| ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server | ~0 | ~0 | ~0 | 8 | 341 |
+| ring | SHA-256, for PKCE, extension binary checksums, the content hash a repository's approvals pin, and an MCP tool's cut-short name; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server; the hub's websocket handshake (SHA-1) and device-token hashes | ~0 | ~0 | ~0 | 8 | 341 |
 | base64 | PKCE, attachments sent to providers, images a client pastes, the terminal's copy through OSC 52 (`docs/tui.md`, "Selection and copy"), and the files the hub's `read_file` answers with | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo; `host.exec`'s process groups; signalling MCP servers; killing a `model` or `credential` switch's credential command; signalling a Fiber delegate's process group; the terminal's clipboard read: its process group, its pipe's poll and waiting for its exit; and the test fakes' process and process-group probes; and the process-group guard and the stoppable read's poll in `support` | ~0 | ~0 | ~0 | 4 | 330 |
 | libc | macOS only: the peak physical footprint for a `peak_memory` line (`docs/state.md`, "What each part holds") | n/a | n/a | ~0 | 1 | n/a |
@@ -334,6 +334,13 @@ rusqlite carries SQLite's C source.
 | File locking | `std::fs::File::lock`, stable since Rust 1.89 |
 | Timestamps | the log's `ts` is milliseconds since the epoch, from `std::time` |
 | Syntax highlighting in the terminal | see below |
+| The hub's websocket server | RFC 6455's server side for text messages; tungstenite's blocking socket has one owner, and the hub writes to a connection from several threads |
+
+The hub's websocket server peaks at 2,704 KiB of macOS footprint with no
+client and 4,144 KiB with 10 authenticated websocket clients: the hub's
+own `peak_memory` at `diagnostics.level` `debug` on SIGTERM, measured on
+macOS arm64 on October 11, 2026. Each client holds its reader, serve and
+pump threads with small buffers, so further clients scale the same way.
 
 Tool arguments are checked against a subset of JSON Schema: `type`,
 `properties`, `required`, `additionalProperties`, `enum`, `items`, `minimum`,

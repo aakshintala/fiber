@@ -91,6 +91,7 @@ fn serve_in(
                 configure().map(|idle_exit| crate::Settings {
                     idle_exit,
                     level: log::diag::Level::Info,
+                    port: None,
                 })
             },
             "0.0.0",
@@ -102,6 +103,96 @@ fn serve_in(
     Deadline::after(WITHIN)
         .recv(&done_rx)
         .expect("a hub that cannot start returns before its deadline")
+}
+
+/// Runs [`serve`] with `settings` in `home` on a thread, so a start
+/// that never returns fails the test under [`WITHIN`] rather than hanging
+/// it.
+#[track_caller]
+fn serve_in_with(home: &Path, mode: Mode, settings: crate::Settings) -> Result<i32, StartError> {
+    let home = home.to_path_buf();
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let starter = Arc::new(FakeStarter::hang(&home));
+        let result = serve(
+            &home,
+            mode,
+            move || Ok(settings),
+            "0.0.0",
+            starter,
+            fakes::clock::FakeClock::new(),
+        );
+        done_tx.send(result).unwrap_or(());
+    });
+    Deadline::after(WITHIN)
+        .recv(&done_rx)
+        .expect("a hub that cannot start returns before its deadline")
+}
+
+/// [`crate::PortSettings`] for `port`, accepting no web page origin.
+fn port_settings(port: u16) -> crate::PortSettings {
+    crate::PortSettings {
+        number: port,
+        allowed_origins: Vec::new(),
+    }
+}
+
+#[test]
+fn an_installed_hub_with_a_taken_port_is_io_failed_and_logged() {
+    let temp = Temp::new();
+    let held = listen::bind_port(0).unwrap();
+    let port = held.local_addr().unwrap().port();
+    let Err(error) = serve_in_with(
+        &temp.dir,
+        Mode::Installed,
+        crate::Settings {
+            idle_exit: Duration::from_secs(1),
+            level: log::diag::Level::Info,
+            port: Some(port_settings(port)),
+        },
+    ) else {
+        panic!("an installed hub with a taken port cannot start");
+    };
+    assert_eq!(error.code(), ErrorCode::IoFailed);
+    assert!(
+        matches!(&error, StartError::Port { port: taken, .. } if *taken == port),
+        "{error:?}"
+    );
+    assert!(
+        error.to_string().contains(&format!("127.0.0.1:{port}")),
+        "{error}"
+    );
+    let lines = log_lines(&temp.dir);
+    let last = lines.last().expect("the error line");
+    assert_eq!(last["level"], "error");
+    assert_eq!(last["code"], "io_failed");
+    assert!(
+        last["message"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("127.0.0.1:{port}")),
+        "{last}"
+    );
+    assert!(!temp.dir.join("run").join("hub").exists());
+    drop(held);
+}
+
+#[test]
+fn an_on_demand_hub_never_binds_the_port() {
+    let temp = Temp::new();
+    let held = listen::bind_port(0).unwrap();
+    let port = held.local_addr().unwrap().port();
+    let result = serve_in_with(
+        &temp.dir,
+        Mode::OnDemand,
+        crate::Settings {
+            idle_exit: Duration::ZERO,
+            level: log::diag::Level::Info,
+            port: Some(port_settings(port)),
+        },
+    );
+    assert_eq!(result.unwrap(), 0);
+    drop(held);
 }
 
 /// A home whose `run/hub` is one byte past the platform's socket limit.
