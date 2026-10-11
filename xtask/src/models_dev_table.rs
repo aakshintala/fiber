@@ -29,6 +29,10 @@ pub(crate) struct Package {
     pub(crate) drop_deprecated: bool,
     /// Ids models.dev lists that the vendor rejects.
     pub(crate) skip: &'static [&'static str],
+    /// Ids kept from models.dev: empty keeps every model, non-empty
+    /// keeps just these ids and drops the rest silently. An id matching
+    /// no generated model is an error, like a stale table entry.
+    pub(crate) only: &'static [&'static str],
     /// A model's protocol, replacing the rule's, as `(id, protocol)`.
     pub(crate) protocol_overrides: &'static [(&'static str, &'static str)],
     /// A JSON object merged into every model.
@@ -74,6 +78,7 @@ const ANTHROPIC: Package = Package {
     base_url: "https://api.anthropic.com/v1",
     drop_deprecated: false,
     skip: &[],
+    only: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
     by_protocol: &[(
@@ -134,6 +139,7 @@ const GEMINI: Package = Package {
     base_url: "https://generativelanguage.googleapis.com/v1beta",
     drop_deprecated: false,
     skip: &[],
+    only: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
     by_protocol: &[],
@@ -186,6 +192,7 @@ const OPENAI: Package = Package {
     base_url: "https://api.openai.com/v1",
     drop_deprecated: false,
     skip: &["gpt-5.6"],
+    only: &[],
     protocol_overrides: &[],
     every_model: r#"{"compat":{"store":false}}"#,
     by_protocol: &[],
@@ -243,6 +250,7 @@ const MUSE: Package = Package {
     base_url: "https://api.meta.ai/v1",
     drop_deprecated: false,
     skip: &[],
+    only: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
     by_protocol: &[(
@@ -277,6 +285,7 @@ const OPENCODE_GO: Package = Package {
     base_url: "https://opencode.ai/zen/go/v1",
     drop_deprecated: true,
     skip: &[],
+    only: &[],
     protocol_overrides: &[("minimax-m2.7", "openai-completions")],
     every_model: r#"{"subscription":true}"#,
     by_protocol: &[
@@ -304,6 +313,7 @@ const OPENCODE_ZEN: Package = Package {
     base_url: "https://opencode.ai/zen/v1",
     drop_deprecated: true,
     skip: &[],
+    only: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
     by_protocol: &[

@@ -398,11 +398,22 @@ pub(crate) fn generate(catalog: &Value, packages: &[Package]) -> Result<Generate
         for id in ids {
             let model = models.get(id).unwrap_or(&Value::Null);
             let protocol = protocol_of(package, model, id);
+            if !package.only.is_empty() && !package.only.contains(&id.as_str()) {
+                continue;
+            }
             if let Some(line) = leave_out_line(package, protocol, id, model) {
                 left_out.push(line);
                 continue;
             }
             generated.push((id.clone(), generate_model(package, protocol, id, model)?));
+        }
+        for id in package.only.iter().copied() {
+            if !generated.iter().any(|model| model.0 == id) {
+                return Err(format!(
+                    "{}: only entry for `{id}` matches no generated model",
+                    stem(package)
+                ));
+            }
         }
         for id in package
             .protocol_overrides
