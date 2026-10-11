@@ -182,6 +182,10 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("credential {}", args.label)
         }
+        Delivery::Name(args, ack) => {
+            ack.0(Ok(None));
+            format!("name {:?}", args.text)
+        }
         Delivery::Close(ack) => {
             ack.0(Ok(None));
             "close".to_owned()
@@ -1013,6 +1017,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 Delivery::Prompt(..)
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
+                | Delivery::Name(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
                 | Delivery::Reply(..)
@@ -1048,6 +1053,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 Delivery::Prompt(..)
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
+                | Delivery::Name(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
                 | Delivery::Reply(..)
@@ -1135,6 +1141,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 Delivery::Prompt(..)
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
+                | Delivery::Name(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
                 | Delivery::Reply(..)
@@ -1195,6 +1202,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 Delivery::Prompt(..)
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
+                | Delivery::Name(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
                 | Delivery::Credential(..)
@@ -1233,6 +1241,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 Delivery::Prompt(..)
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
+                | Delivery::Name(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
                 | Delivery::Credential(..)
