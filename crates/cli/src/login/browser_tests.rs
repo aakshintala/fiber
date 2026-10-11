@@ -165,35 +165,50 @@ fn copy_tree(source: &Path, dest: &Path, replacements: &[(&str, &str)]) {
     }
 }
 
-/// A port nothing listens on, for the package's callback listener.
-fn free_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
-}
-
 /// A browser that records the authorize URL and opens nothing: the test
 /// thread performs the redirect once the callback listens. Each `open` also
 /// reports on the channel, so the wait for it is a notification under
-/// [`BROWSER_WAIT`] instead of an attempt count.
+/// [`BROWSER_WAIT`] instead of an attempt count. It binds a loopback
+/// listener at port 0 and holds it: `port` is the package's callback port,
+/// handed over when the package binds through `callback_listener`, so
+/// choosing and binding leave no gap for another listener.
 struct RedirectBrowser {
     opened: Mutex<Vec<String>>,
     notify: mpsc::Sender<String>,
+    listener: Mutex<Option<TcpListener>>,
+    port: u16,
+    taken: Mutex<Option<mpsc::Sender<()>>>,
 }
 
 impl RedirectBrowser {
     /// A browser and the channel its `open` reports on.
     fn notified() -> (Arc<Self>, mpsc::Receiver<String>) {
         let (notify, opened) = mpsc::channel();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
         (
             Arc::new(Self {
                 opened: Mutex::new(Vec::new()),
                 notify,
+                listener: Mutex::new(Some(listener)),
+                port,
+                taken: Mutex::new(None),
             }),
             opened,
         )
+    }
+
+    /// The held callback port: the package's port once installed with it.
+    fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Reports when the package takes the held listener: waiting on it
+    /// proves `listen` bound before a cancel lands.
+    fn take_signal(&self) -> mpsc::Receiver<()> {
+        let (tx, rx) = mpsc::channel();
+        *self.taken.lock().unwrap() = Some(tx);
+        rx
     }
 }
 
@@ -209,6 +224,18 @@ impl Browser for RedirectBrowser {
 
     fn attended(&self) -> bool {
         true
+    }
+
+    fn callback_listener(&self, port: u16) -> std::io::Result<TcpListener> {
+        if let Some(taken) = self.taken.lock().unwrap().take() {
+            match taken.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        if let Some(listener) = self.listener.lock().unwrap().take() {
+            return Ok(listener);
+        }
+        TcpListener::bind((Ipv4Addr::LOCALHOST, port))
     }
 }
 
@@ -297,7 +324,7 @@ fn browser_flow(
     let _ = server;
     let (tx, rx) = mpsc::channel();
     let (home, providers, label) = (setup.home(), providers.clone(), label.map(str::to_owned));
-    let (browser, clock) = (Arc::clone(browser) as Arc<dyn Browser>, setup.clock());
+    let (browser_in, clock) = (Arc::clone(browser) as Arc<dyn Browser>, setup.clock());
     thread::spawn(move || {
         let result = browser_login(
             &home,
@@ -305,7 +332,7 @@ fn browser_flow(
             "codex",
             label.as_deref(),
             LoginMethod::Browser,
-            browser,
+            browser_in,
             clock,
             &LoginCancel::default(),
         );
@@ -316,6 +343,11 @@ fn browser_flow(
     let wait = Deadline::after(BROWSER_WAIT);
     let url = await_opened(opened, &wait);
     let port = free_port_of(&url);
+    assert_eq!(
+        port,
+        browser.port(),
+        "the package was installed with the held port"
+    );
     redirect(
         port,
         &format!("/auth/callback?code=authcode-1&state={}", state_of(&url)),
@@ -353,10 +385,9 @@ fn a_browser_login_stores_the_email_label_0600_and_names_it_globally() {
     let setup = Setup::new();
     let (access, id) = tokens(EMAIL);
     let server = OauthServer::start(vec![exchange(&access, &id)]);
-    let port = free_port();
-    setup.install(&server, port);
-    let providers = setup.providers();
     let (browser, opened) = RedirectBrowser::notified();
+    setup.install(&server, browser.port());
+    let providers = setup.providers();
     let path = browser_flow(&setup, &providers, None, &browser, &opened, &server).unwrap();
     assert_eq!(path, "credentials/codex/alice@example.com");
 
@@ -380,10 +411,9 @@ fn a_browser_login_with_as_stores_that_label_and_ignores_the_email() {
     let setup = Setup::new();
     let (access, id) = tokens(EMAIL);
     let server = OauthServer::start(vec![exchange(&access, &id)]);
-    let port = free_port();
-    setup.install(&server, port);
-    let providers = setup.providers();
     let (browser, opened) = RedirectBrowser::notified();
+    setup.install(&server, browser.port());
+    let providers = setup.providers();
     let path = browser_flow(&setup, &providers, Some("work"), &browser, &opened, &server).unwrap();
     assert_eq!(path, "credentials/codex/work");
     assert_eq!(setup.stored("work").unwrap()["account_id"], json!(ACCOUNT));
@@ -396,11 +426,10 @@ fn an_as_label_already_stored_is_refused_before_anything_opens() {
     let setup = Setup::new();
     let (access, id) = tokens(EMAIL);
     let server = OauthServer::start(vec![exchange(&access, &id)]);
-    let port = free_port();
-    setup.install(&server, port);
+    let (browser, _opened) = RedirectBrowser::notified();
+    setup.install(&server, browser.port());
     let providers = setup.providers();
     setup.store_for_test("work");
-    let (browser, _opened) = RedirectBrowser::notified();
     let error = failed(browser_login(
         &setup.home(),
         &providers,
@@ -427,11 +456,10 @@ fn an_email_label_already_stored_is_refused_after_the_flow_naming_as() {
     let setup = Setup::new();
     let (access, id) = tokens(EMAIL);
     let server = OauthServer::start(vec![exchange(&access, &id)]);
-    let port = free_port();
-    setup.install(&server, port);
-    let providers = setup.providers();
     setup.store_for_test(EMAIL);
     let (browser, opened) = RedirectBrowser::notified();
+    setup.install(&server, browser.port());
+    let providers = setup.providers();
     let error = failed(browser_flow(
         &setup, &providers, None, &browser, &opened, &server,
     ));
@@ -449,15 +477,14 @@ fn a_browser_login_while_another_holds_the_label_lock_is_io_failed() {
     let setup = Setup::new();
     let (access, id) = tokens(EMAIL);
     let server = OauthServer::start(vec![exchange(&access, &id)]);
-    let port = free_port();
-    setup.install(&server, port);
+    let (browser, opened) = RedirectBrowser::notified();
+    setup.install(&server, browser.port());
     let providers = setup.providers();
     let held = config::CredentialFile::new(&setup.home(), "codex", EMAIL)
         .unwrap()
         .try_lock()
         .unwrap()
         .unwrap();
-    let (browser, opened) = RedirectBrowser::notified();
     let error = failed(browser_flow(
         &setup, &providers, None, &browser, &opened, &server,
     ));
@@ -476,10 +503,9 @@ fn an_email_that_is_no_label_is_a_usage_error_naming_as() {
     let setup = Setup::new();
     let (access, id) = tokens("a.lock");
     let server = OauthServer::start(vec![exchange(&access, &id)]);
-    let port = free_port();
-    setup.install(&server, port);
-    let providers = setup.providers();
     let (browser, opened) = RedirectBrowser::notified();
+    setup.install(&server, browser.port());
+    let providers = setup.providers();
     let error = failed(browser_flow(
         &setup, &providers, None, &browser, &opened, &server,
     ));
@@ -497,11 +523,10 @@ fn a_failed_global_write_deletes_the_stored_file() {
     let setup = Setup::new();
     let (access, id) = tokens(EMAIL);
     let server = OauthServer::start(vec![exchange(&access, &id)]);
-    let port = free_port();
-    setup.install(&server, port);
+    let (browser, opened) = RedirectBrowser::notified();
+    setup.install(&server, browser.port());
     let providers = setup.providers();
     fs::write(setup.home().join("config.json"), "{\"model\": ,").unwrap();
-    let (browser, opened) = RedirectBrowser::notified();
     let error = failed(browser_flow(
         &setup, &providers, None, &browser, &opened, &server,
     ));
@@ -530,7 +555,10 @@ fn a_device_login_shows_its_code_and_stores_the_email_label() {
         ),
         exchange(&access, &id),
     ]);
-    let port = free_port();
+    // The device flow never binds the callback, but the install still
+    // names a port: held, never released, so nothing can take it.
+    let held = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = held.local_addr().unwrap().port();
     setup.install(&server, port);
     let providers = setup.providers();
     let browser = Arc::new(ShowBrowser {
@@ -998,10 +1026,10 @@ fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
     let setup = Setup::new();
     let (access, id) = tokens(EMAIL);
     let server = OauthServer::start(vec![exchange(&access, &id)]);
-    let port = free_port();
-    setup.install(&server, port);
-    let providers = setup.providers();
     let (browser, opened) = RedirectBrowser::notified();
+    let taken = browser.take_signal();
+    setup.install(&server, browser.port());
+    let providers = setup.providers();
     let cancel = Arc::new(LoginCancel::default());
     let (tx, rx) = mpsc::channel();
     let (home, owned) = (setup.home(), providers.clone());
@@ -1027,7 +1055,14 @@ fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
     });
     let wait = Deadline::after(BROWSER_WAIT);
     let url = await_opened(&opened, &wait);
-    let callback_port = free_port_of(&url);
+    assert_eq!(
+        free_port_of(&url),
+        browser.port(),
+        "the package was installed with the held port"
+    );
+    // Taken, so `listen` bound: a cancel now ends the wait instead of
+    // racing its start, which would leave the held listener behind.
+    Deadline::after(BROWSER_WAIT).recv_or_fail(&taken, "the package to take the callback listener");
     cancel.cancel();
     let result = Deadline::after(WAIT)
         .recv(&rx)
@@ -1037,6 +1072,7 @@ fn a_browser_login_cancelled_while_it_waits_stores_nothing() {
     let global = std::fs::read_to_string(setup.home().join("config.json")).unwrap_or_default();
     assert!(!global.contains("credential"), "{global}");
     drop(server);
+    let callback_port = browser.port();
     fakes::within("the callback port to bind again", BROWSER_WAIT, move || {
         loop {
             if TcpListener::bind((Ipv4Addr::LOCALHOST, callback_port)).is_ok() {
