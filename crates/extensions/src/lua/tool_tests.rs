@@ -399,37 +399,6 @@ fn go_module(dir: &std::path::Path, name: &str) -> mpsc::Receiver<()> {
     })
 }
 
-/// A server that accepts one connection, signals, and holds it unanswered
-/// until `WAIT` passes, so a `host.http` call stays parked.
-#[track_caller]
-fn hold_server() -> (String, mpsc::Receiver<()>) {
-    use std::io::Read;
-
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut sock = listener.accept().unwrap().0;
-        let mut seen = Vec::new();
-        let mut byte = [0; 1];
-        while !seen.ends_with(b"\r\n\r\n") {
-            match sock.read(&mut byte) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => seen.push(byte[0]),
-            }
-        }
-        match accepted_tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-        let (_keep, wait) = mpsc::channel::<()>();
-        match Deadline::after(WAIT).recv(&wait) {
-            Ok(()) | Err(_) => {}
-        }
-        drop(sock);
-    });
-    (url, accepted)
-}
-
 /// A tool spec as Lua source with `timeout` and `run`.
 fn tool_spec(timeout: u64, run: &str) -> String {
     format!(
@@ -469,7 +438,9 @@ fn a_tool_call_completes_while_a_command_is_parked_on_an_ask() {
 
 #[test]
 fn a_hook_runs_to_completion_while_a_tool_call_is_parked() {
-    let (url, accepted) = hold_server();
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
+    server.hold();
+    let url = server.url();
     let (_dir, ext) = extension(&format!(
         "{AFTER_TOOL_HOOK}fiber.tool(\"hold\", {})\n",
         tool_spec(
@@ -479,9 +450,10 @@ fn a_hook_runs_to_completion_while_a_tool_call_is_parked() {
     ));
     let holding = Arc::clone(&ext);
     let _held = on_thread(move || holding.tool_run("hold", json!({}), &fakes::CancelToken::new()));
-    Deadline::after(WAIT)
-        .recv(&accepted)
-        .expect("waited for the tool call to reach the server");
+    assert!(
+        server.await_requests(1, WAIT),
+        "waited for the tool call to reach the server"
+    );
     assert!(until(&ext, parked), "waited for the tool call to park");
     let hooked = Arc::clone(&ext);
     let answer = on_thread(move || hooked.hook("after_tool", 0, json!({"content": "x"})));
