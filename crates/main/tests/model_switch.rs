@@ -1369,7 +1369,10 @@ fn install_extension(setup: &Setup, short: &str, data: &Value, init: Option<&str
     }
     let mut manifest = json!({"name": short, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
     if let Some(into) = manifest.as_object_mut() {
-        into.insert("providers".to_owned(), Value::Object(declared.into_iter().collect()));
+        into.insert(
+            "providers".to_owned(),
+            Value::Object(declared.into_iter().collect()),
+        );
     }
     write_json(&source.join("extension.json"), &manifest);
     write_json(&source.join(format!("providers/{provider}.json")), data);
