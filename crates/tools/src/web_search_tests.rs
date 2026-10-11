@@ -241,6 +241,24 @@ fn both_domain_filters_fail_before_the_backend_is_called() {
 }
 
 #[test]
+fn a_missing_or_mistyped_query_fails_invalid_arguments() {
+    let (stub, tool) = backend(Stub::results(Vec::new()));
+    for arguments in [json!({}), json!({"query": 5})] {
+        let output = tool.run(
+            &args(arguments.clone()),
+            &CancelToken::new(),
+            &Recorder::default(),
+        );
+        assert_eq!(
+            output.error.map(|error| error.code),
+            Some(ErrorCode::InvalidArguments),
+            "{arguments}"
+        );
+    }
+    assert!(stub.calls().is_empty(), "the backend is not called");
+}
+
+#[test]
 fn three_results_render_each_on_three_lines() {
     let (_, tool) = backend(Stub::results(vec![
         result(

@@ -11,13 +11,22 @@ use contract::provider::ToolDefinition;
 use contract::session_search::{Found, Hit, LIMIT, Label, Query, Scan};
 use contract::shapes::Effect;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::files::string_argument;
 use crate::tool_util::{effects, failed, text_output};
 
 /// The most characters of a session's name a hit shows.
 const NAME: usize = 80;
+
+/// The call's arguments, checked against the schema before the call runs.
+#[derive(Debug, Deserialize)]
+struct Args {
+    text: String,
+    #[serde(default)]
+    all_projects: bool,
+    limit: Option<u64>,
+}
 
 /// Searches the logs of past and running sessions.
 pub struct SessionSearch {
@@ -69,8 +78,9 @@ impl Tool for SessionSearch {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let all_projects = all_projects(arguments).map_err(EffectsError::Arguments)?;
-        let scope = self.scan.scope(all_projects);
+        let args: Args =
+            crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        let scope = self.scan.scope(args.all_projects);
         Ok(effects(
             vec![Effect::Reads],
             true,
@@ -97,30 +107,15 @@ impl Tool for SessionSearch {
 
 /// The call's query, with the documented defaults.
 fn query(arguments: &Map<String, Value>) -> Result<Query, String> {
-    let text = string_argument(arguments, "text", "Give the text to find as `text`.")?;
-    let all_projects = all_projects(arguments)?;
-    let limit = match arguments.get("limit") {
-        None => LIMIT,
-        Some(value) => value
-            .as_u64()
-            .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
-            .ok_or_else(|| "`limit` must be an integer, 0 or greater.".to_owned())?,
-    };
+    let args: Args = crate::tool_util::arguments(arguments)?;
     Ok(Query {
-        text,
-        all_projects,
-        limit,
+        text: args.text,
+        all_projects: args.all_projects,
+        limit: args
+            .limit
+            .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
+            .unwrap_or(LIMIT),
     })
-}
-
-/// `all_projects`, false when absent.
-fn all_projects(arguments: &Map<String, Value>) -> Result<bool, String> {
-    match arguments.get("all_projects") {
-        None => Ok(false),
-        Some(value) => value
-            .as_bool()
-            .ok_or_else(|| "`all_projects` must be true or false.".to_owned()),
-    }
 }
 
 /// The result the model reads: a header, one block per hit, then what could

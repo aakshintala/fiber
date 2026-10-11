@@ -13,10 +13,17 @@ use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Effect};
 use contract::skills::{SkillRead, Skills};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::files::{path_text, string_argument};
+use crate::files::path_text;
 use crate::tool_util::{cancelled_before, effects, failed, no_effects};
+
+/// The call's arguments, checked against the schema before the call runs.
+#[derive(Debug, Deserialize)]
+struct Args {
+    name: String,
+}
 
 /// Loads one skill from the skills listing. The definition never lists
 /// skill names, so adding or removing a skill leaves the tool set's bytes
@@ -71,11 +78,6 @@ enum Resolve {
     NotUtf8,
 }
 
-/// No effect: the call takes the fast path and `run` fails it.
-fn no_effect() -> Effects {
-    no_effects()
-}
-
 impl Tool for Skill {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
@@ -102,13 +104,13 @@ impl Tool for Skill {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let Ok(name) = string_argument(arguments, "name", "Give the skill's name as `name`.")
-        else {
-            return Ok(no_effect());
+        let Ok(args) = crate::tool_util::arguments::<Args>(arguments) else {
+            return Ok(no_effects());
         };
+        let name = args.name;
         let Ok((target, _)) = self.resolve(&name) else {
             self.judged().remove(&name);
-            return Ok(no_effect());
+            return Ok(no_effects());
         };
         self.judged().insert(name, target.clone());
         let path = path_text(&target);
@@ -125,13 +127,11 @@ impl Tool for Skill {
         if cancel.is_cancelled() {
             return cancelled_before();
         }
-        let Ok(name) = string_argument(arguments, "name", "Give the skill's name as `name`.")
-        else {
-            return failed(
-                ErrorCode::InvalidArguments,
-                "Give the skill's name as `name`.".to_owned(),
-            );
+        let args: Args = match crate::tool_util::arguments(arguments) {
+            Ok(args) => args,
+            Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
+        let name = args.name;
         let (target, listing) = match self.resolve(&name) {
             Ok(resolved) => resolved,
             Err(Resolve::NotListed) => {

@@ -22,15 +22,14 @@ use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::shapes::Effect;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use ureq::http::Uri;
 
-use crate::files::string_argument;
+
 use crate::tool_util::{failed, text_output};
 use download::{Artifact, Html, Sink, Wrap};
 use http::{Ended, Get, Head, Hop, Limit, Stop, guarded};
-
-const MISSING: &str = "Give the page's address as `url`.";
 
 /// The most a body may hold: a download past it fails `too_large`.
 const MAX_BODY: u64 = 10 * 1024 * 1024;
@@ -47,6 +46,12 @@ const FETCH_LIMIT: Duration = Duration::from_secs(5 * 60);
 
 /// Looks a name up. Tests inject their own.
 type Resolve = Arc<dyn Fn(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + Sync>;
+
+/// The call's arguments, checked against the schema before the call runs.
+#[derive(Debug, Deserialize)]
+struct Args {
+    url: String,
+}
 
 /// Fetches a page over HTTP or HTTPS, on this machine, for every provider.
 pub struct WebFetch {
@@ -130,8 +135,9 @@ impl Tool for WebFetch {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let url = string_argument(arguments, "url", MISSING).map_err(EffectsError::Arguments)?;
-        let uri = target::parse(&url).map_err(EffectsError::Arguments)?;
+        let args: Args =
+            crate::tool_util::arguments(arguments).map_err(EffectsError::Arguments)?;
+        let uri = target::parse(&args.url).map_err(EffectsError::Arguments)?;
         Ok(crate::tool_util::effects(
             vec![Effect::Network],
             // A request can change state on the server.
@@ -143,8 +149,11 @@ impl Tool for WebFetch {
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
-        let parsed = string_argument(arguments, "url", MISSING).and_then(|url| target::parse(&url));
-        match parsed {
+        let args: Args = match crate::tool_util::arguments(arguments) {
+            Ok(args) => args,
+            Err(message) => return failed(ErrorCode::InvalidArguments, message),
+        };
+        match target::parse(&args.url) {
             Ok(uri) => self.fetch(uri, cancel),
             Err(message) => failed(ErrorCode::InvalidArguments, message),
         }

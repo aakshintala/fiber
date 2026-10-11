@@ -659,51 +659,21 @@ fn a_run_with_no_judged_path_still_writes() {
 fn bad_arguments_fail_before_anything_is_written() {
     let dir = TempDir::new("fiber-edit-args");
     fs::write(dir.path().join("a.txt"), "old\n").unwrap();
-    let cases = [
-        (
-            json!({"edits": [{"old_text": "old", "new_text": "new"}]}),
-            "Give the file path as `path`.",
-        ),
-        (
-            json!({"path": 1, "edits": [{"old_text": "old", "new_text": "new"}]}),
-            "`path` must be a string.",
-        ),
-        (json!({"path": "a.txt"}), "Give the edits as `edits`."),
-        (
-            json!({"path": "a.txt", "edits": "no"}),
-            "`edits` must be a list of blocks.",
-        ),
-        (
-            json!({"path": "a.txt", "edits": []}),
-            "`edits` must contain at least one block.",
-        ),
-        (
-            json!({"path": "a.txt", "edits": ["no"]}),
-            "`edits[0]` must be an object.",
-        ),
-        (
-            json!({"path": "a.txt", "edits": [{"new_text": "new"}]}),
-            "edits[0]: Give `old_text`.",
-        ),
-        (
-            json!({"path": "a.txt", "edits": [{"old_text": 1, "new_text": "new"}]}),
-            "edits[0]: `old_text` must be a string.",
-        ),
-        (
-            json!({"path": "a.txt", "edits": [{"old_text": "old"}, {"old_text": "x", "new_text": "y"}]}),
-            "edits[0]: Give `new_text`.",
-        ),
-        (
-            json!({"path": "a.txt", "edits": [{"old_text": "old", "new_text": 1}]}),
-            "edits[0]: `new_text` must be a string.",
-        ),
-    ];
-    for (value, expect) in cases {
-        let output = edit_of(dir.path(), value);
-        assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
-        assert_eq!(message(&output), expect);
-        assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"old\n");
-    }
+    let malformed = edit_of(
+        dir.path(),
+        json!({"path": 1, "edits": [{"old_text": "old", "new_text": "new"}]}),
+    );
+    assert_eq!(code(&malformed), Some(ErrorCode::InvalidArguments));
+    assert!(
+        message(&malformed).starts_with("The arguments do not fit the schema:"),
+        "{}",
+        message(&malformed)
+    );
+    assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"old\n");
+    let empty = edit_of(dir.path(), json!({"path": "a.txt", "edits": []}));
+    assert_eq!(code(&empty), Some(ErrorCode::InvalidArguments));
+    assert_eq!(message(&empty), "`edits` must contain at least one block.");
+    assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"old\n");
 }
 
 #[test]

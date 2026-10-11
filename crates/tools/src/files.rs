@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use contract::ErrorCode;
 use contract::shapes::Effect;
 use contract::tool::{Effects, EffectsError, Output};
-use serde_json::{Map, Value};
 
 pub(crate) mod land;
 mod locks;
@@ -533,18 +532,6 @@ pub(crate) fn effects_error(error: ResolveError) -> EffectsError {
         ResolveError::Arguments(message) | ResolveError::Tool(message) => {
             EffectsError::Arguments(message)
         }
-    }
-}
-
-pub(crate) fn string_argument(
-    arguments: &Map<String, Value>,
-    key: &str,
-    missing: &str,
-) -> Result<String, String> {
-    match arguments.get(key) {
-        Some(Value::String(value)) => Ok(value.clone()),
-        Some(_) => Err(format!("`{key}` must be a string.")),
-        None => Err(missing.to_owned()),
     }
 }
 

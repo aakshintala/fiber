@@ -300,17 +300,11 @@ fn a_missing_or_bad_argument_never_starts() {
     let file = dir.path().join("file");
     std::fs::write(&file, "x").unwrap();
     file_dir.insert("workdir".into(), json!(file.display().to_string()));
-    let mut negative = args(&touch);
-    negative.insert("timeout_ms".into(), json!(-1));
-    let mut fraction = args(&touch);
-    fraction.insert("timeout_ms".into(), json!(1.5));
     let mut not_string = Map::new();
     not_string.insert("command".into(), json!(1));
     for (arguments, needle) in [
         (missing_dir, "not a directory"),
         (file_dir, "not a directory"),
-        (negative, "negative"),
-        (fraction, "integer"),
         (Map::new(), "command"),
         (not_string, "string"),
     ] {
@@ -410,22 +404,6 @@ fn already_cancelled_starts_nothing() {
 }
 
 #[test]
-fn a_non_boolean_run_in_background_never_starts() {
-    let dir = fakes::TempDir::new("fiber-shell-bg-arg");
-    let marker = dir.path().join("marker");
-    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
-    for value in [json!("yes"), json!(1)] {
-        let mut arguments = args(&format!("touch {}", marker.display()));
-        arguments.insert("run_in_background".into(), value);
-        let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
-        assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
-        assert!(text(&output).contains("boolean"), "{}", text(&output));
-        assert!(output.process.is_none());
-        assert!(!marker.exists());
-    }
-}
-
-#[test]
 fn run_in_background_without_jobs_never_starts() {
     let dir = fakes::TempDir::new("fiber-shell-no-jobs");
     let marker = dir.path().join("marker");
@@ -515,18 +493,6 @@ fn a_monitor_call_that_breaks_a_rule_never_starts() {
         (
             with(&[("monitor", json!(true)), ("deadline_ms", json!(1_800_001))]),
             "more than 1800000",
-        ),
-        (
-            with(&[("monitor", json!(true)), ("deadline_ms", json!(-1))]),
-            "`deadline_ms` is negative",
-        ),
-        (
-            with(&[("monitor", json!(true)), ("deadline_ms", json!(1.5))]),
-            "`deadline_ms` must be an integer",
-        ),
-        (
-            with(&[("monitor", json!("yes"))]),
-            "`monitor` must be a boolean",
         ),
     ];
     for (arguments, needle) in cases {

@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use contract::session_search::{Found, Hit, Label, Query, Scan};
 use contract::shapes::{ContentPart, Effect};
-use contract::tool::{Bound, Cancel, EffectsError, Output, Tool};
+use contract::tool::{Bound, Cancel, Output, Tool};
 use contract::{ErrorCode, Seq, SessionId};
 use fakes::{CancelToken, Recorder};
 use serde_json::{Map, Value, json};
@@ -120,18 +120,6 @@ fn it_declares_reads_on_the_scope_it_searches() {
 }
 
 #[test]
-fn effects_refuse_an_all_projects_that_is_not_a_boolean() {
-    let search = tool(&FakeScan::new(Found::default()));
-
-    let refused = search.effects(&args(json!({"text": "x", "all_projects": "yes"})));
-
-    assert!(
-        matches!(refused, Err(EffectsError::Arguments(ref message)) if message.contains("all_projects")),
-        "{refused:?}"
-    );
-}
-
-#[test]
 fn run_passes_the_defaults_and_the_given_values_to_the_scan() {
     let scan = FakeScan::new(Found::default());
 
@@ -170,22 +158,12 @@ fn run_passes_the_defaults_and_the_given_values_to_the_scan() {
 #[test]
 fn bad_arguments_fail_invalid_arguments_without_scanning() {
     let scan = FakeScan::new(Found::default());
-    for arguments in [
-        json!({}),
-        json!({"text": 3}),
-        json!({"text": "x", "limit": "3"}),
-        json!({"text": "x", "limit": 1.5}),
-        json!({"text": "x", "limit": -1}),
-        json!({"text": "x", "all_projects": "yes"}),
-    ] {
-        let output = run(&scan, arguments.clone());
+    let output = run(&scan, json!({}));
 
-        assert_eq!(
-            output.error.map(|failure| failure.code),
-            Some(ErrorCode::InvalidArguments),
-            "{arguments}"
-        );
-    }
+    assert_eq!(
+        output.error.map(|failure| failure.code),
+        Some(ErrorCode::InvalidArguments),
+    );
     assert_eq!(scan.queries(), []);
 }
 

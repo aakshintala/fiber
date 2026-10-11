@@ -10,7 +10,7 @@ use serde_json::json;
 use super::{Act, arguments, cancelled_before, effects, failed, no_effects, recheck};
 
 #[test]
-fn failed_carries_the_code_and_the_message_with_a_newline() {
+fn the_failed_output_carries_the_code_and_the_message_with_a_newline() {
     let output = failed(ErrorCode::ToolError, "boom".to_owned());
     assert_eq!(
         output.content,

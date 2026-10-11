@@ -54,7 +54,7 @@ fn the_result_has_no_content_and_carries_the_note() {
 
 #[test]
 fn a_missing_or_mistyped_note_is_an_invalid_argument() {
-    for arguments in [json!({}), json!({"note": 3})] {
+    for arguments in [json!({"note": 3})] {
         let arguments = args(arguments);
 
         assert!(matches!(
