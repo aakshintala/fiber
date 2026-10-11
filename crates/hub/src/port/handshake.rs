@@ -122,33 +122,28 @@ pub(crate) fn refused(refusal: Refusal) -> Vec<u8> {
     .to_vec()
 }
 
-/// Reads the request line and headers through the cap, one byte at a time
-/// so nothing past the blank line is consumed. Past the cap, or at EOF
-/// before the blank line, the request is refused.
+/// Reads the request line and headers through the cap, one line at a
+/// time: past the cap, at EOF before the blank line, or on a line with no
+/// LF, the request is refused. Nothing past the blank line is consumed, so
+/// pipelined bytes stay readable on the same reader.
 fn request_lines(read: &mut impl BufRead) -> Result<Vec<String>, Refusal> {
     let mut capped = read.take(HANDSHAKE_MAX);
     let mut lines = Vec::new();
-    let mut line = Vec::new();
     loop {
-        let mut byte = [0u8; 1];
-        match capped.read(&mut byte) {
-            Ok(1) => {}
+        let mut line = Vec::new();
+        match capped.read_until(b'\n', &mut line) {
+            Ok(_) if line.ends_with(b"\n") => {}
             Ok(_) | Err(_) => return Err(Refusal::BadRequest),
         }
-        let [b] = byte;
-        if b == b'\n' {
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
-            let text =
-                String::from_utf8(std::mem::take(&mut line)).map_err(|_| Refusal::BadRequest)?;
-            if text.is_empty() {
-                return Ok(lines);
-            }
-            lines.push(text);
-        } else {
-            line.push(b);
+        line.pop();
+        if line.last() == Some(&b'\r') {
+            line.pop();
         }
+        let text = String::from_utf8(line).map_err(|_| Refusal::BadRequest)?;
+        if text.is_empty() {
+            return Ok(lines);
+        }
+        lines.push(text);
     }
 }
 
