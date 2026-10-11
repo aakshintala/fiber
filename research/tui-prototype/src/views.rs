@@ -21,14 +21,22 @@ use ratatui::style::Style;
 use std::io::{self, Write};
 
 /// Every `--view-case` case, named in README.md.
-const CASES: &[Case<Look>] = &[Case {
-    name: "delegate-view",
-    help: "a delegate's breadcrumb, status card, transcript and input box",
-    check: "the breadcrumb `main › ◆ review: …`, a status card naming harness, model, calls, elapsed, session and the stop target, the transcript in turn cards, and the input box sending steering to the delegate.",
-    build: || Look {
-        kind: Kind::Delegate,
+const CASES: &[Case<Look>] = &[
+    Case {
+        name: "delegate-view",
+        help: "a delegate's breadcrumb, status card, transcript and input box",
+        check: "the breadcrumb `main › ◆ review: …`, a status card naming harness, model, calls, elapsed, session and the stop target, the transcript in turn cards, and the input box sending steering to the delegate.",
+        build: || Look {
+            kind: Kind::Delegate,
+        },
     },
-}];
+    Case {
+        name: "job-pty",
+        help: "a job's 80x24 pseudo-terminal screen with its stop target",
+        check: "the live 80x24 screen from attach with applied output, the job's status with its stop target, and the input box typing into the job.",
+        build: || Look { kind: Kind::JobPty },
+    },
+];
 
 /// `--view-case`, for `--help` and `check/views.md`.
 pub(crate) const SURFACE: Surface = Surface {
@@ -41,6 +49,7 @@ pub(crate) const SURFACE: Surface = Surface {
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Delegate,
+    JobPty,
 }
 
 struct Look {
@@ -101,6 +110,47 @@ fn delegate_transcript(w: usize) -> Vec<super::Row> {
     )
 }
 
+/// The job's pseudo-terminal screen: 80 columns by 24 rows of output since
+/// the terminal attached, with cursor movement and erasing already applied.
+fn pty_screen_rows() -> Vec<super::Row> {
+    let lines = [
+        "$ cargo test --watch",
+        "running 42 tests",
+        "test lock::flaky_close ... ok",
+        "test lock::reopen ... ok",
+        "test lock::held ... ok",
+        "test serve::attach ... FAILED",
+        "test serve::resume ... ok",
+        "test tui::paint ... ok",
+        "test tui::fit ... ok",
+        "test tui::wrap ... ok",
+        "test panel::cards ... ok",
+        "test rail::bars ... ok",
+        "test input::keys ... ok",
+        "test input::mouse ... ok",
+        "test lua::rows ... ok",
+        "test paged::pages ... ok",
+        "test home::list ... ok",
+        "test login::steps ... ok",
+        "",
+        "failures:",
+        "    serve::attach",
+        "",
+        "test result: FAILED. 41 passed; 1 failed",
+        "waiting for file changes …",
+    ];
+    lines
+        .iter()
+        .map(|l| {
+            if l.contains("FAILED") {
+                row(vec![sp(l.to_string(), fg(RED))])
+            } else {
+                row(vec![sp(l.to_string(), Style::new())])
+            }
+        })
+        .collect()
+}
+
 /// The input box, sending steering messages to the delegate.
 fn delegate_input(w: usize) -> Vec<super::Row> {
     slab(
@@ -129,6 +179,32 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             out.extend(delegate_transcript(cols));
             out.push(super::Row::default());
             out.extend(delegate_input(cols));
+            out
+        }
+        Kind::JobPty => {
+            let mut out = vec![view_header("Job", "◆ cargo test")];
+            out.push(super::Row::default());
+            out.push(row(vec![
+                sp("job s_j42 · cargo test --watch · running 2m", Style::new()),
+                sp(" · ", dim()),
+                sp("■ stop ends it", fg(RED)),
+            ]));
+            out.push(super::Row::default());
+            out.push(row(vec![sp(
+                "live screen · 80 columns × 24 rows from attach",
+                dim(),
+            )]));
+            out.extend(slab(pty_screen_rows(), BW, None, 80));
+            out.push(super::Row::default());
+            out.extend(slab(
+                vec![row(vec![
+                    sp("› █", Style::new()),
+                    sp(" type into the job (job_input)", dim()),
+                ])],
+                BI,
+                None,
+                cols,
+            ));
             out
         }
     }
@@ -305,7 +381,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 1);
+        assert_eq!(CASES.len(), 2);
         assert!(parse("nope").is_none());
     }
 
@@ -336,6 +412,61 @@ mod tests {
     }
 
     #[test]
+    fn job_pty_header_row() {
+        for cols in [160, NARROW] {
+            let c = parse_case("job-pty");
+            let buf = buffer(&c, cols, 48);
+            assert_header(&buf, "job-pty", "Job", "◆ cargo test", cols);
+        }
+    }
+
+    #[test]
+    fn job_pty_shows_status_screen_and_input() {
+        for cols in [160, NARROW] {
+            let c = parse_case("job-pty");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("s_j42"), "no job id");
+            assert!(t.contains("cargo test --watch"), "no command");
+            assert!(t.contains("running 2m"), "no elapsed");
+            assert!(t.contains("■ stop"), "no stop target");
+            assert!(t.contains("job_input"), "no input hint");
+            assert!(t.contains("running 42 tests"), "no screen output");
+            assert!(t.contains("80 columns × 24 rows"), "no screen caption");
+        }
+    }
+
+    #[test]
+    fn job_pty_screen_is_80_by_24() {
+        use crate::width;
+        let rows = pty_screen_rows();
+        assert_eq!(rows.len(), 24, "the screen is not 24 rows");
+        for (y, r) in rows.iter().enumerate() {
+            assert!(
+                width(&r.spans) <= 80,
+                "screen row {y} is wider than 80 columns"
+            );
+        }
+    }
+
+    #[test]
+    fn job_pty_failed_lines_read_red() {
+        let rows = pty_screen_rows();
+        let failed: Vec<_> = rows
+            .iter()
+            .filter(|r| r.spans.iter().any(|s| s.content.contains("FAILED")))
+            .collect();
+        assert!(!failed.is_empty(), "no FAILED line to mark");
+        for r in failed {
+            assert_eq!(r.spans[0].style.fg, Some(crate::RED));
+        }
+        let ok = rows
+            .iter()
+            .find(|r| r.spans.iter().any(|s| s.content.contains("flaky_close")))
+            .unwrap();
+        assert_eq!(ok.spans[0].style.fg, None);
+    }
+
+    #[test]
     fn no_row_overflows_its_screen() {
         use crate::width;
         for name in CASES.iter().map(|c| c.name) {
@@ -359,5 +490,4 @@ mod tests {
             }
         }
     }
-
 }
