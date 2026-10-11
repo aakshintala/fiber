@@ -27,7 +27,9 @@ use contract::{CommandId, Envelope, ErrorCode, JobId, SessionId, TurnId};
 use fakes::Deadline;
 use log::Log;
 
+use crate::before_message::Hooked;
 use crate::inbox::TurnInput;
+use crate::jobs::Queued;
 use crate::{Error, Loop, Model};
 
 /// One hang bound for every wait: the turn runs on a thread of its own, so
@@ -841,6 +843,40 @@ fn no_hook_runs_for_busy_closing_or_after_a_shutdown_started() {
         )
         .unwrap();
     assert!(answered.recv().unwrap().is_ok());
+    world.looped = Some(looped);
+}
+
+#[test]
+fn a_steer_after_close_joins_only_a_batch_that_holds_a_message() {
+    let mut world = started(Vec::new(), None);
+    let mut looped = world.looped.take().unwrap();
+    let (close_ack, _) = capture();
+    looped.take_close(close_ack);
+
+    // A batch that already holds a steer: the late steer joins it.
+    let held = Queued::Steer(driver("c_held", "first"), Hooked::default());
+    let mut input = TurnInput::of(vec![held]);
+    let (ack, answered) = capture();
+    looped
+        .admit_idle(
+            Delivery::Steer(driver("c_joins", "second"), ack),
+            &mut input,
+        )
+        .unwrap();
+    assert!(answered.recv().unwrap().is_ok());
+    assert_eq!(input.pieces.len(), 2);
+
+    // An empty batch: the same steer is refused `closing`.
+    let mut empty = TurnInput::of(Vec::new());
+    let (ack, answered) = capture();
+    looped
+        .admit_idle(
+            Delivery::Steer(driver("c_refused", "hello"), ack),
+            &mut empty,
+        )
+        .unwrap();
+    assert_eq!(rejected(answered.recv().unwrap()).code, ErrorCode::Closing);
+    assert!(empty.pieces.is_empty());
     world.looped = Some(looped);
 }
 
