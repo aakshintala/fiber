@@ -65,7 +65,16 @@ impl Repo {
         dir.write("file", "contents\n");
         git(&dir, &["add", "file"]);
         for n in 0..12 {
-            git(&dir, &["commit", "-q", "--allow-empty", "-m", &format!("commit {n}")]);
+            git(
+                &dir,
+                &[
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    &format!("commit {n}"),
+                ],
+            );
         }
         let temp = TempDir::new("xtask-srtmp");
         let fake = TempDir::new("xtask-srfake");
@@ -201,7 +210,8 @@ fn none_among_the_base_and_its_nine_ancestors_writes_nothing() {
     let summary = TempDir::new("xtask-srsum");
     let summary_file = summary.path().join("summary.md");
     let summary = summary_file.to_str().unwrap().to_owned();
-    let (code, out) = repo.stored_results(Some(&base), &[("GITHUB_STEP_SUMMARY", summary.as_str())]);
+    let (code, out) =
+        repo.stored_results(Some(&base), &[("GITHUB_STEP_SUMMARY", summary.as_str())]);
     assert_eq!(code, Some(0), "{out}");
     assert!(repo.stored_commit().is_none());
     assert!(repo.stored_head().is_none());
@@ -211,7 +221,9 @@ fn none_among_the_base_and_its_nine_ancestors_writes_nothing() {
     );
     assert!(out.contains(&said), "{out}");
     assert!(
-        std::fs::read_to_string(&summary_file).unwrap().contains(&said),
+        std::fs::read_to_string(&summary_file)
+            .unwrap()
+            .contains(&said),
         "{out}"
     );
     assert_eq!(repo.looked_up().len(), 10);
@@ -272,7 +284,10 @@ fn no_base_commit_is_a_usage_error() {
     let repo = Repo::new();
     let (code, out) = repo.stored_results(None, &[]);
     assert_eq!(code, Some(2), "{out}");
-    assert!(out.contains("usage: scripts/stored-results BASE_COMMIT"), "{out}");
+    assert!(
+        out.contains("usage: scripts/stored-results BASE_COMMIT"),
+        "{out}"
+    );
 }
 
 #[test]
