@@ -62,7 +62,7 @@ fn a_live_codex_quota_fetch_reports_windows() {
     let dir = home.join("extensions").join(config::dir_name(
         "github.com/aakshintala/fiber/providers/codex",
     ));
-    let clock = fakes::clock::FakeClock::new();
+    let clock = Arc::new(fakes::clock::SystemClock);
     let extension = Arc::new(extensions::LuaExtension::new(
         "github.com/aakshintala/fiber/providers/codex",
         dir,

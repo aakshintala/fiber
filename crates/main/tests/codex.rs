@@ -147,6 +147,16 @@ impl Drop for KillGroup {
 }
 
 /// A stored codex token carrying `account`, expiring in 2100.
+/// The turn's own requests. The background quota() fetch races the turn: it
+/// may or may not be recorded yet, so it is left out.
+fn turn_requests(server: &ProviderServer) -> Vec<Request> {
+    server
+        .requests()
+        .into_iter()
+        .filter(|request| request.path != "/backend-api/wham/usage")
+        .collect()
+}
+
 fn token(account: &str) -> String {
     fakes::jwt(&json!({
         "https://api.openai.com/auth": { "chatgpt_account_id": account },
@@ -166,15 +176,9 @@ fn a_codex_turn_sends_the_codex_wire_shape() {
 
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
-    let requests = server.requests();
-    // The background quota() fetch races the turn: it may or may not be
-    // recorded yet, so only the turn's own requests are pinned here.
-    let calls: Vec<_> = requests
-        .iter()
-        .filter(|request| request.path != "/backend-api/wham/usage")
-        .collect();
+    let calls = turn_requests(&server);
     assert_eq!(calls.len(), 1);
-    let request: &Request = calls[0];
+    let request: &Request = &calls[0];
     assert_eq!(request.path, "/backend-api/codex/responses");
     let bearer = fingerprint(&format!("Bearer {access}"));
     assert_eq!(request.header("authorization"), Some(bearer.as_str()));
@@ -223,13 +227,7 @@ fn a_codex_usage_limit_is_quota_exceeded_with_its_wait_and_not_retried() {
             .contains("2026-10-07 18:00 UTC"),
         "{error}"
     );
-    let requests = server.requests();
-    // The background quota() fetch races the turn: it may or may not be
-    // recorded yet, so only the turn's own requests are pinned here.
-    let calls: Vec<_> = requests
-        .iter()
-        .filter(|request| request.path != "/backend-api/wham/usage")
-        .collect();
+    let calls = turn_requests(&server);
     assert_eq!(calls.len(), 1);
 }
 
@@ -243,13 +241,7 @@ fn a_thinking_suffix_is_sent_and_an_undeclared_level_is_invalid_arguments() {
     let run = setup.run_with_input(&["ask", "--model", "codex/gpt-6-luna:xhigh", "hi"], "");
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
-    let requests = server.requests();
-    // The background quota() fetch races the turn: it may or may not be
-    // recorded yet, so only the turn's own requests are pinned here.
-    let calls: Vec<_> = requests
-        .iter()
-        .filter(|request| request.path != "/backend-api/wham/usage")
-        .collect();
+    let calls = turn_requests(&server);
     assert_eq!(calls.len(), 1);
     let body: Value = serde_json::from_slice(&calls[0].body).unwrap();
     assert_eq!(body["reasoning"], json!({"effort": "xhigh"}));
@@ -257,13 +249,7 @@ fn a_thinking_suffix_is_sent_and_an_undeclared_level_is_invalid_arguments() {
     let bad = setup.run_with_input(&["ask", "--model", "codex/gpt-6-luna:minimal", "hi"], "");
     assert_eq!(bad.code, Some(1), "{}", bad.stderr);
     assert_eq!(bad.last()["payload"]["error"]["code"], "invalid_arguments");
-    let requests = server.requests();
-    // The background quota() fetch races the turn: it may or may not be
-    // recorded yet, so only the turn's own requests are pinned here.
-    let calls: Vec<_> = requests
-        .iter()
-        .filter(|request| request.path != "/backend-api/wham/usage")
-        .collect();
+    let calls = turn_requests(&server);
     assert_eq!(calls.len(), 1, "no second request is sent");
 }
 
