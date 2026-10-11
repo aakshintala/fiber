@@ -188,20 +188,19 @@ impl Clock for AfterReady {
         if let Some(ready) = ready {
             // One deadline for both lines: a scoped thread reads them.
             let (tx, rx) = std::sync::mpsc::channel();
+            let deadline = Deadline::after(READY);
             std::thread::scope(|scope| {
+                let deadline = &deadline;
                 scope.spawn(move || {
-                    ready.wait(READY);
-                    ready.wait(READY);
+                    ready.wait(deadline.left());
+                    ready.wait(deadline.left());
                     match tx.send(()) {
                         Ok(()) | Err(_) => {}
                     }
                 });
             });
             // Outside the scope closure, which `#[track_caller]` does not cross.
-            assert!(
-                Deadline::after(READY).recv(&rx).is_ok(),
-                "the child's two ready lines"
-            );
+            assert!(deadline.recv(&rx).is_ok(), "the child's two ready lines");
         }
         self.inner.sleep(d);
     }
