@@ -256,7 +256,7 @@ impl SessionExtensions {
                     Ok((declared, commands, tools, backends, providers)) => {
                         entry.declared = Some(declared);
                         entry.commands = commands;
-                        entry.tools = tools;
+                        entry.tools = keep_listed(config, &entry.name, tools);
                         entry.backends = backends;
                         entry.providers = providers;
                     }
@@ -635,6 +635,48 @@ impl Hooks for SessionExtensions {
             extension.deliver_to(inbox.clone());
         }
     }
+}
+
+/// The config list's strings: non-strings are skipped, anything but an
+/// array is empty, as an MCP server's `tools.enabled` and `tools.disabled`.
+fn strings(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The extension's tools left after its `tools.enabled` and
+/// `tools.disabled` lists (`docs/configuration.md`, "Keys"): `enabled`
+/// names only these, `disabled` removes those, both is enabled minus
+/// disabled; a name no tool has changes nothing. Filtering here, before
+/// names settle, keeps a left-out tool out of the clash check too.
+fn keep_listed(config: &Config, name: &str, tools: Vec<LuaTool>) -> Vec<LuaTool> {
+    let list = |field: &str| {
+        config
+            .get(&format!("extensions.\"{name}\".tools.{field}"), None)
+            .map(|(value, _)| strings(&value))
+    };
+    let enabled = list("enabled");
+    let disabled = list("disabled").unwrap_or_default();
+    tools
+        .into_iter()
+        .filter(|tool| {
+            let tool = tool.definition().name;
+            if let Some(enabled) = enabled.as_ref()
+                && !enabled.iter().any(|listed| listed == &tool)
+            {
+                return false;
+            }
+            !disabled.iter().any(|listed| listed == &tool)
+        })
+        .collect()
 }
 
 /// What an `after_tool` hook is given: the call, with `content` and
