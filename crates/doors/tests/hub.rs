@@ -12,10 +12,10 @@ mod support;
 
 use std::fs;
 use std::io::{self, Write};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -108,6 +108,267 @@ fn drop_twice(listener: UnixListener, dropped_tx: mpsc::Sender<()>) {
         drop(closed);
     }
     dropped_tx.send(()).unwrap_or(());
+}
+
+/// Accepts one connection within the test deadline, yielding the thread
+/// while none waits. `None` is the stand-in ending: `stop` set or the
+/// deadline with no time left. The deadline is the hang guard of the
+/// fake's poll loop, not a timing assertion.
+fn accept_within(
+    listener: &UnixListener,
+    deadline: Deadline,
+    stop: &AtomicBool,
+) -> Option<UnixStream> {
+    while !stop.load(Ordering::SeqCst) {
+        match listener.accept() {
+            Ok((stream, _)) => return Some(stream),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if deadline.left().is_zero() {
+                    return None;
+                }
+                thread::yield_now();
+            }
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// Sets `stop` when dropped, so a stand-in thread ends on every path,
+/// including a test panic.
+struct StopGuard(Arc<AtomicBool>);
+
+impl Drop for StopGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// An exiting hub: drops the first connection unanswered, holds the
+/// second unanswered, then removes the socket and drops the held stream
+/// and the listener, as the hub's cleanup closing its socket ends a
+/// queued connection. Sends `ready` once bound and listening, `released`
+/// once the socket is gone.
+fn exiting_hub(
+    listener: UnixListener,
+    socket: PathBuf,
+    ready_tx: mpsc::Sender<()>,
+    released_tx: mpsc::Sender<()>,
+    stop: &AtomicBool,
+    deadline: Deadline,
+) {
+    ready_tx.send(()).unwrap_or(());
+    let Some(first) = accept_within(&listener, deadline, stop) else {
+        drop(listener);
+        fs::remove_file(&socket).unwrap_or(());
+        return;
+    };
+    drop(first);
+    let Some(held) = accept_within(&listener, deadline, stop) else {
+        drop(listener);
+        fs::remove_file(&socket).unwrap_or(());
+        return;
+    };
+    fs::remove_file(&socket).unwrap_or(());
+    drop(held);
+    drop(listener);
+    released_tx.send(()).unwrap_or(());
+}
+
+/// A peer that drops every handshake: counts the drops and stops on
+/// `stop`. Sends the final count once ended.
+fn dropping_hub(
+    listener: UnixListener,
+    count: Arc<AtomicUsize>,
+    done_tx: mpsc::Sender<usize>,
+    stop: &AtomicBool,
+    deadline: Deadline,
+) {
+    loop {
+        let Some(dropped) = accept_within(&listener, deadline, stop) else {
+            break;
+        };
+        drop(dropped);
+        count.fetch_add(1, Ordering::SeqCst);
+    }
+    done_tx.send(count.load(Ordering::SeqCst)).unwrap_or(());
+}
+
+#[test]
+fn a_hub_exiting_past_one_poll_is_started_again_once_its_socket_is_gone() {
+    for entry in live() {
+        let temp = Temp::new();
+        let home = run_home(&temp);
+        let socket = home.join("run").join("hub");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let _guard = StopGuard(Arc::clone(&stop));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (released_tx, released_rx) = mpsc::channel();
+        let thread_stop = Arc::clone(&stop);
+        thread::spawn(move || {
+            exiting_hub(
+                listener,
+                socket,
+                ready_tx,
+                released_tx,
+                &thread_stop,
+                Deadline::after(DEADLINE),
+            )
+        });
+        Deadline::after(DEADLINE)
+            .recv(&ready_rx)
+            .expect("the exiting hub is ready");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let clock = FakeClock::new();
+        let origin = clock.origin();
+        let new_socket = home.join("run").join("hub");
+        let hub = run(
+            entry,
+            home,
+            {
+                let calls = Arc::clone(&calls);
+                move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    let listener = UnixListener::bind(&new_socket)?;
+                    thread::spawn(move || serve_once(listener, &hello_line()));
+                    Ok(())
+                }
+            },
+            Arc::clone(&clock),
+        )
+        .unwrap_or_else(|error| panic!("{}: the fresh hub answers: {error}", entry.name()));
+        assert_eq!(hub.1.kind, "hub_hello", "{}", entry.name());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{}", entry.name());
+        assert!(
+            Deadline::after(DEADLINE).recv(&released_rx).is_ok(),
+            "{}: the exiting hub released its socket",
+            entry.name()
+        );
+        // Two race pauses plus one bind poll after `start`, as `attempt`
+        // sleeps once after starting before it connects again.
+        assert_eq!(
+            clock.now(),
+            origin + Duration::from_millis(30),
+            "{}",
+            entry.name()
+        );
+    }
+}
+
+#[test]
+fn a_hub_that_never_speaks_fails_eof_at_the_race_bound() {
+    for (entry, bound) in [
+        (Entry::Connect, hub::CONNECT_DEADLINE),
+        (Entry::Within(DEADLINE), hub::CONNECT_DEADLINE),
+        (
+            Entry::Until(Duration::from_millis(50)),
+            Duration::from_millis(50),
+        ),
+    ] {
+        let temp = Temp::new();
+        let home = run_home(&temp);
+        let listener = UnixListener::bind(home.join("run").join("hub")).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let _guard = StopGuard(Arc::clone(&stop));
+        let count = Arc::new(AtomicUsize::new(0));
+        let (done_tx, done_rx) = mpsc::channel();
+        let thread_stop = Arc::clone(&stop);
+        let thread_count = Arc::clone(&count);
+        thread::spawn(move || {
+            dropping_hub(
+                listener,
+                thread_count,
+                done_tx,
+                &thread_stop,
+                Deadline::after(DEADLINE),
+            )
+        });
+        let clock = FakeClock::new();
+        let origin = clock.origin();
+        let error = run(entry, home, || Ok(()), Arc::clone(&clock))
+            .expect_err("a peer that never speaks fails");
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::UnexpectedEof,
+            "{}",
+            entry.name()
+        );
+        assert_eq!(
+            error.to_string(),
+            "the hub closed the connection before `hub_hello`",
+            "{}",
+            entry.name()
+        );
+        assert_eq!(
+            clock.now(),
+            origin + bound - Duration::from_millis(10),
+            "{}",
+            entry.name()
+        );
+        stop.store(true, Ordering::SeqCst);
+        let dropped = Deadline::after(DEADLINE)
+            .recv(&done_rx)
+            .expect("the dropping hub reports its count");
+        assert_eq!(
+            dropped,
+            (bound.as_millis() / 10) as usize,
+            "{}",
+            entry.name()
+        );
+    }
+}
+
+#[test]
+fn a_probe_that_meets_an_exiting_hub_fails_with_its_starter_error() {
+    for entry in [Entry::Until(DEADLINE), Entry::Within(DEADLINE)] {
+        let temp = Temp::new();
+        let home = run_home(&temp);
+        let socket = home.join("run").join("hub");
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let _guard = StopGuard(Arc::clone(&stop));
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (released_tx, released_rx) = mpsc::channel();
+        let thread_stop = Arc::clone(&stop);
+        thread::spawn(move || {
+            exiting_hub(
+                listener,
+                socket,
+                ready_tx,
+                released_tx,
+                &thread_stop,
+                Deadline::after(DEADLINE),
+            )
+        });
+        Deadline::after(DEADLINE)
+            .recv(&ready_rx)
+            .expect("the exiting hub is ready");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let error = run(
+            entry,
+            home,
+            {
+                let calls = Arc::clone(&calls);
+                move || {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(io::Error::new(io::ErrorKind::NotFound, "no hub runs"))
+                }
+            },
+            FakeClock::new(),
+        )
+        .expect_err("the probe fails with its starter error");
+        assert_eq!(error.kind(), io::ErrorKind::NotFound, "{}", entry.name());
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "{}", entry.name());
+        assert!(
+            Deadline::after(DEADLINE).recv(&released_rx).is_ok(),
+            "{}: the exiting hub released its socket",
+            entry.name()
+        );
+    }
 }
 
 /// A `start` that binds the old hub on its first call and a new hub on
