@@ -231,12 +231,42 @@ fn a_one_of_is_never_repaired() {
 }
 
 #[test]
-fn integer_or_null_is_not_a_single_type() {
+fn a_null_for_a_nullable_union_is_dropped() {
     let schema = object(json!({"n": {"type": ["integer", "null"]}}));
-    assert_eq!(repair(&schema, &json!({"n": null})), None);
+    let made = repair(&schema, &json!({"n": null})).unwrap();
+    assert_eq!(Value::Object(made.repaired), json!({}));
+    let paths: Vec<_> = made
+        .repairs
+        .iter()
+        .map(|r| (r.path.as_str(), r.fix))
+        .collect();
+    assert_eq!(paths, [("/n", RepairFix::NullDropped)]);
+    let required_schema = json!({
+        "type": "object",
+        "properties": {"n": {"type": ["integer", "null"]}},
+        "required": ["n"]
+    });
+    let made = repair(&required_schema, &json!({"n": null})).unwrap();
+    assert_eq!(Value::Object(made.repaired), json!({}));
+    let paths: Vec<_> = made
+        .repairs
+        .iter()
+        .map(|r| (r.path.as_str(), r.fix))
+        .collect();
+    assert_eq!(paths, [("/n", RepairFix::NullDropped)]);
     assert_eq!(repair(&schema, &json!({"n": "5"})), None);
     let one = object(json!({"n": {"type": ["integer"]}}));
     assert_eq!(repair(&one, &json!({"n": "5"})).unwrap().repaired["n"], 5);
+    // A lone `"null"` type and an untyped schema keep the null.
+    let untyped = object(json!({"n": {}, "z": {"type": "null"}}));
+    assert_eq!(repair(&untyped, &json!({"n": null, "z": null})), None);
+    // A required single-type property keeps its null.
+    let required_single = json!({
+        "type": "object",
+        "properties": {"n": {"type": "integer"}},
+        "required": ["n"]
+    });
+    assert_eq!(repair(&required_single, &json!({"n": null})), None);
 }
 
 #[test]

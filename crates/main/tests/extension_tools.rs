@@ -228,6 +228,19 @@ fn saying(name: &str, said: &str) -> String {
     )
 }
 
+/// A tool registration like [`tool`], but with `schema` as its
+/// `input_schema` Lua table instead of the fixed `{ type = "object" }`.
+fn tool_with_schema(name: &str, schema: &str, effects: &str, run: &str, timeout: &str) -> String {
+    let timeout = if timeout.is_empty() {
+        String::new()
+    } else {
+        format!(" timeout = {timeout},")
+    };
+    format!(
+        "fiber.tool(\"{name}\", {{ description = \"The {name} tool.\", input_schema = {schema},{timeout} effects = {effects}, run = {run} }})\n"
+    )
+}
+
 #[test]
 fn an_extension_tool_is_declared_in_full_runs_and_its_result_passes_the_hooks() {
     let setup = Setup::new_with_fm_root();
@@ -520,4 +533,46 @@ fn a_tool_spinning_past_its_timeout_fails_timeout_and_the_session_goes_on() {
         completed["error"]["message"],
         "`fiber.test/slow`: `spin` passed its 200 ms timeout and was stopped."
     );
+}
+
+#[test]
+fn a_null_for_a_nullable_property_reaches_the_tool_as_absent() {
+    let setup = Setup::new_with_fm_root();
+    let server = calling(&[
+        function_call("call_maybe", "maybe_tag", &json!({"tag": null})),
+        function_call("call_req", "req_tag", &json!({"tag": null})),
+    ]);
+    setup.provider(&server);
+    // A JSON null reaches Lua as null lightuserdata, while an absent key
+    // is nil, so `args.tag == nil` tells absent from json-null.
+    let run_body =
+        "function(args) if args.tag == nil then return \"absent\" else return \"present\" end end";
+    let effects = "{ effects = { \"reads\" }, reversible = true }";
+    setup.lua(
+        "nul",
+        &format!(
+            "{}{}",
+            tool_with_schema(
+                "maybe_tag",
+                "{ type = \"object\", properties = { tag = { type = {\"string\", \"null\"} } } }",
+                effects,
+                run_body,
+                "2000",
+            ),
+            tool_with_schema(
+                "req_tag",
+                "{ type = \"object\", properties = { tag = { type = {\"string\", \"null\"} } }, required = {\"tag\"} }",
+                effects,
+                run_body,
+                "2000",
+            ),
+        ),
+    );
+    let run = ask(&setup, "check the tags");
+    let completed = run.all("tool_call_completed");
+    assert_eq!(completed.len(), 2, "{:?}", run.kinds());
+    for done in &completed {
+        assert_eq!(done["payload"]["status"], "completed");
+    }
+    assert_eq!(outputs_sent(&server), ["absent", "absent"]);
 }
