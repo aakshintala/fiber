@@ -717,6 +717,7 @@ fn offer_rig() -> crate::test_support::Rig {
 
 /// The session's tools and servers, built inside a deadline: `db` waits
 /// for the post-offer load, and `extension_tools` ride after the rest.
+#[allow(clippy::type_complexity, reason = "one session's tools and servers")]
 fn wired(
     rig: &crate::test_support::Rig,
     extension_tools: Vec<(String, std::sync::Arc<dyn contract::tool::Tool>)>,

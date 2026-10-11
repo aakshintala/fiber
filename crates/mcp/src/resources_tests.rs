@@ -701,7 +701,7 @@ fn text_of(out: &contract::tool::Output) -> Vec<String> {
         .map(|part| match part {
             ContentPart::Text { text } => text.clone(),
             ContentPart::Image { .. } => "<image>".to_owned(),
-            _ => "<other>".to_owned(),
+            ContentPart::Pdf(_) | ContentPart::Unknown => "<other>".to_owned(),
         })
         .collect()
 }
