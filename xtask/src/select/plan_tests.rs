@@ -294,6 +294,63 @@ fn a_pull_request_touching_a_release_path_lookalike_skips_the_release_job() {
     }
 }
 
+#[test]
+fn a_docs_only_pull_request_touching_the_bench_crate_runs_no_job() {
+    let plan = plan(
+        "docs",
+        &[],
+        "pull_request",
+        false,
+        true,
+        true,
+        100,
+        &strings(&["crates/bench/README.md"]),
+    );
+    assert_eq!(
+        plan,
+        Plan {
+            jobs: jobs(false, false, false, false, false),
+            shards: 0
+        }
+    );
+}
+
+#[test]
+fn an_ordinary_docs_only_pull_request_still_runs_no_job() {
+    let plan = plan(
+        "docs",
+        &[],
+        "pull_request",
+        false,
+        true,
+        true,
+        100,
+        &strings(&["docs/workflow.md", "README.md"]),
+    );
+    assert_eq!(
+        plan,
+        Plan {
+            jobs: jobs(false, false, false, false, false),
+            shards: 0
+        }
+    );
+}
+
+#[test]
+fn a_code_pull_request_with_a_bench_readme_skips_the_release_job() {
+    let plan = plan(
+        "crates",
+        &strings(&["log"]),
+        "pull_request",
+        false,
+        false,
+        true,
+        100,
+        &strings(&["crates/log/src/lib.rs", "crates/bench/README.md"]),
+    );
+    assert!(!plan.jobs["release"]);
+}
+
 fn results(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
         .iter()
