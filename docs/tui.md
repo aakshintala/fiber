@@ -224,9 +224,10 @@ others in the order their first session started. The rail is drawn from the
 hub's feed (`docs/invocation.md`, "The hub") and shows while two or more
 sessions are live. Home never shows it.
 
-A project header holds the project's name, a "+" that starts a session in
-that project, the summed spend of its live sessions, and "N done", the count
-of its exited sessions, which opens home's session list for that project.
+A project header holds the project's name, bold in the accent colour, a "+"
+that starts a session in that project, and, right-aligned and dim, the summed
+spend of its live sessions and "N ✓", the count of its exited sessions, which
+opens home's session list for that project.
 
 Each card is four rows on its own tint, inside ▄ and ▀ edges, with a ▌ stripe
 on the left in the state's colour:
@@ -243,10 +244,11 @@ on the left in the state's colour:
 1. the card's number, the state glyph and its word, and how long the session
    has been in that state, in one unit (`16s`, `9m`, `2h`, `3d`)
 2. the name, or the first prompt when it has none
-3. what it waits on, in the attention colour, while it waits; otherwise its
-   git branch
+3. what it waits on, in the attention colour, while it waits; otherwise a dim
+   ⎇ and its git branch
 4. its spend, a bar of how full its context is, and the percentage. The bar
-   turns the warning colour from 60% and the error colour from 85%.
+   fills with ▆ on a ░ track in `rule`; the fill turns the warning colour from
+   60% and the error colour from 85%.
 
 Text on each side keeps the same margin from the card's edge. Below a 30-column
 rail the bar goes and the spend and percentage stay. The session on screen
@@ -377,7 +379,7 @@ cut with "…". The cards draw:
   `error` with the share when little is left.
 
 With the rail hidden and sessions waiting, the Session card ends with "! N
-waiting · rail hidden · show" in `attention`, the "!" bold; a click on it
+waiting · hidden · show" in `attention`, the "!" bold; a click on it
 shows the rail.
 
 The context bar is drawn against `preamble_built`'s `context_window` and
@@ -1069,8 +1071,10 @@ handled on click: an escape sequence in a cell breaks the width measure.
 Markdown links (tables included) and bare `http://`/`https://` URLs open
 on click; schemes are `http`, `https` and `mailto`. A click runs `open` or
 `xdg-open` on the terminal's machine; over SSH or with no opener the click
-copies the URL and shows "Copied". A focused link opens with Enter and
-copies with `y`.
+copies the URL and shows "Copied". A link is in the accent colour,
+underlined. A focused link sits on the `surface_raised` tint, with "Enter opens
+· y copies" dim under it, and opens with Enter and copies with `y`. A hovered
+link takes the `hover` tint.
 
 A copy, link or image command still running after 10 seconds is stopped;
 what it started keeps running.
@@ -1596,8 +1600,8 @@ The roles, in order, with the dark theme's values:
 | Role | What it colours | Dark |
 |---|---|---|
 | `text` | the full text colour: replies, the draft, anything with no role of its own | the terminal's foreground |
-| `muted` | what the doc calls dim: READY, labels and hints, summary lines and results, the ▣ line, block quote bars, grips, the logo's counters | `text`, dim |
-| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's title and selection bar | `#6eaafe` |
+| `muted` | what the doc calls dim: READY, labels and hints, summary lines and results, block quote bars, grips, the logo's counters | `text`, dim |
+| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's title and selection bar, a project header's name, links and the ▣ line | `#6eaafe` |
 | `heading` | markdown headings | `#ff9f43` |
 | `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded, a login's ✓ | `#6eaafe` |
 | `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` |
@@ -1682,6 +1686,11 @@ and draws flat:
 - state in words rather than glyphs
 - images as their one line, never inline
 
+Each line starts with what the item is: "you 14:03:" and the prompt,
+"reply:", "thought:", "tool read src/main.rs: 120 lines", "image:" and the
+image's one line, "waiting: approval for shell rm -rf /tmp/x", "running:
+shell, elapsed 12s", "done: completed, 2 tool calls".
+
 `--screen-reader` and `tui.screen_reader` force the flat mode on or off.
 
 ### Images
@@ -1700,7 +1709,8 @@ image, in the prompt bubble.
 - An image part in the log carries its width and height, so paging counts its
   rows without decoding it.
 
-Elsewhere an image is one clickable line, `▣ screenshot.png · 1280×800`.
+Elsewhere an image is one clickable line, `▣ screenshot.png · 1280×800`, in
+the link look ("Links"); in a ledger row it sits under the call's row.
 An image the terminal cannot show, because its file is missing or too
 large or the terminal refused it, is its one line, with a notice saying
 why, and is not asked for again in that session.
