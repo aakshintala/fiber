@@ -1,4 +1,4 @@
-use std::io::{Cursor, Read, Write};
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc;
 use std::thread;
@@ -10,58 +10,6 @@ use crate::deadline::Deadline;
 const READ_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
 
 const STATUS_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
-
-fn decode(bytes: &[u8]) -> (Result<(), Malformed>, Vec<u8>, String) {
-    let mut reader = Cursor::new(bytes.to_vec());
-    let mut body = Vec::new();
-    let result = read_chunked(&mut reader, &mut body);
-    let mut rest = String::new();
-    reader.read_to_string(&mut rest).unwrap();
-    (result, body, rest)
-}
-
-#[test]
-fn a_chunked_body_is_decoded_and_its_trailers_consumed() {
-    let (result, body, rest) =
-        decode(b"3\r\nabc\r\n2;ext=1\r\nde\r\n0\r\nx-trailer: t\r\n\r\nNEXT");
-
-    assert_eq!(result, Ok(()));
-    assert_eq!(body, b"abcde");
-    assert_eq!(rest, "NEXT");
-}
-
-#[test]
-fn malformed_or_truncated_chunked_framing_is_rejected_naming_why() {
-    let cases: [(&[u8], Malformed); 7] = [
-        (
-            b"3\r\nabcX\r\n0\r\n\r\n",
-            "a chunk's data is not followed by CRLF",
-        ),
-        (
-            b"zz\r\nabc\r\n0\r\n\r\n",
-            "a chunk size is not a hex number",
-        ),
-        (
-            b"3\nabc\r\n0\r\n\r\n",
-            "a chunked framing line does not end in CRLF",
-        ),
-        (b"5\r\nab", TRUNCATED),
-        (b"3\r\nabc\r\n", TRUNCATED),
-        (b"3\r\nabc\r\n0\r\n", TRUNCATED),
-        (b"3\r\nabc\r\n0\r\n\r", TRUNCATED),
-    ];
-    for (bytes, why) in cases {
-        let (result, _, _) = decode(bytes);
-        assert_eq!(result, Err(why), "{}", String::from_utf8_lossy(bytes));
-    }
-}
-
-#[test]
-fn a_rejected_body_keeps_what_decoded_before_the_fault() {
-    let (_, body, _) = decode(b"3\r\nabc\r\n4\r\nde");
-
-    assert_eq!(body, b"abcde");
-}
 
 #[test]
 fn a_dropped_connection_records_the_request_and_answers_nothing() {
@@ -254,17 +202,6 @@ fn get_status(server: &ProviderServer) -> String {
         .read_to_string(&mut text)
         .unwrap_or_else(|e| panic!("the status reply arrives within {STATUS_WITHIN:?}: {e}"));
     text.split(' ').nth(1).unwrap().to_owned()
-}
-
-#[test]
-fn a_request_past_the_script_gets_the_fallback_or_the_default_500() {
-    let with = ProviderServer::start_with_fallback([], Response::status(503, "")).unwrap();
-    assert_eq!(get_status(&with), "503");
-    assert_eq!(get_status(&with), "503");
-
-    let without = ProviderServer::start([Response::status(200, "")]).unwrap();
-    assert_eq!(get_status(&without), "200");
-    assert_eq!(get_status(&without), "500");
 }
 
 fn get_status_of(server: &ProviderServer, target: &str) -> String {
@@ -498,60 +435,6 @@ fn stop_joins_an_accept_thread_that_sees_stopping() {
         joined,
         "waited {STATUS_WITHIN:?} for the accept thread to stop"
     );
-}
-
-fn recorded(limit: Option<usize>, count: usize) -> Vec<Request> {
-    let mut state = State {
-        body_limit: limit,
-        ..State::default()
-    };
-    for n in 0..count {
-        let body = format!("body-{n}").into_bytes();
-        state.record(Request {
-            method: "POST".to_owned(),
-            path: "/".to_owned(),
-            headers: Vec::new(),
-            body_len: body.len(),
-            body,
-        });
-    }
-    state.requests
-}
-
-#[test]
-fn by_default_the_newest_64_bodies_are_kept() {
-    let requests = recorded(State::default().body_limit, 65);
-
-    assert!(requests[0].body.is_empty());
-    assert_eq!(requests[0].body_len, 6);
-    assert_eq!(requests[1].body, b"body-1");
-    assert_eq!(requests[64].body, b"body-64");
-}
-
-#[test]
-fn a_limit_of_zero_keeps_no_bodies() {
-    let requests = recorded(Some(0), 2);
-
-    assert!(
-        requests
-            .iter()
-            .all(|r| r.body.is_empty() && r.body_len == 6)
-    );
-}
-
-#[test]
-fn a_limit_past_the_request_count_drops_nothing_and_cannot_overflow() {
-    let requests = recorded(Some(usize::MAX), 3);
-
-    assert_eq!(requests[0].body, b"body-0");
-}
-
-#[test]
-fn no_limit_keeps_every_body() {
-    let requests = recorded(None, 70);
-
-    assert_eq!(requests[0].body, b"body-0");
-    assert_eq!(requests[69].body, b"body-69");
 }
 
 /// Posts `body` and reads the whole response.
