@@ -32,12 +32,16 @@ jobs:
   profile:
     runs-on: ubuntu-24.04
     # No history yet; generous until a few runs set a median. The job builds
-    # fiber and inferno cold, then runs the timing benchmarks
+    # fiber, the paging jig and inferno cold, then runs the timing benchmarks
     # under perf.
     timeout-minutes: 60
     env:
       # C code (lua-src, ring) compiles against musl's headers (ci.yml's Release job).
       CC_x86_64_unknown_linux_musl: musl-gcc
+      # perf's DWARF unwinder gave every user sample of the static musl binary
+      # an empty stack (run 38109358642); frame pointers unwind it. Job-wide, so the
+      # paging jig reuses fiber's dependency builds.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: -C force-frame-pointers=yes
       FIBER_TARGET: x86_64-unknown-linux-musl
     steps:
       - name: Check out
@@ -88,17 +92,20 @@ jobs:
         env:
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
           CARGO_PROFILE_RELEASE_STRIP: none
-          # perf's DWARF unwinder gave every user sample of the static musl binary
-          # an empty stack (run 38109358642); frame pointers unwind it.
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: -C force-frame-pointers=yes
         run: cargo build --release --locked --target "$FIBER_TARGET" --bin fiber
+
+      # The harness reports the parse, fold and frames stages only from the paging rows.
+      # The fiber flamegraph selects fiber's processes, so the jig's samples stay out of it.
+      - name: Build the paging jig
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+          CARGO_PROFILE_RELEASE_STRIP: none
+        run: cargo build --release --locked --target "$FIBER_TARGET" -p tui --example paging
 
       # The harness is built in the debug profile, as the Release job builds it.
       - name: Build the benchmark harness
         run: cargo build -p bench --example bench
 
-      # No --paging: the paging rows are not attach, and their jig took two thirds of
-      # the samples on the first run.
       # cpu-clock, not the default hardware event: a runner's VM has no PMU counters.
       # --call-graph fp unwinds through fiber's frame pointers; perf follows
       # the child processes the harness spawns. A failed run still uploads what it wrote.
@@ -111,6 +118,7 @@ jobs:
           perf record -e cpu-clock -F 499 --call-graph fp -o "$out/perf.data" -- \
             target/debug/examples/bench \
             --fiber "$PWD/target/$FIBER_TARGET/release/fiber" \
+            --paging "$PWD/target/$FIBER_TARGET/release/examples/paging" \
             --out "$out/bench.json" --only timing --runs 2 || status=$?
           echo "bench exited $status"
           # The harness exits 0 with a failed workload recorded in its file, so only a
@@ -132,6 +140,14 @@ jobs:
           perf report -i "$out/perf.data" --pid "$pids" --no-children -g none \
             --sort dso,sym --stdio > "$out/fiber-symbols.txt"
           perf script -i "$out/perf.data" --pid "$pids" | head -n 400 > "$out/fiber-script-head.txt"
+          # perf showed fiber's samples as bare addresses (run 38112087200): record what
+          # the binary holds and resolve the top addresses without perf.
+          bin="target/$FIBER_TARGET/release/fiber"
+          { file "$bin"; readelf -h "$bin" | grep -E 'Type|Entry'
+            echo "symbols: $(nm --defined-only "$bin" | wc -l)"
+            grep -oE 'fiber +\[\.\] 0x[0-9a-f]+' "$out/fiber-symbols.txt" | head -n 20 |
+              awk '{ print $3 }' | xargs -r addr2line -f -C -e "$bin"
+          } > "$out/fiber-binary.txt" 2>&1 || true
           inferno-flamegraph < "$out/folded.txt" > "$out/flamegraph.svg"
           inferno-flamegraph < "$out/fiber-folded.txt" > "$out/fiber-flamegraph.svg"
           exit "$status"
