@@ -258,12 +258,13 @@ fn reset_view(quota: &Quota, wall: SystemTime) -> Quota {
                             resets_at: Some(at),
                             ..
                         } if *at <= wall => WindowUse::Reset,
-                        used => used.clone(),
+                        WindowUse::Percent { .. } => window.used.clone(),
+                        WindowUse::Reset => WindowUse::Reset,
                     },
                 })
                 .collect(),
         ),
-        quota => quota.clone(),
+        quota @ Quota::Credit { .. } => quota.clone(),
     }
 }
 

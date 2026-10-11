@@ -394,7 +394,10 @@ pub(crate) fn choose_reviewer(
     config: &Config,
     session: &extensions::Model<'_>,
     here: &Here,
-    credential: &mut dyn FnMut(
+    // The lookup returns the label beside the access, so the reviewer's
+    // quota is fetched for the account the lookup read (`docs/tools.md`,
+    // "Provider quota").
+    credential: &mut impl FnMut(
         &config::ProviderData,
     ) -> Result<(String, lua_providers::Access), Failure>,
 ) -> Result<r#loop::Reviewer, Failure> {
