@@ -343,7 +343,9 @@ pub fn kill_matching(text: &str) -> io::Result<()> {
 )]
 fn alive(pid: u32) -> bool {
     let id = checked(pid, "pid").expect("a pid past the pid range is never alive");
-    let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+    let options = WaitIdOptions::EXITED
+        .union(WaitIdOptions::NOHANG)
+        .union(WaitIdOptions::NOWAIT);
     match rustix::process::waitid(WaitId::Pid(id), options) {
         Ok(Some(_)) => false,
         Ok(None) | Err(_) => rustix::process::test_kill_process(id).is_ok(),
