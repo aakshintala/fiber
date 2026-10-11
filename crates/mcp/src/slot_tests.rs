@@ -1177,6 +1177,65 @@ fn an_expired_remote_session_renews_without_a_record_or_a_restart() {
 }
 
 #[test]
+fn an_expired_old_server_cannot_expire_its_replacement() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let setup = Setup::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let server = remote_server({
+        let calls = Arc::clone(&calls);
+        move |req: &fakes::Request| {
+            if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                fakes::Response::status(404, "ended")
+            } else {
+                echo_call(req)
+            }
+        }
+    });
+    let url = format!("{}/mcp", server.url());
+    let started = setup.start(vec![setup.remote_spec("fx", &url)]);
+    assert!(started.failed.is_empty());
+    let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
+    let old = match &*super::lock(&slot.state) {
+        State::Running { server, .. } => Arc::clone(server),
+        State::NotStarted { .. }
+        | State::Down { .. }
+        | State::Expired { .. }
+        | State::Dead { .. } => panic!("the initial server runs"),
+    };
+    let tool = setup.tool(&started, "mcp__fx__echo");
+    let expired = setup.run(&tool);
+    assert_eq!(code(&expired), Some(ErrorCode::McpServerUnavailable));
+    assert!(expired.servers.is_empty(), "expiry uses no restart record");
+
+    let replacement = match setup.serve(&slot) {
+        Served::Up(server, records) => {
+            assert!(records.is_empty(), "renewal is not a restart");
+            server
+        }
+        Served::Failed(failed) => panic!("renewal succeeds: {:?}", failed.error),
+    };
+    assert_eq!(http_count(&server, "initialize"), 2);
+
+    // Model the late expiry notification after a newer server has replaced
+    // the one that expired. It must not move the replacement out of Running.
+    slot.expire(&old);
+    let still_current = match setup.serve(&slot) {
+        Served::Up(server, records) => {
+            assert!(records.is_empty(), "the replacement remains live");
+            server
+        }
+        Served::Failed(failed) => panic!("the replacement stays up: {:?}", failed.error),
+    };
+    assert!(Arc::ptr_eq(&replacement, &still_current));
+    assert_eq!(
+        http_count(&server, "initialize"),
+        2,
+        "a stale expiry does not initialize a third server",
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
 fn an_idle_expired_server_renews_on_its_next_call_without_a_record() {
     let setup = Setup::new();
     let server = remote_server(|_| fakes::Response::status(404, "ended"));

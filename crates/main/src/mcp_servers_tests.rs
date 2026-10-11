@@ -164,6 +164,24 @@ fn a_repositorys_entry_wins_over_the_global_one() {
 }
 
 #[test]
+fn a_repository_declaration_gates_a_persons_command_without_command_provenance() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"required": true}}}}));
+    let specs = setup.specs();
+    assert!(
+        specs.specs.is_empty(),
+        "the declaration is not person-owned"
+    );
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the repository declaration gates the person's command");
+    };
+    assert_eq!(gated.spec.name, "fx");
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
+    assert_eq!(gated.fields.command, None, "command provenance is global");
+}
+
+#[test]
 fn a_repositorys_server_is_repository_code() {
     let setup = Setup::new();
     setup.repository(&json!({"mcp": {"servers": {"repo": {"command": "/bin/bash"}}}}));

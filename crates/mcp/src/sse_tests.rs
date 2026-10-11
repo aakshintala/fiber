@@ -102,9 +102,19 @@ fn a_line_past_max_line_is_too_long() {
 }
 
 #[test]
+fn a_line_at_exactly_max_line_is_accepted() {
+    // The no-newline path checks the cap directly; `>=` rejects this exact
+    // length even though only a longer line is too long.
+    let mut reader = Cursor::new(vec![b'x'; super::super::pipes::MAX_LINE]);
+    match super::read_line(&mut reader) {
+        super::ReadLine::Line(line) => assert_eq!(line.len(), super::super::pipes::MAX_LINE),
+        super::ReadLine::Eof => panic!("the exact-cap line is present"),
+        super::ReadLine::TooLong => panic!("the exact-cap line is accepted"),
+    }
+}
+
+#[test]
 fn a_line_at_exactly_max_line_is_an_event() {
-    // `>=` would end the read here; only `>` lets exactly `MAX_LINE`
-    // bytes through.
     let mut body = b"data: ".to_vec();
     body.extend(std::iter::repeat_n(
         b'x',
@@ -119,6 +129,15 @@ fn a_line_at_exactly_max_line_is_an_event() {
         Next::End => panic!("exactly MAX_LINE bytes is an event, got the end"),
         Next::TooLong => panic!("exactly MAX_LINE bytes is an event, got too long"),
     }
+}
+
+#[test]
+fn a_line_one_past_max_line_is_too_long_without_a_newline() {
+    let mut reader = Cursor::new(vec![b'x'; super::super::pipes::MAX_LINE + 1]);
+    assert!(matches!(
+        super::read_line(&mut reader),
+        super::ReadLine::TooLong
+    ));
 }
 
 #[test]

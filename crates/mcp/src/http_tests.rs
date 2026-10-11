@@ -3,6 +3,8 @@
 //! [`ProviderServer::requests`], recorded before the response is sent, so
 //! no row depends on arrival order.
 
+use std::io::Read;
+use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -163,6 +165,19 @@ fn standard() -> impl Fn(&Request) -> Response + Send + Sync + 'static {
 /// The tool names `listed` holds.
 fn listed_names(listed: &crate::cache::Cached) -> Vec<String> {
     listed.tools.iter().map(|tool| tool.name.clone()).collect()
+}
+
+/// One connected TCP pair, with a deadline on both socket operations.
+fn socket_pair() -> (TcpStream, TcpStream) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("the local listener binds");
+    let address = listener.local_addr().expect("the listener address");
+    let client = fakes::within("the local socket connect", WITHIN, move || {
+        TcpStream::connect(address)
+    })
+    .expect("the local socket connects");
+    let (peer, _) = fakes::within("the local socket accept", WITHIN, move || listener.accept())
+        .expect("the local socket is accepted");
+    (client, peer)
 }
 
 #[test]
@@ -501,6 +516,33 @@ fn an_initialize_answered_404_without_an_endpoint_stream_names_its_status() {
             error,
             StartError::StartFailed("The server answered HTTP 404.".to_owned()),
             "row {name}: the POST's status, not HTTP+SSE"
+        );
+    }
+}
+
+#[test]
+fn a_legacy_probe_requires_both_a_success_status_and_an_event_stream() {
+    let endpoint = b"event: endpoint\ndata: /messages?sessionId=abc\n\n".to_vec();
+    for (name, status, media) in [
+        ("success_without_sse", 200, "text/plain"),
+        ("sse_without_success", 404, "text/event-stream"),
+    ] {
+        let setup = Setup::new();
+        let probe = Response {
+            status,
+            headers: vec![("content-type".to_owned(), media.to_owned())],
+            body: endpoint.clone(),
+            drop_connection: false,
+            stall: false,
+        };
+        let server =
+            ProviderServer::start([Response::status(405, "method not allowed"), probe]).unwrap();
+        let url = format!("{}/mcp", server.url());
+        let error = setup.start_err(&url, Duration::from_secs(5));
+        assert_eq!(
+            error,
+            StartError::StartFailed("The server answered HTTP 405.".to_owned()),
+            "row {name}: only a 2xx event stream can identify legacy HTTP+SSE",
         );
     }
 }
@@ -900,6 +942,53 @@ fn a_dropped_connection_a_cut_stream_and_an_overlong_body_are_deaths() {
 }
 
 #[test]
+fn a_body_one_past_max_line_is_rejected() {
+    let setup = Setup::new();
+    let server = ProviderServer::start_responding(move |req: &Request| {
+        if req.method == "DELETE" {
+            return Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => Response::status(
+                200,
+                result(
+                    &id,
+                    json!({
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "remote", "version": "1"},
+                    }),
+                ),
+            )
+            .header("mcp-session-id", SESSION),
+            Some("tools/list") => Response::status(200, result(&id, json!({"tools": []}))),
+            Some("tools/call") => {
+                let mut answer = result(&id, json!({"content": []}));
+                answer.push_str(&" ".repeat(crate::pipes::MAX_LINE - answer.len()));
+                assert_eq!(answer.len(), crate::pipes::MAX_LINE);
+                answer.push(' ');
+                Response::status(200, answer)
+            }
+            _ => Response::status(202, ""),
+        }
+    })
+    .unwrap();
+    let (remote, _listed) = setup.start(&server, Duration::from_secs(5));
+    let error = setup
+        .call(
+            &remote,
+            "tools/call",
+            Duration::from_secs(60),
+            &fakes::CancelToken::new(),
+        )
+        .expect_err("one byte past the body cap ends the exchange");
+    assert_eq!(error, CallError::Gone);
+    assert!(remote.is_gone(), "the overlong answer ends the server");
+}
+
+#[test]
 fn a_body_at_exactly_max_line_carrying_the_answer_returns_it() {
     // `>` into `>=` fails the start here: the cap still lets a full
     // answer through.
@@ -925,8 +1014,11 @@ fn a_body_at_exactly_max_line_carrying_the_answer_returns_it() {
             .header("mcp-session-id", SESSION),
             Some("tools/list") => Response::status(200, result(&id, json!({"tools": []}))),
             Some("tools/call") => {
-                let mut padded = result(&id, json!({"content": []}));
-                padded.push_str(&" ".repeat(crate::pipes::MAX_LINE - padded.len()));
+                let mut answer = json!({"content": [{"text": "", "type": "text"}]});
+                let empty = result(&id, answer.clone());
+                answer["content"][0]["text"] =
+                    json!("x".repeat(crate::pipes::MAX_LINE - empty.len()));
+                let padded = result(&id, answer);
                 assert_eq!(padded.len(), crate::pipes::MAX_LINE);
                 Response::status(200, padded)
             }
@@ -943,7 +1035,14 @@ fn a_body_at_exactly_max_line_carrying_the_answer_returns_it() {
             &fakes::CancelToken::new(),
         )
         .expect("a full-size answer returns");
-    assert_eq!(answered.get("content"), Some(&json!([])));
+    let text = answered
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| content.first())
+        .and_then(|part| part.get("text"))
+        .and_then(Value::as_str)
+        .expect("the full-size answer carries text");
+    assert!(!text.is_empty());
     assert!(!remote.is_gone());
 }
 
@@ -1543,6 +1642,103 @@ fn stop_after_expiry_sends_no_goodbye() {
         "no goodbye after expiry: {:?}",
         server.requests()
     );
+}
+
+#[test]
+fn the_pump_does_not_delete_an_expired_session() {
+    let server = ProviderServer::start_responding(|_| Response::status(200, "")).unwrap();
+    let link = Arc::new(super::Link::new(
+        format!("{}/mcp", server.url()),
+        None,
+        net::LIMITS,
+    ));
+    link.set_session(SESSION.to_owned());
+    let shared = Arc::new(crate::wait::Shared::default());
+    shared.insert(1);
+    assert!(shared.expire_if_awaiting(1), "the session is expired");
+    let (incoming_sender, incoming) = std::sync::mpsc::channel();
+    drop(incoming_sender);
+    let (writer, _outgoing) = std::sync::mpsc::sync_channel(1);
+    let writer = Arc::new(writer);
+    let weak_writer = Arc::downgrade(&writer);
+    let (done, finished) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        super::pump(incoming, link, shared, weak_writer);
+        done.send(()).expect("the pump finished");
+    });
+    Deadline::after(WITHIN)
+        .recv(&finished)
+        .unwrap_or_else(|_| panic!("the pump finishes within {WITHIN:?}"));
+    assert!(
+        server
+            .requests()
+            .iter()
+            .all(|request| request.method != "DELETE"),
+        "expiry is not a goodbye: {:?}",
+        server.requests()
+    );
+}
+
+#[test]
+fn link_keep_refuses_a_socket_for_a_closed_link() {
+    let link = super::Link::new("http://127.0.0.1/mcp".to_owned(), None, net::LIMITS);
+    link.close();
+    let (socket, _peer) = socket_pair();
+    assert!(
+        link.keep(7, &socket).is_err(),
+        "closed links refuse sockets"
+    );
+    assert!(link.stopped(7), "closed links are stopped");
+    let exchange = super::Exchange {
+        id: 7,
+        link: Arc::new(link),
+    };
+    assert!(net::Keep::is_stopped(&exchange), "the exchange is stopped");
+}
+
+#[test]
+fn link_keep_refuses_a_socket_for_an_abandoned_exchange() {
+    let link = super::Link::new("http://127.0.0.1/mcp".to_owned(), None, net::LIMITS);
+    link.abandon(7);
+    let (socket, _peer) = socket_pair();
+    assert!(
+        link.keep(7, &socket).is_err(),
+        "an abandoned exchange refuses sockets",
+    );
+    assert!(link.stopped(7), "an abandoned exchange is stopped");
+    let exchange = super::Exchange {
+        id: 7,
+        link: Arc::new(link),
+    };
+    assert!(net::Keep::is_stopped(&exchange), "the exchange is stopped");
+}
+
+#[test]
+fn link_close_shuts_every_live_socket() {
+    let link = super::Link::new("http://127.0.0.1/mcp".to_owned(), None, net::LIMITS);
+    let (first, first_peer) = socket_pair();
+    let (second, second_peer) = socket_pair();
+    link.keep(1, &first).expect("the first socket is kept");
+    link.keep(2, &second).expect("the second socket is kept");
+    link.close();
+    for (label, mut peer) in [("first", first_peer), ("second", second_peer)] {
+        peer.set_read_timeout(Some(Duration::from_millis(100)))
+            .expect("the read has a kernel bound");
+        let (done, result) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let mut byte = [0];
+            done.send(peer.read(&mut byte))
+                .expect("the read is collected");
+        });
+        let read = Deadline::after(WITHIN)
+            .recv(&result)
+            .unwrap_or_else(|_| panic!("the {label} socket closes within {WITHIN:?}"));
+        assert_eq!(
+            read.expect("the peer read succeeds"),
+            0,
+            "{label} socket EOF"
+        );
+    }
 }
 
 #[test]
