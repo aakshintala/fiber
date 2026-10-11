@@ -234,13 +234,13 @@ fn delegate_input(w: usize) -> Vec<super::Row> {
 fn running_rows() -> Vec<super::Row> {
     vec![
         row(vec![sp("Delegates · 2 running", bold())]),
+        row(vec![sp("◆ docs: rail spec · 9m", Style::new())]),
+        row(vec![sp("  opus-5-5 · high · 3 calls · s_b82c1d", dim())]),
         row(vec![sp(
             "◆ review: the wait_for_path sweep · 4m",
             Style::new(),
         )]),
         row(vec![sp("  opus-5-5 · high · 12 calls · s_d417a0", dim())]),
-        row(vec![sp("◆ docs: rail spec · 9m", Style::new())]),
-        row(vec![sp("  opus-5-5 · high · 3 calls · s_b82c1d", dim())]),
         super::Row::default(),
         row(vec![sp("Jobs · 1 running", bold())]),
         row(vec![sp("◆ cargo test --watch · 2m · s_j42", Style::new())]),
@@ -408,7 +408,7 @@ fn tools_rows() -> Vec<super::Row> {
         super::Row::default(),
         row(vec![sp("Extension · notes", bold())]),
         row(vec![
-            sp("notes_save · loaded · ~400 · this project ", Style::new()),
+            sp("notes_save · full · ~400 · this project ", Style::new()),
             switch(false),
             sp(" · everywhere ", Style::new()),
             switch(true),
@@ -496,94 +496,125 @@ fn skills_rows() -> Vec<super::Row> {
     ]
 }
 
-fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
+/// Rows painted at `w`: the terminal width, except a slab that keeps its
+/// own width, such as the job's 80-column screen.
+fn placed(rows: Vec<super::Row>, w: u16) -> Vec<Placed> {
+    rows.into_iter()
+        .map(|row| Placed { x: 0, w, row })
+        .collect()
+}
+
+fn body_rows(c: &Look, cols: usize) -> Vec<Placed> {
+    let full = cols as u16;
+    let blank = || Placed {
+        x: 0,
+        w: full,
+        row: super::Row::default(),
+    };
     match c.kind {
         Kind::Delegate => {
-            let mut out = vec![view_header("Delegate", "◆ review")];
-            out.push(super::Row::default());
-            out.push(row(vec![sp(
-                "main › ◆ review: the wait_for_path sweep",
-                bold(),
-            )]));
-            out.push(super::Row::default());
-            out.extend(delegate_status(cols));
-            out.push(super::Row::default());
-            out.extend(delegate_transcript(cols));
-            out.push(super::Row::default());
-            out.extend(delegate_input(cols));
+            let mut out = placed(vec![view_header("Delegate", "◆ review")], full);
+            out.push(blank());
+            out.extend(placed(
+                vec![row(vec![sp(
+                    "main › ◆ review: the wait_for_path sweep",
+                    bold(),
+                )])],
+                full,
+            ));
+            out.push(blank());
+            out.extend(placed(delegate_status(cols), full));
+            out.push(blank());
+            out.extend(placed(delegate_transcript(cols), full));
+            out.push(blank());
+            out.extend(placed(delegate_input(cols), full));
             out
         }
         Kind::Running => {
-            let mut out = vec![view_header("Running", "delegates · jobs")];
-            out.push(super::Row::default());
-            out.extend(running_rows());
+            let mut out = placed(vec![view_header("Running", "delegates · jobs")], full);
+            out.push(blank());
+            out.extend(placed(running_rows(), full));
             out
         }
         Kind::Usage => {
-            let mut out = vec![view_header("Usage", "/usage")];
-            out.push(super::Row::default());
-            out.extend(usage_rows());
+            let mut out = placed(vec![view_header("Usage", "/usage")], full);
+            out.push(blank());
+            out.extend(placed(usage_rows(), full));
             out
         }
         Kind::ChangedFiles => {
-            let mut out = vec![view_header("Changed files", "diff against HEAD")];
-            out.push(super::Row::default());
-            out.extend(changed_files_rows(cols));
+            let mut out = placed(
+                vec![view_header("Changed files", "diff against HEAD")],
+                full,
+            );
+            out.push(blank());
+            out.extend(placed(changed_files_rows(cols), full));
             out
         }
         Kind::SearchResults => {
-            let mut out = vec![view_header("Search", "⌕ lock")];
-            out.push(super::Row::default());
-            out.extend(search_results_rows());
+            let mut out = placed(vec![view_header("Search", "⌕ lock")], full);
+            out.push(blank());
+            out.extend(placed(search_results_rows(), full));
             out
         }
         Kind::Tools => {
-            let mut out = vec![view_header("Tools", "/tools")];
-            out.push(super::Row::default());
-            out.extend(tools_rows());
+            let mut out = placed(vec![view_header("Tools", "/tools")], full);
+            out.push(blank());
+            out.extend(placed(tools_rows(), full));
             out
         }
         Kind::Rules => {
-            let mut out = vec![view_header("Rules", "/rules")];
-            out.push(super::Row::default());
-            out.extend(rules_rows());
+            let mut out = placed(vec![view_header("Rules", "/rules")], full);
+            out.push(blank());
+            out.extend(placed(rules_rows(), full));
             out
         }
         Kind::Settings => {
-            let mut out = vec![view_header("Settings", "/settings")];
-            out.push(super::Row::default());
-            out.extend(settings_rows());
+            let mut out = placed(vec![view_header("Settings", "/settings")], full);
+            out.push(blank());
+            out.extend(placed(settings_rows(), full));
             out
         }
         Kind::Skills => {
-            let mut out = vec![view_header("Skills", "/skills")];
-            out.push(super::Row::default());
-            out.extend(skills_rows());
+            let mut out = placed(vec![view_header("Skills", "/skills")], full);
+            out.push(blank());
+            out.extend(placed(skills_rows(), full));
             out
         }
         Kind::JobPty => {
-            let mut out = vec![view_header("Job", "◆ cargo test")];
-            out.push(super::Row::default());
-            out.push(row(vec![
-                sp("job s_j42 · cargo test --watch · running 2m", Style::new()),
-                sp(" · ", dim()),
-                sp("■ stop ends it", fg(RED)),
-            ]));
-            out.push(super::Row::default());
-            out.push(row(vec![sp(
-                "live screen · 80 columns × 24 rows from attach",
-                dim(),
-            )]));
-            out.extend(slab(pty_screen_rows(), BW, None, 80));
-            out.push(super::Row::default());
-            out.extend(slab(
+            let mut out = placed(vec![view_header("Job", "◆ cargo test")], full);
+            out.push(blank());
+            out.extend(placed(
                 vec![row(vec![
-                    sp("› █", Style::new()),
-                    sp(" type into the job (job_input)", dim()),
+                    sp("job s_j42 · cargo test --watch · running 2m", Style::new()),
+                    sp(" · ", dim()),
+                    sp("■ stop ends it", fg(RED)),
                 ])],
-                BI,
-                None,
-                cols,
+                full,
+            ));
+            out.push(blank());
+            out.extend(placed(
+                vec![row(vec![sp(
+                    "live screen · 80 columns × 24 rows from attach",
+                    dim(),
+                )])],
+                full,
+            ));
+            // The screen keeps its own 80 columns: painted at the terminal
+            // width, its background would run past its edges.
+            out.extend(placed(slab(pty_screen_rows(), BW, None, 80), 80));
+            out.push(blank());
+            out.extend(placed(
+                slab(
+                    vec![row(vec![
+                        sp("› █", Style::new()),
+                        sp(" type into the job (job_input)", dim()),
+                    ])],
+                    BI,
+                    None,
+                    cols,
+                ),
+                full,
             ));
             out
         }
@@ -594,19 +625,14 @@ fn frame(c: &Look, cols: usize, rows: usize) -> Frame {
     let mut body = body_rows(c, cols);
     body.truncate(rows);
     while body.len() < rows {
-        body.push(super::Row::default());
+        body.push(Placed {
+            x: 0,
+            w: cols as u16,
+            row: super::Row::default(),
+        });
     }
     Frame {
-        screen: body
-            .into_iter()
-            .map(|r| {
-                vec![Placed {
-                    x: 0,
-                    w: cols as u16,
-                    row: r,
-                }]
-            })
-            .collect(),
+        screen: body.into_iter().map(|p| vec![p]).collect(),
     }
 }
 
@@ -694,6 +720,18 @@ mod tests {
             .join("\n")
     }
 
+    /// The buffer's text, one line per row, as `draw` painted it.
+    fn buf_text(buf: &Buffer, cols: usize, rows: usize) -> String {
+        (0..rows as u16)
+            .map(|y| {
+                (0..cols as u16)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Paints a case into a buffer, as `draw` does.
     fn buffer(c: &Look, cols: usize, rows: usize) -> Buffer {
         let mut buf = Buffer::empty(Rect::new(0, 0, cols as u16, rows as u16));
@@ -708,9 +746,7 @@ mod tests {
 
     /// The swapped-view top row: the surface tint, the name bold, the command
     /// dim, and "Esc returns" dim right-aligned.
-    fn assert_header(buf: &Buffer, case: &str, name: &str, cmd: &str, cols: usize) {
-        let spans = &frame(&parse_case(case), cols, 48).screen[0][0].row.spans;
-        let _ = spans;
+    fn assert_header(buf: &Buffer, name: &str, cmd: &str, cols: usize) {
         // The surface tint runs the whole row.
         for x in [0, cols as u16 / 2, cols as u16 - 1] {
             assert_eq!(buf[(x, 0)].bg, BI, "no surface tint at {x}");
@@ -770,7 +806,7 @@ mod tests {
         for cols in [160, NARROW] {
             let c = parse_case("delegate-view");
             let buf = buffer(&c, cols, 48);
-            assert_header(&buf, "delegate-view", "Delegate", "◆ review", cols);
+            assert_header(&buf, "Delegate", "◆ review", cols);
         }
     }
 
@@ -796,7 +832,7 @@ mod tests {
         for cols in [160, NARROW] {
             let c = parse_case("job-pty");
             let buf = buffer(&c, cols, 48);
-            assert_header(&buf, "job-pty", "Job", "◆ cargo test", cols);
+            assert_header(&buf, "Job", "◆ cargo test", cols);
         }
     }
 
@@ -829,6 +865,34 @@ mod tests {
     }
 
     #[test]
+    fn job_pty_screen_background_ends_at_column_80() {
+        use ratatui::style::Color;
+        let c = parse_case("job-pty");
+        let buf = buffer(&c, 160, 48);
+        let t = buf_text(&buf, 160, 48);
+        let lines: Vec<&str> = t.lines().collect();
+        let top = lines
+            .iter()
+            .position(|l| l.contains("$ cargo test --watch"))
+            .unwrap();
+        // The slab's edge rows frame the 24 screen rows.
+        assert!(lines[top - 1].starts_with("▄"), "no top edge");
+        assert!(lines[top + 24].starts_with("▀"), "no bottom edge");
+        for (i, y) in (top..top + 24).enumerate() {
+            for x in [0, 39, 79] {
+                assert_eq!(buf[(x, y as u16)].bg, BW, "no screen tint at {x},{y}");
+            }
+            for x in [80, 100, 159] {
+                assert_eq!(
+                    buf[(x, y as u16)].bg,
+                    Color::Reset,
+                    "screen row {i} background runs past column 80"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn job_pty_failed_lines_read_red() {
         let rows = pty_screen_rows();
         let failed: Vec<_> = rows
@@ -851,7 +915,7 @@ mod tests {
         for cols in [160, NARROW] {
             let c = parse_case("running");
             let buf = buffer(&c, cols, 48);
-            assert_header(&buf, "running", "Running", "delegates · jobs", cols);
+            assert_header(&buf, "Running", "delegates · jobs", cols);
         }
     }
 
@@ -871,9 +935,9 @@ mod tests {
             );
             // One row per job.
             assert!(t.contains("◆ cargo test --watch · 2m"), "no job row");
-            // Start order: the first delegate reads before the second.
+            // Start order: docs started 9m ago, review 4m ago.
             assert!(
-                t.find("◆ review:").unwrap() < t.find("◆ docs:").unwrap(),
+                t.find("◆ docs:").unwrap() < t.find("◆ review:").unwrap(),
                 "delegates are not in start order"
             );
             assert!(t.contains("opens that item's view"), "no row hint");
@@ -881,11 +945,22 @@ mod tests {
     }
 
     #[test]
+    fn running_buffer_lists_delegates_in_start_order() {
+        let c = parse_case("running");
+        let buf = buffer(&c, 160, 48);
+        let t = buf_text(&buf, 160, 48);
+        assert!(
+            t.find("◆ docs:").unwrap() < t.find("◆ review:").unwrap(),
+            "delegates are not in start order"
+        );
+    }
+
+    #[test]
     fn usage_header_row() {
         for cols in [160, NARROW] {
             let c = parse_case("usage");
             let buf = buffer(&c, cols, 48);
-            assert_header(&buf, "usage", "Usage", "/usage", cols);
+            assert_header(&buf, "Usage", "/usage", cols);
         }
     }
 
@@ -911,13 +986,7 @@ mod tests {
         for cols in [160, NARROW] {
             let c = parse_case("changed-files");
             let buf = buffer(&c, cols, 48);
-            assert_header(
-                &buf,
-                "changed-files",
-                "Changed files",
-                "diff against HEAD",
-                cols,
-            );
+            assert_header(&buf, "Changed files", "diff against HEAD", cols);
         }
     }
 
@@ -967,7 +1036,7 @@ mod tests {
         for cols in [160, NARROW] {
             let c = parse_case("search-results");
             let buf = buffer(&c, cols, 48);
-            assert_header(&buf, "search-results", "Search", "⌕ lock", cols);
+            assert_header(&buf, "Search", "⌕ lock", cols);
         }
     }
 
@@ -1012,7 +1081,7 @@ mod tests {
         for cols in [160, NARROW] {
             let c = parse_case("tools");
             let buf = buffer(&c, cols, 48);
-            assert_header(&buf, "tools", "Tools", "/tools", cols);
+            assert_header(&buf, "Tools", "/tools", cols);
         }
     }
 
@@ -1026,13 +1095,35 @@ mod tests {
             assert!(t.contains("MCP · linear"), "no MCP section");
             assert!(t.contains("linear_search · deferred"), "no MCP row");
             assert!(t.contains("Extension · notes"), "no extension section");
-            assert!(t.contains("notes_save · loaded"), "no extension row");
+            assert!(t.contains("notes_save · full"), "no extension row");
             assert!(t.contains("this project"), "no project switch");
             assert!(t.contains("everywhere"), "no global switch");
             assert_eq!(t.matches("[on]").count(), 2, "wrong on count");
             assert_eq!(t.matches("[off]").count(), 2, "wrong off count");
             assert!(t.contains("on reload"), "no reload note");
         }
+    }
+
+    #[test]
+    fn tools_every_tool_row_shows_full_or_deferred() {
+        for r in tools_rows() {
+            let plain: String = r.spans.iter().map(|s| s.content.as_ref()).collect();
+            if plain.contains("· ~") {
+                assert!(
+                    plain.contains("full") || plain.contains("deferred"),
+                    "tool row without a full/deferred state: {plain}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tools_buffer_shows_full_or_deferred_states() {
+        let c = parse_case("tools");
+        let buf = buffer(&c, 160, 48);
+        let t = buf_text(&buf, 160, 48);
+        assert!(t.contains("notes_save · full"), "no extension row");
+        assert!(!t.contains("loaded"), "a tool still shows a loaded state");
     }
 
     #[test]
@@ -1063,7 +1154,7 @@ mod tests {
         for cols in [160, NARROW] {
             let c = parse_case("rules");
             let buf = buffer(&c, cols, 48);
-            assert_header(&buf, "rules", "Rules", "/rules", cols);
+            assert_header(&buf, "Rules", "/rules", cols);
         }
     }
 
@@ -1106,7 +1197,7 @@ mod tests {
         for cols in [160, NARROW] {
             let c = parse_case("settings");
             let buf = buffer(&c, cols, 48);
-            assert_header(&buf, "settings", "Settings", "/settings", cols);
+            assert_header(&buf, "Settings", "/settings", cols);
         }
     }
 
@@ -1128,7 +1219,7 @@ mod tests {
         for cols in [160, NARROW] {
             let c = parse_case("skills");
             let buf = buffer(&c, cols, 48);
-            assert_header(&buf, "skills", "Skills", "/skills", cols);
+            assert_header(&buf, "Skills", "/skills", cols);
         }
     }
 
