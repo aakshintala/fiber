@@ -415,6 +415,7 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
     let (reply, reply_answer) = answered();
     let (model, model_answer) = answered();
     let (credential, credential_answer) = answered();
+    let (name, name_answer) = answered();
     let (close, close_answer) = answered();
     world.cancel.shutdown(129);
     let (finished, inbox, held) = world.spawn_run();
@@ -456,6 +457,14 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
         ))
         .unwrap();
     inbox
+        .send(Delivery::Name(
+            contract::commands::Name {
+                text: "Mine".into(),
+            },
+            name,
+        ))
+        .unwrap();
+    inbox
         .send(Delivery::JobLine(JobLine {
             job_id: JobId("j_1".into()),
             lines: "tick\n".into(),
@@ -480,6 +489,7 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
         answer(&credential_answer).unwrap_err().code,
         ErrorCode::Closing
     );
+    assert_eq!(answer(&name_answer).unwrap_err().code, ErrorCode::Closing);
     assert!(answer(&close_answer).is_ok());
     // The monitor's batch is dropped; the job's end is written.
     assert_eq!(held.kinds(), ["session_started", "job_completed"]);
