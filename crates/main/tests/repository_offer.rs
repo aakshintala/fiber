@@ -301,10 +301,7 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert!(
-        tools.contains(&"mcp__db__echo"),
-        "{tools:?}"
-    );
+    assert!(tools.contains(&"mcp__db__echo"), "{tools:?}");
     // The complete, ordered durable kinds: the offer is raised and resolved
     // before the preamble, then the turn runs.
     assert_eq!(
