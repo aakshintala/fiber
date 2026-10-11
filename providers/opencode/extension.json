@@ -2,5 +2,13 @@
   "name": "github.com/aakshintala/fiber/providers/opencode",
   "version": "0.0.0",
   "fiber": "0.0.0",
-  "api": 1
+  "api": 1,
+  "providers": {
+    "opencode-zen": [
+      "https://opencode.ai/zen/v1"
+    ],
+    "opencode-go": [
+      "https://opencode.ai/zen/go/v1"
+    ]
+  }
 }

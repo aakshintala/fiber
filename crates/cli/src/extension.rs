@@ -264,14 +264,14 @@ fn commit_plan(
             changes: item.changes.clone(),
             replaces: item.manifest.replaces.clone(),
             providers: item
+                .manifest
                 .providers
                 .iter()
-                .map(|p| {
-                    let mut urls: Vec<String> =
-                        p.models.iter().map(|m| m.base_url.clone()).collect();
+                .map(|(name, urls)| {
+                    let mut urls = urls.clone();
                     urls.sort();
                     urls.dedup();
-                    (p.name.clone(), urls)
+                    (name.clone(), urls)
                 })
                 .collect(),
             process: item.manifest.process.as_ref().map(|p| {

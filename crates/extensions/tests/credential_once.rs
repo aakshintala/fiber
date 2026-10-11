@@ -35,7 +35,7 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
     let script = format!("echo run >> '{}'; printf key", marker.display());
     let mut data = provider("acme", &["a"]);
     data["credential"] = json!({ "command": ["sh", "-c", script] });
-    let source = setup.source("acme", &manifest("acme"), &[data]);
+    let source = setup.source("acme", &manifest("acme-ext"), &[data]);
     install(&setup.home(), &source, "0.1.0").unwrap();
     let (mut providers, notices) = Providers::load(&setup.home()).unwrap();
     assert!(notices.is_empty(), "{notices:?}");

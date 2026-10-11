@@ -88,7 +88,19 @@ impl SessionExtensions {
                     Some(script) => lua.with_host_script(Arc::clone(script)),
                     None => lua,
                 };
-                Arc::new(lua)
+                let lua = Arc::new(lua);
+                // A freshly started VM's registrations are checked as at
+                // load: a lent VM was checked when the session loaded.
+                if let Some(unclaimed) = crate::providers::first_undeclared(
+                    &manifest.providers,
+                    lua.provider_names()?.iter().map(String::as_str),
+                ) {
+                    return Err(Error::UndeclaredProvider {
+                        extension: extension.to_owned(),
+                        provider: unclaimed.to_owned(),
+                    });
+                }
+                lua
             }
         };
         if !lua.provider_names()?.iter().any(|name| name == provider) {

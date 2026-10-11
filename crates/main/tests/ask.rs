@@ -58,7 +58,7 @@ impl Setup {
         let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
         );
         write(
             &source.join("providers/fake.json"),
@@ -890,7 +890,7 @@ fn a_bedrock_converse_model_fails_before_the_session() {
     let source = setup.root.path().join("src");
     write(
         &source.join("extension.json"),
-        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
     );
     write(
         &source.join("providers/fake.json"),
@@ -3176,6 +3176,21 @@ fn fixture(setup: &Setup, server: &ProviderServer) {
     .unwrap()
     .commit()
     .unwrap();
+    // The installed manifest declares the fixture provider at the test
+    // server's URL, so the session admits its models.
+    let dir = setup
+        .home()
+        .join("extensions")
+        .join("fiber.test-lua-fixture");
+    let mut installed: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("extension.json")).unwrap()).unwrap();
+    if let Some(into) = installed.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"fixture": [format!("{}/v1", server.url())]}),
+        );
+    }
+    write(&dir.join("extension.json"), &installed);
     config::store_secret(
         &setup.home(),
         "fixture.url",
@@ -3413,10 +3428,15 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     let source = setup.root.path().join("src-plain");
-    write(
-        &source.join("extension.json"),
-        &json!({"name": "plain", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-    );
+    // The manifest declares the URL the script's `models()` serves.
+    let mut manifest = json!({"name": "plain", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"plain": [format!("{}/v1", server.url())]}),
+        );
+    }
+    write(&source.join("extension.json"), &manifest);
     fs::write(
         source.join("init.lua"),
         format!(
@@ -3665,12 +3685,12 @@ fn login_with_an_unknown_key_prints_its_notice_first() {
 
 /// Installs an inline extension `name` with `init_lua`, and makes `name/m1`
 /// the configured model.
-fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {
+fn inline_extension(setup: &Setup, name: &str, init_lua: &str, base_url: &str) {
     let source = setup.root.path().join(format!("src-{name}"));
-    write(
-        &source.join("extension.json"),
-        &json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-    );
+    // The manifest declares the URL the script's `models()` serves.
+    let manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+        "providers": {name: [base_url]}});
+    write(&source.join("extension.json"), &manifest);
     fs::write(source.join("init.lua"), init_lua).unwrap();
     extensions::plan(
         &setup.home(),
@@ -3692,13 +3712,14 @@ fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {
 fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provider() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
+    let base_url = format!("{}/v1", server.url());
     inline_extension(
         &setup,
         "acme",
         &format!(
-            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
-            server.url()
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{base_url}\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
         ),
+        &base_url,
     );
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);
@@ -3720,13 +3741,14 @@ fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provid
 fn a_sign_error_keeps_the_token_out_of_every_line() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
+    let base_url = format!("{}/v1", server.url());
     inline_extension(
         &setup,
         "acme",
         &format!(
-            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
-            server.url()
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{base_url}\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
         ),
+        &base_url,
     );
 
     let run = setup.run_with_stdin(&["ask", "hi"], None);
@@ -3792,10 +3814,16 @@ fn provider_with(
                    "context_window": 100000})
         })
         .collect();
-    write(
-        &source.join("extension.json"),
-        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-    );
+    // The manifest declares the models' URL, which the script above
+    // also serves.
+    let mut manifest = json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"fake": [format!("{}/v1", server.url())]}),
+        );
+    }
+    write(&source.join("extension.json"), &manifest);
     write(
         &source.join("providers/fake.json"),
         &json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"},

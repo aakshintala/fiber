@@ -466,11 +466,18 @@ fn config_set_exits_zero_and_writes_the_file() {
 fn install(home: &Path, extension: &str, name: &str, models: &serde_json::Value) {
     let dir = home.join("extensions").join(extension);
     fs::create_dir_all(dir.join("providers")).unwrap();
-    fs::write(
-        dir.join("extension.json"),
-        json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
+    let mut urls: Vec<&str> = models
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m.get("base_url").and_then(|u| u.as_str()))
+        .collect();
+    urls.sort();
+    urls.dedup();
+    let mut manifest = json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    manifest["providers"] =
+        serde_json::Value::Object([(name.to_owned(), json!(urls))].into_iter().collect());
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     write_record(&dir);
     fs::write(
         dir.join("providers").join(format!("{name}.json")),
@@ -641,11 +648,13 @@ fn distance_ranks_a_shared_prefix_closer_than_a_single_letter() {
 fn install_host(home: &Path, extension: &str, name: &str, placeholders: serde_json::Value) {
     let dir = home.join("extensions").join(extension);
     fs::create_dir_all(dir.join("providers")).unwrap();
-    fs::write(
-        dir.join("extension.json"),
-        json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
+    let mut manifest = json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    manifest["providers"] = serde_json::Value::Object(
+        [(name.to_owned(), json!(["https://{workspace}/v1"]))]
+            .into_iter()
+            .collect(),
+    );
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     write_record(&dir);
     fs::write(
         dir.join("providers").join(format!("{name}.json")),

@@ -2,5 +2,10 @@
   "name": "github.com/aakshintala/fiber/providers/muse",
   "version": "0.0.0",
   "fiber": "0.0.0",
-  "api": 1
+  "api": 1,
+  "providers": {
+    "muse": [
+      "https://api.meta.ai/v1"
+    ]
+  }
 }

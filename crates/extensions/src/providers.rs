@@ -13,11 +13,14 @@ use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::Value;
 
-use crate::{API, Error, LuaProvider};
+use crate::{API, Error, LuaProvider, SessionExtensions};
 use contract::ThinkingLevel;
 
+mod declared;
 mod placeholders;
 mod scripted;
+
+pub(crate) use declared::first_undeclared;
 
 /// Every provider the installed extensions register, by name.
 #[derive(Clone, Default)]
@@ -27,6 +30,9 @@ pub struct Providers {
     /// provider name: its id and its `model_unconfigured` message, in
     /// model order. Never listed: only `resolve` reads it.
     unconfigured: BTreeMap<String, Vec<(String, String)>>,
+    /// Each loaded extension's manifest `providers` map, by extension
+    /// name: what its registrations are admitted against.
+    declared: BTreeMap<String, BTreeMap<String, Vec<String>>>,
     /// The extension whose data or `models()` supplied each provider's
     /// current models, by provider name.
     extension_of: BTreeMap<String, String>,
@@ -278,9 +284,32 @@ impl Providers {
             // Secrets do not depend on the provider files, so they are kept
             // even when those files leave the extension's providers out.
             providers.secrets.extend(manifest.secrets.iter().cloned());
+            let mut datas = config::read_providers(&dir)?;
+            // A provider the manifest does not declare under `providers`
+            // is not loaded: none of the extension's providers is, with
+            // one notice naming the first undeclared one. This report is
+            // the only one; the session refuses the same extension
+            // silently, since it cannot run Lua here.
+            {
+                let names: Vec<&str> = datas.iter().map(|data| data.name.as_str()).collect();
+                if let Some(unclaimed) = declared::first_undeclared(&manifest.providers, names) {
+                    notices.push(Notice {
+                        code: ErrorCode::ExtensionFailed,
+                        message: Error::UndeclaredProvider {
+                            extension: manifest.name.clone(),
+                            provider: unclaimed.to_owned(),
+                        }
+                        .to_string(),
+                        extension: Some(manifest.name),
+                    });
+                    continue;
+                }
+            }
+            providers
+                .declared
+                .insert(manifest.name.clone(), manifest.providers.clone());
             let mut buffered: Vec<(ProviderData, BTreeMap<String, String>)> = Vec::new();
             let mut failed: Option<Notice> = None;
-            let mut datas = config::read_providers(&dir)?;
             // The built-in provider's name is reserved: a package that
             // claims it is left out, with one notice, like a bad addendum
             // leaves its providers out.
@@ -297,11 +326,7 @@ impl Providers {
                 if let Some(cached) = config::read_model_cache(home, &data.name)? {
                     data.models = cached;
                 }
-                notices.extend(leave_out_invalid(
-                    &data.name,
-                    &manifest.name,
-                    &mut data.models,
-                ));
+                notices.extend(providers.admit(&data.name, &manifest.name, &mut data.models));
                 // One extension's addenda are read into a local buffer
                 // against its own directory, and inserted only when every
                 // one of its files succeeds: a bad addendum leaves out all
@@ -328,6 +353,53 @@ impl Providers {
             }
         }
         Ok((providers, notices))
+    }
+
+    /// Leaves out the models `extension` may not serve: first the invalid
+    /// ones, then the ones whose `base_url` the manifest's entry for
+    /// `provider` does not list. A missing entry admits no model. Every
+    /// extension-supplied model list passes through here before entering
+    /// the registry; only the built-in scripted provider's model does not.
+    fn admit(&self, provider: &str, extension: &str, models: &mut Vec<ModelData>) -> Vec<Notice> {
+        let mut notices = leave_out_invalid(provider, extension, models);
+        let empty = Vec::new();
+        let listed = self
+            .declared
+            .get(extension)
+            .and_then(|entries| entries.get(provider))
+            .unwrap_or(&empty);
+        notices.extend(declared::leave_out_unlisted(
+            provider, extension, listed, models,
+        ));
+        notices
+    }
+
+    /// Drops every provider the session refused for an undeclared Lua
+    /// registration, along with its addenda and declarations, then adds
+    /// each Lua provider's models. The one call every path that runs Lua
+    /// makes after `load`, so no caller can forget the drop. It gives no
+    /// notice of its own: the rejection's notice is the session's.
+    pub fn add_session(&mut self, extensions: &SessionExtensions, config: &Config) -> Vec<Notice> {
+        for name in extensions.rejected() {
+            let dropped: Vec<String> = self
+                .extension_of
+                .iter()
+                .filter(|(_, owner)| *owner == name)
+                .map(|(provider, _)| provider.clone())
+                .collect();
+            for provider in dropped {
+                self.by_name.remove(&provider);
+                self.extension_of.remove(&provider);
+                self.addenda.remove(&provider);
+                self.unconfigured.remove(&provider);
+            }
+            self.declared.remove(name);
+        }
+        let mut notices = Vec::new();
+        for (extension, provider) in extensions.lua_providers() {
+            notices.extend(self.add_lua(extension, provider, config));
+        }
+        notices
     }
 
     /// The installed providers' names, sorted.
@@ -364,6 +436,23 @@ impl Providers {
     ) -> Vec<Notice> {
         let name = provider.name().to_owned();
         if name == scripted::SCRIPTED {
+            // An undeclared `scripted` fails as undeclared; a declared one
+            // keeps the reserved-name notice.
+            let undeclared = self
+                .declared
+                .get(extension)
+                .is_none_or(|entries| !entries.contains_key(&name));
+            if undeclared {
+                let error = Error::UndeclaredProvider {
+                    extension: extension.to_owned(),
+                    provider: name.clone(),
+                };
+                return vec![Notice {
+                    code: ErrorCode::ExtensionFailed,
+                    message: error.to_string(),
+                    extension: Some(extension.to_owned()),
+                }];
+            }
             return vec![reserved_scripted(extension)];
         }
         self.lua.insert(name.clone(), Arc::clone(provider));
@@ -385,7 +474,7 @@ impl Providers {
                 }];
             }
         };
-        let notices = leave_out_invalid(&name, extension, &mut models);
+        let notices = self.admit(&name, extension, &mut models);
         // The addenda resolve against the Lua extension's package
         // directory, replacing the data file's with the final models.
         let addenda = match read_addenda(provider.dir(), &models, extension) {
@@ -546,26 +635,52 @@ impl Providers {
 
     /// Adds the cached model list of `name`, with the installed data file's
     /// other fields: only when no provider is held under `name`, and never
-    /// for `scripted`, which no installed package may register. Whether it
-    /// inserted: `false` leaves the registry as it was.
-    pub fn add_cached(&mut self, name: &str, models: Vec<ModelData>) -> bool {
+    /// for `scripted`, which no installed package may register. The
+    /// extension checked against is the first in name order whose manifest
+    /// declares `name`. Whether it inserted, with the admission notices:
+    /// `None` leaves the registry as it was: `scripted`, already held, or
+    /// no installed extension declares `name`.
+    pub fn add_cached(&mut self, name: &str, models: Vec<ModelData>) -> Option<Vec<Notice>> {
         if name == scripted::SCRIPTED || self.by_name.contains_key(name) {
-            return false;
+            return None;
         }
+        let owner = self
+            .declared
+            .iter()
+            .find(|(_, entries)| entries.contains_key(name))
+            .map(|(extension, _)| extension.clone())?;
+        let mut models = models;
+        let notices = self.admit(name, &owner, &mut models);
         let mut data = self.data(name);
         data.models = models;
         self.by_name.insert(name.to_owned(), data);
-        true
+        self.extension_of.insert(name.to_owned(), owner);
+        Some(notices)
     }
 
     /// Replaces the models held under `name` with a background refresh's
     /// joined list, inserting with default other fields when none is held:
     /// the refresh already wrote the cache file. Never for `scripted`,
-    /// which no installed package may register.
-    pub fn set_models(&mut self, name: &str, models: Vec<ModelData>) {
+    /// which no installed package may register. The extension checked
+    /// against is the first in name order whose manifest declares `name`;
+    /// with none, every model is left out, `name` standing in as the
+    /// extension in the notice, and no owner is recorded.
+    pub fn set_models(&mut self, name: &str, models: Vec<ModelData>) -> Vec<Notice> {
         if name == scripted::SCRIPTED {
-            return;
+            return Vec::new();
         }
+        let owner = self
+            .declared
+            .iter()
+            .find(|(_, entries)| entries.contains_key(name))
+            .map(|(extension, _)| extension.clone());
+        let mut models = models;
+        let Some(owner) = owner else {
+            let mut notices = leave_out_invalid(name, name, &mut models);
+            notices.extend(declared::leave_out_unlisted(name, name, &[], &mut models));
+            return notices;
+        };
+        let notices = self.admit(name, &owner, &mut models);
         match self.by_name.get_mut(name) {
             Some(data) => data.models = models,
             None => {
@@ -574,6 +689,8 @@ impl Providers {
                 self.by_name.insert(name.to_owned(), data);
             }
         }
+        self.extension_of.insert(name.to_owned(), owner);
+        notices
     }
 
     /// The Lua provider `name`, for its signer and token, if an extension

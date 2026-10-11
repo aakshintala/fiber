@@ -63,6 +63,35 @@ impl Setup {
         manifest: &serde_json::Value,
         providers: &[serde_json::Value],
     ) -> PathBuf {
+        let mut manifest = manifest.clone();
+        if manifest.get("providers").is_none() {
+            let mut map = serde_json::Map::new();
+            for data in providers {
+                let Some(pname) = data.get("name").and_then(|n| n.as_str()) else {
+                    continue;
+                };
+                let mut urls = Vec::new();
+                for model in data
+                    .get("models")
+                    .and_then(|m| m.as_array())
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(url) = model.get("base_url").and_then(|u| u.as_str())
+                        && !urls.contains(&url)
+                    {
+                        urls.push(url);
+                    }
+                }
+                map.insert(
+                    pname.to_owned(),
+                    serde_json::Value::Array(
+                        urls.into_iter().map(serde_json::Value::from).collect(),
+                    ),
+                );
+            }
+            manifest["providers"] = serde_json::Value::Object(map);
+        }
         let path = self.root.path().join("src").join(dir);
         write_file(&path.join("extension.json"), &manifest.to_string());
         for provider in providers {
@@ -817,4 +846,24 @@ fn remove_command_gives_its_exit_code() {
 #[test]
 fn install_by_name_command_gives_its_exit_code() {
     run_case("install-by-name");
+}
+
+#[test]
+fn install_summary_lists_a_lua_only_declared_provider() {
+    let setup = Setup::new();
+    let mut declared = manifest(NAME_A);
+    declared["providers"] = serde_json::json!({"p": ["http://b.test/v1", "http://a.test/v1"]});
+    let source = setup.source("aaa", &declared, &[]);
+    let mut input = io::Cursor::new(b"n\n".to_vec());
+    let (err, _) = run_install(
+        &setup.home(),
+        Request::Path(source),
+        &Origin::github(),
+        true,
+        &mut input,
+    );
+    assert!(
+        err.contains("Provider p: http://a.test/v1, http://b.test/v1\n"),
+        "{err}"
+    );
 }

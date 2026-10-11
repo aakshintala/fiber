@@ -60,6 +60,10 @@ pub struct SessionExtensions {
     /// One provider per `fiber.provider` registration, in provider-name
     /// order: the extension's name beside its provider.
     lua_providers: Vec<(String, Arc<LuaProvider>)>,
+    /// The names of extensions refused for an undeclared Lua registration,
+    /// in load order. A data refusal is not listed: `Providers::load`
+    /// never admitted that data.
+    rejected: Vec<String>,
     /// The `after_tool` chain, in run order.
     after_tool: Vec<Entry>,
     /// Whether any hook registered at any point.
@@ -141,6 +145,7 @@ impl SessionExtensions {
             commands: Vec<(String, String)>,
             tools: Vec<LuaTool>,
             backends: Vec<String>,
+            providers: Vec<String>,
         }
         let mut started: Vec<Started> = Vec::new();
         for entry in found {
@@ -190,7 +195,32 @@ impl SessionExtensions {
                 commands: Vec::new(),
                 tools: Vec::new(),
                 backends: Vec::new(),
+                providers: Vec::new(),
             };
+            // A data provider the manifest does not declare under
+            // `providers` keeps the extension out, before its VM starts.
+            // `Providers::load` already reported it, so no notice here.
+            match config::provider_files(&entry.dir) {
+                Ok(files) => {
+                    let stems: Vec<String> = files
+                        .iter()
+                        .filter_map(|file| file.file_stem())
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                        .collect();
+                    if crate::providers::first_undeclared(
+                        &entry.manifest.providers,
+                        stems.iter().map(String::as_str),
+                    )
+                    .is_some()
+                    {
+                        continue;
+                    }
+                }
+                Err(e) => {
+                    session.failed(&entry.name, &Error::Config(e));
+                    continue;
+                }
+            }
             if entry.dir.join(ENTRY).is_file() {
                 let extension = match start::start_vm(
                     &entry.name,
@@ -219,14 +249,16 @@ impl SessionExtensions {
                         extension.commands()?,
                         extension.tools()?,
                         extension.search_backends()?,
+                        extension.provider_names()?,
                     ))
                 });
                 match registered {
-                    Ok((declared, commands, tools, backends)) => {
+                    Ok((declared, commands, tools, backends, providers)) => {
                         entry.declared = Some(declared);
                         entry.commands = commands;
                         entry.tools = tools;
                         entry.backends = backends;
+                        entry.providers = providers;
                     }
                     Err(e) => {
                         session.failed(&entry.name, &e);
@@ -234,6 +266,23 @@ impl SessionExtensions {
                     }
                 }
                 entry.extension = Some(extension);
+            }
+            // A Lua provider the manifest does not declare under
+            // `providers` fails the extension, before names settle, so it
+            // takes no part in them.
+            if let Some(unclaimed) = crate::providers::first_undeclared(
+                &entry.manifest.providers,
+                entry.providers.iter().map(String::as_str),
+            ) {
+                session.failed(
+                    &entry.name,
+                    &Error::UndeclaredProvider {
+                        extension: entry.name.clone(),
+                        provider: unclaimed.to_owned(),
+                    },
+                );
+                session.rejected.push(entry.name.clone());
+                continue;
             }
             started.push(entry);
         }
@@ -285,14 +334,9 @@ impl SessionExtensions {
             if let (Some(lua), Some(declared)) = (&s.extension, s.declared) {
                 let runs_hooks = declared.by_point.values().any(|hooks| !hooks.is_empty());
                 session.register(&s.name, declared, &mut chain);
-                match lua.provider_names() {
-                    Ok(names) => {
-                        for name in names {
-                            let provider = LuaProvider::new(Arc::clone(lua), name);
-                            session.lua_providers.push((s.name.clone(), provider));
-                        }
-                    }
-                    Err(e) => session.failed(&s.name, &e),
+                for name in &s.providers {
+                    let provider = LuaProvider::new(Arc::clone(lua), name.clone());
+                    session.lua_providers.push((s.name.clone(), provider));
                 }
                 let mut has_tools = false;
                 for tool in s.tools {
@@ -348,6 +392,12 @@ impl SessionExtensions {
     /// order: the extension's name beside its provider.
     pub fn lua_providers(&self) -> &[(String, Arc<LuaProvider>)] {
         &self.lua_providers
+    }
+
+    /// The names of extensions refused for an undeclared Lua registration,
+    /// in load order: what `Providers::add_session` drops the data of.
+    pub fn rejected(&self) -> &[String] {
+        &self.rejected
     }
 
     /// Drops every Lua provider except those in `keep`, by provider name.

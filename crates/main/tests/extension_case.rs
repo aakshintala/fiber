@@ -249,11 +249,35 @@ fn setup_named(name: &str, lua: &str) -> Setup {
     let setup = Setup::new();
     let source = setup.root.path().join("case-extension");
     fs::create_dir_all(&source).unwrap();
-    fs::write(
-        source.join("extension.json"),
-        json!({"name": name, "version": "0.1.0", "fiber": "0.0.0", "api": 1}).to_string(),
-    )
-    .unwrap();
+    // The case runner loads hook cases through `SessionExtensions`, so the
+    // manifest declares every `fiber.provider` the script registers. A
+    // cost, credential or sign-only provider lists no URL.
+    let mut seen: Vec<&str> = Vec::new();
+    for part in lua.split("fiber.provider(\"").skip(1) {
+        if let Some(registered) = part.split('"').next()
+            && !seen.contains(&registered)
+        {
+            seen.push(registered);
+        }
+    }
+    let mut manifest = json!({"name": name, "version": "0.1.0", "fiber": "0.0.0", "api": 1});
+    let declared: Vec<(String, Value)> = seen
+        .iter()
+        .map(|registered| ((*registered).to_owned(), json!([])))
+        .collect();
+    // A `models` case lists its models at `http://127.0.0.1:1/v1`.
+    let declared: Vec<(String, Value)> = declared
+        .into_iter()
+        .map(|(registered, urls)| {
+            if lua.contains("http://127.0.0.1:1/v1") {
+                (registered, json!(["http://127.0.0.1:1/v1"]))
+            } else {
+                (registered, urls)
+            }
+        })
+        .collect();
+    manifest["providers"] = Value::Object(declared.into_iter().collect());
+    fs::write(source.join("extension.json"), manifest.to_string()).unwrap();
     fs::write(source.join("init.lua"), lua).unwrap();
     extensions::plan(
         &setup.home(),
@@ -618,7 +642,7 @@ end } })"#,
     fs::create_dir_all(&competitor).unwrap();
     fs::write(
         competitor.join("extension.json"),
-        json!({"name": "fiber.test/openrouter-competitor", "version": "0.1.0", "fiber": "0.0.0", "api": 1}).to_string(),
+        json!({"name": "fiber.test/openrouter-competitor", "version": "0.1.0", "fiber": "0.0.0", "api": 1, "providers": {"openrouter": []}}).to_string(),
     )
     .unwrap();
     fs::write(

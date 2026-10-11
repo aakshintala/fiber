@@ -98,11 +98,13 @@ impl Setup {
             data["credential"] = source;
         }
         fs::create_dir_all(dir.join("providers")).unwrap();
-        fs::write(
-            dir.join("extension.json"),
-            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-        )
-        .unwrap();
+        let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+        manifest["providers"] = serde_json::Value::Object(
+            [(name.to_owned(), json!(["http://x/v1"]))]
+                .into_iter()
+                .collect(),
+        );
+        fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
         write_record(&dir);
         fs::write(
             dir.join("providers").join(format!("{name}.json")),

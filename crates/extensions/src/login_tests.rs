@@ -18,11 +18,13 @@ use crate::providers::Providers;
 fn install(home: &std::path::Path, name: &str, provider: &str) {
     let dir = home.join("extensions").join(name);
     fs::create_dir_all(dir.join("providers")).unwrap();
-    fs::write(
-        dir.join("extension.json"),
-        json!({ "name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1 }).to_string(),
-    )
-    .unwrap();
+    let mut manifest = json!({ "name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1 });
+    manifest["providers"] = serde_json::Value::Object(
+        [(provider.to_owned(), json!(["http://127.0.0.1:1/v1"]))]
+            .into_iter()
+            .collect(),
+    );
+    fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     write_record(&dir);
     fs::write(
         dir.join("providers").join(format!("{provider}.json")),
@@ -82,6 +84,7 @@ fn login_provider_applies_the_manifest_memory_cap_in_mib() {
             "fiber": "0.1.0",
             "api": 1,
             "memory_mib": 2,
+            "providers": {"acme": ["http://127.0.0.1:1/v1"]},
         })
         .to_string(),
     )
@@ -155,4 +158,46 @@ fn login_provider_without_an_installed_package_is_a_config_error() {
         panic!("a login without an installed package resolves");
     };
     assert!(matches!(&error, Error::Config(_)), "{error:?}");
+}
+
+#[test]
+fn login_provider_fails_when_the_vm_registers_an_undeclared_provider() {
+    let root = fakes::TempDir::new("fiber-login-undeclared");
+    let home = root.path().join("home");
+    install(&home, "acme-ext", "acme");
+    let dir = home.join("extensions").join("acme-ext");
+    fs::write(
+        dir.join("extension.json"),
+        json!({ "name": "acme-ext", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
+                "providers": {"acme": ["http://127.0.0.1:1/v1"]} })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("init.lua"),
+        r#"fiber.provider("acme", {
+          credential = { timeout = 60000, run = function(arg)
+            return { token = "t", expires_at = 4102444800 }
+          end }
+        })
+        fiber.provider("rogue", {
+          credential = { timeout = 60000, run = function(arg)
+            return { token = "t", expires_at = 4102444800 }
+          end }
+        })"#,
+    )
+    .unwrap();
+    let (providers, _) = Providers::load(&home).unwrap();
+    let err = match login_provider(
+        &home,
+        &providers,
+        "acme",
+        Arc::new(SystemBrowser::default()),
+        FakeClock::new(),
+    ) {
+        Ok(_) => panic!("a VM registering an undeclared provider logs in"),
+        Err(err) => err,
+    };
+    assert_eq!(err.code(), contract::ErrorCode::ExtensionFailed);
+    assert!(err.to_string().contains("rogue"), "{err}");
 }

@@ -45,16 +45,32 @@ impl Home {
     }
 
     /// Installs `fiber.test/<short>`, whose entry script is `init`, or a
-    /// data-only extension when `init` is `None`.
+    /// data-only extension when `init` is `None`. The manifest declares
+    /// every `fiber.provider` the script registers, with no URLs, so the
+    /// helper builds a well-formed package; a test of an undeclared
+    /// package rewrites the declaration with `edit_manifest`.
     fn install(&self, short: &str, init: Option<&str>) {
         let src = self.root.path().join("src").join(short);
         fs::create_dir_all(&src).unwrap();
-        fs::write(
-            src.join("extension.json"),
-            json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1})
-                .to_string(),
-        )
-        .unwrap();
+        let mut manifest = json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1});
+        if let Some(init) = init {
+            let mut seen: Vec<&str> = Vec::new();
+            for part in init.split("fiber.provider(\"").skip(1) {
+                if let Some(registered) = part.split('"').next()
+                    && !seen.contains(&registered)
+                {
+                    seen.push(registered);
+                }
+            }
+            if !seen.is_empty() {
+                let declared: serde_json::Map<String, serde_json::Value> = seen
+                    .iter()
+                    .map(|registered| ((*registered).to_owned(), json!([])))
+                    .collect();
+                manifest["providers"] = serde_json::Value::Object(declared);
+            }
+        }
+        fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
         if let Some(init) = init {
             fs::write(src.join("init.lua"), init).unwrap();
         }
@@ -1448,5 +1464,150 @@ fn a_disabled_extensions_backend_is_not_counted() {
             .all(|notice| notice.code != ErrorCode::WebSearchUnavailable),
         "{:?}",
         session.notices()
+    );
+}
+
+#[test]
+fn a_lua_provider_its_manifest_does_not_declare_fails_the_extension() {
+    let home = Home::new();
+    home.install(
+        "rogue",
+        Some(&format!(
+            "{}{}",
+            tagging("h", "transform"),
+            crediting("rogue")
+        )),
+    );
+    home.edit_manifest("rogue", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    home.install("good", Some(&crediting("acme")));
+    home.edit_manifest("good", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    let session = home.load(&[]);
+    let names: Vec<String> = session.loaded().iter().map(|e| e.name.clone()).collect();
+    assert!(!names.iter().any(|n| n == "fiber.test/rogue"), "{names:?}");
+    assert!(names.iter().any(|n| n == "fiber.test/good"), "{names:?}");
+    assert!(
+        session.lua_providers().is_empty()
+            || session
+                .lua_providers()
+                .iter()
+                .all(|(e, _)| e != "fiber.test/rogue")
+    );
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/rogue"));
+    assert!(
+        notices[0].message.contains("rogue"),
+        "{}",
+        notices[0].message
+    );
+    assert_eq!(
+        after_tool(&session, "c").outcome,
+        AfterToolOutcome::Unchanged
+    );
+}
+
+#[test]
+fn a_declared_lua_provider_loads() {
+    let home = Home::new();
+    home.install("good", Some(&crediting("acme")));
+    home.edit_manifest("good", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    assert_eq!(session.lua_providers().len(), 1);
+    assert_eq!(session.lua_providers()[0].1.name(), "acme");
+}
+
+#[test]
+fn start_provider_fails_when_a_fresh_vm_registers_an_undeclared_provider() {
+    let home = Home::new();
+    let flag = home.root.path().join("flag");
+    let flag_str = flag.display().to_string();
+    home.install(
+        "prov",
+        Some(&format!(
+            "local ok = pcall(host.fs.read, \"{flag_str}\")\n\
+             if ok then {rogue} end\n{acme}",
+            rogue = crediting("rogue"),
+            acme = crediting("acme"),
+        )),
+    );
+    home.edit_manifest("prov", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    std::fs::write(&flag, "").unwrap();
+    let err = start(&home, &session, "fiber.test/prov", "acme")
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    assert!(err.to_string().contains("rogue"), "{err}");
+}
+
+#[test]
+fn a_data_provider_its_manifest_does_not_declare_keeps_the_extension_out_without_a_second_notice() {
+    let home = Home::new();
+    let marker = home.root.path().join("data-marker");
+    home.install(
+        "rogue",
+        Some(&format!(
+            "host.fs.write({:?}, \"x\")\n",
+            marker.display().to_string()
+        )),
+    );
+    home.edit_manifest("rogue", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    let dir = home.home().join("extensions").join("fiber.test-rogue");
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
+    std::fs::write(
+        dir.join("providers").join("rogue.json"),
+        json!({"name": "rogue", "models": []}).to_string(),
+    )
+    .unwrap();
+    let session = home.load(&[]);
+    assert!(!marker.is_file(), "the entry script never ran");
+    let names: Vec<String> = session.loaded().iter().map(|e| e.name.clone()).collect();
+    assert!(!names.iter().any(|n| n == "fiber.test/rogue"), "{names:?}");
+    assert!(
+        session
+            .notices()
+            .iter()
+            .all(|notice| { notice.extension.as_deref() != Some("fiber.test/rogue") }),
+        "{:?}",
+        session.notices()
+    );
+}
+
+#[test]
+fn an_undeclared_scripted_provider_fails_as_undeclared() {
+    let home = Home::new();
+    home.install("evil", Some(&crediting("scripted")));
+    home.edit_manifest("evil", |m| {
+        m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
+    });
+    let session = home.load(&[]);
+    let names: Vec<String> = session.loaded().iter().map(|e| e.name.clone()).collect();
+    assert!(!names.iter().any(|n| n == "fiber.test/evil"), "{names:?}");
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/evil"));
+    assert!(
+        notices[0].message.contains("scripted"),
+        "{}",
+        notices[0].message
+    );
+    assert!(
+        notices[0].message.contains("does not declare"),
+        "{}",
+        notices[0].message
     );
 }

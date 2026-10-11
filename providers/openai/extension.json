@@ -2,5 +2,10 @@
   "name": "github.com/aakshintala/fiber/providers/openai",
   "version": "0.0.0",
   "fiber": "0.0.0",
-  "api": 1
+  "api": 1,
+  "providers": {
+    "openai": [
+      "https://api.openai.com/v1"
+    ]
+  }
 }

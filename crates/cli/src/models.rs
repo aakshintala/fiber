@@ -183,9 +183,7 @@ fn run(
     notices.extend(loading);
     let extensions = load(&config);
     notices.extend(extensions.notices());
-    for (extension, provider) in extensions.lua_providers() {
-        notices.extend(providers.add_lua(extension, provider, &config));
-    }
+    notices.extend(providers.add_session(&extensions, &config));
     notices.extend(
         providers
             .fill_placeholders(&config, &|name| std::env::var(name).ok())

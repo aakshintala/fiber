@@ -147,6 +147,17 @@ fn fixture_entry_and_callback_calls_use_the_script_and_never_open_a_socket_or_pr
     assert!(!Path::new(&exec_program).exists());
     let source = setup.root().join("fixture");
     copy_tree(&fakes::lua_fixture(), &source);
+    // The script below registers `host-script` at the test server's URL;
+    // the manifest declares it (and `fixture` at the same URL) so the
+    // session loads the extension.
+    let manifest_file = source.join("extension.json");
+    let mut copied: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_file).unwrap()).unwrap();
+    copied["providers"] = serde_json::json!({
+        "fixture": [format!("{}/v1", server.url())],
+        "host-script": [format!("{}/v1", server.url())],
+    });
+    fs::write(&manifest_file, copied.to_string()).unwrap();
     let init_path = source.join("init.lua");
     let mut init = fs::read_to_string(&init_path).unwrap();
     init.push_str(&format!(
