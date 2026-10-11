@@ -9,6 +9,10 @@
 //!   signal is recorded, the door's startup is told to stop, and
 //!   [`Signals::start`] hands it to the door, which stops what it started
 //!   and exits writing nothing;
+//! - committing, while the first lines are written: a first signal starts
+//!   the bound at once and reaches the shutdown once the write returns,
+//!   so a recorded signal writes nothing and one during the write still
+//!   shuts down;
 //! - started: the shutdown the door registered runs, and a second SIGTERM
 //!   or SIGINT kills every live process group at once.
 //!
@@ -16,9 +20,10 @@
 //! whatever is still alive is killed and the process exits with the code.
 //!
 //! A `close` with `now` takes the same path with exit code 0
-//! (`docs/invocation.md`, "Shutdown"): [`Signals::close_now`] starts the
-//! shutdown only once started with no signal seen yet, and otherwise does
-//! nothing, so a later SIGTERM or SIGINT is a second signal.
+//! (`docs/invocation.md`, "Shutdown"): [`Signals::close_now`] records
+//! while armed, defers while committing, and starts the shutdown only
+//! once started with no signal seen yet. Anywhere else it does nothing,
+//! so a later SIGTERM or SIGINT is a second signal.
 
 use std::io::{self, Read};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -51,6 +56,9 @@ enum Phase {
     Booting,
     /// Children may run; `fiber_started` is not written yet.
     Armed,
+    /// The first lines are being written; a first signal's code waits here
+    /// until the write returns.
+    Committing { deferred: Option<i32> },
     /// The session is running.
     Started,
 }
@@ -60,8 +68,12 @@ enum Phase {
 enum Action {
     /// Exit at once with the code.
     Exit(i32),
-    /// Keep the code for [`Signals::start`], and start the bound.
+    /// Keep the code for [`Signals::start`] or [`Signals::commit`], and
+    /// start the bound.
     Record(i32),
+    /// Keep the code in the committing phase for [`Signals::commit`], and
+    /// start the bound now; the shutdown runs once the write returns.
+    Defer(i32),
     /// Start the shutdown, and the bound.
     Shutdown(i32),
     /// Kill every live process group at once.
@@ -77,21 +89,29 @@ fn decide(phase: Phase, signal: i32, seen: u32) -> Action {
     match phase {
         Phase::Booting => Action::Exit(code),
         Phase::Armed if seen == 0 => Action::Record(code),
+        Phase::Committing { .. } if seen == 0 => Action::Defer(code),
         Phase::Started if seen == 0 => Action::Shutdown(code),
         // The doc names only these two for a second signal.
-        Phase::Started if signal == SIGTERM || signal == SIGINT => Action::KillGroups,
-        Phase::Armed | Phase::Started => Action::Nothing,
+        Phase::Committing { .. } | Phase::Started if signal == SIGTERM || signal == SIGINT => {
+            Action::KillGroups
+        }
+        Phase::Armed | Phase::Committing { .. } | Phase::Started => Action::Nothing,
     }
 }
 
-/// What a `close` with `now` does once started with no signal seen yet: the
-/// same shutdown a first signal starts, with exit code 0. Anywhere else it
-/// does nothing, and the shutdown keeps the first signal's code.
+/// What a `close` with `now` does with no signal seen yet: while armed it
+/// records exit code 0 for [`Signals::commit`], while committing it defers
+/// 0 until the write returns, and once started it starts the same shutdown
+/// a first signal starts. Anywhere else it does nothing, and the shutdown
+/// keeps the first signal's code.
 fn decide_close(phase: Phase, seen: u32) -> Action {
-    if phase == Phase::Started && seen == 0 {
-        Action::Shutdown(CLOSE_NOW_CODE)
-    } else {
-        Action::Nothing
+    match phase {
+        Phase::Armed if seen == 0 => Action::Record(CLOSE_NOW_CODE),
+        Phase::Committing { .. } if seen == 0 => Action::Defer(CLOSE_NOW_CODE),
+        Phase::Started if seen == 0 => Action::Shutdown(CLOSE_NOW_CODE),
+        Phase::Booting | Phase::Armed | Phase::Committing { .. } | Phase::Started => {
+            Action::Nothing
+        }
     }
 }
 
@@ -181,10 +201,10 @@ impl Signals {
 
     /// Called just before the session's first line: the code of a signal
     /// that came while armed, for the door to exit with, writing nothing.
-    /// Otherwise the session is started: a first signal from now calls
-    /// `on_signal` with its code, and a second SIGTERM or SIGINT calls
-    /// `on_second`. A signal is either returned here or given to
-    /// `on_signal`, never both.
+    /// Otherwise the session stays armed until [`Signals::commit`]: a first
+    /// signal from the commit on calls `on_signal` with its code, and a
+    /// second SIGTERM or SIGINT calls `on_second`. A signal is either
+    /// returned here or given to `on_signal`, never both.
     pub fn start(
         &self,
         on_signal: Box<dyn Fn(i32) + Send + Sync>,
@@ -196,32 +216,79 @@ impl Signals {
         }
         state.on_signal = Some(Arc::from(on_signal));
         state.on_second = Some(Arc::from(on_second));
-        state.phase = Phase::Started;
         None
     }
 
+    /// Writes the session's first lines unless a signal was recorded: with
+    /// no signal and no `close` with `now` recorded before the commit takes
+    /// the lock, `write` runs once with no lock held and the phase becomes
+    /// started afterwards, whatever `write` returned. A first signal or
+    /// `close` with `now` during `write` starts the bound at that moment
+    /// and reaches `on_signal` exactly once the write returns, outside the
+    /// lock. Called only after [`Signals::start`] returned `None`, at most
+    /// once per process.
+    pub fn commit<R>(&self, write: impl FnOnce() -> R) -> Result<R, i32> {
+        {
+            let mut state = lock(&self.state);
+            if let Some(code) = state.recorded {
+                return Err(code);
+            }
+            state.phase = Phase::Committing { deferred: None };
+        }
+        let output = write();
+        let (deferred, on_signal) = {
+            let mut state = lock(&self.state);
+            let deferred = match state.phase {
+                Phase::Committing { deferred } => deferred,
+                Phase::Booting | Phase::Armed | Phase::Started => None,
+            };
+            state.phase = Phase::Started;
+            (deferred, state.on_signal.clone())
+        };
+        if let Some(code) = deferred
+            && let Some(on_signal) = on_signal
+        {
+            on_signal(code);
+        }
+        Ok(output)
+    }
+
     /// Starts the same shutdown a first signal starts, with exit code 0
-    /// (`docs/invocation.md`, "Shutdown"). Only the first shutdown wins:
-    /// once started with no signal seen yet it starts the bound and calls
-    /// `on_signal` with 0, and anywhere else it does nothing. The callbacks
-    /// run outside the lock, as in [`Signals::handle`].
+    /// (`docs/invocation.md`, "Shutdown"). While armed it records 0 for
+    /// [`Signals::commit`], while committing it defers 0 until the write
+    /// returns, and once started with no signal seen yet it starts the
+    /// bound and calls `on_signal` with 0. Anywhere else it does nothing.
+    /// The callbacks run outside the lock, as in [`Signals::handle`].
     pub fn close_now(self: &Arc<Self>) {
-        let (action, on_signal) = {
+        let (action, on_record, on_signal) = {
             let mut state = lock(&self.state);
             let action = decide_close(state.phase, state.seen);
-            if matches!(action, Action::Shutdown(_)) {
-                state.seen = state.seen.saturating_add(1);
+            match action {
+                Action::Record(code) => {
+                    state.seen = state.seen.saturating_add(1);
+                    state.recorded = Some(code);
+                }
+                Action::Defer(code) => {
+                    state.seen = state.seen.saturating_add(1);
+                    state.phase = Phase::Committing {
+                        deferred: Some(code),
+                    };
+                }
+                Action::Shutdown(_) => {
+                    state.seen = state.seen.saturating_add(1);
+                }
+                Action::Exit(_) | Action::KillGroups | Action::Nothing => {}
             }
-            (action, state.on_signal.clone())
+            (action, state.on_record.clone(), state.on_signal.clone())
         };
-        self.run(action, None, on_signal, None);
+        self.run(action, on_record, on_signal, None);
     }
 
     /// Starts the lifeline: a thread that reads `input` to EOF or an
     /// error, then handles SIGHUP (`docs/delegates.md`, "Lifetime"). A
     /// Fiber delegate's parent holds the write end open and never writes
     /// to it, so end of file means the parent is gone, however it died:
-    /// a shutdown with exit 129, a hangup. Before [`Signals::start`] the
+    /// a shutdown with exit 129, a hangup. Before [`Signals::commit`] the
     /// armed and booting phases exit or record as for a real SIGHUP. Any
     /// byte the parent writes is ignored.
     pub fn lifeline(self: &Arc<Self>, input: Box<dyn Read + Send>) {
@@ -245,8 +312,16 @@ impl Signals {
             let mut state = lock(&self.state);
             let action = decide(state.phase, signal, state.seen);
             state.seen = state.seen.saturating_add(1);
-            if let Action::Record(code) = action {
-                state.recorded = Some(code);
+            match action {
+                Action::Record(code) => {
+                    state.recorded = Some(code);
+                }
+                Action::Defer(code) => {
+                    state.phase = Phase::Committing {
+                        deferred: Some(code),
+                    };
+                }
+                Action::Exit(_) | Action::Shutdown(_) | Action::KillGroups | Action::Nothing => {}
             }
             (
                 action,
@@ -273,6 +348,9 @@ impl Signals {
                 if let Some(on_record) = on_record {
                     on_record();
                 }
+            }
+            Action::Defer(code) => {
+                self.bound(code);
             }
             Action::Shutdown(code) => {
                 self.bound(code);

@@ -335,20 +335,31 @@ fn resumed_session(
         backend: extensions.search_backend(),
     };
     let cancel = Arc::new(r#loop::TurnCancel::default());
-    // A signal while armed: the log stays as it was.
+    // A signal while armed: the log stays as it was. The commit below
+    // decides the window between `start` and the first write: a recorded
+    // signal writes nothing and exits with its code.
     let reads = switching.reads();
     if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
         session_servers.servers.stop();
         close(session, log, &home, dir, &workspace, &*clock);
         return code;
     }
-    if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
-        .and_then(|()| crate::session_extensions::written(&log, &extensions))
-        .and_then(|()| r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices))
-    {
-        session_servers.servers.stop();
-        close(session, log, &home, dir, &workspace, &*clock);
-        return ask_failed(failed(e.code(), e));
+    match signals.commit(|| {
+        r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
+            .and_then(|()| crate::session_extensions::written(&log, &extensions))
+            .and_then(|()| r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices))
+    }) {
+        Err(code) => {
+            session_servers.servers.stop();
+            close(session, log, &home, dir, &workspace, &*clock);
+            return code;
+        }
+        Ok(Err(e)) => {
+            session_servers.servers.stop();
+            close(session, log, &home, dir, &workspace, &*clock);
+            return ask_failed(failed(e.code(), e));
+        }
+        Ok(Ok(())) => {}
     }
     let inbox_wake = session.inbox_wake();
     // The fetch runs a prompt row through its server, starting a lazy
@@ -402,6 +413,7 @@ fn resumed_session(
                 retry,
                 cancel,
             )
+            .map(|()| None)
         },
     );
     session_servers.servers.stop();

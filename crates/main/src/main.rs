@@ -427,7 +427,11 @@ fn finish(
 /// Runs one turn of the session `session` writes to `log`, once its log,
 /// model and prompt are known, shared by new and resumed sessions: sends
 /// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
-/// what ran. One cancel signal, `cancel`, serves the door and the loop, so
+/// what ran. `run` writes the session's first lines through
+/// [`Signals::commit`](doors::Signals::commit): `Ok(Some(code))` means
+/// nothing was written for this process, and `run_turn` returns `code`
+/// with no `quiesce`, no `fiber_exited` and no stderr line. One cancel
+/// signal, `cancel`, serves the door and the loop, so
 /// a `cancel` ends the turn the prompt starts; a shutdown's code on it is
 /// the exit code.
 fn run_turn(
@@ -437,22 +441,40 @@ fn run_turn(
     prompt: Option<String>,
     one_turn: bool,
     cancel: Arc<r#loop::TurnCancel>,
-    run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<(), Failure>,
+    run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<Option<i32>, Failure>,
 ) -> i32 {
     let door = Arc::clone(&cancel);
     let turn = Arc::clone(&cancel);
+    let mut committed: Option<i32> = None;
     let ran = match prompt {
         // `fiber ask` runs one turn: the prompt, then `close`. It always
         // supplies a prompt; without one it would wait for a client.
         Some(prompt) if one_turn => session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
-            run(inbox, turn)
+            match run(inbox, turn) {
+                Ok(code) => {
+                    committed = code;
+                    Ok(())
+                }
+                Err(failure) => Err(failure),
+            }
         }),
         // The session command queues its prompt when one was supplied and
         // serves clients until idle exit or `close`.
         prompt => session.serve(prompt, Arc::new(move || door.cancel()), |inbox| {
-            run(inbox, turn)
+            match run(inbox, turn) {
+                Ok(code) => {
+                    committed = code;
+                    Ok(())
+                }
+                Err(failure) => Err(failure),
+            }
         }),
     };
+    // Nothing was written for this process: the commit found a recorded
+    // signal, so the log stays as it was and the code is the exit code.
+    if let Some(code) = committed {
+        return code;
+    }
     // `fiber_exited` is the last line: nothing on the door side follows it.
     session.quiesce();
     // A `fiber_exited` that cannot be written leaves a log that reads as a
