@@ -208,6 +208,11 @@ for s in "${SETS[@]}"; do
   TOTAL_STAGES=$(( TOTAL_STAGES + $(cases "$file" | wc -l) ))
 done
 
+if [[ -n "${CLAUDECODE:-}" || ! -t 0 || ! -t 1 ]]; then
+  printf 'Run this in its own Ghostty window, not through Claude Code: the cases need the keyboard.\n' >&2
+  exit 1
+fi
+
 banner "Fiber TUI prototype: judge the cases"
 
 stage "Build and window size"
