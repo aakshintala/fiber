@@ -11,10 +11,10 @@ contract = { path = "../contract" }
 libc = "0.2"
 log = { path = "../log" }
 # SHA-1 for the websocket handshake and SHA-256 for device-token hashes.
-ring = "0.17"
+ring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-signal-hook = "0.3"
+signal-hook.workspace = true
 support = { path = "../support" }
 thiserror.workspace = true
 

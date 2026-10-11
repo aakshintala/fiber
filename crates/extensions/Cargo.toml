@@ -6,7 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-base64 = "0.23"
+base64.workspace = true
 config = { path = "../config" }
 contract = { path = "../contract" }
 net = { path = "../net" }
@@ -17,7 +17,7 @@ similar.workspace = true
 thiserror.workspace = true
 mlua = { workspace = true, features = ["serde"] }
 # SHA-256 and HMAC-SHA256 for `host.sha256` and `host.hmac_sha256`.
-ring = "0.17"
+ring.workspace = true
 rustix.workspace = true
 support = { path = "../support" }
 ureq.workspace = true
