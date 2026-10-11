@@ -7,7 +7,7 @@
 mod common;
 
 use common::Setup;
-use config::{CredentialSource, Login, Protocol, read_manifest, read_package_text, read_providers};
+use config::{CredentialSource, Login, Protocol, provider_files, read_manifest, read_package_text, read_providers};
 use contract::ErrorCode;
 
 const DATABRICKS: &str = r#"{
@@ -639,4 +639,60 @@ fn a_secret_name_that_is_not_one_file_name_is_invalid() {
         assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{name}");
         assert!(err.to_string().contains("extension.json"), "{err}");
     }
+}
+
+#[test]
+fn a_manifest_reads_its_providers_and_their_base_urls() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("extension.json"),
+        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
+            "providers": {"acme": ["https://api.acme.dev/v1", "https://{workspace}/v1"]}}"#,
+    );
+    let manifest = read_manifest(&dir).unwrap();
+    assert_eq!(
+        manifest.providers["acme"],
+        vec![
+            "https://api.acme.dev/v1".to_owned(),
+            "https://{workspace}/v1".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn a_manifest_without_providers_declares_none() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(&dir.join("extension.json"), &format!("{BASE}}}"));
+    let manifest = read_manifest(&dir).unwrap();
+    assert!(manifest.providers.is_empty());
+}
+
+#[test]
+fn a_providers_value_that_is_not_a_map_of_lists_is_a_shape_error() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("extension.json"),
+        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
+            "providers": {"acme": "https://x"}}"#,
+    );
+    let err = read_manifest(&dir).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+}
+
+#[test]
+fn provider_files_lists_json_files_in_name_order_and_none_without_the_directory() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    assert!(provider_files(&dir).unwrap().is_empty());
+    setup.write(&dir.join("providers/b.json"), r#"{"name":"b","models":[]}"#);
+    setup.write(&dir.join("providers/a.json"), r#"{"name":"a","models":[]}"#);
+    setup.write(&dir.join("providers/notes.txt"), "ignored");
+    let files = provider_files(&dir).unwrap();
+    assert_eq!(
+        files,
+        vec![dir.join("providers/a.json"), dir.join("providers/b.json")]
+    );
 }

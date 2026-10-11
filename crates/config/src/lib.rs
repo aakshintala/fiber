@@ -38,7 +38,7 @@ pub use credential_file::{CredentialFile, CredentialLock};
 pub use error::ConfigError;
 pub use extension::{
     Binary, Cost, Login, Manifest, ModelData, Opening, Placeholder, Process, Protocol,
-    ProviderData, Tier, read_manifest, read_package_text, read_providers,
+    ProviderData, Tier, provider_files, read_manifest, read_package_text, read_providers,
 };
 pub use extension_settings::ExtensionSettings;
 pub use home::{

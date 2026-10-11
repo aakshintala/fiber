@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -61,6 +61,10 @@ pub struct Manifest {
     /// (`docs/configuration.md`, "Secrets").
     #[serde(default)]
     pub secrets: Vec<String>,
+    /// The providers it registers, each with its base URLs; a `{name}`
+    /// URL is a per-account host's pattern. None by default.
+    #[serde(default)]
+    pub providers: BTreeMap<String, Vec<String>>,
 }
 
 /// An extension section's files in the opening message
@@ -386,16 +390,16 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, ConfigError> {
     Ok(manifest)
 }
 
-/// Reads every `providers/<name>.json` in an extension's directory, in name
-/// order. A file whose `name` is not its file name is invalid.
-pub fn read_providers(dir: &Path) -> Result<Vec<ProviderData>, ConfigError> {
+/// Lists every `providers/*.json` in an extension's directory, in name
+/// order. A missing directory is an empty list.
+pub fn provider_files(dir: &Path) -> Result<Vec<PathBuf>, ConfigError> {
     let dir = dir.join("providers");
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
         Err(source) => return Err(ConfigError::Io { file: dir, source }),
     };
-    let mut files = Vec::new();
+    let mut files: Vec<PathBuf> = Vec::new();
     for entry in entries {
         let file = entry
             .map_err(|source| ConfigError::Io {
@@ -408,8 +412,15 @@ pub fn read_providers(dir: &Path) -> Result<Vec<ProviderData>, ConfigError> {
         }
     }
     files.sort();
-    files
+    Ok(files)
+}
+
+/// Reads every `providers/<name>.json` in an extension's directory, in name
+/// order. A file whose `name` is not its file name is invalid.
+pub fn read_providers(dir: &Path) -> Result<Vec<ProviderData>, ConfigError> {
+    provider_files(dir)
         .into_iter()
+        .flatten()
         .map(|file| {
             let data: ProviderData = read_typed(&file, "a provider's data")?;
             if file
