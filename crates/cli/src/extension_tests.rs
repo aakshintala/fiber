@@ -837,3 +837,23 @@ fn remove_command_gives_its_exit_code() {
 fn install_by_name_command_gives_its_exit_code() {
     run_case("install-by-name");
 }
+
+#[test]
+fn install_summary_lists_a_lua_only_declared_provider() {
+    let setup = Setup::new();
+    let mut declared = manifest(NAME_A);
+    declared["providers"] = serde_json::json!({"p": ["http://b.test/v1", "http://a.test/v1"]});
+    let source = setup.source("aaa", &declared, &[]);
+    let mut input = io::Cursor::new(b"n\n".to_vec());
+    let (err, _) = run_install(
+        &setup.home(),
+        Request::Path(source),
+        &Origin::github(),
+        true,
+        &mut input,
+    );
+    assert!(
+        err.contains("Provider p: http://a.test/v1, http://b.test/v1\n"),
+        "{err}"
+    );
+}

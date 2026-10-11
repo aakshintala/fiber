@@ -81,14 +81,14 @@ fn summary(item: &RepoItem) -> Result<(Vec<String>, Option<String>), Error> {
             for built_in in &manifest.replaces {
                 lines.push(format!("replaces `{built_in}`"));
             }
-            for provider in config::read_providers(&item.dir)? {
-                let mut urls: Vec<String> =
-                    provider.models.iter().map(|m| m.base_url.clone()).collect();
+            // What an install shows is the manifest's declaration, so a
+            // Lua-only provider shows too.
+            for (name, urls) in &manifest.providers {
+                let mut urls: Vec<&String> = urls.iter().collect();
                 urls.sort();
                 urls.dedup();
                 lines.push(format!(
-                    "registers provider `{}` at {}",
-                    provider.name,
+                    "registers provider `{name}` at {}",
                     urls.iter()
                         .map(|u| format!("`{u}`"))
                         .collect::<Vec<_>>()

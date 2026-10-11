@@ -453,3 +453,24 @@ fn a_never_marked_item_says_so_and_an_undecided_one_does_not() {
         .collect();
     assert_eq!(flags, vec![("a".into(), false), ("b".into(), true)]);
 }
+
+#[test]
+fn a_lua_only_extension_shows_the_providers_its_manifest_declares() {
+    let repo = Repo::new();
+    repo.package(
+        "tools/acme",
+        "github.com/acme/fiber-acme",
+        &json!({
+            "providers": {"acme": ["https://api.acme.dev/v1", "https://eu.acme.dev/v1"]},
+        }),
+    );
+    repo.config(&json!({"repository_extensions": [{"path": "tools/acme"}]}));
+    let [item] = offered(&repo).try_into().unwrap();
+    assert!(
+        lines(&item).contains(
+            &"registers provider `acme` at `https://api.acme.dev/v1`, `https://eu.acme.dev/v1`"
+        ),
+        "{}",
+        item.summary
+    );
+}
