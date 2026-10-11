@@ -15,10 +15,12 @@ use contract::{ErrorCode, SessionId};
 use serde_json::{Map, Value, json};
 
 pub(crate) mod group;
+pub(crate) mod models;
 pub(crate) mod outcome;
 pub(crate) mod run;
 
-pub use run::{Launch, Launched, Resolve, Watch, Watched};
+pub use models::{DelegateModels, Resolve};
+pub use run::{Launch, Launched, Watch, Watched};
 
 use run::Runner;
 
@@ -56,20 +58,21 @@ pub struct DelegateSpawn {
     pub watch: Watch,
 }
 
-/// A `delegate_spawn` call's arguments, checked.
-struct Arguments {
-    description: String,
-    prompt: String,
-    model: String,
+/// Reads `description` and `prompt`: each is required, and each is a
+/// string. `model` is checked in `run`, not here, so a missing or
+/// wrongly typed one reaches the tool's own check, which lists the valid
+/// roles and references (`docs/delegates.md`, "Choosing a model").
+fn check_effects_arguments(arguments: &Map<String, Value>) -> Result<(String, String), String> {
+    check_strings(arguments, &["description", "prompt"]).map(|values| (values[0].clone(), values[1].clone()))
 }
 
-/// Reads the call's arguments: each of `description`, `prompt` and `model`
-/// is required, and each is a string.
-fn check_arguments(arguments: &Map<String, Value>) -> Result<Arguments, String> {
+/// Reads each of `names` from the call's arguments: each is required,
+/// and each is a string.
+fn check_strings(arguments: &Map<String, Value>, names: &[&str]) -> Result<Vec<String>, String> {
     let mut missing = Vec::new();
-    for name in ["description", "prompt", "model"] {
-        if !arguments.contains_key(name) {
-            missing.push(name);
+    for name in names {
+        if !arguments.contains_key(*name) {
+            missing.push(*name);
         }
     }
     if !missing.is_empty() {
@@ -84,9 +87,9 @@ fn check_arguments(arguments: &Map<String, Value>) -> Result<Arguments, String> 
         ));
     }
     let mut wrong = Vec::new();
-    for name in ["description", "prompt", "model"] {
-        if !arguments[name].is_string() {
-            wrong.push(name);
+    for name in names {
+        if !arguments[*name].is_string() {
+            wrong.push(*name);
         }
     }
     if !wrong.is_empty() {
@@ -100,14 +103,15 @@ fn check_arguments(arguments: &Map<String, Value>) -> Result<Arguments, String> 
             }
         ));
     }
-    Ok(Arguments {
-        description: arguments["description"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned(),
-        prompt: arguments["prompt"].as_str().unwrap_or_default().to_owned(),
-        model: arguments["model"].as_str().unwrap_or_default().to_owned(),
-    })
+    Ok(names
+        .iter()
+        .map(|name| {
+            arguments[*name]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect())
 }
 
 impl Tool for DelegateSpawn {
@@ -117,8 +121,10 @@ impl Tool for DelegateSpawn {
             description: "Starts a Fiber delegate: a child session that runs \
                  `prompt` as a background job and exits when its run ends. \
                  Returns at once with the delegate's job id and log path; \
-                 wait for it with `jobs wait`. `model` is a `fiber:` model \
-                 reference."
+                 wait for it with `jobs wait`. `model` is required: a configured \
+                 role name or a full `fiber:` model reference, checked when the \
+                 call is made; list the valid roles and references with \
+                 `delegate_models`."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -132,11 +138,10 @@ impl Tool for DelegateSpawn {
                         "description": "What the child session runs."
                     },
                     "model": {
-                        "type": "string",
-                        "description": "The delegate's model, as a `fiber:` reference."
+                        "description": "The delegate's model: a configured role name or a full `fiber:` reference, checked when the call is made. Required."
                     }
                 },
-                "required": ["description", "prompt", "model"],
+                "required": ["description", "prompt"],
                 "additionalProperties": false
             }),
             deferred: false,
@@ -145,7 +150,7 @@ impl Tool for DelegateSpawn {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        check_arguments(arguments).map_err(EffectsError::Arguments)?;
+        check_effects_arguments(arguments).map_err(EffectsError::Arguments)?;
         Ok(Effects {
             declared: DeclaredEffects {
                 effects: vec![Effect::Executes],
@@ -169,7 +174,7 @@ impl Tool for DelegateSpawn {
         _cancel: &dyn Cancel,
         _emit: &dyn Emit,
     ) -> Output {
-        let call = match check_arguments(arguments) {
+        let (description, prompt) = match check_effects_arguments(arguments) {
             Ok(call) => call,
             Err(message) => {
                 return crate::registry::failed(
@@ -179,16 +184,35 @@ impl Tool for DelegateSpawn {
                 );
             }
         };
-        // Checked when the call is made, before any process starts: an
-        // invalid value fails and lists the valid references.
-        let resolved = match (self.resolve)(&call.model) {
-            Ok(resolved) => resolved,
-            Err(valid) => {
-                let message = format!(
-                    "Unknown delegate model {:?}. Valid models:\n{}",
-                    call.model,
-                    valid.join("\n")
+        // The schema leaves `model` optional and untyped, so a missing or
+        // wrongly typed value reaches this check, which lists the valid
+        // roles and references (`docs/delegates.md`, "Choosing a model").
+        let model = match arguments.get("model") {
+            Some(Value::String(model)) => model.clone(),
+            None => {
+                let message =
+                    format!("Give model: a role or a full reference.\n{}", self.resolve.catalogue);
+                return crate::registry::failed(
+                    ErrorCode::InvalidArguments,
+                    message.clone(),
+                    message,
                 );
+            }
+            Some(_) => {
+                let message = format!("model must be a string.\n{}", self.resolve.catalogue);
+                return crate::registry::failed(
+                    ErrorCode::InvalidArguments,
+                    message.clone(),
+                    message,
+                );
+            }
+        };
+        // Checked when the call is made, before any process starts: an
+        // invalid value fails and lists the valid roles and references.
+        let resolved = match (self.resolve.lookup)(&model) {
+            Ok(resolved) => resolved,
+            Err(reason) => {
+                let message = format!("{reason}\n{}", self.resolve.catalogue);
                 return crate::registry::failed(
                     ErrorCode::InvalidArguments,
                     message.clone(),
@@ -208,8 +232,8 @@ impl Tool for DelegateSpawn {
             session_id: session_id.clone(),
             job_id: job_id.clone(),
             parent: self.parent.clone(),
-            model: resolved,
-            prompt: call.prompt,
+            model: resolved.clone(),
+            prompt,
             workspace: self.workspace.clone(),
         };
         let (runner, stop) = Runner::new(
@@ -231,7 +255,7 @@ impl Tool for DelegateSpawn {
         let (started, finish) = self.registry.open_started(
             job_id.clone(),
             "delegate_spawn".to_owned(),
-            call.description,
+            description,
             output_path.clone(),
             stop,
         );
@@ -240,7 +264,10 @@ impl Tool for DelegateSpawn {
             job_id: job_id.clone(),
             delegate_session_id: session_id.clone(),
             harness: "fiber".to_owned(),
-            model: call.model,
+            // The resolved reference, with any role resolved: a full
+            // reference argument records the same text as before
+            // (`docs/events.md`, "`delegate_started`").
+            model: format!("fiber:{resolved}"),
             workspace: self.workspace.to_string_lossy().into_owned(),
             worktree: None,
             forked_from: None,
