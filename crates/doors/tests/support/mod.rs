@@ -4,6 +4,10 @@
 //! defined once.
 
 #![allow(dead_code, reason = "each test file uses its own subset")]
+#![allow(
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
 
 use std::io::Write;
 use std::path::PathBuf;

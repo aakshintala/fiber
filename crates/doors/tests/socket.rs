@@ -11,7 +11,6 @@
 
 mod support;
 
-use support::*;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -21,6 +20,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
+use support::*;
 
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;

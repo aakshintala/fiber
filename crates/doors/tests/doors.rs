@@ -10,14 +10,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::fs;
-use std::io::{self, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+mod support;
 
 use contract::events::{Event, FiberStarted, InputItem, TurnStarted};
 use contract::inbox::Delivery;
@@ -27,46 +20,14 @@ use doors::{Session, exit_before_session, failure, mint, project, prompt, resolv
 use fakes::Deadline;
 use log::Log;
 use serde_json::Value;
-
-/// A temporary directory, removed on drop, with a short name: a session's
-/// socket path must fit in 103 bytes on macOS.
-struct Temp(
-    PathBuf,
-    #[expect(dead_code, reason = "Drop removes the directory")] fakes::TempDir,
-);
-
-impl Temp {
-    fn new() -> Self {
-        let held = fakes::TempDir::new("fd");
-        let dir = held.path().to_path_buf();
-        Self(dir, held)
-    }
-}
-
-/// A writer the test reads back after the session is done with it.
-#[derive(Clone, Default)]
-struct Shared(Arc<Mutex<Vec<u8>>>);
-
-impl Write for Shared {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Shared {
-    fn lines(&self) -> Vec<Value> {
-        String::from_utf8(self.0.lock().unwrap().clone())
-            .unwrap()
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect()
-    }
-}
+use std::fs;
+use std::io;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Arc;
+use support::*;
 
 /// A reader that fails the test if read: stdin on a terminal is never read.
 struct Untouched;
@@ -80,9 +41,6 @@ impl io::Read for Untouched {
 fn failure_of(result: Result<String, Failure>) -> Failure {
     result.unwrap_err()
 }
-
-/// How long a test waits for a delivery before it fails.
-const DEADLINE: Duration = Duration::from_secs(10);
 
 const NO_PROMPT: &str = "No prompt. Run `fiber ask \"<prompt>\"` or `fiber ask < <file>`.";
 
@@ -327,7 +285,7 @@ fn started() -> Event {
 #[test]
 fn a_session_binds_its_socket_and_one_that_never_got_a_prompt_leaves_nothing() {
     let temp = Temp::new();
-    let out = Shared::default();
+    let out = Shared::new();
     let (log, dir, session) = open(&temp, "h", &out);
     let session = session.unwrap();
     let path = socket(&dir);
@@ -356,7 +314,7 @@ fn a_session_binds_its_socket_and_one_that_never_got_a_prompt_leaves_nothing() {
 #[test]
 fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
     let temp = Temp::new();
-    let out = Shared::default();
+    let out = Shared::new();
     let (log, dir, session) = open(&temp, "h", &out);
     let session = session.unwrap();
     log.append(&started(), None, None).unwrap();
@@ -408,14 +366,14 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
     );
     assert!(!socket(&dir).exists());
     let log = fs::read_to_string(dir.join("events.jsonl")).unwrap();
-    let printed = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+    let printed = String::from_utf8(out.buf.lock().unwrap().clone()).unwrap();
     assert_eq!(printed, log);
 }
 
 #[test]
 fn a_fiber_home_too_long_for_a_socket_is_a_usage_error_and_leaves_no_session() {
     let temp = Temp::new();
-    let (_log, dir, session) = open(&temp, &"h".repeat(110), &Shared::default());
+    let (_log, dir, session) = open(&temp, &"h".repeat(110), &Shared::new());
 
     let error = session.err().unwrap();
 
@@ -430,7 +388,7 @@ fn a_socket_path_at_the_platforms_limit_binds() {
     let temp = Temp::new();
     // `<home>/run/` and an 18-byte session id.
     let pad = max - "/run/".len() - 18 - temp.0.as_os_str().len() - 1;
-    let (log, dir, session) = open(&temp, &"h".repeat(pad), &Shared::default());
+    let (log, dir, session) = open(&temp, &"h".repeat(pad), &Shared::new());
 
     let session = session.unwrap();
 
