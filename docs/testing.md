@@ -503,7 +503,7 @@ that expires, reports that wait, not a harness kill.
 A wait that takes several lines has one deadline for the whole wait, never one
 per line, and needs no clock: a scoped thread reads the lines and sends them
 over a channel, and the test takes them with one `recv_timeout`, as `until` in
-`crates/doors/tests/socket.rs` does. A binary-level test that must hand product
+`crates/doors/tests/support/mod.rs` does. A binary-level test that must hand product
 code a `contract::clock::Clock` uses `fakes::clock::SystemClock`, the process clock, or `StretchedClock`
 in `crates/main/tests/support/mod.rs`, which runs it slower so a product deadline spans the test's own.
 
