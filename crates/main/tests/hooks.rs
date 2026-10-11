@@ -1,9 +1,10 @@
-//! Binary-level tests of a Lua extension's `after_tool` hook through
-//! `fiber ask` (`docs/extensions.md`, "Hooks"; `docs/testing.md`, "Levels"):
-//! the built `fiber` runs in its own process group with its own
-//! `FIBER_HOME`, holding an ordinary provider whose base URL is the fake
-//! server, and the extensions under test. No test here waits on a hook's
-//! timeout; those run on the fake clock in `extensions`.
+//! Binary-level tests of a Lua extension's `after_tool` and `before_tool`
+//! hooks through `fiber ask` and `fiber session` (`docs/extensions.md`,
+//! "Hooks"; `docs/testing.md`, "Levels"): the built `fiber` runs in its
+//! own process group with its own `FIBER_HOME`, holding an ordinary
+//! provider whose base URL is the fake server, and the extensions under
+//! test. No test here waits on a hook's timeout; those run on the fake
+//! clock in `extensions`.
 
 #![allow(
     clippy::unwrap_used,
@@ -13,6 +14,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod extension_harness;
 mod support;
 
 use std::fs;
@@ -44,18 +46,6 @@ impl Setup {
         .unwrap()
         .commit()
         .unwrap();
-    }
-
-    /// Installs `fiber.test/<short>`, whose entry script is `init`.
-    fn lua(&self, short: &str, init: &str) {
-        let source = self.root.path().join("src").join(short);
-        write(
-            &source.join("extension.json"),
-            &json!({"name": format!("fiber.test/{short}"), "version": "v2.0.0", "fiber": "0.1.0", "api": 1})
-                .to_string(),
-        );
-        write(&source.join("init.lua"), init);
-        self.install(source);
     }
 
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
@@ -238,6 +228,16 @@ fn read_kinds(loading: &[&'static str], hooked: &[&'static str]) -> Vec<&'static
         ],
     ]
     .concat()
+}
+
+/// The complete event kinds of a run whose call never started: as
+/// [`read_kinds`] with no notices, without `tool_call_started`. A refused,
+/// failed or denied-before-permission call writes no permission line.
+fn unstarted_kinds() -> Vec<&'static str> {
+    read_kinds(&[], &[])
+        .into_iter()
+        .filter(|kind| *kind != "tool_call_started")
+        .collect()
 }
 
 /// An `after_tool` hook of `phase` that appends `|<tag>`.
@@ -506,4 +506,426 @@ fn an_after_tool_hook_calling_host_log_writes_one_live_line_and_its_diagnostic_l
         assert!(next >= at, "{key} follows the key before it");
         at = next;
     }
+}
+
+/// A `before_tool` hook of `phase` with `body` as its run's body.
+fn before_hook(phase: &str, failure: &str, body: &str) -> String {
+    format!(
+        "fiber.hook(\"before_tool\", {{ phase = \"{phase}\", timeout = 30000, on_failure = \"{failure}\",\n\
+           run = function(call) {body} end }})\n"
+    )
+}
+
+fn rewrite_guard(path: &str) -> String {
+    format!(
+        "fiber.hook(\"before_tool\", {{ timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return {{ arguments = {{ path = \"{path}\" }} }} end }})\n"
+    )
+}
+
+#[test]
+fn a_before_tool_rewrite_is_checked_judged_and_run_and_the_model_sees_its_own_call() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("a.txt"), "A\n").unwrap();
+    fs::write(setup.workspace().join("b.txt"), "B\n").unwrap();
+    setup.lua("guard", &rewrite_guard("b.txt"));
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path": "a.txt"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), read_kinds(&[], &[]));
+
+    let started = run.first("tool_call_started");
+    assert_eq!(started["payload"]["arguments"], json!({"path": "b.txt"}));
+    assert_eq!(
+        started["payload"]["changed_by"],
+        json!(["fiber.test/guard"])
+    );
+    let line = "Extension fiber.test/guard rewrote this call's arguments; it ran with {\"path\":\"b.txt\"}.";
+    let completed = run.completed();
+    assert_eq!(
+        completed["content"],
+        json!([{"type": "text", "text": format!("{line}\nB\n")}])
+    );
+    assert_eq!(output_sent(&server), format!("{line}\nB\n"));
+
+    // The model's call is sent back as it wrote it.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let second: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let call = second["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "function_call")
+        .unwrap();
+    assert_eq!(call["arguments"], json!({"path": "a.txt"}).to_string());
+}
+
+#[test]
+fn a_rewrite_into_credentials_is_refused_by_the_credential_deny() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("a.txt"), "A\n").unwrap();
+    let secret = setup.home().join("credentials").join("secret.txt");
+    fs::create_dir_all(secret.parent().unwrap()).unwrap();
+    fs::write(&secret, "the secret is hunter2\n").unwrap();
+    setup.lua("guard", &rewrite_guard(&secret.display().to_string()));
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path": "a.txt"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    let mut expected = read_kinds(&[], &[]);
+    let at = expected
+        .iter()
+        .position(|kind| *kind == "tool_call_started")
+        .unwrap();
+    expected[at] = "permission_resolved";
+    assert_eq!(run.kinds(), expected);
+
+    let resolved = run.first("permission_resolved");
+    assert_eq!(resolved["payload"]["decided_by"], "credential_deny");
+    let completed = run.completed();
+    assert_eq!(completed["status"], "denied");
+    assert_eq!(completed["reason"], "credentials");
+    for line in &run.lines {
+        assert!(
+            !line.to_string().contains("hunter2"),
+            "the secret reaches no stdout line"
+        );
+    }
+    let dir = run.session_dir(&setup);
+    assert!(!on_disk(&dir).contains("hunter2"));
+}
+
+#[test]
+fn a_rewrite_that_fails_the_schema_fails_invalid_arguments_and_never_starts() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("a.txt"), "A\n").unwrap();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"before_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return { arguments = { path = 5 } } end })\n",
+    );
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path": "a.txt"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), unstarted_kinds());
+    let completed = run.completed();
+    assert_eq!(completed["status"], "failed");
+    assert_eq!(completed["error"]["code"], "invalid_arguments");
+    assert!(
+        completed["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(
+                "Extension fiber.test/guard rewrote this call's arguments, and they do not match the tool's schema:"
+            ),
+        "{}",
+        completed["content"][0]["text"]
+    );
+}
+
+#[test]
+fn a_before_tool_refusal_is_denied_hook_and_the_tool_never_runs() {
+    let setup = Setup::new();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"before_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return { refuse = \"no writes here\" } end })\n",
+    );
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_write",
+            "write",
+            &json!({"path": "out.txt", "content": "hi\n"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "write it"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), unstarted_kinds());
+    let completed = run.completed();
+    assert_eq!(completed["status"], "denied");
+    assert_eq!(completed["reason"], "hook");
+    assert_eq!(
+        completed["content"],
+        json!([{"type": "text", "text": "Extension fiber.test/guard refused this call: no writes here. It did not run."}])
+    );
+    assert!(!setup.workspace().join("out.txt").exists());
+    assert_eq!(
+        output_sent(&server),
+        "Extension fiber.test/guard refused this call: no writes here. It did not run."
+    );
+}
+
+#[test]
+fn a_check_hook_that_returns_a_change_has_failed() {
+    let check = "return { arguments = call.arguments }";
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("note.txt"), "original\n").unwrap();
+    setup.lua("guard", &before_hook("check", "blocking", check));
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path": "note.txt"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), unstarted_kinds());
+    let completed = run.completed();
+    assert_eq!(completed["status"], "failed");
+    assert_eq!(completed["error"]["code"], "hook_failed");
+
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("note.txt"), "original\n").unwrap();
+    setup.lua("guard", &before_hook("check", "non-blocking", check));
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path": "note.txt"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = read_kinds(&[], &[]);
+    let at = expected
+        .iter()
+        .position(|kind| *kind == "tool_call_started")
+        .unwrap();
+    expected.insert(at, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notices = run.all("notice");
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0]["payload"]["code"], "hook_failed");
+    assert_eq!(notices[0]["payload"]["extension"], "fiber.test/guard");
+    let completed = run.completed();
+    assert_eq!(completed["content"][0]["text"], "original\n");
+}
+
+#[test]
+fn a_blocking_before_tool_failure_fails_the_call_hook_failed_and_never_starts() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("note.txt"), "original\n").unwrap();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"before_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) error(\"boom\") end })\n",
+    );
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path": "note.txt"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    let run = setup.run(&["ask", "read the note"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), unstarted_kinds());
+    let completed = run.completed();
+    assert_eq!(completed["status"], "failed");
+    assert_eq!(completed["error"]["code"], "hook_failed");
+    let text = completed["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with(
+            "The `before_tool` hook of extension fiber.test/guard failed, so the call did not run: "
+        ) && text.contains("boom"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_rewrite_survives_a_resume_while_its_approval_is_pending() {
+    use extension_harness::{kinds as session_kinds, send as session_send, until as session_until};
+
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_1",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("config.json"),
+        json!({"model": "fake/m", "session": {"idle_exit_ms": 0}}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo"})
+        ),
+    )
+    .unwrap();
+    setup.lua(
+        "guard",
+        "fiber.hook(\"before_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call)\n\
+             if call.tool == \"shell\" then return { arguments = { command = \"echo bye\" } } end\n\
+           end })\n",
+    );
+    let id = doors::mint("s_");
+    let first = setup.start_session(&id, &["--prompt", "run it"]);
+    let (status, out, stderr) = first.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let requested = out
+        .iter()
+        .find(|line| line["kind"] == "permission_requested")
+        .expect("the approval was raised");
+    let request_id = requested["payload"]["request_id"].as_str().unwrap();
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["suspended_on"], request_id);
+    // The first process's complete stream: the approval hangs the call,
+    // so no `tool_call_started` follows the request.
+    assert_eq!(
+        session_kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "fiber_exited",
+        ]
+    );
+
+    fs::write(
+        setup.home().join("config.json"),
+        json!({"model": "fake/m", "session": {"idle_exit_ms": 3600000}}).to_string(),
+    )
+    .unwrap();
+    let mut running = setup.start_session(&id, &["--resume"]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    session_send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let asked = session_until(&client, "the re-raised request", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let raised = asked.last().expect("the request was raised again");
+    assert_eq!(raised["payload"]["request_id"], request_id);
+    assert_eq!(raised["payload"]["step"], "standing_ask");
+    session_send(
+        &client,
+        &format!(
+            r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","decision":"allow"}}}}"#
+        ),
+    );
+    let done = session_until(&client, "the turn to complete", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let started = done
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started")
+        .expect("the call started");
+    assert_eq!(
+        started["payload"]["arguments"],
+        json!({"command": "echo bye"})
+    );
+    assert_eq!(
+        started["payload"]["changed_by"],
+        json!(["fiber.test/guard"])
+    );
+    let completed = done
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the call completed");
+    let line = "Extension fiber.test/guard rewrote this call's arguments; it ran with {\"command\":\"echo bye\"}.";
+    assert!(
+        completed["payload"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("{line}\nbye")),
+        "{}",
+        completed["payload"]["content"][0]["text"]
+    );
+    session_send(&client, r#"{"id":"c_close","command":"close"}"#);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+
+    let at = out
+        .iter()
+        .position(|line| line["kind"] == "fiber_started")
+        .expect("the resumed process writes fiber_started");
+    let resumed: Vec<Value> = out[at..]
+        .iter()
+        .filter(|line| line["kind"] != "clients")
+        .cloned()
+        .collect();
+    assert_eq!(
+        session_kinds(&resumed),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 }

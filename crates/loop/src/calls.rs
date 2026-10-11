@@ -17,11 +17,12 @@ use contract::events::{
 };
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects};
-use contract::tool::{Bound, Cancel, Effects, Output, Tool};
-use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
+use contract::tool::{Bound, Cancel, Output, Tool};
+use contract::{ActionId, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
 
-use super::completion::{completed, denied, failed, resolved};
+use super::before_tool::Prepared;
+use super::completion::{completed, denied, resolved};
 use crate::asking::Release;
 use crate::interactions::Suspend;
 use crate::progress::{SharedWake, Stream};
@@ -40,13 +41,14 @@ enum State {
     Ready(Box<ToolCallCompleted>),
     /// Running on its own thread, streaming through its call's emitter.
     /// `declared` rides along for the change check at completion; `tool`
-    /// and `arguments` for the hooks.
+    /// and `arguments` for the hooks; `rewritten` for the result line.
     Running {
         bound: Bound,
         stream: Arc<Stream>,
         declared: DeclaredEffects,
         tool: String,
         arguments: Arc<Map<String, Value>>,
+        rewritten: Option<Vec<String>>,
     },
     /// Its completion is written.
     Done,
@@ -77,16 +79,8 @@ fn encoded(delta: &Progress) -> u64 {
     u64::try_from(bytes).unwrap_or(u64::MAX)
 }
 
-/// A call that runs: its tool, the arguments it runs with, and the effects
-/// it declared.
-pub(crate) type Approved = (Arc<dyn Tool>, Map<String, Value>, DeclaredEffects);
-
-/// A call that names a tool and fits its schema: the tool, the arguments it
-/// runs with, and the effects it declared.
-pub(crate) type Checked = (Arc<dyn Tool>, Map<String, Value>, Effects);
-
 /// A call's decision: it runs, or it completes as given without running.
-pub(crate) type Decided = Result<Approved, Box<ToolCallCompleted>>;
+pub(crate) type Decided = Result<Prepared, Box<ToolCallCompleted>>;
 
 /// What a person's answer carries onto its `permission_resolved` line.
 pub(crate) struct Answered {
@@ -237,23 +231,29 @@ impl Loop {
                     // `tool_call_started`, completed `cancelled`. A decision
                     // line already written stays.
                     Ok(_) if self.turn_cancelled() => State::Ready(self.cancelled_before_ran()),
-                    Ok((tool, arguments, declared)) => {
+                    Ok(prepared) => {
                         let again = reraise
                             .as_ref()
                             .filter(|(action, _)| *action == id)
                             .map(|(_, request)| request.clone());
                         if again.is_none() {
+                            let (arguments, changed_by) = match &prepared.rewritten {
+                                Some(changed_by) => {
+                                    (Some(prepared.arguments.clone()), Some(changed_by.clone()))
+                                }
+                                None => (None, None),
+                            };
                             self.append(
                                 &Event::ToolCallStarted(ToolCallStarted {
-                                    declared: declared.clone(),
-                                    arguments: None,
-                                    changed_by: None,
+                                    declared: prepared.effects.declared.clone(),
+                                    arguments,
+                                    changed_by,
                                 }),
                                 turn,
                                 Some(&id),
                             )?;
                         }
-                        let bound = tool.bound();
+                        let bound = prepared.tool.bound();
                         // `fiber ask`, a delegate, after `close`, or no inbox
                         // wake: nobody can answer (`docs/tools.md`, "Asking
                         // the person").
@@ -269,7 +269,8 @@ impl Loop {
                         release.add(Arc::clone(&stream));
                         let thread_stream = Arc::clone(&stream);
                         let call_cancel = Arc::clone(&cancel);
-                        let arguments = Arc::new(arguments);
+                        let tool = Arc::clone(&prepared.tool);
+                        let arguments = Arc::new(prepared.arguments);
                         let thread_arguments = Arc::clone(&arguments);
                         scope.spawn(move || {
                             let output = tool.run_asking(
@@ -283,9 +284,10 @@ impl Loop {
                         State::Running {
                             bound,
                             stream,
-                            declared,
+                            declared: prepared.effects.declared,
                             tool: name,
                             arguments,
+                            rewritten: prepared.rewritten,
                         }
                     }
                 };
@@ -357,63 +359,18 @@ impl Loop {
         })
     }
 
-    /// The tool, arguments and effects of `call`, once it names a tool and
-    /// its arguments fit that tool's schema; otherwise the failed
-    /// completion it gets (`docs/loop.md`, "Tool calls that do not run").
-    pub(crate) fn checked(
-        &self,
-        call: &ToolCallRequested,
-    ) -> Result<Checked, Box<ToolCallCompleted>> {
-        let Some((_, tool, definition)) = self.tools.get(&call.name) else {
-            let names: Vec<String> = self.tools.keys().map(|n| format!("`{n}`")).collect();
-            let exist = if names.is_empty() {
-                "You have no tools.".to_owned()
-            } else {
-                format!("The tools are {}.", names.join(", "))
-            };
-            return Err(Box::new(failed(
-                ErrorCode::UnknownTool,
-                format!("No tool is named `{}`. {exist}", call.name),
-            )));
-        };
-        let arguments = match &call.repair {
-            Some(repair) => Value::Object(repair.repaired.clone()),
-            None => call.arguments.clone(),
-        };
-        let Value::Object(arguments) = arguments else {
-            return Err(Box::new(failed(
-                ErrorCode::InvalidArguments,
-                "The arguments are not a JSON object. Send them as one.".to_owned(),
-            )));
-        };
-        let errors = schema::check(&definition.input_schema, &Value::Object(arguments.clone()));
-        if !errors.is_empty() {
-            return Err(Box::new(failed(
-                ErrorCode::InvalidArguments,
-                format!(
-                    "The arguments do not match the tool's schema:\n{}",
-                    errors.join("\n")
-                ),
-            )));
-        }
-        let effects = match tool.effects(&arguments) {
-            Ok(effects) => effects,
-            Err(e) => return Err(Box::new(failed(ErrorCode::ToolError, e.to_string()))),
-        };
-        Ok((Arc::clone(tool), arguments, effects))
-    }
-
-    /// Checks `call` and decides whether it runs (`docs/loop.md`, "Tool
-    /// calls that do not run", and `docs/permissions.md`, "The order a call
-    /// is judged in").
+    /// Checks `call`, runs its hooks and decides whether it runs
+    /// (`docs/loop.md`, "Tool calls that do not run", and
+    /// `docs/permissions.md`, "The order a call is judged in"). The
+    /// decision judges the prepared call, not the one the model asked for.
     fn decide(
         &mut self,
         call: &ToolCallRequested,
         id: &ActionId,
         turn: &TurnId,
     ) -> Result<Decided, Error> {
-        let (tool, arguments, effects) = match self.checked(call) {
-            Ok(checked) => checked,
+        let prepared = match self.prepared(call, turn)? {
+            Ok(prepared) => prepared,
             Err(failed) => return Ok(Err(failed)),
         };
         // The rules are read once for every call, including ones that later
@@ -424,7 +381,7 @@ impl Loop {
         let rules = self.rules.read();
         match super::permission::judge(
             &call.name,
-            &effects,
+            &prepared.effects,
             &rules,
             &self.grants,
             &self.workspace,
@@ -445,12 +402,12 @@ impl Loop {
                 id,
                 turn,
                 &call.name,
-                &effects.declared,
+                &prepared.effects.declared,
                 AskStep::StandingAsk {
                     standing_rule: rule,
                 },
             )? {
-                Asked::Allow => Ok(Ok((tool, arguments, effects.declared))),
+                Asked::Allow => Ok(Ok(prepared)),
                 Asked::Deny(completed) | Asked::Gone(completed) => Ok(Err(completed)),
                 Asked::Cancelled => Ok(Err(self.cancelled_before_ran())),
                 // The idle delay passed. Nothing more is written; `run_calls`
@@ -465,13 +422,11 @@ impl Loop {
                 if let Some(by) = decided {
                     self.decided(id, turn, resolved(None, Decision::Allow, by, None, None))?;
                 }
-                Ok(Ok((tool, arguments, effects.declared)))
+                Ok(Ok(prepared))
             }
             // Step 7 is the reviewer: the call is judged by a separate
             // model (`docs/permissions.md`, "The reviewer").
-            super::permission::Verdict::Review => {
-                self.review(call, id, turn, tool, arguments, &effects)
-            }
+            super::permission::Verdict::Review => self.review(call, id, turn, prepared),
         }
     }
 
@@ -585,13 +540,16 @@ impl Loop {
 
     /// The completion of a call of `tool` with `arguments` that ran and
     /// returned `output`, as the hooks left it, its text cut to `bound`
-    /// (`docs/tools.md`, "Bounded results"). Writes the call's job lines and
+    /// (`docs/tools.md`, "Bounded results"). `rewritten` names the
+    /// extensions that rewrote the arguments, heading the text with the
+    /// result line. Writes the call's job lines and
     /// the hooks' notices under `id` before the caller writes
     /// `tool_call_completed`.
     fn finish(
         &mut self,
         output: Output,
         (tool, arguments): (&str, &Map<String, Value>),
+        rewritten: Option<&[String]>,
         bound: Bound,
         id: &ActionId,
         turn: &TurnId,
@@ -652,6 +610,7 @@ impl Loop {
             images,
             details,
             process: process.as_ref(),
+            rewritten,
         };
         let shaped = self.shape(ran, bound, id, turn)?;
         Ok(ToolCallCompleted {
@@ -703,6 +662,7 @@ impl Loop {
                 bound,
                 tool,
                 arguments,
+                rewritten,
                 ..
             } => match stream.take_finished() {
                 Some((output, flushed)) => {
@@ -710,7 +670,8 @@ impl Loop {
                         self.write_delta(&delta, turn, &call.id);
                     }
                     let call_of = (tool.as_str(), arguments.as_ref());
-                    Box::new(self.finish(output, call_of, *bound, &call.id, turn)?)
+                    let rewritten = rewritten.as_deref();
+                    Box::new(self.finish(output, call_of, rewritten, *bound, &call.id, turn)?)
                 }
                 None => return Ok(false),
             },

@@ -115,12 +115,13 @@ impl Loop {
 
     /// Finishes a turn cut short on a question, once the preamble is
     /// written: the question is raised again under the same `request_id`,
-    /// and its call, allowed before the exit, runs again without being
-    /// judged again and with no second `tool_call_started`; its ask pends
-    /// under that request. A reply or `close` held aside answers it as if it
-    /// came now. With nobody to answer, Fiber declines the request raised
-    /// again, and the call, with nobody to ask, hands its questions to the
-    /// driver (`docs/invocation.md`, "Lifecycle"). Then the turn goes on as
+    /// and its call, allowed before the exit, runs again with the arguments
+    /// it started with, without being judged again and with no second
+    /// `tool_call_started`; its ask pends under that request. A reply or
+    /// `close` held aside answers it as if it came now. With nobody to
+    /// answer, Fiber declines the request raised again, and the call, with
+    /// nobody to ask, hands its questions to the driver
+    /// (`docs/invocation.md`, "Lifecycle"). Then the turn goes on as
     /// after any batch.
     pub(crate) fn finish_suspended_form(
         &mut self,
@@ -131,6 +132,7 @@ impl Loop {
             pending,
             action,
             batch,
+            started,
         } = suspended;
         let request = pending.request_id().clone();
         // Armed with the re-raise: a shutdown before it leaves the request
@@ -146,10 +148,7 @@ impl Loop {
             batch,
             &action,
             || Err(self.cancelled_before_ran()),
-            |call| {
-                self.checked(call)
-                    .map(|(tool, arguments, effects)| (tool, arguments, effects.declared))
-            },
+            |call| self.started_again(call, started),
         );
         let cancelled = self.run_batch(calls, &turn, Some((action, request)))?;
         self.finish_batch(&turn, cancelled)

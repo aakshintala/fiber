@@ -33,6 +33,9 @@ pub(crate) struct Ran<'a> {
     pub(crate) details: Option<Value>,
     /// How its process ended.
     pub(crate) process: Option<&'a Process>,
+    /// The extensions that rewrote the arguments, when a `before_tool`
+    /// hook did: the completion's text begins with the line naming them.
+    pub(crate) rewritten: Option<&'a [String]>,
 }
 
 /// What the completion carries of the output, once the hooks have answered
@@ -76,7 +79,9 @@ impl Loop {
             });
         }
         let (parts, full) = joined(ran.text);
+        let line = rewritten_line(ran.rewritten, ran.arguments);
         let Some(hooks) = self.hooks.clone() else {
+            let (parts, full) = with_line(parts, full, &line);
             return Ok(self
                 .capped(parts, full, ran.details, None, bound, id)?
                 .with(ran.images));
@@ -94,9 +99,11 @@ impl Loop {
         }
         let changed_by = (!answer.changed_by.is_empty()).then_some(answer.changed_by);
         let mut shaped = match answer.outcome {
-            AfterToolOutcome::Unchanged => self
-                .capped(parts, full, ran.details, None, bound, id)?
-                .with(ran.images),
+            AfterToolOutcome::Unchanged => {
+                let (parts, full) = with_line(parts, full, &line);
+                self.capped(parts, full, ran.details, None, bound, id)?
+                    .with(ran.images)
+            }
             // Its only content is the line: images go too.
             AfterToolOutcome::Withheld { extension } => Shaped {
                 content: vec![ContentPart::Text {
@@ -119,6 +126,7 @@ impl Loop {
                     Some(text) => (None, text),
                     None => (parts, full),
                 };
+                let (parts, full) = with_line(parts, full, &line);
                 self.capped(parts, full, details, artifact, bound, id)?
                     .with(ran.images)
             }
@@ -186,6 +194,38 @@ impl Shaped {
         self.content.extend(images);
         self
     }
+}
+
+/// The line heading the completion of a call a `before_tool` hook rewrote:
+/// who rewrote it and the arguments that ran. `None` when the call ran as
+/// asked.
+fn rewritten_line(rewritten: Option<&[String]>, arguments: &Map<String, Value>) -> Option<String> {
+    let rewritten = rewritten?;
+    let names = rewritten.join(", ");
+    let arguments = serde_json::to_string(arguments).unwrap_or_default();
+    if rewritten.len() == 1 {
+        Some(format!(
+            "Extension {names} rewrote this call's arguments; it ran with {arguments}."
+        ))
+    } else {
+        Some(format!(
+            "Extensions {names} rewrote this call's arguments; it ran with {arguments}."
+        ))
+    }
+}
+
+/// The text parts whose joined text is `full` headed by `line`: one part,
+/// so the call's text parts are joined into one part under it. `None` is
+/// no line: the parts and the text as they were.
+fn with_line(
+    parts: Option<Vec<ContentPart>>,
+    full: String,
+    line: &Option<String>,
+) -> (Option<Vec<ContentPart>>, String) {
+    let Some(line) = line else {
+        return (parts, full);
+    };
+    (None, format!("{line}\n{full}"))
 }
 
 #[cfg(test)]

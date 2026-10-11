@@ -125,6 +125,11 @@ pub(crate) struct Suspended {
     /// request order, each with its request: the batch the finishing turn
     /// completes.
     pub(crate) batch: Vec<(ActionId, ToolCallRequested)>,
+    /// The arguments the action started with and who rewrote them, from
+    /// its `tool_call_started`: what a suspended question's call runs
+    /// again with. `None` for an approval, and for a call that never
+    /// started.
+    pub(crate) started: Option<crate::before_tool::Started>,
 }
 
 /// The suspended turn `lines` describe, if any: the last line is a
@@ -207,12 +212,46 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
     if !batch.iter().any(|(id, _)| *id == action) {
         return Ok(None);
     }
+    // What the action started with, for a suspended question's call to run
+    // again with: its `tool_call_started`'s arguments and who rewrote
+    // them. An approval's call is prepared again instead, so only an
+    // interaction reads it. A started line with `arguments` but no
+    // `changed_by` names nobody.
+    let started = matches!(request, Pending::Interaction(_))
+        .then(|| started_arguments(lines, &action))
+        .transpose()?
+        .flatten();
     Ok(Some(Suspended {
         turn,
         pending: request,
         action,
         batch,
+        started,
     }))
+}
+
+/// The action's `tool_call_started` arguments and who rewrote them, when
+/// it started rewritten: `None` when it never started, or started as
+/// asked.
+fn started_arguments(
+    lines: &[Envelope],
+    action: &ActionId,
+) -> Result<Option<crate::before_tool::Started>, Error> {
+    let mut started = None;
+    for line in lines.iter().filter(|l| l.is_durable()) {
+        if line.kind != "tool_call_started" || line.action_id.as_ref() != Some(action) {
+            continue;
+        }
+        let Some(Event::ToolCallStarted(call)) =
+            Event::from_envelope(line).map_err(Error::Unreadable)?
+        else {
+            continue;
+        };
+        if let Some(arguments) = call.arguments {
+            started = Some((arguments, call.changed_by.unwrap_or_default()));
+        }
+    }
+    Ok(started)
 }
 
 impl Loop {
@@ -363,23 +402,79 @@ impl Loop {
             return self.finish_suspended_form(suspended);
         };
         let turn = suspended.turn.clone();
+        // `suspended` only returns a batch that holds the action.
+        let Some((_, call)) = suspended
+            .batch
+            .iter()
+            .find(|(id, _)| *id == suspended.action)
+        else {
+            return self.run_steps(&turn);
+        };
+        // The action's call through the hooks once more, before the
+        // credential deny and the re-raise: the person judges the call
+        // that will run. `Unchecked` keeps today's path below, with the
+        // recorded request and the check's failure on allow. `Settled`
+        // completes without raising the request again.
+        match self.prepared_suspended(call, &turn, &request)? {
+            crate::before_tool::Again::Settled(completed) => {
+                // Armed first: a shutdown before it writes nothing more,
+                // so the next resume settles again.
+                let cancel = Arc::clone(&self.cancel);
+                let armed = cancel.commit(Commit::Arm, || {});
+                let Some(()) = armed else {
+                    return Ok(None);
+                };
+                let decision: Decided = Err(completed);
+                let calls = crate::suspend::form_batch(
+                    suspended.batch,
+                    &suspended.action,
+                    || Err(self.cancelled_before_ran()),
+                    |_| decision,
+                );
+                let cancelled = self.run_batch(calls, &turn, None)?;
+                self.finish_batch(&turn, cancelled)
+            }
+            crate::before_tool::Again::Ready(prepared, rebuilt) => {
+                let allow: Decided = Ok(prepared);
+                self.finish_ready(suspended, allow, rebuilt)
+            }
+            crate::before_tool::Again::Unchecked(failed) => {
+                let allow: Decided = Err(failed);
+                self.finish_ready(suspended, allow, request)
+            }
+        }
+    }
+
+    /// The finishing turn for a prepared approval: the credential deny
+    /// judges the prepared call, the request is raised again, and the
+    /// answer completes the batch. `allow` is the prepared call an answer
+    /// allows, or the check's failure for a call that no longer checks.
+    /// `request` is the recorded one for an unchecked call and the rebuilt
+    /// one for a prepared one.
+    fn finish_ready(
+        &mut self,
+        suspended: Suspended,
+        allow: Decided,
+        request: contract::events::PermissionRequested,
+    ) -> Result<Option<TurnOutcome>, Error> {
+        let turn = suspended.turn.clone();
         // The credential deny applies to every call, including one
         // suspended before its path became a configured credential file:
         // it is refused without asking, as `judge` refuses it before any
-        // ask. A call that cannot be checked waits for its answer as ever.
-        // The refusal answers the previously raised request, and the batch
-        // completes through the run phase every step uses: the calls
+        // ask. The refusal answers the previously raised request, and the
+        // batch completes through the run phase every step uses: the calls
         // before the action complete `cancelled` without running, as an
         // answered request's calls do, and the calls after it are judged
         // and run with it (`docs/loop.md`, "Tool calls that do not run").
         // Armed with the refusal: the calls after it run cancellably, as
         // after the re-raise below. A shutdown before it writes nothing
         // more, so the next resume refuses again.
-        if let Some((_, call)) = suspended
-            .batch
-            .iter()
-            .find(|(id, _)| *id == suspended.action)
-            && let Ok((_, _, effects)) = self.checked(call)
+        let effects = match &allow {
+            Ok(prepared) => Some(prepared.effects.clone()),
+            // A call that no longer checks has no effects to deny.
+            Err(_) => None,
+        };
+        if let Some(effects) = effects
             && let Some(why) = crate::permission::credential_why(
                 &effects.declared,
                 &self.workspace,
@@ -437,7 +532,7 @@ impl Loop {
         };
         raised?;
         if self.answerable {
-            return self.answer_suspended(suspended, &request);
+            return self.answer_suspended(suspended, &request, allow);
         }
         // Nobody decided the re-raised request, review or standing ask: the
         // resume denies it by `cancel` (`docs/events.md`, `permission_resolved`).
@@ -475,6 +570,7 @@ impl Loop {
         &mut self,
         suspended: Suspended,
         request: &contract::events::PermissionRequested,
+        allow: Decided,
     ) -> Result<Option<TurnOutcome>, Error> {
         let Suspended {
             turn,
@@ -487,11 +583,9 @@ impl Loop {
             return self.run_steps(&turn);
         };
         let decision: Decided = match self.await_answer(&action, &turn, &call.name, request)? {
-            // The answer allows the call the request was raised for, as
-            // the model asked for it: checked again, it runs.
-            Asked::Allow => self
-                .checked(call)
-                .map(|(tool, arguments, effects)| (tool, arguments, effects.declared)),
+            // The answer allows the prepared call: it runs with no second
+            // check.
+            Asked::Allow => allow,
             Asked::Deny(completed) | Asked::Gone(completed) => Err(completed),
             Asked::Cancelled => Err(self.cancelled_before_ran()),
             Asked::Idle => {
@@ -550,5 +644,72 @@ impl Loop {
         let outcome = completed.outcome;
         self.append(&Event::TurnCompleted(completed), turn, None)?;
         Ok(Some(outcome))
+    }
+}
+
+#[cfg(test)]
+mod started_arguments_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+
+    use contract::events::{Event, ToolCallStarted};
+    use contract::shapes::DeclaredEffects;
+    use contract::{ActionId, Envelope, Seq, SessionId};
+    use serde_json::{Map, json};
+
+    use super::started_arguments;
+
+    fn envelope(kind: &str, action: &str, payload: Map<String, serde_json::Value>) -> Envelope {
+        Envelope {
+            kind: kind.into(),
+            session_id: SessionId("s_test".into()),
+            ts: 1,
+            schema_version: contract::SCHEMA_VERSION,
+            turn_id: None,
+            action_id: Some(ActionId(action.into())),
+            seq: Some(Seq(1)),
+            payload,
+        }
+    }
+
+    fn started(action: &str) -> Envelope {
+        let event = Event::ToolCallStarted(ToolCallStarted {
+            declared: DeclaredEffects {
+                effects: Vec::new(),
+                reversible: true,
+                paths: None,
+            },
+            arguments: Some(json!({"path": "b.txt"}).as_object().unwrap().clone()),
+            changed_by: Some(vec!["fiber.test/guard".into()]),
+        });
+        envelope("tool_call_started", action, event.payload().unwrap())
+    }
+
+    #[test]
+    fn ignores_other_event_kinds_even_when_the_action_matches() {
+        let action = ActionId("a_target".into());
+        let line = envelope("tool_call_completed", "a_target", Map::new());
+
+        assert_eq!(started_arguments(&[line], &action).unwrap(), None);
+    }
+
+    #[test]
+    fn ignores_started_lines_for_other_actions() {
+        let action = ActionId("a_target".into());
+
+        assert_eq!(
+            started_arguments(&[started("a_other")], &action).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn returns_the_started_arguments_for_the_matching_action() {
+        let action = ActionId("a_target".into());
+        let arguments = json!({"path": "b.txt"}).as_object().unwrap().clone();
+
+        assert_eq!(
+            started_arguments(&[started("a_target")], &action).unwrap(),
+            Some((arguments, vec!["fiber.test/guard".into()]))
+        );
     }
 }

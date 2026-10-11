@@ -9,11 +9,11 @@ use contract::events::{
 };
 use contract::provider::{CallError, Cost, Input, ModelRequest, Provider, Reply};
 use contract::shapes::Failure;
-use contract::tool::{Effects, Tool};
+use contract::tool::Effects;
 use contract::{ActionId, ErrorCode, RequestId, TurnId};
-use serde_json::{Map, Value};
 
-use crate::calls::{Approved, Asked};
+use crate::before_tool::Prepared;
+use crate::calls::{Asked, Decided};
 use crate::{Error, Loop, Model};
 
 mod request;
@@ -21,9 +21,6 @@ mod selection;
 mod shown;
 
 pub(crate) use shown::{Reviewed, render_reviewed};
-
-/// What step 7 says about one call: it runs, or how its denial reads.
-type Decided = Result<Approved, Box<ToolCallCompleted>>;
 
 /// What a `no_model` escalation and notice say: nothing chose the
 /// reviewer's model, so every reviewed call goes to a person
@@ -180,9 +177,7 @@ struct UnderReview<'a> {
     call: &'a ToolCallRequested,
     id: &'a ActionId,
     turn: &'a TurnId,
-    tool: &'a Arc<dyn Tool>,
-    arguments: &'a Map<String, Value>,
-    effects: &'a Effects,
+    prepared: &'a Prepared,
 }
 
 /// What sends a reviewer request: the reviewer's provider and model, cloned
@@ -211,9 +206,7 @@ impl Loop {
         call: &ToolCallRequested,
         id: &ActionId,
         turn: &TurnId,
-        tool: Arc<dyn Tool>,
-        arguments: Map<String, Value>,
-        effects: &Effects,
+        prepared: Prepared,
     ) -> Result<Decided, Error> {
         let prompt = sections();
         if self.review_over_budget() {
@@ -223,9 +216,7 @@ impl Loop {
             call,
             id,
             turn,
-            tool: &tool,
-            arguments: &arguments,
-            effects,
+            prepared: &prepared,
         };
         let endpoint = match &self.reviewer {
             Ok(reviewer) => ReviewEndpoint {
@@ -313,8 +304,7 @@ impl Loop {
             if self.review_over_budget() {
                 return Ok(StageReply::Budget);
             }
-            let (conversation, previous) =
-                self.review_conversation(under.id, under.effects, stage, note.as_deref());
+            let (conversation, previous) = self.review_conversation(under, stage, note.as_deref());
             match self.send_review(
                 under.turn,
                 endpoint,
@@ -373,11 +363,7 @@ impl Loop {
             under.turn,
             Some(under.id),
         )?;
-        Ok(Ok((
-            Arc::clone(under.tool),
-            under.arguments.clone(),
-            under.effects.declared.clone(),
-        )))
+        Ok(Ok(under.prepared.clone()))
     }
 
     /// A reviewer `block`: counted, then escalated or returned to the model.
@@ -440,19 +426,15 @@ impl Loop {
             under.id,
             under.turn,
             &under.call.name,
-            &under.effects.declared,
+            &under.prepared.effects.declared,
             AskStep::Review {
                 escalation: Some(escalation),
-                rule: rule_offer(under.effects),
+                rule: rule_offer(&under.prepared.effects),
             },
         )? {
             Asked::Allow => {
                 self.consecutive = 0;
-                Ok(Ok((
-                    Arc::clone(under.tool),
-                    under.arguments.clone(),
-                    under.effects.declared.clone(),
-                )))
+                Ok(Ok(under.prepared.clone()))
             }
             Asked::Deny(completed) => {
                 self.consecutive = 0;
@@ -482,17 +464,19 @@ impl Loop {
 
     /// The reviewer's request: the transcript cut after the call, then its
     /// effects, then the stage item. Both stages match up to the stage item.
+    /// A rewritten call is judged as the call that will run: its effects
+    /// item names the rewritten call's declared effects and the arguments
+    /// it runs with. The history never changes after a line renders.
     fn review_conversation(
         &mut self,
-        id: &ActionId,
-        effects: &Effects,
+        under: &UnderReview<'_>,
         stage: &str,
         note: Option<&str>,
     ) -> (Vec<Input>, Option<usize>) {
         let cut = self
             .reviewed
             .iter()
-            .position(|item| matches!(&item.shown, shown::Shown::Call(call) if call == id))
+            .position(|item| matches!(&item.shown, shown::Shown::Call(call) if call == under.id))
             .map_or(self.reviewed.len(), |at| at + 1);
         let previous = self.reviewer_sent;
         self.reviewer_sent = Some(cut);
@@ -502,10 +486,21 @@ impl Loop {
             .take(cut)
             .map(|item| item.input.clone())
             .collect();
-        let declared = serde_json::to_string(&effects.declared).unwrap_or_default();
+        let declared = serde_json::to_string(&under.prepared.effects.declared).unwrap_or_default();
         let workspace = self.workspace_label.clone();
+        let effects = match &under.prepared.rewritten {
+            Some(changed_by) => {
+                let names = changed_by.join(", ");
+                let arguments =
+                    serde_json::to_string(&under.prepared.arguments).unwrap_or_default();
+                format!(
+                    "Declared effects: {declared}\nExtension {names} rewrote this call's arguments; it runs with {arguments}\nWorkspace root: {workspace}"
+                )
+            }
+            None => format!("Declared effects: {declared}\nWorkspace root: {workspace}"),
+        };
         conversation.push(Input::User {
-            text: format!("Declared effects: {declared}\nWorkspace root: {workspace}"),
+            text: effects,
             images: Vec::new(),
         });
         conversation.push(Input::User {
@@ -740,7 +735,7 @@ fn resolved(
 /// The rule an allow can remember: the call's subject and its prefix, absent
 /// when no rule can match the call (`docs/permissions.md`, "What a rule
 /// matches").
-fn rule_offer(effects: &Effects) -> Option<RuleOffer> {
+pub(crate) fn rule_offer(effects: &Effects) -> Option<RuleOffer> {
     if effects.always_reviewed {
         return None;
     }

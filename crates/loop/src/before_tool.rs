@@ -1,0 +1,368 @@
+//! Before a call runs (`docs/tools.md`, "Before a call runs"): the
+//! existence and schema check, the effects function, the `before_tool`
+//! hooks and the re-check of a rewrite. The permission decision judges the
+//! call this prepares, not the one the model asked for.
+
+use std::sync::Arc;
+
+use contract::events::{AskStep, Event, PermissionRequested, ToolCallCompleted, ToolCallRequested};
+use contract::hook::{BeforeToolCall, BeforeToolOutcome, CheckOutcome};
+use contract::tool::{Effects, Tool};
+use contract::{ErrorCode, TurnId};
+use serde_json::{Map, Value};
+
+use crate::calls::Decided;
+use crate::{Error, Loop};
+
+/// A call that names a tool and fits its schema: the tool, the arguments it
+/// runs with, and the effects it declared.
+pub(crate) type Checked = (Arc<dyn Tool>, Map<String, Value>, Effects);
+
+/// What a started call runs again with on resume: the arguments its
+/// `tool_call_started` logged and the extensions that rewrote them.
+pub(crate) type Started = (Map<String, Value>, Vec<String>);
+
+/// A call ready to be judged: the tool, the arguments it runs with, the
+/// effects function's answer for those arguments, and who rewrote them.
+/// `rewritten` is `Some(changed_by)` exactly when `arguments` are a hook's,
+/// and `effects` are then the effects function's answer for those
+/// arguments.
+#[derive(Clone)]
+pub(crate) struct Prepared {
+    /// The tool the call runs on.
+    pub(crate) tool: Arc<dyn Tool>,
+    /// The arguments the call runs with.
+    pub(crate) arguments: Map<String, Value>,
+    /// The effects function's answer for `arguments`.
+    pub(crate) effects: Effects,
+    /// The extensions that rewrote the arguments, in run order.
+    pub(crate) rewritten: Option<Vec<String>>,
+}
+
+impl From<Checked> for Prepared {
+    fn from((tool, arguments, effects): Checked) -> Self {
+        Self {
+            tool,
+            arguments,
+            effects,
+            rewritten: None,
+        }
+    }
+}
+
+/// Why the schema-and-effects check failed, before it is worded.
+enum ClassifyFailure {
+    /// The arguments do not fit the schema: one line per error.
+    Schema(Vec<String>),
+    /// The effects function failed: its message.
+    Effects(String),
+}
+
+/// What preparing a suspended approval found (`docs/events.md`, "Resume").
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a short-lived resume value; boxing its one large arm would allocate on every resume"
+)]
+pub(crate) enum Again {
+    /// The model's own call no longer checks: the recorded request is
+    /// raised again, and an allow completes with the check's failure.
+    Unchecked(Box<ToolCallCompleted>),
+    /// A hook refused or failed, or the rewrite failed its check: the call
+    /// completes with that, and the request is not raised again.
+    Settled(Box<ToolCallCompleted>),
+    /// The prepared call, and the request to raise again: the recorded
+    /// `request_id` and step kind, with `declared` and any rule offer
+    /// rebuilt from the prepared call.
+    Ready(Prepared, PermissionRequested),
+}
+
+impl Loop {
+    /// The tool, arguments and effects of `call`, once it names a tool and
+    /// its arguments fit that tool's schema; otherwise the failed
+    /// completion it gets (`docs/loop.md`, "Tool calls that do not run").
+    pub(crate) fn checked(
+        &self,
+        call: &ToolCallRequested,
+    ) -> Result<Checked, Box<ToolCallCompleted>> {
+        let Some((_, tool, _)) = self.tools.get(&call.name) else {
+            return Err(unknown_tool(self, &call.name));
+        };
+        let tool = Arc::clone(tool);
+        let arguments = match &call.repair {
+            Some(repair) => Value::Object(repair.repaired.clone()),
+            None => call.arguments.clone(),
+        };
+        let Value::Object(arguments) = arguments else {
+            return Err(Box::new(crate::completion::failed(
+                ErrorCode::InvalidArguments,
+                "The arguments are not a JSON object. Send them as one.".to_owned(),
+            )));
+        };
+        match classify(&tool, &arguments) {
+            Ok(effects) => Ok((tool, arguments, effects)),
+            Err(ClassifyFailure::Schema(errors)) => Err(Box::new(crate::completion::failed(
+                ErrorCode::InvalidArguments,
+                format!(
+                    "The arguments do not match the tool's schema:\n{}",
+                    errors.join("\n")
+                ),
+            ))),
+            Err(ClassifyFailure::Effects(message)) => Err(Box::new(crate::completion::failed(
+                ErrorCode::ToolError,
+                message,
+            ))),
+        }
+    }
+
+    /// Checks `call`, runs the `before_tool` hooks and re-checks a rewrite,
+    /// then runs the `check` hooks on what will run (`docs/permissions.md`,
+    /// "The order a call is judged in"). Never writes a permission line and
+    /// never touches the reviewer's history. With no hooks it is `checked`
+    /// converted, `rewritten: None`.
+    pub(crate) fn prepared(
+        &mut self,
+        call: &ToolCallRequested,
+        turn: &TurnId,
+    ) -> Result<Decided, Error> {
+        let checked = match self.checked(call) {
+            Ok(checked) => checked,
+            Err(failed) => return Ok(Err(failed)),
+        };
+        let Some(hooks) = self.hooks.clone() else {
+            return Ok(Ok(Prepared::from(checked)));
+        };
+        self.hooked(&call.name, checked, hooks, turn)
+    }
+
+    /// Runs the `before_tool` hooks on a checked call and re-checks a
+    /// rewrite, then runs the `check` hooks on what will run. Writes each
+    /// stage's notices under the turn as it answers. Never writes a
+    /// permission line.
+    fn hooked(
+        &mut self,
+        tool_name: &str,
+        checked: Checked,
+        hooks: Arc<dyn contract::hook::Hooks>,
+        turn: &TurnId,
+    ) -> Result<Decided, Error> {
+        let (tool, arguments, effects) = checked;
+        if self.shutting_down() {
+            return Ok(Err(self.cancelled_before_ran()));
+        }
+        let answer = hooks.before_tool(&BeforeToolCall {
+            tool: tool_name,
+            arguments: &arguments,
+            declared: &effects.declared,
+        });
+        for notice in answer.notices {
+            self.append(&Event::Notice(notice), turn, None)?;
+        }
+        let (arguments, effects, rewritten) = match answer.outcome {
+            BeforeToolOutcome::Unchanged => (arguments, effects, None),
+            BeforeToolOutcome::Rewritten {
+                arguments: rewritten_arguments,
+                changed_by,
+            } => {
+                let names = changed_by.join(", ");
+                match classify(&tool, &rewritten_arguments) {
+                    Ok(rewritten_effects) => {
+                        (rewritten_arguments, rewritten_effects, Some(changed_by))
+                    }
+                    Err(ClassifyFailure::Schema(errors)) => {
+                        return Ok(Err(Box::new(crate::completion::failed(
+                            ErrorCode::InvalidArguments,
+                            format!(
+                                "Extension {names} rewrote this call's arguments, and they do not match the tool's schema:\n{}",
+                                errors.join("\n")
+                            ),
+                        ))));
+                    }
+                    Err(ClassifyFailure::Effects(message)) => {
+                        return Ok(Err(Box::new(crate::completion::failed(
+                            ErrorCode::ToolError,
+                            format!(
+                                "Extension {names} rewrote this call's arguments, and the tool could not classify them: {message}"
+                            ),
+                        ))));
+                    }
+                }
+            }
+            BeforeToolOutcome::Refused(refusal) => {
+                return Ok(Err(crate::completion::denied(
+                    "hook",
+                    format!(
+                        "Extension {} refused this call: {}. It did not run.",
+                        refusal.extension, refusal.reason
+                    ),
+                )));
+            }
+            BeforeToolOutcome::Failed(failure) => {
+                return Ok(Err(Box::new(crate::completion::failed(
+                    ErrorCode::HookFailed,
+                    format!(
+                        "The `before_tool` hook of extension {} failed, so the call did not run: {}",
+                        failure.extension, failure.message
+                    ),
+                ))));
+            }
+        };
+        if self.shutting_down() {
+            return Ok(Err(self.cancelled_before_ran()));
+        }
+        let check = hooks.check_tool(&BeforeToolCall {
+            tool: tool_name,
+            arguments: &arguments,
+            declared: &effects.declared,
+        });
+        for notice in check.notices {
+            self.append(&Event::Notice(notice), turn, None)?;
+        }
+        match check.outcome {
+            CheckOutcome::Passed => Ok(Ok(Prepared {
+                tool,
+                arguments,
+                effects,
+                rewritten,
+            })),
+            CheckOutcome::Refused(refusal) => Ok(Err(crate::completion::denied(
+                "hook",
+                format!(
+                    "Extension {} refused this call: {}. It did not run.",
+                    refusal.extension, refusal.reason
+                ),
+            ))),
+            CheckOutcome::Failed(failure) => Ok(Err(Box::new(crate::completion::failed(
+                ErrorCode::HookFailed,
+                format!(
+                    "The `before_tool` hook of extension {} failed, so the call did not run: {}",
+                    failure.extension, failure.message
+                ),
+            )))),
+        }
+    }
+}
+
+/// `Ready` for `prepared`: the recorded `request_id` and step kind, with
+/// `declared` and any rule offer rebuilt from the prepared call, so the
+/// person judges the call that will run.
+fn ready(prepared: Prepared, recorded: &PermissionRequested) -> Again {
+    let step = match &recorded.step {
+        AskStep::StandingAsk { standing_rule } => AskStep::StandingAsk {
+            standing_rule: standing_rule.clone(),
+        },
+        AskStep::Review { escalation, .. } => AskStep::Review {
+            escalation: escalation.clone(),
+            rule: crate::reviewer::rule_offer(&prepared.effects),
+        },
+    };
+    let request = PermissionRequested {
+        request_id: recorded.request_id.clone(),
+        declared: prepared.effects.declared.clone(),
+        step,
+    };
+    Again::Ready(prepared, request)
+}
+
+/// The failed completion of a call naming no registered tool, as
+/// [`Loop::checked`] words it.
+fn unknown_tool(looped: &Loop, name: &str) -> Box<ToolCallCompleted> {
+    let names: Vec<String> = looped.tools.keys().map(|n| format!("`{n}`")).collect();
+    let exist = if names.is_empty() {
+        "You have no tools.".to_owned()
+    } else {
+        format!("The tools are {}.", names.join(", "))
+    };
+    Box::new(crate::completion::failed(
+        ErrorCode::UnknownTool,
+        format!("No tool is named `{name}`. {exist}"),
+    ))
+}
+
+/// The effects function's answer for `arguments` of `tool`, once they fit
+/// its schema; otherwise why they do not, before it is worded.
+fn classify(
+    tool: &Arc<dyn Tool>,
+    arguments: &Map<String, Value>,
+) -> Result<Effects, ClassifyFailure> {
+    let definition = tool.definition();
+    let errors = crate::schema::check(&definition.input_schema, &Value::Object(arguments.clone()));
+    if !errors.is_empty() {
+        return Err(ClassifyFailure::Schema(errors));
+    }
+    match tool.effects(arguments) {
+        Ok(effects) => Ok(effects),
+        Err(error) => Err(ClassifyFailure::Effects(error.to_string())),
+    }
+}
+
+impl Loop {
+    /// Runs a suspended approval's call through the hooks once, before its
+    /// request is raised again (`docs/events.md`, "Resume"). `Unchecked`:
+    /// the model's own call no longer checks, and no hook runs. `Settled`:
+    /// a hook refused or failed, or the rewrite failed its check. `Ready`:
+    /// the prepared call with the request to raise again, rebuilt from it.
+    pub(crate) fn prepared_suspended(
+        &mut self,
+        call: &ToolCallRequested,
+        turn: &TurnId,
+        recorded: &PermissionRequested,
+    ) -> Result<Again, Error> {
+        let checked = match self.checked(call) {
+            Ok(checked) => checked,
+            Err(failed) => return Ok(Again::Unchecked(failed)),
+        };
+        let Some(hooks) = self.hooks.clone() else {
+            return Ok(ready(Prepared::from(checked), recorded));
+        };
+        match self.hooked(&call.name, checked, hooks, turn)? {
+            Ok(prepared) => Ok(ready(prepared, recorded)),
+            Err(settled) => Ok(Again::Settled(settled)),
+        }
+    }
+
+    /// Decides a call that already started, on resume, with the arguments
+    /// its `tool_call_started` logged (`docs/events.md`, "Resume").
+    /// `None` checks the model's call as ever. `Some` runs no hook: the
+    /// started arguments are checked against the schema and the effects
+    /// function, without repair, failing with the rewrite texts when they
+    /// no longer fit.
+    pub(crate) fn started_again(
+        &self,
+        call: &ToolCallRequested,
+        started: Option<Started>,
+    ) -> Decided {
+        let Some((arguments, changed_by)) = started else {
+            return self.checked(call).map(Prepared::from);
+        };
+        let Some((_, tool, _)) = self.tools.get(&call.name) else {
+            return Err(unknown_tool(self, &call.name));
+        };
+        let tool = Arc::clone(tool);
+        let names = changed_by.join(", ");
+        match classify(&tool, &arguments) {
+            Ok(effects) => Ok(Prepared {
+                tool,
+                arguments,
+                effects,
+                rewritten: Some(changed_by),
+            }),
+            Err(ClassifyFailure::Schema(errors)) => Err(Box::new(crate::completion::failed(
+                ErrorCode::InvalidArguments,
+                format!(
+                    "Extension {names} rewrote this call's arguments, and they do not match the tool's schema:\n{}",
+                    errors.join("\n")
+                ),
+            ))),
+            Err(ClassifyFailure::Effects(message)) => Err(Box::new(crate::completion::failed(
+                ErrorCode::ToolError,
+                format!(
+                    "Extension {names} rewrote this call's arguments, and the tool could not classify them: {message}"
+                ),
+            ))),
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "before_tool_tests.rs"]
+mod tests;
