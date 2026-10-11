@@ -58,7 +58,10 @@ fn every_builtin_tool_with_a_section_returns_it() {
         (write.definition().name, write.guidelines()),
         (edit.definition().name, edit.guidelines()),
         (shell.definition().name, shell.guidelines()),
-        (crate::Handoff.definition().name, crate::Handoff.guidelines()),
+        (
+            crate::Handoff.definition().name,
+            crate::Handoff.guidelines(),
+        ),
         (skill.definition().name, skill.guidelines()),
         (hosted.definition().name, hosted.guidelines()),
         (backend.definition().name, backend.guidelines()),

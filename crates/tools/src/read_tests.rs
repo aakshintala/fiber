@@ -534,4 +534,3 @@ fn a_capped_read_shares_the_session_file_state() {
     assert!(output.error.is_none(), "{}", text(&output));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"new\n");
 }
-

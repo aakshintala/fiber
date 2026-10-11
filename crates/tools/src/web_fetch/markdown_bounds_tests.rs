@@ -798,4 +798,3 @@ fn every_character_reference_expands_less_than_twice() {
         );
     }
 }
-

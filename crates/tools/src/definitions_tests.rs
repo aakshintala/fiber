@@ -64,9 +64,6 @@ fn strict_tools_fit_the_strict_shape() {
     strict(&files.write().definition().input_schema);
     strict(&files.edit().definition().input_schema);
     strict(&Handoff.definition().input_schema);
-    let fetch = WebFetch::new(
-        Path::new("/ws").join("artifacts"),
-        FakeClock::new(),
-    );
+    let fetch = WebFetch::new(Path::new("/ws").join("artifacts"), FakeClock::new());
     strict(&fetch.definition().input_schema);
 }

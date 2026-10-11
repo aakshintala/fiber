@@ -26,7 +26,11 @@ struct State {
 
 impl PathLocks {
     /// No path is held.
-    #[cfg_attr(false, mutants::skip, reason = "`new` and `default` build the same empty lock, so replacing either body with the other changes nothing")]
+    #[cfg_attr(
+        false,
+        mutants::skip,
+        reason = "`new` and `default` build the same empty lock, so replacing either body with the other changes nothing"
+    )]
     pub fn new() -> Self {
         Self::default()
     }

@@ -73,4 +73,3 @@ fn a_missing_or_mistyped_note_is_an_invalid_argument() {
         ));
     }
 }
-

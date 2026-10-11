@@ -938,4 +938,3 @@ fn deleting_a_line_reports_that_no_lines_were_written() {
         format!("edits[0]: replaced lines 2-2 with no lines.\nWrote {shown}: 4 bytes.")
     );
 }
-

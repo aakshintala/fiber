@@ -594,4 +594,3 @@ fn a_read_only_file_keeps_its_mode() {
         0o444
     );
 }
-

@@ -333,7 +333,11 @@ impl Hidden {
     /// open. Halving a capacity over `4(L - 1)` gives at most `2L`, within
     /// `4(L - 1)` for `L >= 2`; at `L = 1` the earlier closes already
     /// reached the 64 floor.
-    #[cfg_attr(false, mutants::skip, reason = "the bound `max(64, 4 × open)` holds on either side of the quarter and the floor, so a flipped comparison changes nothing a consumer sees; `the_hidden_stack_shrinks_back_after_deep_nesting` checks the bound itself")]
+    #[cfg_attr(
+        false,
+        mutants::skip,
+        reason = "the bound `max(64, 4 × open)` holds on either side of the quarter and the floor, so a flipped comparison changes nothing a consumer sees; `the_hidden_stack_shrinks_back_after_deep_nesting` checks the bound itself"
+    )]
     fn shrink(&mut self) {
         if self.stack.capacity() > 64 && self.stack.len() * 4 < self.stack.capacity() {
             self.stack.shrink_to(self.stack.capacity() / 2);
