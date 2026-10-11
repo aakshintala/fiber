@@ -708,3 +708,49 @@ fn a_refresh_after_close_spawns_nothing_and_returns_the_published() {
     );
     assert_eq!(temp.log_lines().len(), lines_before, "no line after close");
 }
+
+#[test]
+fn a_refresh_queued_on_the_lock_spawns_nothing_after_close() {
+    let temp = Temp::new();
+    let shell = fake_shell(&temp, "exec sleep 600");
+    let clock = fakes::clock::FakeClock::new();
+    let environments = Environments::new(inherited(&shell, &temp.dir), &temp.home);
+    // The first capture holds the capture lock on its hung shell: the
+    // refresh admitted now queues on it, so `close` lands between its
+    // admission and its spawn.
+    let first = Arc::clone(&environments);
+    let first_clock = Arc::clone(&clock);
+    let first_diag = temp.diag(Arc::clone(&clock));
+    let first_done = thread::spawn(move || first.first(&*first_clock, &first_diag));
+    let (pid, watchdog) = watchdog(&temp.dir);
+    // The queued refresh's spawn would rewrite the pid file: remove it,
+    // so any spawn after `close` is seen.
+    fs::remove_file(temp.dir.join("pid")).unwrap();
+    let second = Arc::clone(&environments);
+    let second_clock = Arc::clone(&clock);
+    let second_diag = temp.diag(Arc::clone(&clock));
+    let (refresh_tx, refresh_rx) = mpsc::channel();
+    thread::spawn(move || {
+        refresh_tx
+            .send(second.refresh(&*second_clock, &second_diag))
+            .unwrap_or(());
+    });
+    environments.close();
+    first_done.join().expect("the first capture ends");
+    let refreshed = Deadline::after(WITHIN)
+        .recv(&refresh_rx)
+        .expect("the queued refresh returns");
+    assert_eq!(refreshed.source, VariablesSource::Inherited);
+    assert!(fakes::pids_exit(&[pid], WITHIN), "the shell is reaped");
+    assert!(
+        !temp.dir.join("pid").exists(),
+        "the queued refresh spawned nothing"
+    );
+    assert!(
+        temp.log_lines()
+            .iter()
+            .all(|line| line["code"] != "environment_built"),
+        "a cancelled refresh writes no line"
+    );
+    watchdog.stand_down(WITHIN);
+}

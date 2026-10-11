@@ -26,8 +26,8 @@ use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
 use super::{
-    AnswerRead, Status, classify_answer, ignore_closed_peer, installed, is_answer_timeout,
-    is_closed_peer, is_missing, probe, probe_with, render_json, render_text,
+    AnswerRead, STATUS_WITHIN, Status, classify_answer, ignore_closed_peer, installed,
+    is_answer_timeout, is_closed_peer, is_missing, probe, probe_with, render_json, render_text,
 };
 use crate::hub_unit::{Manager, name};
 
@@ -668,4 +668,92 @@ fn hub_status_exits_without_the_manager() {
         ),
         0
     );
+}
+
+/// A hub that answers `status` six seconds in: it says `hub_hello`, reads
+/// the one command, writes one unrelated line, then waits (bounded) for
+/// the test's release before writing the answer. The unrelated line and
+/// the answer arrive in separate reads, which the release guarantees.
+fn slow_hub(home: &Path, answer: String) -> Sender<()> {
+    let listener = UnixListener::bind(home.join("run/hub")).unwrap();
+    let (go, wait) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .write_all(hub_line("hub_hello", json!({})).as_bytes())
+            .unwrap();
+        let mut line = String::new();
+        BufReader::new(&stream).read_line(&mut line).unwrap();
+        let other = accepted("c_other", "9.9.9", 7);
+        stream.write_all(other.as_bytes()).unwrap();
+        // Bounded, so the 5-second case ends its thread without the
+        // release the late probe never sends.
+        Deadline::after(DEADLINE).recv(&wait).unwrap_or(());
+        stream.write_all(answer.as_bytes()).unwrap_or(());
+        hold(&stream);
+    });
+    go
+}
+
+#[test]
+fn a_hub_answering_six_seconds_in_is_read_within_the_status_window() {
+    for (within, reads) in [(STATUS_WITHIN, true), (Duration::from_secs(5), false)] {
+        let (_dir, home) = home();
+        let go = slow_hub(&home, accepted("c_status", "1.2.3", 1));
+        let clock: Arc<FakeClock> = FakeClock::new();
+        let (calls_tx, calls_rx) = mpsc::channel::<u64>();
+        let (done_tx, done_rx) = mpsc::channel();
+        let thread_clock = Arc::clone(&clock);
+        let thread_home = home.clone();
+        thread::spawn(move || {
+            let mut n = 0;
+            let mut before_read = || {
+                n += 1;
+                calls_tx.send(n).unwrap_or(());
+                if n == 1 {
+                    thread_clock.advance(Duration::from_secs(6));
+                } else if n == 2 {
+                    // Only after `ask` passed its deadline check again:
+                    // with a 5-second window the second check fails
+                    // first and this never runs, so the probe is late.
+                    go.send(()).unwrap_or(());
+                }
+            };
+            done_tx
+                .send(probe_with(
+                    &thread_home,
+                    &*thread_clock,
+                    within,
+                    false,
+                    &mut || {},
+                    &mut before_read,
+                ))
+                .unwrap_or(());
+        });
+        let wait = Deadline::after(DEADLINE);
+        let got = wait.recv(&done_rx).expect("the probe returns");
+        if reads {
+            let status = got.unwrap();
+            assert_eq!(status.version.as_deref(), Some("1.2.3"));
+            assert_eq!(wait.recv(&calls_rx), Ok(1));
+            assert_eq!(
+                wait.recv(&calls_rx),
+                Ok(2),
+                "the answer arrives on the second read"
+            );
+        } else {
+            let error = got.unwrap_err();
+            assert_eq!(error.code, ErrorCode::IoFailed);
+            assert!(
+                error.message.contains("did not answer status"),
+                "{}",
+                error.message
+            );
+            assert_eq!(wait.recv(&calls_rx), Ok(1));
+            assert!(
+                calls_rx.try_recv().is_err(),
+                "no second read after the deadline"
+            );
+        }
+    }
 }

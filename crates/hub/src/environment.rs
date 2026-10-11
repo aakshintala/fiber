@@ -186,15 +186,13 @@ impl Environments {
     /// published environment is returned. Running sessions keep theirs:
     /// a published environment never changes.
     pub(crate) fn refresh(&self, clock: &dyn Clock, diag: &Diag) -> Arc<Environment> {
+        // Admitted before taking the serializing lock, and checked for
+        // `close` only after holding it: a refresh admitted just before
+        // `close` ends without spawning once the running capture releases
+        // the lock, so no shell spawns after `close` begins.
         let cancel = capture::Cancel::new();
         {
             let mut state = lock(&self.state);
-            if state.closed {
-                return state
-                    .published
-                    .clone()
-                    .unwrap_or_else(|| Arc::new(self.fallback()));
-            }
             state.running = state.running.saturating_add(1);
             state.cancels.push(Arc::clone(&cancel));
         }
