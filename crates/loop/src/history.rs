@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::Error;
 use crate::handoff::Carry;
 use crate::resume::Resumed;
-use crate::reviewer::{Reviewed, render_reviewed};
+use crate::reviewer::render_reviewed;
 
 /// The kinds the fold reads a payload of. Every other line's envelope is
 /// read and its payload never parsed.
@@ -49,64 +49,55 @@ const FOLDED: &[&str] = &[
 pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     let first = segments.first().ok_or(Error::NoSessionStarted)?;
     let last = segments.last().ok_or(Error::NoSessionStarted)?;
-    let root = first.session_id.0.clone();
-    let session = last.session_id.0.clone();
-    let mut workspace = None;
-    let mut worktree = None;
-    let mut preamble = None;
-    let mut model = None;
-    let mut credential = None;
-    let mut thinking = None;
-    let mut settings = None;
-    let mut ledger = crate::usage::Ledger::default();
-    // A parent segment's own first-seen generations, so a correction there
-    // keeps the model its call was first recorded at, as the ledger does
-    // for the own segment. Never written anywhere.
-    let mut parent_ledger = crate::usage::Ledger::default();
-    let mut grants = Vec::new();
-    let mut session_blocks = 0;
-    // The reviewer's input follows the session's handoffs
-    // (`docs/permissions.md`, "At a handoff").
-    let mut reviewed = Vec::new();
-    let mut orphans = crate::jobs::Orphans::default();
-    let mut offers = crate::offer::Folded::default();
-    // The jobs running and the session log's path as of the line read.
-    let mut running = Carry::default();
-    // Each turn's latest `turn_started` since the last completed handoff,
-    // with the state at it: a later handoff names one of them. The
-    // position names its segment, so a turn in a parent and one in the
-    // child never share it.
-    let mut starts: HashMap<TurnId, ((usize, u64), Carry)> = HashMap::new();
-    let mut window = ((0, 0), Carry::default());
+    let mut resumed = Resumed {
+        session: last.session_id.0.clone(),
+        root: first.session_id.0.clone(),
+        // A placeholder until the own `session_started` below writes
+        // the real one: the error returns first, so it never leaves.
+        workspace: String::new(),
+        worktree: None,
+        model: None,
+        credential: None,
+        thinking: None,
+        settings: None,
+        window: (0, 0),
+        end: 0,
+        seed: Carry::default(),
+        ledger: crate::usage::Ledger::default(),
+        grants: Vec::new(),
+        session_blocks: 0,
+        // The reviewer's input follows the session's handoffs
+        // (`docs/permissions.md`, "At a handoff").
+        reviewed: Vec::new(),
+        orphans: Vec::new(),
+        offers: crate::offer::Folded::default(),
+        preamble: None,
+    };
+    let mut pass = Pass {
+        own_segment: false,
+        index: 0,
+        workspace: None,
+        // A parent segment's own first-seen generations, so a correction
+        // there keeps the model its call was first recorded at, as the
+        // ledger does for the own segment. Never written anywhere.
+        parent_ledger: crate::usage::Ledger::default(),
+        // The jobs running and the session log's path as of the line read.
+        running: Carry::default(),
+        // Each turn's latest `turn_started` since the last completed
+        // handoff, with the state at it: a later handoff names one of
+        // them. The position names its segment, so a turn in a parent
+        // and one in the child never share it.
+        starts: HashMap::new(),
+        orphans: crate::jobs::Orphans::default(),
+    };
     let mut end = 0;
     let Some(own) = segments.len().checked_sub(1) else {
         return Err(Error::NoSessionStarted);
     };
-    let mut fold = Fold {
-        workspace: &mut workspace,
-        worktree: &mut worktree,
-        preamble: &mut preamble,
-        model: &mut model,
-        credential: &mut credential,
-        thinking: &mut thinking,
-        settings: &mut settings,
-        ledger: &mut ledger,
-        parent_ledger: &mut parent_ledger,
-        own_segment: false,
-        grants: &mut grants,
-        session_blocks: &mut session_blocks,
-        reviewed: &mut reviewed,
-        orphans: &mut orphans,
-        offers: &mut offers,
-        running: &mut running,
-        starts: &mut starts,
-        window: &mut window,
-        index: 0,
-    };
     for (index, segment) in segments.iter().enumerate() {
-        fold.own_segment = index == own;
-        fold.index = index;
-        if fold.own_segment {
+        pass.own_segment = index == own;
+        pass.index = index;
+        if pass.own_segment {
             for line in log::lines(&segment.dir)? {
                 let line = line?;
                 end += 1;
@@ -121,7 +112,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
                 {
                     break;
                 }
-                fold_line(&line, &mut fold)?;
+                fold_line(&line, &mut resumed, &mut pass)?;
                 // The point is inclusive (`docs/events.md`, "Rewind"):
                 // its own line is the last one read.
                 if segment
@@ -134,150 +125,131 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
             }
         } else {
             for line in segment.lines(0)? {
-                fold_line(&line, &mut fold)?;
+                fold_line(&line, &mut resumed, &mut pass)?;
             }
         }
     }
-    let Some(workspace) = workspace else {
+    let Some(workspace) = pass.workspace.take() else {
         return Err(Error::NoSessionStarted);
     };
-    let (window, seed) = window;
-    Ok(Resumed {
-        session,
-        root,
-        workspace,
-        worktree,
-        model,
-        credential,
-        thinking,
-        settings,
-        window,
-        end,
-        seed,
-        ledger,
-        grants,
-        session_blocks,
-        reviewed,
-        orphans: orphans.finish(),
-        offers,
-        preamble,
-    })
+    resumed.workspace = workspace;
+    resumed.orphans = pass.orphans.finish();
+    resumed.end = end;
+    Ok(resumed)
 }
 
-/// What [`fold_line`] threads through one line.
-struct Fold<'a> {
-    workspace: &'a mut Option<String>,
-    worktree: &'a mut Option<contract::shapes::Worktree>,
-    preamble: &'a mut Option<contract::events::PreambleBuilt>,
-    model: &'a mut Option<String>,
-    credential: &'a mut Option<String>,
-    thinking: &'a mut Option<String>,
-    settings: &'a mut Option<ModelSettings>,
-    ledger: &'a mut crate::usage::Ledger,
-    parent_ledger: &'a mut crate::usage::Ledger,
+/// What [`fold_line`] carries through the pass besides the [`Resumed`] it
+/// builds: the own segment's workspace until it moves, and the state
+/// that only exists mid-pass. Every field is owned.
+struct Pass {
     own_segment: bool,
-    grants: &'a mut Vec<contract::events::Grant>,
-    session_blocks: &'a mut u64,
-    reviewed: &'a mut Vec<Reviewed>,
-    orphans: &'a mut crate::jobs::Orphans,
-    offers: &'a mut crate::offer::Folded,
-    running: &'a mut Carry,
-    starts: &'a mut HashMap<TurnId, ((usize, u64), Carry)>,
-    window: &'a mut ((usize, u64), Carry),
     index: usize,
+    workspace: Option<String>,
+    parent_ledger: crate::usage::Ledger,
+    running: Carry,
+    starts: HashMap<TurnId, ((usize, u64), Carry)>,
+    orphans: crate::jobs::Orphans,
 }
 
-/// Folds one line of segment `fold.index`: the workspace from the own
-/// segment's `session_started`, the model, the credential label and the
-/// thinking, the session-wide state, and the handoff window. The ledger
-/// and the reviewer's block count fold only the own segment.
-fn fold_line(line: &Envelope, fold: &mut Fold<'_>) -> Result<(), Error> {
+/// Folds one line of segment `pass.index` into `resumed`: the workspace
+/// from the own segment's `session_started`, the model, the credential
+/// label and the thinking, the session-wide state, and the handoff
+/// window. The ledger and the reviewer's block count fold only the own
+/// segment.
+fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<(), Error> {
     if !line.is_durable() || !FOLDED.contains(&line.kind.as_str()) {
         return Ok(());
     }
     let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
         return Ok(());
     };
-    render_reviewed(fold.reviewed, &event, line.action_id.as_ref(), line.seq);
-    fold.orphans.fold(&event);
-    fold.offers.fold(&event);
-    fold.running.fold_jobs(&event);
+    render_reviewed(
+        &mut resumed.reviewed,
+        &event,
+        line.action_id.as_ref(),
+        line.seq,
+    );
+    pass.orphans.fold(&event);
+    resumed.offers.fold(&event);
+    pass.running.fold_jobs(&event);
     if let Event::SessionStarted(started) = &event
-        && fold.own_segment
-        && fold.workspace.is_none()
+        && pass.own_segment
+        && pass.workspace.is_none()
     {
-        *fold.workspace = Some(started.workspace.clone());
-        *fold.worktree = started.worktree.clone();
+        pass.workspace = Some(started.workspace.clone());
+        resumed.worktree = started.worktree.clone();
     } else if let Event::UsageRecorded(recorded) = &event {
         // The call's model is not the session's: the line may be a
         // delegate's copy, a reviewer's call or an extension's.
-        let ledger = if fold.own_segment {
-            &mut *fold.ledger
+        let ledger = if pass.own_segment {
+            &mut resumed.ledger
         } else {
-            &mut *fold.parent_ledger
+            &mut pass.parent_ledger
         };
         ledger.record(recorded);
     } else if let Event::PreambleBuilt(built) = &event {
-        *fold.model = Some(built.model.clone());
-        fold.credential.clone_from(&built.credential);
-        *fold.preamble = Some(built.clone());
+        resumed.model = Some(built.model.clone());
+        resumed.credential.clone_from(&built.credential);
+        resumed.preamble = Some(built.clone());
         // The settings the log last recorded, for a resume that switches
         // the credential label (`docs/model-routing.md`, "Which credential
         // a session uses").
-        *fold.settings = Some(ModelSettings {
+        resumed.settings = Some(ModelSettings {
             model: built.model.clone(),
             thinking: built.thinking.clone(),
             cache_lifetime: built.cache_lifetime,
             credential: built.credential.clone(),
         });
     } else if let Event::ModelChanged(changed) = &event {
-        *fold.model = Some(changed.after.model.clone());
-        fold.credential.clone_from(&changed.after.credential);
-        *fold.thinking = changed.after.thinking.clone();
-        *fold.settings = Some(changed.after.clone());
+        resumed.model = Some(changed.after.model.clone());
+        resumed.credential.clone_from(&changed.after.credential);
+        resumed.thinking = changed.after.thinking.clone();
+        resumed.settings = Some(changed.after.clone());
     } else if let Event::PermissionResolved(resolved) = &event {
         if let Some(grant) = &resolved.grant {
-            fold.grants.push(grant.clone());
+            resumed.grants.push(grant.clone());
         }
         // A model's block, a reviewer failure and a denial with no
         // reviewer set up each count, as they do live. The
         // spending-budget denial is `decided_by: budget` and does not.
         // debt: undercounts session blocks whose escalation a person
         // answered or a cancel ended; fixed when the log records blocks.
-        if fold.own_segment
+        if pass.own_segment
             && resolved.decision == Decision::Deny
             && matches!(
                 resolved.decided_by,
                 DecidedBy::Reviewer | DecidedBy::NoReviewer
             )
         {
-            *fold.session_blocks += 1;
+            resumed.session_blocks += 1;
         }
     } else if let Event::OpeningMessage(message) = &event {
-        fold.running
+        pass.running
             .session_log
             .clone_from(&message.environment.session_log);
     } else if let Event::TurnStarted(_) = &event {
         if let (Some(turn), Some(seq)) = (&line.turn_id, line.seq) {
             let state = Carry {
-                jobs: fold.running.jobs.clone(),
-                session_log: fold.running.session_log.clone(),
+                jobs: pass.running.jobs.clone(),
+                session_log: pass.running.session_log.clone(),
                 ..Carry::default()
             };
-            fold.starts
-                .insert(turn.clone(), ((fold.index, seq.0), state));
+            pass.starts
+                .insert(turn.clone(), ((pass.index, seq.0), state));
         }
     } else if let Event::HandoffCompleted(done) = &event
         && done.outcome == Outcome::Completed
     {
         let turn = line.turn_id.as_ref();
-        *fold.window = turn
-            .and_then(|turn| fold.starts.get(turn))
+        let (window, seed) = turn
+            .and_then(|turn| pass.starts.get(turn))
             .cloned()
             .unwrap_or_default();
+        resumed.window = window;
+        resumed.seed = seed;
         // Only this turn can complete another handoff before its
         // next `turn_started`.
-        fold.starts.retain(|started, _| Some(started) == turn);
+        pass.starts.retain(|started, _| Some(started) == turn);
     }
     Ok(())
 }
