@@ -101,15 +101,6 @@ fn serve_once(listener: UnixListener, line: &[u8]) {
     stream.flush().unwrap();
 }
 
-/// Accepts two connections, drops both silent, then reports.
-fn drop_twice(listener: UnixListener, dropped_tx: mpsc::Sender<()>) {
-    for _ in 0..2 {
-        let (closed, _) = listener.accept().unwrap();
-        drop(closed);
-    }
-    dropped_tx.send(()).unwrap_or(());
-}
-
 /// Accepts one connection within the test deadline, yielding the thread
 /// while none waits. `None` is the stand-in ending: `stop` set or the
 /// deadline with no time left. The deadline is the hang guard of the
@@ -304,7 +295,9 @@ fn a_hub_that_never_speaks_fails_eof_at_the_race_bound() {
         );
         assert_eq!(
             clock.now(),
-            origin + bound - Duration::from_millis(10),
+            (origin + bound)
+                .checked_sub(Duration::from_millis(10))
+                .unwrap(),
             "{}",
             entry.name()
         );
@@ -569,40 +562,6 @@ fn a_hub_that_exited_before_the_retry_is_started_again() {
         assert!(
             Deadline::after(DEADLINE).recv(&exited_rx).is_ok(),
             "{}: waited {DEADLINE:?} for the old hub to exit",
-            entry.name()
-        );
-    }
-}
-
-#[test]
-fn the_retry_after_a_dropped_handshake_waits_one_poll() {
-    for entry in live() {
-        let temp = Temp::new();
-        let home = run_home(&temp);
-        let listener = UnixListener::bind(home.join("run").join("hub")).unwrap();
-        let (dropped_tx, dropped_rx) = mpsc::channel();
-        thread::spawn(move || drop_twice(listener, dropped_tx));
-        let clock = FakeClock::new();
-        let origin = clock.origin();
-        let error = run(entry, home, || Ok(()), Arc::clone(&clock))
-            .expect_err("two silent connections fail the connect");
-        assert_eq!(
-            error.kind(),
-            io::ErrorKind::UnexpectedEof,
-            "{}",
-            entry.name()
-        );
-        // One poll between the attempts, and none after the final failure.
-        // The 10 ms mirrors the private `CONNECT_POLL` the skeleton sleeps.
-        assert_eq!(
-            clock.now(),
-            origin + Duration::from_millis(10),
-            "{}",
-            entry.name()
-        );
-        assert!(
-            Deadline::after(DEADLINE).recv(&dropped_rx).is_ok(),
-            "{}: waited {DEADLINE:?} for the server to drop both connections",
             entry.name()
         );
     }

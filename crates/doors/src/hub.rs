@@ -3,8 +3,9 @@
 //!
 //! A client starts the hub when none is running, then retries connecting
 //! on the injected clock. The first line is read byte by byte, without
-//! buffered over-read, and must be `hub_hello`: EOF before it is the
-//! idle-exit race, and the whole connect is retried once. The line must
+//! buffered over-read, and must be `hub_hello`: EOF or a reset before it
+//! is the idle-exit race, and the whole connect repeats past each race
+//! until the race bound, pausing one poll between attempts. The line must
 //! arrive within one deadline on the injected clock, fixed when the socket
 //! accepts, so a hub that accepts and never speaks, or trickles its line,
 //! cannot hang the client; the returned stream has no read timeout.
@@ -48,12 +49,12 @@ pub fn connect(
 }
 
 /// [`connect`], with `hub_hello` due by `deadline` on `clock`: the same
-/// absolute deadline bounds both connection attempts and the handshake,
-/// so a peer that closes just before it leaves no fresh deadline for the
-/// retry. Between the attempts the client pauses one poll, so the exiting
-/// hub's listener is gone, and `start` may run again. Past it the connect
-/// fails `TimedOut`. `before_read` runs after each handshake read's
-/// deadline check, just before the read.
+/// absolute deadline bounds every attempt and the handshake, so a peer
+/// that closes just before it leaves no fresh deadline for a retry.
+/// Between races the client pauses one poll, and `start` may run again
+/// once the socket is gone. Past it the connect fails `TimedOut`.
+/// `before_read` runs after each handshake read's deadline check, just
+/// before the read.
 pub fn connect_until(
     home: &Path,
     start: &mut dyn FnMut() -> io::Result<()>,
@@ -65,9 +66,9 @@ pub fn connect_until(
     connect_with(home, start, clock, Due::At { deadline, total }, before_read)
 }
 /// [`connect`], with `hub_hello` due within `hello_within` of the socket
-/// accepting, on `clock`. Between the attempts the client pauses one poll,
-/// so the exiting hub's listener is gone, and `start` may run again. Past
-/// it the connect fails `TimedOut`.
+/// accepting, on `clock`. Between races the client pauses one poll, and
+/// `start` may run again once the socket is gone. Past the race bound the
+/// connect fails `UnexpectedEof`.
 pub fn connect_within(
     home: &Path,
     start: &mut dyn FnMut() -> io::Result<()>,
@@ -111,6 +112,18 @@ impl Due {
         }
     }
 
+    /// The race bound: a race retries only when the next attempt would
+    /// start before it. The shared deadline for `At`, so every race,
+    /// bind wait and handshake read ends by it; the first attempt's
+    /// start plus [`CONNECT_DEADLINE`] for `Within`, so the retries end
+    /// together while each attempt still waits its own bind deadline.
+    fn race_bound(&self, first_start: Instant) -> Instant {
+        match self {
+            Due::At { deadline, .. } => *deadline,
+            Due::Within(_) => first_start + CONNECT_DEADLINE,
+        }
+    }
+
     /// The duration the hello timeout message names.
     fn named(&self) -> Duration {
         match self {
@@ -120,11 +133,12 @@ impl Due {
     }
 }
 
-/// The two-attempt skeleton [`connect_until`] and [`connect_within`] share:
-/// one [`attempt`], then exactly one [`CONNECT_POLL`] pause and a second
-/// [`attempt`] with a fresh `started` when the first saw the idle-exit
-/// race. `start` runs at most once per attempt. After the second race the
-/// result is `UnexpectedEof` with no further sleep.
+/// The skeleton [`connect_until`] and [`connect_within`] share: each
+/// [`attempt`] runs until it speaks `hub_hello`, and the idle-exit race
+/// pauses one [`CONNECT_POLL`] and retries the whole connect with a fresh
+/// `started`, while the retry would start before the race bound. `start`
+/// runs at most once per attempt. Past the bound the result is
+/// `UnexpectedEof` with no further sleep.
 fn connect_with(
     home: &Path,
     start: &mut dyn FnMut() -> io::Result<()>,
@@ -132,21 +146,24 @@ fn connect_with(
     due: Due,
     before_read: &mut dyn FnMut(),
 ) -> io::Result<Hub> {
+    let first_start = clock.now();
+    let bound = due.race_bound(first_start);
     let mut started = false;
-    match attempt(home, &mut started, start, clock, &due, before_read) {
-        Ok(hub) => return Ok(hub),
-        Err(Poll::Race) => {}
-        Err(Poll::Failed(error)) => return Err(error),
-    }
-    // EOF before `hub_hello` is the idle-exit race: the hub exited before
-    // the handshake, so the retry pauses one poll for its listener to go
-    // away, then may start a new hub when the socket is gone.
-    started = false;
-    clock.sleep(CONNECT_POLL);
-    match attempt(home, &mut started, start, clock, &due, before_read) {
-        Ok(hub) => return Ok(hub),
-        Err(Poll::Race) => {}
-        Err(Poll::Failed(error)) => return Err(error),
+    loop {
+        match attempt(home, &mut started, start, clock, &due, before_read) {
+            Ok(hub) => return Ok(hub),
+            Err(Poll::Race) => {}
+            Err(Poll::Failed(error)) => return Err(error),
+        }
+        // EOF or a reset before `hub_hello` is the idle-exit race: the
+        // hub exited before the handshake, so the connect retries past
+        // each race until the bound, then may start a new hub once the
+        // socket is gone.
+        if clock.now() + CONNECT_POLL >= bound {
+            break;
+        }
+        started = false;
+        clock.sleep(CONNECT_POLL);
     }
     Err(io::Error::new(
         io::ErrorKind::UnexpectedEof,
@@ -203,7 +220,7 @@ fn is_closed_peer(kind: io::ErrorKind) -> bool {
 enum HelloRead {
     /// One byte towards the line.
     Byte,
-    /// End of stream before the line: the idle-exit race.
+    /// End of stream or a reset before the line: the idle-exit race.
     Race,
     /// The deadline passed while reading.
     TimedOut,
@@ -212,11 +229,14 @@ enum HelloRead {
 }
 
 /// Classifies one handshake byte-read, so tests inject each outcome.
+/// A reset is the same race: a connection queued on a listener that
+/// closes unaccepted reads reset, not EOF, on some platforms.
 fn classify_hello_read(read: io::Result<usize>) -> HelloRead {
     match read {
         Ok(0) => HelloRead::Race,
         Ok(_) => HelloRead::Byte,
         Err(error) if is_hello_timeout(error.kind()) => HelloRead::TimedOut,
+        Err(error) if error.kind() == io::ErrorKind::ConnectionReset => HelloRead::Race,
         Err(error) => HelloRead::Failed(error),
     }
 }
@@ -231,7 +251,8 @@ fn ignore_closed_peer(set: io::Result<()>) -> io::Result<()> {
 }
 
 enum Poll {
-    /// EOF before `hub_hello`: retry the whole connect once.
+    /// EOF or a reset before `hub_hello`: the whole connect retries while
+    /// the retry would start before the race bound.
     Race,
     /// No retry: the error.
     Failed(io::Error),

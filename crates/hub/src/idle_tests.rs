@@ -1056,7 +1056,7 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
     assert!(bytes.is_empty(), "the second connection carries no bytes");
     match size {
         Ok(0) => {}
-        Err(kind) if kind == std::io::ErrorKind::ConnectionReset => {}
+        Err(std::io::ErrorKind::ConnectionReset) => {}
         other => panic!("the second connection ends EOF or reset, got {other:?}"),
     }
     assert_eq!(
