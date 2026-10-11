@@ -259,7 +259,9 @@ fn many_connections_leave_nothing_held() {
             fakes::within("forty connections", DEADLINE, move || {
                 for i in 0..40 {
                     let client = Client::connect(&socket).unwrap();
-                    client.send(&subscribe_line(&format!("c_{i}"), "full")).unwrap();
+                    client
+                        .send(&subscribe_line(&format!("c_{i}"), "full"))
+                        .unwrap();
                     let _ack = recv(&client);
                     drop(client);
                 }
