@@ -9,10 +9,13 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
+use support::*;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex};
@@ -33,26 +36,12 @@ use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Origin, Process, Sender, Tokens, Usage};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, CommandId, ErrorCode, GenerationId, SessionId};
-use doors::{Session, mint};
 use fakes::Client;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::jobs::FakeJobs;
 use log::Log;
 use serde_json::{Map, Value};
-
-/// A hang bound for one line, the same order as the log crate's watcher tests.
-const DEADLINE: Duration = Duration::from_secs(10);
-
-/// One deadline for a whole `until` wait or one `subscribe` acknowledgement.
-/// The busiest test makes seven such waits and closes its session once under
-/// [`DEADLINE`]: 7 x 6 + 10 = 52 s, at most half of nextest's 120 s kill
-/// (`docs/testing.md`, "Waits and timeouts").
-const UNTIL: Duration = Duration::from_secs(6);
-
-/// How long the reader inside `until` blocks on one receive, so it notices a
-/// missed deadline within this bound instead of one more [`UNTIL`].
-const SLICE: Duration = Duration::from_secs(1);
 
 const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
 const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
@@ -61,204 +50,6 @@ const UNFIT: &str = "The arguments do not fit this command.";
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
 const ENDED: &str = "The session ended before answering.";
-
-struct Temp(
-    PathBuf,
-    #[expect(dead_code, reason = "Drop removes the directory")] fakes::TempDir,
-);
-
-impl Temp {
-    fn new() -> Self {
-        let held = fakes::TempDir::new("fd");
-        let dir = held.path().to_path_buf();
-        Self(dir, held)
-    }
-}
-
-#[derive(Clone)]
-struct Shared {
-    buf: Arc<Mutex<Vec<u8>>>,
-    ready: Arc<Condvar>,
-}
-
-impl Shared {
-    fn new() -> Self {
-        Self {
-            buf: Arc::new(Mutex::new(Vec::new())),
-            ready: Arc::new(Condvar::new()),
-        }
-    }
-}
-
-impl Write for Shared {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.buf.lock().unwrap().extend_from_slice(buf);
-        self.ready.notify_all();
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-struct Opened {
-    _temp: Temp,
-    clock: Arc<FakeClock>,
-    log: Arc<Log>,
-    sessions: PathBuf,
-    id: SessionId,
-    dir: PathBuf,
-    socket: PathBuf,
-    out: Shared,
-    session: Session,
-}
-
-impl Opened {
-    fn open(tools: Vec<ToolInfo>) -> Self {
-        let temp = Temp::new();
-        let home = temp.0.join("h");
-        let sessions = home.join("projects/p/sessions");
-        let id = SessionId(mint("s_"));
-        let dir = sessions.join(&id.0);
-        let clock = FakeClock::new();
-        let timed = Arc::clone(&clock);
-        let timed: Arc<dyn Clock> = timed;
-        let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
-        let out = Shared::new();
-        let session =
-            Session::open(&home, &dir, &log, timed, tools, Box::new(out.clone())).unwrap();
-        Self {
-            _temp: temp,
-            clock,
-            log,
-            sessions,
-            id: id.clone(),
-            dir,
-            socket: home.join("run").join(&id.0),
-            out,
-            session,
-        }
-    }
-
-    /// Closes the session and returns its temporary directory, still present
-    /// when the session kept it.
-    #[track_caller]
-    fn close(self) -> Temp {
-        let Opened {
-            session,
-            log,
-            _temp,
-            ..
-        } = self;
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            session.close(log);
-            if let Ok(()) = tx.send(()) {}
-        });
-        Deadline::after(DEADLINE).recv(&rx).expect("close returned");
-        _temp
-    }
-}
-
-fn next(client: &Client) -> Value {
-    client.recv(DEADLINE).expect("a line arrived")
-}
-
-/// Lines up to and including the first one `done` accepts, read under one
-/// [`UNTIL`] deadline for the whole wait, not one per line. Fails naming the
-/// wait when it passes.
-#[track_caller]
-fn until(client: &Client, mut done: impl FnMut(&Value) -> bool + Send) -> Vec<Value> {
-    let stop = AtomicBool::new(false);
-    let got = thread::scope(|scope| {
-        let (tx, rx) = mpsc::channel();
-        let stop = &stop;
-        scope.spawn(move || {
-            let mut lines = Vec::new();
-            let mut idle = 0;
-            while !stop.load(Ordering::SeqCst) {
-                let Some(line) = client.recv(SLICE) else {
-                    // A closed socket answers at once: stop instead of spinning.
-                    idle += 1;
-                    if idle > UNTIL.as_secs() {
-                        break;
-                    }
-                    continue;
-                };
-                idle = 0;
-                let finished = done(&line);
-                lines.push(line);
-                if finished {
-                    if let Ok(()) = tx.send(lines) {}
-                    return;
-                }
-            }
-        });
-        let waited = Deadline::after(UNTIL).recv(&rx);
-        stop.store(true, Ordering::SeqCst);
-        waited
-    });
-    got.expect("the awaited line arrived within one deadline for the whole wait")
-}
-
-fn kind(line: &Value) -> &str {
-    line["kind"].as_str().unwrap()
-}
-
-fn command_id(line: &Value) -> Option<&str> {
-    line["payload"].get("command_id").and_then(Value::as_str)
-}
-
-fn seqs(lines: &[Value]) -> Vec<u64> {
-    lines
-        .iter()
-        .filter_map(|line| line["seq"].as_u64())
-        .collect()
-}
-
-fn kinds(lines: &[Value]) -> Vec<&str> {
-    lines.iter().map(kind).collect()
-}
-
-fn send(client: &Client, line: &str) {
-    client.send(line).unwrap();
-}
-
-/// The acknowledgement for `id`, skipping events that belong to the session.
-#[track_caller]
-fn response(client: &Client, id: &str) -> Value {
-    until(client, |line| command_id(line) == Some(id))
-        .into_iter()
-        .next_back()
-        .unwrap()
-}
-
-fn subscribe(client: &Client, id: &str, level: &str) -> Value {
-    send(
-        client,
-        &format!(r#"{{"id":"{id}","command":"subscribe","args":{{"level":"{level}"}}}}"#),
-    );
-    let line = client
-        .recv(UNTIL)
-        .expect("the subscribe acknowledgement arrived");
-    assert_eq!(kind(&line), "command_accepted", "{line}");
-    assert_eq!(command_id(&line).unwrap(), id);
-    assert_eq!(
-        line["ts"].as_u64(),
-        Some(1_700_000_000_000),
-        "an acknowledgement's ts comes from the clock"
-    );
-    line
-}
-
-fn rejection(line: &Value) -> (&str, &str) {
-    assert_eq!(kind(line), "command_rejected", "{line}");
-    (
-        line["payload"]["code"].as_str().unwrap(),
-        line["payload"]["message"].as_str().unwrap(),
-    )
-}
 
 fn step() -> Event {
     Event::StepStarted(Empty {})
