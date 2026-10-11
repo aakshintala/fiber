@@ -11,7 +11,9 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 use fakes::jobs::JobDeltas;
 
-use super::{Errors, JobStream, Shared, escaped_len, lock, read_errors, read_output};
+use super::{
+    Errors, HELD_MAX, JobStream, Pending, Shared, escaped_len, lock, read_errors, read_output,
+};
 
 struct Chunks(Vec<Vec<u8>>);
 
@@ -49,7 +51,7 @@ fn the_file_stops_at_the_cap_and_later_bytes_are_dropped() {
     assert_eq!(std::fs::read(&path).unwrap(), b"abcdefghij");
     let inner = lock(&shared.inner);
     assert!(inner.cap_fired);
-    assert_eq!(inner.pending.as_bytes(), b"abcdefghij");
+    assert_eq!(inner.pending.bytes.as_slice(), b"abcdefghij");
     assert_eq!(inner.written, 10);
 }
 
@@ -71,7 +73,7 @@ fn a_copy_past_the_cap_is_kept_whole_and_fires_it_at_once() {
     assert!(lock(&shared.inner).cap_fired);
     feed(&shared, &[b"gh"]);
     assert_eq!(std::fs::read(&path).unwrap(), b"abcdef");
-    assert!(lock(&shared.inner).pending.is_empty());
+    assert!(lock(&shared.inner).pending.bytes.is_empty());
 }
 
 #[test]
@@ -90,7 +92,7 @@ fn a_copy_under_the_cap_leaves_it_unfired_and_counts_toward_it() {
     let (shared, path) = attached(&dir, b"abc", 5);
     assert!(!lock(&shared.inner).cap_fired);
     // The copy is not a delta: the foreground already streamed it.
-    assert!(lock(&shared.inner).pending.is_empty());
+    assert!(lock(&shared.inner).pending.bytes.is_empty());
     feed(&shared, &[b"def"]);
     assert_eq!(std::fs::read(&path).unwrap(), b"abcde");
     assert!(lock(&shared.inner).cap_fired);
@@ -188,7 +190,7 @@ fn the_flush_writes_what_is_held_and_an_incomplete_tail_lossily() {
     queue(&shared, &[b'!', "é".as_bytes()[0]]);
     stream.flush(&shared);
     assert_eq!(texts(&deltas), ["one", "two!\u{fffd}"]);
-    assert!(lock(&shared.inner).pending.is_empty());
+    assert!(lock(&shared.inner).pending.bytes.is_empty());
     stream.flush(&shared);
     assert_eq!(deltas.deltas().len(), 2);
 }
@@ -247,7 +249,7 @@ fn standard_error_reaches_no_line_and_no_delta() {
     read_errors(Chunks(vec![b"secret\n".to_vec()]), &shared);
     let inner = lock(&shared.inner);
     assert!(inner.lines.as_ref().unwrap().is_empty());
-    assert!(inner.pending.is_empty());
+    assert!(inner.pending.bytes.is_empty());
     assert!(inner.output.is_empty());
 }
 
@@ -441,4 +443,106 @@ fn held_text_across_not_yet_due_passes_is_capped_at_the_newest_64_kib() {
     let mut expected = "a".repeat(25_536);
     expected.push_str(&"b".repeat(40_000));
     assert_delta_eq(&got[1], &expected);
+}
+
+#[test]
+fn a_pending_push_of_exactly_64_kib_keeps_everything() {
+    let mut pending = Pending::default();
+    pending.push(&vec![b'a'; HELD_MAX]);
+    assert!(!pending.dropped);
+    assert_eq!(pending.bytes.len(), HELD_MAX);
+    assert_eq!(pending.bytes, vec![b'a'; HELD_MAX]);
+}
+
+#[test]
+fn a_pending_push_of_one_byte_past_64_kib_drops_the_first_byte() {
+    let mut pending = Pending::default();
+    let mut over = vec![b'X'];
+    over.extend_from_slice(&vec![b'a'; HELD_MAX]);
+    pending.push(&over);
+    assert!(pending.dropped);
+    assert_eq!(pending.bytes.len(), HELD_MAX);
+    assert_eq!(pending.bytes, vec![b'a'; HELD_MAX]);
+}
+
+#[test]
+fn a_pending_cut_skips_at_most_three_leading_continuation_bytes() {
+    for n in 0..=4_usize {
+        let mut pending = Pending::default();
+        let mut queued = vec![b'X'; 5];
+        queued.extend_from_slice(&vec![0x80; n]);
+        queued.extend_from_slice(&vec![b'a'; HELD_MAX - n]);
+        assert_eq!(queued.len(), HELD_MAX + 5);
+        pending.push(&queued);
+        assert!(pending.dropped, "n = {n}");
+        let skipped = n.min(3);
+        let mut expected = vec![0x80; n - skipped];
+        expected.extend_from_slice(&vec![b'a'; HELD_MAX - n]);
+        assert_eq!(pending.bytes.len(), HELD_MAX - skipped, "n = {n}");
+        assert_eq!(pending.bytes, expected, "n = {n}");
+    }
+}
+
+#[test]
+fn a_pending_cut_skips_only_continuation_bytes() {
+    for (lead, skipped) in [
+        (0x41_u8, false),
+        (0xC3_u8, false),
+        (0x80_u8, true),
+        (0xBF_u8, true),
+    ] {
+        let mut pending = Pending::default();
+        let mut queued = vec![b'X'; 5];
+        queued.extend_from_slice(&[lead]);
+        queued.extend_from_slice(&vec![b'a'; HELD_MAX - 1]);
+        assert_eq!(queued.len(), HELD_MAX + 5);
+        pending.push(&queued);
+        assert!(pending.dropped, "lead = {lead:#X}");
+        let mut expected = Vec::new();
+        if !skipped {
+            expected.push(lead);
+        }
+        expected.extend_from_slice(&vec![b'a'; HELD_MAX - 1]);
+        assert_eq!(
+            pending.bytes.len(),
+            HELD_MAX - usize::from(skipped),
+            "lead = {lead:#X}"
+        );
+        assert_eq!(pending.bytes, expected, "lead = {lead:#X}");
+    }
+}
+
+#[test]
+fn two_pending_pushes_past_the_cap_keep_the_last_64_kib_in_order() {
+    let mut pending = Pending::default();
+    pending.push(&vec![b'a'; 40_000]);
+    assert!(!pending.dropped);
+    pending.push(&vec![b'b'; 40_000]);
+    assert!(pending.dropped);
+    let mut expected = vec![b'a'; 25_536];
+    expected.extend_from_slice(&vec![b'b'; 40_000]);
+    assert_eq!(pending.bytes.len(), HELD_MAX);
+    assert_eq!(pending.bytes, expected);
+}
+
+#[test]
+fn a_pending_take_clears_both_bytes_and_flag() {
+    let mut pending = Pending::default();
+    pending.push(b"abc");
+    let (bytes, dropped) = pending.take();
+    assert_eq!(bytes, b"abc");
+    assert!(!dropped);
+    assert!(pending.bytes.is_empty());
+    let (bytes, dropped) = pending.take();
+    assert!(bytes.is_empty());
+    assert!(!dropped);
+    let mut over = vec![b'X'];
+    over.extend_from_slice(&vec![b'a'; HELD_MAX]);
+    pending.push(&over);
+    let (bytes, dropped) = pending.take();
+    assert!(dropped);
+    assert_eq!(bytes, vec![b'a'; HELD_MAX]);
+    assert!(pending.bytes.is_empty());
+    let (_, dropped) = pending.take();
+    assert!(!dropped);
 }

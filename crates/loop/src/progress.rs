@@ -111,11 +111,8 @@ impl Pacer {
 /// Drops the oldest bytes past `HELD_MAX`, keeping the newest starting at
 /// a character boundary, so the text stays valid UTF-8.
 fn cap_held(text: &mut String) {
-    if text.len() > HELD_MAX {
-        let cut = text.len() - HELD_MAX;
-        let boundary = text.ceil_char_boundary(cut);
-        text.drain(..boundary);
-    }
+    let cut = text.len().saturating_sub(HELD_MAX);
+    text.drain(..text.ceil_char_boundary(cut));
 }
 
 /// Wakes the loop thread waiting in `run_calls`: one flag under one mutex,

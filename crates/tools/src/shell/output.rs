@@ -39,20 +39,17 @@ impl Pending {
     /// Queues `bytes`, dropping the oldest past `HELD_MAX`.
     pub(super) fn push(&mut self, bytes: &[u8]) {
         self.bytes.extend_from_slice(bytes);
-        if self.bytes.len() > HELD_MAX {
-            let mut cut = self.bytes.len() - HELD_MAX;
-            let mut skipped = 0;
-            while skipped < 3 {
-                let Some(next) = self.bytes.get(cut) else {
-                    break;
-                };
-                if next & 0xC0 != 0x80 {
-                    break;
-                }
-                cut += 1;
-                skipped += 1;
-            }
-            self.bytes.drain(..cut);
+        let cut = self.bytes.len().saturating_sub(HELD_MAX);
+        let skip = self
+            .bytes
+            .get(cut..)
+            .unwrap_or_default()
+            .iter()
+            .take(3)
+            .take_while(|b| **b & 0xC0 == 0x80)
+            .count();
+        if cut > 0 {
+            self.bytes.drain(..cut.saturating_add(skip));
             self.dropped = true;
         }
     }
@@ -64,16 +61,6 @@ impl Pending {
             std::mem::take(&mut self.bytes),
             std::mem::take(&mut self.dropped),
         )
-    }
-
-    #[cfg(test)]
-    pub(super) fn as_bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    #[cfg(test)]
-    pub(super) fn is_empty(&self) -> bool {
-        self.bytes.is_empty()
     }
 }
 
@@ -501,11 +488,8 @@ fn escaped_len(text: &str) -> u64 {
 /// Drops the oldest bytes past `HELD_MAX`, keeping the newest starting at
 /// a character boundary, so the text stays valid UTF-8.
 fn cap_held(text: &mut String) {
-    if text.len() > HELD_MAX {
-        let cut = text.len() - HELD_MAX;
-        let boundary = text.ceil_char_boundary(cut);
-        text.drain(..boundary);
-    }
+    let cut = text.len().saturating_sub(HELD_MAX);
+    text.drain(..text.ceil_char_boundary(cut));
 }
 
 pub(super) fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
