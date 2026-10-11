@@ -509,10 +509,7 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
     // The viewer's copies live under Fiber home: cloned before the
     // connect closure moves it.
     let launch_home = home.clone();
-    let connect: tui::Connect = Box::new(move || {
-        let mut start = || start_hub(fiber.clone());
-        doors::hub::connect(&home, &mut start, hub_clock.as_ref())
-    });
+    let connect: tui::Connect = Box::new(move || connect_hub(&home, &fiber, hub_clock.as_ref()));
     let identity = doors::project(&workspace);
     let mut launch = launch::launch(workspace, &identity, &config, theme, &launch_home);
     launch.models = Some(models);
@@ -536,6 +533,16 @@ fn start_hub(exe: Result<PathBuf, String>) -> io::Result<()> {
         .map(|_| ())
 }
 
+/// Connects to the hub under `home`, starting it with `fiber` when none runs.
+fn connect_hub(
+    home: &Path,
+    fiber: &Result<PathBuf, String>,
+    clock: &dyn contract::clock::Clock,
+) -> io::Result<doors::hub::Hub> {
+    let mut start = || start_hub(fiber.clone());
+    doors::hub::connect(home, &mut start, clock)
+}
+
 /// `fiber sessions`: the hub it reaches is started when none runs.
 fn sessions_list(
     all: bool,
@@ -544,9 +551,11 @@ fn sessions_list(
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let mut connect = || {
-        let home = config::fiber_home_from_env().map_err(io::Error::other)?;
-        let mut start = || start_hub(fiber.clone());
-        doors::hub::connect(&home, &mut start, clock)
+        connect_hub(
+            &config::fiber_home_from_env().map_err(io::Error::other)?,
+            &fiber,
+            clock,
+        )
     };
     ::cli::sessions_list(all, json, &mut connect)
 }
@@ -560,9 +569,11 @@ fn sessions_delete(
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let mut connect = || {
-        let home = config::fiber_home_from_env().map_err(io::Error::other)?;
-        let mut start = || start_hub(fiber.clone());
-        doors::hub::connect(&home, &mut start, clock)
+        connect_hub(
+            &config::fiber_home_from_env().map_err(io::Error::other)?,
+            &fiber,
+            clock,
+        )
     };
     ::cli::delete(id, cascade, yes, &mut connect)
 }
@@ -578,9 +589,11 @@ fn sessions_prune(
     fiber: Result<PathBuf, String>,
 ) -> i32 {
     let mut connect = || {
-        let home = config::fiber_home_from_env().map_err(io::Error::other)?;
-        let mut start = || start_hub(fiber.clone());
-        doors::hub::connect(&home, &mut start, clock)
+        connect_hub(
+            &config::fiber_home_from_env().map_err(io::Error::other)?,
+            &fiber,
+            clock,
+        )
     };
     ::cli::prune(
         &::cli::PruneArgs {
