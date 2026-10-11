@@ -29,6 +29,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/skills/cache-warming/SKILL.md", "main"),
     ("docs/skills/using-fiber/SKILL.md", "main"),
     ("crates/tools/prompt/guidelines.md", "tools"),
+    ("providers/openrouter/init.lua", "main"),
 ];
 /// Crates whose tests read a first-party package under `providers/` or
 /// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
