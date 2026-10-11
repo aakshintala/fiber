@@ -217,6 +217,8 @@ fn invert((r, g, b): (u8, u8, u8)) -> (u8, u8, u8) {
     hsl_to_rgb((h, s, 1.0 - l))
 }
 
+/// Pulls the channels out of an `Rgb` colour, for tests.
+#[cfg(test)]
 fn rgb(c: Color) -> Option<(u8, u8, u8)> {
     match c {
         Color::Rgb(r, g, b) => Some((r, g, b)),
@@ -293,13 +295,23 @@ pub(crate) fn map(look: Look, colour: Color, is_bg: bool) -> Color {
         Color::Black => (hex(0x000000), Ramp::Either),
         Color::White if look.theme == Theme::Dark => (hex(0xffffff), Ramp::Either),
         Color::White => (hex(0x1f2328), Ramp::Either),
-        Color::Rgb(r, g, b) if look.theme == Theme::Dark => ((r, g, b), fallback_ramp((r, g, b))),
-        Color::Rgb(r, g, b) => match light_for((r, g, b), is_bg) {
-            Some((v, ramp)) => (v, ramp),
-            None => {
-                let v = (r, g, b);
-                (invert(v), fallback_ramp(v))
-            }
+        Color::Rgb(r, g, b) => {
+            let v = (r, g, b);
+            // Tabled roles keep their ramp in both themes; computed
+            // tints take the ramp their spread implies.
+            let ramp = match light_for(v, is_bg) {
+                Some((_, ramp)) => ramp,
+                None => fallback_ramp(v),
+            };
+            let out = if look.theme == Theme::Light {
+                match light_for(v, is_bg) {
+                    Some((t, _)) => t,
+                    None => invert(v),
+                }
+            } else {
+                v
+            };
+            (out, ramp)
         },
         // Already indexed: nothing to quantize.
         other => return other,
@@ -617,6 +629,18 @@ mod tests {
         assert_eq!(map(DARK_256, val(0xff0000), false), Color::Indexed(196));
         assert_eq!(map(DARK_256, val(0x00ff00), false), Color::Indexed(46));
         assert_eq!(map(DARK_256, val(0x0000ff), false), Color::Indexed(21));
+    }
+
+    #[test]
+    fn tabled_roles_keep_their_ramp_in_both_themes() {
+        // Scroll and comment are greys by value but hues by role: the
+        // cube in both themes, not the grey ramp.
+        assert_eq!(map(DARK_256, val(0x808080), false), Color::Indexed(102));
+        assert_eq!(map(DARK_256, val(0x7a7a8a), false), Color::Indexed(102));
+        assert_eq!(map(LIGHT_256, val(0x808080), false), Color::Indexed(145));
+        // Neutral tints take the grey ramp in both themes.
+        assert_eq!(map(DARK_256, val(0x1a1a22), true), Color::Indexed(234));
+        assert_eq!(map(LIGHT_256, val(0x1a1a22), true), Color::Indexed(255));
     }
 
     #[test]
