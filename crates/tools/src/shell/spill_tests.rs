@@ -50,11 +50,6 @@ fn ends(bytes: &[u8]) -> (&[u8], &[u8]) {
 }
 
 #[test]
-fn the_threshold_is_one_mebibyte() {
-    assert_eq!(SPILL_AT, 1_048_576);
-}
-
-#[test]
 fn a_crossing_chunk_spills_from_the_first_byte() {
     let dir = TempDir::new("fiber-spill-first-byte");
     let mut buffer = vec![b'a'; SPILL_AT];

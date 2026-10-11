@@ -298,17 +298,22 @@ impl Loop {
                 artifact: hook_artifact,
             } => {
                 let details = hook_details.or(details);
+                let replaces = content.is_some();
                 let full = match content {
                     Some(text) => lined(&text),
                     None => shown,
                 };
                 let cap = bound.start.saturating_add(bound.end);
-                // A hook's `content` over the cap is cut with a notice
-                // naming the spilled file, and nothing is written for it:
-                // the file stays the artifact.
+                // Only a hook's replacement `content` is cut here, with a
+                // notice naming the spilled file, and nothing is written
+                // for it: the file stays the artifact. Without replacement
+                // content the spilled outcome is already shaped, so its cut
+                // text keeps its notice: cutting it again would report the
+                // notice's bytes as the removed count instead of the
+                // command's missing bytes.
                 let content = if full.is_empty() {
                     Vec::new()
-                } else if full.len() > cap {
+                } else if replaces && full.len() > cap {
                     vec![ContentPart::Text {
                         text: cut_hook_content(&full, bound, &path),
                     }]
@@ -406,12 +411,39 @@ impl Loop {
                 artifact,
             } => {
                 let details = hook_details.or(details);
-                let (parts, full) = match content {
-                    Some(text) if text.is_empty() => (Some(Vec::new()), text),
-                    Some(text) => (None, lined(&text)),
-                    None => (None, shown),
-                };
-                self.capped(parts, full, details, artifact, bound, id)?
+                match content {
+                    // Replacement `content` is capped as without a spill:
+                    // the hook's artifact text goes to `<action_id>.txt`.
+                    Some(text) => {
+                        let (parts, full) = if text.is_empty() {
+                            (Some(Vec::new()), text)
+                        } else {
+                            (None, lined(&text))
+                        };
+                        self.capped(parts, full, details, artifact, bound, id)?
+                    }
+                    // Without replacement `content` the unsaved outcome
+                    // stays as shaped: its notice names no artifact and
+                    // nothing is saved for it, so the failure summary is
+                    // never claimed as the full output. Only a hook's
+                    // artifact text is written, to `<action_id>.txt` as
+                    // without a spill.
+                    None => {
+                        let artifact = artifact
+                            .map(|text| {
+                                self.log
+                                    .write_artifact(&format!("{}.txt", id.0), text.as_bytes())
+                                    .map(|named| named.0)
+                            })
+                            .transpose()?;
+                        Shaped {
+                            content: vec![ContentPart::Text { text: shown }],
+                            details,
+                            artifact,
+                            changed_by: None,
+                        }
+                    }
+                }
             }
         };
         shaped.changed_by = changed_by;

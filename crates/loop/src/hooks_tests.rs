@@ -1477,6 +1477,62 @@ fn a_hooks_artifact_text_replaces_the_spilled_file() {
 }
 
 #[test]
+fn an_artifact_only_hook_keeps_the_spilled_cut_text_with_its_notice() {
+    let home = fakes::TempDir::new("fiber-spilled-hook-artifact-only");
+    let hooks = FakeHooks::new(changed(None, None, Some("replaced")), &["acme"], Vec::new());
+    let tool = spilling(
+        &home,
+        vec![b'a'; 100],
+        "HHHH",
+        "TTTT",
+        92,
+        Bound { start: 4, end: 0 },
+    );
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    let path = ran.session.join("artifacts").join(SPILL_NAME);
+    // The already-cut text is kept unchanged past the cap: the notice
+    // still reports the command's 92 missing bytes, not a second cut's.
+    assert_eq!(completed.payload["content"][0]["text"], cut_of(&path));
+    assert_eq!(completed.payload["artifact"], "artifacts/s_spill.txt");
+    assert_eq!(completed.payload["changed_by"], json!(["acme"]));
+    // Only the artifact text replaced the file: nothing else was written.
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "replaced");
+    let entries: Vec<_> = std::fs::read_dir(ran.session.join("artifacts"))
+        .unwrap()
+        .collect();
+    assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn a_details_only_hook_keeps_the_spilled_cut_text_and_file() {
+    let home = fakes::TempDir::new("fiber-spilled-hook-details-only");
+    let hooks = FakeHooks::new(
+        changed(None, Some(json!({"n": 1})), None),
+        &["acme"],
+        Vec::new(),
+    );
+    let tool = spilling(
+        &home,
+        vec![b'a'; 100],
+        "HHHH",
+        "TTTT",
+        92,
+        Bound { start: 4, end: 0 },
+    );
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    let path = ran.session.join("artifacts").join(SPILL_NAME);
+    // The already-cut text is kept unchanged past the cap: the notice
+    // still reports the command's 92 missing bytes, not a second cut's.
+    assert_eq!(completed.payload["content"][0]["text"], cut_of(&path));
+    assert_eq!(completed.payload["details"], json!({"n": 1}));
+    assert_eq!(completed.payload["artifact"], "artifacts/s_spill.txt");
+    assert_eq!(completed.payload["changed_by"], json!(["acme"]));
+    assert_eq!(std::fs::read(&path).unwrap(), vec![b'a'; 100]);
+}
+
+#[test]
 fn a_hooks_content_over_the_cap_is_cut_naming_the_spilled_file() {
     let home = fakes::TempDir::new("fiber-spilled-hook-cap");
     let returned = "r".repeat(20);
@@ -1613,11 +1669,12 @@ fn unsaved(
     removed: u64,
     message: String,
     left: Option<std::path::PathBuf>,
+    bound: Bound,
 ) -> Fixed {
     let (head, tail) = (head.to_owned(), tail.to_owned());
     Fixed {
         output: text("unused"),
-        bound: Bound::DEFAULT,
+        bound,
         effects: vec![Effect::Reads],
         cancel: None,
         shutdown: None,
@@ -1642,7 +1699,7 @@ fn a_spill_that_was_not_kept_names_no_artifact_and_shows_no_file() {
     let home = fakes::TempDir::new("fiber-spilled-unsaved");
     let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
     let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
-    let tool = unsaved("HHHH", "TTTT", 92, message.clone(), None);
+    let tool = unsaved("HHHH", "TTTT", 92, message.clone(), None, Bound::DEFAULT);
     let ran = run_spilled(home, tool, Some(Arc::clone(&hooks)));
     let completed = ran.completed();
     let notice = format!("[92 bytes cut. The full output could not be saved: {message}.]");
@@ -1662,7 +1719,7 @@ fn a_hooks_artifact_text_on_an_unsaved_spill_goes_to_the_action_file() {
     let home = fakes::TempDir::new("fiber-spilled-unsaved-artifact");
     let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
     let hooks = FakeHooks::new(changed(None, None, Some("replaced")), &["acme"], Vec::new());
-    let tool = unsaved("HHHH", "TTTT", 92, message, None);
+    let tool = unsaved("HHHH", "TTTT", 92, message, None, Bound::DEFAULT);
     let ran = run_spilled(home, tool, Some(hooks));
     let completed = ran.completed();
     let artifact = completed.payload["artifact"].as_str().unwrap();
@@ -1676,11 +1733,51 @@ fn a_hooks_artifact_text_on_an_unsaved_spill_goes_to_the_action_file() {
 }
 
 #[test]
+fn a_details_only_hook_on_an_unsaved_spill_names_no_artifact_and_saves_nothing() {
+    let home = fakes::TempDir::new("fiber-spilled-unsaved-details-only");
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let hooks = FakeHooks::new(
+        changed(None, Some(json!({"n": 1})), None),
+        &["acme"],
+        Vec::new(),
+    );
+    // Past the cap, so cutting the failure summary again would save it
+    // as the artifact: the outcome must stay as shaped instead.
+    let tool = unsaved(
+        "HHHH",
+        "TTTT",
+        92,
+        message.clone(),
+        None,
+        Bound { start: 4, end: 0 },
+    );
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    let notice = format!("[92 bytes cut. The full output could not be saved: {message}.]");
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": format!("HHHH\n{notice}\nTTTT")}])
+    );
+    assert_eq!(completed.payload["details"], json!({"n": 1}));
+    assert!(completed.payload.get("artifact").is_none());
+    assert_eq!(completed.payload["changed_by"], json!(["acme"]));
+    // Nothing was saved for the failure summary.
+    assert!(
+        !ran.session.join("artifacts").exists()
+            || std::fs::read_dir(ran.session.join("artifacts"))
+                .unwrap()
+                .next()
+                .is_none(),
+        "no artifact was written for the unsaved spill"
+    );
+}
+
+#[test]
 fn replaced_content_on_an_unsaved_spill_is_sent_with_who_changed_it() {
     let home = fakes::TempDir::new("fiber-spilled-unsaved-changed");
     let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
     let hooks = FakeHooks::new(changed(Some("new"), None, None), &["acme"], Vec::new());
-    let tool = unsaved("HHHH", "TTTT", 92, message, None);
+    let tool = unsaved("HHHH", "TTTT", 92, message, None, Bound::DEFAULT);
     let ran = run_spilled(home, tool, Some(hooks));
     let completed = ran.completed();
     assert_eq!(
@@ -1696,7 +1793,7 @@ fn empty_replaced_content_on_an_unsaved_spill_sends_no_text_part() {
     let home = fakes::TempDir::new("fiber-spilled-unsaved-empty");
     let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
     let hooks = FakeHooks::new(changed(Some(""), None, None), &["acme"], Vec::new());
-    let tool = unsaved("HHHH", "TTTT", 92, message, None);
+    let tool = unsaved("HHHH", "TTTT", 92, message, None, Bound::DEFAULT);
     let ran = run_spilled(home, tool, Some(hooks));
     let completed = ran.completed();
     assert_eq!(completed.payload["content"], json!([]));
@@ -1750,7 +1847,14 @@ fn a_left_file_that_survives_fails_the_turn() {
     std::fs::write(&left, b"partial").unwrap();
     std::fs::set_permissions(other.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
     let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
-    let tool = unsaved("HHHH", "TTTT", 92, message, Some(left.clone()));
+    let tool = unsaved(
+        "HHHH",
+        "TTTT",
+        92,
+        message,
+        Some(left.clone()),
+        Bound::DEFAULT,
+    );
     let ran = run_spilled(home, tool, None);
     std::fs::set_permissions(other.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
     let Err(crate::Error::Log(_)) = &ran.turn else {

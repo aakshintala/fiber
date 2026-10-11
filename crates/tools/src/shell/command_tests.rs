@@ -1151,19 +1151,30 @@ fn a_foreground_command_past_a_mebibyte_spills() {
     let dir = fakes::TempDir::new("fiber-shell-foreground-spill");
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir(&artifacts).unwrap();
-    let ran = super::execute(
-        std::path::Path::new("/bin/sh"),
-        "head -c 1048577 /dev/zero | tr '\\0' a",
-        dir.path(),
-        Duration::from_secs(60),
-        FakeClock::new().as_ref(),
-        &CancelToken::new(),
-        &Recorder::default(),
-        MovePolicy::Foreground,
-        None,
-        Some(spill_config(&artifacts)),
-    )
-    .unwrap();
+    // The blocking call runs on its own thread: a stalled child fails
+    // the test at the deadline instead of hanging it (`docs/testing.md`,
+    // "Waits and timeouts"). The command ends on its own; the fake clock
+    // is never advanced.
+    let work = dir.path().to_path_buf();
+    let ran = fakes::within(
+        "a foreground command past a mebibyte",
+        JOB_DEADLINE,
+        move || {
+            super::execute(
+                std::path::Path::new("/bin/sh"),
+                "head -c 1048577 /dev/zero | tr '\\0' a",
+                &work,
+                Duration::from_secs(60),
+                FakeClock::new().as_ref(),
+                &CancelToken::new(),
+                &Recorder::default(),
+                MovePolicy::Foreground,
+                None,
+                Some(spill_config(&artifacts)),
+            )
+            .unwrap()
+        },
+    );
     let super::Ran::Finished(finished) = ran else {
         panic!("a quick command moved");
     };
@@ -1182,29 +1193,44 @@ fn a_command_moved_at_once_never_spills() {
     std::fs::create_dir(&artifacts).unwrap();
     let clock = FakeClock::new();
     let cancel = CancelToken::new();
-    let ran = super::execute(
-        std::path::Path::new("/bin/sh"),
-        "exit 0",
-        dir.path(),
-        Duration::from_secs(60),
-        clock.as_ref(),
-        &cancel,
-        &Recorder::default(),
-        MovePolicy::Background,
-        None,
-        Some(spill_config(&artifacts)),
-    )
-    .unwrap();
-    let super::Ran::Moved(moved) = ran else {
-        panic!("a background command did not move");
-    };
+    let work = dir.path().to_path_buf();
+    // `execute` and `resume` both block: each runs on its own thread
+    // under the deadline (`docs/testing.md`, "Waits and timeouts").
+    let moved = fakes::within("a background command moves", JOB_DEADLINE, {
+        let clock = Arc::clone(&clock);
+        let cancel = cancel.clone();
+        let artifacts = artifacts.clone();
+        move || {
+            let ran = super::execute(
+                std::path::Path::new("/bin/sh"),
+                "exit 0",
+                &work,
+                Duration::from_secs(60),
+                clock.as_ref(),
+                &cancel,
+                &Recorder::default(),
+                MovePolicy::Background,
+                None,
+                Some(spill_config(&artifacts)),
+            )
+            .unwrap();
+            let super::Ran::Moved(moved) = ran else {
+                panic!("a background command did not move");
+            };
+            moved
+        }
+    });
     {
         let inner = super::super::output::lock(&moved.progress.shared.inner);
         assert!(inner.spill_config.is_none());
         assert!(inner.spill.is_none());
     }
     // The move's command ends cleanly back in the foreground.
-    let finished = moved.resume(clock.as_ref(), &cancel, &Recorder::default());
+    let finished = fakes::within("a moved command resumes", JOB_DEADLINE, {
+        let clock = Arc::clone(&clock);
+        let cancel = cancel.clone();
+        move || moved.resume(clock.as_ref(), &cancel, &Recorder::default())
+    });
     assert!(matches!(finished.output, super::Kept::Whole(_)));
     assert!(std::fs::read_dir(&artifacts).unwrap().next().is_none());
 }
@@ -1216,22 +1242,32 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
     std::fs::create_dir(&artifacts).unwrap();
     let clock = FakeClock::new();
     let cancel = CancelToken::new();
-    let ran = super::execute(
-        std::path::Path::new("/bin/sh"),
-        "exit 0",
-        dir.path(),
-        Duration::from_secs(60),
-        clock.as_ref(),
-        &cancel,
-        &Recorder::default(),
-        MovePolicy::Background,
-        None,
-        Some(spill_config(&artifacts)),
-    )
-    .unwrap();
-    let super::Ran::Moved(moved) = ran else {
-        panic!("a background command did not move");
-    };
+    let work = dir.path().to_path_buf();
+    // `execute` and `resume` both block: each runs on its own thread
+    // under the deadline (`docs/testing.md`, "Waits and timeouts").
+    let moved = fakes::within("a background command moves", JOB_DEADLINE, {
+        let clock = Arc::clone(&clock);
+        let cancel = cancel.clone();
+        move || {
+            let ran = super::execute(
+                std::path::Path::new("/bin/sh"),
+                "exit 0",
+                &work,
+                Duration::from_secs(60),
+                clock.as_ref(),
+                &cancel,
+                &Recorder::default(),
+                MovePolicy::Background,
+                None,
+                Some(spill_config(&artifacts)),
+            )
+            .unwrap();
+            let super::Ran::Moved(moved) = ran else {
+                panic!("a background command did not move");
+            };
+            moved
+        }
+    });
     // The job's file arrived first: the resume must not arm the spill
     // over it, so the buffered output stays whole.
     {
@@ -1239,7 +1275,11 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
         inner.output = vec![b'y'; super::super::spill::SPILL_AT + 1];
         inner.file = Some(std::fs::File::create(dir.path().join("j_1.log")).unwrap());
     }
-    let finished = moved.resume(clock.as_ref(), &cancel, &Recorder::default());
+    let finished = fakes::within("a filed command resumes", JOB_DEADLINE, {
+        let clock = Arc::clone(&clock);
+        let cancel = cancel.clone();
+        move || moved.resume(clock.as_ref(), &cancel, &Recorder::default())
+    });
     assert!(
         matches!(finished.output, super::Kept::Whole(_)),
         "a resumed command with a file stays whole"
@@ -1253,25 +1293,39 @@ fn a_resumed_command_arms_the_spill() {
     std::fs::create_dir(&artifacts).unwrap();
     let clock = FakeClock::new();
     let cancel = CancelToken::new();
-    let ran = super::execute(
-        std::path::Path::new("/bin/sh"),
-        "head -c 2097152 /dev/zero | tr '\\0' a",
-        dir.path(),
-        Duration::from_secs(60),
-        clock.as_ref(),
-        &cancel,
-        &Recorder::default(),
-        MovePolicy::Background,
-        None,
-        Some(spill_config(&artifacts)),
-    )
-    .unwrap();
-    let super::Ran::Moved(moved) = ran else {
-        panic!("a background command did not move");
-    };
+    let work = dir.path().to_path_buf();
+    // `execute` and `resume` both block: each runs on its own thread
+    // under the deadline (`docs/testing.md`, "Waits and timeouts").
+    let moved = fakes::within("a background command moves", JOB_DEADLINE, {
+        let clock = Arc::clone(&clock);
+        let cancel = cancel.clone();
+        move || {
+            let ran = super::execute(
+                std::path::Path::new("/bin/sh"),
+                "head -c 2097152 /dev/zero | tr '\\0' a",
+                &work,
+                Duration::from_secs(60),
+                clock.as_ref(),
+                &cancel,
+                &Recorder::default(),
+                MovePolicy::Background,
+                None,
+                Some(spill_config(&artifacts)),
+            )
+            .unwrap();
+            let super::Ran::Moved(moved) = ran else {
+                panic!("a background command did not move");
+            };
+            moved
+        }
+    });
     // A move on the first pass never spills; the resume arms it, and the
     // command's output past 1 MiB spills from there.
-    let finished = moved.resume(clock.as_ref(), &cancel, &Recorder::default());
+    let finished = fakes::within("a moved command resumes", JOB_DEADLINE, {
+        let clock = Arc::clone(&clock);
+        let cancel = cancel.clone();
+        move || moved.resume(clock.as_ref(), &cancel, &Recorder::default())
+    });
     let super::Kept::Spilled(spill) = finished.output else {
         panic!("a resumed command past a mebibyte spills");
     };

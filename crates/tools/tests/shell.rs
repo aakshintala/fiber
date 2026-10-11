@@ -2510,16 +2510,16 @@ fn a_shell_without_artifacts_never_spills() {
 #[test]
 fn a_relative_artifacts_directory_spills_under_its_absolute_form() {
     let dir = fakes::TempDir::new("fiber-shell-public-relative");
-    // Resolved against the process's directory: created and removed here.
-    let name = "fiber-shell-public-relative-artifacts";
-    let absolute = std::env::current_dir().unwrap().join(name);
-    if absolute.is_dir() {
-        std::fs::remove_dir_all(&absolute).unwrap();
-    }
-    std::fs::create_dir(&absolute).unwrap();
-    let shell = Arc::new(
-        Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_artifacts(name.into()),
+    // Test-owned and unique: created under the process's directory, which
+    // the relative path resolves against, and removed on drop, so no
+    // concurrent run shares it and no failure leaks it.
+    let owned = fakes::TempDir::under(
+        &std::env::current_dir().unwrap(),
+        "fiber-shell-public-relative-artifacts",
     );
+    let name: PathBuf = owned.path().file_name().unwrap().into();
+    let shell =
+        Arc::new(Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_artifacts(name));
     let output = run_on(
         &shell,
         args("head -c 1048577 /dev/zero | tr '\\0' a"),
@@ -2529,6 +2529,5 @@ fn a_relative_artifacts_directory_spills_under_its_absolute_form() {
     let spilled = output.spilled.expect("spilled is set");
     let kept = spilled.file.as_ref().expect("the file is kept");
     assert!(kept.path.is_absolute());
-    assert!(kept.path.starts_with(&absolute));
-    std::fs::remove_dir_all(&absolute).unwrap();
+    assert!(kept.path.starts_with(owned.path()));
 }
