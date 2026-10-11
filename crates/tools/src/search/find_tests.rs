@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
+use std::time::Duration;
 
 use super::{Outcome, run};
 
@@ -577,7 +578,9 @@ fn a_match_prints_no_notice_and_an_error_prints_none_either() {
 #[test]
 fn globs_match_bytes() {
     use super::glob_match;
-    let cases: &[(&[u8], &[u8], bool, bool)] = &[
+    // `const`, not a local: the hang guard below moves the table onto its
+    // own thread, which needs `'static`.
+    const CASES: &[(&[u8], &[u8], bool, bool)] = &[
         (b"", b"", false, true),
         (b"", b"a", false, false),
         (b"a", b"a", false, true),
@@ -655,15 +658,37 @@ fn globs_match_bytes() {
         (b"[[:foo:]]", b"f]", false, true),
         (b"[[:foo:]]", b"x", false, false),
     ];
-    for (pattern, text, ignore_case, expected) in cases {
-        assert_eq!(
-            glob_match(pattern, text, *ignore_case),
-            *expected,
-            "{:?} vs {:?} (case: {ignore_case})",
-            String::from_utf8_lossy(pattern),
-            String::from_utf8_lossy(text),
-        );
-    }
+    fakes::within("the glob match", GLOB_LIMIT, || {
+        for (pattern, text, ignore_case, expected) in CASES {
+            assert_eq!(
+                glob_match(pattern, text, *ignore_case),
+                *expected,
+                "{:?} vs {:?} (case: {ignore_case})",
+                String::from_utf8_lossy(pattern),
+                String::from_utf8_lossy(text),
+            );
+        }
+    });
+}
+
+/// How long one glob match may take: a hang guard, not a timing assertion.
+/// Backtracking over many stars, or a class rescanned per `[`, takes
+/// minutes at the sizes below; the two-pointer walk stays linear.
+const GLOB_LIMIT: Duration = Duration::from_secs(10);
+
+#[test]
+fn a_glob_of_many_stars_against_a_long_run_matches_within_the_limit() {
+    use super::glob_match;
+    fakes::within("the glob match", GLOB_LIMIT, || {
+        assert!(!glob_match(b"*a*a*a*a*b", &[b'a'; 4096], false));
+        assert!(glob_match(b"*a*a*a*a*", &[b'a'; 4096], false));
+        // Every `[:` opens a class no `:]` closes nearby: the members are
+        // `[` and `:`, as in bash, and `[` itself matches.
+        let mut pattern = Vec::from(b"[".as_slice());
+        pattern.extend_from_slice(&b"[:".repeat(200_000));
+        pattern.push(b']');
+        assert!(glob_match(&pattern, b"[", false));
+    });
 }
 
 /// Standard output that plants a late file once the walk has printed `./a`:
