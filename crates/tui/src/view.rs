@@ -551,7 +551,11 @@ fn conversation_rows(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<
         let row = area.bottom().saturating_sub(1);
         let mut cells: Vec<(String, bool)> = Vec::with_capacity(30);
         cells.push(("▐".to_owned(), false));
-        cells.extend(NEW_BELOW.chars().map(|ch| (ch.to_string(), true)));
+        cells.extend(
+            Line::raw(NEW_BELOW)
+                .styled_graphemes(Style::default())
+                .map(|grapheme| (grapheme.symbol.to_owned(), true)),
+        );
         cells.push(("▌".to_owned(), false));
         let start = area
             .x

@@ -12,6 +12,13 @@ use crate::surface::Edges;
 use crate::theme::Role;
 use crate::turn::{Fold, Row, Turn, fold_line};
 
+fn is_edge_row(line: &ratatui::text::Line<'_>) -> bool {
+    let mut graphemes = line.styled_graphemes(ratatui::style::Style::default());
+    graphemes.next().is_some_and(|first| {
+        matches!(first.symbol, "▄" | "▀") && graphemes.all(|g| matches!(g.symbol, "▄" | "▀"))
+    })
+}
+
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const WIDTH: u16 = 60;
 
@@ -686,7 +693,7 @@ fn nothing_in_the_card_is_indented_past_its_padding() {
     let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
     for (line, _) in rows.iter().skip(6) {
         let shown = line.to_string();
-        if shown.chars().all(|ch| ch == '▄' || ch == '▀') {
+        if is_edge_row(line) {
             continue;
         }
         if shown.is_empty() {
@@ -759,7 +766,7 @@ fn the_card_rows_sit_one_column_inside_the_tint() {
     let mut in_card = false;
     for (line, _) in &rows {
         let shown = line.to_string();
-        if !shown.is_empty() && shown.chars().all(|ch| ch == '▄' || ch == '▀') {
+        if !shown.is_empty() && is_edge_row(line) {
             // The card's own edges span the width; the bubble's fit
             // their block.
             if line
@@ -907,9 +914,7 @@ fn a_card_narrower_than_three_columns_has_no_padding() {
         for (line, _) in &rows {
             // The time row is right-aligned text, never padded: only
             // the card's own rows keep the width.
-            if line.style.bg.is_some_and(|bg| Some(bg) == turn())
-                || line.to_string().chars().all(|ch| ch == '▄' || ch == '▀')
-            {
+            if line.style.bg.is_some_and(|bg| Some(bg) == turn()) || is_edge_row(line) {
                 assert!(line.width() <= usize::from(width), "{width}: {line}");
             }
         }
@@ -952,7 +957,7 @@ fn a_card_at_three_columns_keeps_every_row_inside_its_padding() {
     assert!(shown.iter().any(|row| row.contains('▣')), "{shown:?}");
     for (line, _) in &rows {
         let shown = line.to_string();
-        if !shown.is_empty() && shown.chars().all(|ch| ch == '▄' || ch == '▀') {
+        if !shown.is_empty() && is_edge_row(line) {
             assert_eq!(line.width(), 3, "{shown:?}");
             continue;
         }
@@ -961,13 +966,11 @@ fn a_card_at_three_columns_keeps_every_row_inside_its_padding() {
         }
         assert_eq!(line.width(), 2, "{shown:?}");
         assert!(shown.starts_with(' '), "{shown:?}");
-        for ch in shown.chars() {
-            let mut buf = [0u8; 4];
-            assert!(
-                crate::format::width(ch.encode_utf8(&mut buf)) <= 1,
-                "{shown:?}"
-            );
-        }
+        assert!(
+            line.styled_graphemes(ratatui::style::Style::default())
+                .all(|grapheme| crate::format::width(grapheme.symbol) <= 1),
+            "{shown:?}"
+        );
     }
 }
 
@@ -999,7 +1002,7 @@ fn an_opened_edit_group_wraps_inside_the_padding() {
     let mut ledger = 0;
     for (line, _) in &rows {
         let shown = line.to_string();
-        if shown.chars().all(|ch| ch == '▄' || ch == '▀') || shown.is_empty() {
+        if is_edge_row(line) || shown.is_empty() {
             continue;
         }
         if !line.style.bg.is_some_and(|bg| Some(bg) == turn()) {

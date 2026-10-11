@@ -1036,14 +1036,205 @@ fn pill_at(grid: &Grid) -> Option<u16> {
     })
 }
 
+/// The pill and scroll bar have every cell property checked below.
+fn pill_is_complete(grid: &Grid) -> bool {
+    let Some(row) = pill_at(grid) else {
+        return false;
+    };
+    if !(48..=77).all(|x| {
+        let cell = grid.cell(x, row);
+        !cell.dim
+            && !cell.bold
+            && !cell
+                .symbol
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_digit)
+    }) {
+        return false;
+    }
+    if grid.cell(48, row).fg != RULE_RGB || grid.cell(77, row).fg != RULE_RGB {
+        return false;
+    }
+    if !(49..=76).all(|x| {
+        let cell = grid.cell(x, row);
+        cell.fg == ATTENTION_RGB && cell.bg == RULE_RGB
+    }) {
+        return false;
+    }
+    let mut thumbs = 0;
+    for y in 0..=row {
+        let cell = grid.cell(125, y);
+        if cell.symbol == "┃" {
+            if cell.fg != SCROLL_RGB {
+                return false;
+            }
+            thumbs += 1;
+        } else if cell.symbol != " " {
+            return false;
+        }
+    }
+    thumbs > 0
+        && (0..48).all(|y| {
+            let symbol = grid.cell(125, y).symbol;
+            symbol != "│" && symbol != "█"
+        })
+}
+
+/// Whether the followed frame has every cell property asserted below.
+fn followed_end_is_complete(grid: &Grid) -> bool {
+    if grid.contents.contains("New messages below")
+        || !grid.contents.contains("Done.")
+        || grid
+            .rows
+            .iter()
+            .filter(|row| row.contains("▣ completed"))
+            .count()
+            != 2
+    {
+        return false;
+    }
+    let bubble: Vec<u16> = (0..48)
+        .filter(|y| {
+            (36..=124).all(|x| grid.cell(x, *y).bg == PROMPT_RGB)
+                && grid.cell(124, *y).symbol == "▐"
+        })
+        .collect();
+    if bubble.len() != 2 || bubble[0] < 2 || bubble[1] + 4 >= 48 {
+        return false;
+    }
+    let first = bubble[0];
+    let second = bubble[1];
+    if !(36..=124).all(|x| grid.cell(x, first).bg == PROMPT_RGB)
+        || grid.cell(35, first).bg != Colour::Default
+        || grid.cell(124, first).fg != ACCENT_RGB
+        || grid.cell(36, first).symbol != " "
+        || grid.cell(37, first).symbol != "a"
+        || grid.cell(123, first).symbol != " "
+    {
+        return false;
+    }
+    for (y, edge) in [(first - 1, "▄"), (second + 1, "▀")] {
+        if !(36..=124).all(|x| {
+            let cell = grid.cell(x, y);
+            cell.symbol == edge && cell.fg == PROMPT_RGB && cell.bg == Colour::Default
+        }) {
+            return false;
+        }
+    }
+    if !(1..=124).all(|x| {
+        let cell = grid.cell(x, first - 2);
+        cell.symbol == " " && cell.bg == Colour::Default
+    }) {
+        return false;
+    }
+    let time_row = second + 2;
+    let time: String = (0..160).map(|x| grid.cell(x, time_row).symbol).collect();
+    if !is_time_row(time.trim())
+        || (0..125).rfind(|x| grid.cell(*x, time_row).symbol != " ") != Some(123)
+        || !(0..125).all(|x| {
+            let cell = grid.cell(x, time_row);
+            cell.symbol == " " || cell.dim
+        })
+        || grid.cell(124, time_row).symbol != " "
+    {
+        return false;
+    }
+    if !(1..=124).all(|x| grid.cell(x, second + 3).symbol == " ") {
+        return false;
+    }
+    let card_top = second + 4;
+    if !(1..=124).all(|x| {
+        let cell = grid.cell(x, card_top);
+        cell.symbol == "▄" && cell.fg == TURN_RGB && cell.bg == Colour::Default
+    }) {
+        return false;
+    }
+    let Some(card_bottom) = (card_top..48).find(|y| {
+        (1..=124).all(|x| grid.cell(x, *y).symbol == "▀" && grid.cell(x, *y).fg == TURN_RGB)
+    }) else {
+        return false;
+    };
+    if !(card_top + 1..card_bottom).all(|y| {
+        (1..=124).all(|x| grid.cell(x, y).bg == TURN_RGB)
+            && grid.cell(1, y).symbol == " "
+            && grid.cell(124, y).symbol == " "
+    }) {
+        return false;
+    }
+    let row_with = |needle: &str| {
+        (card_top + 1..card_bottom).find(|y| {
+            (0..160)
+                .map(|x| grid.cell(x, *y).symbol)
+                .collect::<String>()
+                .contains(needle)
+        })
+    };
+    let (Some(group), Some(steer), Some(said), Some(done)) = (
+        row_with("Ran 1 command"),
+        row_with("steer"),
+        row_with("use x"),
+        row_with("Done."),
+    ) else {
+        return false;
+    };
+    if ![(group, '•'), (steer, 's'), (said, 'u'), (done, 'D')]
+        .into_iter()
+        .all(|(y, first)| {
+            grid.cell(1, y).symbol == " " && grid.cell(2, y).symbol == first.to_string()
+        })
+        || said != steer + 1
+        || [(group, steer), (said, done)]
+            .into_iter()
+            .any(|(first, second)| {
+                second != first + 2 || !(1..=124).all(|x| grid.cell(x, first + 1).symbol == " ")
+            })
+    {
+        return false;
+    }
+    if (2..=6)
+        .map(|x| grid.cell(x, steer).symbol)
+        .collect::<String>()
+        != "steer"
+        || !(2..=6).all(|x| {
+            let cell = grid.cell(x, steer);
+            cell.fg == ATTENTION_RGB && cell.bold
+        })
+        || !(7..=15).all(|x| grid.cell(x, steer).dim)
+        || !(16..=123).all(|x| {
+            let cell = grid.cell(x, steer);
+            cell.symbol == "─" && cell.fg == RULE_RGB
+        })
+        || !(2..=6).all(|x| grid.cell(x, said).bold)
+    {
+        return false;
+    }
+    let Some(closing) = (card_top + 1..card_bottom).find(|y| {
+        (0..160)
+            .map(|x| grid.cell(x, *y).symbol)
+            .collect::<String>()
+            .contains("1 call")
+    }) else {
+        return false;
+    };
+    let closed: String = (0..160).map(|x| grid.cell(x, closing).symbol).collect();
+    closing == done + 2
+        && (0..125).all(|x| {
+            let cell = grid.cell(x, closing);
+            cell.symbol == " " || cell.dim
+        })
+        && !closed.contains("token")
+        && !closed.contains('$')
+}
+
 /// Whether `text` matches `you HH:MM`.
 fn is_time_row(text: &str) -> bool {
-    let cells: Vec<char> = text.chars().collect();
+    let cells = text.as_bytes();
     cells.len() >= 9
-        && cells[..4] == ['y', 'o', 'u', ' ']
+        && cells[..4] == *b"you "
         && cells[4].is_ascii_digit()
         && cells[5].is_ascii_digit()
-        && cells[6] == ':'
+        && cells[6] == b':'
         && cells[7].is_ascii_digit()
         && cells[8].is_ascii_digit()
 }
@@ -1114,7 +1305,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     run.write(b"\r");
     run.wait_bytes(from2, FINISHED_TITLE, "the finished second turn");
     // New output while scrolled up raises the pill.
-    let pill = run.wait_screen("the pill", |grid| pill_at(grid).is_some());
+    let pill = run.wait_screen("the pill", pill_is_complete);
     let row = pill_at(&pill).expect("the pill's row");
     // The pill is centred on the conversation's bottom row: ▐ at 48 and
     // ▌ at 77, both in rule, the label between them in attention on rule.
@@ -1135,9 +1326,9 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
             !pill
                 .cell(x, row)
                 .symbol
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_ascii_digit()),
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_digit),
             "pill cell ({x}, {row})"
         );
     }
@@ -1160,16 +1351,7 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
     }
     // End follows again: the pill goes, "Done." shows, both turns closed.
     run.write(b"\x1b[F");
-    let end = run.wait_screen("the followed end", |grid| {
-        !grid.contents.contains("New messages below")
-            && grid.contents.contains("Done.")
-            && grid
-                .rows
-                .iter()
-                .filter(|row| row.contains("▣ completed"))
-                .count()
-                == 2
-    });
+    let end = run.wait_screen("the followed end", followed_end_is_complete);
     assert!(!end.contents.contains("New messages below"));
     // The long prompt's bubble is 89 cells wide: floor(124 × 72 / 100).
     let bubble: Vec<u16> = (0..48)
@@ -1211,10 +1393,9 @@ fn turns_draw_bubbles_padded_turn_cards_a_thumb_and_the_pill() {
         .collect();
     assert!(is_time_row(time.trim()), "{time:?}");
     // Without the bar column the row ends at column 123.
-    let text: String = time.chars().take(125).collect();
     assert_eq!(
-        text.trim_end().chars().count(),
-        124,
+        (0..125).rfind(|x| end.cell(*x, bubble[1] + 2).symbol != " "),
+        Some(123),
         "the time ends at column 123: {time:?}"
     );
     for x in 0..125 {

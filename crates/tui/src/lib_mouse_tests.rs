@@ -1252,13 +1252,9 @@ fn a_click_queued_after_wheel_ups_opens_the_scrolled_group() {
     let mut inputs: Vec<Input> = (0..30).map(|_| wheel_up(10, 5)).collect();
     inputs.push(click(40, 7));
     feed(&mut lp, inputs);
-    // The pill covers the ledger row on screen, so the opened group
-    // reads off the rows.
-    let rows: Vec<String> = lp.app.lines().iter().map(ToString::to_string).collect();
-    assert!(
-        rows.iter().any(|row| row.contains("read src/a0.rs")),
-        "{rows:?}"
-    );
+    // Move the opened ledger row above the pill so the screen shows it.
+    feed(&mut lp, vec![wheel_down(10, 5)]);
+    assert!(shown(&lp).contains("read src/a0.rs"), "{}", shown(&lp));
 }
 
 #[test]
@@ -1272,17 +1268,12 @@ fn queued_page_ups_keep_their_frames_and_fresh_targets() {
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut shown_lp, reads(4));
     feed(&mut shown_lp, queued());
-    // The pill covers the ledger row on screen, so the opened group
-    // reads off the rows.
-    let rows: Vec<String> = shown_lp
-        .app
-        .lines()
-        .iter()
-        .map(ToString::to_string)
-        .collect();
+    // Move the opened ledger row above the pill so the screen shows it.
+    feed(&mut shown_lp, vec![wheel_down(10, 5)]);
     assert!(
-        rows.iter().any(|row| row.contains("read src/a1.rs")),
-        "{rows:?}"
+        shown(&shown_lp).contains("read src/a1.rs"),
+        "{}",
+        shown(&shown_lp)
     );
     // Each PageUp keeps its frame: the three mid-batch frames and the
     // batch's own, as four batches draw today.

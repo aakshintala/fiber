@@ -515,6 +515,36 @@ fn pad_blanks_a_glyph_wider_than_the_inner_width() {
 }
 
 #[test]
+fn pad_never_splits_a_zwj_emoji() {
+    let line = Line::raw("x👩‍💻");
+    assert_eq!(super::fitted(&line, 3), 1);
+
+    let mut rows = Rows::default();
+    rows.push((line.clone(), None));
+    rows.pad(0, 1, 4);
+    let (lines, _) = rows.into_parts();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect::<Vec<_>>(),
+        [" x👩‍💻"]
+    );
+
+    let mut rows = Rows::default();
+    rows.push((line, None));
+    rows.pad(0, 0, 2);
+    let (lines, _) = rows.into_parts();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|(line, _)| line.to_string())
+            .collect::<Vec<_>>(),
+        ["x", "👩‍💻"]
+    );
+}
+
+#[test]
 fn pad_respects_the_row_start_and_width_boundaries() {
     let expected = ["first", "second", " third"];
     for (from, want) in [

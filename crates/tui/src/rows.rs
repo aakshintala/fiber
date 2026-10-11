@@ -259,8 +259,8 @@ pub(crate) fn fitted(line: &Line<'_>, inner: u16) -> usize {
 }
 
 /// One drawn glyph with its style.
-struct Cell {
-    ch: char,
+struct Cell<'a> {
+    ch: &'a str,
     width: usize,
     style: Style,
 }
@@ -274,7 +274,7 @@ struct Planned {
 
 /// `cells`' starting cell offsets, with the total width last: cell `i`
 /// covers original cells `off[i]` on.
-fn offsets(cells: &[Cell]) -> Vec<usize> {
+fn offsets(cells: &[Cell<'_>]) -> Vec<usize> {
     let mut off = Vec::with_capacity(cells.len().saturating_add(1));
     let mut at: usize = 0;
     off.push(at);
@@ -285,15 +285,15 @@ fn offsets(cells: &[Cell]) -> Vec<usize> {
     off
 }
 /// `line` flattened to its glyphs with their widths and styles.
-fn cells_of(line: &Line<'_>) -> Vec<Cell> {
+fn cells_of<'a>(line: &'a Line<'_>) -> Vec<Cell<'a>> {
     let mut cells = Vec::new();
     for span in &line.spans {
-        for ch in span.content.chars() {
-            let mut buf = [0u8; 4];
+        // Ratatui excludes `\n` here because a line break is not a drawn glyph.
+        for grapheme in span.styled_graphemes(Style::default()) {
             cells.push(Cell {
-                ch,
-                width: crate::format::width(ch.encode_utf8(&mut buf)),
-                style: span.style,
+                ch: grapheme.symbol,
+                width: crate::format::width(grapheme.symbol),
+                style: grapheme.style,
             });
         }
     }
@@ -305,7 +305,7 @@ fn cells_of(line: &Line<'_>) -> Vec<Cell> {
 /// dropped and the next piece joins with it) or cutting hard with no
 /// space there. No glyph is cut; a glyph wider than `inner` takes a
 /// piece of its own. One plan when the row fits, none when it is empty.
-fn plan(cells: &[Cell], inner: usize) -> Vec<Planned> {
+fn plan(cells: &[Cell<'_>], inner: usize) -> Vec<Planned> {
     if inner == 0 || cells.is_empty() {
         return Vec::new();
     }
@@ -335,7 +335,7 @@ fn plan(cells: &[Cell], inner: usize) -> Vec<Planned> {
             .get(at..end)
             .unwrap_or_default()
             .iter()
-            .rposition(|cell| cell.ch == ' ')
+            .rposition(|cell| cell.ch == " ")
             .map(|found| found + at);
         match space {
             Some(found) if found > at => {
@@ -364,7 +364,12 @@ fn plan(cells: &[Cell], inner: usize) -> Vec<Planned> {
 /// The piece's line: its cells' text under their styles, keeping the
 /// line's style and alignment. A glyph wider than `inner` draws as one
 /// blank cell, so the piece fits the room.
-fn build_piece(line: &Line<'_>, cells: &[Cell], planned: &Planned, inner: u16) -> Line<'static> {
+fn build_piece(
+    line: &Line<'_>,
+    cells: &[Cell<'_>],
+    planned: &Planned,
+    inner: u16,
+) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut current = (Style::default(), String::new());
     let mut started = false;
@@ -372,7 +377,7 @@ fn build_piece(line: &Line<'_>, cells: &[Cell], planned: &Planned, inner: u16) -
         let (text, style) = if cell.width > usize::from(inner) {
             (" ".to_owned(), cell.style)
         } else {
-            (cell.ch.to_string(), cell.style)
+            (cell.ch.to_owned(), cell.style)
         };
         if !started || current.0 != style {
             if !current.1.is_empty() {

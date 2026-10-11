@@ -1474,9 +1474,9 @@ fn the_pill_is_centred_on_the_bottom_row_in_attention_on_rule() {
         assert!(
             !buf[(x, row)]
                 .symbol()
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_ascii_digit()),
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_digit),
             "col {x}"
         );
     }
