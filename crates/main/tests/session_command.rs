@@ -25,20 +25,12 @@ use std::thread;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, PIXEL, PIXEL_BASE64, function_call, git, group_alive, hello, kinds, stream,
-    text_reply, write_json,
+    Deadline, PIXEL, PIXEL_BASE64, Setup, function_call, git, group_alive, hello, kinds,
+    stream, text_reply, write_json,
 };
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
-    fn new() -> Self {
+    fn new_with_fm_root() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fm");
         fs::create_dir_all(root.path().join("h")).unwrap();
@@ -46,21 +38,7 @@ impl Setup {
         Self { deadline, root }
     }
 
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
-    /// Installs a provider `fake` with model `m` on `openai-responses` at the
-    /// fake server, and makes `fake/m` the configured model.
-    fn provider(&self, server: &ProviderServer) {
-        self.provider_with(&json!({}), server);
-    }
-
-    /// [`Setup::provider`], with the fake model declaring `input`
+    /// Installs the provider with the fake model declaring `input`
     /// `["text", "image"]`, so a pasted image is sent as an image part.
     fn provider_with_images(&self, server: &ProviderServer) {
         self.provider_with(&json!({"input": ["text", "image"]}), server);
@@ -116,26 +94,6 @@ impl Setup {
 
     fn socket(&self, id: &str) -> PathBuf {
         self.home().join("run").join(id)
-    }
-
-    /// One `fiber` invocation with `args`: the environment every test
-    /// runs under. Stdio is piped; the caller decides how to wait.
-    fn fiber(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
-        command
-            .args(args)
-            .current_dir(self.root.path())
-            .env_clear()
-            .envs(fakes::check_run())
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", self.root.path())
-            .env("FIBER_HOME", self.home())
-            .env("FIBER_TEST_FAKE_KEY", "sk-test")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        command
     }
 
     /// Starts `fiber session --id <id> --workspace <workspace>` with
@@ -594,7 +552,7 @@ fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> V
 
 #[test]
 fn a_prompt_over_the_socket_runs_a_turn_and_close_ends_the_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let id = doors::mint("s_");
@@ -652,7 +610,7 @@ fn a_prompt_over_the_socket_runs_a_turn_and_close_ends_the_session() {
 
 #[test]
 fn a_prompt_naming_a_skill_sends_the_expanded_text_as_one_message() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     // The `review-pr` skill, as `tests/ask.rs` installs it: the prompt
@@ -727,7 +685,7 @@ fn a_prompt_naming_a_skill_sends_the_expanded_text_as_one_message() {
 
 #[test]
 fn an_idle_session_exits_with_a_client_still_connected() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     server.hold();
     setup.provider(&server);
@@ -811,7 +769,7 @@ fn an_idle_session_exits_with_a_client_still_connected() {
 
 #[test]
 fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     // Default idle: the session stays up after its first turn. The first
@@ -967,7 +925,7 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
 
 #[test]
 fn a_served_session_whose_last_turn_failed_exits_0() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     // A zero budget fails the turn before the provider is called, and
@@ -1035,7 +993,7 @@ fn a_served_session_whose_last_turn_failed_exits_0() {
 
 #[test]
 fn a_session_that_never_got_a_prompt_leaves_nothing_behind() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     setup.no_idle();
@@ -1064,7 +1022,7 @@ fn a_session_that_never_got_a_prompt_leaves_nothing_behind() {
 
 #[test]
 fn a_bad_id_is_a_usage_error_and_creates_nothing() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let workspace = setup.workspace();
     let (code, lines, stderr) = setup.run(&[
         "session",
@@ -1086,7 +1044,7 @@ fn a_bad_id_is_a_usage_error_and_creates_nothing() {
 
 #[test]
 fn an_id_whose_session_directory_exists_fails_before_any_session_line() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     let id = doors::mint("s_");
@@ -1122,7 +1080,7 @@ fn an_id_whose_session_directory_exists_fails_before_any_session_line() {
 
 #[test]
 fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_1",
@@ -1277,7 +1235,7 @@ fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
 
 #[test]
 fn a_second_session_with_the_same_id_fails_and_leaves_the_first_alone() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     // Another workspace is another project, so the same id passes the
@@ -1376,7 +1334,7 @@ fn suspend_on_an_approval(setup: &Setup, id: &str) -> String {
 
 #[test]
 fn a_resumed_session_raises_its_request_again_and_a_reply_runs_the_call() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_1",
@@ -1547,7 +1505,7 @@ fn commands_answer(client: &Socket) -> (Vec<Value>, Value) {
 
 #[test]
 fn commands_answers_with_the_workspaces_skills_and_templates() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     workspace_skill(
@@ -1581,7 +1539,7 @@ fn commands_answers_with_the_workspaces_skills_and_templates() {
 
 #[test]
 fn a_resumed_session_answers_commands_from_its_recorded_workspace() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[function_call(
         "call_1",
         "shell",
@@ -1606,7 +1564,7 @@ fn a_resumed_session_answers_commands_from_its_recorded_workspace() {
 
 #[test]
 fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     workspace_skill(&setup, "review", "description: Repository review.\n");
@@ -1693,7 +1651,7 @@ fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
 
 #[test]
 fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[function_call(
         "call_1",
         "shell",
@@ -1824,7 +1782,7 @@ fn image_prompt(id: &str, text: &str, data: &str) -> String {
 
 #[test]
 fn a_pasted_image_is_stored_logged_by_path_and_sent_as_an_image_part() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_with_images(&server);
     let id = doors::mint("s_");
@@ -1904,7 +1862,7 @@ fn a_pasted_image_is_stored_logged_by_path_and_sent_as_an_image_part() {
 
 #[test]
 fn a_steered_image_is_applied_and_sent_on_the_next_request() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     // The first reply runs `sleep 5`, so the turn stays open seconds
     // after the prompt: the steer, pasted behind it, is delivered and
     // applied at the step boundary, inside the turn. The reply is held
@@ -2028,7 +1986,7 @@ fn a_steered_image_is_applied_and_sent_on_the_next_request() {
 
 #[test]
 fn unreadable_pasted_images_are_rejected_without_a_turn() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_with_images(&server);
     let id = doors::mint("s_");
@@ -2265,7 +2223,7 @@ fn assert_exited_clean(exited: &Value) {
 
 #[test]
 fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
     server.hold();
     let (running, client, job_group) =
@@ -2311,7 +2269,7 @@ fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
 
 #[test]
 fn close_now_while_idle_with_a_job_starts_no_turn() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
     let (running, client, job_group) = job_session(&setup, JOB_SCRIPT_FOREVER, &server, || {});
     // The prompt's turn completed: the session is idle with the job running.
@@ -2353,7 +2311,7 @@ fn tty_call() -> Value {
 
 #[test]
 fn job_input_types_into_a_tty_job_and_its_output_arrives() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[tty_call()]), hello()]).unwrap();
     fs::write(
         setup.home().join("rules"),
@@ -2436,7 +2394,7 @@ fn job_input_types_into_a_tty_job_and_its_output_arrives() {
 
 #[test]
 fn close_now_on_a_pending_approval_leaves_it_pending_and_exits_0() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[function_call(
         "call_1",
         "shell",
@@ -2514,7 +2472,7 @@ fn close_now_on_a_pending_approval_leaves_it_pending_and_exits_0() {
 
 #[test]
 fn close_now_while_idle_with_no_jobs_exits_0() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let id = doors::mint("s_");
@@ -2545,7 +2503,7 @@ fn close_now_while_idle_with_no_jobs_exits_0() {
 
 #[test]
 fn close_without_now_waits_for_the_job_to_finish() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello(), hello()]).unwrap();
     let (mut running, client, job_group) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
     let _done = until(&client, "the prompt's turn_completed", |line| {
@@ -2609,7 +2567,7 @@ fn close_without_now_waits_for_the_job_to_finish() {
 
 #[test]
 fn close_now_after_close_stops_the_job_it_was_waiting_for() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello()]).unwrap();
     let (running, client, job_group) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
     let _done = until(&client, "the prompt's turn_completed", |line| {
@@ -2667,7 +2625,7 @@ fn close_on_a_pending_review_escalation_denies_it_by_cancel() {
     // escalation waits: the reviewer's stage-1 failure raises a person ask,
     // and the close denies it (`docs/testing.md`, "What a change ships
     // with").
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     // A `write` under the data directory is not fast-pathed, so it reaches
     // the review step: a `shell` call only reads, and the loop fast-paths
     // it past the reviewer (`docs/permissions.md`, "Fast paths").
@@ -2749,7 +2707,7 @@ fn close_on_a_pending_review_escalation_denies_it_by_cancel() {
 
 #[test]
 fn a_session_in_a_worktree_it_made_keeps_the_worktree_when_dirty() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     git(setup.deadline, &setup.workspace(), &["init", "--quiet"]);
@@ -2812,7 +2770,7 @@ fn the_notes_are_fixed_for_the_session_across_two_turns() {
     // change between the turns, but both reviewer requests carry the
     // original text: the notes are fixed for the session
     // (`docs/permissions.md`, "What the person tells it").
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let first_lua = setup.home().join("data/notes/x.lua").display().to_string();
     let second_lua = setup.home().join("data/notes/y.lua").display().to_string();
     let server = ProviderServer::start([
@@ -2926,7 +2884,7 @@ fn delegate_questions() -> Value {
 
 #[test]
 fn a_delegate_runs_one_turn_and_exits_with_its_parent_recorded() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     setup.slow_idle();
@@ -2972,7 +2930,7 @@ fn a_delegate_runs_one_turn_and_exits_with_its_parent_recorded() {
 
 #[test]
 fn an_ask_user_call_ends_a_delegate_turn_with_its_questions() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let questions = delegate_questions();
     let server = ProviderServer::start([ask_user(&questions)]).unwrap();
     setup.provider(&server);
@@ -3010,7 +2968,7 @@ fn an_ask_user_call_ends_a_delegate_turn_with_its_questions() {
 
 #[test]
 fn dropping_a_delegate_lifeline_exits_129_within_the_bound() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let prefix = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Working\"}\n\n";
     let server = ProviderServer::start([Response::stall(200, prefix, prefix.len() + 100000)
         .header("content-type", "text/event-stream")])
@@ -3049,7 +3007,7 @@ fn dropping_a_delegate_lifeline_exits_129_within_the_bound() {
 
 #[test]
 fn a_parent_without_a_prompt_is_a_usage_error_and_starts_nothing() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let workspace = setup.workspace();
     let (code, lines, stderr) = setup.run(&[
         "session",
@@ -3099,7 +3057,7 @@ fn prompt_fixture(setup: &Setup) -> PathBuf {
 
 #[test]
 fn the_prompt_command_runs_a_servers_prompt() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let dir = prompt_fixture(&setup);
@@ -3173,7 +3131,7 @@ fn the_prompt_command_runs_a_servers_prompt() {
 
 #[test]
 fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     prompt_fixture(&setup);
@@ -3220,7 +3178,7 @@ fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
 
 #[test]
 fn a_resumed_session_answers_commands_with_its_servers_prompts() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([stream(&[function_call(
         "call_1",
         "shell",
@@ -3330,7 +3288,7 @@ fn a_resumed_session_answers_commands_with_its_servers_prompts() {
 
 #[test]
 fn a_skill_added_mid_session_reaches_the_model_and_loads() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
         hello(),
         stream(&[function_call(

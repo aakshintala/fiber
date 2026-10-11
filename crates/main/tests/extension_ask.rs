@@ -23,7 +23,7 @@ use fakes::Client;
 use fakes::ProviderServer;
 use fakes::Watchdog;
 use serde_json::{Value, json};
-use support::{Deadline, function_call, group_alive};
+use support::{Deadline, Setup, function_call, group_alive};
 
 fn subscribe(deadline: Deadline, client: &Client) {
     client
@@ -63,7 +63,7 @@ fn ask_command() -> String {
 
 #[test]
 fn a_command_raising_a_form_resolves_through_reply() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     setup.lua("worker", &ask_command());
@@ -123,7 +123,7 @@ fn a_command_raising_a_form_resolves_through_reply() {
 
 #[test]
 fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     setup.lua("worker", &ask_command());
@@ -260,7 +260,7 @@ fn fiber_ask_declines_a_hook_ask_and_writes_no_question() {
     // `turn_start` has no call site yet: only `after_tool` hooks run, so
     // the hook below answers a tool call instead, naming the answer in
     // the content the provider sees next.
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_1",
@@ -300,7 +300,7 @@ fn fiber_ask_declines_a_hook_ask_and_writes_no_question() {
 
 #[test]
 fn close_while_an_ask_is_pending_declines_it_by_fiber() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     setup.lua(
@@ -355,7 +355,7 @@ fn close_while_an_ask_is_pending_declines_it_by_fiber() {
 
 #[test]
 fn a_resumed_interactive_session_answers_a_host_ask() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     setup.lua(
@@ -415,7 +415,7 @@ fn a_resumed_one_turn_session_declines_a_host_ask_at_once() {
     // As `fiber_ask_declines_a_hook_ask_and_writes_no_question`, but on a
     // resumed session: `fiber ask --resume` runs one turn with no client,
     // so the hook's ask declines at once and writes no question.
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_1",

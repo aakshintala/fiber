@@ -20,13 +20,13 @@ use std::fs;
 use extension_harness::*;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::function_call;
+use support::{Setup, function_call};
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
 
 #[test]
 fn commands_lists_the_extensions_command_with_tag_and_description() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     setup.lua("worker", SYNC);
@@ -60,7 +60,7 @@ fn commands_lists_the_extensions_command_with_tag_and_description() {
 
 #[test]
 fn command_runs_idle_reports_status_and_duplicates_reject() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     setup.lua("worker", SYNC);
@@ -129,7 +129,7 @@ fn command_runs_idle_reports_status_and_duplicates_reject() {
 
 #[test]
 fn command_runs_during_a_turn() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     setup.lua("worker", SYNC);
@@ -173,7 +173,7 @@ fn command_runs_during_a_turn() {
 
 #[test]
 fn replacing_a_builtin_without_replaces_unloads_with_extension_failed() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     setup.lua_with(
@@ -240,7 +240,7 @@ fn replacing_a_builtin_without_replaces_unloads_with_extension_failed() {
 
 #[test]
 fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     let (url, accepted, _release) = hold_server(setup.deadline);
@@ -304,7 +304,7 @@ fn a_command_parked_past_close_writes_no_line_after_fiber_exited() {
 
 #[test]
 fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     setup.lua(
@@ -412,7 +412,7 @@ fn host_drive_prompt_from_a_command_carries_the_extension_sender() {
 
 #[test]
 fn host_drive_steer_from_a_command_carries_the_extension_sender() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_1",
@@ -594,7 +594,7 @@ fn host_drive_steer_from_a_command_carries_the_extension_sender() {
 
 #[test]
 fn host_drive_reply_to_a_pending_approval_is_refused() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
         stream(&[function_call(
             "call_1",
