@@ -5,11 +5,11 @@ use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::events::Control;
 use contract::provider::ToolDefinition;
-use contract::shapes::DeclaredEffects;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
-use crate::files::{failed, string_argument};
+use crate::files::string_argument;
+use crate::tool_util::{failed, no_effects};
 
 const MISSING: &str = "Give the handoff note as `note`.";
 
@@ -45,16 +45,7 @@ impl Tool for Handoff {
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
         string_argument(arguments, "note", MISSING).map_err(EffectsError::Arguments)?;
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: Vec::new(),
-                reversible: true,
-                paths: None,
-            },
-            subject: Some(String::new()),
-            prefix: None,
-            always_reviewed: false,
-        })
+        Ok(no_effects())
     }
 
     fn run(

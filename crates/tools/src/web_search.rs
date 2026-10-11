@@ -8,11 +8,11 @@ use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::search::{Domains, SearchBackend, SearchResult};
-use contract::shapes::{DeclaredEffects, Effect};
+use contract::shapes::Effect;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
-use crate::files::failed;
+use crate::tool_util::{failed, text_output};
 
 /// A search the model's provider hosts. It is declared as the vendor's tool
 /// type and name only, and carries the effects and the guideline line a
@@ -42,16 +42,13 @@ impl Tool for HostedSearch {
     }
 
     fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: vec![Effect::Network],
-                reversible: true,
-                paths: None,
-            },
-            subject: Some(String::new()),
-            prefix: None,
-            always_reviewed: false,
-        })
+        Ok(crate::tool_util::effects(
+            vec![Effect::Network],
+            true,
+            None,
+            Some(String::new()),
+            None,
+        ))
     }
 
     fn run(
@@ -121,16 +118,13 @@ impl Tool for BackendSearch {
     }
 
     fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: vec![Effect::Network],
-                reversible: true,
-                paths: None,
-            },
-            subject: Some(String::new()),
-            prefix: None,
-            always_reviewed: false,
-        })
+        Ok(crate::tool_util::effects(
+            vec![Effect::Network],
+            true,
+            None,
+            Some(String::new()),
+            None,
+        ))
     }
 
     /// Runs the backend on the query and the domain filter. Both domain
@@ -187,7 +181,7 @@ impl Tool for BackendSearch {
         };
         match self.backend.search(query, &domains, cancel) {
             Ok(None) => Output::default(),
-            Ok(Some(results)) => crate::files::text_output(render(&results)),
+            Ok(Some(results)) => text_output(render(&results)),
             Err(failure) => failed(failure.code, failure.message),
         }
     }

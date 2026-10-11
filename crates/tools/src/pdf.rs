@@ -14,7 +14,7 @@ use contract::shapes::{ContentPart, ImagePart, PdfPart};
 use contract::tool::{Cancel, Output};
 use serde_json::{Map, Value};
 
-use crate::files::{failed, text_output};
+use crate::tool_util::{failed, text_output};
 use crate::image::{ImageChild, run_to_end};
 
 /// The most pages a PDF without `pages` may hold (`docs/tools.md`, "read").

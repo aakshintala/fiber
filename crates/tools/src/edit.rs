@@ -17,9 +17,10 @@ use similar::TextDiff;
 use matching::{Applied, Block, MatchError, Report};
 
 use crate::files::{
-    InspectError, Inspected, Shared, declare, effects_error, failed, hash_bytes, inspect,
-    path_text, resolve, resolved, string_argument, text_output, unsupported_message,
+    InspectError, Inspected, Shared, declare, effects_error, hash_bytes, inspect,
+    path_text, resolve, resolved, string_argument, unsupported_message,
 };
+use crate::tool_util::failed;
 use crate::write::line_changes;
 
 /// Replaces stretches of a text file. Every block matches the file as it was
@@ -87,7 +88,7 @@ impl Tool for Edit {
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
-            return text_output("Cancelled before it started.\n".to_owned());
+            return crate::tool_util::cancelled_before();
         }
         let raw = match string_argument(arguments, "path", "Give the file path as `path`.") {
             Ok(raw) => raw,
@@ -107,18 +108,15 @@ impl Tool for Edit {
             Ok(path) => path,
             Err(output) => return output,
         };
-        if path != key
-            || self
-                .shared
-                .judged(&raw)
-                .is_some_and(|judged| judged != path)
-        {
-            return failed(
-                ErrorCode::PathChanged,
-                format!(
-                    "`{raw}` changed between the permission check and the write. Nothing was written."
-                ),
-            );
+        let judged = self.shared.judged(&raw);
+        if let Err(output) = crate::tool_util::recheck(
+            &raw,
+            &path,
+            Some(&key),
+            judged.as_deref(),
+            crate::tool_util::Act::Write,
+        ) {
+            return output;
         }
         let text = match inspect(&path) {
             Ok(Inspected::Pdf { size, .. }) | Ok(Inspected::PdfOverCap { size }) => {

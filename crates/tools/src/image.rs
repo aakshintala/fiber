@@ -19,7 +19,7 @@ use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
 use serde_json::Value;
 
-use crate::files::{failed, text_output};
+use crate::tool_util::{failed, text_output};
 
 /// How much of the child's standard error a failure message keeps.
 const MESSAGE_CAP: usize = 2048;

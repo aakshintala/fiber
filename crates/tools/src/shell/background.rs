@@ -550,9 +550,9 @@ fn to_completed(job_id: JobId, path: &Path, finished: Finished, limit: Limit) ->
         !capped && !flooded && finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
     let mut output = assemble(limit, finished);
     if capped {
-        output.error = Some(super::failure(ErrorCode::OutputCap, CAPPED.to_owned()));
+        output.error = Some(crate::tool_util::failure(ErrorCode::OutputCap, CAPPED.to_owned()));
     } else if flooded {
-        output.error = Some(super::failure(ErrorCode::Flooded, FLOODED.to_owned()));
+        output.error = Some(crate::tool_util::failure(ErrorCode::Flooded, FLOODED.to_owned()));
     }
     let status = if stopped {
         Outcome::Cancelled

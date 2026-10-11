@@ -16,6 +16,8 @@ use contract::shapes::{ContentPart, Failure, Process};
 use contract::tool::{Bound, Cancel, Effects, Output, Tool};
 use serde_json::{Map, Value, json};
 
+use crate::tool_util::{cancelled_before, failed, failure};
+
 mod background;
 
 mod command;
@@ -64,7 +66,6 @@ const MONITOR_ALONE: &str = "`monitor` cannot be combined with `run_in_backgroun
 
 const NO_JOBS: &str = "Background jobs are not available in this session.";
 
-const CANCELLED_BEFORE: &str = "Cancelled before it started.";
 const CANCELLED: &str = "Cancelled and stopped.";
 const INDETERMINATE: &str = "The command was stopped, and Fiber cannot tell whether it completed.";
 const HELD_OPEN: &str = "Output was still held open.";
@@ -187,7 +188,7 @@ impl Tool for Shell {
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
-            return line_only(CANCELLED_BEFORE);
+            return cancelled_before();
         }
         let parsed = match parse(arguments, &self.workspace, self.max_deadline_ms) {
             Ok(parsed) => parsed,
@@ -599,40 +600,12 @@ fn text_of(output: &[u8], line: &str) -> String {
     text
 }
 
-fn line_only(line: &str) -> Output {
-    Output {
-        content: vec![ContentPart::Text {
-            text: format!("{line}\n"),
-        }],
-        ..Output::default()
-    }
-}
-
 fn with_process(text: String, error: Option<Failure>, process: Process) -> Output {
     Output {
         content: vec![ContentPart::Text { text }],
         error,
         process: Some(process),
         ..Output::default()
-    }
-}
-
-fn failed(code: ErrorCode, message: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text {
-            text: format!("{message}\n"),
-        }],
-        error: Some(failure(code, message)),
-        ..Output::default()
-    }
-}
-
-fn failure(code: ErrorCode, message: String) -> Failure {
-    Failure {
-        code,
-        message,
-        retry_after_ms: None,
-        provider: None,
     }
 }
 

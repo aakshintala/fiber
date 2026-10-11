@@ -20,12 +20,13 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
-use contract::shapes::{DeclaredEffects, Effect};
+use contract::shapes::Effect;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 use ureq::http::Uri;
 
-use crate::files::{failed, string_argument, text_output};
+use crate::files::string_argument;
+use crate::tool_util::{failed, text_output};
 use download::{Artifact, Html, Sink, Wrap};
 use http::{Ended, Get, Head, Hop, Limit, Stop, guarded};
 
@@ -131,17 +132,14 @@ impl Tool for WebFetch {
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
         let url = string_argument(arguments, "url", MISSING).map_err(EffectsError::Arguments)?;
         let uri = target::parse(&url).map_err(EffectsError::Arguments)?;
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: vec![Effect::Network],
-                // A request can change state on the server.
-                reversible: false,
-                paths: None,
-            },
-            subject: Some(target::subject(&uri)),
-            prefix: Some(target::prefix(&uri)),
-            always_reviewed: false,
-        })
+        Ok(crate::tool_util::effects(
+            vec![Effect::Network],
+            // A request can change state on the server.
+            false,
+            None,
+            Some(target::subject(&uri)),
+            Some(target::prefix(&uri)),
+        ))
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {

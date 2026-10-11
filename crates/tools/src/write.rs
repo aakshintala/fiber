@@ -16,9 +16,10 @@ use similar::{ChangeTag, TextDiff};
 
 use crate::files::land::{land, shape_replacement};
 use crate::files::{
-    Shared, declare, effects_error, failed, hash_bytes, kind_of, path_text, resolve, resolved,
-    string_argument, text_output, unsupported_message,
+    Shared, declare, effects_error, hash_bytes, kind_of, path_text, resolve, resolved,
+    string_argument, unsupported_message,
 };
+use crate::tool_util::failed;
 
 /// Creates or replaces a text file.
 pub struct Write {
@@ -71,7 +72,7 @@ impl Tool for Write {
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
-            return text_output("Cancelled before it started.\n".to_owned());
+            return crate::tool_util::cancelled_before();
         }
         let raw = match string_argument(arguments, "path", "Give the file path as `path`.") {
             Ok(raw) => raw,
@@ -95,18 +96,15 @@ impl Tool for Write {
             Ok(path) => path,
             Err(output) => return output,
         };
-        if path != key
-            || self
-                .shared
-                .judged(&raw)
-                .is_some_and(|judged| judged != path)
-        {
-            return failed(
-                ErrorCode::PathChanged,
-                format!(
-                    "`{raw}` changed between the permission check and the write. Nothing was written."
-                ),
-            );
+        let judged = self.shared.judged(&raw);
+        if let Err(output) = crate::tool_util::recheck(
+            &raw,
+            &path,
+            Some(&key),
+            judged.as_deref(),
+            crate::tool_util::Act::Write,
+        ) {
+            return output;
         }
         let existing = match existing(&path) {
             Ok(existing) => existing,

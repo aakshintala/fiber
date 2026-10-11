@@ -9,11 +9,12 @@ use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::session_search::{Found, Hit, LIMIT, Label, Query, Scan};
-use contract::shapes::{DeclaredEffects, Effect};
+use contract::shapes::Effect;
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
-use crate::files::{failed, string_argument, text_output};
+use crate::files::string_argument;
+use crate::tool_util::{effects, failed, text_output};
 
 /// The most characters of a session's name a hit shows.
 const NAME: usize = 80;
@@ -70,16 +71,13 @@ impl Tool for SessionSearch {
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
         let all_projects = all_projects(arguments).map_err(EffectsError::Arguments)?;
         let scope = self.scan.scope(all_projects);
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: vec![Effect::Reads],
-                reversible: true,
-                paths: Some(vec![scope.to_string_lossy().into_owned()]),
-            },
-            subject: Some(String::new()),
-            prefix: None,
-            always_reviewed: false,
-        })
+        Ok(effects(
+            vec![Effect::Reads],
+            true,
+            Some(vec![scope.to_string_lossy().into_owned()]),
+            Some(String::new()),
+            None,
+        ))
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {

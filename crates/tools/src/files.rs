@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use contract::ErrorCode;
-use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
+use contract::shapes::Effect;
 use contract::tool::{Effects, EffectsError, Output};
 use serde_json::{Map, Value};
 
@@ -501,16 +501,13 @@ pub(crate) fn dir_prefix(path: &Path) -> String {
 
 pub(crate) fn declare(effect: Effect, reversible: bool, resolved: &Path) -> Effects {
     let path = path_text(resolved);
-    Effects {
-        declared: DeclaredEffects {
-            effects: vec![effect],
-            reversible,
-            paths: Some(vec![path.clone()]),
-        },
-        subject: Some(path),
-        prefix: Some(dir_prefix(resolved)),
-        always_reviewed: false,
-    }
+    crate::tool_util::effects(
+        vec![effect],
+        reversible,
+        Some(vec![path.clone()]),
+        Some(path),
+        Some(dir_prefix(resolved)),
+    )
 }
 
 /// Resolves `raw` against `workspace`. A failure is the call's output.
@@ -521,8 +518,13 @@ pub(crate) fn declare(effect: Effect, reversible: bool, resolved: &Path) -> Effe
 pub(crate) fn resolved(workspace: &Path, raw: &str) -> Result<PathBuf, Output> {
     match resolve(workspace, raw) {
         Ok(path) => Ok(path),
-        Err(ResolveError::Arguments(message)) => Err(failed(ErrorCode::InvalidArguments, message)),
-        Err(ResolveError::Tool(message)) => Err(failed(ErrorCode::ToolError, message)),
+        Err(ResolveError::Arguments(message)) => Err(crate::tool_util::failed(
+            ErrorCode::InvalidArguments,
+            message,
+        )),
+        Err(ResolveError::Tool(message)) => {
+            Err(crate::tool_util::failed(ErrorCode::ToolError, message))
+        }
     }
 }
 
@@ -543,28 +545,6 @@ pub(crate) fn string_argument(
         Some(Value::String(value)) => Ok(value.clone()),
         Some(_) => Err(format!("`{key}` must be a string.")),
         None => Err(missing.to_owned()),
-    }
-}
-
-pub(crate) fn text_output(text: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text { text }],
-        ..Output::default()
-    }
-}
-
-pub(crate) fn failed(code: ErrorCode, message: String) -> Output {
-    Output {
-        content: vec![ContentPart::Text {
-            text: format!("{message}\n"),
-        }],
-        error: Some(Failure {
-            code,
-            message,
-            retry_after_ms: None,
-            provider: None,
-        }),
-        ..Output::default()
     }
 }
 

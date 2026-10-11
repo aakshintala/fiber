@@ -11,9 +11,10 @@ use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
 use crate::files::{
-    InspectError, Inspected, ResolveError, Shared, declare, effects_error, failed, hash_bytes,
-    inspect, resolve, string_argument, text_output, unsupported_message,
+    InspectError, Inspected, ResolveError, Shared, declare, effects_error, hash_bytes,
+    inspect, resolve, string_argument, unsupported_message,
 };
+use crate::tool_util::{failed, text_output};
 use crate::pdf::{PageRange, page_range};
 
 /// The tool's own cut (`docs/tools.md`, "Bounded results"): the default cap.
@@ -86,7 +87,7 @@ impl Tool for Read {
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
-            return text_output("Cancelled before it started.\n".to_owned());
+            return crate::tool_util::cancelled_before();
         }
         let raw = match string_argument(arguments, "path", "Give the file path as `path`.") {
             Ok(raw) => raw,
@@ -111,17 +112,15 @@ impl Tool for Read {
             }
             Err(ResolveError::Tool(message)) => return failed(ErrorCode::ToolError, message),
         };
-        if self
-            .shared
-            .judged(&raw)
-            .is_some_and(|judged| judged != path)
-        {
-            return failed(
-                ErrorCode::PathChanged,
-                format!(
-                    "`{raw}` changed between the permission check and the read. Nothing was read."
-                ),
-            );
+        let judged = self.shared.judged(&raw);
+        if let Err(output) = crate::tool_util::recheck(
+            &raw,
+            &path,
+            None,
+            judged.as_deref(),
+            crate::tool_util::Act::Read,
+        ) {
+            return output;
         }
         // debt: the whole file is read into memory, a measured file that does not fit
         let text = match inspect(&path) {
