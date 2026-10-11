@@ -23,6 +23,7 @@ use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{Effect, Failure};
 use contract::tool::Tool;
 use contract::{Envelope, ErrorCode, ThinkingLevel};
+use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use serde_json::{Value, json};
 
@@ -2170,8 +2171,8 @@ fn a_remembered_allow_taken_before_the_shutdown_stands_and_the_call_never_runs()
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     answered.join().unwrap();
     assert!(
-        answer
-            .recv_timeout(support::DEADLINE)
+        Deadline::after(support::DEADLINE)
+            .recv(&answer)
             .expect("the reply's answer"),
         "the reply was accepted"
     );

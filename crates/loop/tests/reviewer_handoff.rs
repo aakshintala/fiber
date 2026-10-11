@@ -20,6 +20,7 @@ use contract::provider::{Cost, Input, ModelRequest, Provider};
 use contract::shapes::Failure;
 use contract::tool::Tool;
 use contract::{Envelope, ErrorCode, ThinkingLevel};
+use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use r#loop::{BlockLimits, Loop, Model, Permissions, PromptInputs, Reviewer};
 use serde_json::json;
@@ -425,8 +426,8 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
         done.send(outcome).unwrap();
     });
     assert_eq!(
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .expect("the turn ended in time"),
         Some(TurnOutcome::Completed)
     );

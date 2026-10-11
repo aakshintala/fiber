@@ -21,6 +21,7 @@ use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, ErrorCode, SessionId};
+use fakes::Deadline;
 use log::Log;
 use serde_json::{Map, Value, json};
 
@@ -239,6 +240,7 @@ impl Ran {
     }
 }
 
+#[track_caller]
 fn run(
     tool: Fixed,
     script: Vec<fakes::Scripted>,
@@ -252,6 +254,7 @@ fn run(
 
 /// [`run`], with the session's `artifacts/` replaced by a file when
 /// `break_artifacts` is set, so no artifact can be written.
+#[track_caller]
 fn run_with(
     tool: Fixed,
     script: Vec<fakes::Scripted>,
@@ -325,7 +328,9 @@ fn run_with(
     thread::spawn(move || {
         let _sent = done_tx.send(looped.turn());
     });
-    let turn = done_rx.recv_timeout(TURN_DEADLINE).expect("the turn ended");
+    let turn = Deadline::after(TURN_DEADLINE)
+        .recv(&done_rx)
+        .expect("the turn ended");
     drop(inbox);
     // The loop is dropped once its turn returns, so the watcher ends. A
     // turn that fails writes no `turn_completed`: the end breaks the loop
@@ -940,6 +945,7 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
 
 /// Runs one `probe` call that starts a shutdown while it runs and returns
 /// `output`, cut to 4 + 4 bytes, under hooks that would rewrite it.
+#[track_caller]
 fn shut_down_during(output: Output) -> (Ran, Arc<FakeHooks>) {
     let hooks = FakeHooks::new(
         changed(Some("rewritten"), None, None),

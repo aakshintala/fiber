@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use contract::events::{Git, SessionState, SessionStatus, Waiting, WaitingKind};
 use contract::{Envelope, JobId, SessionId};
+use fakes::Deadline;
 use serde_json::{Value, json};
 
 use super::Fold;
@@ -897,6 +898,7 @@ fn a_clients_line_reads_the_count_and_leaves_since() {
 /// waits for the release, appends one `clients` line per entry of `counts`
 /// while it is held, then folds one more durable line and stops. Returns
 /// every `session_status` payload a second watcher saw.
+#[track_caller]
 fn session_statuses_with_a_held_clients_read(counts: &[u32]) -> Vec<Value> {
     use contract::events::{Clients, Empty, Event, InputItem, TurnStarted};
     use contract::shapes::{ContentPart, Origin, Sender};
@@ -958,8 +960,8 @@ fn session_statuses_with_a_held_clients_read(counts: &[u32]) -> Vec<Value> {
         None,
     )
     .unwrap();
-    observer_held
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&observer_held)
         .expect("the observer is held");
     // The attach, then the stream_closed detach, land while the read is held.
     for count in counts {
@@ -977,7 +979,9 @@ fn session_statuses_with_a_held_clients_read(counts: &[u32]) -> Vec<Value> {
         status.join();
         done_tx.send(()).unwrap();
     });
-    done_rx.recv_timeout(DEADLINE).expect("the observer ended");
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the observer ended");
 
     let mut statuses = Vec::new();
     while let Ok(Some(line)) = seen.try_recv() {
@@ -1144,8 +1148,8 @@ fn a_dropped_clients_line_is_read_at_the_next_durable_line() {
         None,
     )
     .unwrap();
-    observer_held
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&observer_held)
         .expect("the observer is held");
     // More lines than a watcher's queue holds: the rest are dropped.
     for _ in 0..2_000 {
@@ -1172,7 +1176,9 @@ fn a_dropped_clients_line_is_read_at_the_next_durable_line() {
         status.join();
         done_tx.send(()).unwrap();
     });
-    done_rx.recv_timeout(DEADLINE).expect("the observer ended");
+    Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the observer ended");
 
     // The log keeps the latest status it was handed.
     let last = log.latest("session_status").expect("a session_status");
@@ -1251,8 +1257,8 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
         ),
     )
     .expect("an observer");
-    observer_held
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&observer_held)
         .expect("the observer is held");
     let turn = Some(TurnId("t_1".into()));
     let append = |event: Event| log.append(&event, turn.clone(), None).unwrap();
@@ -1403,8 +1409,8 @@ fn stop_returns_after_the_observer_folded_what_was_written() {
         ),
     )
     .expect("an observer");
-    observer_held
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&observer_held)
         .expect("the observer is held");
     let turn = Some(TurnId("t_1".into()));
     log.append(
@@ -1440,7 +1446,9 @@ fn stop_returns_after_the_observer_folded_what_was_written() {
         done_tx.send(exit_rx.try_recv()).unwrap();
     });
     release.send(()).unwrap();
-    let that = done.recv_timeout(DEADLINE).expect("stop returned");
+    let that = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("stop returned");
     assert_eq!(
         that,
         Err(std::sync::mpsc::TryRecvError::Disconnected),

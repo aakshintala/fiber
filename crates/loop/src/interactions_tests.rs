@@ -24,6 +24,7 @@ use log::Log;
 
 use crate::progress::{SharedWake, Stream};
 use crate::{Loop, Model};
+use fakes::Deadline;
 
 /// Bound on every wait in this test: the raise park and the answer receive.
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -174,8 +175,8 @@ fn a_cancel_landing_before_the_take_declines_the_ask() {
     assert_eq!(resolved.payload["declined"], true);
     assert!(stream.asking().pending().is_none());
     assert_eq!(
-        answer_rx
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&answer_rx)
             .expect("the cancel declined the ask"),
         Answered::NoAnswer
     );

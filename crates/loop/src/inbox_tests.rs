@@ -19,6 +19,7 @@ use log::Log;
 
 use super::{TurnInput, Waited};
 use crate::{Loop, Model};
+use fakes::Deadline;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -318,7 +319,7 @@ fn a_resolved_idle_is_written_then_acked() {
         .admit_idle(Delivery::Resolved(resolved("r_1"), ack), &mut input)
         .unwrap();
     assert!(input.pieces.is_empty(), "resolved starts no turn idle");
-    let (accepted, seen) = rx.recv_timeout(DEADLINE).expect("the ack runs");
+    let (accepted, seen) = Deadline::after(DEADLINE).recv(&rx).expect("the ack runs");
     assert!(accepted, "resolved accepts its ack");
     assert_eq!(
         seen.last().map(String::as_str),
@@ -355,7 +356,7 @@ fn a_resolved_mid_turn_is_written_then_acked_and_queues_nothing() {
         .admit_running(Delivery::Resolved(resolved("r_1"), ack), &turn)
         .unwrap();
     assert!(looped.queued.is_empty(), "resolved queues nothing mid-turn");
-    let (accepted, seen) = rx.recv_timeout(DEADLINE).expect("the ack runs");
+    let (accepted, seen) = Deadline::after(DEADLINE).recv(&rx).expect("the ack runs");
     assert!(accepted, "resolved accepts its ack");
     assert_eq!(
         seen.last().map(String::as_str),
@@ -387,14 +388,15 @@ fn interaction_lines_while_an_approval_waits_are_written_and_the_wait_goes_on() 
         .take_while_waiting(&pending, Delivery::Resolved(resolved("r_1"), ack), &turn)
         .unwrap();
     assert!(matches!(waited, Waited::Again));
-    assert!(rx.recv_timeout(DEADLINE).expect("the ack runs"));
+    assert!(Deadline::after(DEADLINE).recv(&rx).expect("the ack runs"));
+    let wait = Deadline::after(DEADLINE);
     let first = watched
-        .recv_timeout(DEADLINE)
+        .recv_timeout(wait.left())
         .expect("interaction_requested arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before interaction_requested");
     let second = watched
-        .recv_timeout(DEADLINE)
+        .recv_timeout(wait.left())
         .expect("interaction_resolved arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before interaction_resolved");

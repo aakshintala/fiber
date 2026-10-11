@@ -24,6 +24,7 @@ use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, ErrorCode, RequestId};
+use fakes::Deadline;
 use fakes::Scripted;
 use serde_json::{Map, Value, json};
 
@@ -392,13 +393,14 @@ fn standing_ask() -> StandingRules {
 
 /// `run` until it returns. The session keeps its inbox sender, so the loop
 /// ends because `close` was taken.
+#[track_caller]
 fn run_until_close(session: &mut Session) -> Vec<Envelope> {
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(looped.run()).unwrap());
     let lines = session.lines();
-    finished
-        .recv_timeout(support::DEADLINE)
+    Deadline::after(support::DEADLINE)
+        .recv(&finished)
         .expect("close ended the loop")
         .unwrap();
     lines
@@ -983,8 +985,8 @@ fn close_while_idle_ends_run() {
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(looped.run()).unwrap());
-    finished
-        .recv_timeout(support::DEADLINE)
+    Deadline::after(support::DEADLINE)
+        .recv(&finished)
         .expect("close ended the loop")
         .unwrap();
     assert_eq!(take(&answers), accepted());

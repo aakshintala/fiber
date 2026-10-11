@@ -18,6 +18,7 @@ use contract::ErrorCode;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{Decision, TurnOutcome};
 
+use fakes::Deadline;
 use support::{
     DEADLINE, Gate, Script, Session, Tap, TestTool, completed, delivery, kinds, paris, shell,
     steer, text_all, tool_call_reply,
@@ -578,8 +579,8 @@ fn a_reply_queued_ahead_of_the_cancel_wake_is_rejected() {
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     answered.join().unwrap();
     // Even the allow was rejected stale: the request was already over.
-    let (code, message) = waiting
-        .recv_timeout(DEADLINE)
+    let (code, message) = Deadline::after(DEADLINE)
+        .recv(&waiting)
         .expect("the reply's answer")
         .expect("the reply was rejected");
     assert_eq!(code, ErrorCode::StaleRequest);
@@ -897,7 +898,9 @@ fn a_reply_after_turn_completed_is_stale_and_logs_nothing() {
             "turn_completed",
         ]
     );
-    let request_id = request_rx.recv_timeout(DEADLINE).expect("the request id");
+    let request_id = Deadline::after(DEADLINE)
+        .recv(&request_rx)
+        .expect("the request id");
     let before = log::read(&session.dir).unwrap().len();
     let (rejected, waiting) = std::sync::mpsc::channel();
     session
@@ -924,8 +927,8 @@ fn a_reply_after_turn_completed_is_stale_and_logs_nothing() {
         .unwrap();
     assert_eq!(session.turn(), None);
     assert_eq!(
-        waiting
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&waiting)
             .expect("the reply was answered"),
         Some(ErrorCode::StaleRequest)
     );
@@ -1142,7 +1145,9 @@ fn a_reply_taken_before_the_shutdown_stands_and_the_call_never_runs() {
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     asked.join().unwrap();
     assert!(
-        answered.recv_timeout(DEADLINE).expect("the reply's answer"),
+        Deadline::after(DEADLINE)
+            .recv(&answered)
+            .expect("the reply's answer"),
         "the reply was accepted"
     );
     let lines = session.lines();
@@ -1201,7 +1206,9 @@ fn a_reply_taken_before_a_cancel_keeps_its_text() {
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     asked.join().unwrap();
     assert!(
-        answered.recv_timeout(DEADLINE).expect("the reply's answer"),
+        Deadline::after(DEADLINE)
+            .recv(&answered)
+            .expect("the reply's answer"),
         "the reply was accepted"
     );
     let lines = session.lines();

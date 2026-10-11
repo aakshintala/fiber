@@ -29,6 +29,7 @@ use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender};
 use contract::tool::{Cancel, Effects, EffectsError, Output, ServerRecord, Tool};
 use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId};
+use fakes::Deadline;
 use serde_json::{Map, Value, json};
 
 use super::register;
@@ -789,6 +790,7 @@ struct Ran {
     homes: Vec<String>,
 }
 
+#[track_caller]
 fn run_turn(
     tools: Vec<Arc<dyn Tool>>,
     script: Vec<fakes::Scripted>,
@@ -856,8 +858,8 @@ fn run_turn(
     thread::spawn(move || {
         let _sent = done_tx.send(looped.turn());
     });
-    let outcome = done_rx
-        .recv_timeout(TURN_DEADLINE)
+    let outcome = Deadline::after(TURN_DEADLINE)
+        .recv(&done_rx)
         .expect("the turn ended")
         .unwrap();
     drop(inbox);

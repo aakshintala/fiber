@@ -24,6 +24,7 @@ use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::provider::{Finish, Input, Provider, ReplyAction};
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode};
+use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use r#loop::{HandoffSettings, Hosted, Prepare, Prepared, Retry, Switchable};
 use serde_json::json;
@@ -1039,7 +1040,13 @@ fn a_person_handoff_during_a_turn_runs_at_the_next_step_boundary() {
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     // Accepted when taken.
-    assert!(answer.recv_timeout(DEADLINE).unwrap().unwrap().is_none());
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv(&answer)
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         of_kind(&lines, "handoff_started")[0].payload["trigger"],
         "person"
@@ -1228,7 +1235,10 @@ fn a_steer_drop_cannot_drop_a_handoff() {
         &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
     );
 
-    let rejected = answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    let rejected = Deadline::after(DEADLINE)
+        .recv(&answer)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(rejected.code, ErrorCode::StaleRequest);
 }
 
@@ -1247,7 +1257,10 @@ fn a_steer_drop_between_turns_cannot_drop_a_handoff_either() {
     assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let rejected = answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    let rejected = Deadline::after(DEADLINE)
+        .recv(&answer)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(rejected.code, ErrorCode::StaleRequest);
 }
 
@@ -1278,7 +1291,13 @@ fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
     assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert!(answer.recv_timeout(DEADLINE).unwrap().unwrap().is_none());
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv(&answer)
+            .unwrap()
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         serde_json::Value::Object(of_kind(&lines, "turn_started")[0].payload.clone()),
         json!({"input": [{"type": "handoff", "command_id": "c_h"}]})
@@ -1339,7 +1358,12 @@ fn a_prompt_in_the_drain_of_a_handoff_is_carried_and_answered_after_it() {
         assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, REPLY, ENDED]);
 
         assert_eq!(outcome, Some(TurnOutcome::Completed));
-        assert!(prompt_answer.recv_timeout(DEADLINE).unwrap().is_ok());
+        assert!(
+            Deadline::after(DEADLINE)
+                .recv(&prompt_answer)
+                .unwrap()
+                .is_ok()
+        );
         let input = &of_kind(&lines, "turn_started")[0].payload["input"];
         let types: Vec<&str> = input
             .as_array()
@@ -1461,7 +1485,10 @@ fn a_handoff_is_refused_closing_once_close_was_taken_with_nothing_to_start() {
 
     assert_eq!(session.turn(), None);
 
-    let rejected = answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    let rejected = Deadline::after(DEADLINE)
+        .recv(&answer)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(rejected.code, ErrorCode::Closing);
     assert!(session.requests().is_empty());
 }
@@ -1489,7 +1516,7 @@ fn a_handoff_after_close_joins_a_turn_that_already_has_input() {
     assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, REPLY, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert!(answer.recv_timeout(DEADLINE).unwrap().is_ok());
+    assert!(Deadline::after(DEADLINE).recv(&answer).unwrap().is_ok());
 }
 
 // A tool's handoff (`docs/handoff.md`, "A tool").

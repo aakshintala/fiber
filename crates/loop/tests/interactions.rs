@@ -33,6 +33,7 @@ use contract::provider::{Provider, ToolDefinition};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, True};
 use contract::tool::{Answered, Ask, Asking, Cancel, Check, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId};
+use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use r#loop::{Error, HandoffSettings, Loop, Model, Prepared, Switchable};
 use serde_json::{Map, Value, json};
@@ -172,12 +173,13 @@ fn spawn_turn(session: &mut Session) -> mpsc::Receiver<(Loop, Result<Option<Turn
 }
 
 /// Waits for the turn `spawn_turn` started, putting the loop back.
+#[track_caller]
 fn finish(
     session: &mut Session,
     finished: &mpsc::Receiver<(Loop, Result<Option<TurnOutcome>, Error>)>,
 ) -> Result<Option<TurnOutcome>, Error> {
-    let (looped, outcome) = finished
-        .recv_timeout(DEADLINE)
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(finished)
         .expect("the turn ended in time");
     session.looped = Some(looped);
     outcome
@@ -207,10 +209,9 @@ fn rejected(answered: &contract::inbox::Answer, code: ErrorCode) {
     }
 }
 
-fn told(answers: &mpsc::Receiver<Answered>) -> Answered {
-    answers
-        .recv_timeout(DEADLINE)
-        .expect("the tool got its answer")
+#[track_caller]
+fn told(answers: &mpsc::Receiver<Answered>, wait: &Deadline) -> Answered {
+    wait.recv(answers).expect("the tool got its answer")
 }
 
 /// Asserts a resolved line is Fiber's decline.
@@ -278,11 +279,12 @@ fn a_confirm_is_answered_and_the_ack_follows_its_line() {
         answer: yes(),
     };
     session.inbox.send(Delivery::Reply(reply, ack)).unwrap();
-    let (answered, resolved_first) = seen.recv_timeout(DEADLINE).unwrap();
+    let (answered, resolved_first) = Deadline::after(DEADLINE).recv(&seen).unwrap();
     assert_eq!(answered, Ok(None));
     assert!(resolved_first, "the reply is accepted after its line");
+    let wait = Deadline::after(DEADLINE);
     assert_eq!(
-        told(&answers),
+        told(&answers, &wait),
         Answered::Reply(Answer::Confirmed { confirmed: true })
     );
     assert_eq!(
@@ -348,8 +350,9 @@ fn an_unfit_reply_is_rejected_and_the_interaction_stays_pending() {
         "That answer does not fit the pending request."
     );
     assert_eq!(answer(&session, &request, yes()), Ok(None));
+    let wait = Deadline::after(DEADLINE);
     assert_eq!(
-        told(&answers),
+        told(&answers, &wait),
         Answered::Reply(Answer::Confirmed { confirmed: true })
     );
     assert_eq!(
@@ -398,15 +401,17 @@ fn the_askers_check_rejects_a_reply_and_never_sees_a_decline() {
     rejected(&answer(&session, &first, x), ErrorCode::InvalidArguments);
     let seven = ReplyAnswer::Text { text: "7".into() };
     assert_eq!(answer(&session, &first, seven), Ok(None));
+    let wait = Deadline::after(DEADLINE);
     assert_eq!(
-        told(&answers),
+        told(&answers, &wait),
         Answered::Reply(Answer::Text { text: "7".into() })
     );
     let second = request_id(&tap.wait_for("interaction_requested"));
     let declined = ReplyAnswer::Declined { declined: True };
     assert_eq!(answer(&session, &second, declined), Ok(None));
+    let wait = Deadline::after(DEADLINE);
     assert_eq!(
-        told(&answers),
+        told(&answers, &wait),
         Answered::Reply(Answer::Declined { declined: True })
     );
     assert_eq!(
@@ -447,7 +452,8 @@ fn a_reply_naming_another_request_or_a_resolved_one_is_stale() {
     let request = request_id(&tap.wait_for("interaction_requested"));
     rejected(&answer(&session, "r_other", yes()), ErrorCode::StaleRequest);
     assert_eq!(answer(&session, &request, yes()), Ok(None));
-    told(&answers);
+    let wait = Deadline::after(DEADLINE);
+    told(&answers, &wait);
     rejected(&answer(&session, &request, yes()), ErrorCode::StaleRequest);
     assert_eq!(
         finish(&mut session, &finished).unwrap(),
@@ -473,10 +479,12 @@ fn a_reply_naming_another_request_or_a_resolved_one_is_stale() {
 
 /// Runs a turn whose one call asks a confirm nobody can answer, and checks
 /// Fiber's decline names a request never raised.
+#[track_caller]
 fn nobody_answers(mut session: Session, answers: &mpsc::Receiver<Answered>) {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(told(answers), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(told(answers, &wait), Answered::NoAnswer);
     let lines = session.lines();
     assert_kinds(
         &lines,
@@ -613,12 +621,14 @@ fn close_while_pending_declines_it_and_every_later_ask() {
     tap.wait_for("interaction_requested");
     let (ack, closed) = acked();
     session.inbox.send(Delivery::Close(ack)).unwrap();
-    assert_eq!(closed.recv_timeout(DEADLINE).unwrap(), Ok(None));
-    assert_eq!(told(&answers), Answered::NoAnswer);
-    assert_eq!(told(&answers), Answered::NoAnswer);
+    assert_eq!(Deadline::after(DEADLINE).recv(&closed).unwrap(), Ok(None));
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
     let lines = session.lines();
     assert!(
-        ran.recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&ran)
             .expect("run returns after close")
             .is_ok()
     );
@@ -645,6 +655,7 @@ fn close_while_pending_declines_it_and_every_later_ask() {
 
 /// Runs a turn whose call is pending when `stop` runs, and checks Fiber's
 /// decline comes before the call's completion.
+#[track_caller]
 fn stopped_while_pending(stop: impl FnOnce(&Session)) -> (Vec<Envelope>, Option<TurnOutcome>) {
     let (tool, answers) = Asks::new(vec![plain(confirm())]);
     let mut session = session(&["asks"], vec![tool]).inbox_woken();
@@ -653,7 +664,8 @@ fn stopped_while_pending(stop: impl FnOnce(&Session)) -> (Vec<Envelope>, Option<
     let finished = spawn_turn(&mut session);
     tap.wait_for("interaction_requested");
     stop(&session);
-    assert_eq!(told(&answers), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
     let outcome = finish(&mut session, &finished).unwrap();
     let lines = session.events_until("the call's completion and the turn's end", |line| {
         line.kind == "turn_completed"
@@ -725,7 +737,8 @@ fn the_inbox_closing_while_pending_declines_it() {
     // Every sender goes: the session's own and the one the wake reaches.
     session.inbox = mpsc::channel().0;
     session.woken = None;
-    assert_eq!(told(&answers), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
     declined_by_fiber(&tap.wait_for("interaction_resolved"));
     assert_eq!(
         finish(&mut session, &finished).unwrap(),
@@ -752,6 +765,7 @@ fn the_inbox_closing_while_pending_declines_it() {
 /// Runs a turn whose call asks with `until` 10 s on, at `at`, advances the clock to
 /// 1 ms before it and checks the request still pends, then to it and
 /// checks Fiber declines it.
+#[track_caller]
 fn until_passes(mut session: Session, answers: &mpsc::Receiver<Answered>, at: Instant) {
     let clock = Arc::clone(&session.clock);
     let tap = Tap::new(&session.log);
@@ -772,7 +786,8 @@ fn until_passes(mut session: Session, answers: &mpsc::Receiver<Answered>, at: In
     );
     assert!(answers.try_recv().is_err(), "the call still waits");
     clock.advance(Duration::from_millis(1));
-    assert_eq!(told(answers), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(told(answers, &wait), Answered::NoAnswer);
     assert_eq!(
         finish(&mut session, &finished).unwrap(),
         Some(TurnOutcome::Completed)
@@ -899,8 +914,9 @@ fn action_ids_are_written_as_given_or_as_the_call_alone() {
     *past.lock().unwrap() = Some(session.clock.now());
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(told(&answers), Answered::NoAnswer);
-    assert_eq!(told(&answers), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
     let lines = session.lines();
     assert_kinds(
         &lines,
@@ -944,8 +960,9 @@ fn two_calls_ask_at_once_and_each_gets_its_own_answer() {
     let no = ReplyAnswer::Confirmed { confirmed: false };
     assert_eq!(answer(&session, &request_id(&two), no), Ok(None));
     assert_eq!(answer(&session, &request_id(&one), yes()), Ok(None));
-    told(&answers);
-    told(&answers);
+    let wait = Deadline::after(DEADLINE);
+    told(&answers, &wait);
+    told(&answers, &wait);
     assert_eq!(
         finish(&mut session, &finished).unwrap(),
         Some(TurnOutcome::Completed)
@@ -1064,7 +1081,8 @@ fn another_calls_deltas_keep_flowing_while_one_is_pending() {
     tap.wait_for_delta("two");
     gates[2].open();
     assert_eq!(answer(&session, &request, yes()), Ok(None));
-    told(&answers);
+    let wait = Deadline::after(DEADLINE);
+    told(&answers, &wait);
     assert_eq!(
         finish(&mut session, &finished).unwrap(),
         Some(TurnOutcome::Completed)
@@ -1152,16 +1170,17 @@ fn other_deliveries_are_admitted_while_a_call_waits() {
     let send = |delivery: Delivery| session.inbox.send(delivery).unwrap();
     let (ack, busy) = acked();
     send(Delivery::Prompt(message("busy"), ack));
-    rejected(&busy.recv_timeout(DEADLINE).unwrap(), ErrorCode::Busy);
+    let waited = Deadline::after(DEADLINE).recv(&busy).unwrap();
+    rejected(&waited, ErrorCode::Busy);
     let (ack, kept) = acked();
     send(Delivery::Steer(message("keep"), ack));
-    assert_eq!(kept.recv_timeout(DEADLINE).unwrap(), Ok(None));
+    assert_eq!(Deadline::after(DEADLINE).recv(&kept).unwrap(), Ok(None));
     let (ack, queued) = acked();
     send(Delivery::Steer(message("drop"), ack));
-    assert_eq!(queued.recv_timeout(DEADLINE).unwrap(), Ok(None));
+    assert_eq!(Deadline::after(DEADLINE).recv(&queued).unwrap(), Ok(None));
     let (ack, dropped) = acked();
     send(Delivery::SteerDrop(CommandId("c_drop".into()), ack));
-    assert_eq!(dropped.recv_timeout(DEADLINE).unwrap(), Ok(None));
+    assert_eq!(Deadline::after(DEADLINE).recv(&dropped).unwrap(), Ok(None));
     send(Delivery::Interaction(InteractionRequested {
         request_id: RequestId("r_ext".into()),
         interaction: confirm(),
@@ -1179,9 +1198,10 @@ fn other_deliveries_are_admitted_while_a_call_waits() {
         },
         ack,
     ));
-    assert_eq!(switch.recv_timeout(DEADLINE).unwrap(), Ok(None));
+    assert_eq!(Deadline::after(DEADLINE).recv(&switch).unwrap(), Ok(None));
     assert_eq!(answer(&session, &request, yes()), Ok(None));
-    told(&answers);
+    let wait = Deadline::after(DEADLINE);
+    told(&answers, &wait);
     assert_eq!(
         finish(&mut session, &finished).unwrap(),
         Some(TurnOutcome::Completed)
@@ -1231,7 +1251,8 @@ fn an_ask_after_the_cancel_is_declined_at_once() {
     tap.wait_for("tool_call_started");
     assert!(session.cancel.cancel());
     gate.open();
-    assert_eq!(told(&answers), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
     assert_eq!(
         finish(&mut session, &finished).unwrap(),
         Some(TurnOutcome::Interrupted)
@@ -1321,8 +1342,9 @@ fn a_log_failure_while_a_call_is_pending_releases_it() {
     tap.wait_for("interaction_requested");
     break_artifacts(&session);
     first.open();
-    assert_eq!(told(&answers), Answered::NoAnswer);
-    assert_eq!(told(&answers), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
     let ended = finish(&mut session, &finished);
     assert!(matches!(ended, Err(Error::Log(_))), "{ended:?}");
     first.check("first");
@@ -1348,7 +1370,8 @@ fn a_log_failure_before_a_calls_first_ask_releases_it() {
     break_artifacts(&session);
     first.open();
     second.open();
-    assert_eq!(told(&answers), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
     let ended = finish(&mut session, &finished);
     assert!(matches!(ended, Err(Error::Log(_))), "{ended:?}");
     first.check("first");
@@ -1387,8 +1410,9 @@ fn an_ask_that_suspends_is_logged_resumes_and_any_other_without_the_key() {
     *past.lock().unwrap() = Some(session.clock.now());
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    assert_eq!(told(&answers), Answered::NoAnswer);
-    assert_eq!(told(&answers), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
+    assert_eq!(told(&answers, &wait), Answered::NoAnswer);
     let lines = session.lines();
     let requested = of_kind(&lines, "interaction_requested");
     assert_eq!(requested.len(), 2);

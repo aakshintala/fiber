@@ -25,6 +25,7 @@ use contract::provider::{Input, Provider};
 use contract::shapes::{Tokens, Usage};
 use contract::tool::Tool;
 use contract::{ActionId, RequestId};
+use fakes::Deadline;
 use fakes::Scripted;
 use proptest::prelude::*;
 use serde_json::json;
@@ -205,6 +206,7 @@ fn write_history(history: &History, steps: &Steps, tail: Tail) -> Vec<(String, F
     calls
 }
 
+#[track_caller]
 fn check(steps: Steps, tail: Tail) -> Result<(), TestCaseError> {
     let tool = Arc::new(support::TestTool::reads("read", "Paris."));
     let mut history = History::new(vec![
@@ -240,8 +242,8 @@ fn check(steps: Steps, tail: Tail) -> Result<(), TestCaseError> {
     std::thread::spawn(move || {
         done.send(looped.turn()).unwrap();
     });
-    let outcome = finished
-        .recv_timeout(CASE_DEADLINE)
+    let outcome = Deadline::after(CASE_DEADLINE)
+        .recv(&finished)
         .expect("the resumed turn ended before the deadline");
     prop_assert_eq!(outcome.unwrap(), Some(TurnOutcome::Completed));
 

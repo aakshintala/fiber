@@ -20,6 +20,7 @@ use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, Origin, Sender as From, Tokens, Usage};
 use contract::{CommandId, Envelope, ErrorCode, JobId, SessionId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use log::Log;
 
@@ -277,13 +278,23 @@ impl Held {
     }
 }
 
+#[track_caller]
 fn ran(finished: &Receiver<Result<(), crate::Error>>) {
-    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+    let result = Deadline::after(DEADLINE)
+        .recv(finished)
+        .expect("run returned");
     assert!(result.is_ok(), "{result:?}");
 }
 
-fn stopped(stops: &Receiver<JobId>) -> String {
-    stops.recv_timeout(DEADLINE).expect("a stop was sent").0
+#[track_caller]
+fn stopped(stops: &Receiver<JobId>, wait: &Deadline) -> String {
+    wait.recv(stops).expect("a stop was sent").0
+}
+
+/// The ack's answer, failing at [`DEADLINE`].
+#[track_caller]
+fn answer(rx: &Receiver<Result<(), Rejection>>) -> Result<(), Rejection> {
+    Deadline::after(DEADLINE).recv(rx).unwrap()
 }
 
 #[test]
@@ -293,7 +304,8 @@ fn a_shutdown_stops_a_running_job_and_writes_its_end_before_run_returns() {
     world.cancel.shutdown(143);
     let (finished, inbox, held) = world.spawn_run();
 
-    assert_eq!(stopped(&stops), "j_1");
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(stopped(&stops, &wait), "j_1");
     jobs.end("j_1", &inbox);
     ran(&finished);
 
@@ -356,7 +368,8 @@ fn settle_writes_a_delegate_finish_delivered_while_settling() {
     let world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
     world.cancel.shutdown(143);
     let (finished, inbox, held) = world.spawn_run();
-    assert_eq!(stopped(&stops), "j_1");
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(stopped(&stops, &wait), "j_1");
     jobs.end_delegate("j_1", &inbox, "Done.");
     ran(&finished);
     assert_eq!(
@@ -376,11 +389,13 @@ fn the_stop_is_sent_again_to_a_job_listed_after_the_first() {
     world.cancel.shutdown(130);
     let (finished, inbox, held) = world.spawn_run();
 
-    assert_eq!(stopped(&stops), "j_1");
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(stopped(&stops, &wait), "j_1");
     // A call moves to the background as the first job ends.
     jobs.add("j_2");
     jobs.end("j_1", &inbox);
-    while stopped(&stops) != "j_2" {}
+    let wait = Deadline::after(DEADLINE);
+    while stopped(&stops, &wait) != "j_2" {}
     jobs.end("j_2", &inbox);
     ran(&finished);
 
@@ -403,7 +418,8 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
     let (close, close_answer) = answered();
     world.cancel.shutdown(129);
     let (finished, inbox, held) = world.spawn_run();
-    assert_eq!(stopped(&stops), "j_1");
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(stopped(&stops, &wait), "j_1");
 
     inbox
         .send(Delivery::Prompt(message("hello"), prompt))
@@ -449,7 +465,6 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
     jobs.end("j_1", &inbox);
     ran(&finished);
 
-    let answer = |rx: &Receiver<Result<(), Rejection>>| rx.recv_timeout(DEADLINE).unwrap();
     assert_eq!(answer(&prompt_answer).unwrap_err().code, ErrorCode::Closing);
     assert_eq!(answer(&steer_answer).unwrap_err().code, ErrorCode::Closing);
     assert_eq!(
@@ -483,7 +498,10 @@ fn a_prompt_waiting_when_the_shutdown_lands_starts_no_turn() {
     let (finished, _inbox, held) = world.spawn_run();
     ran(&finished);
 
-    let rejected = prompt_answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    let rejected = Deadline::after(DEADLINE)
+        .recv(&prompt_answer)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(rejected.code, ErrorCode::Closing);
     assert_eq!(held.kinds(), ["session_started"]);
 }
@@ -581,7 +599,10 @@ fn a_reply_taken_as_the_shutdown_lands_leaves_the_request_pending() {
         .take_while_waiting(&pending, Delivery::Reply(reply, ack), &turn)
         .unwrap();
     assert!(matches!(waited, crate::inbox::Waited::Again));
-    let rejected = answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    let rejected = Deadline::after(DEADLINE)
+        .recv(&answer)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(rejected.code, ErrorCode::StaleRequest);
 
     let (ack, answer) = answered();
@@ -590,7 +611,7 @@ fn a_reply_taken_as_the_shutdown_lands_leaves_the_request_pending() {
         .take_while_waiting(&pending, Delivery::Close(ack), &turn)
         .unwrap();
     assert!(matches!(waited, crate::inbox::Waited::Again));
-    assert!(answer.recv_timeout(DEADLINE).unwrap().is_ok());
+    assert!(Deadline::after(DEADLINE).recv(&answer).unwrap().is_ok());
 }
 
 /// An `extension_log` taken while the jobs settle is written live and to
@@ -739,7 +760,10 @@ fn a_reply_taken_after_a_cancel_alone_ends_the_wait_cancelled() {
         .take_while_waiting(&pending, reply, &turn)
         .unwrap();
     assert!(matches!(waited, crate::inbox::Waited::Cancelled));
-    let rejected = answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    let rejected = Deadline::after(DEADLINE)
+        .recv(&answer)
+        .unwrap()
+        .unwrap_err();
     assert_eq!(rejected.code, ErrorCode::StaleRequest);
 }
 
@@ -785,7 +809,7 @@ fn settle_writes_an_interaction_and_its_resolution_then_acks() {
         .looped
         .settle_one(Delivery::Resolved(resolved("r_1"), ack))
         .unwrap();
-    let (accepted, seen) = rx.recv_timeout(DEADLINE).expect("the ack runs");
+    let (accepted, seen) = Deadline::after(DEADLINE).recv(&rx).expect("the ack runs");
     assert!(accepted, "resolved accepts its ack");
     assert_eq!(
         seen.last().map(String::as_str),
@@ -853,8 +877,8 @@ fn after_rewound_a_shutdown_writes_nothing_and_refuses_what_waits_closing() {
         .send(Delivery::Prompt(message("hello"), ack))
         .unwrap();
     let (finished, _inbox, held) = world.spawn_run();
-    let answer = refused
-        .recv_timeout(DEADLINE)
+    let answer = Deadline::after(DEADLINE)
+        .recv(&refused)
         .expect("the prompt is refused");
     match answer {
         Err(rejection) => {

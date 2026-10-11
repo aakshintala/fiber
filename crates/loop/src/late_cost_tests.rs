@@ -11,6 +11,7 @@ use contract::events::{ReviewerUse, UsageRecorded};
 use contract::provider::CostLookup;
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, TurnId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::{LOOKUP_AFTER, LateCost, Settled};
@@ -68,9 +69,10 @@ impl Seen {
     /// Waits until the worker no longer holds the lookup: it ran and its
     /// result was pushed or dropped, or it was never dispatched and the
     /// queue is gone.
+    #[track_caller]
     fn await_dropped(&self) {
-        self.dropped
-            .recv_timeout(WAIT)
+        Deadline::after(WAIT)
+            .recv(&self.dropped)
             .expect("waited for the worker to let go of the lookup");
     }
 }
@@ -217,8 +219,8 @@ fn a_stop_while_the_lookup_runs_drops_its_result() {
         .unwrap();
     assert!(clock.await_parked(due, WAIT), "the worker parks at the due");
     clock.advance(LOOKUP_AFTER);
-    entered
-        .recv_timeout(WAIT)
+    Deadline::after(WAIT)
+        .recv(&entered)
         .expect("waited for the lookup to start");
     late.stop();
     go.send(()).unwrap();

@@ -28,6 +28,7 @@ use contract::inbox::{Ack, Answer, Delivery};
 use contract::repository::{Decided, RepositoryCode, Unapproved};
 use contract::shapes::{Failure, Process};
 use contract::{Envelope, ErrorCode, RequestId};
+use fakes::Deadline;
 use fakes::Scripted;
 use log::Watcher;
 use serde_json::Value;
@@ -156,8 +157,11 @@ fn spawn_run(session: &mut Session) -> mpsc::Receiver<Result<(), r#loop::Error>>
     finished
 }
 
+#[track_caller]
 fn ended(finished: &mpsc::Receiver<Result<(), r#loop::Error>>) -> Result<(), r#loop::Error> {
-    finished.recv_timeout(DEADLINE).expect("run ended in time")
+    Deadline::after(DEADLINE)
+        .recv(finished)
+        .expect("run ended in time")
 }
 
 /// An acknowledgement that reports its answer.
@@ -171,10 +175,14 @@ fn probe() -> (Ack, mpsc::Receiver<Answer>) {
     )
 }
 
+#[track_caller]
 fn answered(rx: &mpsc::Receiver<Answer>) -> Answer {
-    rx.recv_timeout(DEADLINE).expect("the reply was answered")
+    Deadline::after(DEADLINE)
+        .recv(rx)
+        .expect("the reply was answered")
 }
 
+#[track_caller]
 fn rejection(rx: &mpsc::Receiver<Answer>) -> (ErrorCode, String) {
     let rejected = answered(rx).expect_err("the reply was rejected");
     (rejected.code, rejected.message)
@@ -321,7 +329,7 @@ fn a_prompt_raises_one_offer_before_the_preamble_and_waits_for_the_reply() {
         ))
         .unwrap();
     assert_eq!(
-        written.recv_timeout(DEADLINE).unwrap(),
+        Deadline::after(DEADLINE).recv(&written).unwrap(),
         (true, true),
         "accepted after repository_code_resolved"
     );
@@ -789,7 +797,7 @@ fn waiting_on_an_offer_is_idle() {
     assert!(!kinds.iter().any(|k| k == "preamble_built"));
     assert!(
         matches!(
-            prompt_answer.recv_timeout(DEADLINE),
+            Deadline::after(DEADLINE).recv(&prompt_answer),
             Err(mpsc::RecvTimeoutError::Disconnected)
         ),
         "the prompt's ack is dropped uncalled"

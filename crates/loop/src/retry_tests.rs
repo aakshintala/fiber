@@ -14,6 +14,7 @@ use contract::inbox::{Ack, Delivery, Message};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{CommandId, SessionId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{Scripted, ScriptedProvider};
 use log::Log;
@@ -447,6 +448,7 @@ impl RetryRun {
 
     /// Reads a whole log wait on one worker, bounded by one named deadline
     /// rather than resetting a timeout for every line.
+    #[track_caller]
     fn wait_for_event(&mut self, kind: &'static str, deadline: Duration) {
         let watcher = self.watcher.take().expect("the log watcher is available");
         let (watcher, lines) = fakes::within(&format!("log event {kind}"), deadline, move || {
@@ -473,11 +475,13 @@ impl RetryRun {
     }
 
     /// Reads until `retry_scheduled`, the line the test clock advances on.
+    #[track_caller]
     fn wait_for_retry_scheduled(&mut self, deadline: Duration) {
         self.wait_for_event("retry_scheduled", deadline);
     }
 
     /// Reads until the retry's `assistant_message_started` appears.
+    #[track_caller]
     fn wait_for_retry_started(&mut self, deadline: Duration) {
         self.wait_for_event("assistant_message_started", deadline);
         assert_eq!(self.starts, 2, "the retry started after the first request");
@@ -485,10 +489,11 @@ impl RetryRun {
 
     /// Receives the turn result within one named deadline; it completed on
     /// the retry, which served one request more.
+    #[track_caller]
     fn finish(self) {
         assert_eq!(
-            self.turn
-                .recv_timeout(TURN_WAIT_DEADLINE)
+            Deadline::after(TURN_WAIT_DEADLINE)
+                .recv(&self.turn)
                 .expect("the turn completed within TURN_WAIT_DEADLINE")
                 .unwrap(),
             Some(contract::events::TurnOutcome::Completed)

@@ -18,6 +18,7 @@ use contract::events::{
 };
 use contract::skills::Skills;
 use contract::{Envelope, Seq, SessionId};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::SkillSet;
@@ -604,7 +605,9 @@ fn a_reader_that_calls_back_into_the_set_does_not_deadlock() {
             }
             done.send(()).unwrap();
         });
-        finished.recv_timeout(Duration::from_secs(5)).unwrap();
+        Deadline::after(Duration::from_secs(5))
+            .recv(&finished)
+            .unwrap();
     }
 }
 

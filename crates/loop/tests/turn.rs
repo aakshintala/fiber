@@ -18,6 +18,7 @@ use contract::events::{
 use contract::provider::{Cost, Delta, Input, InputSize, ReplyAction};
 use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, Seq};
+use fakes::Deadline;
 use fakes::{Scripted, reply};
 use serde_json::{Value, json};
 
@@ -704,8 +705,8 @@ fn the_loop_runs_turns_until_every_sender_is_gone() {
     );
     drop(session.inbox);
     assert!(
-        finished
-            .recv_timeout(support::DEADLINE)
+        Deadline::after(support::DEADLINE)
+            .recv(&finished)
             .expect("waited for the loop to finish")
     );
     ran.join().unwrap();

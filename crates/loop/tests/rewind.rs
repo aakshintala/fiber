@@ -27,6 +27,7 @@ use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, Origin, Point, Sender, Worktree};
 use contract::tool::Tool;
 use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, Seq, SessionId};
+use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use log::Log;
 use r#loop::{Loop, Model, Permissions, PromptInputs, Rewound, rewind_note};
@@ -172,6 +173,7 @@ fn start_b(
 
 /// Runs one turn of `b` for the prompt `text`, failing at one deadline
 /// instead of hanging.
+#[track_caller]
 fn run_turn(b: Loop, tx: &mpsc::Sender<Delivery>, text: &str) -> Loop {
     tx.send(delivery(text)).unwrap();
     let (done, finished) = mpsc::channel();
@@ -180,8 +182,8 @@ fn run_turn(b: Loop, tx: &mpsc::Sender<Delivery>, text: &str) -> Loop {
         let outcome = b.turn().unwrap();
         done.send((b, outcome)).unwrap();
     });
-    let (b, outcome) = finished
-        .recv_timeout(DEADLINE)
+    let (b, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("the turn ended in time");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     b
@@ -918,8 +920,10 @@ fn args(from: Option<&str>, seq: Option<u64>, summarise: bool, adopt: Vec<&str>)
     }
 }
 
+#[track_caller]
 fn answer_of(rx: mpsc::Receiver<Answer>) -> Answer {
-    rx.recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the rewind is answered in time")
 }
 
@@ -953,6 +957,7 @@ fn assert_minted(id: &SessionId) {
 /// Runs one turn wait on `looped` on its own thread, after sending
 /// `delivery`: the loop and the wait's outcome, failing at one named
 /// deadline instead of hanging.
+#[track_caller]
 fn drive(
     mut looped: Loop,
     tx: &mpsc::Sender<Delivery>,
@@ -964,8 +969,8 @@ fn drive(
         let outcome = looped.turn().unwrap();
         done.send((looped, outcome)).unwrap();
     });
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("the wait ended in time")
 }
 
@@ -974,6 +979,7 @@ fn drive(
 /// inbox sender) is dropped to end it with no turn. Returns the loop; the
 /// test reads each answer on its own channel, failing at one named
 /// deadline instead of hanging.
+#[track_caller]
 fn drive_closed(mut looped: Loop, sender: mpsc::Sender<Delivery>, batch: Vec<Delivery>) -> Loop {
     for delivery in batch {
         sender.send(delivery).unwrap();
@@ -984,8 +990,8 @@ fn drive_closed(mut looped: Loop, sender: mpsc::Sender<Delivery>, batch: Vec<Del
         done.send((looped, outcome)).unwrap();
     });
     drop(sender);
-    let (looped, outcome) = finished
-        .recv_timeout(DEADLINE)
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("the wait ended in time");
     assert_eq!(outcome, None, "no turn starts");
     looped
@@ -1267,13 +1273,16 @@ impl SendRewind {
         *self.inbox.lock().unwrap() = Some(inbox);
     }
 
+    #[track_caller]
     fn answer(&self) -> Answer {
-        self.seen
+        let waiting = self
+            .seen
             .lock()
             .unwrap()
             .take()
-            .expect("the tool sent its rewind")
-            .recv_timeout(DEADLINE)
+            .expect("the tool sent its rewind");
+        Deadline::after(DEADLINE)
+            .recv(&waiting)
             .expect("the rewind is answered in time")
     }
 }
@@ -1443,8 +1452,8 @@ fn a_rewind_while_an_approval_waits_is_busy() {
             .to_owned();
         let (rw, answered) = rewind(args(None, None, false, vec![]));
         inbox.send(rw).unwrap();
-        let answer = answered
-            .recv_timeout(DEADLINE)
+        let answer = Deadline::after(DEADLINE)
+            .recv(&answered)
             .expect("the rewind is answered in time");
         inbox
             .send(reply_to(RequestId(id), allow(), ignore()))
@@ -1454,7 +1463,11 @@ fn a_rewind_while_an_approval_waits_is_busy() {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     waiting.join().expect("the watcher ends");
-    let rejection = rejected(seen.recv_timeout(DEADLINE).expect("the answer arrives"));
+    let rejection = rejected(
+        Deadline::after(DEADLINE)
+            .recv(&seen)
+            .expect("the answer arrives"),
+    );
     assert_eq!(rejection.code, ErrorCode::Busy);
     assert_eq!(rejection.message, "A turn is running; rewind once it ends.");
 }
@@ -1517,7 +1530,10 @@ fn a_rewind_before_a_prompt_and_a_close_refuses_both_closing() {
     session.looped = Some(drive_closed(looped, inbox, vec![rw, prompt, close]));
     accepted(answer_of(answered));
     for (name, rx) in [("prompt", prompted), ("close", closed)] {
-        match rx.recv_timeout(DEADLINE).expect("refused in time") {
+        match Deadline::after(DEADLINE)
+            .recv(&rx)
+            .expect("refused in time")
+        {
             Err(rejection) => {
                 assert_eq!(rejection.code, ErrorCode::Closing, "{name}");
                 assert_eq!(
