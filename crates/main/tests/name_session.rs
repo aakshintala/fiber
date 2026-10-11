@@ -20,13 +20,11 @@ use std::process::Child;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use contract::SessionId;
-use contract::events::{Event, NamedBy, SessionNamed};
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, Setup, Socket, SystemClock, answered, expired, function_call, group_alive, hello,
-    is_status, read_kinds, run_to_exit, stream, until,
+    Deadline, Setup, Socket, answered, expired, function_call, group_alive, hello, is_status,
+    read_kinds, run_to_exit, stream, until,
 };
 
 /// A finished `function_call` for `name_session` with `arguments`.
@@ -345,29 +343,95 @@ fn a_person_name_pins_the_session_after_a_resume() {
     ])
     .unwrap();
     setup.provider(&server);
-    let lines = ask_with(&setup, "go");
+    server.hold();
+    let running = start(&setup, &["ask", "go"]);
+    let first_raw: String = setup
+        .deadline
+        .recv(&running.stdout)
+        .expect("waited until the deadline for fiber_started");
+    let started: Value = serde_json::from_str(&first_raw).unwrap();
+    let id = started["session_id"].as_str().unwrap().to_owned();
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the held response was requested"
+    );
+    let client = Socket::connect(setup.deadline, &setup.session_socket(&id));
+    client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
+    let subscribed = until(&client, "the subscribe acknowledgement", |line| {
+        line["payload"]["command_id"] == "c_sub"
+    });
+    assert_eq!(
+        answered(&subscribed, "c_sub")["kind"],
+        "command_accepted",
+        "{subscribed:?}"
+    );
+    // The `tools` probe's answer proves the `name` is queued before the
+    // release, so the name is taken at step 2's drain, after `c1` completed.
+    client.send(r#"{"id":"c_pin","command":"name","args":{"text":"Mine"}}"#);
+    client.send(r#"{"id":"c_q1","command":"tools"}"#);
+    let queued = until(&client, "the answer to c_q1", |line| {
+        line["payload"]["command_id"] == "c_q1"
+    });
+    assert_eq!(
+        answered(&queued, "c_q1")["kind"],
+        "command_accepted",
+        "{queued:?}"
+    );
+    server.release_one();
+    let pinned = until(&client, "the answer to c_pin", |line| {
+        line["payload"]["command_id"] == "c_pin"
+    });
+    assert_eq!(
+        answered(&pinned, "c_pin")["kind"],
+        "command_accepted",
+        "{pinned:?}"
+    );
+    server.release();
+    let mut raw = vec![first_raw];
+    loop {
+        let line: String = setup
+            .deadline
+            .recv(&running.stdout)
+            .expect("waited until the deadline for fiber_exited");
+        let parsed: Value = serde_json::from_str(&line).unwrap();
+        let done = parsed["kind"] == "fiber_exited";
+        raw.push(line);
+        if done {
+            break;
+        }
+    }
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    finish(running);
+    // The first run names once by model (`c1`) and once by person (taken at
+    // step 2's drain): `read_kinds` with a `session_named` before the first
+    // `tool_call_completed` and another after the second `step_started`,
+    // with `session_status` and `clients` set aside.
     let mut expected = read_kinds();
     let at = expected
         .iter()
         .position(|k| *k == "tool_call_completed")
         .unwrap();
     expected.insert(at, "session_named");
-    assert_eq!(support::kinds(&lines), expected);
-    let id = session_id(&lines).to_owned();
-    {
-        let dir = session_dir(&setup, &id);
-        let sessions = dir.parent().unwrap();
-        let log = log::Log::open(sessions, SessionId(id.clone()), Arc::new(SystemClock)).unwrap();
-        log.append(
-            &Event::SessionNamed(SessionNamed {
-                name: Some("Mine".into()),
-                by: NamedBy::Person,
-            }),
-            None,
-            None,
-        )
+    let mut seen = 0;
+    let at_step = expected
+        .iter()
+        .position(|k| {
+            if *k == "step_started" {
+                seen += 1;
+            }
+            seen == 2
+        })
         .unwrap();
-    }
+    expected.insert(at_step + 1, "session_named");
+    let kinds: Vec<&str> = lines
+        .iter()
+        .filter(|line| line["kind"] != "session_status" && line["kind"] != "clients")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, expected);
     let before = read_lines(&session_dir(&setup, &id).join("events.jsonl"))
         .iter()
         .filter(|l| l["kind"] == "session_named")
@@ -454,8 +518,9 @@ struct Running {
 
 #[track_caller]
 fn start(setup: &Setup, args: &[&str]) -> Running {
+    // Like `ask_with`, the session runs with the setup root as its working
+    // directory, so `fiber ask --resume` later finds it there.
     let mut command = setup.fiber(args);
-    command.current_dir(setup.workspace());
     let mut child = command.spawn().unwrap();
     let group = child.id();
     let watchdog = Watchdog::group(group);
