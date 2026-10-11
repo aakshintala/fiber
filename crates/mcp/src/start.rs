@@ -18,6 +18,7 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{McpServerFailed, ServerFailure, ToolInfo, ToolSource, ToolState};
 use contract::images::Images;
+use contract::provider::ToolDefinition;
 use contract::tool::Tool;
 
 use crate::cache;
@@ -253,7 +254,8 @@ pub(crate) fn launch(
 /// failures for the log, and the servers for the session's end.
 pub struct Started {
     /// `(registered_by, tool)` pairs for the loop, sorted by qualified
-    /// name. `registered_by` is the server's name.
+    /// name. `registered_by` is the server's name, except `mcp_resources`,
+    /// which `builtin` registers when any server offers resources.
     pub tools: Vec<(String, Arc<dyn Tool>)>,
     /// One per tool, built as `main`'s `builtin::registered` builds them
     /// but with [`ToolSource::Mcp`].
@@ -431,6 +433,20 @@ pub fn start(
         ));
         tools.extend(declare(&spec, &cached.tools, &link, artifacts, &images));
     }
+    let slots: Arc<Mutex<Vec<Arc<Slot>>>> = Arc::new(Mutex::new(slots));
+    // One `mcp_resources` for every start with a server offering
+    // resources, reaching the start's own slots, so it follows adoption.
+    if slots
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .any(|slot| slot.offers_resources())
+    {
+        let definition = crate::resources_definition();
+        let tool: Arc<dyn Tool> =
+            Arc::new(crate::resources::Resources::new(&slots, artifacts, &images));
+        tools.push(("builtin".to_owned(), tool, resources_info(&definition)));
+    }
     tools.sort_by(|left, right| left.1.definition().name.cmp(&right.1.definition().name));
     let (pairs, infos): (Vec<_>, Vec<_>) = tools
         .into_iter()
@@ -441,11 +457,25 @@ pub fn start(
         infos,
         failed,
         servers: Servers {
-            slots: Arc::new(Mutex::new(slots)),
+            slots,
             resources_declared: AtomicBool::new(false),
         },
         prompts: Prompts::collect(sources),
         required_failed,
+    }
+}
+
+/// One `mcp_resources` row: listed as built in, in full, like
+/// `main`'s `builtin::registered` builds its rows.
+fn resources_info(definition: &ToolDefinition) -> ToolInfo {
+    let bytes =
+        u64::try_from(serde_json::to_vec(definition).unwrap_or_default().len()).unwrap_or(u64::MAX);
+    ToolInfo {
+        name: definition.name.clone(),
+        source: ToolSource::Builtin,
+        state: ToolState::Full,
+        bytes,
+        tokens: None,
     }
 }
 

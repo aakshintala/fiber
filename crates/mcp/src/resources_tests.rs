@@ -581,3 +581,374 @@ fn a_server_that_fails_to_start_carries_its_record() {
     }
     setup.stop(started.servers);
 }
+
+/// A fake remote MCP server offering resources: the handshake with the
+/// tools and resources capabilities, one `fetch` tool answering a
+/// resource link, two `resources/list` pages keyed on `params.cursor`,
+/// and `resources/read` keyed on `params.uri`.
+fn resource_server() -> fakes::ProviderServer {
+    fakes::ProviderServer::start_responding(|req: &fakes::Request| {
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result = |result: Value| {
+            json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
+        };
+        let error = |code: i64, message: &str| {
+            json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+                .to_string()
+        };
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => fakes::Response::status(
+                200,
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}, "resources": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                })),
+            )
+            .header("mcp-session-id", "1868a90c"),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => fakes::Response::status(
+                200,
+                result(json!({"tools": [{"name": "fetch", "description": "Fetches.", "inputSchema": {"type": "object"}}]})),
+            ),
+            Some("tools/call") => fakes::Response::status(
+                200,
+                result(json!({"content": [{"type": "resource_link", "uri": "file:///notes.txt", "name": "notes", "mimeType": "text/plain"}]})),
+            ),
+            Some("resources/list") => {
+                let page = match body
+                    .get("params")
+                    .and_then(|params| params.get("cursor"))
+                    .and_then(Value::as_str)
+                {
+                    None => json!({
+                        "resources": [{"uri": "file:///notes.txt", "name": "notes", "mimeType": "text/plain"}],
+                        "nextCursor": "p2",
+                    }),
+                    Some("p2") => json!({
+                        "resources": [{"uri": "file:///more.txt", "name": "more", "mimeType": "text/plain"}],
+                    }),
+                    Some(cursor) => panic!("unexpected cursor {cursor}"),
+                };
+                fakes::Response::status(200, result(page))
+            }
+            Some("resources/read") => {
+                let uri = body
+                    .get("params")
+                    .and_then(|params| params.get("uri"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                match uri {
+                    "file:///notes.txt" => fakes::Response::status(
+                        200,
+                        result(json!({"contents": [{"uri": "file:///notes.txt", "mimeType": "text/plain", "text": "hello"}]})),
+                    ),
+                    "file:///blob.bin" => fakes::Response::status(
+                        200,
+                        result(json!({"contents": [{"uri": "file:///blob.bin", "mimeType": "application/octet-stream", "blob": "aGk="}]})),
+                    ),
+                    _ => fakes::Response::status(200, error(-32002, "Resource not found")),
+                }
+            }
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap()
+}
+
+/// Starts `name` over `server` through the public `start`, expecting the
+/// tool declared.
+fn live(setup: &Setup, server: &fakes::ProviderServer, name: &str) -> crate::start::Started {
+    let url = format!("{}/mcp", server.url());
+    let spec = setup.remote_spec(name, &url);
+    let images: Arc<dyn contract::images::Images> = FakeImages::ok();
+    let workspace = setup.workspace();
+    let artifacts = setup.artifacts();
+    let cache = setup.cache();
+    let clock = setup.clock();
+    std::fs::create_dir_all(&artifacts).expect("artifacts dir");
+    fakes::within("the start", WITHIN, move || {
+        crate::start::start(
+            vec![spec],
+            &workspace,
+            &artifacts,
+            images,
+            &cache,
+            &clock,
+            "0.0.0",
+        )
+    })
+}
+
+/// The `mcp_resources` tool of `started`.
+fn live_tool(
+    started: &crate::start::Started,
+    artifacts: &std::path::Path,
+) -> Arc<super::Resources> {
+    let images: Arc<dyn contract::images::Images> = FakeImages::ok();
+    resources(started, artifacts, &images)
+}
+
+fn text_of(out: &contract::tool::Output) -> Vec<String> {
+    out.content
+        .iter()
+        .map(|part| match part {
+            ContentPart::Text { text } => text.clone(),
+            ContentPart::Image { .. } => "<image>".to_owned(),
+            _ => "<other>".to_owned(),
+        })
+        .collect()
+}
+
+/// The `params` of every request to `method` the fake recorded, in order.
+fn method_params(server: &fakes::ProviderServer, method: &str) -> Vec<Value> {
+    server
+        .requests()
+        .iter()
+        .filter_map(|req| serde_json::from_slice::<Value>(&req.body).ok())
+        .filter(|body| body.get("method").and_then(Value::as_str) == Some(method))
+        .map(|body| body.get("params").cloned().unwrap_or(Value::Null))
+        .collect()
+}
+
+#[test]
+fn a_live_remote_server_with_resources_declares_the_tool() {
+    let setup = Setup::new();
+    let server = resource_server();
+    let started = live(&setup, &server, "docs");
+    assert!(started.failed.is_empty());
+    let names: Vec<String> = started
+        .tools
+        .iter()
+        .map(|(_, tool)| tool.definition().name)
+        .collect();
+    assert_eq!(names, ["mcp__docs__fetch", "mcp_resources"]);
+    setup.stop(started.servers);
+}
+
+#[test]
+fn list_without_a_server_names_it_and_sends_nothing() {
+    let setup = Setup::new();
+    let server = resource_server();
+    let started = live(&setup, &server, "docs");
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let out = run(&tool, json!({"action": "list"}));
+    assert!(out.error.is_none());
+    assert_eq!(text_of(&out), ["{\"servers\":[\"docs\"]}"]);
+    assert!(
+        method_params(&server, "resources/list").is_empty(),
+        "naming the servers sends nothing",
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn list_returns_the_page_and_the_cursor_fetches_the_next() {
+    let setup = Setup::new();
+    let server = resource_server();
+    let started = live(&setup, &server, "docs");
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let first = run(&tool, json!({"action": "list", "server": "docs"}));
+    assert!(first.error.is_none());
+    assert_eq!(
+        text_of(&first),
+        [
+            "{\"resources\":[{\"uri\":\"file:///notes.txt\",\"name\":\"notes\",\
+          \"mimeType\":\"text/plain\"}],\"nextCursor\":\"p2\"}"
+        ],
+    );
+    let second = run(
+        &tool,
+        json!({"action": "list", "server": "docs", "cursor": "p2"}),
+    );
+    assert!(second.error.is_none());
+    assert_eq!(
+        text_of(&second),
+        [
+            "{\"resources\":[{\"uri\":\"file:///more.txt\",\"name\":\"more\",\
+          \"mimeType\":\"text/plain\"}]}"
+        ],
+    );
+    assert_eq!(
+        method_params(&server, "resources/list"),
+        [json!({}), json!({"cursor": "p2"})],
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn read_maps_text_and_blob_contents() {
+    let setup = Setup::new();
+    let server = resource_server();
+    let started = live(&setup, &server, "docs");
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let text = run(
+        &tool,
+        json!({"action": "read", "server": "docs", "uri": "file:///notes.txt"}),
+    );
+    assert!(text.error.is_none());
+    assert_eq!(text_of(&text), ["hello"]);
+    let blob = run(
+        &tool,
+        json!({"action": "read", "server": "docs", "uri": "file:///blob.bin"}),
+    );
+    assert!(blob.error.is_none());
+    let lines = text_of(&blob);
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].starts_with("Saved application/octet-stream content, 2 bytes, to artifacts/mcp-"),
+        "line: {}",
+        lines[0],
+    );
+    assert_eq!(
+        method_params(&server, "resources/read"),
+        [
+            json!({"uri": "file:///notes.txt"}),
+            json!({"uri": "file:///blob.bin"})
+        ],
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_resource_link_a_tool_returned_reads_through_mcp_resources() {
+    let setup = Setup::new();
+    let server = resource_server();
+    let started = live(&setup, &server, "docs");
+    let fetch = setup.tool(&started, "mcp__docs__fetch");
+    let linked = setup.run(&fetch);
+    assert!(linked.error.is_none());
+    assert_eq!(
+        text_of(&linked),
+        ["Resource link: file:///notes.txt (name: notes, type: text/plain)"],
+    );
+    // No `list` page holds any other URI, yet `read` fetches the link.
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let out = run(
+        &tool,
+        json!({"action": "read", "server": "docs", "uri": "file:///notes.txt"}),
+    );
+    assert!(out.error.is_none());
+    assert_eq!(text_of(&out), ["hello"]);
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_refused_read_is_a_tool_error_with_its_message() {
+    let setup = Setup::new();
+    let server = resource_server();
+    let started = live(&setup, &server, "docs");
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let out = run(
+        &tool,
+        json!({"action": "read", "server": "docs", "uri": "file:///missing.txt"}),
+    );
+    let failure = out.error.expect("failed");
+    assert_eq!(failure.code, ErrorCode::ToolError);
+    assert!(
+        failure.message.contains("Resource not found"),
+        "message: {}",
+        failure.message,
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn a_malformed_list_or_read_is_a_tool_error() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start_responding(|req: &fakes::Request| {
+        if req.method == "DELETE" {
+            return fakes::Response::status(200, "");
+        }
+        let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+        let id = body.get("id").cloned().unwrap_or(Value::Null);
+        let result =
+            |result: Value| json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string();
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => fakes::Response::status(
+                200,
+                result(json!({
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}, "resources": {}},
+                    "serverInfo": {"name": "remote", "version": "1"},
+                })),
+            )
+            .header("mcp-session-id", "1868a90c"),
+            Some("notifications/initialized") | Some("notifications/cancelled") | None => {
+                fakes::Response::status(202, "")
+            }
+            Some("tools/list") => fakes::Response::status(200, result(json!({"tools": []}))),
+            Some("resources/list") => {
+                fakes::Response::status(200, result(json!({"nextCursor": "p2"})))
+            }
+            Some("resources/read") => {
+                fakes::Response::status(200, result(json!({"contents": {"text": "hi"}})))
+            }
+            Some(other) => panic!("unexpected method {other}"),
+        }
+    })
+    .unwrap();
+    let started = live(&setup, &server, "docs");
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let listed = run(&tool, json!({"action": "list", "server": "docs"}));
+    let failure = listed.error.expect("failed");
+    assert_eq!(failure.code, ErrorCode::ToolError);
+    assert_eq!(
+        failure.message,
+        "The MCP server `docs` answered `resources/list` without a resource list.",
+    );
+    let read = run(
+        &tool,
+        json!({"action": "read", "server": "docs", "uri": "file:///x"}),
+    );
+    let failure = read.error.expect("failed");
+    assert_eq!(failure.code, ErrorCode::ToolError);
+    assert_eq!(
+        failure.message,
+        "The MCP server `docs` answered `resources/read` without its contents.",
+    );
+    setup.stop(started.servers);
+}
+
+#[test]
+fn the_first_starts_tool_reaches_an_adopted_server() {
+    let setup = Setup::new();
+    let server = resource_server();
+    let first = live(&setup, &server, "docs");
+    assert!(first.failed.is_empty());
+    let other = dead_spec(&setup, "other", true);
+    let second = setup.start(vec![other]);
+    assert!(second.failed.is_empty());
+    first.servers.adopt(second.servers);
+    let tool = live_tool(&first, setup.artifacts().as_path());
+    // Both servers are named, although `other` started elsewhere.
+    let named = run(&tool, json!({"action": "list"}));
+    assert!(named.error.is_none());
+    assert_eq!(text_of(&named), ["{\"servers\":[\"docs\",\"other\"]}"]);
+    // `list` on `docs` reaches the fake.
+    let listed = run(&tool, json!({"action": "list", "server": "docs"}));
+    assert!(listed.error.is_none());
+    assert!(
+        text_of(&listed)[0].contains("file:///notes.txt"),
+        "the adopted tool reaches its own server: {:?}",
+        text_of(&listed),
+    );
+    // `other` is a lazy cached server whose command does not exist: its
+    // call fails at once, proving the tool found the adopted slot and
+    // served it instead of failing `invalid_arguments`.
+    let refused = run(&tool, json!({"action": "list", "server": "other"}));
+    let failure = refused.error.expect("failed");
+    assert_eq!(failure.code, ErrorCode::McpServerUnavailable);
+    assert_eq!(refused.servers.len(), 1);
+    match &refused.servers[0] {
+        contract::tool::ServerRecord::Failed(record) => assert_eq!(record.server, "other"),
+        contract::tool::ServerRecord::Ready(_) => panic!("one failed record"),
+    }
+    setup.stop(first.servers);
+}

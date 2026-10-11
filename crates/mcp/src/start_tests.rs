@@ -9,6 +9,7 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::ServerFailure;
 use contract::events::ToolSource;
+use contract::events::ToolState;
 use contract::shapes::ContentPart;
 use contract::shapes::Effect;
 use fakes::Deadline;
@@ -1424,4 +1425,62 @@ fn the_declared_flag_starts_false_and_marks_once() {
         "adopting a marked list never touches the adopter's flag",
     );
     setup.stop(fresh.servers);
+}
+
+#[test]
+fn mcp_resources_is_declared_only_when_a_server_offers_resources() {
+    // One server without resources declares no `mcp_resources`.
+    let setup = Setup::new();
+    let without = setup.start(vec![lazy_spec(&setup, "fx", false)]);
+    assert!(without.failed.is_empty());
+    assert_eq!(names(&without), Vec::<String>::new());
+    setup.stop(without.servers);
+    // A second server offering resources declares exactly one, and an
+    // `all` check would miss a second registration, so the count pins it.
+    let setup = Setup::new();
+    let with = setup.start(vec![
+        lazy_spec(&setup, "fx", false),
+        lazy_spec(&setup, "docs", true),
+    ]);
+    assert!(with.failed.is_empty());
+    assert_eq!(names(&with), ["mcp_resources"]);
+    let registered: Vec<&str> = with
+        .tools
+        .iter()
+        .filter(|(_, tool)| tool.definition().name == "mcp_resources")
+        .map(|(registered_by, _)| registered_by.as_str())
+        .collect();
+    assert_eq!(registered, ["builtin"]);
+    setup.stop(with.servers);
+    // No servers declare none.
+    let setup = Setup::new();
+    let empty = setup.start(vec![]);
+    assert_eq!(names(&empty), Vec::<String>::new());
+    setup.stop(empty.servers);
+}
+
+#[test]
+fn the_resources_info_is_a_full_builtin_row() {
+    let setup = Setup::new();
+    let started = setup.start(vec![lazy_spec(&setup, "docs", true)]);
+    assert!(started.failed.is_empty());
+    let definition = crate::resources_definition();
+    let info = started
+        .infos
+        .iter()
+        .find(|info| info.name == "mcp_resources")
+        .expect("the resources info is declared");
+    assert_eq!(
+        *info,
+        contract::events::ToolInfo {
+            name: "mcp_resources".to_owned(),
+            source: ToolSource::Builtin,
+            state: ToolState::Full,
+            bytes: serde_json::to_vec(&definition)
+                .expect("a definition writes")
+                .len() as u64,
+            tokens: None,
+        }
+    );
+    setup.stop(started.servers);
 }
