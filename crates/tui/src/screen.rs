@@ -121,12 +121,15 @@ impl<B: Backend> Screen<B> {
         Ok(())
     }
 
-    /// Resizes the viewport; the next draw repaints it whole.
+    /// Resizes the viewport; the next draw repaints it whole. The resize's
+    /// own bytes reach the tty before returning, with the block left open
+    /// for the redraw, as below.
     pub(crate) fn resize(&mut self, width: u16, height: u16) -> Result<(), B::Error> {
         self.area = Rect::new(0, 0, width, height);
         self.last = None;
         self.terminal.backend_mut().size = self.area.as_size();
-        self.terminal.resize(self.area)
+        self.terminal.resize(self.area)?;
+        self.terminal.backend_mut().flush_inner()
     }
 
     /// The click targets of the last frame drawn: what a click hits.
@@ -206,6 +209,159 @@ impl<W: std::io::Write> SyncEmit for CrosstermBackend<W> {
     }
 }
 
+/// One frame's bytes on their way to the tty: every byte crossterm
+/// writes waits here. Crossterm's cursor commands flush eagerly
+/// (`execute!`), mid-frame; `flush` holds those: the frame backend
+/// below delivers the whole buffer in one `write` when the frame ends. Once a `Screen` call returns `Ok`, every byte it
+/// produced has reached the tty, in order; once it returns `Err`, nothing
+/// it buffered is ever written later. It never writes on drop, so no
+/// byte can reach the tty after the restore bytes at exit.
+pub(crate) struct FrameWriter<W> {
+    shared: std::rc::Rc<std::cell::RefCell<FrameWriterInner<W>>>,
+}
+
+impl<W> Clone for FrameWriter<W> {
+    fn clone(&self) -> Self {
+        Self {
+            shared: std::rc::Rc::clone(&self.shared),
+        }
+    }
+}
+
+/// The tty and one frame's bytes, shared between the writer crossterm
+/// sees and the frame backend draining it.
+struct FrameWriterInner<W> {
+    out: W,
+    buf: Vec<u8>,
+}
+
+/// One frame's reserved bytes: picked, not measured.
+// debt: 65,536 is picked, not measured; a measured frame size on the
+// benchmark runner would set it.
+const FRAME_BUFFER: usize = 65_536;
+
+impl<W: std::io::Write> FrameWriter<W> {
+    /// Ready to buffer `out`'s frames.
+    fn new(out: W) -> Self {
+        Self {
+            shared: std::rc::Rc::new(std::cell::RefCell::new(FrameWriterInner {
+                out,
+                buf: Vec::with_capacity(FRAME_BUFFER),
+            })),
+        }
+    }
+}
+
+impl<W> FrameWriterInner<W>
+where
+    W: std::io::Write,
+{
+    /// Writes the buffered bytes in one `write_all`, then flushes, and
+    /// empties the buffer whether that succeeds or fails. Only the frame
+    /// backend calls this, once per frame: an empty buffer writes nothing.
+    fn drain(&mut self) -> std::io::Result<()> {
+        let drained = if self.buf.is_empty() {
+            Ok(())
+        } else {
+            self.out.write_all(&self.buf)
+        };
+        self.buf.clear();
+        drained.and(self.out.flush())
+    }
+}
+
+impl<W: std::io::Write> std::io::Write for FrameWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.shared.borrow_mut().buf.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    /// Holds: crossterm's mid-frame flushes deliver nothing; the frame
+    /// backend drains the buffer at the frame's end.
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Crossterm over the frame writer, with a `flush` that delivers the
+/// whole buffered frame in one write. Crossterm flushes eagerly around
+/// its cursor commands, mid-frame; those flushes only reach the writer
+/// above, which holds them. The frame's end, and the resize below, drain
+/// through here instead, so each draws exactly one `write`.
+pub(crate) struct FrameBackend<W: std::io::Write, B = CrosstermBackend<FrameWriter<W>>> {
+    inner: B,
+    writer: FrameWriter<W>,
+}
+
+impl<W, B> Backend for FrameBackend<W, B>
+where
+    W: std::io::Write,
+    B: Backend<Error = std::io::Error>,
+{
+    type Error = std::io::Error;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+        I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+        self.inner.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+        self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+        self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+        self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
+        self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        self.inner.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+        self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> Result<Size, Self::Error> {
+        self.inner.size()
+    }
+
+    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+        self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.writer.shared.borrow_mut().drain()
+    }
+}
+
+impl<W: std::io::Write> SyncEmit for FrameBackend<W> {
+    fn emit(&mut self, begin: bool) -> Result<(), Self::Error> {
+        use std::io::Write as _;
+        self.inner
+            .write_all(if begin { SYNC_BEGIN } else { SYNC_END })
+    }
+}
+
+/// A crossterm backend writing each frame in one write, through the frame
+/// writer.
+pub(crate) fn backend<W: std::io::Write>(out: W) -> FrameBackend<W> {
+    let writer = FrameWriter::new(out);
+    FrameBackend {
+        inner: CrosstermBackend::new(writer.clone()),
+        writer,
+    }
+}
+
 impl SyncEmit for TestBackend {
     fn emit(&mut self, _begin: bool) -> Result<(), Self::Error> {
         Ok(())
@@ -242,6 +398,13 @@ impl<B: Backend> TtySized<B> {
             self.open = true;
         }
         Ok(())
+    }
+
+    /// Flushes the inner backend without closing the block: after a
+    /// resize's clear, so its bytes are on the wire before returning
+    /// while the redraw still joins their block.
+    fn flush_inner(&mut self) -> Result<(), B::Error> {
+        self.inner.flush()
     }
 }
 

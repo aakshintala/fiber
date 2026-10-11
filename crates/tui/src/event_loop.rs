@@ -19,7 +19,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 
 use contract::clock::Clock;
 use contract::{Envelope, Seq, SessionId};
-use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::backend::Backend;
 use signal_hook::consts::{SIGINT, SIGQUIT, SIGWINCH};
 use signal_hook::iterator::Signals;
 
@@ -61,7 +61,7 @@ pub fn run(
     let Ok(out) = tty.try_clone() else {
         return 1;
     };
-    let Ok(mut screen) = Screen::new(CrosstermBackend::new(out), width, height) else {
+    let Ok(mut screen) = Screen::new(crate::screen::backend(out), width, height) else {
         return 1;
     };
     let mut app = App::new(launch.workspace.clone());
@@ -292,9 +292,31 @@ impl<B: Backend> Loop<B> {
                 self.app.begin_batch();
             }
             let mut code = None;
+            // A frame separates two Bytes inputs unless both are
+            // wheel-only, so every other input keeps the frame it gets
+            // today. `framed` avoids a pre-frame before the first input;
+            // non-Bytes batches never enter this branch.
+            let mut wheel_prev = false;
+            let mut framed = false;
             for input in inputs {
                 self.wakeups = self.wakeups.saturating_add(1);
-                if let Some(quit) = self.handle(input) {
+                if let Input::Bytes(bytes) = input {
+                    let events = self.parser.feed(&bytes);
+                    let wheel = Self::wheel_only(&events);
+                    if framed
+                        && !(wheel_prev && wheel)
+                        && let Some(quit) = self.frame(rx)
+                    {
+                        code = Some(quit);
+                        break;
+                    }
+                    framed = true;
+                    wheel_prev = wheel;
+                    if let Some(quit) = self.handle_events(events) {
+                        code = Some(quit);
+                        break;
+                    }
+                } else if let Some(quit) = self.handle(input) {
                     code = Some(quit);
                     break;
                 }
@@ -313,6 +335,161 @@ impl<B: Backend> Loop<B> {
         }
     }
 
+    /// Whether `events` hold only wheel steps: a non-empty run of wheel
+    /// reports, so a batch of them shares one frame.
+    fn wheel_only(events: &[Event]) -> bool {
+        !events.is_empty()
+            && events.iter().all(|event| {
+                matches!(
+                    event,
+                    Event::Mouse(mouse)
+                        if matches!(mouse.kind, MouseKind::WheelUp | MouseKind::WheelDown)
+                )
+            })
+    }
+
+    /// Handles parsed terminal events: the time, what each does to the
+    /// app, and what each sends. `run` parses each read first, so a Bytes
+    /// batch can share a frame across a run of wheel steps; `handle`
+    /// parses reads itself. Returns the exit code when the terminal
+    /// quits, before any frame.
+    fn handle_events(&mut self, events: Vec<Event>) -> Option<i32> {
+        self.app.set_now(
+            self.clock.now(),
+            contract::clock::wall_ms(self.clock.wall()),
+        );
+        let before = self.app.session().cloned();
+        for event in events {
+            let effect = match event {
+                Event::Stroke(stroke) => self.app.on_press(stroke, self.clock.now()),
+                Event::Key(key) => self.app.on_key(key, self.clock.now()),
+                Event::Edit(edit) => self.app.on_edit(edit),
+                Event::Mouse(mouse) => {
+                    // Every left click, on a target or not, clears
+                    // "Copied" and ends a finished attention title
+                    // (`docs/tui.md`, "Getting the person's
+                    // attention"); a click on `copy` sets it again.
+                    if mouse.kind == MouseKind::Press(Button::Left) {
+                        self.app.clear_copied();
+                        self.app.attention_seen();
+                    }
+                    self.app.on_drag(&mouse);
+                    self.app.on_wheel(&mouse);
+                    let selected = self.app.on_select(&mouse, self.screen.targets());
+                    let clicked = self
+                        .pointer
+                        .on_mouse(&mouse, self.screen.targets(), self.hover);
+                    // A click's effect, else the selection's.
+                    let effect = clicked.map_or(Effect::None, |target| self.app.on_click(target));
+                    if effect == Effect::None {
+                        selected
+                    } else {
+                        effect
+                    }
+                }
+                Event::Reply(Reply::KittyFlags(_)) => {
+                    self.kitty();
+                    Effect::None
+                }
+                Event::Reply(Reply::Appearance(appearance)) => {
+                    self.screen.appearance(appearance);
+                    Effect::None
+                }
+                Event::Reply(Reply::DeviceAttributes) => Effect::None,
+            };
+            match effect {
+                Effect::None => {}
+                Effect::Copy(text) => {
+                    clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
+                }
+                Effect::OpenLink(url) => self.open_link(url),
+                Effect::Send(lines) => self.send(&lines),
+                Effect::Quit => return Some(0),
+                Effect::Exit(lines) => {
+                    // The quit question's closes go out, then the
+                    // terminal quits: a close never written keeps
+                    // its resume line.
+                    self.send(&lines);
+                    return Some(0);
+                }
+                Effect::ListFiles => self.list_files(),
+                Effect::ReadImage(ticket) => {
+                    if let Some(notice) = crate::paste_image::start(
+                        self.paste_reader.as_ref(),
+                        &self.clock,
+                        self.files_out.as_ref(),
+                        ticket,
+                    ) {
+                        // Nothing started, so the running ticket's
+                        // result can never arrive: landing the
+                        // failure shows the notice and clears the
+                        // gate for the next press.
+                        self.app.on_image(ticket, Err(notice));
+                    }
+                }
+                Effect::FindPause { generation, after } => {
+                    if let Some(out) = &self.files_out {
+                        let clock = Arc::clone(&self.clock);
+                        let out = out.clone();
+                        // A pause thread outliving the loop finds
+                        // the channel closed and returns.
+                        drop(crate::sources::builder("tui-find-pause").spawn(move || {
+                            clock.sleep(after);
+                            drop(out.send(Input::FindDue(generation)));
+                        }));
+                    }
+                }
+                Effect::Search { generation, query } => {
+                    if let Some(search) = &self.search {
+                        search.search(generation, query);
+                    }
+                }
+                Effect::Editor { target, text } => {
+                    if let Some(code) = self.open_editor(target, &text) {
+                        return Some(code);
+                    }
+                }
+                Effect::OpenFile(file) => {
+                    if let Some(code) = self.open_file(&file) {
+                        return Some(code);
+                    }
+                }
+            }
+        }
+        self.after_input(before)
+    }
+
+    /// The bookkeeping every handled input ends with: reporting an attach
+    /// the input brought, dropping a closed panel worker, asking a read
+    /// the picker owes, and starting a login that waits.
+    fn after_input(&mut self, before: Option<SessionId>) -> Option<i32> {
+        // An attach the input brought is reported once: the session
+        // changed to one, from none.
+        if before.is_none()
+            && let Some(session) = self.app.session()
+        {
+            (self.on_attach)(session);
+        }
+        // A closed `@` panel drops its worker and the listing it holds.
+        if !self.app.files_open() {
+            self.search = None;
+        }
+        // The model-list read the picker owes, if one is owed.
+        if let (Some(refresh), Some(out)) = (self.app.take_reads(), &self.files_out) {
+            self.model_reader.ask(refresh, &out.clone());
+        }
+        // The browser login the input asked for, if one waits: its
+        // progress and its end arrive as `Input::Login`.
+        if let Some(out) = self.files_out.clone()
+            && let Some(start) = self.app.take_login_start()
+        {
+            let worker = crate::login_worker::start(start, Arc::clone(&self.clock), out);
+            self.app.login_started(worker);
+        }
+        self.save_shares();
+        None
+    }
+
     /// Handles one input: the time, what it does to the app, and what it
     /// sends. Returns the exit code when the terminal quits, before any
     /// frame, as handling every input in `step` did.
@@ -324,104 +501,8 @@ impl<B: Backend> Loop<B> {
         let before = self.app.session().cloned();
         match input {
             Input::Bytes(bytes) => {
-                for event in self.parser.feed(&bytes) {
-                    let effect = match event {
-                        Event::Stroke(stroke) => self.app.on_press(stroke, self.clock.now()),
-                        Event::Key(key) => self.app.on_key(key, self.clock.now()),
-                        Event::Edit(edit) => self.app.on_edit(edit),
-                        Event::Mouse(mouse) => {
-                            // Every left click, on a target or not, clears
-                            // "Copied" and ends a finished attention title
-                            // (`docs/tui.md`, "Getting the person's
-                            // attention"); a click on `copy` sets it again.
-                            if mouse.kind == MouseKind::Press(Button::Left) {
-                                self.app.clear_copied();
-                                self.app.attention_seen();
-                            }
-                            self.app.on_drag(&mouse);
-                            self.app.on_wheel(&mouse);
-                            let selected = self.app.on_select(&mouse, self.screen.targets());
-                            let clicked =
-                                self.pointer
-                                    .on_mouse(&mouse, self.screen.targets(), self.hover);
-                            // A click's effect, else the selection's.
-                            let effect =
-                                clicked.map_or(Effect::None, |target| self.app.on_click(target));
-                            if effect == Effect::None {
-                                selected
-                            } else {
-                                effect
-                            }
-                        }
-                        Event::Reply(Reply::KittyFlags(_)) => {
-                            self.kitty();
-                            Effect::None
-                        }
-                        Event::Reply(Reply::Appearance(appearance)) => {
-                            self.screen.appearance(appearance);
-                            Effect::None
-                        }
-                        Event::Reply(Reply::DeviceAttributes) => Effect::None,
-                    };
-                    match effect {
-                        Effect::None => {}
-                        Effect::Copy(text) => {
-                            clipboard::copy(self.tty.as_ref(), self.copy_command.as_deref(), text);
-                        }
-                        Effect::OpenLink(url) => self.open_link(url),
-                        Effect::Send(lines) => self.send(&lines),
-                        Effect::Quit => return Some(0),
-                        Effect::Exit(lines) => {
-                            // The quit question's closes go out, then the
-                            // terminal quits: a close never written keeps
-                            // its resume line.
-                            self.send(&lines);
-                            return Some(0);
-                        }
-                        Effect::ListFiles => self.list_files(),
-                        Effect::ReadImage(ticket) => {
-                            if let Some(notice) = crate::paste_image::start(
-                                self.paste_reader.as_ref(),
-                                &self.clock,
-                                self.files_out.as_ref(),
-                                ticket,
-                            ) {
-                                // Nothing started, so the running ticket's
-                                // result can never arrive: landing the
-                                // failure shows the notice and clears the
-                                // gate for the next press.
-                                self.app.on_image(ticket, Err(notice));
-                            }
-                        }
-                        Effect::FindPause { generation, after } => {
-                            if let Some(out) = &self.files_out {
-                                let clock = Arc::clone(&self.clock);
-                                let out = out.clone();
-                                // A pause thread outliving the loop finds
-                                // the channel closed and returns.
-                                drop(crate::sources::builder("tui-find-pause").spawn(move || {
-                                    clock.sleep(after);
-                                    drop(out.send(Input::FindDue(generation)));
-                                }));
-                            }
-                        }
-                        Effect::Search { generation, query } => {
-                            if let Some(search) = &self.search {
-                                search.search(generation, query);
-                            }
-                        }
-                        Effect::Editor { target, text } => {
-                            if let Some(code) = self.open_editor(target, &text) {
-                                return Some(code);
-                            }
-                        }
-                        Effect::OpenFile(file) => {
-                            if let Some(code) = self.open_file(&file) {
-                                return Some(code);
-                            }
-                        }
-                    }
-                }
+                let events = self.parser.feed(&bytes);
+                return self.handle_events(events);
             }
             Input::Hub(line) => {
                 let lines = self.app.on_line(line);
@@ -482,31 +563,7 @@ impl<B: Backend> Loop<B> {
                 }
             }
         }
-        // An attach the input brought is reported once: the session
-        // changed to one, from none.
-        if before.is_none()
-            && let Some(session) = self.app.session()
-        {
-            (self.on_attach)(session);
-        }
-        // A closed `@` panel drops its worker and the listing it holds.
-        if !self.app.files_open() {
-            self.search = None;
-        }
-        // The model-list read the picker owes, if one is owed.
-        if let (Some(refresh), Some(out)) = (self.app.take_reads(), &self.files_out) {
-            self.model_reader.ask(refresh, &out.clone());
-        }
-        // The browser login the input asked for, if one waits: its
-        // progress and its end arrive as `Input::Login`.
-        if let Some(out) = self.files_out.clone()
-            && let Some(start) = self.app.take_login_start()
-        {
-            let worker = crate::login_worker::start(start, Arc::clone(&self.clock), out);
-            self.app.login_started(worker);
-        }
-        self.save_shares();
-        None
+        self.after_input(before)
     }
 
     /// Loads the pages the frame needs, and draws what changed: once per
@@ -543,7 +600,12 @@ impl<B: Backend> Loop<B> {
     /// code draws once per batch through `run`.
     #[cfg(test)]
     fn step(&mut self, input: Input, rx: &Receiver<Input>) -> Option<i32> {
-        if let Some(code) = self.handle(input) {
+        if let Input::Bytes(bytes) = input {
+            let events = self.parser.feed(&bytes);
+            if let Some(code) = self.handle_events(events) {
+                return Some(code);
+            }
+        } else if let Some(code) = self.handle(input) {
             return Some(code);
         }
         self.frame(rx)

@@ -25,6 +25,8 @@ const DOC: &str = concat!(
     "| `paging` jig, slowest jump frame | 6 ms | Linux x86_64 | picked |\n",
     "| `paging` jig, slowest re-count at a new width | 48 ms | Linux x86_64 | picked |\n",
     "| `paging` jig, slowest append frame | 4 ms | Linux x86_64 | picked |\n",
+    "| Terminal, wheel to frame, the `paging` jig's session at scale 1, 160 by 48 | 16 ms | Linux x86_64 | picked |\n",
+    "| Terminal, wheel to frame, one turn with an opened `read` of 300 lines, 160 by 48 | 16 ms | Linux x86_64 | picked |\n",
     "\n## Measuring\n\n| Not | A budget |\n|---|---|\n| x | y |\n",
 );
 
@@ -70,6 +72,8 @@ fn head() -> Value {
             "paging_jump_ms": [2.6, 2.5, 2.7, 2.6, 2.6],
             "paging_width_ms": [24.1, 23.8, 24.0, 24.4, 24.0],
             "paging_append_ms": [1.8, 1.7, 1.8, 1.9, 1.8],
+            "wheel_paging_ms": [3.9, 4.1, 3.8, 4.0, 4.2],
+            "wheel_read_ms": [1.1, 1.0, 1.2, 1.1, 1.0],
             "paging_counts": vec![json!({"lines": 8074, "turns": 10, "calls": 1051, "pages": 120, "rows": 2915}); 5]
         },
         "failures": []
@@ -122,7 +126,9 @@ fn base() -> Value {
             "paging_load_ms": [1.1, 1.1, 1.1, 1.1, 1.1],
             "paging_jump_ms": [2.2, 2.2, 2.2, 2.2, 2.2],
             "paging_width_ms": [20.5, 20.5, 20.5, 20.5, 20.5],
-            "paging_append_ms": [1.5, 1.5, 1.5, 1.5, 1.5]
+            "paging_append_ms": [1.5, 1.5, 1.5, 1.5, 1.5],
+            "wheel_paging_ms": [3.5, 3.5, 3.5, 3.5, 3.5],
+            "wheel_read_ms": [0.9, 0.9, 0.9, 0.9, 0.9]
         },
         "failures": []
     })
@@ -823,6 +829,28 @@ const PAGING: [(&str, &str); 6] = [
 #[test]
 fn a_head_missing_a_paging_metric_fails_naming_it() {
     for (budget, id) in PAGING {
+        let mut missing = head();
+        missing["metrics"].as_object_mut().unwrap().remove(id);
+        let failures = failures_of(&missing);
+        assert!(has(&failures, id), "{id}: {failures:?}");
+        assert!(has(&failures, budget), "{id}: {failures:?}");
+    }
+}
+
+const WHEEL: [(&str, &str); 2] = [
+    (
+        "Terminal, wheel to frame, the `paging` jig's session",
+        "wheel_paging_ms",
+    ),
+    (
+        "Terminal, wheel to frame, one turn with an opened `read`",
+        "wheel_read_ms",
+    ),
+];
+
+#[test]
+fn a_head_missing_a_wheel_metric_fails_naming_it() {
+    for (budget, id) in WHEEL {
         let mut missing = head();
         missing["metrics"].as_object_mut().unwrap().remove(id);
         let failures = failures_of(&missing);

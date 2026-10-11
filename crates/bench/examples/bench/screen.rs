@@ -119,6 +119,45 @@ impl Screen {
             .any(|row| row.iter().collect::<String>().contains(needle))
     }
 
+    /// The first row and column holding `needle`, reading rows top to
+    /// bottom: a needle never spans rows, and an empty one matches
+    /// nothing, as in [`Screen::holds`].
+    pub(crate) fn find(&self, needle: &str) -> Option<(usize, usize)> {
+        if needle.is_empty() {
+            return None;
+        }
+        for (row, cells) in self.cells.iter().enumerate() {
+            let text: String = cells.iter().collect();
+            if let Some(byte) = text.find(needle) {
+                let mut col = 0;
+                for (at, _) in text.char_indices() {
+                    if at >= byte {
+                        break;
+                    }
+                    col += 1;
+                }
+                return Some((row, col));
+            }
+        }
+        None
+    }
+
+    /// Each row's cells `from..to`, joined with newlines, untrimmed: the
+    /// caller cuts a column out of whole rows. Past the last column reads
+    /// blank, and an empty or backward range reads empty.
+    pub(crate) fn columns(&self, from: usize, to: usize) -> String {
+        self.cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .skip(from)
+                    .take(to.saturating_sub(from))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// The rows as text for a timeout note: trailing blanks trimmed,
     /// joined by newlines.
     pub(crate) fn text(&self) -> String {
