@@ -24,8 +24,6 @@ const RULE: Colour = Colour::Rgb(58, 58, 74);
 const COMMENT: Colour = Colour::Rgb(122, 122, 138);
 /// Code blocks sit on the `code` slab.
 const CODE_BG: Colour = Colour::Rgb(24, 24, 33);
-/// The turn's card: `turn/card.rs` paints its rows on `surface`.
-const CARD_BG: Colour = Colour::Rgb(26, 26, 34);
 
 /// The row's symbols, one per cell.
 #[track_caller]
@@ -54,9 +52,10 @@ fn find_col(screen: &Grid, y: u16, needle: &str) -> u16 {
     let want: Vec<String> = needle.chars().map(|ch| ch.to_string()).collect();
     (0..160)
         .find(|x| {
-            want.iter()
-                .enumerate()
-                .all(|(dx, ch)| screen.cell(x + dx as u16, y).symbol == *ch)
+            want.iter().enumerate().all(|(dx, ch)| {
+                let dx = u16::try_from(dx).expect("the run fits its row");
+                screen.cell(x + dx, y).symbol == *ch
+            })
         })
         .expect("the markdown run on its row")
 }
@@ -108,7 +107,12 @@ fn markdown_reply_uses_the_markdown_look() {
     for x in hx..hx + 7 {
         let cell = screen.cell(x, heading);
         assert_eq!(cell.fg, HEADING, "heading cell ({x}, {heading})");
-        assert_eq!(cell.bg, CARD_BG, "heading cell ({x}, {heading})");
+        // The card's own background, whatever role paints it.
+        assert_eq!(
+            cell.bg,
+            screen.cell(hx + 7, heading).bg,
+            "heading cell ({x}, {heading})"
+        );
         assert!(cell.bold, "heading cell ({x}, {heading})");
     }
 
@@ -119,7 +123,12 @@ fn markdown_reply_uses_the_markdown_look() {
         let cell = screen.cell(bx + dx, para);
         assert!(cell.bold, "bold cell ({}, {para})", bx + dx);
         assert_eq!(cell.fg, Colour::Default, "bold cell ({}, {para})", bx + dx);
-        assert_eq!(cell.bg, CARD_BG, "bold cell ({}, {para})", bx + dx);
+        assert_eq!(
+            cell.bg,
+            screen.cell(bx + 4, para).bg,
+            "bold cell ({}, {para})",
+            bx + dx
+        );
     }
 
     // Inline code is in info on the card, its backticks stripped.
@@ -129,7 +138,13 @@ fn markdown_reply_uses_the_markdown_look() {
     for dx in 0..8 {
         let cell = screen.cell(cx + dx, para);
         assert_eq!(cell.fg, INFO, "inline code cell ({}, {para})", cx + dx);
-        assert_eq!(cell.bg, CARD_BG, "inline code cell ({}, {para})", cx + dx);
+        // The card cell next to it on the same row: no tint of its own.
+        assert_eq!(
+            cell.bg,
+            screen.cell(cx - 1, para).bg,
+            "inline code cell ({}, {para})",
+            cx + dx
+        );
     }
 
     // The bullet is "• " in accent; its wrapped line hangs two columns in.
@@ -193,7 +208,12 @@ fn markdown_reply_uses_the_markdown_look() {
             let cell = screen.cell(x, ey);
             assert_eq!(cell.symbol.as_str(), glyph, "edge cell ({x}, {ey})");
             assert_eq!(cell.fg, CODE_BG, "edge cell ({x}, {ey})");
-            assert_eq!(cell.bg, CARD_BG, "edge cell ({x}, {ey})");
+            // The card's own background, read off the heading's row.
+            assert_eq!(
+                cell.bg,
+                screen.cell(hx + 7, heading).bg,
+                "edge cell ({x}, {ey})"
+            );
         }
     }
     // Line numbers are right-aligned in four columns in rule, then two spaces.
@@ -259,7 +279,8 @@ fn markdown_reply_uses_the_markdown_look() {
     // Number columns are right-aligned in the text colour.
     for (y, digits) in [(hub, "41"), (hub, "3,120"), (tui, "212"), (tui, "9,804")] {
         let dx = find_col(&screen, y, digits);
-        for offset in 0..digits.len() as u16 {
+        let len = u16::try_from(digits.len()).expect("the number fits its row");
+        for offset in 0..len {
             assert_eq!(
                 screen.cell(dx + offset, y).fg,
                 Colour::Default,
