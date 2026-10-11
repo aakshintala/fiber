@@ -14,7 +14,7 @@
 
 use super::input::{Ev, Key};
 use super::{Args, Term};
-use super::{BC, BI, BW, RED};
+use super::{BC, BI, BK, BW, RED};
 use super::{bold, dim, fg, paint, row, slab, sp, view_header};
 use crate::cases::{Case, Surface};
 use ratatui::style::Style;
@@ -50,6 +50,14 @@ const CASES: &[Case<Look>] = &[
         check: "usage broken down by turn, by model and by delegate, each with tokens by kind, billed and subscription cost, and the budget left.",
         build: || Look { kind: Kind::Usage },
     },
+    Case {
+        name: "changed-files",
+        help: "the files Fiber changed with one file's hunks",
+        check: "the changed files with the chosen file's hunks as a diff against HEAD, the untracked file wholly added, removals red.",
+        build: || Look {
+            kind: Kind::ChangedFiles,
+        },
+    },
 ];
 
 /// `--view-case`, for `--help` and `check/views.md`.
@@ -66,6 +74,7 @@ enum Kind {
     JobPty,
     Running,
     Usage,
+    ChangedFiles,
 }
 
 struct Look {
@@ -235,6 +244,49 @@ fn usage_rows() -> Vec<super::Row> {
     ]
 }
 
+/// Changed files: the files Fiber changed, with the chosen file's hunks as
+/// the workspace's current diff against HEAD. Removals read red; additions
+/// keep the default colour, since the palette names no green.
+fn changed_files_rows(w: usize) -> Vec<super::Row> {
+    let mut out = vec![
+        row(vec![
+            sp("crates/tui/src/view.rs", bold()),
+            sp(" · +41 −12", dim()),
+        ]),
+        row(vec![
+            sp("notes/scratch.md", Style::new()),
+            sp(" · untracked, wholly added", dim()),
+        ]),
+        super::Row::default(),
+    ];
+    let hunks = [
+        "@@ -12,7 +12,9 @@ fn paint(",
+        "     let spans = fit(&r.spans, w as usize);",
+        "-    buf.set_line(x, y, &Line::from(spans), w);",
+        "+    let line = Line::from(spans);",
+        "+    buf.set_line(x, y, &line, w);",
+        "     if let Some(bg) = r.bg {",
+    ];
+    out.extend(slab(
+        hunks
+            .iter()
+            .map(|l| {
+                if l.starts_with('-') {
+                    row(vec![sp(l.to_string(), fg(RED))])
+                } else if l.starts_with("@@") {
+                    row(vec![sp(l.to_string(), dim())])
+                } else {
+                    row(vec![sp(l.to_string(), Style::new())])
+                }
+            })
+            .collect(),
+        BK,
+        None,
+        w,
+    ));
+    out
+}
+
 fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
     match c.kind {
         Kind::Delegate => {
@@ -262,6 +314,12 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             let mut out = vec![view_header("Usage", "/usage")];
             out.push(super::Row::default());
             out.extend(usage_rows());
+            out
+        }
+        Kind::ChangedFiles => {
+            let mut out = vec![view_header("Changed files", "diff against HEAD")];
+            out.push(super::Row::default());
+            out.extend(changed_files_rows(cols));
             out
         }
         Kind::JobPty => {
@@ -464,7 +522,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 4);
+        assert_eq!(CASES.len(), 5);
         assert!(parse("nope").is_none());
     }
 
@@ -607,6 +665,62 @@ mod tests {
             assert!(t.contains("subscription"), "no subscription cost");
             assert!(t.contains("budget left"), "no budget left");
         }
+    }
+
+    #[test]
+    fn changed_files_header_row() {
+        for cols in [160, NARROW] {
+            let c = parse_case("changed-files");
+            let buf = buffer(&c, cols, 48);
+            assert_header(
+                &buf,
+                "changed-files",
+                "Changed files",
+                "diff against HEAD",
+                cols,
+            );
+        }
+    }
+
+    #[test]
+    fn changed_files_shows_files_and_hunks() {
+        for cols in [160, NARROW] {
+            let c = parse_case("changed-files");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("crates/tui/src/view.rs"), "no file row");
+            assert!(t.contains("+41"), "no additions");
+            assert!(t.contains("−12"), "no deletions");
+            assert!(t.contains("notes/scratch.md"), "no untracked file");
+            assert!(t.contains("untracked"), "untracked not marked");
+            assert!(t.contains("@@ -12,7 +12,9 @@"), "no hunk header");
+            assert!(t.contains("-    buf.set_line"), "no removal");
+            assert!(t.contains("+    let line"), "no addition");
+        }
+    }
+
+    #[test]
+    fn changed_files_marks_removals_red_and_hunks_dim() {
+        let rows = changed_files_rows(160);
+        let removal = rows
+            .iter()
+            .find(|r| {
+                r.spans
+                    .iter()
+                    .any(|s| s.content.contains("-    buf.set_line"))
+            })
+            .unwrap();
+        assert_eq!(removal.spans[0].style.fg, Some(crate::RED));
+        // Additions keep the default colour: the palette names no green.
+        let addition = rows
+            .iter()
+            .find(|r| r.spans.iter().any(|s| s.content.contains("+    let line")))
+            .unwrap();
+        assert_eq!(addition.spans[0].style.fg, None);
+        let hunk = rows
+            .iter()
+            .find(|r| r.spans.iter().any(|s| s.content.starts_with("@@")))
+            .unwrap();
+        assert!(hunk.spans[0].style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
