@@ -21,6 +21,7 @@ fn empty_servers() -> crate::mcp_servers::SessionServers {
     let started = mcp::start(
         Vec::new(),
         &workspace,
+        &root.path().join("artifacts"),
         &workspace.join("cache"),
         &clock,
         "0.0.0",

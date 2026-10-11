@@ -136,7 +136,7 @@ pub(crate) fn text(result: &PromptResult) -> Result<String, String> {
                 }
                 Content::Text { .. } => {}
                 Content::Image => return Err("an image".to_owned()),
-                Content::Audio => return Err("audio".to_owned()),
+                Content::Audio { .. } => return Err("audio".to_owned()),
                 Content::Resource { resource } => match &resource.text {
                     Some(found) if !found.is_empty() => texts.push(found.clone()),
                     Some(_) => {}
@@ -145,7 +145,7 @@ pub(crate) fn text(result: &PromptResult) -> Result<String, String> {
                     }
                     None => return Err("an unreadable resource".to_owned()),
                 },
-                Content::ResourceLink => return Err("a resource link".to_owned()),
+                Content::ResourceLink { .. } => return Err("a resource link".to_owned()),
                 Content::Other => return Err("unsupported content".to_owned()),
                 Content::Unreadable => return Err("unreadable content".to_owned()),
             }

@@ -3,7 +3,8 @@
 use serde_json::{Map, Value, json};
 
 use super::{
-    Argument, CallResult, Content, ListedPrompt, ListedTool, Message, entries, from_object,
+    Argument, CallResult, Content, ListedPrompt, ListedTool, Message, Resource, entries,
+    from_object,
 };
 
 fn tool(value: Value) -> ListedTool {
@@ -172,6 +173,37 @@ fn unknown_fields_survive_a_round_trip() {
     assert_eq!(again, read);
 }
 
+fn audio(data: Option<Value>, mime_type: Option<&str>) -> Content {
+    Content::Audio {
+        data,
+        mime_type: mime_type.map(str::to_owned),
+    }
+}
+
+fn resource_link(uri: Option<&str>, name: Option<&str>, mime_type: Option<&str>) -> Content {
+    Content::ResourceLink {
+        uri: uri.map(str::to_owned),
+        name: name.map(str::to_owned),
+        mime_type: mime_type.map(str::to_owned),
+    }
+}
+
+fn resource(
+    text: Option<&str>,
+    blob: Option<Value>,
+    uri: Option<&str>,
+    mime_type: Option<&str>,
+) -> Content {
+    Content::Resource {
+        resource: Resource {
+            text: text.map(str::to_owned),
+            blob,
+            uri: uri.map(str::to_owned),
+            mime_type: mime_type.map(str::to_owned),
+        },
+    }
+}
+
 #[test]
 fn content_parses_each_shape() {
     let result: CallResult = serde_json::from_value(json!({
@@ -180,14 +212,17 @@ fn content_parses_each_shape() {
             {"type": "text"},
             {"type": "image"},
             {"type": "audio"},
+            {"type": "audio", "data": "aGk=", "mimeType": "audio/mpeg"},
             {"type": "resource", "resource": {"text": "from a file"}},
             {"type": "resource", "resource": {"blob": "aGk="}},
+            {"type": "resource", "resource": {"text": "t", "uri": "file:///x", "mimeType": "text/plain"}},
             {"type": "resource", "resource": {}},
             {"type": "resource"},
             {"type": "resource", "resource": null},
             {"type": "resource", "resource": 5},
             {"type": "resource", "resource": ["hello", null]},
             {"type": "resource_link"},
+            {"type": "resource_link", "uri": "file:///x", "name": "x", "mimeType": "text/plain"},
             {"type": "bogus"},
             {"no": "type"},
             7,
@@ -202,50 +237,18 @@ fn content_parses_each_shape() {
             },
             Content::Text { text: None },
             Content::Image,
-            Content::Audio,
-            Content::Resource {
-                resource: super::Resource {
-                    text: Some("from a file".to_owned()),
-                    blob: None,
-                }
-            },
-            Content::Resource {
-                resource: super::Resource {
-                    text: None,
-                    blob: Some(Value::from("aGk=")),
-                }
-            },
-            Content::Resource {
-                resource: super::Resource {
-                    text: None,
-                    blob: None,
-                }
-            },
-            Content::Resource {
-                resource: super::Resource {
-                    text: None,
-                    blob: None,
-                }
-            },
-            Content::Resource {
-                resource: super::Resource {
-                    text: None,
-                    blob: None,
-                }
-            },
-            Content::Resource {
-                resource: super::Resource {
-                    text: None,
-                    blob: None,
-                }
-            },
-            Content::Resource {
-                resource: super::Resource {
-                    text: None,
-                    blob: None,
-                }
-            },
-            Content::ResourceLink,
+            audio(None, None),
+            audio(Some(Value::from("aGk=")), Some("audio/mpeg")),
+            resource(Some("from a file"), None, None, None),
+            resource(None, Some(Value::from("aGk=")), None, None),
+            resource(Some("t"), None, Some("file:///x"), Some("text/plain")),
+            resource(None, None, None, None),
+            resource(None, None, None, None),
+            resource(None, None, None, None),
+            resource(None, None, None, None),
+            resource(None, None, None, None),
+            resource_link(None, None, None),
+            resource_link(Some("file:///x"), Some("x"), Some("text/plain")),
             Content::Other,
             Content::Unreadable,
             Content::Unreadable,
@@ -254,6 +257,72 @@ fn content_parses_each_shape() {
     let empty: CallResult = from_object(json!(7)).unwrap_or_default();
     assert_eq!(empty, CallResult::default());
     let _: Map<String, Value> = Map::new();
+}
+
+#[test]
+fn new_content_fields_read_present_absent_and_wrong() {
+    for (name, value, expected) in [
+        ("audio absent", json!({"type": "audio"}), audio(None, None)),
+        (
+            "audio null",
+            json!({"type": "audio", "data": null, "mimeType": null}),
+            audio(None, None),
+        ),
+        (
+            "audio present",
+            json!({"type": "audio", "data": "aGk=", "mimeType": "audio/mpeg"}),
+            audio(Some(Value::from("aGk=")), Some("audio/mpeg")),
+        ),
+        (
+            "audio array data and numeric type read as absent",
+            json!({"type": "audio", "data": ["aGk="], "mimeType": 7}),
+            audio(None, None),
+        ),
+        (
+            "audio numeric data stays a value",
+            json!({"type": "audio", "data": 7}),
+            audio(Some(Value::from(7)), None),
+        ),
+        (
+            "link absent",
+            json!({"type": "resource_link"}),
+            resource_link(None, None, None),
+        ),
+        (
+            "link null",
+            json!({"type": "resource_link", "uri": null, "name": null, "mimeType": null}),
+            resource_link(None, None, None),
+        ),
+        (
+            "link present",
+            json!({"type": "resource_link", "uri": "u", "name": "n", "mimeType": "m"}),
+            resource_link(Some("u"), Some("n"), Some("m")),
+        ),
+        (
+            "link wrong types read as absent",
+            json!({"type": "resource_link", "uri": 7, "name": 7, "mimeType": 7}),
+            resource_link(None, None, None),
+        ),
+        (
+            "resource uri and type absent",
+            json!({"type": "resource", "resource": {"text": "t"}}),
+            resource(Some("t"), None, None, None),
+        ),
+        (
+            "resource uri and type present",
+            json!({"type": "resource", "resource": {"uri": "u", "mimeType": "m"}}),
+            resource(None, None, Some("u"), Some("m")),
+        ),
+        (
+            "resource uri and type wrong read as absent",
+            json!({"type": "resource", "resource": {"uri": 7, "mimeType": 7}}),
+            resource(None, None, None, None),
+        ),
+    ] {
+        let result: CallResult =
+            serde_json::from_value(json!({"content": [value]})).expect("content reads");
+        assert_eq!(result.content, vec![expected], "row: {name}");
+    }
 }
 
 #[test]

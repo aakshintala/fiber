@@ -241,7 +241,16 @@ pub(crate) enum Content {
     /// An image.
     Image,
     /// Audio.
-    Audio,
+    Audio {
+        /// Its base64 data; a missing or `null` value, or an array,
+        /// reads as `None`, while any other value stays for the call
+        /// to report.
+        #[serde(default, deserialize_with = "lenient")]
+        data: Option<Value>,
+        /// Its MIME type; a non-string reads as `None`.
+        #[serde(rename = "mimeType", default, deserialize_with = "lenient")]
+        mime_type: Option<String>,
+    },
     /// An embedded resource.
     Resource {
         /// The resource; a missing, `null` or non-object resource reads
@@ -250,7 +259,17 @@ pub(crate) enum Content {
         resource: Resource,
     },
     /// A resource link.
-    ResourceLink,
+    ResourceLink {
+        /// Its URI; a non-string reads as `None`.
+        #[serde(default, deserialize_with = "lenient")]
+        uri: Option<String>,
+        /// Its name; a non-string reads as `None`.
+        #[serde(default, deserialize_with = "lenient")]
+        name: Option<String>,
+        /// Its MIME type; a non-string reads as `None`.
+        #[serde(rename = "mimeType", default, deserialize_with = "lenient")]
+        mime_type: Option<String>,
+    },
     /// A part that failed to deserialize: no `type`, a non-string
     /// `type`, or a non-object. Never serialized.
     #[serde(skip)]
@@ -268,6 +287,12 @@ pub(crate) struct Resource {
     pub text: Option<String>,
     /// Its blob; a `null` counts as absent.
     pub blob: Option<Value>,
+    /// Its URI; a non-string reads as `None`.
+    #[serde(default, deserialize_with = "lenient")]
+    pub uri: Option<String>,
+    /// Its MIME type; a non-string reads as `None`.
+    #[serde(rename = "mimeType", default, deserialize_with = "lenient")]
+    pub mime_type: Option<String>,
 }
 
 /// Reads server JSON that must be an object: anything else is rejected, so
