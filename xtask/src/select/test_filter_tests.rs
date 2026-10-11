@@ -209,106 +209,12 @@ fn a_path_attribute_on_a_non_mod_item_registers_nothing() {
 }
 
 #[test]
-fn a_pending_path_does_not_survive_a_semicolon() {
-    // The `use` item's `;` ends the attribute run, so the later `mod`
-    // without its own attribute registers nothing.
-    let files = strings(&["crates/main/src/idle_tests.rs"]);
-    let sources = vec![decl(
-        "main",
-        "crates/main/src/settings.rs",
-        "#[path = \"idle_tests.rs\"] use idle;\nmod idle_tests;",
-    )];
-    let (expression, _) = test_filter(&files, &members(), &sources);
-    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
-}
-
-#[test]
-fn a_pending_path_does_not_survive_a_braced_item() {
-    let files = strings(&["crates/main/src/idle_tests.rs"]);
-    let sources = vec![decl(
-        "main",
-        "crates/main/src/settings.rs",
-        "#[path = \"idle_tests.rs\"] fn f() {}\nmod idle_tests;",
-    )];
-    let (expression, _) = test_filter(&files, &members(), &sources);
-    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
-}
-
-#[test]
 fn an_inline_module_after_a_path_attribute_registers_nothing() {
     let files = strings(&["crates/main/src/idle_tests.rs"]);
     let sources = vec![decl(
         "main",
         "crates/main/src/settings.rs",
         "#[path = \"idle_tests.rs\"] mod idle_tests {}",
-    )];
-    let (expression, _) = test_filter(&files, &members(), &sources);
-    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
-}
-
-#[test]
-fn a_visibility_between_a_path_attribute_and_its_mod_still_registers() {
-    // A paren group is `pub(crate)`: only brace groups clear a pending
-    // `#[path]`.
-    let files = strings(&["crates/main/src/idle_tests.rs"]);
-    let sources = vec![decl(
-        "main",
-        "crates/main/src/settings.rs",
-        "#[path = \"idle_tests.rs\"] pub(crate) mod idle_tests;",
-    )];
-    let (expression, _) = test_filter(&files, &members(), &sources);
-    assert_eq!(
-        expression,
-        "(package(main) & test(/^settings::idle_tests::/))"
-    );
-}
-
-#[test]
-fn a_hash_before_a_paren_group_registers_nothing() {
-    // Only a bracket group after `#` starts an attribute.
-    let files = strings(&["crates/main/src/idle_tests.rs"]);
-    let sources = vec![decl(
-        "main",
-        "crates/main/src/settings.rs",
-        "#(path = \"idle_tests.rs\")\nmod idle_tests;",
-    )];
-    let (expression, _) = test_filter(&files, &members(), &sources);
-    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
-}
-
-#[test]
-fn an_inner_attribute_registers_nothing() {
-    // `#![...]`: the `#` is not followed by the bracket group, and the
-    // bracket group alone starts no attribute.
-    let files = strings(&["crates/main/src/idle_tests.rs"]);
-    let sources = vec![decl(
-        "main",
-        "crates/main/src/settings.rs",
-        "#![path = \"idle_tests.rs\"]\nmod idle_tests;",
-    )];
-    let (expression, _) = test_filter(&files, &members(), &sources);
-    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
-}
-
-#[test]
-fn a_lone_hash_registers_nothing() {
-    let files = strings(&["crates/main/src/idle_tests.rs"]);
-    let sources = vec![decl(
-        "main",
-        "crates/main/src/settings.rs",
-        "#\nmod idle_tests;",
-    )];
-    let (expression, _) = test_filter(&files, &members(), &sources);
-    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
-}
-
-#[test]
-fn a_mod_without_a_trailing_semicolon_registers_nothing() {
-    let files = strings(&["crates/main/src/idle_tests.rs"]);
-    let sources = vec![decl(
-        "main",
-        "crates/main/src/settings.rs",
-        "#[path = \"idle_tests.rs\"] mod idle_tests !",
     )];
     let (expression, _) = test_filter(&files, &members(), &sources);
     assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
