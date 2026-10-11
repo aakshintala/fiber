@@ -196,6 +196,8 @@ fn answer_reads_text_in_order_and_drops_the_rest() {
                         resource: Resource {
                             text: Some("file".to_owned()),
                             blob: None,
+                            uri: None,
+                            mime_type: None,
                         },
                     },
                 ],
