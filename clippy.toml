@@ -4,6 +4,7 @@ allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
 
 disallowed-methods = [
+    { path = "std::sync::mpsc::Receiver::recv_timeout", reason = "receive through fakes::Deadline (docs/testing.md, \"Waits and timeouts\")" },
     { path = "std::thread::sleep", reason = "wait on an injected contract::clock::Clock" },
     { path = "std::time::Instant::now", reason = "read time from an injected contract::clock::Clock" },
     { path = "std::time::SystemTime::now", reason = "read time from an injected contract::clock::Clock" },
