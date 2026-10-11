@@ -9,19 +9,19 @@ use crate::client;
 
 pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
     loop {
-        if gate.stopped() {
+        if gate.conns.stopped() {
             return;
         }
         match listener.accept() {
             Ok((stream, _)) => {
                 let Ok(shutdown_stream) = stream.try_clone() else {
-                    if gate.stopped() {
+                    if gate.conns.stopped() {
                         return;
                     }
                     continue;
                 };
                 let Ok((read, stop)) = support::stoppable::reader(stream) else {
-                    if gate.stopped() {
+                    if gate.conns.stopped() {
                         return;
                     }
                     continue;
@@ -39,10 +39,13 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                     // admitted after the stop is rejected instead of leaked:
                     // its stream is already shut, dropping `tx` ends its
                     // thread, and joining reaps it.
-                    match gate.push_reader(handle, client::ender(shutdown_stream, stop)) {
+                    match gate
+                        .conns
+                        .push_reader(handle, client::ender(shutdown_stream, stop))
+                    {
                         Ok(id) => {
                             if tx.send(id).is_err() {
-                                gate.finish(id);
+                                gate.conns.finish(id);
                             }
                         }
                         Err(handle) => {
@@ -57,11 +60,11 @@ pub(super) fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
             // many open files, waits until a connection ends or the session
             // stops, so the loop does not spin.
             Err(error) => {
-                if gate.stopped() {
+                if gate.conns.stopped() {
                     return;
                 }
                 if accept_error_waits(error.kind()) {
-                    gate.wait_for_room();
+                    gate.conns.wait_for_room();
                 }
             }
         }

@@ -3,14 +3,12 @@
 //! stream copied to stdout, the clients on that socket, and what is left
 //! when it exits.
 
-use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
 
 use crate::client;
@@ -26,17 +24,21 @@ use contract::{CommandId, ErrorCode, SessionId};
 use log::{Injector, Log, Watcher};
 
 mod accept;
+mod accepted;
+mod clients;
 mod conns;
 mod event;
 mod shells;
 #[cfg(test)]
 use accept::accept_error_waits;
 use accept::accept_loop;
+use accepted::Accepted;
+use clients::Clients as ClientCounts;
 use conns::Conns;
 #[cfg(test)]
 use conns::{GRACE, grace_remains};
 pub(crate) use event::envelope;
-use shells::RunningShells;
+use shells::Shells;
 pub(crate) use shells::Stopped;
 
 /// A running session process's door side: its socket, the clients on it, and
@@ -62,34 +64,35 @@ pub(crate) struct Gate {
     pub(crate) tools: Mutex<Vec<ToolInfo>>,
     /// What the `commands` command answers with, set by
     /// [`Session::commands`]; empty until then.
-    commands: Mutex<Vec<CommandInfo>>,
+    commands: OnceLock<Vec<CommandInfo>>,
     /// What the `skills` command answers with, set by [`Session::skills`];
     /// empty until then.
-    skills: Mutex<Vec<SkillInfo>>,
-    /// The id of every command this process accepted or is running, across
-    /// connections, so a repeat is rejected `duplicate_command` (`docs/invocation.md`).
-    accepted: Mutex<HashSet<String>>,
+    skills: OnceLock<Vec<SkillInfo>>,
+    pub(crate) accepted: Accepted,
+    /// The loop's inbox (`docs/architecture.md`, "One inbox"): unbounded;
+    /// each entry is one admitted command, a job's end or a hook's delivery,
+    /// and the loop drains it at step boundaries.
     inbox: Mutex<Option<Sender<Delivery>>>,
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.
-    cancel: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
+    cancel: OnceLock<Arc<dyn Fn() -> bool + Send + Sync>>,
     /// What a `close` with `now` starts (`docs/invocation.md`, "Shutdown"),
     /// wired by the session process. Unset, `now` is an ordinary close.
-    close_now: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    close_now: OnceLock<Arc<dyn Fn() + Send + Sync>>,
     /// The tool a driver `shell` runs. None leaves `shell` unknown.
-    driver_shell: Mutex<Option<Arc<dyn Tool>>>,
+    driver_shell: OnceLock<Arc<dyn Tool>>,
     /// The session's jobs, which `job_stop` and `background` reach. None
     /// leaves both with nothing to act on.
-    jobs: Mutex<Option<Arc<dyn contract::jobs::Jobs>>>,
+    jobs: OnceLock<Arc<dyn contract::jobs::Jobs>>,
     /// The session's hooks, which receive the loop's inbox so an extension's
     /// program run can be logged as `extension_exec`.
-    hooks: Mutex<Option<Arc<dyn contract::hook::Hooks>>>,
+    hooks: OnceLock<Arc<dyn contract::hook::Hooks>>,
     /// The session's extensions as the door reaches them, for the `command`
     /// driver command.
-    door: Mutex<Option<Arc<dyn contract::extension::ExtensionDoor>>>,
+    door: OnceLock<Arc<dyn contract::extension::ExtensionDoor>>,
     /// The image child's driver, which pasted images are processed through.
     /// None leaves image parts rejected: this Fiber processes no images yet.
-    images: Mutex<Option<Arc<dyn contract::images::Images>>>,
+    images: OnceLock<Arc<dyn contract::images::Images>>,
     /// The cancel a pasted image in flight sees: one per session, cancelled
     /// by shutdown alongside the driver shells, and never by `cancel`.
     pub(crate) pasting: Arc<crate::shell::ShellCancel>,
@@ -97,20 +100,14 @@ pub(crate) struct Gate {
     /// `fiber ask` and a bare [`Session::run`] append no prompt.
     pub(crate) history: OnceLock<Option<PathBuf>>,
     /// Driver shells running now, and whether shutdown has begun, which
-    /// cancels a new one as it registers. Both sit under this lock, so a
-    /// shell that registers after `close` cannot miss the snapshot.
-    shells: Mutex<RunningShells>,
-    /// Signalled whenever a driver shell leaves [`Gate::shells`].
-    shell_ended: Condvar,
+    /// cancels a new one as it registers.
+    pub(crate) shells: Shells,
     /// What a test observes, or holds, at a [`tests::Probe`] point.
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
-    stop: AtomicBool,
-    /// The `full` connections, and whether `clients` lines are sealed.
-    clients: Mutex<(u32, bool)>,
-    /// Paired with [`Gate::conns`].
-    writers: Condvar,
-    conns: Mutex<Conns>,
+    clients: ClientCounts,
+    /// The live connections, their writers, and whether the session stopped.
+    pub(crate) conns: Conns,
 }
 
 /// Replaces (`Some`) or removes (`None`) the `tools` answer's entry for a
@@ -171,14 +168,15 @@ impl Session {
         }
         // A job's end wakes the loop through the same inbox
         // (`docs/tools.md`, "Background jobs").
-        if let Some(jobs) = lock(&self.gate.jobs).as_ref() {
+        if let Some(jobs) = self.gate.jobs.get() {
             jobs.deliver_to(inbox.clone());
         }
-        if let Some(hooks) = lock(&self.gate.hooks).as_ref() {
+        if let Some(hooks) = self.gate.hooks.get() {
             hooks.deliver_to(inbox.clone());
         }
         *lock(&self.gate.inbox) = Some(inbox);
-        *lock(&self.gate.cancel) = Some(cancel);
+        let stored = self.gate.cancel.set(cancel);
+        debug_assert!(stored.is_ok(), "cancel is wired once");
         self.start_accept()?;
         run(waiting)
     }
@@ -242,7 +240,8 @@ impl Session {
     /// The tool a driver `shell` runs (`docs/invocation.md`, "Shell").
     /// With none set, `shell` stays an unknown command.
     pub fn shell(&self, tool: Arc<dyn Tool>) {
-        *lock(&self.gate.driver_shell) = Some(tool);
+        let stored = self.gate.driver_shell.set(tool);
+        debug_assert!(stored.is_ok(), "driver_shell is wired once");
     }
 
     /// Every `/name` the session runs, which the `commands` driver command
@@ -250,7 +249,8 @@ impl Session {
     /// does"). Set before [`Session::run`]; with none set, the answer is an
     /// empty list.
     pub fn commands(&self, commands: Vec<CommandInfo>) {
-        *lock(&self.gate.commands) = commands;
+        let stored = self.gate.commands.set(commands);
+        debug_assert!(stored.is_ok(), "commands is wired once");
     }
 
     /// Every skill discovery read, switched-off and shadowed ones included
@@ -259,24 +259,28 @@ impl Session {
     /// before [`Session::run`]; with none set, the answer is an empty
     /// list.
     pub fn skills(&self, skills: Vec<SkillInfo>) {
-        *lock(&self.gate.skills) = skills;
+        let stored = self.gate.skills.set(skills);
+        debug_assert!(stored.is_ok(), "skills is wired once");
     }
 
     /// The session's jobs, which the `job_stop` and `background` driver
     /// commands act on (`docs/invocation.md`, "Driver commands"). With none
     /// set, both are rejected `stale_request`: no job or call is running.
     pub fn jobs(&self, jobs: Arc<dyn contract::jobs::Jobs>) {
-        *lock(&self.gate.jobs) = Some(jobs);
+        let stored = self.gate.jobs.set(jobs);
+        debug_assert!(stored.is_ok(), "jobs is wired once");
     }
 
     /// The session's hooks, which receive the loop's inbox beside the jobs.
     pub fn hooks(&self, hooks: Arc<dyn contract::hook::Hooks>) {
-        *lock(&self.gate.hooks) = Some(hooks);
+        let stored = self.gate.hooks.set(hooks);
+        debug_assert!(stored.is_ok(), "hooks is wired once");
     }
 
     /// The session's extensions as the `command` driver command reaches them.
     pub fn extensions(&self, door: Arc<dyn contract::extension::ExtensionDoor>) {
-        *lock(&self.gate.door) = Some(door);
+        let stored = self.gate.door.set(door);
+        debug_assert!(stored.is_ok(), "door is wired once");
     }
 
     /// The in-process driver `host.drive` sends through (`docs/extensions.md`,
@@ -290,7 +294,8 @@ impl Session {
     /// (`docs/architecture.md`, "The call rules"). With none set, an image
     /// part is rejected: this Fiber processes no images yet.
     pub fn images(&self, images: Arc<dyn contract::images::Images>) {
-        *lock(&self.gate.images) = Some(images);
+        let stored = self.gate.images.set(images);
+        debug_assert!(stored.is_ok(), "images is wired once");
     }
 
     /// What changes one entry of the `tools` answer when a `model` switch
@@ -304,7 +309,7 @@ impl Session {
             let Some(gate) = gate.upgrade() else {
                 return;
             };
-            if gate.stopped() {
+            if gate.conns.stopped() {
                 return;
             }
             let mut tools = lock(&gate.tools);
@@ -330,7 +335,8 @@ impl Session {
 
     /// What `close` with `now` starts; unset, `now` is an ordinary close.
     pub fn close_now(&self, start: Arc<dyn Fn() + Send + Sync>) {
-        *lock(&self.gate.close_now) = Some(start);
+        let stored = self.gate.close_now.set(start);
+        debug_assert!(stored.is_ok(), "close_now is wired once");
     }
 
     /// What a shutdown calls to stop the door side's work
@@ -360,8 +366,8 @@ impl Session {
     /// `fiber_exited`. Idempotent; [`Session::close`] behaves as before.
     pub fn quiesce(&self) {
         // An emission holds this lock, so one in flight finishes first.
-        lock(&self.gate.clients).1 = true;
-        if let Some(door) = lock(&self.gate.door).clone() {
+        self.gate.clients.seal();
+        if let Some(door) = self.gate.door() {
             door.seal();
         }
         self.gate.cancel_shells();
@@ -391,7 +397,7 @@ impl Session {
         self.gate.wait_shells();
         #[cfg(test)]
         self.gate.note(tests::Probe::FirstShellWaitDone);
-        self.gate.mark_stopped();
+        self.gate.conns.mark_stopped();
         // The inbox sender is dropped here, so a kept receiver sees
         // `Disconnected`: the detached accept thread keeps its own `Arc`
         // until process exit and can no longer be relied on to release it.
@@ -405,8 +411,8 @@ impl Session {
             fs::remove_dir_all(&self.dir).unwrap_or(());
         }
         drop(log);
-        self.gate.wait_writers();
-        self.gate.join_clients();
+        self.gate.conns.wait_writers(self.gate.clock.as_ref());
+        self.gate.conns.join_clients();
         self.gate.wait_shells();
         // The printer's watcher returns only on a `client::STOP` line or
         // the log's end: with nothing written and another `Arc<Log>` still
@@ -434,15 +440,29 @@ impl Session {
 }
 
 impl Gate {
-    /// Claims `id` before its command is dispatched. False when an earlier
-    /// command holds it, running or accepted.
-    pub(crate) fn reserve(&self, id: &CommandId) -> bool {
-        lock(&self.accepted).insert(id.0.clone())
+    /// Stops a running turn and every driver shell.
+    pub(crate) fn stop_running(&self) -> Stopped {
+        let turn = self.cancel.get().is_some_and(|cancel| cancel());
+        let shell = self.shells.stop_all();
+        Stopped { turn, shell }
     }
 
-    /// Frees `id` once its command is rejected, so a client may retry it.
-    pub(crate) fn release(&self, id: &CommandId) {
-        lock(&self.accepted).remove(&id.0);
+    /// Marks the gate so a shell that registers later is cancelled at once,
+    /// and cancels the shells already running. A pasted image in flight is
+    /// cancelled too: the session started its child, so shutdown stops it
+    /// inside the bound. Closing the socket does not stop a tool blocked
+    /// in `run`.
+    pub(super) fn cancel_shells(&self) {
+        self.shells.seal_and_cancel();
+        self.pasting.cancel();
+    }
+
+    /// Waits until no driver shell is registered: each has answered.
+    pub(super) fn wait_shells(&self) {
+        #[cfg(test)]
+        self.shells.wait(&|| self.note(tests::Probe::ShellsWaiting));
+        #[cfg(not(test))]
+        self.shells.wait(&|| {});
     }
 
     #[cfg(test)]
@@ -455,20 +475,12 @@ impl Gate {
 
     /// One more `full` connection, and the `clients` line for it.
     pub(crate) fn attach(&self) {
-        let mut clients = lock(&self.clients);
-        clients.0 += 1;
-        if !clients.1 {
-            self.emit_clients(clients.0);
-        }
+        self.clients.attach(|count| self.emit_clients(count));
     }
 
     /// One fewer `full` connection, and the `clients` line for it.
     pub(crate) fn detach(&self) {
-        let mut clients = lock(&self.clients);
-        clients.0 = clients.0.saturating_sub(1);
-        if !clients.1 {
-            self.emit_clients(clients.0);
-        }
+        self.clients.detach(|count| self.emit_clients(count));
     }
 
     fn emit_clients(&self, count: u32) {
@@ -479,35 +491,35 @@ impl Gate {
     }
 
     pub(crate) fn commands(&self) -> Vec<CommandInfo> {
-        lock(&self.commands).clone()
+        self.commands.get().cloned().unwrap_or_default()
     }
 
     pub(crate) fn skills(&self) -> Vec<SkillInfo> {
-        lock(&self.skills).clone()
+        self.skills.get().cloned().unwrap_or_default()
     }
 
     pub(crate) fn door(&self) -> Option<Arc<dyn contract::extension::ExtensionDoor>> {
-        lock(&self.door).clone()
+        self.door.get().cloned()
     }
 
     pub(crate) fn jobs(&self) -> Option<Arc<dyn contract::jobs::Jobs>> {
-        lock(&self.jobs).clone()
+        self.jobs.get().cloned()
     }
 
     pub(crate) fn driver_shell(&self) -> Option<Arc<dyn Tool>> {
-        lock(&self.driver_shell).clone()
+        self.driver_shell.get().cloned()
     }
 
-    /// What a `close` with `now` starts, cloned out of the lock so the
+    /// What a `close` with `now` starts, cloned out of the slot so the
     /// shutdown runs with no gate lock held.
     pub(crate) fn close_now(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
-        lock(&self.close_now).clone()
+        self.close_now.get().cloned()
     }
 
-    /// The image child's driver, cloned out of the lock so no child run
+    /// The image child's driver, cloned out of the slot so no child run
     /// holds it.
     pub(crate) fn images(&self) -> Option<Arc<dyn contract::images::Images>> {
-        lock(&self.images).clone()
+        self.images.get().cloned()
     }
 
     pub(crate) fn deliver(&self, delivery: Delivery) {
@@ -535,12 +547,7 @@ impl Wake for InboxWake {
 
 impl Wake for Gate {
     fn wake(&self) {
-        // The lock is taken before the notify, so a waiter that has judged
-        // and not yet parked cannot miss this wake.
-        {
-            let _held = lock(&self.conns);
-            self.writers.notify_all();
-        }
+        self.conns.notify();
         // A clock move wakes the loop the way an accepted cancel does.
         // The delivery means only that the loop should look again.
         self.deliver(Delivery::Cancelled);
@@ -568,34 +575,24 @@ fn open_in(
         clock: Arc::clone(&clock),
         session_id,
         tools: Mutex::new(tools),
-        commands: Mutex::new(Vec::new()),
-        skills: Mutex::new(Vec::new()),
-        accepted: Mutex::new(HashSet::new()),
+        commands: OnceLock::new(),
+        skills: OnceLock::new(),
+        accepted: Accepted::new(),
         inbox: Mutex::new(None),
-        cancel: Mutex::new(None),
-        close_now: Mutex::new(None),
-        driver_shell: Mutex::new(None),
-        jobs: Mutex::new(None),
-        hooks: Mutex::new(None),
-        door: Mutex::new(None),
-        images: Mutex::new(None),
+        cancel: OnceLock::new(),
+        close_now: OnceLock::new(),
+        driver_shell: OnceLock::new(),
+        jobs: OnceLock::new(),
+        hooks: OnceLock::new(),
+        door: OnceLock::new(),
+        images: OnceLock::new(),
         pasting: Arc::new(crate::shell::ShellCancel::new()),
         history: OnceLock::new(),
-        shells: Mutex::new(RunningShells {
-            stopped: false,
-            running: Vec::new(),
-        }),
-        shell_ended: Condvar::new(),
+        shells: Shells::new(),
         #[cfg(test)]
         probe: Mutex::new(None),
-        stop: AtomicBool::new(false),
-        clients: Mutex::new((0, false)),
-        writers: Condvar::new(),
-        conns: Mutex::new(Conns {
-            live: Vec::new(),
-            writers_open: 0,
-            next: 1,
-        }),
+        clients: ClientCounts::new(),
+        conns: Conns::new(),
     });
     // The session's `Arc<Gate>` keeps this subscription alive: the weak
     // handle upgrades for as long as that allocation lives.

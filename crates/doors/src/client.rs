@@ -175,7 +175,7 @@ impl Drop for Finish {
     fn drop(&mut self) {
         #[cfg(test)]
         crate::session::park_reader_for_test();
-        self.gate.finish(self.id);
+        self.gate.conns.finish(self.id);
     }
 }
 
@@ -187,7 +187,7 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
             return;
         }
     };
-    if !conn.gate.reserve(&line.id) {
+    if !conn.gate.accepted.reserve(&line.id) {
         reject(conn, Some(line.id), ErrorCode::DuplicateCommand, DUPLICATE);
         return;
     }
@@ -585,7 +585,7 @@ pub(crate) fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, me
     if let Some(id) = &id
         && !matches!(code, ErrorCode::Malformed | ErrorCode::DuplicateCommand)
     {
-        conn.gate.release(id);
+        conn.gate.accepted.release(id);
     }
     send(
         conn,
@@ -645,7 +645,7 @@ pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
         let gate = Arc::clone(&conn.gate);
         return guard(move |result| {
             if result.is_err() {
-                gate.release(&id);
+                gate.accepted.release(&id);
             }
             answer.0(result);
         });
@@ -661,7 +661,7 @@ pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
                 result,
             }),
             Err(rejection) => {
-                gate.release(&id);
+                gate.accepted.release(&id);
                 Event::CommandRejected(CommandRejected {
                     command_id: Some(id),
                     code: rejection.code,
@@ -729,7 +729,7 @@ pub(crate) fn spawn_writer(
     stream: Box<dyn Write + Send>,
     summary: bool,
 ) -> mpsc::Sender<level::Switch> {
-    gate.begin_writer();
+    gate.conns.begin_writer();
     let ended = Arc::clone(&gate);
     let failed = Arc::clone(&gate);
     let (tx, rx) = mpsc::channel();
@@ -746,14 +746,14 @@ pub(crate) fn spawn_writer(
                 // The watcher failed: the reader and socket stay open, so
                 // the connection is shut and the client sees EOF after
                 // every line before the one that failed.
-                failed.shut(id);
+                failed.conns.shut(id);
             }
         }) {
         Ok(handle) => {
-            gate.push_writer(id, handle);
+            gate.conns.push_writer(id, handle);
             if let Ok(()) = tx.send(()) {}
         }
-        Err(_) => gate.end_writer(),
+        Err(_) => gate.conns.end_writer(),
     }
     switch_tx
 }
@@ -762,7 +762,7 @@ struct WriterEnd(Arc<Gate>);
 
 impl Drop for WriterEnd {
     fn drop(&mut self) {
-        self.0.end_writer();
+        self.0.conns.end_writer();
     }
 }
 

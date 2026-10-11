@@ -191,15 +191,10 @@ fn descriptors() -> usize {
 }
 
 fn wait_idle(gate: &Gate) {
-    let conns = super::lock(&gate.conns);
-    let (conns, _) = gate
-        .writers
-        .wait_timeout_while(conns, DEADLINE, |conns| {
-            !conns.live.is_empty() || conns.writers_open > 0
-        })
-        .unwrap_or_else(PoisonError::into_inner);
     assert!(
-        conns.live.is_empty() && conns.writers_open == 0,
+        gate.conns.wait_while(DEADLINE, |state| {
+            state.live_len() != 0 || state.writers_open() > 0
+        }),
         "a disconnected client left a socket or a thread held"
     );
 }
@@ -209,15 +204,10 @@ fn wait_idle(gate: &Gate) {
 /// its socket's last clone; `Gate::finish` notifies under the lock after that,
 /// so the count, not an empty `live`, proves the descriptors are released.
 fn wait_released(gate: &Gate, before: usize) {
-    let conns = super::lock(&gate.conns);
-    let (_conns, waited) = gate
-        .writers
-        .wait_timeout_while(conns, DEADLINE, |conns| {
-            !conns.live.is_empty() || conns.writers_open > 0 || descriptors() != before
-        })
-        .unwrap_or_else(PoisonError::into_inner);
     assert!(
-        !waited.timed_out(),
+        gate.conns.wait_while(DEADLINE, |state| {
+            state.live_len() != 0 || state.writers_open() > 0 || descriptors() != before
+        }),
         "descriptors return to the count from before the clients connected"
     );
 }
@@ -236,21 +226,9 @@ fn many_connections_leave_nothing_held() {
             client.send(&subscribe_line("c_live", "full")).unwrap();
             let _ack = recv(&client);
             {
-                let conns = super::lock(&gate.conns);
-                let (conns, _) = gate
-                    .writers
-                    .wait_timeout_while(conns, DEADLINE, |conns| {
-                        !conns.live.iter().any(|(_, live)| {
-                            live.reader.is_some()
-                                && live.writer.is_some()
-                                && live.shutdown.is_some()
-                        })
-                    })
-                    .unwrap_or_else(PoisonError::into_inner);
                 assert!(
-                    conns.live.iter().any(|(_, live)| {
-                        live.reader.is_some() && live.writer.is_some() && live.shutdown.is_some()
-                    }),
+                    gate.conns
+                        .wait_while(DEADLINE, |state| !state.has_full_entry()),
                     "a live connection keeps its reader, its writer and its shutdown"
                 );
             }
@@ -350,21 +328,9 @@ fn close_returns_while_a_silent_client_stays_open() {
     // The reader is published and blocked: it holds its reader and its
     // shutdown, and the client sends nothing from here on.
     {
-        let conns = lock(&gate.conns);
-        let (conns, _) = gate
-            .writers
-            .wait_timeout_while(conns, DEADLINE, |conns| {
-                !conns
-                    .live
-                    .iter()
-                    .any(|(_, live)| live.reader.is_some() && live.shutdown.is_some())
-            })
-            .unwrap_or_else(PoisonError::into_inner);
         assert!(
-            conns
-                .live
-                .iter()
-                .any(|(_, live)| { live.reader.is_some() && live.shutdown.is_some() }),
+            gate.conns
+                .wait_while(DEADLINE, |state| !state.has_reader_shutdown()),
             "the silent client's reader is published and blocked"
         );
     }
@@ -540,6 +506,7 @@ fn attach_held(gate: &Arc<super::Gate>, held: &Arc<Held>, watcher: log::Watcher)
     });
     let fail = Arc::clone(held);
     let id = gate
+        .conns
         .push_reader(
             reader,
             Box::new(move || {
@@ -765,6 +732,7 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
     // has reached `read` yet or not.
     let flag = Arc::clone(&shut);
     let id = gate
+        .conns
         .push_reader(
             reader,
             Box::new(move || {
@@ -773,10 +741,14 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
             }),
         )
         .expect("the gate is running");
+    assert!(
+        gate.conns.published(id),
+        "the reader is published under its id"
+    );
     let (done_tx, done_rx) = mpsc::channel();
     let finishing = Arc::clone(&gate);
     thread::spawn(move || {
-        finishing.finish(id);
+        finishing.conns.finish(id);
         if let Ok(()) = done_tx.send(()) {}
     });
     Deadline::after(DEADLINE)
@@ -805,6 +777,7 @@ fn a_reader_that_reaps_itself_finishes() {
         if let Ok(()) = done_tx.send(()) {}
     });
     let id = gate
+        .conns
         .push_reader(reader, crate::client::ender(shutdown, stop))
         .expect("the gate is running");
     if let Ok(()) = id_tx.send(id) {}
@@ -829,9 +802,8 @@ fn a_reading_writer_records_fiber_exited_before_it_ends() {
         "a reading writer records fiber_exited",
     );
     {
-        let conns = super::lock(&gate.conns);
         assert!(
-            conns.writers_open > 0,
+            gate.conns.writers_open() > 0,
             "fiber_exited arrives before the writer ends"
         );
     }
@@ -893,7 +865,7 @@ fn accept_waits_after_an_error_until_a_connection_ends() {
     let waiter = Arc::clone(&gate);
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        waiter.wait_for_room();
+        waiter.conns.wait_for_room();
         if let Ok(()) = tx.send(()) {}
     });
     wait_until_accept_waits();
@@ -901,7 +873,7 @@ fn accept_waits_after_an_error_until_a_connection_ends() {
         rx.try_recv().is_err(),
         "accept waits until a connection ends or the session stops"
     );
-    gate.end_writer();
+    gate.conns.end_writer();
     Deadline::after(DEADLINE)
         .recv(&rx)
         .expect("a connection ending lets accept try again");
@@ -1619,7 +1591,7 @@ fn the_stopper_cancels_a_running_driver_shell_and_wakes_the_loop() {
 fn the_stopper_after_the_inbox_is_gone_still_cancels_later_shells() {
     let opened = Opened::open(Vec::new());
     (opened.session.stopper())();
-    assert!(super::lock(&opened.session.gate.shells).stopped);
+    assert!(opened.session.gate.shells.sealed());
     close_within(opened.session, opened.log);
 }
 
@@ -1639,10 +1611,10 @@ fn abandon_unregisters_a_driver_shell_that_never_ran() {
     let Ok(running) = crate::shell::start(&gate, &command) else {
         panic!("the driver shell passed its checks");
     };
-    assert_eq!(super::lock(&gate.shells).running.len(), 1);
+    assert_eq!(gate.shells.running_len(), 1);
     running.abandon(&gate);
     assert!(
-        super::lock(&gate.shells).running.is_empty(),
+        gate.shells.running_len() == 0,
         "close would wait for a shell that never runs"
     );
     close_within(opened.session, opened.log);
@@ -1663,7 +1635,7 @@ fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
         .recv(&running.cancelled)
         .expect("quiesce cancelled the driver shell");
     // The shell is cancelled but still running: quiesce is still waiting.
-    assert!(!super::lock(&gate.shells).running.is_empty());
+    assert!(gate.shells.running_len() != 0);
     assert!(
         done.try_recv().is_err(),
         "quiesce returned before the shell ended"
@@ -1673,7 +1645,7 @@ fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
         .recv(&done)
         .expect("quiesce returned once the shell ended");
     let session = quiescing.join().unwrap();
-    assert!(super::lock(&gate.shells).running.is_empty());
+    assert_eq!(gate.shells.running_len(), 0);
     drop(running.client);
     close_within(session, running.opened.log);
 }
@@ -1695,8 +1667,11 @@ fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
     // The shell is cancelled but still running: close is still waiting,
     // before it stops accepting. A subscriber's writer would hold close
     // later anyway, as the shell's answer keeps its queue open.
-    assert!(!super::lock(&gate.shells).running.is_empty());
-    assert!(!gate.stopped(), "close went on before the shell ended");
+    assert!(gate.shells.running_len() != 0);
+    assert!(
+        !gate.conns.stopped(),
+        "close went on before the shell ended"
+    );
     running.release.send(()).unwrap();
     // The answer is queued before the shell leaves the registry, so it
     // reaches the client before close drops the log.
@@ -1711,7 +1686,7 @@ fn close_cancels_a_running_driver_shell_and_waits_for_its_answer() {
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("close returned once the shell ended");
-    assert!(super::lock(&gate.shells).running.is_empty());
+    assert_eq!(gate.shells.running_len(), 0);
 }
 
 #[test]
@@ -1749,11 +1724,11 @@ fn a_driver_shell_started_after_the_stopper_is_cancelled_and_waited_for() {
         .recv(&cancelled)
         .expect("the driver shell started cancelled");
     // Registered although shutdown had begun, so close waits for it.
-    assert!(!super::lock(&gate.shells).running.is_empty());
+    assert!(gate.shells.running_len() != 0);
     release.send(()).unwrap();
     drop(connected);
     close_within(opened.session, opened.log);
-    assert!(super::lock(&gate.shells).running.is_empty());
+    assert_eq!(gate.shells.running_len(), 0);
 }
 
 #[test]
@@ -1824,7 +1799,7 @@ fn close_waits_for_a_driver_shell_admitted_after_its_first_wait() {
     Deadline::after(DEADLINE)
         .recv(&done)
         .expect("close returned once the shell ended");
-    assert!(super::lock(&gate.shells).running.is_empty());
+    assert_eq!(gate.shells.running_len(), 0);
     drop(client);
 }
 
@@ -2775,7 +2750,7 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
     let opened = Opened::open(Vec::new());
     let gate = Arc::clone(&opened.session.gate);
     // The acceptor passed its stopped check before close began.
-    assert!(!gate.stopped());
+    assert!(!gate.conns.stopped());
     let (checked_tx, checked_rx) = mpsc::channel();
     let (stopped_tx, stopped_rx) = mpsc::channel();
     let closer = Arc::clone(&gate);
@@ -2783,8 +2758,8 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
         Deadline::after(DEADLINE)
             .recv(&checked_rx)
             .expect("the acceptor checked before the stop");
-        closer.mark_stopped();
-        closer.join_clients();
+        closer.conns.mark_stopped();
+        closer.conns.join_clients();
         stopped_tx.send(()).unwrap_or(());
     });
     checked_tx.send(()).unwrap();
@@ -2805,7 +2780,7 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
         let _received = id_rx.recv();
         exited_tx.send(()).unwrap_or(());
     });
-    let handle = match gate.push_reader(
+    let handle = match gate.conns.push_reader(
         reader,
         Box::new(move || {
             flag.store(true, Ordering::SeqCst);
@@ -2820,7 +2795,7 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
         "the rejection shuts the stream"
     );
     assert!(
-        super::lock(&gate.conns).live.is_empty(),
+        gate.conns.live_len() == 0,
         "the rejected reader is never published"
     );
     drop(id_tx);
