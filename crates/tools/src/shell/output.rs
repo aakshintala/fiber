@@ -318,6 +318,9 @@ const BYTES_PER_SECOND: u64 = 102_400;
 pub(super) struct JobStream {
     job_id: JobId,
     emit: Arc<dyn Emit>,
+    /// The encoded length of this stream's event with an empty `text`:
+    /// the envelope every delta's pace starts from, serialised once.
+    envelope: u64,
     /// An incomplete UTF-8 sequence waiting for the next bytes.
     carry: Vec<u8>,
     /// Decoded output no delta has carried yet.
@@ -328,9 +331,20 @@ pub(super) struct JobStream {
 
 impl JobStream {
     pub(super) fn new(job_id: JobId, emit: Arc<dyn Emit>) -> Self {
+        let empty = Event::JobDelta(JobDelta {
+            job_id: job_id.clone(),
+            progress: Progress {
+                text: Some(String::new()),
+                details: None,
+            },
+        });
+        let envelope = serde_json::to_vec(&empty)
+            .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
         Self {
             job_id,
             emit,
+            envelope,
             carry: Vec::new(),
             held: String::new(),
             next_due: None,
@@ -376,18 +390,39 @@ impl JobStream {
         }
     }
 
-    /// Emits the held text and returns the delta's encoded size.
+    /// Emits the held text and returns the delta's encoded size, counted
+    /// without serialising: the envelope plus the text's escaped length.
     fn send(&mut self) -> u64 {
+        let text = std::mem::take(&mut self.held);
+        let bytes = self.envelope.saturating_add(escaped_len(&text));
         let event = Event::JobDelta(JobDelta {
             job_id: self.job_id.clone(),
             progress: Progress {
-                text: Some(std::mem::take(&mut self.held)),
+                text: Some(text),
                 details: None,
             },
         });
         self.emit.emit(&event);
-        serde_json::to_vec(&event).map_or(0, |bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+        bytes
     }
+}
+
+/// The length `text` takes inside its JSON string, counted in one pass
+/// with serde_json's default escaping: `"` and `\` cost 2, the five
+/// shorthand controls cost 2, any other byte below 0x20 costs 6 as
+/// `\u00XX`, and every other byte costs 1. The quotes themselves belong
+/// to the envelope, so a test compares against the string length minus 2.
+fn escaped_len(text: &str) -> u64 {
+    let mut len: u64 = 0;
+    for byte in text.bytes() {
+        len = len.saturating_add(match byte {
+            b'"' | b'\\' => 2,
+            0x08 | 0x0c | b'\n' | b'\r' | b'\t' => 2,
+            0x00..=0x1f => 6,
+            _ => 1,
+        });
+    }
+    len
 }
 
 pub(super) fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {

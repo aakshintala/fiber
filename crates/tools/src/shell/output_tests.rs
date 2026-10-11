@@ -11,7 +11,7 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 use fakes::jobs::JobDeltas;
 
-use super::{Errors, JobStream, Shared, lock, read_errors, read_output};
+use super::{Errors, JobStream, Shared, escaped_len, lock, read_errors, read_output};
 
 struct Chunks(Vec<Vec<u8>>);
 
@@ -137,8 +137,7 @@ fn the_first_change_goes_out_at_once_and_later_ones_collapse() {
 }
 
 #[test]
-fn a_large_delta_pushes_the_next_one_out_by_its_size() {
-    let (clock, deltas, mut stream, shared) = stream();
+fn a_large_delta_pushes_the_next_one_out_by_its_size() {    let (clock, deltas, mut stream, shared) = stream();
     // About 20 KiB encoded: 200 ms at 100 KiB/s, past the 100 ms floor.
     queue(&shared, &vec![b'a'; 20_480]);
     stream.pass(&shared, clock.as_ref());
@@ -283,4 +282,68 @@ fn a_monitors_output_is_kept_for_its_lines_from_the_move_on() {
     );
     read_output(Chunks(vec![b"x\n".to_vec()]), &plain);
     assert!(lock(&plain.inner).lines.is_none());
+}
+
+#[test]
+fn the_pace_is_the_encoded_event_length() {
+    use contract::events::{Event, JobDelta, Progress};
+    let (clock, deltas, mut stream, shared) = stream();
+    // Mixed escapes, past 10 KiB raw: the pace sits above the 100 ms floor.
+    let text = "a\"\n\u{1}é".repeat(2000);
+    queue(&shared, text.as_bytes());
+    stream.pass(&shared, clock.as_ref());
+    assert_eq!(texts(&deltas), [text.clone()]);
+    let event = Event::JobDelta(JobDelta {
+        job_id: JobId("j_x".to_owned()),
+        progress: Progress {
+            text: Some(text),
+            details: None,
+        },
+    });
+    let encoded = u64::try_from(serde_json::to_vec(&event).unwrap().len()).unwrap();
+    let paced = Duration::from_nanos(encoded.saturating_mul(1_000_000_000) / 102_400)
+        .max(Duration::from_millis(100));
+    queue(&shared, b"b");
+    stream.pass(&shared, clock.as_ref());
+    assert_eq!(stream.deadline(), Some(clock.origin() + paced));
+}
+
+#[test]
+fn escaped_len_matches_serde_json_for_each_escape_class() {
+    let cases = [
+        "plain ASCII",
+        "\"",
+        "\\",
+        "\u{8}",
+        "\u{c}",
+        "\n",
+        "\r",
+        "\t",
+        "\u{0}",
+        "\u{1}",
+        "\u{1f}",
+        "\u{7f}",
+        "é",
+        "😀",
+        "a\"\n\u{1}é",
+    ];
+    for case in cases {
+        assert_eq!(
+            escaped_len(case),
+            u64::try_from(serde_json::to_string(case).unwrap().len() - 2).unwrap(),
+            "{case:?}"
+        );
+    }
+}
+
+use proptest::prelude::*;
+
+proptest! {
+    #[test]
+    fn escaped_len_matches_serde_json_on_any_string(text: String) {
+        prop_assert_eq!(
+            escaped_len(&text),
+            u64::try_from(serde_json::to_string(&text).unwrap().len() - 2).unwrap()
+        );
+    }
 }
