@@ -47,7 +47,7 @@ fn script(setup: &Setup, hold: &str) {
                 {"name": "read", "arguments": {"path": "b.txt"}},
             ]},
             {"reasoning": "**Searching**", "tool_calls": [
-                {"name": "shell", "arguments": {"command": "rg -n A0003 a.txt"}},
+                {"name": "shell", "arguments": {"command": "grep -n A0003 a.txt"}},
             ]},
             {"reasoning": "**Editing**", "tool_calls": [
                 {"name": "edit", "arguments": {"path": "a.txt", "edits": [
@@ -287,7 +287,7 @@ fn the_group_line_and_the_ledger_match_the_doc() {
         assert_dim(&grid, y, at, right - 1, "the read result");
     }
     // The tool reports how many lines matched.
-    let search = ledger_row(&grid, gutter, "search", "rg -n A0003 a.txt");
+    let search = ledger_row(&grid, gutter, "search", "grep -n A0003 a.txt");
     assert_eq!(grid.cell(gutter + 6, search).symbol.as_str(), "✓");
     assert_eq!(grid.cell(gutter + 6, search).fg, SUCCESS);
     for x in gutter + 8..gutter + 17 {
