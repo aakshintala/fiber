@@ -292,14 +292,10 @@ impl<B: Backend> Loop<B> {
                 self.app.begin_batch();
             }
             let mut code = None;
-            // A Bytes batch longer than one shares a frame across a run
-            // of wheel steps: a frame separates two of its inputs
-            // unless both are wheel-only, so every other input keeps
-            // the frame it gets today.
-            let bytes_batch = inputs.len() > 1
-                && inputs
-                    .first()
-                    .is_some_and(|head| matches!(head, Input::Bytes(_)));
+            // A frame separates two Bytes inputs unless both are
+            // wheel-only, so every other input keeps the frame it gets
+            // today. `framed` avoids a pre-frame before the first input;
+            // non-Bytes batches never enter this branch.
             let mut wheel_prev = false;
             let mut framed = false;
             for input in inputs {
@@ -307,8 +303,7 @@ impl<B: Backend> Loop<B> {
                 if let Input::Bytes(bytes) = input {
                     let events = self.parser.feed(&bytes);
                     let wheel = Self::wheel_only(&events);
-                    if bytes_batch
-                        && framed
+                    if framed
                         && !(wheel_prev && wheel)
                         && let Some(quit) = self.frame(rx)
                     {

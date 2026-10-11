@@ -51,7 +51,7 @@ impl SyncEmit for Calls {
 }
 
 impl Backend for Calls {
-    type Error = std::convert::Infallible;
+    type Error = std::io::Error;
 
     fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
     where
@@ -121,13 +121,15 @@ fn the_tty_sized_backend_passes_every_call_but_the_size_through() {
         emit: Calls::emit,
     };
     let cell = ratatui::buffer::Cell::default();
-    let ok = |result: Result<(), std::convert::Infallible>| result.unwrap_or(());
+    let ok = |result: Result<(), std::io::Error>| {
+        result.unwrap_or_else(|err| panic!("backend call: {err}"));
+    };
     ok(backend.draw([(0, 0, &cell), (1, 0, &cell)].into_iter()));
     ok(backend.hide_cursor());
     ok(backend.show_cursor());
     let position = backend
         .get_cursor_position()
-        .unwrap_or_else(|err| match err {});
+        .unwrap_or_else(|err| panic!("cursor: {err}"));
     assert_eq!(position, ratatui::layout::Position::new(3, 4));
     ok(backend.set_cursor_position((5, 6)));
     ok(backend.clear());
@@ -146,7 +148,7 @@ fn the_tty_sized_backend_passes_every_call_but_the_size_through() {
             "flush"
         ]
     );
-    let size = backend.size().unwrap_or_else(|err| match err {});
+    let size = backend.size().unwrap_or_else(|err| panic!("size: {err}"));
     assert_eq!(size, ratatui::layout::Size::new(40, 10));
 }
 
@@ -177,6 +179,61 @@ impl std::io::Write for CountingWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+#[test]
+fn frame_backend_hide_cursor_writes_the_hide_sequence() {
+    let written = CountingWriter::default();
+    let mut backend = backend(written.clone());
+    Backend::hide_cursor(&mut backend).unwrap_or_else(|err| panic!("hide cursor: {err}"));
+    assert!(
+        written.bytes().is_empty(),
+        "crossterm's flush stays buffered"
+    );
+    Backend::flush(&mut backend).unwrap_or_else(|err| panic!("flush: {err}"));
+    assert_eq!(written.bytes(), b"\x1b[?25l");
+}
+
+#[test]
+fn frame_backend_clear_writes_the_clear_sequence() {
+    let written = CountingWriter::default();
+    let mut backend = backend(written.clone());
+    Backend::clear(&mut backend).unwrap_or_else(|err| panic!("clear: {err}"));
+    assert!(
+        written.bytes().is_empty(),
+        "crossterm's flush stays buffered"
+    );
+    Backend::flush(&mut backend).unwrap_or_else(|err| panic!("flush: {err}"));
+    assert_eq!(written.bytes(), b"\x1b[2J");
+}
+
+#[test]
+fn frame_backend_returns_the_inner_cursor_and_size() {
+    let written = CountingWriter::default();
+    let mut backend = super::FrameBackend {
+        inner: Calls::default(),
+        writer: super::FrameWriter::new(written),
+    };
+    assert_eq!(
+        Backend::get_cursor_position(&mut backend).unwrap_or_else(|err| panic!("cursor: {err}")),
+        ratatui::layout::Position::new(3, 4)
+    );
+    assert_eq!(
+        Backend::size(&backend).unwrap_or_else(|err| panic!("size: {err}")),
+        ratatui::layout::Size::new(1, 1)
+    );
+    assert_eq!(backend.inner.0, ["get"]);
+}
+
+#[test]
+fn frame_backend_flush_drains_buffered_bytes() {
+    let written = CountingWriter::default();
+    let mut backend = backend(written.clone());
+    std::io::Write::write_all(&mut backend.inner, b"pending frame")
+        .unwrap_or_else(|err| panic!("buffer frame: {err}"));
+    assert!(written.bytes().is_empty(), "bytes wait for the frame flush");
+    Backend::flush(&mut backend).unwrap_or_else(|err| panic!("flush: {err}"));
+    assert_eq!(written.bytes(), b"pending frame");
 }
 
 /// One session line of `kind`, numbered `seq`.

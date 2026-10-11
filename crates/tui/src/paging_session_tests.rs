@@ -17,6 +17,11 @@ fn count(lines: &[String], kind: &str) -> usize {
 }
 
 #[test]
+fn words_wraps_a_seed_past_the_source_length() {
+    assert_eq!(super::words(20, 80), "ssion log holds ever");
+}
+
+#[test]
 fn scale_1_holds_8555_lines() {
     assert_eq!(lines().len(), 8555);
 }

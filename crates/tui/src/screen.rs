@@ -291,12 +291,16 @@ impl<W: std::io::Write> std::io::Write for FrameWriter<W> {
 /// its cursor commands, mid-frame; those flushes only reach the writer
 /// above, which holds them. The frame's end, and the resize below, drain
 /// through here instead, so each draws exactly one `write`.
-pub(crate) struct FrameBackend<W: std::io::Write> {
-    inner: CrosstermBackend<FrameWriter<W>>,
+pub(crate) struct FrameBackend<W: std::io::Write, B = CrosstermBackend<FrameWriter<W>>> {
+    inner: B,
     writer: FrameWriter<W>,
 }
 
-impl<W: std::io::Write> Backend for FrameBackend<W> {
+impl<W, B> Backend for FrameBackend<W, B>
+where
+    W: std::io::Write,
+    B: Backend<Error = std::io::Error>,
+{
     type Error = std::io::Error;
 
     fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>

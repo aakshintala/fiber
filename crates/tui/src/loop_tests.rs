@@ -864,6 +864,17 @@ fn queued_hub_lines_draw_one_frame() {
     assert!(!screen.contains("Esc to interrupt"), "{screen}");
 }
 
+#[test]
+fn one_bytes_input_draws_only_its_final_frame() {
+    let (mut lp, flushes, tx, rx) = counting();
+    assert_eq!(
+        run_queued(&mut lp, rx, tx, vec![Input::Bytes(b"a".to_vec())]),
+        0
+    );
+    assert_eq!(flushes.get(), 1, "one frame for a one-input Bytes batch");
+    assert_eq!(lp.app.draft(), "a");
+}
+
 /// Runs `lp` over `inputs` queued before it starts, to the end of input.
 #[track_caller]
 fn run_queued(
