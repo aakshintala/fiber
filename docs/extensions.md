@@ -601,7 +601,7 @@ closes after the first `turn_completed` or `turn_failed`.
 
 A call case invokes a provider function without starting a session. It requires
 `call` with `provider`, `function` and `arg`, plus exactly one of `returns` or
-`error`. The runner supports `cost`, `models`, `login`, `credential` and
+`error`. The runner supports `cost`, `models`, `quota`, `login`, `credential` and
 `sign`. A `cost` return is `null` or a finite number at or above 0. `models` takes `{}`
 as its `arg`, and its return is the model list, matched as a session case's
 `expect` is: an object checks only the fields it gives, an array matches in

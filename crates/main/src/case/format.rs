@@ -259,6 +259,11 @@ fn parse_outcome(
         && !value.is_array()
     {
         return Err("returns: models expects a list of models".to_owned());
+    } else if call.function == "quota"
+        && let CallOutcome::Returns(value) = &outcome
+        && !(value.is_null() || value.is_object())
+    {
+        return Err("returns: quota expects null or a table".to_owned());
     }
     if let CallOutcome::Error(value) = &outcome {
         validate_expected_error(value)?;
@@ -622,8 +627,8 @@ fn parse_call(value: &Value) -> Result<Call, String> {
     only(map, &["provider", "function", "arg"], "call")?;
     let provider = string(map, "provider", "call")?;
     let function = string(map, "function", "call")?;
-    if !["cost", "models", "login", "credential", "sign"].contains(&function.as_str()) {
-        return Err("call.function: supported functions are `cost`, `models`, `login`, `credential` and `sign`".to_owned());
+    if !["cost", "models", "quota", "login", "credential", "sign"].contains(&function.as_str()) {
+        return Err("call.function: supported functions are `cost`, `models`, `quota`, `login`, `credential` and `sign`".to_owned());
     }
     let arg = map.get("arg").cloned().ok_or("call.arg: required")?;
     Ok(Call {
