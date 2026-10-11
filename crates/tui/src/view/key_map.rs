@@ -273,7 +273,7 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
         body,
         footer: chrome
             .footer
-            .then(|| overlay::legend(&[("↑↓", "move"), ("←→", "tabs"), ("esc", "closes")])),
+            .then(|| overlay::legend(&[("↑↓", "move"), ("←→", "tabs"), ("Esc", "closes")])),
         prefer: u16::MAX,
     };
     overlay::draw(buf, area, &framed, Place::Dock, targets);

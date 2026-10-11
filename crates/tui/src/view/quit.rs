@@ -16,9 +16,9 @@ use crate::view::overlay::{self, Place, Row};
 /// The quit choices: leaving working sessions running, closing them all
 /// now, or staying.
 const CHOICES: [(&str, &str); 3] = [
-    ("enter", "leave them running"),
+    ("Enter", "leave them running"),
     ("c", "close all"),
-    ("esc", "stay"),
+    ("Esc", "stay"),
 ];
 
 /// One dim body row.

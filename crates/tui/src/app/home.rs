@@ -273,7 +273,7 @@ impl App {
                             home.launch.thinking.as_deref().unwrap_or("default")
                         ),
                     ),
-                    (None, "enter starts a session".to_owned()),
+                    (None, "Enter starts a session".to_owned()),
                 ]);
                 chips
             },
