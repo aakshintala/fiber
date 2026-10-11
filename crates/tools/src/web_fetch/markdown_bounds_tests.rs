@@ -550,6 +550,46 @@ fn the_hidden_stack_shrinks_back_after_deep_nesting() {
     );
 }
 
+#[test]
+fn a_bulk_template_close_restores_the_hidden_stack_capacity_bound() {
+    let depth = 524_289;
+    let mut hidden = Hidden::default();
+    hidden.open("template", &start("template", false, vec![]));
+    let noscript = start("noscript", false, vec![]);
+    for _ in 0..depth {
+        hidden.open("noscript", &noscript);
+    }
+
+    hidden.end("template");
+
+    assert!(!hidden.is_hidden());
+    assert!(
+        hidden.open_capacity() <= 64,
+        "capacity {} for an empty hidden stack",
+        hidden.open_capacity()
+    );
+}
+
+#[test]
+fn an_svg_breakout_restores_the_hidden_stack_capacity_bound() {
+    let depth = 524_289;
+    let mut hidden = Hidden::default();
+    hidden.open("svg", &start("svg", false, vec![]));
+    let template = start("template", false, vec![]);
+    for _ in 0..depth {
+        hidden.open("template", &template);
+    }
+
+    hidden.open("p", &start("p", false, vec![]));
+
+    assert!(!hidden.is_hidden());
+    assert!(
+        hidden.open_capacity() <= 64,
+        "capacity {} for an empty hidden stack",
+        hidden.open_capacity()
+    );
+}
+
 /// Closing the element above the outermost `svg` must not spend the
 /// `noscript` below it: popping the template decrements only its own
 /// above-`svg` count, so a later `</noscript>` with the `svg` still open
