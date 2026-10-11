@@ -382,8 +382,12 @@ reads each part as plain words. Anything it cannot read plainly makes the
 call declare `executes`, as `docs/tools.md` requires. A recogniser that fails
 closed does not need a full parser.
 
-Fiber uses the system allocator. Whether another allocator lowers resident
-memory is for the memory budget (`docs/performance.md`) to measure.
+Fiber uses the system allocator, musl's in the release binary. Speed that
+allocation costs is won by allocating less, not by another allocator: one
+kept several times more memory after work for its speed
+(`research/allocator/README.md`), and the memory budgets
+(`docs/performance.md`) come first. Another allocator is considered only once
+allocating less has reached its limit.
 
 ## Tests and development tools
 

@@ -181,8 +181,10 @@ stated invariants rather than a fixed expected output. For example:
 - `log`: durable output equals the log; a session killed at each fsync
   boundary, or after a half-written line, reopens intact, and a tool call whose
   fate is unknown is never run again
-- `loop`: no turn is lost; nothing a cancelled call produces is admitted after
-  the cancel; results return in request order
+- `loop`: no turn is lost; a cancelled call ends in one completion with status
+  `cancelled`, and nothing from it follows: no delta after that completion, no
+  `control` acted on, nothing after `turn_completed`; results return in request
+  order
 
 `web_fetch`'s HTML converter carries property tests too. Generated pages mix
 nesting, broken markup, entities, scripts and huge attributes, and each is

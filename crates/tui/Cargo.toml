@@ -14,12 +14,12 @@ pulldown-cmark.workspace = true
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 rustix.workspace = true
 serde_json.workspace = true
-signal-hook = "0.3"
+signal-hook.workspace = true
 support = { path = "../support" }
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
-insta = "1"
+insta.workspace = true
 proptest.workspace = true
 
 [[example]]

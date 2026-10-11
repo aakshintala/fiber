@@ -246,6 +246,55 @@ fn a_first_turn_without_a_message_leaves_no_name_to_fall_back_on() {
 }
 
 #[test]
+fn a_session_message_first_turn_names_nothing_until_a_driver_prompt() {
+    let mut w = world();
+    w.start();
+    w.feed(
+        "turn_started",
+        None,
+        &json!({"input": [{"type": "message", "source": "session", "from_session_id": "sess-2", "content": [{"type": "text", "text": "Fiber: a message from session sess-2"}]}]}),
+    );
+    w.finish();
+    assert_eq!(w.status().name, "");
+    w.prompt("hello");
+    assert_eq!(w.status().name, "hello");
+}
+
+#[test]
+fn a_session_message_turn_then_a_jobs_only_turn_names_the_next_driver_prompt() {
+    let mut w = world();
+    w.start();
+    w.feed(
+        "turn_started",
+        None,
+        &json!({"input": [{"type": "message", "source": "session", "from_session_id": "sess-2", "content": [{"type": "text", "text": "framed"}]}]}),
+    );
+    w.finish();
+    w.feed(
+        "turn_started",
+        None,
+        &json!({"input": [{"type": "jobs", "job_ids": ["j1"]}]}),
+    );
+    w.finish();
+    assert_eq!(w.status().name, "");
+    w.prompt("hello");
+    assert_eq!(w.status().name, "hello");
+}
+
+#[test]
+fn an_extension_message_first_turn_names_nothing() {
+    let mut w = world();
+    w.start();
+    w.feed(
+        "turn_started",
+        None,
+        &json!({"input": [{"type": "message", "source": "extension", "extension": "x", "content": [{"type": "text", "text": "an extension message"}]}]}),
+    );
+    w.finish();
+    assert_eq!(w.status().name, "");
+}
+
+#[test]
 fn a_delegate_names_its_parent_and_another_session_does_not() {
     let mut w = world();
     let mut payload = started();

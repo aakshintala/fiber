@@ -159,6 +159,20 @@ item, ← → its answer, and Send answers them all at once. Esc puts it aside
 behind the approval badge, and ⌥A or `/approvals` reopens it, as for an
 approval.
 
+The view's top row names it "Offer", with "repository code" dim. Each item
+is a row naming its kind and name with what identifies it ("Extension notes ·
+v0.3", "Hook tidy · before_tool on read, shell", "MCP server linear ·
+declared in .fiber/mcp.json"), "▸ " in `secondary` and the row in
+`secondary` on the chosen item. Under it, dim, what an install shows: where
+it comes from and where it loads, what it runs, and what it carries. A
+changed item says "the declaration changed", dim, then its diff drawn as
+"Changed files" draws a hunk. Last comes the item's choices on one row:
+"( ) approve", "( ) skip for this session" and "( ) never", the chosen one's
+mark "(•)" in `secondary` and its label bold, the other marks dim. After the
+items, "A package's TUI files are never installed from a repository." and
+the hint "↑↓ choose an item · ←→ its answer · Send answers them all · Esc
+puts it aside", both dim.
+
 ### The session list
 
 Home lists sessions, live ones first, then recently exited ones, one row
@@ -418,7 +432,11 @@ a click on it returns too. The views are:
   ("main › ◆ review: …"). A status card gives harness, model, calls, elapsed
   time and session, with a stop target. The transcript uses the same turn
   cards as the conversation, and the input box sends steering messages to
-  that delegate. A delegate that has not bound its socket yet answers
+  that delegate. The breadcrumb is bold. The status card is a `surface`
+  slab: "harness <name>", then " · model <model> · <level>" dim; under it,
+  dim, the calls, "elapsed <time>" and "session <id>"; then "■ stop <id>" in
+  `error`. The input box's hint reads "steering goes to ◆ <description>",
+  dim. A delegate that has not bound its socket yet answers
   `session_not_found`; while its parent lists it running, the terminal asks
   again every 500 ms.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
@@ -430,11 +448,22 @@ a click on it returns too. The views are:
   80 columns by 24 rows, drawn from the job's output since the terminal
   attached. Carriage return, line feed, backspace, tab, cursor movement and
   erasing in a line or the display are applied; other escape sequences are
-  dropped.
+  dropped. Its status row is "job <id> · <command> · running <time>", then
+  " · " dim and "■ stop ends it" in `error`; under it, "live screen · 80
+  columns × 24 rows from attach" dim. The screen sits on a `turn` slab 80
+  columns wide, and the input box's hint reads "type into the job", dim.
 - **The running delegates or jobs,** from "N delegates running" or "N jobs
-  running" in the narrow layout: the Delegates card's two rows for each
-  delegate, or one row for each job, in the order they started. A row opens
-  that item's view.
+  running" in the narrow layout: two rows for each delegate, or one row for
+  each job, in the order they started. A row opens that item's view.
+  "Delegates · N running" bold heads the delegates. A delegate's first row is
+  "◆ <description> · <elapsed>"; its second, indented two columns, is dim:
+  the model, the thinking level, the calls and the session, then its spend,
+  a 10-cell bar of how full its context is and the percentage. The bar is ▆
+  in `accent` for the share used and in `rule` for the rest, the fill turning
+  the warning colour from 60% and the error colour from 85%, as a rail
+  card's does. "Jobs · N running" bold heads the jobs, one row each: "◆
+  <command> · <elapsed> · <id>". The last row is "a row opens that item's
+  view", dim.
 - **The model picker:** models by provider with roles marked, a chip for each
   thinking level the model supports, and the size of the prompt-cache rebuild
   a switch costs. Choosing a model saves the global `model`, and choosing a
@@ -477,6 +506,9 @@ a click on it returns too. The views are:
 - **The usage view,** `/usage`: the session's `usage` (`docs/events.md`) broken
   down by turn, by model and by delegate, each with tokens by kind, cost billed
   and cost on subscription, and the budget left when `budget.usd` is set.
+  "By turn", "By model" and "By delegate" are bold headings, then one row
+  each: "turn 3 · 120k in · 15k out · $1.35 billed · $0.00 subscription".
+  The last row is "budget left $17.90 of $20.00", dim.
 - **The context breakdown:** one bar of context by category against the
   handoff point, with the largest tool results. The categories are the
   system prompt, tool definitions, tool results since the handoff in force,
@@ -496,8 +528,16 @@ a click on it returns too. The views are:
 - **Changed files:** the files Fiber changed, with the chosen file's hunks.
   The hunks are the workspace's current diff against `HEAD`, read when the
   file is chosen, so they include changes Fiber did not make; the title says
-  "diff against HEAD". An untracked file shows as wholly added.
+  "diff against HEAD". An untracked file shows as wholly added. Each file is
+  a row: the chosen file's path bold, then " · " dim, "+N" in `added` and
+  "−N" in `removed`; an untracked file's path, then "· untracked, wholly
+  added" dim. Under the chosen file, each hunk's `@@` line dim, removed lines
+  in `removed` and added lines in `added`, with their `-` and `+`.
 - **Search results:** every match with its surrounding lines ("Search").
+  The first row is "3 of 5 · ⌕ <query>". Each match is its file and line
+  bold, then the lines around it, the match on the `match` tint and the
+  current match on `match_current`. The last row is "Enter jumps to the
+  match", dim.
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
   tool by source, full or deferred, and its approximate size. Each MCP
   server's or extension's tool has two on/off switches, this project and
@@ -506,15 +546,35 @@ a click on it returns too. The views are:
   reload, and the view says what the reload's cache rebuild costs. Built-in
   tools have no switch: they are always declared, so every session sends the
   same tool list, and the view shows them as rows without a switch.
+  Each source is a bold heading ("Built-in", "MCP · linear", "Extension ·
+  notes"), then one row per tool: "<name> · full · ~1.2k", or "deferred",
+  then " · this project " and its switch and " · everywhere " and its switch.
+  A switch reads "[on]" bold or "[off]" dim. The last row is "a change
+  rebuilds the cache (~84k tokens · $0.31) on reload", dim.
 - **`/rules`:** every standing rule by scope, global and then this project.
   Each shows the prefix it allows, when and from which session it was added,
   and a ✕ that revokes it. Revoking deletes the line and applies to the next
   call judged. Ctrl+G opens the rules file (`docs/permissions.md`,
-  "Remembering a decision").
+  "Remembering a decision"). "Global" and "This project" are bold headings;
+  a rule's row is "allow shell:git status · added 2d ago in review #688 · "
+  and the ✕ in `error`. The last row is "Ctrl+G opens the rules file", dim.
 - **`/settings`:** the configuration keys, their effective values and the
   layer each comes from. It edits a key through the same path as
   `fiber config set`, and says when a change needs a reload and what that
-  costs. Ctrl+G opens the file.
+  costs. Ctrl+G opens the file. The keys are a table of aligned columns:
+  a dim header row, "key", "value" and "layer", then one row per key, its
+  name, its effective value and its layer: `default`, `global`,
+  `repository`, `project` or `-c` (`docs/configuration.md`, "Layers").
+  Under the table, the reload line ("changing model needs a reload (~84k
+  tokens)") and "Ctrl+G opens the file", both dim.
+
+  ```
+  key                 value         layer
+  model               opus-5-5      global
+  thinking            high          project
+  permissions.mode    auto          repository
+  budget.usd          20            project
+  ```
 - **`/keys`:** the rebinding screen ("Bindings").
 - **`/skills`:** one row per skill with its name, one-line description, where
   it comes from (the repository, personal, an extension by name, or built in),
@@ -522,7 +582,10 @@ a click on it returns too. The views are:
   switched off. A switch turns a skill off or on for this project or
   everywhere, writing `skills.disabled` in that layer; the change reaches the
   model at the next turn start. Enter shows the skill's text, Ctrl+G opens its
-  file (`docs/system-prompt.md`, "Skills").
+  file (`docs/system-prompt.md`, "Skills"). A row is "review · checks a diff
+  · repo · seen · this project " and its switch, then " · everywhere " and
+  its switch, as on `/tools`; a shadowing skill adds "shadows <name>". The
+  last row is "Enter shows the text · Ctrl+G opens its file", dim.
 - **`/rewind`** ("Rewind").
 - **A repository's offer**, before a new session's first request ("Approving
   what a repository ships").
@@ -991,7 +1054,9 @@ The form is an `approval` slab with ▄ and ▀ edges, every row starting with a
   option, outside a row that takes text.
 - The row to answer in words, numbered after the options: "✎ " dim, then
   "Type an answer, alone or with the options" dim ("Type an answer" with no
-  options), or the answer bold with a cursor.
+  options), or the answer bold with a cursor. The dim text is a placeholder:
+  with the cursor on the row, the cursor sits on its first character, drawn
+  reversed, and the first key typed replaces it.
 - In a multi-choice question, "Next →", or "Review →" on the last question,
   in `secondary`, bold under the cursor.
 - After a blank row, the hint, dim: "←→ question · ↑↓ choose · Enter chooses
@@ -1503,8 +1568,12 @@ fast sweep wrote 1,332 frames and 358,360 bytes, 129 µs a report.
   own 16 colours are never used.
 - **`NO_COLOR`** set and not empty turns colour off: every role is the
   terminal's default colour. Bold, dim, reversed and underline stay, so focus,
-  selection, matches and state words still show. A half-block edge draws as a blank,
-  because with no tint there is no surface to edge, and its row stays.
+  selection, matches and state words still show. With no tint there is no
+  surface to see, so each surface with half-block edges is drawn instead as
+  a thin box, ┌─┐ above, │ on each side and └─┘ below, dim, in the edges'
+  rows and one column on each side, so a rail card's text is two columns
+  narrower. The person's prompt bubble is the exception: its edges draw as
+  blanks and its rows stay.
 - **Markdown in replies:**
   - Headings are bold in `heading`, their `#` markers stripped.
   - Paragraphs are in the text colour, `**bold**` is bold with no colour of
@@ -1595,56 +1664,64 @@ A theme sets colours only. It gives each colour role a value, and an
 extension's spans name the same roles ("What a renderer returns"). Anything
 bigger goes through "Extension seams".
 
-The roles, in order, with the dark theme's values:
+The roles, in order, with each built-in theme's values:
 
-| Role | What it colours | Dark |
-|---|---|---|
-| `text` | the full text colour: replies, the draft, anything with no role of its own | the terminal's foreground |
-| `muted` | what the doc calls dim: READY, labels and hints, summary lines and results, block quote bars, grips, the logo's counters | `text`, dim |
-| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's title and selection bar, a project header's name, links and the ▣ line | `#6eaafe` |
-| `heading` | markdown headings | `#ff9f43` |
-| `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded, a login's ✓ | `#6eaafe` |
-| `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` |
-| `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown, a failed login's reason | `#ff5d73` |
-| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` |
-| `added` | lines added: an edited file's `+N`, added lines in a diff | `#6eaafe` |
-| `removed` | lines removed: an edited file's `−N`, removed lines in a diff | `#ff5d73` |
-| `code_text` | code with no syntax role | the terminal's foreground |
-| `keyword` | keywords | `#6eaafe` |
-| `string` | string and character literals | `#ce9178` |
-| `comment` | comments, which are also italic | `#7a7a8a` |
-| `number` | number literals | `#b5cea8` |
-| `function` | function and macro names | `#7dd3fc` |
-| `type` | type names | `#7dd3fc` |
-| `constant` | constants: `true`, `null`, `ALL_CAPS` names | `#7dd3fc` |
-| `operator` | operators | the terminal's foreground |
-| `info` | inline code, a call's kind, an approval's tool name and rule prefix, the input box's › and the workspace picker's, "Copied", the context bar's fill | `#7dd3fc` |
-| `secondary` | the git branch, the handoff band's label, the question form's stripe, title and marks, the delegates' ◆ | `#b39ddb` |
-| `rule` | rules, line numbers, a bar's empty cells, the pill, a grip's column under the pointer, "Chat about this" | `#3a3a4a` |
-| `scroll` | the scroll bar's thumb | `#808080` |
-| `background` | every cell of the conversation no surface covers | the terminal's background |
-| `panel` | the rail's and the panel's regions, the narrow layout's status line | `#0c0c11` |
-| `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays | `#1a1a22` |
-| `surface_raised` | the card on screen, a hovered card | `#3a3a4a` |
-| `turn` | a turn's card | `#101017` |
-| `prompt` | the person's prompt bubble | `#343541` |
-| `code` | code blocks | `#181821` |
-| `handoff` | the handoff band | `#1f1a2e` |
-| `approval` | the approval panel for a standing ask, and the question form | `#1a1a22` |
-| `alert` | the approval panel for a reviewer's escalation; red in both built-in themes | `#501c20` |
-| `hover` | the click target under the pointer where it has no tint; a target on a tint is drawn with that tint 0x14 lighter on each channel | `#1e1e26` |
-| `selection` | selected text | `#264f78` |
-| `match` | a search match, its text white | `#5a4a1a` |
-| `match_current` | the current search match, its text black | `#ff9f43` |
+| Role | What it colours | Dark | Light |
+|---|---|---|---|
+| `text` | the full text colour: replies, the draft, anything with no role of its own | the terminal's foreground | `#1f2328` |
+| `muted` | what the doc calls dim: READY, labels and hints, summary lines and results, block quote bars, grips, the logo's counters | `text`, dim | `text`, dim |
+| `accent` | bullets, the logo's mark, WORKING and the rail's spinner, a running job's stripe, the prompt and input stripes, the model's name, answered questions' headers, a quota bar, an overlay's title and selection bar, a project header's name, links and the ▣ line | `#6eaafe` | `#0969da` |
+| `heading` | markdown headings | `#ff9f43` | `#bc4c00` |
+| `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded, a login's ✓ | `#6eaafe` | `#0969da` |
+| `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` | `#bc4c00` |
+| `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown, a failed login's reason | `#ff5d73` | `#cf222e` |
+| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` | `#bc4c00` |
+| `added` | lines added: an edited file's `+N`, added lines in a diff | `#73c991` | `#1a7f37` |
+| `removed` | lines removed: an edited file's `−N`, removed lines in a diff | `#ff5d73` | `#cf222e` |
+| `code_text` | code with no syntax role | the terminal's foreground | `#1f2328` |
+| `keyword` | keywords | `#6eaafe` | `#0969da` |
+| `string` | string and character literals | `#ce9178` | `#a31515` |
+| `comment` | comments, which are also italic | `#7a7a8a` | `#6e7781` |
+| `number` | number literals | `#b5cea8` | `#116329` |
+| `function` | function and macro names | `#7dd3fc` | `#0b7285` |
+| `type` | type names | `#7dd3fc` | `#0b7285` |
+| `constant` | constants: `true`, `null`, `ALL_CAPS` names | `#7dd3fc` | `#0b7285` |
+| `operator` | operators | the terminal's foreground | `#1f2328` |
+| `info` | inline code, a call's kind, an approval's tool name and rule prefix, the input box's › and the workspace picker's, "Copied", the context bar's fill | `#7dd3fc` | `#0b7285` |
+| `secondary` | the git branch, the handoff band's label, the question form's stripe, title and marks, the delegates' ◆ | `#b39ddb` | `#6f42c1` |
+| `rule` | rules, line numbers, a bar's empty cells, the pill, a grip's column under the pointer, "Chat about this" | `#3a3a4a` | `#d0d7de` |
+| `scroll` | the scroll bar's thumb | `#808080` | `#b0b7bf` |
+| `background` | every cell of the conversation no surface covers | the terminal's background | `#ffffff` |
+| `panel` | the rail's and the panel's regions, the narrow layout's status line | `#0c0c11` | `#f6f8fa` |
+| `surface` | the input box, the panel's cards, the search box, a swapped view's top row, overlays | `#1a1a22` | `#eaeef2` |
+| `surface_raised` | the card on screen, a hovered card | `#3a3a4a` | `#d0d7de` |
+| `turn` | a turn's card | `#101017` | `#f3f5f8` |
+| `prompt` | the person's prompt bubble | `#343541` | `#dde3ea` |
+| `code` | code blocks | `#181821` | `#eff1f4` |
+| `handoff` | the handoff band | `#1f1a2e` | `#efe9f9` |
+| `approval` | the approval panel for a standing ask, and the question form | `#1a1a22` | `#eaeef2` |
+| `alert` | the approval panel for a reviewer's escalation; red in both built-in themes | `#501c20` | `#ffd7d9` |
+| `hover` | the click target under the pointer where it has no tint; a target on a tint is drawn with that tint 0x14 lighter on each channel | `#1e1e26` | `#e3e7ec` |
+| `selection` | selected text | `#264f78` | `#b6d7ff` |
+| `match` | a search match, its text white | `#5a4a1a` | `#fff1a8` |
+| `match_current` | the current search match, its text black | `#ff9f43` | `#ffd67e` |
 
 In the dark theme `text`, `code_text`, `operator` and `background` are the
 terminal's own default colours, and `muted` is the text colour drawn dim, so
 the conversation sits on the terminal's own background. They stay the
 default at 256 colours. A theme file may still give any of them a `#rrggbb`.
 
-The dark theme, and every surface's look in this doc, is the prototype's
-([research/tui-prototype/src/main.rs](../research/tui-prototype/src/main.rs)),
-which the owner judged by eye.
+The light theme paints its own text and page: `text`, `code_text` and
+`operator` are `#1f2328` and `background` is `#ffffff`, so it looks the same
+in any terminal. At 256 colours its page is the colour cube's white, 231,
+which the grey ramp lacks. A tint whose nearest entry is 231 takes the grey
+ramp's lightest, 255, so every tint stays visible on the page.
+
+The dark and light themes, and every surface's look in this doc, are the
+prototype's
+([research/tui-prototype/src/main.rs](../research/tui-prototype/src/main.rs),
+[theme.rs](../research/tui-prototype/src/theme.rs)), which the owner judged
+by eye.
 
 A stripe takes its state's colour, and the logo's five letters step through
 `heading`, `accent`, `string`, `type` and `keyword`.
