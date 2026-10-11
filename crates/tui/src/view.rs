@@ -27,7 +27,7 @@ mod key_map;
 mod marks;
 pub(crate) mod model_picker;
 mod offer;
-mod overlay;
+pub(crate) mod overlay;
 pub(crate) mod panel;
 mod quit;
 pub(crate) mod rail;

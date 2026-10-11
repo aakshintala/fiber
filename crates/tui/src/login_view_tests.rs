@@ -75,21 +75,28 @@ fn answering_fake(stored: Stored) -> Fake {
     fake
 }
 
-/// A call's context over `fake`, 24 rows tall, in `/w`.
-fn ctx(fake: &Fake) -> Ctx<'_> {
+/// A call's context over `fake`, `height` rows tall, in `/w`.
+fn ctx_h(fake: &Fake, height: usize) -> Ctx<'_> {
     Ctx {
         seam: fake,
         workspace: Path::new("/w"),
-        height: 24,
+        height,
         width: 80,
         usage: None,
     }
 }
 
-/// The view over `targets()` with the row at `index` selected.
+/// A call's context over `fake`, 24 rows tall, in `/w`.
+fn ctx(fake: &Fake) -> Ctx<'_> {
+    ctx_h(fake, 24)
+}
+
+/// The view over `targets()` with the item at `index` selected.
 fn at(fake: &Fake, index: usize) -> Login {
-    let mut login = Login::open(&ctx(fake));
-    login.list.select(index, login.items.len(), 20);
+    let context = ctx(fake);
+    let mut login = Login::open(&context);
+    login.selected = index;
+    login.sync_list(&context);
     login
 }
 
@@ -98,24 +105,30 @@ fn press(login: &mut Login, fake: &Fake, keys: &[Key]) -> Vec<Act> {
     keys.iter().map(|key| login.key(key, &ctx(fake))).collect()
 }
 
+/// Presses each key in turn with a `height`-row context.
+fn press_h(login: &mut Login, fake: &Fake, height: usize, keys: &[Key]) -> Vec<Act> {
+    let context = ctx_h(fake, height);
+    keys.iter().map(|key| login.key(key, &context)).collect()
+}
+
 /// Types `text` into the open panel.
 fn typed(login: &mut Login, fake: &Fake, text: &str) {
     let keys: Vec<Key> = text.chars().map(Key::Char).collect();
     press(login, fake, &keys);
 }
 
-/// Opens the key panel over `acme`: the second row.
+/// Opens the key panel over `acme`: open focuses the first target, so
+/// Enter opens it with no Down. Edited by hand: the two panel helpers
+/// are different edits, one dropping a key and one shortening a run
+/// that skips the gap (`docs/workflow.md`, "Tools, not handwork").
 fn open_key_panel(login: &mut Login, fake: &Fake) {
-    press(login, fake, &[Key::Down, Key::Enter]);
+    press(login, fake, &[Key::Enter]);
 }
 
-/// Opens the value panel over the secret: the last row.
+/// Opens the value panel over the secret: two Downs, skipping the gap
+/// and the Secrets heading. Edited by hand, see `open_key_panel`.
 fn open_secret_panel(login: &mut Login, fake: &Fake) {
-    press(
-        login,
-        fake,
-        &[Key::Down, Key::Down, Key::Down, Key::Down, Key::Enter],
-    );
+    press(login, fake, &[Key::Down, Key::Down, Key::Enter]);
 }
 
 /// `login` drawn at `width` x `height`, one string per row.
@@ -195,11 +208,182 @@ fn a_failed_read_says_why_and_enter_does_nothing() {
 }
 
 #[test]
-fn enter_on_a_heading_or_the_note_does_nothing() {
+fn open_focuses_the_first_target() {
+    let fake = fake_with(targets());
+    let login = Login::open(&ctx(&fake));
+    assert_eq!(login.selected, 1);
+}
+
+#[test]
+fn enter_right_after_open_opens_key_entry() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert!(panel_open(&login));
+}
+
+#[test]
+fn down_and_up_step_over_targets_only() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    press(&mut login, &fake, &[Key::Down]);
+    assert_eq!(login.selected, 2);
+    // Down from codex skips the gap and the Secrets heading.
+    press(&mut login, &fake, &[Key::Down]);
+    assert_eq!(login.selected, 5);
+    // Down on the last target stays.
+    press(&mut login, &fake, &[Key::Down]);
+    assert_eq!(login.selected, 5);
+    // Up from the secret skips back past the gap.
+    press(&mut login, &fake, &[Key::Up]);
+    assert_eq!(login.selected, 2);
+    press(&mut login, &fake, &[Key::Up]);
+    assert_eq!(login.selected, 1);
+    // Up on the first target stays.
+    press(&mut login, &fake, &[Key::Up]);
+    assert_eq!(login.selected, 1);
+}
+
+#[test]
+fn page_up_and_page_down_land_on_targets() {
+    let fake = fake_with(targets());
+    // (height, from, key, to): the page is the shown body rows less
+    // one, at least one, so height 10 pages by 1, 11 by 2, 24 by 15
+    // and 9 by 1 at the floor.
+    for (height, from, key, to) in [
+        (10, 1, Key::PageDown, 2),
+        (10, 2, Key::PageDown, 5),
+        (10, 5, Key::PageDown, 5),
+        (10, 5, Key::PageUp, 2),
+        (10, 2, Key::PageUp, 1),
+        (10, 1, Key::PageUp, 1),
+        (11, 1, Key::PageDown, 5),
+        (11, 5, Key::PageUp, 2),
+        (12, 5, Key::PageUp, 2),
+        (24, 1, Key::PageDown, 5),
+        (24, 5, Key::PageUp, 1),
+        (9, 1, Key::PageDown, 2),
+    ] {
+        let mut login = at(&fake, from);
+        press_h(&mut login, &fake, height, &[key]);
+        assert_eq!(login.selected, to, "height {height} from {from}");
+    }
+}
+
+#[test]
+fn paging_with_one_target_stays() {
+    let fake = fake_with(vec![targets()[0].clone()]);
+    let mut login = Login::open(&ctx(&fake));
+    assert_eq!(login.selected, 1);
+    press(
+        &mut login,
+        &fake,
+        &[Key::PageDown, Key::PageUp, Key::Down, Key::Up],
+    );
+    assert_eq!(login.selected, 1);
+}
+
+#[test]
+fn keys_with_no_targets_do_nothing() {
+    let fake = fake_with(Vec::new());
+    let mut login = Login::open(&ctx(&fake));
+    for key in [Key::Up, Key::Down, Key::PageUp, Key::PageDown, Key::Enter] {
+        assert!(matches!(login.key(&key, &ctx(&fake)), Act::Stay));
+    }
+    assert_eq!(login.selected, 0);
     assert!(!panel_open(&login));
+    assert!(fake.stores().is_empty());
+}
+
+#[test]
+fn keys_on_a_failed_read_do_nothing() {
+    let fake = failed_fake("config.json: not JSON");
+    let mut login = Login::open(&ctx(&fake));
+    for key in [Key::Up, Key::Down, Key::PageUp, Key::PageDown, Key::Enter] {
+        assert!(matches!(login.key(&key, &ctx(&fake)), Act::Stay));
+    }
+    assert_eq!(login.selected, 0);
+    assert!(!panel_open(&login));
+    assert!(fake.stores().is_empty());
+}
+
+#[test]
+fn the_window_maths_saturate() {
+    // The list overlay's chrome is eight rows: shorter than it no body
+    // row shows, at nine rows tall exactly one does.
+    assert_eq!(super::shown_body_rows(7), 0);
+    assert_eq!(super::shown_body_rows(8), 0);
+    assert_eq!(super::shown_body_rows(9), 1);
+    // An empty body or window starts at the top without underflowing.
+    assert_eq!(super::window_start(0, 0, 0), 0);
+    assert_eq!(super::window_start(0, 0, 1), 0);
+    // PageUp and PageDown with no row shown do not panic and stay put.
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    press_h(&mut login, &fake, 1, &[Key::PageDown, Key::PageUp]);
+    assert_eq!(login.selected, 1);
+}
+
+#[test]
+fn with_no_row_shown_down_and_up_leave_both_selections() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    let legacy = login.list.selected();
+    // Each key on its own: a Down followed by an Up would hide a
+    // broken freeze by cancelling out.
+    press_h(&mut login, &fake, 1, &[Key::Down]);
+    assert_eq!(login.selected, 1);
+    assert_eq!(login.list.selected(), legacy);
+    press_h(&mut login, &fake, 1, &[Key::Up]);
+    assert_eq!(login.selected, 1);
+    assert_eq!(login.list.selected(), legacy);
+}
+
+#[test]
+fn the_step_viewport_follows_the_selection() {
+    // Six key providers and two secrets: ten frame rows, the gap left
+    // out, the last secret at frame row 9. Eight rows tall six rows
+    // show, so the last secret scrolls the viewport to today's top.
+    let mut made = Vec::new();
+    for n in 0..6 {
+        made.push(LoginTarget {
+            name: format!("p{n}"),
+            kind: LoginKind::Key,
+        });
+    }
+    for name in ["s0.api_key", "s1.api_key"] {
+        made.push(LoginTarget {
+            name: name.to_owned(),
+            kind: LoginKind::Secret,
+        });
+    }
+    let fake = fake_with(made);
+    let context = ctx_h(&fake, 8);
+    let mut login = Login::open(&context);
+    assert_eq!(login.selected, 1);
+    for _ in 0..7 {
+        login.key(&Key::Down, &context);
+    }
+    assert_eq!(login.selected, 10);
+    assert_eq!(login.list.selected(), 9);
+    assert_eq!(login.list.top(), 4);
+    // Its secret panel opens over the same frame rows as today.
+    assert!(matches!(login.key(&Key::Enter, &context), Act::Stay));
+    assert!(panel_open(&login));
+    let screen = drawn(&login, 80, 8);
+    assert!(screen.contains("Value for s1.api_key:"), "{screen}");
+}
+
+#[test]
+fn enter_on_a_heading_or_the_note_does_nothing() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    // The headings and the gap never take focus: Enter on each stays.
+    for selected in [0, 3, 4] {
+        login.selected = selected;
+        assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+        assert!(!panel_open(&login));
+    }
     assert!(fake.stores().is_empty());
     let fake = fake_with(Vec::new());
     let mut login = Login::open(&ctx(&fake));
@@ -556,8 +740,14 @@ fn esc_on_the_list_closes() {
 fn a_click_selects_a_row_and_the_x_closes() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
-    assert!(matches!(login.click(Spot::Row(4), &ctx(&fake)), Act::Stay));
-    assert_eq!(login.list.selected(), 4);
+    assert!(matches!(login.click(Spot::Row(5), &ctx(&fake)), Act::Stay));
+    assert_eq!(login.selected, 5);
+    // A click on the Secrets heading, the gap or past the last item
+    // leaves the selection.
+    for spot in [Spot::Row(4), Spot::Row(3), Spot::Row(99)] {
+        assert!(matches!(login.click(spot, &ctx(&fake)), Act::Stay));
+        assert_eq!(login.selected, 5);
+    }
     assert!(matches!(login.click(Spot::Close, &ctx(&fake)), Act::Close));
 }
 
