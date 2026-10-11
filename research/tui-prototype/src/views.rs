@@ -73,6 +73,12 @@ const CASES: &[Case<Look>] = &[
         check: "tools by source with state and size, two on/off switches per MCP or extension tool, built-ins without a switch, and the reload cost.",
         build: || Look { kind: Kind::Tools },
     },
+    Case {
+        name: "rules",
+        help: "standing rules by scope with their revoke marks",
+        check: "global rules then this project's, each with its prefix, when and from which session it was added, and its red ✕.",
+        build: || Look { kind: Kind::Rules },
+    },
 ];
 
 /// `--view-case`, for `--help` and `check/views.md`.
@@ -92,6 +98,7 @@ enum Kind {
     ChangedFiles,
     SearchResults,
     Tools,
+    Rules,
 }
 
 struct Look {
@@ -398,6 +405,33 @@ fn tools_rows() -> Vec<super::Row> {
     ]
 }
 
+/// `/rules`: every standing rule by scope, global then this project. Each
+/// shows the prefix it allows, when and from which session it was added,
+/// and a ✕ that revokes it.
+fn rules_rows() -> Vec<super::Row> {
+    vec![
+        row(vec![sp("Global", bold())]),
+        row(vec![
+            sp(
+                "allow shell:git status · added 2d ago in review #688 · ",
+                Style::new(),
+            ),
+            sp("✕", fg(RED)),
+        ]),
+        super::Row::default(),
+        row(vec![sp("This project", bold())]),
+        row(vec![
+            sp(
+                "ask shell:cargo publish · added 1h ago in main · ",
+                Style::new(),
+            ),
+            sp("✕", fg(RED)),
+        ]),
+        super::Row::default(),
+        row(vec![sp("Ctrl+G opens the rules file", dim())]),
+    ]
+}
+
 fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
     match c.kind {
         Kind::Delegate => {
@@ -443,6 +477,12 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             let mut out = vec![view_header("Tools", "/tools")];
             out.push(super::Row::default());
             out.extend(tools_rows());
+            out
+        }
+        Kind::Rules => {
+            let mut out = vec![view_header("Rules", "/rules")];
+            out.push(super::Row::default());
+            out.extend(rules_rows());
             out
         }
         Kind::JobPty => {
@@ -645,7 +685,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 7);
+        assert_eq!(CASES.len(), 8);
         assert!(parse("nope").is_none());
     }
 
@@ -940,6 +980,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn rules_header_row() {
+        for cols in [160, NARROW] {
+            let c = parse_case("rules");
+            let buf = buffer(&c, cols, 48);
+            assert_header(&buf, "rules", "Rules", "/rules", cols);
+        }
+    }
+
+    #[test]
+    fn rules_shows_scopes_and_revoke_marks() {
+        for cols in [160, NARROW] {
+            let c = parse_case("rules");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("Global"), "no global scope");
+            assert!(t.contains("allow shell:git status"), "no global rule");
+            assert!(t.contains("This project"), "no project scope");
+            assert!(t.contains("ask shell:cargo publish"), "no project rule");
+            assert!(t.contains("added 2d ago in review #688"), "no rule origin");
+            assert!(t.contains("✕"), "no revoke mark");
+            assert!(t.contains("Ctrl+G opens the rules file"), "no file hint");
+            // Global reads before this project.
+            assert!(
+                t.find("Global").unwrap() < t.find("This project").unwrap(),
+                "scopes out of order"
+            );
+        }
+    }
+
+    #[test]
+    fn rules_revoke_marks_read_red() {
+        let mut marks = 0;
+        for r in rules_rows() {
+            for s in &r.spans {
+                if s.content == "✕" {
+                    assert_eq!(s.style.fg, Some(crate::RED));
+                    marks += 1;
+                }
+            }
+        }
+        assert_eq!(marks, 2, "not one ✕ per rule");
     }
 
     #[test]
