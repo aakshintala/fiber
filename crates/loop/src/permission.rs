@@ -65,31 +65,11 @@ pub(crate) fn judge(
     credentials: &Path,
     files: &[PathBuf],
 ) -> Verdict {
-    if let Some(why) = credential_why(&effects.declared, workspace, credentials, files) {
-        return Verdict::Deny {
-            by: DecidedBy::CredentialDeny,
-            reason: "credentials",
-            why,
-        };
-    }
-    let rules = match rules {
+    let rules = match deny_steps(tool, effects, rules, workspace, credentials, files) {
         Ok(rules) => rules,
-        Err(error) => {
-            return Verdict::Deny {
-                by: DecidedBy::StandingRule,
-                reason: "rules_unreadable",
-                why: error.0.clone(),
-            };
-        }
+        Err(denied) => return denied,
     };
     let subject = effects.subject.as_deref();
-    if find(rules, tool, subject, RuleDecision::Deny).is_some() {
-        return Verdict::Deny {
-            by: DecidedBy::StandingRule,
-            reason: "standing_rule",
-            why: "A standing rule refuses this call.".to_owned(),
-        };
-    }
     if let Some(rule) = find(rules, tool, subject, RuleDecision::Ask) {
         return Verdict::Ask(rule);
     }
@@ -109,6 +89,58 @@ pub(crate) fn judge(
         return Verdict::Allow(Some(DecidedBy::StandingRule));
     }
     Verdict::Review
+}
+
+/// Inner admission is the anchor; only the denies apply to an inner call.
+pub(crate) fn inner_verdict(
+    tool: &str,
+    effects: &Effects,
+    rules: &Result<StandingRules, RulesError>,
+    workspace: &Path,
+    credentials: &Path,
+    files: &[PathBuf],
+) -> Verdict {
+    match deny_steps(tool, effects, rules, workspace, credentials, files) {
+        Ok(_) => Verdict::Allow(None),
+        Err(denied) => denied,
+    }
+}
+
+/// Steps 1 and 2, shared by both call paths; unreadable rules fail closed.
+fn deny_steps<'a>(
+    tool: &str,
+    effects: &Effects,
+    rules: &'a Result<StandingRules, RulesError>,
+    workspace: &Path,
+    credentials: &Path,
+    files: &[PathBuf],
+) -> Result<&'a StandingRules, Verdict> {
+    if let Some(why) = credential_why(&effects.declared, workspace, credentials, files) {
+        return Err(Verdict::Deny {
+            by: DecidedBy::CredentialDeny,
+            reason: "credentials",
+            why,
+        });
+    }
+    let rules = match rules {
+        Ok(rules) => rules,
+        Err(error) => {
+            return Err(Verdict::Deny {
+                by: DecidedBy::StandingRule,
+                reason: "rules_unreadable",
+                why: error.0.clone(),
+            });
+        }
+    };
+    let subject = effects.subject.as_deref();
+    if find(rules, tool, subject, RuleDecision::Deny).is_some() {
+        return Err(Verdict::Deny {
+            by: DecidedBy::StandingRule,
+            reason: "standing_rule",
+            why: "A standing rule refuses this call.".to_owned(),
+        });
+    }
+    Ok(rules)
 }
 
 /// Why the credential deny refuses a call with `declared` effects, if it
