@@ -1208,6 +1208,7 @@ dependencies = [
  "contract",
  "fakes",
  "log 0.0.0",
+ "ring",
  "serde",
  "serde_json",
  "signal-hook",

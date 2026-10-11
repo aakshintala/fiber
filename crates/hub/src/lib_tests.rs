@@ -91,6 +91,7 @@ fn serve_in(
                 configure().map(|idle_exit| crate::Settings {
                     idle_exit,
                     level: log::diag::Level::Info,
+                    port: None,
                 })
             },
             "0.0.0",

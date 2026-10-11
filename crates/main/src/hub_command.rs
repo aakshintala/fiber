@@ -62,7 +62,9 @@ fn serve(exe: Result<PathBuf, String>, mode: hub::Mode) -> i32 {
 }
 
 /// The hub's `hub.idle_exit_ms` and `diagnostics.level`, from the
-/// configuration read in `workspace`, the current directory.
+/// configuration read in `workspace`, the current directory. The port
+/// comes from Fiber home's global `config.json` only: a project file's
+/// `hub.port` is ignored (`docs/invocation.md`, "The hub").
 fn configure(home: &Path, workspace: std::io::Result<PathBuf>) -> Result<hub::Settings, Failure> {
     let workspace = workspace.map_err(|error| {
         failure(
@@ -85,7 +87,32 @@ fn configure(home: &Path, workspace: std::io::Result<PathBuf>) -> Result<hub::Se
         } else {
             log::diag::Level::Info
         },
+        port: port(home, &config)?,
     })
+}
+
+/// The port an installed hub also listens on: `Some` when Fiber home's
+/// global `config.json` holds a `hub.port`, with the web page origins
+/// from the loaded configuration, else `None`.
+fn port(home: &Path, config: &config::Config) -> Result<Option<hub::PortSettings>, Failure> {
+    let number = config::get_global(home, "hub.port")
+        .map_err(|error| failure(error.code(), error.to_string()))?
+        .and_then(|value| value.as_u64())
+        .and_then(|number| u16::try_from(number).ok());
+    let Some(number) = number else {
+        return Ok(None);
+    };
+    let allowed_origins = config
+        .get("hub.allowed_origins", None)
+        .and_then(|(value, _)| value.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|origin| origin.as_str().map(str::to_owned))
+        .collect();
+    Ok(Some(hub::PortSettings {
+        number,
+        allowed_origins,
+    }))
 }
 
 /// The hub's exit code, printing a start failure the way every command
