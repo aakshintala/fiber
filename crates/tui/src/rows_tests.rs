@@ -272,3 +272,284 @@ fn on_surface_keeps_each_rows_text() {
     assert_eq!(texts[1].scopes, vec![Target::Group(1)]);
     assert_eq!(texts[3].scopes, vec![Target::Group(1)]);
 }
+
+#[test]
+fn pad_prefixes_blank_cells_and_shifts_text_marks() {
+    // One pad column: the row starts with a blank, skip grows by one,
+    // and the link and spin move past it; decoration stays
+    // (`docs/tui.md`, "Turns").
+    use crate::app::Target;
+    let mut rows = Rows::default();
+    rows.push_text(
+        row("hello world"),
+        RowText {
+            skip: 0,
+            tail: 0,
+            decoration: true,
+            links: vec![(3..7, "https://x".to_owned())],
+            scopes: Vec::new(),
+            spin: Some(0),
+            join: Join::Break,
+        },
+    );
+    rows.pad(0, 1, 20);
+    let (lines, texts) = rows.into_parts();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].0.to_string(), " hello world");
+    assert_eq!(lines[0].0.width(), 12);
+    assert_eq!(texts[0].skip, 1);
+    assert_eq!(texts[0].links, vec![(4..8, "https://x".to_owned())]);
+    assert_eq!(texts[0].spin, Some(1));
+    assert!(texts[0].decoration);
+    let _ = Target::Group(1);
+}
+
+#[test]
+fn pad_splits_an_over_wide_row_at_a_space() {
+    // A dim line of 29 cells at inner 10 breaks after its spaces into 3
+    // pieces, each padded to at most 11 cells, keeping the dim style and
+    // joining with the dropped space; the target stays on the first
+    // piece (`docs/tui.md`, "Turns", "Selection and copy").
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::Span;
+    let dim = Style::default().add_modifier(Modifier::DIM);
+    let mut rows = Rows::default();
+    rows.push_text(
+        (
+            Line::styled("aaaa bbbb cccc dddd eeee ffff", dim),
+            Some(crate::app::Target::Group(3)),
+        ),
+        RowText {
+            join: Join::WrapSpace,
+            ..RowText::plain()
+        },
+    );
+    rows.pad(0, 1, 10);
+    let (lines, texts) = rows.into_parts();
+    assert_eq!(lines.len(), 3);
+    let shown: Vec<String> = lines.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(shown, [" aaaa bbbb", " cccc dddd", " eeee ffff"]);
+    for (line, _) in &lines {
+        assert!(line.width() <= 11, "{line}");
+        assert!(line.to_string().starts_with(' '));
+        assert!(
+            line.spans
+                .iter()
+                .all(|span: &Span| span.style.add_modifier.contains(Modifier::DIM))
+                || line.spans.first().is_some_and(|span| span.content == " "),
+            "{line:?}"
+        );
+    }
+    assert_eq!(
+        texts.iter().map(|text| text.join).collect::<Vec<_>>(),
+        [Join::WrapSpace, Join::WrapSpace, Join::WrapSpace]
+    );
+    assert_eq!(lines[0].1, Some(crate::app::Target::Group(3)));
+    assert!(lines[1].1.is_none() && lines[2].1.is_none());
+    let logical: Vec<String> = crate::logical::logical(&lines, &texts)
+        .iter()
+        .map(|line| line.text.clone())
+        .collect();
+    assert_eq!(logical, ["aaaa bbbb cccc dddd eeee ffff"]);
+}
+
+#[test]
+fn pad_splits_a_multi_span_row_keeping_each_style() {
+    // An edit-ledger-shaped row (a 40-cell path, " +3" in added, " −1"
+    // in removed, all bold) at inner 12: every piece fits the room with
+    // its pad, and the colours and the bold stay on their text
+    // (`docs/tui.md`, "Turns").
+    use ratatui::style::{Modifier, Style};
+    use ratatui::text::Span;
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let line = Line::from(vec![
+        Span::styled("a".repeat(40), bold),
+        Span::styled(" +3", bold.fg(crate::theme::Role::Added.color())),
+        Span::styled(" −1", bold.fg(crate::theme::Role::Removed.color())),
+    ]);
+    let mut rows = Rows::default();
+    rows.push((line, None));
+    rows.pad(0, 1, 12);
+    let (lines, texts) = rows.into_parts();
+    assert_eq!(lines.len(), 4);
+    for (line, _) in &lines {
+        assert!(line.width() <= 13, "{line}");
+    }
+    for (line, _) in &lines {
+        for span in line.spans.iter().skip(1) {
+            assert!(span.style.add_modifier.contains(Modifier::BOLD), "{span:?}");
+        }
+    }
+    let last = lines
+        .last()
+        .map(|(line, _)| line.to_string())
+        .expect("a last piece");
+    assert!(last.contains("+3"), "{last:?}");
+    assert!(last.contains("−1"), "{last:?}");
+    let added = lines
+        .iter()
+        .flat_map(|(line, _)| &line.spans)
+        .find(|span| span.content.contains("+3"))
+        .expect("the added count keeps its span");
+    assert_eq!(added.style.fg, Some(crate::theme::Role::Added.color()));
+    let removed = lines
+        .iter()
+        .flat_map(|(line, _)| &line.spans)
+        .find(|span| span.content.contains("−1"))
+        .expect("the removed count keeps its span");
+    assert_eq!(removed.style.fg, Some(crate::theme::Role::Removed.color()));
+    let logical: Vec<String> = crate::logical::logical(&lines, &texts)
+        .iter()
+        .map(|line| line.text.clone())
+        .collect();
+    assert_eq!(logical, [format!("{} +3 −1", "a".repeat(40))]);
+}
+
+#[test]
+fn pad_redistributes_skip_tail_links_and_spin() {
+    // A 20-cell row with skip 2, tail 3, a link on 8..14 and a spin at
+    // 15, at inner 6 with pad 1: each piece's marks cover exactly the
+    // original cells it drew, shifted by the pad, and the pieces copy
+    // back to the row's text (`docs/tui.md`, "Selection and copy").
+    let mut rows = Rows::default();
+    rows.push_text(
+        row("0123456789abcdefghij"),
+        RowText {
+            skip: 2,
+            tail: 3,
+            links: vec![(8..14, "https://x".to_owned())],
+            spin: Some(15),
+            ..RowText::plain()
+        },
+    );
+    rows.pad(0, 1, 6);
+    let (lines, texts) = rows.into_parts();
+    assert_eq!(lines.len(), 4);
+    let shown: Vec<String> = lines.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(shown, [" 012345", " 6789ab", " cdefgh", " ij"]);
+    assert_eq!(
+        texts.iter().map(|text| text.skip).collect::<Vec<_>>(),
+        [3, 1, 1, 1]
+    );
+    assert_eq!(
+        texts.iter().map(|text| text.tail).collect::<Vec<_>>(),
+        [0, 0, 1, 2]
+    );
+    assert_eq!(
+        texts
+            .iter()
+            .map(|text| text.links.clone())
+            .collect::<Vec<_>>(),
+        [
+            Vec::new(),
+            vec![(3..7, "https://x".to_owned())],
+            vec![(1..3, "https://x".to_owned())],
+            Vec::new(),
+        ]
+    );
+    assert_eq!(
+        texts.iter().map(|text| text.spin).collect::<Vec<_>>(),
+        [None, None, Some(4), None]
+    );
+    assert_eq!(
+        texts.iter().map(|text| text.join).collect::<Vec<_>>(),
+        [Join::Break, Join::Wrap, Join::Wrap, Join::Wrap]
+    );
+    let logical: Vec<String> = crate::logical::logical(&lines, &texts)
+        .iter()
+        .map(|line| line.text.clone())
+        .collect();
+    assert_eq!(logical, ["23456789abcdefg"]);
+}
+
+#[test]
+fn pad_hard_cuts_a_word_longer_than_the_inner_width() {
+    // No space in the window: the pieces cut hard and join with nothing
+    // (`docs/tui.md`, "Selection and copy").
+    let mut rows = Rows::default();
+    rows.push(row("abcdefghij"));
+    rows.pad(0, 1, 4);
+    let (lines, texts) = rows.into_parts();
+    let shown: Vec<String> = lines.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(shown, [" abcd", " efgh", " ij"]);
+    assert_eq!(
+        texts.iter().map(|text| text.join).collect::<Vec<_>>(),
+        [Join::Break, Join::Wrap, Join::Wrap]
+    );
+    let logical: Vec<String> = crate::logical::logical(&lines, &texts)
+        .iter()
+        .map(|line| line.text.clone())
+        .collect();
+    assert_eq!(logical, ["abcdefghij"]);
+}
+
+#[test]
+fn pad_blanks_a_glyph_wider_than_the_inner_width() {
+    // "界" is two cells at inner 1: it draws as one blank cell keeping
+    // its style, plus the pad (`docs/tui.md`, "Turns").
+    use ratatui::style::{Modifier, Style};
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut rows = Rows::default();
+    rows.push((Line::styled("界", bold), None));
+    rows.pad(0, 1, 1);
+    let (lines, texts) = rows.into_parts();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].0.to_string(), "  ");
+    assert_eq!(lines[0].0.width(), 2);
+    assert!(
+        lines[0].0.style.add_modifier.contains(Modifier::BOLD),
+        "{:#?}",
+        lines[0].0
+    );
+    assert_eq!(texts[0].skip, 1);
+}
+
+#[test]
+fn fitted_counts_the_pieces_pad_draws() {
+    // The count and the drawing share one split rule (`docs/tui.md`,
+    // "Turns").
+    for (text, inner) in [
+        ("hello world", 3),
+        ("hello world", 5),
+        ("hello world", 30),
+        ("abcdefghij", 4),
+        ("aaaa bbbb cccc dddd eeee ffff", 10),
+        ("", 6),
+    ] {
+        let line = Line::raw(text.to_owned());
+        let mut rows = Rows::default();
+        rows.push((line.clone(), None));
+        rows.pad(0, 0, inner);
+        let (lines, _) = rows.into_parts();
+        assert_eq!(
+            super::fitted(&line, inner),
+            lines.len(),
+            "{text:?} at {inner}"
+        );
+    }
+    assert_eq!(super::fitted(&Line::raw("hi"), 0), 1);
+}
+
+#[test]
+fn gap_inserts_one_plain_blank_row_at_the_index() {
+    // One empty plain row between the rows around it, with the scopes
+    // current at the call (`docs/tui.md`, "Turns").
+    use crate::app::Target;
+    let mut rows = Rows::default();
+    rows.push(row("a"));
+    assert!(rows.open_scope(Target::Group(1), true));
+    rows.push(row("b"));
+    rows.gap(1);
+    rows.end_scope();
+    rows.push(row("c"));
+    let (lines, texts) = rows.into_parts();
+    let shown: Vec<String> = lines.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(shown, ["a", "", "b", "c"]);
+    assert_eq!(
+        texts[1],
+        RowText {
+            scopes: vec![Target::Group(1)],
+            ..RowText::plain()
+        }
+    );
+}
