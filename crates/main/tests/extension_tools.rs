@@ -208,14 +208,7 @@ const RAN: &[&str] = &["tool_call_started", "tool_call_completed"];
 /// A tool registration as a line of Lua: `name`, the Lua `effects` and
 /// `run`, and `timeout = <timeout>` unless `timeout` is empty.
 fn tool(name: &str, effects: &str, run: &str, timeout: &str) -> String {
-    let timeout = if timeout.is_empty() {
-        String::new()
-    } else {
-        format!(" timeout = {timeout},")
-    };
-    format!(
-        "fiber.tool(\"{name}\", {{ description = \"The {name} tool.\", input_schema = {{ type = \"object\" }},{timeout} effects = {effects}, run = {run} }})\n"
-    )
+    tool_with_schema(name, "{ type = \"object\" }", effects, run, timeout)
 }
 
 /// A tool `name` that only reads and answers `said`.
@@ -225,6 +218,19 @@ fn saying(name: &str, said: &str) -> String {
         "{ effects = { \"reads\" }, reversible = true }",
         &format!("function() return \"{said}\" end"),
         "2000",
+    )
+}
+
+/// A tool registration like [`tool`], but with `schema` as its
+/// `input_schema` Lua table instead of the fixed `{ type = "object" }`.
+fn tool_with_schema(name: &str, schema: &str, effects: &str, run: &str, timeout: &str) -> String {
+    let timeout = if timeout.is_empty() {
+        String::new()
+    } else {
+        format!(" timeout = {timeout},")
+    };
+    format!(
+        "fiber.tool(\"{name}\", {{ description = \"The {name} tool.\", input_schema = {schema},{timeout} effects = {effects}, run = {run} }})\n"
     )
 }
 
@@ -520,4 +526,77 @@ fn a_tool_spinning_past_its_timeout_fails_timeout_and_the_session_goes_on() {
         completed["error"]["message"],
         "`fiber.test/slow`: `spin` passed its 200 ms timeout and was stopped."
     );
+}
+
+#[test]
+fn a_null_for_a_nullable_property_reaches_the_tool_as_absent() {
+    let setup = Setup::new_with_fm_root();
+    let server = calling(&[
+        function_call("call_maybe", "maybe_tag", &json!({"tag": null})),
+        function_call("call_req", "req_tag", &json!({"tag": null})),
+    ]);
+    setup.provider(&server);
+    // A JSON null reaches Lua as null lightuserdata, while an absent key
+    // is nil, so `args.tag == nil` tells absent from json-null.
+    let run_body =
+        "function(args) if args.tag == nil then return \"absent\" else return \"present\" end end";
+    let effects = "{ effects = { \"reads\" }, reversible = true }";
+    setup.lua(
+        "nul",
+        &format!(
+            "{}{}",
+            tool_with_schema(
+                "maybe_tag",
+                "{ type = \"object\", properties = { tag = { type = {\"string\", \"null\"} } } }",
+                effects,
+                run_body,
+                "2000",
+            ),
+            tool_with_schema(
+                "req_tag",
+                "{ type = \"object\", properties = { tag = { type = {\"string\", \"null\"} } }, required = {\"tag\"} }",
+                effects,
+                run_body,
+                "2000",
+            ),
+        ),
+    );
+    let run = ask(&setup, "check the tags");
+    // The optional call runs and sees no `tag`; the required call fails
+    // before it starts, its dropped null now missing. Had the null been
+    // kept, both calls would have run and answered `"present"`.
+    assert_eq!(
+        run.kinds(),
+        kinds(
+            &[],
+            2,
+            &[],
+            &[
+                "tool_call_started",
+                "tool_call_completed",
+                "tool_call_completed"
+            ]
+        )
+    );
+    let completed = run.all("tool_call_completed");
+    assert_eq!(completed.len(), 2, "{completed:?}");
+    assert_eq!(completed[0]["payload"]["status"], "completed");
+    assert_eq!(
+        completed[0]["payload"]["content"],
+        json!([{"type": "text", "text": "absent"}])
+    );
+    assert_eq!(completed[1]["payload"]["status"], "failed");
+    assert_eq!(
+        completed[1]["payload"]["error"]["code"],
+        "invalid_arguments"
+    );
+    assert!(
+        completed[1]["payload"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`/tag`: missing"),
+        "{}",
+        completed[1]["payload"]["error"]["message"]
+    );
+    assert_eq!(outputs_sent(&server)[0], "absent");
 }
