@@ -26,15 +26,16 @@ in `research/concurrency/README.md`.
 
 ## Results
 
-Pending the first run after merge. The run fills this table with the
-median of its five samples per binary, and names the commit and runner.
+Run [38139307008](https://github.com/aakshintala/fiber/actions/runs/38139307008)
+on commit `a8ae8a1d`, runner `ubuntu-24.04`, mimalloc v0.1.52: the median
+of five samples per binary.
 
 | Row | musl system | musl + mimalloc | gnu (glibc) |
 |---|---|---|---|
-| Terminal to its first frame, attaching, 10 MiB (ms) | pending | pending | pending |
-| Terminal, attaching a 10 MiB session, peak RSS (KiB) | pending | pending | pending |
-| Terminal, memory kept after attaching a 10 MiB session, RssAnon (KiB) | pending | pending | pending |
-| Session, memory kept after the busy turn, RssAnon (KiB) | pending | pending | pending |
+| Terminal to its first frame, attaching, 10 MiB (ms) | 944.6 | 265.5 | 311.9 |
+| Terminal, attaching a 10 MiB session, peak RSS (KiB) | 41240 | 75836 | 44476 |
+| Terminal, memory kept after attaching a 10 MiB session, RssAnon (KiB) | 5796 | 62316 | 32664 |
+| Session, memory kept after the busy turn, RssAnon (KiB) | 8128 | 34516 | 6712 |
 
 Changing the shipped allocator is an owner question that follows from
 these numbers, not part of #1990.
