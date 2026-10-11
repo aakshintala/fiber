@@ -113,7 +113,7 @@ The selector has its own tests.
 
 On a ready pull request, one job on each of Linux x86_64, Linux arm64 and
 macOS arm64 runs `scripts/check`, the gate CI applies (`docs/workflow.md`,
-"The gate"). A draft pull request runs only the Linux x86_64 leg. Each
+"The gate"). A draft pull request runs only the Linux x86_64 leg, because `cargo xtask plan` leaves its `test` job unselected. Each
 job:
 
 - compiles the selected crates with the debug profile, every target,
