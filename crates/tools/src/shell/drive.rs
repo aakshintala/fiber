@@ -10,9 +10,9 @@ use contract::tool::Cancel;
 use rustix::process::Signal;
 
 use super::background::{MoveAsk, Step, running_step, wait_deadline};
-use super::command::{Finished, MovePolicy, MoveReason, StopKind};
+use super::command::{Finished, Kept, MovePolicy, MoveReason, StopKind};
 use super::monitor::Feed;
-use super::output::{JobStream, Shared, lock, stream_output, stream_tail};
+use super::output::{JobStream, Shared, lock, stream_output, stream_rest};
 use super::process_group::send_term;
 
 pub(super) struct View {
@@ -38,7 +38,8 @@ pub(super) struct Run {
     pub(super) stop: Option<StopKind>,
     pub(super) sent_signal: bool,
     pub(super) seen_empty: bool,
-    pub(super) streamed: usize,
+    /// An incomplete UTF-8 sequence the stream queue's last take left.
+    pub(super) stream_carry: Vec<u8>,
     pub(super) timeout_at: Option<Instant>,
     pub(super) move_at: Option<Instant>,
     pub(super) pgid: u32,
@@ -87,7 +88,7 @@ pub(super) fn pump(
         // The drive loop holds the emitter and streams every pass, woken by
         // the reader on every chunk; the reader never holds it, so nothing
         // emits after this returns.
-        progress.streamed = stream_output(&progress.shared, emit, progress.streamed);
+        stream_output(&progress.shared, emit, &mut progress.stream_carry);
         if let Some(job) = progress.job.as_mut() {
             job.pass(&progress.shared, clock);
         }
@@ -187,7 +188,7 @@ pub(super) fn pump(
                         progress.seen_empty,
                         view.eof,
                         emit,
-                        progress.streamed,
+                        &mut progress.stream_carry,
                     );
                     // After `finish` the reader queues nothing more, so this
                     // is every byte the file holds, before the end is reported.
@@ -235,7 +236,7 @@ pub(super) fn finish(
     seen_empty: bool,
     eof: bool,
     emit: &dyn Emit,
-    streamed: usize,
+    carry: &mut Vec<u8>,
 ) -> Finished {
     let (output, status, capped) = {
         let mut inner = lock(&shared.inner);
@@ -245,16 +246,17 @@ pub(super) fn finish(
             // of the result.
             inner.discard = true;
         }
-        (
-            std::mem::take(&mut inner.output),
-            inner.status,
-            inner.cap_fired,
-        )
+        // The spill leaves `Inner` with the result: nothing writes the
+        // file after it is taken.
+        let output = match inner.spill.take() {
+            Some(spill) => Kept::Spilled(Box::new(spill)),
+            None => Kept::Whole(std::mem::take(&mut inner.output)),
+        };
+        (output, inner.status, inner.cap_fired)
     };
-    // Tailed from this exact snapshot: the reader appends from here into a
-    // fresh buffer the result never sees (discarded above while open), so
-    // the concatenated delta texts equal the lossy result.
-    stream_tail(&output, emit, streamed);
+    // The queue's rest goes out lossily, so below the cap the concatenated
+    // delta texts equal the lossy whole output.
+    stream_rest(shared, emit, carry);
     let stopped = stop.is_some();
     Finished {
         output,

@@ -381,6 +381,7 @@ fn execute_fails_when_the_program_does_not_exist() {
         &Recorder::default(),
         super::command::MovePolicy::Stay,
         None,
+        None,
     );
     assert!(err.is_err());
 }
@@ -627,4 +628,200 @@ fn the_flags_parse_to_one_mode_and_only_run_in_background_skips_the_bare_wait() 
             assert_eq!(mode.in_background(), background, "{mode:?}");
         }
     }
+}
+
+use super::command::{Finished, Kept};
+use super::spill::{Config as SpillConfig, Spill};
+use contract::tool::Bound;
+
+fn artifacts(dir: &fakes::TempDir) -> SpillConfig {
+    SpillConfig {
+        dir: dir.path().join("artifacts"),
+        bound: Bound {
+            start: 8192,
+            end: 8192,
+        },
+        wrap: None,
+        name: None,
+    }
+}
+
+#[test]
+fn with_cap_splits_its_share_and_leaves_the_shell_otherwise() {
+    let capped = shell().with_cap(100).unwrap();
+    assert_eq!(capped.bound(), Bound { start: 50, end: 50 });
+    let capped = shell().with_cap(101).unwrap();
+    assert_eq!(capped.bound(), Bound { start: 51, end: 50 });
+    assert_eq!(capped.definition().name, "shell");
+}
+
+#[test]
+fn with_artifacts_stores_a_relative_directory_absolute() {
+    let dir = fakes::TempDir::new("fiber-shell-artifacts");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_artifacts("rel".into());
+    assert!(shell.artifacts.as_ref().unwrap().is_absolute());
+}
+
+#[test]
+fn assemble_of_a_spilled_output_has_no_text_and_names_the_file() {
+    let dir = fakes::TempDir::new("fiber-shell-assemble");
+    std::fs::create_dir(dir.path().join("artifacts")).unwrap();
+    let spill = Spill::start(artifacts(&dir), vec![b'x'; 20_000]);
+    let status = Command::new("true").status().unwrap();
+    let output = super::assemble(
+        super::Limit {
+            ms: 1,
+            monitor: false,
+        },
+        Finished {
+            output: Kept::Spilled(Box::new(spill)),
+            status: Some(status),
+            stop: None,
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: false,
+            flooded: false,
+        },
+        None,
+    );
+    assert!(output.content.is_empty());
+    assert!(output.error.is_none());
+    let spilled = output.spilled.expect("spilled is set");
+    let kept = spilled.file.as_ref().expect("the file is kept");
+    let file = std::fs::read(&kept.path).unwrap();
+    assert_eq!(file.len(), 20_000 + 14);
+    assert_eq!(&file[..100], &[b'x'; 100][..]);
+    assert_eq!(&file[file.len() - 14..], b"\nExit code 0.\n");
+    assert!(spilled.tail.ends_with("Exit code 0.\n"));
+    assert_eq!(spilled.tail.len(), 8192);
+    assert_eq!(spilled.head.len(), 8192);
+    assert_eq!(&spilled.head.as_bytes()[..100], &[b'x'; 100][..]);
+    assert_eq!(spilled.removed, 20_000 + 14 - 16_384);
+}
+
+#[test]
+fn assemble_of_a_failed_spilled_output_keeps_its_error_and_process() {
+    let dir = fakes::TempDir::new("fiber-shell-assemble-failed");
+    std::fs::create_dir(dir.path().join("artifacts")).unwrap();
+    let spill = Spill::start(artifacts(&dir), b"partial".to_vec());
+    let status = Command::new("sh").args(["-c", "exit 3"]).status().unwrap();
+    let output = super::assemble(
+        super::Limit {
+            ms: 1,
+            monitor: false,
+        },
+        Finished {
+            output: Kept::Spilled(Box::new(spill)),
+            status: Some(status),
+            stop: None,
+            indeterminate: false,
+            held_open: false,
+            sent_signal: false,
+            capped: false,
+            flooded: false,
+        },
+        None,
+    );
+    assert!(output.content.is_empty());
+    assert_eq!(code(&output), Some(ErrorCode::NonzeroExit));
+    let process = output.process.expect("a spilled output names its process");
+    assert_eq!(process.exit_code, Some(3));
+    assert_eq!(process.signal, None);
+    assert!(!process.timed_out);
+    let spilled = output.spilled.expect("spilled is set");
+    assert!(spilled.head.ends_with("Exit code 3.\n"));
+}
+
+#[test]
+fn assemble_hands_the_open_failure_line_to_both_kinds_of_output() {
+    let dir = fakes::TempDir::new("fiber-shell-open-line");
+    std::fs::create_dir(dir.path().join("artifacts")).unwrap();
+    let status = Command::new("true").status().unwrap();
+    let finished = |output| Finished {
+        output,
+        status: Some(status),
+        stop: None,
+        indeterminate: false,
+        held_open: false,
+        sent_signal: false,
+        capped: false,
+        flooded: false,
+    };
+    let limit = super::Limit {
+        ms: 1,
+        monitor: false,
+    };
+    let line = "It could not move to the background: the jobs are full.";
+    let spilled = super::assemble(
+        limit,
+        finished(Kept::Spilled(Box::new(Spill::start(
+            artifacts(&dir),
+            vec![b'x'; 20_000],
+        )))),
+        Some(line),
+    );
+    let spilled = spilled.spilled.expect("spilled is set");
+    let kept = spilled.file.expect("kept");
+    let file = std::fs::read_to_string(&kept.path).unwrap();
+    assert!(file.ends_with(&format!("{line}\nExit code 0.\n")), "{file}");
+    assert!(
+        spilled.tail.ends_with(&format!("{line}\nExit code 0.\n")),
+        "{}",
+        spilled.tail
+    );
+    let whole = super::assemble(limit, finished(Kept::Whole(b"hi".to_vec())), Some(line));
+    assert_eq!(
+        text(&whole),
+        format!("hi\n{line}\nExit code 0.\n"),
+        "the line ends the text of a whole output too"
+    );
+}
+
+/// A spill writer that fails every write.
+fn failing_writer() -> super::spill::Wrap {
+    use std::io::{self, Write};
+    use std::sync::Arc;
+    struct Fails;
+    impl Write for Fails {
+        fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("boom"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    Arc::new(|_file| {
+        let fails: Box<dyn Write + Send> = Box::new(Fails);
+        fails
+    })
+}
+
+#[test]
+fn a_spill_that_cannot_be_written_keeps_only_its_ends() {
+    let dir = fakes::TempDir::new("fiber-shell-spill-fail");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_artifacts(dir.path().join("artifacts"))
+        .with_spill_writer(failing_writer());
+    std::fs::create_dir(dir.path().join("artifacts")).unwrap();
+    let output = shell.run(
+        &args("head -c 1048577 /dev/zero | tr '\\0' a"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    assert!(output.content.is_empty());
+    let spilled = output.spilled.expect("spilled is set");
+    let Err(failed) = spilled.file else {
+        panic!("a failed spill is kept");
+    };
+    assert!(failed.message.contains("boom"), "{}", failed.message);
+    assert_eq!(failed.left, None);
+    assert!(
+        std::fs::read_dir(dir.path().join("artifacts"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "the partial file was removed"
+    );
 }

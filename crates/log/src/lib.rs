@@ -43,7 +43,7 @@ pub use scan::{
 pub use search::{Identity, SessionScan};
 pub use usage::usage;
 pub use weak_emit::WeakEmit;
-pub use write::Log;
+pub use write::{Log, cut_joined, cut_notice};
 
 /// The log's name in a session directory.
 const EVENTS: &str = "events.jsonl";

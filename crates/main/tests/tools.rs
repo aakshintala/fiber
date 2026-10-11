@@ -2774,3 +2774,145 @@ fn a_reviewed_call_carries_the_notes_after_the_shared_instructions() {
         "{instructions:?}"
     );
 }
+
+/// A foreground `shell` flood of 64 MiB keeps the session's peak RSS growth
+/// bounded: the output past 1 MiB goes to the call's artifact file as it
+/// arrives (`docs/tools.md`, "Result and output"). Linux only:
+/// `docs/performance.md` measures peak RSS on Linux.
+#[test]
+#[cfg(target_os = "linux")]
+fn foreground_output_past_a_mebibyte_keeps_peak_rss_growth_bounded() {
+    let setup = Setup::new_with_started_deadline();
+    // Prints the `VmHWM` of its nearest ancestor whose comm is `fiber`.
+    let measure = setup.workspace().join("vmhwm.sh");
+    fs::write(
+        &measure,
+        "pid=$$\n\
+         while true; do\n\
+         comm=$(cat /proc/$pid/comm 2>/dev/null) || exit 1\n\
+         if [ \"$comm\" = \"fiber\" ]; then break; fi\n\
+         if [ \"$pid\" = \"1\" ]; then exit 1; fi\n\
+         pid=$(sed 's/.*) //' /proc/$pid/stat | cut -d' ' -f2)\n\
+         done\ngrep VmHWM /proc/$pid/status\n",
+    )
+    .unwrap();
+    let flood = setup.workspace().join("flood.sh");
+    fs::write(&flood, "yes | head -c 67108864\n").unwrap();
+    let print_command = format!("sh {}", measure.display());
+    let flood_command = format!("sh {}", flood.display());
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_before",
+            "shell",
+            &json!({"command": print_command}),
+        )]),
+        stream(&[function_call(
+            "call_flood",
+            "shell",
+            &json!({"command": flood_command}),
+        )]),
+        stream(&[function_call(
+            "call_after",
+            "shell",
+            &json!({"command": print_command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_defaults(&server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": print_command}),
+            json!({"decision": "allow", "tool": "shell", "prefix": flood_command}),
+        ),
+    )
+    .unwrap();
+    let run = setup.run(&["ask", "measure the flood"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // `tool_call_delta` is ephemeral, and how many the flood fills depends
+    // on when it writes, so the comparison leaves them out; every other
+    // kind is pinned in order.
+    let kinds: Vec<&str> = run
+        .lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .filter(|kind| *kind != "tool_call_delta")
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let completed: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    assert_eq!(completed.len(), 3);
+    for completion in &completed {
+        assert_eq!(completion["payload"]["status"], "completed");
+    }
+    let hwm = |completion: &Value| {
+        let text = completion["payload"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        let line = text
+            .lines()
+            .find(|line| line.starts_with("VmHWM:"))
+            .unwrap();
+        line.split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+    };
+    let before = hwm(completed[0]);
+    let after = hwm(completed[2]);
+    assert!(before > 0 && after >= before, "{before} {after}");
+    // Without the spill the buffer alone is at least 64 MiB.
+    assert!(
+        after <= before + 4096,
+        "peak RSS grew by more than 4 MiB: {before} KiB to {after} KiB"
+    );
+}
