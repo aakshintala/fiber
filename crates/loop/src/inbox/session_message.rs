@@ -39,7 +39,10 @@ impl Loop {
     /// A session message taken while the loop is idle: its framed text
     /// joins the turn's input, after `close` too.
     pub(super) fn admit_message_idle(&mut self, message: SessionMessage, input: &mut TurnInput) {
-        input.pieces.push(Queued::Steer(framed(message)));
+        input.pieces.push(Queued::Steer(
+            framed(message),
+            crate::before_message::Hooked::default(),
+        ));
     }
 
     /// A session message taken while a turn runs: queued for the next step
@@ -50,7 +53,10 @@ impl Loop {
         message: SessionMessage,
         turn: &TurnId,
     ) -> Result<(), crate::Error> {
-        self.queued.push_back(Queued::Steer(framed(message)));
+        self.queued.push_back(Queued::Steer(
+            framed(message),
+            crate::before_message::Hooked::default(),
+        ));
         self.emit_queue(Some(turn))?;
         Ok(())
     }
@@ -101,7 +107,7 @@ impl Loop {
     pub(crate) fn holds_message(&self) -> bool {
         self.queued
             .iter()
-            .any(|piece| matches!(piece, Queued::Steer(message) if is_session(message)))
+            .any(|piece| matches!(piece, Queued::Steer(message, _) if is_session(message)))
             || self
                 .deferred
                 .iter()
@@ -114,7 +120,7 @@ impl Loop {
 pub(super) fn has_session_message(pieces: &[Queued]) -> bool {
     pieces
         .iter()
-        .any(|piece| matches!(piece, Queued::Steer(message) if is_session(message)))
+        .any(|piece| matches!(piece, Queued::Steer(message, _) if is_session(message)))
 }
 
 /// Whether `message` came from another session.

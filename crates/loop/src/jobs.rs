@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use contract::events::{
-    DelegateFinished, Event, InputItem, JobCompleted, JobLine, JobsPendingNotified, Outcome,
-    PendingReason,
+    ContextAdded, DelegateFinished, Event, InputItem, JobCompleted, JobLine, JobsPendingNotified,
+    Outcome, PendingReason,
 };
 use contract::inbox::{JobNotice, Message};
 use contract::jobs::Jobs;
@@ -20,6 +20,7 @@ use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{CommandId, ErrorCode, JobId, TurnId};
 
+use crate::before_message::Hooked;
 use crate::prompt::{fill, message};
 use crate::{Error, Loop};
 
@@ -35,8 +36,9 @@ const ORPHANED: &str = "The process that ran this job died; it may still be runn
 #[derive(Debug)]
 pub(crate) enum Queued {
     /// Written as `steering_applied`, or as a `message` item when it starts
-    /// a turn. Fiber's own ending notice only ever starts a turn.
-    Steer(Message),
+    /// a turn. Fiber's own ending notice only ever starts a turn. The
+    /// second field is what the `before_message` chain left on the message.
+    Steer(Message, Hooked),
     /// Written as `delegate_finished` (bounded) then `job_completed`
     /// with no action; named in a `jobs` item when it starts a turn.
     Job(JobCompleted, Option<DelegateFinished>),
@@ -159,15 +161,18 @@ impl Loop {
     /// the next turn's input, and `jobs_pending_notified` is queued for that
     /// turn's first step (`docs/events.md`, `jobs_pending_notified`).
     fn notice(&mut self, running: Vec<JobId>, reason: PendingReason, input: &mut Vec<Queued>) {
-        input.push(Queued::Steer(Message {
-            content: vec![ContentPart::Text {
-                text: pending_text(&running, reason),
-            }],
-            sender: Sender {
-                origin: Origin::Fiber,
-                command_id: None,
+        input.push(Queued::Steer(
+            Message {
+                content: vec![ContentPart::Text {
+                    text: pending_text(&running, reason),
+                }],
+                sender: Sender {
+                    origin: Origin::Fiber,
+                    command_id: None,
+                },
             },
-        }));
+            Hooked::default(),
+        ));
         self.queued.push_back(Queued::Pending(running, reason));
     }
 
@@ -211,16 +216,25 @@ impl Loop {
     /// consecutive job notices and monitor batches as one `jobs` item that
     /// names each job once. They are queued, so their `job_completed` and
     /// `job_line` lines are written at the first step boundary
-    /// (`docs/events.md`, `turn_started`).
-    pub(crate) fn turn_input(&mut self, pieces: Vec<Queued>) -> Vec<InputItem> {
+    /// (`docs/events.md`, `turn_started`). The second part is the contexts
+    /// the `before_message` hooks added, in order, for the turn to write
+    /// after `turn_started`.
+    pub(crate) fn turn_input(
+        &mut self,
+        pieces: Vec<Queued>,
+    ) -> (Vec<InputItem>, Vec<ContextAdded>) {
         let mut input: Vec<InputItem> = Vec::new();
+        let mut contexts: Vec<ContextAdded> = Vec::new();
         for piece in pieces {
             match piece {
-                Queued::Steer(message) => input.push(InputItem::Message {
-                    content: message.content,
-                    sender: message.sender,
-                    changed_by: None,
-                }),
+                Queued::Steer(message, hooked) => {
+                    contexts.extend(hooked.context);
+                    input.push(InputItem::Message {
+                        content: message.content,
+                        sender: message.sender,
+                        changed_by: hooked.changed_by,
+                    });
+                }
                 Queued::Handoff(command_id, instructions) => {
                     input.push(InputItem::Handoff {
                         command_id: command_id.clone(),
@@ -242,7 +256,7 @@ impl Loop {
                 Queued::Pending(ids, reason) => self.queued.push_back(Queued::Pending(ids, reason)),
             }
         }
-        input
+        (input, contexts)
     }
 
     /// Writes each `jobs_pending_notified` at the front of the queue: the
@@ -267,7 +281,7 @@ impl Loop {
         let mut steered = false;
         while let Some(piece) = self.queued.pop_front() {
             let event = match piece {
-                Queued::Steer(message) => {
+                Queued::Steer(message, _hooked) => {
                     steered = true;
                     Event::SteeringApplied(contract::events::SteeringApplied {
                         content: message.content,
