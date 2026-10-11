@@ -408,6 +408,149 @@ fn a_quick_command_answers_without_the_clock_moving() {
     guard.stand_down(DEADLINE);
 }
 
+/// A finish that lands while the wait is checking is not missed: the state
+/// lock holds the wait between its checks while the helper finishes, so
+/// both the stdout reader's and the leader's wakes land between the wait's
+/// checks and its park. The generation captured first ends that park at
+/// once; read after the checks, the park would miss them and hang on the
+/// frozen clock until this test's deadline.
+#[test]
+fn a_completion_between_the_checks_and_the_park_is_not_missed() {
+    let root = fakes::TempDir::new("fiber-read-credential-interleave");
+    let ready = Ready::new(root.path());
+    let go = root.path().join("go");
+    let timeout = Duration::from_secs(30);
+    let clock = FakeClock::new();
+    let deadline = clock.origin() + timeout;
+    let reads = Arc::new(Reads::default());
+    let script = format!(
+        "echo $$ > '{}'; while [ ! -e '{}' ]; do sleep 0.01; done; printf key",
+        ready.path().display(),
+        go.display()
+    );
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the wait parked at its deadline"
+    );
+    // Both wakes land while the wait is held here: the park below already
+    // has them in its generation, so it must return at once. Each thread
+    // bumps after its send, so two bumps mean both answers are in.
+    let wake = Arc::clone(&reads.wake);
+    let seen = wake.generation();
+    {
+        let _held = reads.lock();
+        std::fs::write(&go, "").unwrap();
+        fakes::within("the two wakes", DEADLINE, move || {
+            loop {
+                if wake.generation() >= seen + 2 {
+                    return;
+                }
+                std::thread::yield_now();
+            }
+        });
+    }
+    let output = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, "the interleaved read")
+        .unwrap();
+    assert_eq!(output.stdout, b"key");
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the group reaped its leader"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
+/// A key finished after its timeout is refused: the state lock holds the
+/// wait between its checks while the helper finishes and the clock moves
+/// past the deadline, so the wait observes both done past its end. The
+/// late key is never accepted; the group is killed and the read times out.
+#[test]
+fn a_key_finished_after_its_timeout_is_refused() {
+    let root = fakes::TempDir::new("fiber-read-credential-late-key");
+    let ready = Ready::new(root.path());
+    let go = root.path().join("go");
+    let timeout = Duration::from_secs(30);
+    let clock = FakeClock::new();
+    let deadline = clock.origin() + timeout;
+    let reads = Arc::new(Reads::default());
+    let script = format!(
+        "echo $$ > '{}'; while [ ! -e '{}' ]; do sleep 0.01; done; printf key",
+        ready.path().display(),
+        go.display()
+    );
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let finished = credential_on_thread(&reads, sh(&script), timeout, &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the wait parked at its deadline"
+    );
+    // The helper finishes while the wait is held here, then the clock
+    // moves past the deadline: the wait's next checks see a finish past
+    // its end, which times out instead of answering the late key.
+    let wake = Arc::clone(&reads.wake);
+    let seen = wake.generation();
+    {
+        let _held = reads.lock();
+        std::fs::write(&go, "").unwrap();
+        fakes::within("the two wakes", DEADLINE, move || {
+            loop {
+                if wake.generation() >= seen + 2 {
+                    return;
+                }
+                std::thread::yield_now();
+            }
+        });
+        clock.advance(timeout + Duration::from_secs(1));
+    }
+    let error = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, "the late read")
+        .expect_err("a key finished after its timeout");
+    assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the timeout killed the group"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
+/// A helper that prints its key, closes stdout, then finishes cleanup
+/// answers without the clock moving: the stdout reader's wake lands while
+/// the leader still runs, and only the leader's own wake ends the wait.
+#[test]
+fn a_leader_that_closes_stdout_before_it_exits_answers_without_the_clock_moving() {
+    let root = fakes::TempDir::new("fiber-read-credential-cleanup");
+    let ready = Ready::new(root.path());
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let script = format!(
+        "echo $$ > '{}'; printf key; exec >&-; exec sleep 1",
+        ready.path().display()
+    );
+    let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
+    let finished =
+        credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let output = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, "the cleaning-up leader")
+        .unwrap();
+    assert_eq!(output.stdout, b"key");
+    assert!(
+        fakes::group_empties(pgid, DEADLINE),
+        "the group reaped its leader"
+    );
+    watchdog.stand_down(DEADLINE);
+    pre.stand_down(DEADLINE);
+}
+
 #[test]
 fn cancel_ends_a_credential_wait_with_interrupted_and_kills_the_group() {
     let root = fakes::TempDir::new("fiber-read-credential-cancel");
@@ -484,8 +627,12 @@ fn dropping_cancel_on_drop_kills_what_a_finished_command_left() {
         ready.path().display()
     );
     let pre = fakes::Watchdog::matching(&ready.path().display().to_string());
-    let output = reads
-        .credential(&mut sh(&script), Duration::from_secs(30), &*clock)
+    // On a thread under a wall-clock deadline: a missed wake fails here,
+    // never hangs the test binary.
+    let finished =
+        credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
+    let output = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, "the finished read")
         .unwrap();
     assert_eq!(String::from_utf8_lossy(&output.stdout), "key");
     let pgid = ready.wait(DEADLINE)[0];

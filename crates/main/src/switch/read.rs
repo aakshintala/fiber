@@ -106,14 +106,16 @@ impl Reads {
     /// Runs a credential source's `command` as the leader of a new process
     /// group and collects its output, giving up at `timeout` on `clock`.
     /// A run finished by then (its leader exited and stdout at end-of-file)
-    /// returns at once, on any clock. A run not finished at the timeout
-    /// has its group killed and its leader reaped before this returns
-    /// `TimedOut`; the stdout reader is never waited on after the kill, so
-    /// a process that left the group and holds stdout keeps only that
-    /// reader thread alive, never the caller. Once [`Reads::cancel`] ran,
-    /// this returns `Interrupted`, whether it was waiting, timing out or
-    /// not yet spawned. A `timeout` no deadline on `clock` can hold starts
-    /// nothing and is `InvalidInput`.
+    /// returns at once, on any clock. A key finished after the wait's own
+    /// end is not a key: a run done past its deadline, or after shutdown
+    /// cancelled the reads, is killed and reported as the wait ended. A run
+    /// not finished at the timeout has its group killed and its leader
+    /// reaped before this returns `TimedOut`; the stdout reader is never
+    /// waited on after the kill, so a process that left the group and holds
+    /// stdout keeps only that reader thread alive, never the caller. Once
+    /// [`Reads::cancel`] ran, this returns `Interrupted`, whether it was
+    /// waiting, timing out or not yet spawned. A `timeout` no deadline on
+    /// `clock` can hold starts nothing and is `InvalidInput`.
     pub(crate) fn credential(
         &self,
         command: &mut Command,
@@ -128,10 +130,38 @@ impl Reads {
         })?;
         let mut child = self.spawn(command)?;
         let group = child.id();
+        // Taken before the reaper below owns the child.
+        let stdout = child.stdout.take();
+        // The leader's exit wakes the wait on its own: a helper that prints
+        // its key, closes stdout, then finishes cleanup bumps here when it
+        // exits, after the stdout reader's bump was already spent waiting
+        // for it. The blocking wait owns the child, so the timeout and
+        // cancel paths below receive its answer to reap the leader.
+        let (status_sent, status_received) = mpsc::channel();
+        {
+            let exit_wake = Arc::clone(&self.wake);
+            match std::thread::Builder::new()
+                .name("fiber-credential-wait".to_owned())
+                .spawn(move || {
+                    let status = child.wait();
+                    match status_sent.send(status) {
+                        Ok(()) | Err(_) => {}
+                    }
+                    exit_wake.bump();
+                }) {
+                Ok(_) => {}
+                Err(error) => {
+                    kill_group(group);
+                    return Err(io::Error::other(format!(
+                        "a thread for the credential read: {error}"
+                    )));
+                }
+            }
+        }
         let wake = Arc::clone(&self.wake);
         let subscribing: Arc<dyn Wake> = wake.clone();
         let (sent, received) = mpsc::channel();
-        if let Some(mut stdout) = child.stdout.take() {
+        if let Some(mut stdout) = stdout {
             let (sent, wake) = (sent, Arc::clone(&wake));
             match std::thread::Builder::new()
                 .name("fiber-credential-stdout".to_owned())
@@ -157,21 +187,29 @@ impl Reads {
             }
         }
         clock.subscribe(Arc::downgrade(&subscribing));
-        let mut status = None;
+        let mut exit: Option<std::process::ExitStatus> = None;
+        let mut output: Option<io::Result<Vec<u8>>> = None;
         loop {
-            if status.is_none() {
-                status = child.try_wait()?;
-            }
-            if let Some(exit) = status {
-                match received.try_recv() {
-                    Ok(Ok(stdout)) => {
-                        return Ok(Output {
-                            status: exit,
-                            stdout,
-                            stderr: Vec::new(),
-                        });
-                    }
+            // The generation is captured before the checks: a finish, a
+            // cancel or a clock move past this point ends the park below
+            // at once, so no wake lands between a check and the park
+            // unheard.
+            let seen = self.wake.generation();
+            if exit.is_none() {
+                match status_received.try_recv() {
+                    Ok(Ok(status)) => exit = Some(status),
                     Ok(Err(error)) => return Err(error),
+                    Err(mpsc::TryRecvError::Empty) => {}
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        return Err(io::Error::other(
+                            "the credential read ended without its leader's exit",
+                        ));
+                    }
+                }
+            }
+            if output.is_none() {
+                match received.try_recv() {
+                    Ok(outcome) => output = Some(outcome),
                     Err(mpsc::TryRecvError::Empty) => {}
                     Err(mpsc::TryRecvError::Disconnected) => {
                         return Err(io::Error::other(
@@ -180,28 +218,55 @@ impl Reads {
                     }
                 }
             }
+            // A run is finished only once its leader exited and stdout is
+            // at end-of-file: either alone parks again below.
+            match (exit.take(), output.take()) {
+                (Some(status), Some(outcome)) => {
+                    // A key that arrived after the wait's own end is not a
+                    // key: the group is killed and the wait reports its
+                    // end, never the late key.
+                    if self.lock().cancelled {
+                        kill_group(group);
+                        return Err(interrupted());
+                    }
+                    if deadline_due(clock.now(), deadline) {
+                        kill_group(group);
+                        return Err(timed_out());
+                    }
+                    match outcome {
+                        Ok(stdout) => {
+                            return Ok(Output {
+                                status,
+                                stdout,
+                                stderr: Vec::new(),
+                            });
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                (status, outcome) => {
+                    exit = status;
+                    output = outcome;
+                }
+            }
             if self.lock().cancelled {
                 kill_group(group);
-                if status.is_none() {
-                    child.wait()?;
+                if exit.is_none() {
+                    // The reaper owns the leader's wait: its answer reaps
+                    // the leader. After SIGKILL it answers at once; the
+                    // receive is ignored either way, since the answer here
+                    // is `Interrupted`.
+                    let _ = status_received.recv();
                 }
                 return Err(interrupted());
             }
             if deadline_due(clock.now(), deadline) {
                 kill_group(group);
-                if status.is_none() {
-                    child.wait()?;
+                if exit.is_none() {
+                    let _ = status_received.recv();
                 }
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "the command was still running at its timeout",
-                ));
+                return Err(timed_out());
             }
-            // The generation is read after the checks above, and the park
-            // returns at once on any bump past it, so a finish, a cancel
-            // or a clock move that lands between the checks and the park
-            // still ends the park.
-            let seen = self.wake.generation();
             self.wake.park(clock, Some(deadline), seen);
         }
     }
@@ -276,6 +341,15 @@ fn closing() -> Failure {
 
 fn interrupted() -> io::Error {
     io::Error::new(io::ErrorKind::Interrupted, "the session is shutting down")
+}
+
+/// A command still running at its timeout, or finished past it: its group
+/// was killed, and reading the key fails.
+fn timed_out() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        "the command was still running at its timeout",
+    )
 }
 
 /// Whether a process is left in group `group`.
