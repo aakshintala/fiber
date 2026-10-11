@@ -32,6 +32,7 @@ pub(crate) fn run(
     clock: Arc<dyn contract::clock::Clock>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
+    crate::startup_log::as_session();
     if let Err(e) = std::env::set_current_dir(&args.workspace) {
         return ask_failed(failed(
             ErrorCode::IoFailed,

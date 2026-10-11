@@ -123,3 +123,28 @@ fn a_usage_error_creates_no_log() {
     assert_eq!(setup.run_ask(&["ask", "one", "two"]), Some(2));
     assert!(!setup.home().join("logs").exists(), "{:?}", setup.logs());
 }
+
+#[test]
+fn an_internal_session_failure_writes_a_session_line() {
+    let setup = Setup::new();
+    let missing = setup.root.path().join("missing");
+    let code = setup.run_ask(&[
+        "session",
+        "--id",
+        "s_00000000000000a1",
+        "--workspace",
+        missing.to_str().unwrap(),
+    ]);
+    assert_eq!(code, Some(1));
+
+    let logs = setup.logs();
+    assert_eq!(logs.len(), 1, "{logs:?}");
+    assert!(
+        logs[0].starts_with("session-") && logs[0].ends_with(".log"),
+        "{logs:?}"
+    );
+    let text = fs::read_to_string(setup.home().join("logs").join(&logs[0])).unwrap();
+    let line: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(line["process"], "session");
+    assert_eq!(line["code"], "io_failed");
+}
