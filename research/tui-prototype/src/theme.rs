@@ -296,8 +296,9 @@ pub(crate) fn map(look: Look, colour: Color, is_bg: bool) -> Color {
         return Color::Reset;
     }
     let (v, ramp): ((u8, u8, u8), Ramp) = match colour {
-        // The terminal's own colours stay the default at 256 colours.
-        Color::Reset if look.depth == Depth::C256 => return Color::Reset,
+        // The dark theme keeps the terminal's own colours as the default;
+        // the light theme paints its own text and background, quantized
+        // at 256 colours.
         Color::Reset if look.theme == Theme::Dark => return Color::Reset,
         Color::Reset if !is_bg => (hex(0x1f2328), Ramp::Either),
         Color::Reset => (hex(0xffffff), Ramp::Grey),
@@ -309,19 +310,26 @@ pub(crate) fn map(look: Look, colour: Color, is_bg: bool) -> Color {
         Color::White => (hex(0x1f2328), Ramp::Either),
         Color::Rgb(r, g, b) => {
             let v = (r, g, b);
-            // Tabled roles keep their ramp in both themes; computed
-            // tints take the ramp their spread implies.
-            let ramp = match light_for(v, is_bg) {
-                Some((_, ramp)) => ramp,
-                None => fallback_ramp(v),
-            };
+            // One lookup for both the mapped value and the ramp: text
+            // (fg) takes whichever entry is nearest, while tints (bg)
+            // keep the role's ramp and computed tints take the ramp
+            // their spread implies.
+            let found = light_for(v, is_bg);
             let out = if look.theme == Theme::Light {
-                match light_for(v, is_bg) {
+                match found {
                     Some((t, _)) => t,
                     None => invert(v),
                 }
             } else {
                 v
+            };
+            let ramp = if is_bg {
+                match found {
+                    Some((_, ramp)) => ramp,
+                    None => fallback_ramp(v),
+                }
+            } else {
+                Ramp::Either
             };
             (out, ramp)
         }
@@ -347,10 +355,25 @@ pub(crate) fn map_cell(look: Look, cell: &Cell) -> Cell {
 
 /// Whether `clear` must first paint the background: under the light
 /// theme unpainted cells would otherwise show the terminal's own (dark)
-/// background. Erased cells take the current background on BCE
-/// terminals, so the wrapper sets it, clears, and resets it.
+/// background, at truecolour and at 256 colours alike. Erased cells take
+/// the current background on BCE terminals, so the wrapper sets it,
+/// clears, and resets it.
 pub(crate) fn needs_clear(look: Look) -> bool {
-    look.theme == Theme::Light && look.depth == Depth::True
+    look.theme == Theme::Light && matches!(look.depth, Depth::True | Depth::C256)
+}
+
+/// The SGR sequence that paints the light background before `clear`, or
+/// `None` where no painting is owed: truecolour RGB at full depth, the
+/// quantized 256 index at [`Depth::C256`].
+pub(crate) fn clear_seq(look: Look) -> Option<String> {
+    if !needs_clear(look) {
+        return None;
+    }
+    match map(look, Color::Reset, true) {
+        Color::Indexed(n) => Some(format!("\x1b[48;5;{n}m")),
+        Color::Rgb(r, g, b) => Some(format!("\x1b[48;2;{r};{g};{b}m")),
+        _ => None,
+    }
 }
 
 /// The backend wrapper: every `draw` maps each cell through [`map_cell`],
@@ -403,22 +426,25 @@ where
     }
 
     fn clear(&mut self) -> Result<(), Self::Error> {
-        if needs_clear(get()) {
-            write!(self.0, "\x1b[48;2;255;255;255m")?;
+        let look = get();
+        if let Some(seq) = clear_seq(look) {
+            write!(self.0, "{seq}")?;
         }
         self.0.clear()?;
-        if needs_clear(get()) {
+        if needs_clear(look) {
             write!(self.0, "\x1b[49m")?;
         }
         Ok(())
     }
 
     fn clear_region(&mut self, clear_type: ratatui::backend::ClearType) -> Result<(), Self::Error> {
-        if needs_clear(get()) && matches!(clear_type, ratatui::backend::ClearType::All) {
-            write!(self.0, "\x1b[48;2;255;255;255m")?;
+        let look = get();
+        let paint = needs_clear(look) && matches!(clear_type, ratatui::backend::ClearType::All);
+        if paint && let Some(seq) = clear_seq(look) {
+            write!(self.0, "{seq}")?;
         }
         self.0.clear_region(clear_type)?;
-        if needs_clear(get()) && matches!(clear_type, ratatui::backend::ClearType::All) {
+        if paint {
             write!(self.0, "\x1b[49m")?;
         }
         Ok(())
@@ -639,12 +665,17 @@ mod tests {
     }
 
     #[test]
-    fn tabled_roles_keep_their_ramp_in_both_themes() {
-        // Scroll and comment are greys by value but hues by role: the
-        // cube in both themes, not the grey ramp.
-        assert_eq!(map(DARK_256, val(0x808080), false), Color::Indexed(102));
-        assert_eq!(map(DARK_256, val(0x7a7a8a), false), Color::Indexed(102));
-        assert_eq!(map(LIGHT_256, val(0x808080), false), Color::Indexed(145));
+    fn text_takes_either_tints_keep_their_ramp() {
+        // Text (fg) takes whichever entry is nearest: the scroll thumb
+        // lands on the grey ramp even though its role ramp is the cube.
+        assert_eq!(map(DARK_256, val(0x808080), false), Color::Indexed(244));
+        assert_eq!(map(DARK_256, val(0x7a7a8a), false), Color::Indexed(244));
+        assert_eq!(map(LIGHT_256, val(0x7a7a8a), false), Color::Indexed(243));
+        assert_eq!(map(LIGHT_256, val(0x808080), false), Color::Indexed(250));
+        // The same value as a tint (bg) keeps its role ramp.
+        assert_eq!(map(DARK_256, val(0x808080), true), Color::Indexed(102));
+        // A rule edge under light-256: the light value through Either.
+        assert_eq!(map(LIGHT_256, val(0x3a3a4a), false), Color::Indexed(188));
         // Neutral tints take the grey ramp in both themes.
         assert_eq!(map(DARK_256, val(0x1a1a22), true), Color::Indexed(234));
         assert_eq!(map(LIGHT_256, val(0x1a1a22), true), Color::Indexed(255));
@@ -685,14 +716,20 @@ mod tests {
 
     #[test]
     fn dark_256_keeps_defaults_and_kills_ansi() {
-        // The terminal's own colours stay the default at 256 colours.
+        // The dark theme keeps the terminal's own colours as the default.
         assert_eq!(map(DARK_256, Color::Reset, false), Color::Reset);
         assert_eq!(map(DARK_256, Color::Reset, true), Color::Reset);
         // Its 16 ANSI colours never reach the screen.
         assert_eq!(map(DARK_256, Color::Black, false), Color::Indexed(16));
         assert_eq!(map(DARK_256, Color::White, false), Color::Indexed(231));
-        // Text takes whichever entry is nearest, even the cube.
-        assert_eq!(map(LIGHT_256, Color::Reset, false), Color::Reset);
+    }
+
+    #[test]
+    fn light_256_quantizes_defaults() {
+        // The light theme paints its own text and background, so at 256
+        // colours Reset quantizes instead of staying the default.
+        assert_eq!(map(LIGHT_256, Color::Reset, false), Color::Indexed(235));
+        assert_eq!(map(LIGHT_256, Color::Reset, true), Color::Indexed(255));
     }
 
     #[test]
@@ -749,21 +786,25 @@ mod tests {
     }
 
     #[test]
-    fn only_light_truecolour_paints_unpainted_cells() {
+    fn light_paints_unpainted_cells_at_both_depths() {
         for theme in [Theme::Dark, Theme::Light] {
             for depth in [Depth::True, Depth::C256, Depth::None] {
                 let look = Look { theme, depth };
                 assert_eq!(
                     needs_clear(look),
-                    look == Look {
-                        theme: Theme::Light,
-                        depth: Depth::True,
-                    }
+                    look.theme == Theme::Light && matches!(look.depth, Depth::True | Depth::C256)
                 );
             }
         }
         // The painted background is the background role's light value.
         assert_eq!(map(LIGHT, Color::Reset, true), Color::Rgb(255, 255, 255));
+        // At 256 colours it is painted quantized: a truecolour RGB SGR
+        // at full depth, the 256 index at C256, nothing anywhere else.
+        assert_eq!(clear_seq(LIGHT), Some("\x1b[48;2;255;255;255m".to_string()));
+        assert_eq!(clear_seq(LIGHT_256), Some("\x1b[48;5;255m".to_string()));
+        assert_eq!(clear_seq(DARK_256), None);
+        assert_eq!(clear_seq(Look::DARK), None);
+        assert_eq!(clear_seq(NONE), None);
     }
 
     #[test]
