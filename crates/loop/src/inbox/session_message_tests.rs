@@ -659,7 +659,7 @@ fn an_idle_message_frames_an_unnamed_sender_by_its_id_alone() {
     let mut input = crate::inbox::TurnInput::of(Vec::new());
     looped.admit_message_idle(super::for_test(FROM, None, COMMAND, TEXT), &mut input);
     assert_eq!(input.pieces.len(), 1);
-    let crate::jobs::Queued::Steer(message) = &input.pieces[0] else {
+    let crate::jobs::Queued::Steer(message, _) = &input.pieces[0] else {
         panic!("an idle message joins the input as a steer");
     };
     assert_eq!(

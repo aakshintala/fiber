@@ -36,7 +36,7 @@ use fakes::{Deadline, Scripted, ScriptedProvider};
 use serde_json::{Map, Value, json};
 
 use support::{
-    DEADLINE, History, Session, Tap, calls_reply, delivery, message_started, of_kind,
+    DEADLINE, History, Session, Tap, calls_reply, delivery, ignore, message_started, of_kind,
     standing_request, user_turn,
 };
 
@@ -47,11 +47,13 @@ struct Seen {
     arguments: Map<String, Value>,
 }
 
-/// A scripted `Hooks` fake: seen calls and a queue of answers per method.
+/// A scripted `Hooks` fake: seen calls and a queue of answers per method,
+/// with an optional shutdown to start inside `before_tool`.
 struct FakeHooks {
     before_seen: Mutex<Vec<Seen>>,
     check_seen: Mutex<Vec<Seen>>,
     before_answers: Mutex<VecDeque<BeforeToolOutcome>>,
+    shutdown: Mutex<Option<Arc<r#loop::TurnCancel>>>,
 }
 
 impl FakeHooks {
@@ -60,6 +62,7 @@ impl FakeHooks {
             before_seen: Mutex::new(Vec::new()),
             check_seen: Mutex::new(Vec::new()),
             before_answers: Mutex::new(VecDeque::new()),
+            shutdown: Mutex::new(None),
         }
     }
 
@@ -106,6 +109,9 @@ impl Hooks for FakeHooks {
 
     fn before_tool(&self, call: &BeforeToolCall<'_>) -> BeforeToolAnswer {
         self.before_seen.lock().unwrap().push(seen_of(call));
+        if let Some(cancel) = self.shutdown.lock().unwrap().clone() {
+            cancel.shutdown(143);
+        }
         let outcome = self
             .before_answers
             .lock()
@@ -190,6 +196,11 @@ impl Tool for PathTool {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned();
+        // A test-only branch: the hook rewrote the call into arguments the
+        // schema fits but the tool cannot classify.
+        if path == "bad/effects" {
+            return Err(EffectsError::Tool("the path resolves nowhere".into()));
+        }
         Ok(Effects {
             declared: DeclaredEffects {
                 effects: vec![Effect::Reads],
@@ -724,6 +735,32 @@ impl History {
         .answerable(answerable)
     }
 
+    /// Runs `looped` to its end with `close` queued, through `Loop::run`
+    /// so its real status observer folds the log: the `session_status`
+    /// lines in order, one per change. The finishing turn defers the
+    /// close, and the next idle wait takes it and ends the run.
+    #[track_caller]
+    fn run_closed(&mut self, looped: r#loop::Loop) -> Vec<contract::Envelope> {
+        self.inbox_tx.send(Delivery::Close(ignore())).unwrap();
+        let mut watcher = self.log.watch();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            let outcome = looped.run();
+            done.send(outcome).unwrap();
+        });
+        Deadline::after(DEADLINE)
+            .recv(&finished)
+            .expect("the run ended in time")
+            .unwrap();
+        let mut statuses = Vec::new();
+        while let Ok(Some(line)) = watcher.try_recv() {
+            if line.kind == "session_status" {
+                statuses.push(line);
+            }
+        }
+        statuses
+    }
+
     #[track_caller]
     fn step(&mut self, mut looped: r#loop::Loop) -> (r#loop::Loop, Option<TurnOutcome>) {
         let (done, finished) = mpsc::channel();
@@ -818,12 +855,14 @@ fn allowed_kinds() -> Vec<&'static str> {
 }
 
 /// The complete kinds of a resumed turn whose call settles without its
-/// request raised again: the refused call completes denied, and the later
-/// call of the batch starts and runs.
+/// request raised again: the decision line answers the recorded request,
+/// the refused call completes denied, and the later call of the batch
+/// starts and runs.
 fn settled_kinds() -> Vec<&'static str> {
     vec![
         "preamble_built",
         "opening_message",
+        "permission_resolved",
         "tool_call_started",
         "tool_call_completed",
         "tool_call_completed",
@@ -836,9 +875,49 @@ fn settled_kinds() -> Vec<&'static str> {
     ]
 }
 
-/// The complete kinds of a resumed turn refused without its request
-/// raised again: the decision line answers the recorded request, and the
-/// call completes without running.
+/// The status fold listed the old request pending, then ran a step with it
+/// no longer pending: the first status waits on `r_9`, a later one works,
+/// and the last names no `r_9`.
+#[track_caller]
+fn assert_status_resolved(statuses: &[contract::Envelope]) {
+    assert!(!statuses.is_empty(), "the run folded some status");
+    assert_eq!(statuses[0].payload["state"], "waiting");
+    assert_eq!(statuses[0].payload["waiting"]["request_id"], "r_9");
+    assert!(
+        statuses
+            .iter()
+            .any(|line| matches!(line.payload["state"].as_str(), Some("tool" | "streaming"))),
+        "a step ran past the settled batch"
+    );
+    let last = statuses.last().unwrap();
+    let names_r9 = last
+        .payload
+        .get("waiting")
+        .and_then(|waiting| waiting.get("request_id"))
+        == Some(&json!("r_9"));
+    assert!(!names_r9, "the last status names no r_9");
+}
+
+/// Writes the resumed process's exit as a shutdown would, and asserts the
+/// `fiber_exited` line suspends on nothing: the settled request is answered.
+#[track_caller]
+fn assert_exited_settled(history: &History) {
+    r#loop::fiber_exited(&history.log, &history.dir, Ok(()), false, Some(143)).unwrap();
+    let exited = history
+        .lines()
+        .into_iter()
+        .rfind(|line| line.kind == "fiber_exited")
+        .expect("the exit was written");
+    assert!(
+        exited.payload.get("suspended_on").is_none(),
+        "suspended_on names no settled request: {:?}",
+        exited.payload
+    );
+}
+
+/// The complete kinds of a resumed turn whose call never runs: the
+/// decision line answers the recorded request by hook, and the call
+/// completes without running.
 fn refused_kinds() -> Vec<&'static str> {
     vec![
         "preamble_built",
@@ -909,7 +988,7 @@ fn a_resumed_rewrite_is_raised_judged_and_run_again() {
 }
 
 #[test]
-fn a_resumed_refusal_settles_without_raising_and_runs_the_rest() {
+fn a_resumed_refusal_answers_its_request_by_hook_and_runs_the_rest() {
     let mut history = suspended_probes(&["a.txt", "c.txt"]);
     let tool = Arc::new(PathTool::plain());
     let hooks = FakeHooks::new();
@@ -923,19 +1002,25 @@ fn a_resumed_refusal_settles_without_raising_and_runs_the_rest() {
         }));
     let hooks = Arc::new(hooks);
     let looped = history.resume_with(probe_tools(&tool), Arc::clone(&hooks), true);
-    let (_looped, outcome) = history.step(looped);
-    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_status_resolved(&history.run_closed(looped));
 
     let new = history.new_lines();
     assert!(
         !new.iter().any(|line| line.kind == "permission_requested"),
         "the request is not raised again"
     );
-    assert!(
-        !new.iter().any(|line| line.kind == "permission_resolved"),
-        "no decision line answers it"
-    );
     assert_eq!(new_kinds(&new), settled_kinds());
+    let resolved = line(&new, "permission_resolved");
+    assert_eq!(resolved.action_id, Some(ActionId("a_1".into())));
+    assert_eq!(
+        serde_json::Value::Object(resolved.payload.clone()),
+        json!({
+            "request_id": "r_9",
+            "decision": "deny",
+            "decided_by": "hook",
+            "reason": "Extension fiber.test/guard refused this call: no writes. It did not run.",
+        })
+    );
     let completed: Vec<_> = new
         .iter()
         .filter(|line| line.kind == "tool_call_completed")
@@ -949,6 +1034,139 @@ fn a_resumed_refusal_settles_without_raising_and_runs_the_rest() {
     );
     assert_eq!(completed[1].payload["status"], "completed");
     assert_eq!(tool.runs().len(), 1);
+    assert_exited_settled(&history);
+}
+
+#[test]
+fn a_resumed_hook_failure_answers_its_request_by_hook_and_fails_the_call() {
+    let mut history = suspended_probes(&["a.txt"]);
+    let tool = Arc::new(PathTool::plain());
+    let hooks = FakeHooks::new();
+    hooks
+        .before_answers
+        .lock()
+        .unwrap()
+        .push_back(BeforeToolOutcome::Failed(contract::hook::HookFailure {
+            extension: "fiber.test/guard".to_owned(),
+            message: "boom".to_owned(),
+        }));
+    let hooks = Arc::new(hooks);
+    let looped = history.resume_with(probe_tools(&tool), Arc::clone(&hooks), true);
+    assert_status_resolved(&history.run_closed(looped));
+
+    let new = history.new_lines();
+    assert!(
+        !new.iter().any(|line| line.kind == "permission_requested"),
+        "the request is not raised again"
+    );
+    assert_eq!(new_kinds(&new), refused_kinds());
+    let resolved = line(&new, "permission_resolved");
+    assert_eq!(resolved.action_id, Some(ActionId("a_1".into())));
+    assert_eq!(
+        serde_json::Value::Object(resolved.payload.clone()),
+        json!({
+            "request_id": "r_9",
+            "decision": "deny",
+            "decided_by": "hook",
+            "reason": "The `before_tool` hook of extension fiber.test/guard failed, \
+                       so the call did not run: boom",
+        })
+    );
+    let completed = line(&new, "tool_call_completed");
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "hook_failed");
+    assert!(tool.runs().is_empty(), "the call never runs");
+    assert_exited_settled(&history);
+}
+
+#[test]
+fn a_resumed_rewrite_the_schema_rejects_answers_its_request_by_hook() {
+    let mut history = suspended_probes(&["a.txt"]);
+    let tool = Arc::new(PathTool::plain());
+    let hooks = Arc::new(FakeHooks::rewriting(json!({"path": 5})));
+    let looped = history.resume_with(probe_tools(&tool), Arc::clone(&hooks), true);
+    assert_status_resolved(&history.run_closed(looped));
+
+    let new = history.new_lines();
+    assert!(
+        !new.iter().any(|line| line.kind == "permission_requested"),
+        "the request is not raised again"
+    );
+    assert_eq!(new_kinds(&new), refused_kinds());
+    let resolved = line(&new, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "hook");
+    let reason = resolved.payload["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with(
+            "Extension fiber.test/guard rewrote this call's arguments, \
+             and they do not match the tool's schema:"
+        ),
+        "{reason}"
+    );
+    let completed = line(&new, "tool_call_completed");
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "invalid_arguments");
+    assert!(tool.runs().is_empty(), "the call never runs");
+    assert_exited_settled(&history);
+}
+
+#[test]
+fn a_resumed_rewrite_its_effects_reject_answers_its_request_by_hook() {
+    let mut history = suspended_probes(&["a.txt"]);
+    let tool = Arc::new(PathTool::plain());
+    let hooks = Arc::new(FakeHooks::rewriting(json!({"path": "bad/effects"})));
+    let looped = history.resume_with(probe_tools(&tool), Arc::clone(&hooks), true);
+    assert_status_resolved(&history.run_closed(looped));
+
+    let new = history.new_lines();
+    assert!(
+        !new.iter().any(|line| line.kind == "permission_requested"),
+        "the request is not raised again"
+    );
+    assert_eq!(new_kinds(&new), refused_kinds());
+    let resolved = line(&new, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "hook");
+    let reason = resolved.payload["reason"].as_str().unwrap();
+    assert!(
+        reason.starts_with(
+            "Extension fiber.test/guard rewrote this call's arguments, \
+             and the tool could not classify them:"
+        ),
+        "{reason}"
+    );
+    let completed = line(&new, "tool_call_completed");
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "tool_error");
+    assert!(tool.runs().is_empty(), "the call never runs");
+    assert_exited_settled(&history);
+}
+
+#[test]
+fn a_shutdown_inside_the_resumed_hook_writes_no_decision() {
+    let mut history = suspended_probes(&["a.txt"]);
+    let tool = Arc::new(PathTool::plain());
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    let hooks = FakeHooks::new();
+    hooks.shutdown.lock().unwrap().replace(Arc::clone(&cancel));
+    hooks
+        .before_answers
+        .lock()
+        .unwrap()
+        .push_back(BeforeToolOutcome::Refused(contract::hook::Refusal {
+            extension: "fiber.test/guard".to_owned(),
+            reason: "no writes".to_owned(),
+        }));
+    let hooks = Arc::new(hooks);
+    let looped = history
+        .resume_with(probe_tools(&tool), Arc::clone(&hooks), true)
+        .cancelled_by(cancel);
+    let (_looped, outcome) = history.step(looped);
+    assert_eq!(outcome, None);
+
+    let new = history.new_lines();
+    assert_eq!(new_kinds(&new), ["preamble_built", "opening_message"]);
 }
 
 #[test]
