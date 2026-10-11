@@ -21,17 +21,11 @@ use std::thread;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{Deadline, HELLO_KINDS, KillGroup, group_alive, is_status, spawn_watched};
-
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
+use support::{Deadline, HELLO_KINDS, KillGroup, Run, Setup, group_alive, is_status, spawn_watched};
 
 impl Setup {
     #[track_caller]
-    fn new() -> Self {
+    fn new_with_started_deadline() -> Self {
         Self::within(Deadline::start())
     }
 
@@ -42,14 +36,10 @@ impl Setup {
         Self { deadline, root }
     }
 
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
     /// Installs a provider `fake` with model `m` speaking `protocol` at the
     /// fake server, and configures `fake/m` with zero backoffs and
     /// `attempts` retries.
-    fn provider(&self, server: &ProviderServer, protocol: &str, attempts: u64) {
+    fn provider_with_retry(&self, server: &ProviderServer, protocol: &str, attempts: u64) {
         let source = self.root.path().join("src");
         write_file(
             &source.join("extension.json"),
@@ -139,12 +129,6 @@ fn write_file(file: &std::path::Path, value: &Value) {
 }
 
 /// One finished run: its exit code and stdout's lines, parsed.
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
-    stderr: String,
-}
-
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
@@ -162,19 +146,8 @@ impl From<Output> for Run {
 }
 
 impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|l| l["kind"].as_str().unwrap())
-            .collect()
-    }
-
     fn last(&self) -> &Value {
         self.lines.last().expect("stdout has a line")
-    }
-
-    fn session_id(&self) -> &str {
-        self.lines[0]["session_id"].as_str().unwrap()
     }
 
     /// The session's directory, from its id.
@@ -351,7 +324,7 @@ fn succeeds_after_one_retry(
 ) {
     let setup = Setup::within(deadline);
     let server = ProviderServer::start([failure, success]).unwrap();
-    setup.provider(&server, protocol, attempts);
+    setup.provider_with_retry(&server, protocol, attempts);
     let run = setup.ask();
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), RETRIED_HELLO_KINDS);
@@ -368,10 +341,10 @@ fn succeeds_after_one_retry(
 
 #[test]
 fn a_429_asking_for_2_seconds_over_the_cap_records_retry_after_ms_2000() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server =
         ProviderServer::start([Response::status(429, "{}").header("retry-after", "2")]).unwrap();
-    setup.provider(&server, "openai-responses", 3);
+    setup.provider_with_retry(&server, "openai-responses", 3);
     let run = setup.ask();
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), FAILED_AT_ONCE_KINDS);
@@ -416,9 +389,9 @@ fn server_errors_timeouts_and_conflicts_are_retried() {
 
 #[test]
 fn a_dropped_connection_is_retried() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([Response::drop_connection(), responses_hello()]).unwrap();
-    setup.provider(&server, "openai-responses", 3);
+    setup.provider_with_retry(&server, "openai-responses", 3);
     let run = setup.ask();
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), RETRIED_HELLO_KINDS);
@@ -474,7 +447,7 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
     ] {
         let setup = Setup::within(deadline);
         let server = ProviderServer::start([Response::stream(cut.body), hello]).unwrap();
-        setup.provider(&server, protocol, 3);
+        setup.provider_with_retry(&server, protocol, 3);
         let run = setup.ask();
         let mut expected = vec![
             "session_started",
@@ -571,14 +544,14 @@ const RESUMED_RETRIED_KINDS: [&str; 17] = [
 
 #[test]
 fn a_resumed_run_takes_its_retry_attempts_from_dash_c() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         responses_hello(),
         Response::status(503, "{}"),
         responses_hello(),
     ])
     .unwrap();
-    setup.provider(&server, "openai-responses", 0);
+    setup.provider_with_retry(&server, "openai-responses", 0);
     let first = setup.ask();
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     assert_eq!(first.kinds(), HELLO_KINDS);
@@ -616,7 +589,7 @@ const FAILED_AT_ONCE_KINDS: [&str; 12] = [
 fn fails_at_once(deadline: Deadline, failure: Response, code: &str) {
     let setup = Setup::within(deadline);
     let server = ProviderServer::start([failure]).unwrap();
-    setup.provider(&server, "openai-responses", 3);
+    setup.provider_with_retry(&server, "openai-responses", 3);
     let run = setup.ask();
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), FAILED_AT_ONCE_KINDS);
@@ -643,10 +616,10 @@ fn a_400_a_401_and_false_on_a_503_fail_at_once() {
 
 #[test]
 fn two_503s_with_one_attempt_fail_the_ask() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server =
         ProviderServer::start([Response::status(503, "{}"), Response::status(503, "{}")]).unwrap();
-    setup.provider(&server, "openai-responses", 1);
+    setup.provider_with_retry(&server, "openai-responses", 1);
     let run = setup.ask();
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
     assert_eq!(
@@ -683,10 +656,10 @@ fn retry_scheduled_carries_last_attempt_from_configured_attempts() {
     // `last_attempt` is 1 + the config-file attempts: each run fails
     // once with a 503, then answers.
     for (attempts, last_attempt) in [(2, 3), (1, 2)] {
-        let setup = Setup::new();
+        let setup = Setup::new_with_started_deadline();
         let server =
             ProviderServer::start([Response::status(503, "{}"), responses_hello()]).unwrap();
-        setup.provider(&server, "openai-responses", attempts);
+        setup.provider_with_retry(&server, "openai-responses", attempts);
         let run = setup.ask();
         assert_eq!(run.code, Some(0), "attempts {attempts}: {}", run.stderr);
         assert_eq!(
@@ -705,9 +678,9 @@ fn retry_scheduled_carries_last_attempt_from_configured_attempts() {
     }
     // A per-run `-c retry.attempts=2` wins over attempts 0 in the file:
     // without it the ask below would fail at once.
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([Response::status(503, "{}"), responses_hello()]).unwrap();
-    setup.provider(&server, "openai-responses", 0);
+    setup.provider_with_retry(&server, "openai-responses", 0);
     let run = setup.ask_with(&["-c", "retry.attempts=2"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), RETRIED_HELLO_KINDS);
@@ -720,13 +693,13 @@ fn retry_scheduled_carries_last_attempt_from_configured_attempts() {
 
 #[test]
 fn a_401_that_echoes_the_key_is_logged_redacted() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([Response::status(
         401,
         r#"{"error":{"message":"Incorrect API key provided: sk-test"}}"#,
     )])
     .unwrap();
-    setup.provider(&server, "openai-responses", 3);
+    setup.provider_with_retry(&server, "openai-responses", 3);
     let run = setup.ask();
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), FAILED_AT_ONCE_KINDS);

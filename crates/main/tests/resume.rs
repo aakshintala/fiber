@@ -31,33 +31,17 @@ use contract::{ActionId, CommandId, SessionId, TurnId};
 use fakes::{ProviderServer, Request, Response};
 use serde_json::{Value, json};
 use support::{
-    Deadline, first_line, function_call, group_alive, hello_inline_completed as hello, is_status,
-    stream, text_reply,
+    Deadline, Setup, first_line, function_call, group_alive, hello_inline_completed as hello,
+    is_status, stream, text_reply,
 };
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
-    fn new() -> Self {
+    fn new_with_fa_root() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fa");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { deadline, root }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
     }
 
     /// Installs a provider `fake` with `models` on `openai-responses` at the
@@ -95,11 +79,6 @@ impl Setup {
         write(&self.home().join("config.json"), &json!({"model": default}));
     }
 
-    /// Installs a provider `fake` with model `m`, the configured model.
-    fn provider(&self, server: &ProviderServer) {
-        self.provider_models(server, &["m"], "fake/m");
-    }
-
     /// The project's sessions directory.
     fn sessions(&self) -> PathBuf {
         let workspace = fs::canonicalize(self.workspace()).unwrap();
@@ -111,7 +90,7 @@ impl Setup {
     /// test's [`Deadline`]. A watchdog beside it kills that group if this process
     /// dies first.
     #[track_caller]
-    fn fiber(&self, args: &[&str]) -> Run {
+    fn run_in_workspace(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -325,11 +304,11 @@ fn a(id: &str) -> ActionId {
 
 #[test]
 fn a_second_ask_with_a_unique_prefix_continues_the_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
 
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     assert_eq!(
         first.kinds(),
@@ -354,7 +333,7 @@ fn a_second_ask_with_a_unique_prefix_continues_the_session() {
     let id = first.session_id().to_owned();
     let prefix = &id[..8];
 
-    let second = setup.fiber(&["ask", "--resume", prefix, "two"]);
+    let second = setup.run_in_workspace(&["ask", "--resume", prefix, "two"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     assert_eq!(second.session_id(), id);
     assert_eq!(second.lines[0]["payload"]["resumed"], true);
@@ -405,7 +384,7 @@ fn a_second_ask_with_a_unique_prefix_continues_the_session() {
 
 #[test]
 fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     hand_built(
@@ -419,7 +398,7 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
         ],
     );
 
-    let run = setup.fiber(&["ask", "--resume", "s_fixed1", "two"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", "s_fixed1", "two"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.session_id(), "s_fixed1");
     assert_eq!(run.lines[0]["payload"]["resumed"], true);
@@ -490,7 +469,7 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
 
 #[test]
 fn the_logs_last_model_beats_the_flag_and_the_default() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_models(&server, &["m1", "m2"], "fake/m1");
     hand_built(&setup, "s_model1", vec![]);
@@ -525,7 +504,7 @@ fn the_logs_last_model_beats_the_flag_and_the_default() {
         .unwrap();
     }
 
-    let run = setup.fiber(&["ask", "--resume", "s_model1", "--model", "fake/m1", "two"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", "s_model1", "--model", "fake/m1", "two"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(
         run.kinds(),
@@ -555,7 +534,7 @@ fn the_logs_last_model_beats_the_flag_and_the_default() {
 
 #[test]
 fn resume_failures_end_stdout_with_a_pre_session_fiber_exited() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     // Two sessions sharing the prefix `s_`: the id is `s_` plus hex, so a
@@ -565,16 +544,16 @@ fn resume_failures_end_stdout_with_a_pre_session_fiber_exited() {
     }
 
     // `--resume` with no value, and with an empty value, are usage errors.
-    assert_pre_session(&setup.fiber(&["ask", "--resume"]), 2, "usage");
-    assert_pre_session(&setup.fiber(&["ask", "--resume", ""]), 2, "usage");
+    assert_pre_session(&setup.run_in_workspace(&["ask", "--resume"]), 2, "usage");
+    assert_pre_session(&setup.run_in_workspace(&["ask", "--resume", ""]), 2, "usage");
     // An ambiguous prefix is a usage error naming the matches.
-    let ambiguous = setup.fiber(&["ask", "--resume", "s_aa", "x"]);
+    let ambiguous = setup.run_in_workspace(&["ask", "--resume", "s_aa", "x"]);
     assert_pre_session(&ambiguous, 2, "usage");
     assert!(ambiguous.stderr.contains("s_aaa"), "{}", ambiguous.stderr);
     assert!(ambiguous.stderr.contains("s_aab"), "{}", ambiguous.stderr);
     // An unknown id is `session_not_found`.
     assert_pre_session(
-        &setup.fiber(&["ask", "--resume", "s_nope", "x"]),
+        &setup.run_in_workspace(&["ask", "--resume", "s_nope", "x"]),
         1,
         "session_not_found",
     );
@@ -583,10 +562,10 @@ fn resume_failures_end_stdout_with_a_pre_session_fiber_exited() {
 
 #[test]
 fn a_held_session_fails_session_held() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     assert_eq!(
         first.kinds(),
@@ -618,7 +597,7 @@ fn a_held_session_fails_session_held() {
         fakes::clock::FakeClock::new(),
     )
     .unwrap();
-    let run = setup.fiber(&["ask", "--resume", &id, "two"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", &id, "two"]);
     assert_pre_session(&run, 1, "session_held");
     assert!(run.stderr.contains(&id), "{}", run.stderr);
     // The failed resume sent nothing: the only request is the first run's.
@@ -627,10 +606,10 @@ fn a_held_session_fails_session_held() {
 
 #[test]
 fn a_failure_before_the_session_leaves_the_log_untouched() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     assert_eq!(
         first.kinds(),
@@ -663,7 +642,7 @@ fn a_failure_before_the_session_leaves_the_log_untouched() {
         .replace("FIBER_TEST_FAKE_KEY", "FIBER_TEST_UNSET_KEY");
     fs::write(&source, text).unwrap();
 
-    let run = setup.fiber(&["ask", "--resume", &id, "two"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", &id, "two"]);
     assert_pre_session(&run, 1, "credential_missing");
     assert_eq!(fs::read(&events).unwrap(), before);
     assert!(setup.sessions().join(&id).is_dir());
@@ -671,7 +650,7 @@ fn a_failure_before_the_session_leaves_the_log_untouched() {
 
 #[test]
 fn a_failed_resumed_turn_prints_its_error_on_stderr() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), Response::status(503, "{}")]).unwrap();
     setup.provider(&server);
     write(
@@ -679,12 +658,12 @@ fn a_failed_resumed_turn_prints_its_error_on_stderr() {
         &json!({"model": "fake/m", "retry": {"attempts": 0}}),
     );
 
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     assert_eq!(first.stderr, "");
     let id = first.session_id().to_owned();
 
-    let run = setup.fiber(&["ask", "--resume", &id, "two"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", &id, "two"]);
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
     assert_eq!(
         run.kinds(),
@@ -761,12 +740,12 @@ fn preamble_label(run: &Run) -> Value {
 
 #[test]
 fn a_new_session_uses_and_records_the_label_the_configuration_names() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     labels(&setup, "work", &["work", "other"]);
 
-    let run = setup.fiber(&["ask", "one"]);
+    let run = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), ask_kinds(false));
     assert_eq!(preamble_label(&run), "work");
@@ -779,11 +758,11 @@ fn a_new_session_uses_and_records_the_label_the_configuration_names() {
 
 #[test]
 fn a_session_with_no_label_set_uses_the_default_label() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
 
-    let run = setup.fiber(&["ask", "one"]);
+    let run = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), ask_kinds(false));
     assert_eq!(preamble_label(&run), "default");
@@ -795,16 +774,16 @@ fn a_session_with_no_label_set_uses_the_default_label() {
 
 #[test]
 fn a_resumed_session_keeps_its_label_when_the_configuration_changes() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     labels(&setup, "work", &["work", "other"]);
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     let id = first.session_id().to_owned();
 
     labels(&setup, "other", &[]);
-    let second = setup.fiber(&["ask", "--resume", &id, "two"]);
+    let second = setup.run_in_workspace(&["ask", "--resume", &id, "two"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     assert_eq!(first.kinds(), ask_kinds(false));
     assert_eq!(second.kinds(), ask_kinds(true));
@@ -818,11 +797,11 @@ fn a_resumed_session_keeps_its_label_when_the_configuration_changes() {
 
 #[test]
 fn a_resume_whose_label_no_longer_exists_fails_before_the_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     labels(&setup, "work", &["work", "other"]);
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     assert_eq!(first.kinds(), ask_kinds(false));
     let id = first.session_id().to_owned();
@@ -831,7 +810,7 @@ fn a_resume_whose_label_no_longer_exists_fails_before_the_session() {
 
     fs::remove_file(setup.home().join("credentials/fake/work")).unwrap();
     labels(&setup, "other", &[]);
-    let run = setup.fiber(&["ask", "--resume", &id, "two"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", &id, "two"]);
     assert_pre_session(&run, 1, "credential_missing");
     assert!(
         run.stderr.contains("credentials/fake/work")
@@ -1013,7 +992,7 @@ fn finish_output(running: Running) -> Finished {
 
 #[test]
 fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     server.hold();
@@ -1096,17 +1075,17 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
 
 #[test]
 fn a_changed_append_system_changes_the_resumed_request() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
 
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     let id = first.session_id().to_owned();
     let prefix = &id[..8];
 
     fs::write(setup.home().join("APPEND_SYSTEM.md"), "Be terse.\n").unwrap();
-    let second = setup.fiber(&["ask", "--resume", prefix, "two"]);
+    let second = setup.run_in_workspace(&["ask", "--resume", prefix, "two"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
 
     let requests = server.requests();
@@ -1196,7 +1175,7 @@ fn fiber_exit(suspended_on: Option<&str>) -> Event {
 
 #[test]
 fn a_suspended_approval_is_refused_then_the_prompt_runs_next() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     hand_built(
@@ -1214,7 +1193,7 @@ fn a_suspended_approval_is_refused_then_the_prompt_runs_next() {
     let events = setup.sessions().join("s_susp1").join("events.jsonl");
     let before = fs::read(&events).unwrap().len();
 
-    let run = setup.fiber(&["ask", "--resume", "s_susp1", "next"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", "s_susp1", "next"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.session_id(), "s_susp1");
     assert_eq!(run.lines[0]["payload"]["resumed"], true);
@@ -1279,7 +1258,7 @@ fn a_suspended_approval_is_refused_then_the_prompt_runs_next() {
 
 #[test]
 fn a_suspended_review_request_is_denied_by_cancel_on_resume() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     hand_built(
@@ -1297,7 +1276,7 @@ fn a_suspended_review_request_is_denied_by_cancel_on_resume() {
     let events = setup.sessions().join("s_susp2").join("events.jsonl");
     let before = fs::read(&events).unwrap().len();
 
-    let run = setup.fiber(&["ask", "--resume", "s_susp2", "next"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", "s_susp2", "next"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.session_id(), "s_susp2");
     assert_eq!(run.lines[0]["payload"]["resumed"], true);
@@ -1363,7 +1342,7 @@ fn a_suspended_review_request_is_denied_by_cancel_on_resume() {
 fn a_turn_suspended_after_a_completed_handoff_re_raises_its_approval() {
     // `main`'s order: open, the pass, `fiber_started` and the extension
     // lines, then the resume, whose window ends where the pass ended.
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     let opening = |os: &str| {
@@ -1429,7 +1408,7 @@ fn a_turn_suspended_after_a_completed_handoff_re_raises_its_approval() {
         ],
     );
 
-    let run = setup.fiber(&["ask", "--resume", "s_hand1", "next"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", "s_hand1", "next"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let kinds = run.kinds();
     // The context's opening message is in the window: none is written.
@@ -1476,7 +1455,7 @@ fn an_unreadable_line_before_the_last_handoff_does_not_fail_the_resume() {
     // unreadable `text_completed` line sits before the handoff turn's
     // `turn_started`, where the window starts, so the resume never reads
     // its payload.
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let text = |text: &str| {
@@ -1567,7 +1546,7 @@ fn an_unreadable_line_before_the_last_handoff_does_not_fail_the_resume() {
         }
     }
 
-    let run = setup.fiber(&["ask", "--resume", "s_unread1", "next"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", "s_unread1", "next"]);
     // The resume reads only its window, so the prompt runs: the provider
     // is asked and the turn completes on the context after the handoff.
     // The unreadable line is an earlier process's, which `fiber_exited`
@@ -1594,7 +1573,7 @@ fn a_resumed_turn_reviews_with_the_notes_on_disk() {
     // A resume is a new process that reads configuration again: notes
     // changed on disk take effect at resume (`docs/permissions.md`,
     // "What the person tells it").
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let lua = setup.home().join("data/notes/x.lua").display().to_string();
     let server = ProviderServer::start([
         hello(),
@@ -1614,7 +1593,7 @@ fn a_resumed_turn_reviews_with_the_notes_on_disk() {
             "reviewer": {"model": "fake/m", "context": "Our org is acme."}}),
     );
 
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     let id = first.session_id().to_owned();
     let prefix = id[..8].to_owned();
@@ -1624,7 +1603,7 @@ fn a_resumed_turn_reviews_with_the_notes_on_disk() {
         &json!({"model": "fake/m",
             "reviewer": {"model": "fake/m", "context": "Our org is globex."}}),
     );
-    let second = setup.fiber(&["ask", "--resume", prefix.as_str(), "save the snippet"]);
+    let second = setup.run_in_workspace(&["ask", "--resume", prefix.as_str(), "save the snippet"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
 
     let requests = server.requests();
@@ -1645,7 +1624,7 @@ fn a_resumed_turn_reviews_with_the_notes_on_disk() {
 /// settings as `before`: the label and every setting the log last had.
 #[test]
 fn a_resume_with_a_new_label_records_model_changed() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     labels(&setup, "work", &["work", "home"]);
@@ -1653,7 +1632,7 @@ fn a_resume_with_a_new_label_records_model_changed() {
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "providers": {"fake": {"credential": "work"}}, "cache": {"lifetime": "5m"}}),
     );
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     let id = first.session_id().to_owned();
 
@@ -1663,7 +1642,7 @@ fn a_resume_with_a_new_label_records_model_changed() {
         &setup.home().join("config.json"),
         &json!({"model": "fake/m", "providers": {"fake": {"credential": "work"}}}),
     );
-    let second = setup.fiber(&["ask", "--resume", &id, "--credential", "home", "two"]);
+    let second = setup.run_in_workspace(&["ask", "--resume", &id, "--credential", "home", "two"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     let mut expected = vec!["fiber_started", "extensions_loaded", "model_changed"];
     expected.extend(ask_kinds(true)[2..].iter().copied());
@@ -1699,15 +1678,15 @@ fn a_resume_with_a_new_label_records_model_changed() {
 /// A resume with the recorded label records nothing.
 #[test]
 fn a_resume_with_the_same_label_records_nothing() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     labels(&setup, "work", &["work", "home"]);
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     let id = first.session_id().to_owned();
 
-    let second = setup.fiber(&["ask", "--resume", &id, "--credential", "work", "two"]);
+    let second = setup.run_in_workspace(&["ask", "--resume", &id, "--credential", "work", "two"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     assert_eq!(second.kinds(), ask_kinds(true));
 }
@@ -1716,17 +1695,17 @@ fn a_resume_with_the_same_label_records_nothing() {
 /// the log stays byte for byte as it was.
 #[test]
 fn a_resume_with_an_absent_label_fails_before_the_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     labels(&setup, "work", &["work", "home"]);
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     let id = first.session_id().to_owned();
     let events = setup.sessions().join(&id).join("events.jsonl");
     let before = fs::read(&events).unwrap();
 
-    let run = setup.fiber(&["ask", "--resume", &id, "--credential", "nope", "two"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", &id, "--credential", "nope", "two"]);
     assert_pre_session(&run, 1, "credential_missing");
     assert!(run.stderr.contains("home"), "stderr: {}", run.stderr);
     assert!(run.stderr.contains("work"), "stderr: {}", run.stderr);
@@ -1738,7 +1717,7 @@ fn a_resume_with_an_absent_label_fails_before_the_session() {
 /// then `preamble_built` before the turn.
 #[test]
 fn a_live_resume_with_a_new_label_switches_before_the_prompt() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     labels(&setup, "work", &["work", "home"]);
@@ -1759,7 +1738,7 @@ fn a_live_resume_with_a_new_label_switches_before_the_prompt() {
     first_line(setup.deadline, &running.stdout);
     let socket = support::Socket::connect(setup.deadline, &setup.home().join("run").join(&id));
 
-    let run = setup.fiber(&["ask", "--resume", &id, "--credential", "home", "hi"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", &id, "--credential", "home", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let requests = server.requests();
     assert_eq!(requests.len(), 1, "{requests:?}");
@@ -1807,7 +1786,7 @@ fn a_live_resume_with_a_new_label_switches_before_the_prompt() {
 /// starts.
 #[test]
 fn a_live_resume_with_an_absent_label_is_rejected() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     labels(&setup, "work", &["work", "home"]);
@@ -1828,7 +1807,7 @@ fn a_live_resume_with_an_absent_label_is_rejected() {
     first_line(setup.deadline, &running.stdout);
     let socket = support::Socket::connect(setup.deadline, &setup.home().join("run").join(&id));
 
-    let run = setup.fiber(&["ask", "--resume", &id, "--credential", "nope", "hi"]);
+    let run = setup.run_in_workspace(&["ask", "--resume", &id, "--credential", "nope", "hi"]);
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
     assert_eq!(run.lines.len(), 1, "{:?}", run.lines);
     assert_eq!(
@@ -1865,15 +1844,15 @@ fn a_live_resume_with_an_absent_label_is_rejected() {
 
 #[test]
 fn a_resumed_session_declares_delegate_spawn() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fa_root();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
 
-    let first = setup.fiber(&["ask", "one"]);
+    let first = setup.run_in_workspace(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     let id = first.session_id().to_owned();
 
-    let second = setup.fiber(&["ask", "--resume", &id, "two"]);
+    let second = setup.run_in_workspace(&["ask", "--resume", &id, "two"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
 
     let requests = server.requests();
