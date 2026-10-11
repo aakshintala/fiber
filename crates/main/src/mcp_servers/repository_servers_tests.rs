@@ -221,10 +221,16 @@ fn pinned_spec_maps_each_string_through_the_frozen_resolutions() {
         .join("pinned")
         .join(&approved.hash)
         .join("srv/run.sh");
-    // `/bin/bash` and a bare word stay as written; the inside path becomes
-    // its copy and the outside link its frozen target.
+    // An outside command is its frozen target (`/bin` links to `/usr/bin` on
+    // some hosts) and a bare word stays as written; the inside path becomes
+    // its copy.
+    let bash = std::path::Path::new("/bin/bash")
+        .canonicalize()
+        .unwrap()
+        .display()
+        .to_string();
     let run = spec.run.as_ref().expect("a program");
-    assert_eq!(run.command, "/bin/bash");
+    assert_eq!(run.command, bash);
     assert_eq!(
         run.args,
         vec![
