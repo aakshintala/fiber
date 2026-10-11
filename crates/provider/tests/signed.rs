@@ -139,7 +139,18 @@ fn a_credential_error_displays_its_message_alone() {
 }
 
 #[test]
-fn endpoint_debug_names_the_signer_without_reaching_into_it() {
+fn endpoint_debug_prints_no_secret_and_names_the_signer_without_reaching_into_it() {
+    let planted = "sk-planted-4c1e9b";
+    let endpoint = Endpoint {
+        provider: "acme".into(),
+        key: Some(contract::Secret::new(planted.into())),
+        headers: vec![("x-api-key".into(), planted.into())],
+        ..Endpoint::default()
+    };
+    let printed = format!("{endpoint:?}");
+    assert!(printed.contains("acme"), "{printed}");
+    assert!(printed.contains("x-api-key"), "{printed}");
+    assert!(!printed.contains(planted), "{printed}");
     let unsigned = Endpoint {
         provider: "p".into(),
         model: "m".into(),

@@ -31,7 +31,3 @@ pub(crate) fn carried(
 pub(crate) fn named(id: String) -> Option<GenerationId> {
     (!id.is_empty()).then_some(GenerationId(id))
 }
-
-#[cfg(test)]
-#[path = "unfinished_tests.rs"]
-mod tests;

@@ -1,4 +1,3 @@
-use contract::Secret;
 use serde_json::json;
 
 use super::{Compat, Endpoint};
@@ -33,19 +32,4 @@ fn compat_flags_are_read_from_data_with_thinking_budget_unset_when_absent() {
             "{data}"
         );
     }
-}
-
-#[test]
-fn debug_prints_neither_the_key_nor_a_header_value() {
-    let planted = "sk-planted-4c1e9b";
-    let endpoint = Endpoint {
-        provider: "acme".into(),
-        key: Some(Secret::new(planted.into())),
-        headers: vec![("x-api-key".into(), planted.into())],
-        ..Endpoint::default()
-    };
-    let printed = format!("{endpoint:?}");
-    assert!(printed.contains("acme"), "{printed}");
-    assert!(printed.contains("x-api-key"), "{printed}");
-    assert!(!printed.contains(planted), "{printed}");
 }
