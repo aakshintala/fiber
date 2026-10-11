@@ -2,6 +2,7 @@
 
 use super::{CHECK_EVERY, KEPT, Search, list, rank};
 use crate::Input;
+use fakes::Deadline;
 use std::cell::Cell;
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
@@ -15,18 +16,21 @@ fn owned(paths: &[&str]) -> Vec<String> {
 }
 
 /// Runs `work` on a thread and returns its result within [`DEADLINE`].
+#[track_caller]
 fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("files-within".to_owned())
         .spawn(move || done.send(work()).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for {what}: {err}"))
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(result) => result,
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
 }
 
 /// Runs git with `args` in `dir`, which must succeed.
+#[track_caller]
 fn git(dir: &Path, args: &[&str]) {
     let dir = dir.to_path_buf();
     let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
@@ -45,12 +49,14 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// Lists `dir` within [`DEADLINE`].
+#[track_caller]
 fn list_within(dir: &Path) -> Result<Vec<String>, String> {
     let dir = dir.to_path_buf();
     within("the listing", move || list(&dir))
 }
 
 /// A repository with `a.txt` and `sub/b.rs` tracked and `c.txt` not.
+#[track_caller]
 fn repository() -> fakes::TempDir {
     let dir = fakes::TempDir::new("tui-files");
     let root = dir.path();
@@ -64,8 +70,13 @@ fn repository() -> fakes::TempDir {
 }
 
 /// The next result the worker posts, within [`DEADLINE`].
-fn next_result(rx: &Receiver<Input>, what: &str) -> (u64, Result<Vec<String>, String>) {
-    match rx.recv_timeout(DEADLINE) {
+#[track_caller]
+fn next_result(
+    rx: &Receiver<Input>,
+    what: &str,
+    wait: &Deadline,
+) -> (u64, Result<Vec<String>, String>) {
+    match wait.recv(rx) {
         Ok(Input::Files { generation, result }) => (generation, result),
         Ok(_) => panic!("{what}: not a file search result"),
         Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
@@ -176,13 +187,13 @@ fn the_worker_skips_a_search_superseded_before_it_ran() {
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
     assert_eq!(
-        next_result(&rx, "the newest search"),
+        next_result(&rx, "the newest search", &Deadline::after(DEADLINE)),
         (2, Ok(owned(&["b.rs"])))
     );
     // Generation 1 never ran: the next result is the next search's.
     search.search(3, String::new());
     assert_eq!(
-        next_result(&rx, "the next search"),
+        next_result(&rx, "the next search", &Deadline::after(DEADLINE)),
         (3, Ok(owned(&["a.rs", "b.rs"])))
     );
 }
@@ -192,7 +203,10 @@ fn a_failed_listing_answers_every_search_with_its_error() {
     let (out, rx) = mpsc::channel();
     let search = Search::spawn(|| Err("no git".to_owned()), out);
     search.search(4, "x".to_owned());
-    assert_eq!(next_result(&rx, "the error"), (4, Err("no git".to_owned())));
+    assert_eq!(
+        next_result(&rx, "the error", &Deadline::after(DEADLINE)),
+        (4, Err("no git".to_owned()))
+    );
 }
 
 #[test]
@@ -201,12 +215,12 @@ fn a_worker_that_never_started_answers_every_search_with_why() {
     let search = Search::unstarted("no threads".to_owned(), out);
     search.search(5, "x".to_owned());
     assert_eq!(
-        next_result(&rx, "the error"),
+        next_result(&rx, "the error", &Deadline::after(DEADLINE)),
         (5, Err("no threads".to_owned()))
     );
     search.search(6, String::new());
     assert_eq!(
-        next_result(&rx, "the next error"),
+        next_result(&rx, "the next error", &Deadline::after(DEADLINE)),
         (6, Err("no threads".to_owned()))
     );
 }
@@ -228,7 +242,7 @@ fn dropping_the_worker_abandons_the_search_it_was_asked_for() {
         .send(())
         .unwrap_or_else(|err| panic!("release: {err}"));
     // The worker ends without posting: its sender goes with it.
-    match rx.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&rx) {
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
         Err(mpsc::RecvTimeoutError::Timeout) => panic!("waited {DEADLINE:?} for the worker to end"),
         Ok(_) => panic!("a dropped worker posted a result"),

@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use contract::HubLine;
 use contract::clock::Clock;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use ratatui::backend::TestBackend;
 
@@ -69,14 +70,18 @@ fn pair() -> (UnixStream, UnixStream) {
 }
 
 /// Waits for one signal on `rx` within [`DEADLINE`].
-fn signalled(rx: &Receiver<()>, what: &str) {
-    rx.recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for {what}: {err}"));
+#[track_caller]
+fn signalled(rx: &Receiver<()>, what: &str, wait: &Deadline) {
+    match wait.recv(rx) {
+        Ok(()) => {}
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
 }
 
 /// Runs the terminal on a pty with `connect` and `clock`: the pty pair,
 /// and the exit code once it quits. The hub thread starts once the first
 /// frame is read.
+#[track_caller]
 fn spawn_run(connect: crate::Connect, clock: &Arc<FakeClock>) -> (Pair, Receiver<i32>) {
     let pair = open();
     let slave = pair
@@ -96,13 +101,15 @@ fn spawn_run(connect: crate::Connect, clock: &Arc<FakeClock>) -> (Pair, Receiver
 }
 
 /// Ctrl+C twice, then the exit code within [`DEADLINE`].
-fn quit(pair: &mut Pair, finished: &Receiver<i32>) -> i32 {
+#[track_caller]
+fn quit(pair: &mut Pair, finished: &Receiver<i32>, wait: &Deadline) -> i32 {
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
-    finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"))
+    match wait.recv(finished) {
+        Ok(code) => code,
+        Err(err) => panic!("waited {DEADLINE:?} for run to return: {err}"),
+    }
 }
 
 #[test]
@@ -113,8 +120,8 @@ fn run_reconnects_after_a_drop_with_backoff_on_the_fake_clock() {
     let (connect, called, _gone) = dial(vec![(ours, hello()), (again, hello())]);
     let (mut pair, finished) = spawn_run(connect, &clock);
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8], b"lost" as &[u8]]);
-    watched(&frames, "the first frame");
-    signalled(&called, "the first connect");
+    watched(&frames, "the first frame", &Deadline::after(DEADLINE));
+    signalled(&called, "the first connect", &Deadline::after(DEADLINE));
     let reader = BufReader::new(
         theirs
             .try_clone()
@@ -125,17 +132,17 @@ fn run_reconnects_after_a_drop_with_backoff_on_the_fake_clock() {
     // The hub hangs up: home has no working line, so its notice says so.
     drop(reader);
     drop(theirs);
-    watched(&frames, "the drop notice");
+    watched(&frames, "the drop notice", &Deadline::after(DEADLINE));
     assert!(
         clock.await_parked(clock.origin() + HALF, DEADLINE),
         "waited {DEADLINE:?} for the backoff to park on the clock"
     );
     assert!(called.try_recv().is_err());
     clock.advance(HALF);
-    signalled(&called, "the reconnect");
+    signalled(&called, "the reconnect", &Deadline::after(DEADLINE));
     let (_, feed) = command(BufReader::new(theirs_again), "the feed after reconnecting");
     assert_eq!(feed["command"], "feed");
-    assert_eq!(quit(&mut pair, &finished), 0);
+    assert_eq!(quit(&mut pair, &finished, &Deadline::after(DEADLINE)), 0);
 }
 
 /// A hub `command_accepted` for `id` starting `session`, as a line.
@@ -163,8 +170,8 @@ fn a_prompt_in_flight_is_resent_after_reconnecting() {
     let (connect, called, _gone) = dial(vec![(ours, hello()), (again, hello())]);
     let (mut pair, finished) = spawn_run(connect, &clock);
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
-    watched(&frames, "the first frame");
-    signalled(&called, "the first connect");
+    watched(&frames, "the first frame", &Deadline::after(DEADLINE));
+    signalled(&called, "the first connect", &Deadline::after(DEADLINE));
     let reader = BufReader::new(
         theirs
             .try_clone()
@@ -193,7 +200,7 @@ fn a_prompt_in_flight_is_resent_after_reconnecting() {
         "waited {DEADLINE:?} for the backoff to park on the clock"
     );
     clock.advance(HALF);
-    signalled(&called, "the reconnect");
+    signalled(&called, "the reconnect", &Deadline::after(DEADLINE));
     let reader = BufReader::new(theirs_again);
     let (reader, subscribe) = command(reader, "the subscribe after reconnecting");
     assert_eq!(subscribe["command"], "subscribe");
@@ -203,7 +210,7 @@ fn a_prompt_in_flight_is_resent_after_reconnecting() {
     assert_eq!(commands["command"], "commands");
     let (_, resent) = command(reader, "the resent prompt");
     assert_eq!(resent, prompt);
-    assert_eq!(quit(&mut pair, &finished), 0);
+    assert_eq!(quit(&mut pair, &finished, &Deadline::after(DEADLINE)), 0);
 }
 
 #[test]
@@ -215,15 +222,15 @@ fn run_stops_retrying_after_a_refused_schema() {
     let (connect, called, gone) = dial(vec![(ours, newer)]);
     let (mut pair, finished) = spawn_run(connect, &clock);
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8], b"schema" as &[u8]]);
-    watched(&frames, "the first frame");
-    signalled(&called, "the first connect");
-    watched(&frames, "the refusal notice");
+    watched(&frames, "the first frame", &Deadline::after(DEADLINE));
+    signalled(&called, "the first connect", &Deadline::after(DEADLINE));
+    watched(&frames, "the refusal notice", &Deadline::after(DEADLINE));
     // No permit: the thread never waits on the clock or connects again.
     assert!(!clock.await_parked(clock.origin() + HALF, QUIET));
     assert!(clock.parked().is_empty());
     assert!(called.try_recv().is_err());
-    assert_eq!(quit(&mut pair, &finished), 0);
-    signalled(&gone, "the hub thread to end");
+    assert_eq!(quit(&mut pair, &finished, &Deadline::after(DEADLINE)), 0);
+    signalled(&gone, "the hub thread to end", &Deadline::after(DEADLINE));
     assert!(called.try_recv().is_err());
 }
 
@@ -233,14 +240,14 @@ fn quitting_during_backoff_ends_the_hub_thread() {
     let (connect, called, gone) = dial(Vec::new());
     let (mut pair, finished) = spawn_run(connect, &clock);
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
-    watched(&frames, "the first frame");
-    signalled(&called, "the first connect");
+    watched(&frames, "the first frame", &Deadline::after(DEADLINE));
+    signalled(&called, "the first connect", &Deadline::after(DEADLINE));
     assert!(
         clock.await_parked(clock.origin() + HALF, DEADLINE),
         "waited {DEADLINE:?} for the backoff to park on the clock"
     );
-    assert_eq!(quit(&mut pair, &finished), 0);
-    signalled(&gone, "the hub thread to end");
+    assert_eq!(quit(&mut pair, &finished, &Deadline::after(DEADLINE)), 0);
+    signalled(&gone, "the hub thread to end", &Deadline::after(DEADLINE));
     assert_eq!(clock.now(), clock.origin());
     assert!(called.try_recv().is_err());
 }
@@ -253,13 +260,13 @@ fn dropping_the_loop_ends_a_hub_thread_that_waits_for_a_permit() {
     let (tx, rx) = mpsc::channel();
     let (connect, _called, gone) = dial(Vec::new());
     spawn_hub(connect, tx, retry, Arc::clone(&lp.clock));
-    match rx.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&rx) {
         Ok(Input::ConnectFailed(_)) => {}
         Ok(_) => panic!("the first input is the failed connect"),
         Err(err) => panic!("waited {DEADLINE:?} for the failed connect: {err}"),
     }
     drop(lp);
-    signalled(&gone, "the hub thread to end");
+    signalled(&gone, "the hub thread to end", &Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -271,7 +278,7 @@ fn dropping_the_loop_ends_a_hub_thread_that_reads() {
     let (tx, rx) = mpsc::channel();
     let (connect, _called, gone) = dial(vec![(ours, hello())]);
     spawn_hub(connect, tx, retry, Arc::clone(&lp.clock));
-    let connected = match rx.recv_timeout(DEADLINE) {
+    let connected = match Deadline::after(DEADLINE).recv(&rx) {
         Ok(input @ Input::Connected(..)) => input,
         Ok(_) => panic!("the first input is the connection"),
         Err(err) => panic!("waited {DEADLINE:?} for the connection: {err}"),
@@ -280,7 +287,7 @@ fn dropping_the_loop_ends_a_hub_thread_that_reads() {
     assert!(lp.app.connected());
     // The hub's end stays open: only the loop's hang-up ends the read.
     drop(lp);
-    signalled(&gone, "the hub thread to end");
+    signalled(&gone, "the hub thread to end", &Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -292,7 +299,7 @@ fn dropping_the_loop_before_the_connect_is_stepped_ends_the_read() {
     let (tx, rx) = mpsc::channel();
     let (connect, _called, gone) = dial(vec![(ours, hello())]);
     spawn_hub(connect, tx, retry, Arc::clone(&lp.clock));
-    match rx.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&rx) {
         Ok(Input::Connected(..)) => {}
         Ok(_) => panic!("the first input is the connection"),
         Err(err) => panic!("waited {DEADLINE:?} for the connection: {err}"),
@@ -301,7 +308,7 @@ fn dropping_the_loop_before_the_connect_is_stepped_ends_the_read() {
     // stream: only the permit's stop of the watched read ends it.
     // The hub's end stays open throughout.
     drop(lp);
-    signalled(&gone, "the hub thread to end");
+    signalled(&gone, "the hub thread to end", &Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -311,7 +318,7 @@ fn watch_matches_a_marker_only_at_its_full_length() {
     pty.slave
         .write_all(b"los")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    match frames.recv_timeout(QUIET) {
+    match Deadline::after(QUIET).recv(&frames) {
         Ok(chunk) => panic!("a marker one byte short matched: {chunk:?}"),
         Err(mpsc::RecvTimeoutError::Timeout) => {}
         Err(err) => panic!("the watcher ended before the marker: {err}"),
@@ -320,7 +327,11 @@ fn watch_matches_a_marker_only_at_its_full_length() {
         .write_all(b"t")
         .unwrap_or_else(|err| panic!("write: {err}"));
     assert_eq!(
-        watched(&frames, "the marker at its full length"),
+        watched(
+            &frames,
+            "the marker at its full length",
+            &Deadline::after(DEADLINE)
+        ),
         b"lost",
         "the chunk ends with the marker and starts at the first byte"
     );
@@ -333,13 +344,14 @@ fn watch_cuts_a_chunk_at_each_marker_in_one_write() {
     pty.slave
         .write_all(b"one two")
         .unwrap_or_else(|err| panic!("write: {err}"));
+    let wait = Deadline::after(DEADLINE);
     assert_eq!(
-        watched(&frames, "the first marker"),
+        watched(&frames, "the first marker", &wait),
         b"one",
         "the first chunk ends with the first marker"
     );
     assert_eq!(
-        watched(&frames, "the second marker"),
+        watched(&frames, "the second marker", &wait),
         b" two",
         "the second chunk starts after the first marker"
     );
@@ -367,11 +379,11 @@ fn watch_keeps_draining_after_its_last_marker() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     assert_eq!(
-        watched(&frames, "the marker"),
+        watched(&frames, "the marker", &Deadline::after(DEADLINE)),
         b"mark",
         "the chunk ends with the marker and starts at the first byte"
     );
-    match written.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&written) {
         Ok(()) => {}
         Err(err) => panic!("waited {DEADLINE:?} for the writer past the last marker: {err}"),
     }

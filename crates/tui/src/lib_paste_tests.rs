@@ -13,6 +13,7 @@ use super::tests::{feed, hello, new_loop};
 use crate::Input;
 use crate::link::Line;
 use crate::paste_image::{Decode, Reader};
+use fakes::Deadline;
 
 /// One named wall-clock deadline for every blocking wait.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -84,7 +85,7 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
     assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
     let (_, step_rx) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
-    let landed = worker.recv_timeout(DEADLINE).unwrap();
+    let landed = Deadline::after(DEADLINE).recv(&worker).unwrap();
     let Input::Image { ticket, result } = landed else {
         panic!("the worker posted something else");
     };
@@ -136,7 +137,7 @@ fn a_second_press_after_a_synchronous_failure_starts_a_read() {
     let (out, worker) = mpsc::channel();
     lp.files_out = Some(out);
     assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
-    let landed = worker.recv_timeout(DEADLINE).unwrap();
+    let landed = Deadline::after(DEADLINE).recv(&worker).unwrap();
     let Input::Image { ticket, result } = landed else {
         panic!("the worker posted something else");
     };

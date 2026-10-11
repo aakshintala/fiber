@@ -5,6 +5,7 @@ use super::{NEXT, NO_EDITOR, Target, TempFile, command, open, run_in};
 use crate::app::{App, Effect};
 use crate::keys::{Edit, Key};
 use contract::clock::Clock;
+use fakes::Deadline;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -76,6 +77,7 @@ impl Fake {
     }
 
     /// Runs `command` on `text` with one deadline.
+    #[track_caller]
     fn run_command(&self, command: String, text: &str) -> Result<String, String> {
         let temp = self.temp.path().to_path_buf();
         let text = text.to_owned();
@@ -84,12 +86,14 @@ impl Fake {
             .name("editor-run".to_owned())
             .spawn(move || done.send(run_in(&temp, &command, &text)).unwrap_or(()))
             .unwrap_or_else(|err| panic!("spawn: {err}"));
-        finished
-            .recv_timeout(DEADLINE)
-            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the editor: {err}"))
+        match Deadline::after(DEADLINE).recv(&finished) {
+            Ok(result) => result,
+            Err(err) => panic!("waited {DEADLINE:?} for the editor: {err}"),
+        }
     }
 
     /// Runs the editor `/bin/sh <script>` on `text` with one deadline.
+    #[track_caller]
     fn run(&self, text: &str) -> Result<String, String> {
         self.run_command(self.command("", ""), text)
     }
@@ -226,6 +230,7 @@ fn an_unreadable_file_keeps_the_draft_and_says_so() {
 
 impl Fake {
     /// Runs `open` with the editor on `path`, with one deadline.
+    #[track_caller]
     fn open(&self, path: &Path) -> Result<(), String> {
         let command = self.command("", "");
         let path = path.to_path_buf();
@@ -234,9 +239,10 @@ impl Fake {
             .name("editor-open".to_owned())
             .spawn(move || done.send(open(&command, &path)).unwrap_or(()))
             .unwrap_or_else(|err| panic!("spawn: {err}"));
-        finished
-            .recv_timeout(DEADLINE)
-            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the editor: {err}"))
+        match Deadline::after(DEADLINE).recv(&finished) {
+            Ok(result) => result,
+            Err(err) => panic!("waited {DEADLINE:?} for the editor: {err}"),
+        }
     }
 }
 
@@ -269,7 +275,7 @@ fn open_reports_a_failing_editor() {
         .spawn(move || done.send(open(&command, &path)).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     assert_eq!(
-        finished.recv_timeout(DEADLINE).ok(),
+        Deadline::after(DEADLINE).recv(&finished).ok(),
         Some(Err("The editor was ended by signal 2.".to_owned()))
     );
 }

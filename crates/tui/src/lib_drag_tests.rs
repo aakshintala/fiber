@@ -3,13 +3,14 @@
 //! (`docs/tui.md`, "Layout").
 
 use super::Input;
-use super::tests::{Pair, feed, new_loop, open};
+use super::tests::{DEADLINE, Pair, feed, new_loop, open};
 use crate::configure::{Configure, Layer};
 use crate::configure_fake::Fake;
 use crate::home::Launch;
 use crate::link::Line;
 use crate::osc;
 use crate::pty_watch::{watch, watched};
+use fakes::Deadline;
 use ratatui::backend::TestBackend;
 use std::io::Write;
 use std::path::PathBuf;
@@ -82,6 +83,7 @@ fn drag() -> Vec<Input> {
 
 /// A loop at 200x40 on a pty pair, with home state and two live sessions.
 /// The watcher reads the pty from the first frame to end of file.
+#[track_caller]
 fn pty(markers: Vec<&'static [u8]>) -> (Pair, mpsc::Receiver<Vec<u8>>, super::Loop<TestBackend>) {
     let pair = open();
     let frames = watch(&pair.main, markers);
@@ -188,7 +190,7 @@ fn hover_over_an_edge_writes_col_resize_once_and_leaving_writes_default() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let written = watched(&frames, "the mark");
+    let written = watched(&frames, "the mark", &Deadline::after(DEADLINE));
     let expected = [
         osc::title("✓ work · fiber").as_slice(),
         osc::pointer(true),
@@ -212,7 +214,7 @@ fn with_hover_off_no_osc_22_is_written() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let written = watched(&frames, "the mark");
+    let written = watched(&frames, "the mark", &Deadline::after(DEADLINE));
     assert!(
         !written
             .windows(osc::pointer(true).len())
@@ -232,7 +234,7 @@ fn a_drag_off_the_edge_keeps_the_resize_arrow_until_release() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let written = watched(&frames, "the mark");
+    let written = watched(&frames, "the mark", &Deadline::after(DEADLINE));
     let expected = [
         osc::title("✓ work · fiber").as_slice(),
         osc::pointer(true),
@@ -247,7 +249,7 @@ fn a_drag_off_the_edge_keeps_the_resize_arrow_until_release() {
 fn after_the_editor_returns_the_pointer_shape_is_written_again() {
     let (pair, frames, mut lp) = pty(vec![b"\x1b[c" as &[u8], b"ENDMARK" as &[u8]]);
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    watched(&frames, "the setup queries");
+    watched(&frames, "the setup queries", &Deadline::after(DEADLINE));
     // The pointer sits on the rail's edge before the editor opens.
     step(&mut lp, b"\x1b[<35;30;21M");
     // The size does not change across the hand-over.
@@ -266,7 +268,7 @@ fn after_the_editor_returns_the_pointer_shape_is_written_again() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let tail = watched(&frames, "the mark");
+    let tail = watched(&frames, "the mark", &Deadline::after(DEADLINE));
     // After the resume bytes the arrow is written again.
     let resumed: &[u8] =
         b"\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h";

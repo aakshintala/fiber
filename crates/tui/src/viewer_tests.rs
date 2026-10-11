@@ -10,6 +10,7 @@ use base64::Engine as _;
 use super::{command, spawn};
 use crate::Input;
 use crate::image::View;
+use fakes::Deadline;
 
 /// One deadline per receive: the worker answers promptly.
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -26,10 +27,11 @@ fn view(name: &str, bytes: &[u8]) -> View {
 }
 
 /// Spawns the worker and waits for its answer.
+#[track_caller]
 fn opened(argv: &[String], dir: &std::path::Path, view: View) -> Result<(), String> {
     let (out, rx) = mpsc::channel();
     spawn(argv, dir, view, &out);
-    match rx.recv_timeout(DEADLINE) {
+    match Deadline::after(DEADLINE).recv(&rx) {
         Ok(Input::Viewed { result, .. }) => result,
         Ok(
             Input::Bytes(_)

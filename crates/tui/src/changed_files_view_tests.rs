@@ -19,6 +19,7 @@ use crate::app::{App, Effect, SessionView};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::swapped::List;
+use fakes::Deadline;
 
 fn changes(entries: &[(&str, u64, u64)]) -> BTreeMap<String, (u64, u64)> {
     entries
@@ -235,8 +236,8 @@ fn diff_command_under_sh_reads_only_a_literal_untracked_star_path() {
             .unwrap_or_else(|error| panic!("wait for diff command: {error}"));
         done.send(output).unwrap_or(());
     });
-    let output = finished
-        .recv_timeout(Duration::from_secs(10))
+    let output = Deadline::after(Duration::from_secs(10))
+        .recv(&finished)
         .expect("waited for the shell diff command");
     watchdog.stand_down(Duration::from_secs(5));
     let stdout = String::from_utf8(output.stdout)

@@ -7,6 +7,7 @@ use crate::link::Line;
 use crate::pty_watch::{watch, watched};
 use crate::stroke::{Code, Mods, Stroke};
 use contract::clock::Clock;
+use fakes::Deadline;
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -48,6 +49,7 @@ pub(super) struct Pair {
 }
 
 /// Opens a pty pair with a 60x12 window.
+#[track_caller]
 pub(super) fn open() -> Pair {
     let main =
         rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
@@ -158,6 +160,7 @@ pub(super) fn new_loop<B: Backend + crate::screen::SyncEmit>(
 /// Runs `lp` over `inputs`, then with every sender gone. With no inputs it
 /// returns before drawing, so a test that captures a frame feeds at least one
 /// input first.
+#[track_caller]
 pub(super) fn feed<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> i32 {
     let (tx, rx) = mpsc::channel();
     for input in inputs {
@@ -187,19 +190,22 @@ pub(super) fn once(hub: UnixStream, hello: contract::HubLine) -> crate::Connect 
 
 /// Runs `work` on a thread and returns its result, failing after
 /// [`DEADLINE`] with `what`: one deadline however many reads it makes.
+#[track_caller]
 fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
         .name("lib-within".to_owned())
         .spawn(move || done.send(work()).unwrap_or(()))
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for {what}: {err}"))
+    match Deadline::after(DEADLINE).recv(&finished) {
+        Ok(result) => result,
+        Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
+    }
 }
 
 /// Reads one command line the loop wrote to the hub, with one deadline,
 /// and hands the reader back.
+#[track_caller]
 pub(super) fn command(
     mut reader: BufReader<UnixStream>,
     what: &str,
@@ -278,7 +284,7 @@ fn the_first_kitty_reply_pushes_the_flags_once() {
         .write_all(b"END")
         .unwrap_or_else(|err| panic!("write: {err}"));
     assert_eq!(
-        watched(&frames, "the kitty push"),
+        watched(&frames, "the kitty push", &Deadline::after(DEADLINE)),
         [
             b"\x1b[>1u".to_vec(),
             crate::osc::title("fiber"),
@@ -461,9 +467,15 @@ fn restore_puts_back_what_setup_changed() {
     let end = "\x1b[<u\x1b[?2004l\x1b[?1003l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?2031l\x1b]22;default\x1b\\\x1b[23;2t\x1b[?1049l\x1b[?25h";
     let frames = watch(&pair.main, vec![start.as_bytes(), end.as_bytes()]);
     crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
-    assert_eq!(watched(&frames, "the start bytes"), start.as_bytes());
+    assert_eq!(
+        watched(&frames, "the start bytes", &Deadline::after(DEADLINE)),
+        start.as_bytes()
+    );
     crate::restore();
-    assert_eq!(watched(&frames, "the restore bytes"), end.as_bytes());
+    assert_eq!(
+        watched(&frames, "the restore bytes", &Deadline::after(DEADLINE)),
+        end.as_bytes()
+    );
     assert!(is_cooked(
         &rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"))
     ));
@@ -537,7 +549,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // On home the input line is not on the last row: the first frame is
     // read through the placeholder, whose letters are written together.
     // The start bytes are checked inside the first marker's chunk.
-    let first = watched(&frames, "the first frame");
+    let first = watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     assert!(
         first.starts_with(START),
         "the first chunk starts with the start bytes: {first:?}"
@@ -560,23 +572,24 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     // redraw splits the hint around the cells the unarmed foot already
     // holds, so the whole hint never arrives in one run, but every
     // fragment does.
-    watched(&frames, "the armed quit hint's Press");
-    watched(&frames, "the armed quit hint's Ctrl+C");
-    watched(&frames, "the armed quit hint's again to");
+    let wait = Deadline::after(DEADLINE);
+    watched(&frames, "the armed quit hint's Press", &wait);
+    watched(&frames, "the armed quit hint's Ctrl+C", &wait);
+    watched(&frames, "the armed quit hint's again to", &wait);
     pair.main
         .write_all(&[0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
     pair.main
         .flush()
         .unwrap_or_else(|err| panic!("flush: {err}"));
-    let code = finished
-        .recv_timeout(DEADLINE)
+    let code = Deadline::after(DEADLINE)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
     let after = rustix::termios::tcgetattr(&pair.slave).unwrap_or_else(|err| panic!("attr: {err}"));
     assert!(is_cooked(&after));
     // After the last frame the output holds the restore bytes.
-    let tail = watched(&frames, "the restore bytes");
+    let tail = watched(&frames, "the restore bytes", &Deadline::after(DEADLINE));
     assert_eq!(
         tail.get(tail.len().saturating_sub(RESTORE.len())..),
         Some(RESTORE)
@@ -609,7 +622,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     // Unchanged cells are skipped, spaces included, so one word is matched.
     // The start bytes are checked inside the first marker's chunk.
-    let notice = watched(&frames, "the connect notice");
+    let notice = watched(&frames, "the connect notice", &Deadline::after(DEADLINE));
     assert!(
         notice.starts_with(START),
         "the first chunk starts with the start bytes: {notice:?}"
@@ -617,8 +630,8 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let code = finished
-        .recv_timeout(DEADLINE)
+    let code = Deadline::after(DEADLINE)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
     assert!(is_cooked(
@@ -631,7 +644,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
     (&pair.slave)
         .write_all(b"mark")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let tail = watched(&frames, "the mark");
+    let tail = watched(&frames, "the mark", &Deadline::after(DEADLINE));
     let dropped: &[u8] = b"\x1b[?2026h\x1b[?25h\x1b[?2026l";
     let expected = [RESTORE, dropped, b"mark".as_slice()].concat();
     assert_eq!(
@@ -669,7 +682,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     // The notice is drawn after the first frame, so SIGWINCH is caught.
     // The start bytes are checked inside the first marker's chunk.
-    let notice = watched(&frames, "the connect notice");
+    let notice = watched(&frames, "the connect notice", &Deadline::after(DEADLINE));
     assert!(
         notice.starts_with(START),
         "the first chunk starts with the start bytes: {notice:?}"
@@ -691,8 +704,9 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     // The foot hint sits on the new last row, wider than the screen and
     // cut: the cursor goes to column 1, and the next character printed,
     // after any colour change, is its `↓`.
-    watched(&frames, "the move to row 10");
-    let next = watched(&frames, "the foot hint on row 10");
+    let wait = Deadline::after(DEADLINE);
+    watched(&frames, "the move to row 10", &wait);
+    let next = watched(&frames, "the foot hint on row 10", &wait);
     let between = next
         .get(..next.len().saturating_sub("↓".len()))
         .unwrap_or_default();
@@ -706,8 +720,8 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let code = finished
-        .recv_timeout(DEADLINE)
+    let code = Deadline::after(DEADLINE)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
 }
@@ -802,6 +816,7 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
     assert!(lp.app.panel().is_none());
 }
 
+#[track_caller]
 fn connected_loop() -> (Loop<TestBackend>, BufReader<UnixStream>) {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
@@ -977,6 +992,7 @@ fn declines(extra: &serde_json::Value) -> Vec<(serde_json::Value, Vec<u8>)> {
 /// Declining `payload` with `keys`, with a turn running or not: the
 /// declined reply, its accept, then a prompt typed after it. The command
 /// that follows the reply on the hub's socket.
+#[track_caller]
 fn command_after_decline(
     running: bool,
     payload: serde_json::Value,
@@ -1067,8 +1083,9 @@ fn a_cursor_move_alone_writes_and_a_still_frame_writes_nothing() {
 }
 
 /// The next bytes the reader sends, with one deadline.
-fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str) -> Vec<u8> {
-    match rx.recv_timeout(DEADLINE) {
+#[track_caller]
+fn next_bytes(rx: &mpsc::Receiver<Input>, what: &str, wait: &Deadline) -> Vec<u8> {
+    match wait.recv(rx) {
         Ok(Input::Bytes(bytes)) => bytes,
         Ok(_) => panic!("{what}: not bytes"),
         Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
@@ -1129,7 +1146,8 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let suspended = watched(&frames, "the restore bytes");
+    let wait = Deadline::after(DEADLINE);
+    let suspended = watched(&frames, "the restore bytes", &wait);
     assert!(
         suspended.starts_with(start.as_bytes()),
         "the restore chunk starts with the start bytes: {suspended:?}"
@@ -1138,14 +1156,17 @@ fn hand_over_gives_the_terminal_and_its_input_to_the_program() {
     let resumed = "typed\r\n\x1b[?1049h\x1b[22;2t\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1003h\x1b[>1u\x1b]11;?\x1b\\\x1b[?2031h\x1b[?996n";
     let title = crate::osc::title("fiber");
     assert_eq!(
-        watched(&frames, "the mark"),
+        watched(&frames, "the mark", &wait),
         [resumed.as_bytes(), title.as_slice(), b"ENDMARK".as_slice()].concat()
     );
     // The reader runs again.
     pair.main
         .write_all(b"k")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    assert_eq!(next_bytes(&rx, "a key after the program"), b"k");
+    assert_eq!(
+        next_bytes(&rx, "a key after the program", &Deadline::after(DEADLINE)),
+        b"k"
+    );
     crate::term::restore();
 }
 
@@ -1208,6 +1229,7 @@ fn fake_editor(body: &str) -> (FakeEditor, super::Var) {
 
 /// Runs `lp` over `inputs` on a thread with one deadline: the exit code
 /// and the draft.
+#[track_caller]
 fn feed_within(mut lp: Loop<TestBackend>, inputs: Vec<Input>) -> (i32, String) {
     within("the loop", move || {
         let code = feed(&mut lp, inputs);
@@ -1346,7 +1368,10 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
         b"\x1b]52;c;bGV0IGEgPSAxOw==\x07".to_vec(),
     ]
     .concat();
-    assert_eq!(watched(&frames, "the OSC 52 bytes"), osc);
+    assert_eq!(
+        watched(&frames, "the OSC 52 bytes", &Deadline::after(DEADLINE)),
+        osc
+    );
     ready.wait(DEADLINE);
     assert_eq!(
         std::fs::read_to_string(&out).ok().as_deref(),
@@ -1558,6 +1583,7 @@ const RESTORE: &[u8] =
 /// the exit code once it quits, and the watched pty chunks. The watcher
 /// starts before `run`, and is the only reader from the first frame to
 /// end of file.
+#[track_caller]
 fn spawn_run(
     hub: UnixStream,
     markers: Vec<&'static [u8]>,
@@ -1568,6 +1594,7 @@ fn spawn_run(
 /// Runs the terminal on a pty from `started`, for a launch carrying the
 /// person's `keys`: the pty pair, the exit code once it quits, and the
 /// watched pty chunks.
+#[track_caller]
 fn spawn_run_with_launch(
     hub: UnixStream,
     markers: Vec<&'static [u8]>,
@@ -1607,7 +1634,7 @@ fn run_home_names_the_key_maps_bound_key() {
     started.keys = crate::KeysSetup { user: keys };
     let (hub, held) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let (mut pair, finished, frames) = spawn_run_with_launch(hub, vec![b"quit" as &[u8]], started);
-    let first = watched(&frames, "the first frame");
+    let first = watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     assert!(
         first.starts_with(START),
         "the first chunk starts with the start bytes: {first:?}"
@@ -1630,8 +1657,8 @@ fn run_home_names_the_key_maps_bound_key() {
         .flush()
         .unwrap_or_else(|err| panic!("flush: {err}"));
     assert_eq!(
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
         0
     );
@@ -1647,7 +1674,7 @@ fn run_prints_a_resume_line_per_live_session_after_restoring() {
         .unwrap_or_else(|err| panic!("write: {err}"));
     // The test waits for the session's name on screen before quitting.
     // The start bytes are checked inside the first marker's chunk.
-    let row = watched(&frames, "the session row");
+    let row = watched(&frames, "the session row", &Deadline::after(DEADLINE));
     assert!(
         row.starts_with(START),
         "the first chunk starts with the start bytes: {row:?}"
@@ -1665,12 +1692,12 @@ fn run_prints_a_resume_line_per_live_session_after_restoring() {
         .flush()
         .unwrap_or_else(|err| panic!("flush: {err}"));
     assert_eq!(
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
         0
     );
-    let tail = watched(&frames, "the resume line");
+    let tail = watched(&frames, "the resume line", &Deadline::after(DEADLINE));
     let Some(at) = tail
         .windows(RESTORE.len())
         .position(|window| window == RESTORE)
@@ -1694,7 +1721,7 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     crate::link::write_line(&write, &hub_status("s_aaaaaaaaaaaaaaaa", "streaming"))
         .unwrap_or_else(|err| panic!("write: {err}"));
     // The start bytes are checked inside the first marker's chunk.
-    let row = watched(&frames, "the session row");
+    let row = watched(&frames, "the session row", &Deadline::after(DEADLINE));
     assert!(
         row.starts_with(START),
         "the first chunk starts with the start bytes: {row:?}"
@@ -1738,8 +1765,8 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     assert_eq!(close["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(close["args"], serde_json::json!({"now": true}));
     assert_eq!(
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
         0
     );
@@ -1748,7 +1775,7 @@ fn run_close_all_sends_summary_and_close_now_and_prints_no_line_for_it() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let tail = watched(&frames, "the mark");
+    let tail = watched(&frames, "the mark", &Deadline::after(DEADLINE));
     let Some(at) = tail
         .windows(RESTORE.len())
         .position(|window| window == RESTORE)
@@ -1775,7 +1802,7 @@ fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
     crate::link::write_line(&write, &hub_status("s_aaaaaaaaaaaaaaaa", "streaming"))
         .unwrap_or_else(|err| panic!("write: {err}"));
     // The start bytes are checked inside the first marker's chunk.
-    let row = watched(&frames, "the session row");
+    let row = watched(&frames, "the session row", &Deadline::after(DEADLINE));
     assert!(
         row.starts_with(START),
         "the first chunk starts with the start bytes: {row:?}"
@@ -1784,7 +1811,7 @@ fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
     // the test waits for `lost` on screen.
     drop(write);
     drop(held);
-    watched(&frames, "the lost notice");
+    watched(&frames, "the lost notice", &Deadline::after(DEADLINE));
     // Ctrl+C twice asks, and `c` with the link down quits and closes
     // nothing: one write, so the loop asks before it closes. The session
     // keeps its resume line.
@@ -1795,12 +1822,12 @@ fn run_close_all_with_a_lost_hub_still_prints_the_resume_line() {
         .flush()
         .unwrap_or_else(|err| panic!("flush: {err}"));
     assert_eq!(
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}")),
         0
     );
-    let tail = watched(&frames, "the resume line");
+    let tail = watched(&frames, "the resume line", &Deadline::after(DEADLINE));
     let Some(at) = tail
         .windows(RESTORE.len())
         .position(|window| window == RESTORE)
@@ -1843,7 +1870,7 @@ fn run_writes_the_title_once_until_it_changes() {
     (&pair.slave)
         .write_all(b"ENDMARK")
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let written = watched(&frames, "the mark");
+    let written = watched(&frames, "the mark", &Deadline::after(DEADLINE));
     let expected = [
         crate::osc::title("fiber"),
         crate::osc::title("✓ fix the parser · fiber"),
@@ -1858,6 +1885,7 @@ fn owned(paths: &[&str]) -> Vec<String> {
 }
 
 /// Runs git with `args` in `dir`, which must succeed.
+#[track_caller]
 fn git(dir: &Path, args: &[&str]) {
     let dir = dir.to_path_buf();
     let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
@@ -1876,6 +1904,7 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// A repository with `a.txt` and `sub/b.rs` tracked and `c.txt` not.
+#[track_caller]
 fn repository() -> fakes::TempDir {
     let dir = fakes::TempDir::new("tui-files");
     let root = dir.path();
@@ -1889,8 +1918,13 @@ fn repository() -> fakes::TempDir {
 }
 
 /// The next result the worker posts, within [`DEADLINE`].
-fn next_result(rx: &Receiver<Input>, what: &str) -> (u64, Result<Vec<String>, String>) {
-    match rx.recv_timeout(DEADLINE) {
+#[track_caller]
+fn next_result(
+    rx: &Receiver<Input>,
+    what: &str,
+    wait: &Deadline,
+) -> (u64, Result<Vec<String>, String>) {
+    match wait.recv(rx) {
         Ok(Input::Files { generation, result }) => (generation, result),
         Ok(_) => panic!("{what}: not a file search result"),
         Err(err) => panic!("waited {DEADLINE:?} for {what}: {err}"),
@@ -1935,13 +1969,17 @@ fn the_loop_lists_searches_and_drops_the_worker_on_close() {
     let (_hub, idle) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(b"@".to_vec()), &idle), None);
     assert!(lp.search.is_some());
-    let (generation, result) = next_result(&rx, "the listing's first search");
+    let (generation, result) = next_result(
+        &rx,
+        "the listing's first search",
+        &Deadline::after(DEADLINE),
+    );
     assert_eq!(generation, lp.app.generation());
     assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
     let shown = lp.app.completions().map(|c| c.lines()).unwrap_or_default();
     assert_eq!(shown, owned(&["a.txt", "sub/b.rs"]));
     assert_eq!(lp.step(Input::Bytes(b"b".to_vec()), &idle), None);
-    let (generation, result) = next_result(&rx, "the search for b");
+    let (generation, result) = next_result(&rx, "the search for b", &Deadline::after(DEADLINE));
     assert_eq!(result, Ok(owned(&["sub/b.rs"])));
     assert_eq!(lp.step(Input::Files { generation, result }, &idle), None);
     assert_eq!(lp.step(Input::Bytes(b"\t".to_vec()), &idle), None);
@@ -2026,9 +2064,10 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
     );
     // Each pause sleeps on the injected clock, then sends its generation.
     let mut generations = Vec::new();
+    let wait = Deadline::after(DEADLINE);
     for _ in 0..3 {
-        match due
-            .recv_timeout(DEADLINE)
+        match wait
+            .recv(&due)
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for FindDue: {err}"))
         {
             Input::FindDue(generation) => generations.push(generation),
@@ -2216,8 +2255,8 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
     .unwrap_or_else(|err| panic!("send: {err}"));
     tx.send(Input::Bytes(vec![0x03, 0x03]))
         .unwrap_or_else(|err| panic!("send: {err}"));
-    let (code, lp) = finished
-        .recv_timeout(DEADLINE)
+    let (code, lp) = Deadline::after(DEADLINE)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the loop to quit: {err}"));
     assert_eq!(code, 0);
     assert!(lp.app.pages().part(0).is_some(), "the revealed page loaded");
@@ -2252,10 +2291,8 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     // The cached lists answer with one model and one notice, only after
     // the test releases the read following the first frame.
     let read: crate::ReadModels = Arc::new(move |refresh| {
-        held_in
-            .lock()
-            .unwrap()
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&held_in.lock().unwrap())
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the cached read release: {err}"));
         seen_in.lock().unwrap().push(refresh);
         Ok(crate::Catalogue {
@@ -2292,7 +2329,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
             }
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let first = watched(&frames, "the first frame");
+    let first = watched(&frames, "the first frame", &Deadline::after(DEADLINE));
     assert!(
         first.starts_with(START),
         "the first chunk starts with the start bytes: {first:?}"
@@ -2309,12 +2346,13 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
         .unwrap_or_else(|err| panic!("release the cached read: {err}"));
     // Both halves sit on one notice row, drawn in row-major order, so
     // `the lists` comes first and `are in` follows it.
-    let lists = watched(&frames, "the cached read's notice text");
+    let wait = Deadline::after(DEADLINE);
+    let lists = watched(&frames, "the cached read's notice text", &wait);
     assert!(
         lists.ends_with(b"the lists"),
         "the chunk ends with the notice text: {lists:?}"
     );
-    let ending = watched(&frames, "the cached read's notice ending");
+    let ending = watched(&frames, "the cached read's notice ending", &wait);
     assert!(
         ending.ends_with(b"are in"),
         "the chunk ends with the notice ending: {ending:?}"
@@ -2323,8 +2361,8 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
-    let code = finished
-        .recv_timeout(DEADLINE)
+    let code = Deadline::after(DEADLINE)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
     assert_eq!(code, 0);
 }
@@ -2344,8 +2382,8 @@ fn opening_the_picker_asks_stale_through_the_loop() {
     let (_, idle) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(vec![0x0c]), &idle), None);
     assert!(lp.app.model_picker_open());
-    let answer = rx
-        .recv_timeout(DEADLINE)
+    let answer = Deadline::after(DEADLINE)
+        .recv(&rx)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the stale read: {err}"));
     assert!(matches!(answer, Input::Models(Ok(_))));
     assert_eq!(*seen.lock().unwrap(), [crate::Refresh::Stale]);
@@ -2379,16 +2417,18 @@ fn one_model() -> crate::Catalogue {
 
 /// Quits a running terminal: Ctrl+C twice, waiting for 0 with one named
 /// deadline.
-fn quit(pair: &mut Pair, finished: &mpsc::Receiver<i32>) {
+#[track_caller]
+fn quit(pair: &mut Pair, finished: &mpsc::Receiver<i32>, wait: &Deadline) {
     pair.main
         .write_all(&[0x03, 0x03])
         .unwrap_or_else(|err| panic!("write: {err}"));
     pair.main
         .flush()
         .unwrap_or_else(|err| panic!("flush: {err}"));
-    let code = finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
+    let code = match wait.recv(finished) {
+        Ok(code) => code,
+        Err(err) => panic!("waited {DEADLINE:?} for run to return: {err}"),
+    };
     assert_eq!(code, 0);
 }
 
@@ -2414,10 +2454,8 @@ fn with_no_model_the_picker_opens_at_start() {
     // so no reader outlives the test.
     let read: crate::ReadModels = std::sync::Arc::new(move |_| {
         if !released_in.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            held_in
-                .lock()
-                .unwrap_or_else(|err| panic!("lock: {err}"))
-                .recv_timeout(DEADLINE)
+            Deadline::after(DEADLINE)
+                .recv(&held_in.lock().unwrap_or_else(|err| panic!("lock: {err}")))
                 .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the read release: {err}"));
         }
         Ok(one_model())
@@ -2440,7 +2478,7 @@ fn with_no_model_the_picker_opens_at_start() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     // The first frame shows the picker, which opened with no keypress.
-    watched(&frames, "the picker at start");
+    watched(&frames, "the picker at start", &Deadline::after(DEADLINE));
     // Opening saves nothing: the choice does, once Enter chooses it.
     assert!(seam.writes().is_empty());
     release
@@ -2449,7 +2487,11 @@ fn with_no_model_the_picker_opens_at_start() {
     // The cached read answers, and its frame lists the one model: only
     // then does one Enter choose, as an Enter before the folded answer
     // keeps the picker open, sending nothing.
-    watched(&frames, "the answered catalogue");
+    watched(
+        &frames,
+        "the answered catalogue",
+        &Deadline::after(DEADLINE),
+    );
     pair.main
         .write_all(b"\r")
         .unwrap_or_else(|err| panic!("write: {err}"));
@@ -2459,7 +2501,7 @@ fn with_no_model_the_picker_opens_at_start() {
     // Choosing writes through the seam before the home chips name the
     // model, so their frame proves the write went out: one named
     // deadline for it.
-    watched(&frames, "the chosen home chips");
+    watched(&frames, "the chosen home chips", &Deadline::after(DEADLINE));
     assert_eq!(
         seam.writes(),
         vec![(
@@ -2469,7 +2511,7 @@ fn with_no_model_the_picker_opens_at_start() {
             "zz/qq".to_owned()
         )]
     );
-    quit(&mut pair, &finished);
+    quit(&mut pair, &finished, &Deadline::after(DEADLINE));
 }
 
 #[test]
@@ -2495,6 +2537,6 @@ fn with_a_model_home_opens_as_before() {
     // Home draws with no picker over it: the first frame names the
     // shortcuts the picker would cover.
     let frames = watch(&pair.main, vec![b"shortcuts" as &[u8]]);
-    watched(&frames, "home at start");
-    quit(&mut pair, &finished);
+    watched(&frames, "home at start", &Deadline::after(DEADLINE));
+    quit(&mut pair, &finished, &Deadline::after(DEADLINE));
 }

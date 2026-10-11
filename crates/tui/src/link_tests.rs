@@ -2,6 +2,7 @@
 
 use super::{Line, answers, parse_line, read_lines, write_line};
 use crate::Input;
+use fakes::Deadline;
 use std::io::Read;
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
@@ -25,8 +26,8 @@ fn written_lines_are_exact_json() {
                 .unwrap_or(())
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
-    let buf = finished
-        .recv_timeout(DEADLINE)
+    let buf = Deadline::after(DEADLINE)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the line: {err}"))
         .unwrap_or_else(|err| panic!("read: {err}"));
     assert_eq!(buf, format!("{line}\n").into_bytes());
@@ -50,17 +51,18 @@ fn lines_read_split_into_hub_and_session() {
             .write_all(format!("{line}\n").as_bytes())
             .unwrap_or_else(|err| panic!("write: {err}"));
     }
-    let first = rx
-        .recv_timeout(DEADLINE)
+    let wait = Deadline::after(DEADLINE);
+    let first = wait
+        .recv(&rx)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the hub line: {err}"));
-    let second = rx
-        .recv_timeout(DEADLINE)
+    let second = wait
+        .recv(&rx)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the session line: {err}"));
     assert!(matches!(first, Input::Hub(Line::Hub(_))));
     assert!(matches!(second, Input::Hub(Line::Session(_))));
     drop(client);
-    let end = rx
-        .recv_timeout(DEADLINE)
+    let end = Deadline::after(DEADLINE)
+        .recv(&rx)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the disconnect: {err}"));
     assert!(matches!(end, Input::Disconnected));
     reader.join().unwrap_or_else(|err| panic!("join: {err:?}"));

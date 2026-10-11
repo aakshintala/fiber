@@ -6,6 +6,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 
 use super::{Gate, Step, TICK, TickThread, Ticker};
@@ -143,9 +144,12 @@ fn run(ticker: &Arc<Ticker>, clock: Arc<FakeClock>, tx: mpsc::Sender<Input>) -> 
 }
 
 /// The next tick, within [`DEADLINE`].
-fn tick(rx: &Receiver<Input>) -> Input {
-    rx.recv_timeout(DEADLINE)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the tick: {err}"))
+#[track_caller]
+fn tick(rx: &Receiver<Input>, wait: &Deadline) -> Input {
+    match wait.recv(rx) {
+        Ok(tick) => tick,
+        Err(err) => panic!("waited {DEADLINE:?} for the tick: {err}"),
+    }
 }
 
 /// Waits for the thread to park at `until`, within [`DEADLINE`].
@@ -176,7 +180,7 @@ fn an_armed_ticker_sends_one_tick_at_its_deadline() {
     // Nothing sent yet: an empty channel, not a dead thread.
     assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
     clock.advance(Duration::from_millis(1));
-    assert!(matches!(tick(&rx), Input::Tick));
+    assert!(matches!(tick(&rx, &Deadline::after(DEADLINE)), Input::Tick));
 }
 
 #[test]
@@ -191,13 +195,13 @@ fn a_second_deadline_waits_for_the_first_ticks_ack() {
     ticker.arm(Some(at));
     parked(&clock, at);
     clock.advance(TICK);
-    assert!(matches!(tick(&rx), Input::Tick));
+    assert!(matches!(tick(&rx, &Deadline::after(DEADLINE)), Input::Tick));
     // Re-armed in the past, but the first tick is unacked: the "no tick
     // before the ack" half lives in `gate_step_table`'s in-flight row, so
     // no quiet wait proves it here.
     ticker.arm(Some(origin));
     ticker.ack();
-    assert!(matches!(tick(&rx), Input::Tick));
+    assert!(matches!(tick(&rx, &Deadline::after(DEADLINE)), Input::Tick));
 }
 
 #[test]
@@ -257,7 +261,7 @@ fn a_deadline_already_past_sends_at_once() {
     let (tx, rx) = mpsc::channel();
     let _finished = run(&ticker, clock.clone(), tx);
     ticker.arm(Some(origin));
-    assert!(matches!(tick(&rx), Input::Tick));
+    assert!(matches!(tick(&rx, &Deadline::after(DEADLINE)), Input::Tick));
     // The past deadline never parked on the clock.
     assert!(clock.parked().is_empty());
 }
@@ -269,8 +273,8 @@ fn quit_ends_the_thread_without_advancing_time() {
     let (tx, _rx) = mpsc::channel();
     let finished = run(&ticker, clock.clone(), tx);
     ticker.quit();
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the thread to end: {err}"));
     assert_eq!(clock.now(), origin);
 }
@@ -286,7 +290,7 @@ fn dropping_a_tick_thread_ends_its_thread() {
     // The thread's return drops its only sender, closing the channel: a
     // timeout instead would pass a thread that never ends.
     assert!(matches!(
-        rx.recv_timeout(DEADLINE),
+        Deadline::after(DEADLINE).recv(&rx),
         Err(mpsc::RecvTimeoutError::Disconnected)
     ));
 }
@@ -320,7 +324,7 @@ fn a_started_thread_sends_what_its_ticker_arms() {
     thread.arm(Some(at));
     parked(&clock, at);
     clock.advance(TICK);
-    assert!(matches!(tick(&rx), Input::Tick));
+    assert!(matches!(tick(&rx, &Deadline::after(DEADLINE)), Input::Tick));
     thread.ack();
     thread.stop();
 }
