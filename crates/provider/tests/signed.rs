@@ -10,23 +10,18 @@
     reason = "test code, helpers included"
 )]
 
-use std::sync::mpsc;
+#[path = "support/harness.rs"]
+mod harness;
+
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 
 use contract::ErrorCode;
-use contract::events::CacheLifetime;
-use contract::provider::{CallError, Delta, Input, ModelCall, ModelRequest};
 use contract::signing::{SignRequest, Signer};
-use fakes::{Deadline, ProviderServer, Response};
+use fakes::{ProviderServer, Response};
 use provider::Endpoint;
-use provider::anthropic_messages::Messages;
-use provider::google_generative_ai::Gemini;
-use provider::openai_completions::Completions;
 use provider::openai_responses::Responses;
 
-const DEADLINE: Duration = Duration::from_secs(10);
+use harness::{failed, protocols, request, run};
 
 /// Counts the requests it signed and adds one header to each.
 struct Counting(Mutex<usize>);
@@ -52,110 +47,11 @@ impl Signer for Refuses {
     }
 }
 
-fn request() -> ModelRequest {
-    ModelRequest {
-        system_prompt: "You are terse.".into(),
-        tools: Vec::new(),
-        thinking: None,
-        tool_choice: "auto".into(),
-        cache_lifetime: CacheLifetime::OneHour,
-        cache_key: "session_1".into(),
-        previous_end: None,
-        sent_tools: None,
-        max_output_tokens: None,
-        conversation: vec![Input::User {
-            text: "hi".into(),
-            images: Vec::new(),
-        }],
-        session_dir: std::path::PathBuf::new(),
-    }
-}
-
 fn endpoint(provider: &str, server: &ProviderServer, signer: Arc<dyn Signer>) -> Endpoint {
     Endpoint {
-        provider: provider.into(),
-        model: "m".into(),
-        base_url: format!("{}/v1", server.url()),
-        key: Some(contract::Secret::new("sk-secret".into())),
         signer: Some(signer),
-        direct: true,
-        ..Endpoint::default()
+        ..harness::endpoint(provider, server)
     }
-}
-
-/// One protocol's calls from an endpoint.
-struct Protocol {
-    name: &'static str,
-    call: fn(&Endpoint) -> Box<dyn ModelCall>,
-}
-
-fn protocols() -> [Protocol; 4] {
-    fn messages(endpoint: &Endpoint) -> Box<dyn ModelCall> {
-        Box::new(Messages::new(endpoint.clone()).request(&request()))
-    }
-    fn responses(endpoint: &Endpoint) -> Box<dyn ModelCall> {
-        Box::new(Responses::new(endpoint.clone()).request(&request()))
-    }
-    fn completions(endpoint: &Endpoint) -> Box<dyn ModelCall> {
-        Box::new(Completions::new(endpoint.clone()).request(&request()))
-    }
-    fn gemini(endpoint: &Endpoint) -> Box<dyn ModelCall> {
-        Box::new(Gemini::new(endpoint.clone()).request(&request()))
-    }
-    [
-        Protocol {
-            name: "anthropic",
-            call: messages,
-        },
-        Protocol {
-            name: "opencode",
-            call: responses,
-        },
-        Protocol {
-            name: "openrouter",
-            call: completions,
-        },
-        Protocol {
-            name: "gemini",
-            call: gemini,
-        },
-    ]
-}
-
-/// Runs `call` on its own thread, so a call that never returns fails the
-/// test at the deadline instead of hanging it.
-#[track_caller]
-fn run(call: Box<dyn ModelCall>) {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let mut deltas = Vec::new();
-        let _reply = call.run(&mut |d: Delta| deltas.push(d));
-        done.send(()).unwrap();
-    });
-    Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("waited for the call to return");
-}
-
-#[track_caller]
-fn failed(call: Box<dyn ModelCall>) -> (contract::shapes::Failure, Option<bool>) {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let mut deltas = Vec::new();
-        done.send(call.run(&mut |d: Delta| deltas.push(d))).unwrap();
-    });
-    let reply = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("waited for the call to return");
-    let Err(CallError::Failed {
-        failure,
-        should_retry,
-        ..
-    }) = reply
-    else {
-        panic!("expected a failure");
-    };
-    (failure, should_retry)
 }
 
 #[test]
@@ -171,8 +67,8 @@ fn a_signed_call_sends_the_signers_headers_on_every_send() {
             Arc::clone(&signer) as Arc<dyn Signer>,
         );
         // Two builds, one send each: a retry signs again.
-        run((protocol.call)(&endpoint));
-        run((protocol.call)(&endpoint));
+        let (_reply, _deltas) = run((protocol.call)(&endpoint, &request()));
+        let (_reply, _deltas) = run((protocol.call)(&endpoint, &request()));
         assert_eq!(*signer.0.lock().unwrap(), 2, "{}", protocol.name);
         let requests = server.requests();
         assert_eq!(requests.len(), 2, "{}", protocol.name);
@@ -198,7 +94,7 @@ fn a_signer_with_its_own_code_fails_with_it_and_is_not_retried() {
                 code: ErrorCode::AuthenticationFailed,
             }),
         );
-        let (failure, should_retry) = failed((protocol.call)(&endpoint));
+        let (failure, should_retry) = failed((protocol.call)(&endpoint, &request()));
         assert_eq!(
             failure.code,
             ErrorCode::AuthenticationFailed,
@@ -243,7 +139,18 @@ fn a_credential_error_displays_its_message_alone() {
 }
 
 #[test]
-fn endpoint_debug_names_the_signer_without_reaching_into_it() {
+fn endpoint_debug_prints_no_secret_and_names_the_signer_without_reaching_into_it() {
+    let planted = "sk-planted-4c1e9b";
+    let endpoint = Endpoint {
+        provider: "acme".into(),
+        key: Some(contract::Secret::new(planted.into())),
+        headers: vec![("x-api-key".into(), planted.into())],
+        ..Endpoint::default()
+    };
+    let printed = format!("{endpoint:?}");
+    assert!(printed.contains("acme"), "{printed}");
+    assert!(printed.contains("x-api-key"), "{printed}");
+    assert!(!printed.contains(planted), "{printed}");
     let unsigned = Endpoint {
         provider: "p".into(),
         model: "m".into(),

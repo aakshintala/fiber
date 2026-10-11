@@ -16,13 +16,15 @@ mod probes;
 #[path = "support/wire_tools.rs"]
 mod wire_tools;
 
+#[path = "support/harness.rs"]
+mod harness;
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
@@ -40,7 +42,9 @@ use serde_json::{Value, json};
 
 use probes::Recorded;
 
-const DEADLINE: Duration = Duration::from_secs(10);
+use harness::{
+    DEADLINE, completions_completed as completed_reply, completions_sse as stream, run, sent_body,
+};
 
 fn research(path: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -56,12 +60,8 @@ fn decoded(bytes: &[u8]) -> (Result<Reply, provider::Error>, Vec<Delta>) {
 
 fn endpoint(server: &ProviderServer) -> Endpoint {
     Endpoint {
-        provider: "openrouter".into(),
         model: "z-ai/glm-5.3-flash".into(),
-        base_url: format!("{}/v1", server.url()),
-        key: Some(contract::Secret::new("sk-secret".into())),
-        direct: true,
-        ..Endpoint::default()
+        ..harness::endpoint("openrouter", server)
     }
 }
 
@@ -97,47 +97,15 @@ fn loose_tool() -> ToolDefinition {
 
 fn request() -> ModelRequest {
     ModelRequest {
-        system_prompt: "You are terse.".into(),
         tools: vec![weather_tool(), loose_tool()],
-        thinking: None,
-        tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "s_root".into(),
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
             images: Vec::new(),
         }],
-        previous_end: None,
-        sent_tools: None,
-        max_output_tokens: None,
-        session_dir: std::path::PathBuf::new(),
+        ..harness::request()
     }
-}
-
-/// Runs `call` on its own thread, so a call that never returns fails the
-/// test at the deadline instead of hanging it.
-#[track_caller]
-fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let mut deltas = Vec::new();
-        let reply = call.run(&mut |d| deltas.push(d));
-        done.send((reply, deltas)).unwrap();
-    });
-    Deadline::after(DEADLINE)
-        .recv(&finished)
-        .expect("waited for the call to return")
-}
-
-fn sent_body(server: &ProviderServer, n: usize) -> Value {
-    serde_json::from_slice(&server.requests()[n].body).unwrap()
-}
-
-/// A stream of `data:` chunks, one per JSON value, then `[DONE]`.
-fn stream(chunks: &[Value]) -> Vec<u8> {
-    let mut out: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
-    out.push_str("data: [DONE]\n\n");
-    out.into_bytes()
 }
 
 fn chunk(delta: Value, finish_reason: Option<&str>) -> Value {
@@ -148,14 +116,6 @@ fn chunk(delta: Value, finish_reason: Option<&str>) -> Value {
 fn usage(prompt: u64, cached: u64, output: u64) -> Value {
     json!({"id": "gen-1", "choices": [], "usage": {"prompt_tokens": prompt,
         "completion_tokens": output, "prompt_tokens_details": {"cached_tokens": cached}}})
-}
-
-fn completed_reply() -> Response {
-    Response::stream(stream(&[
-        chunk(json!({"role": "assistant", "content": "hi"}), None),
-        chunk(json!({}), Some("stop")),
-        usage(10, 4, 3),
-    ]))
 }
 
 #[track_caller]
