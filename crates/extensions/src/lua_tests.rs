@@ -15,10 +15,10 @@ const WAIT: Duration = Duration::from_secs(5);
 
 /// Bound on a wait for the hub's state, a held request to reach its server,
 /// or the extension thread to quit.
-const WAIT_UNTIL: Duration = Duration::from_secs(2);
+const WAIT_UNTIL: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// Bound on a wait for a test server to accept, or a caller to park.
-const WAIT_SERVER: Duration = Duration::from_secs(3);
+const WAIT_SERVER: Duration = fakes::MUST_SUCCEED_WITHIN;
 
 /// A panic in a host function is never a Lua error the extension's `pcall`
 /// can catch (`docs/code-quality.md`, "Panics"). Tests run under unwind,
@@ -422,7 +422,7 @@ fn serve_after(
     (hub, id, done_rx)
 }
 
-/// Waits until `check` holds for the hub's state, or two seconds pass.
+/// Waits until `check` holds for the hub's state, or the must-succeed bound passes.
 fn until(hub: &Hub, check: impl Fn(&Shared) -> bool) -> bool {
     let shared = hub.lock();
     hub.wait_for(shared, WAIT_UNTIL, check)
