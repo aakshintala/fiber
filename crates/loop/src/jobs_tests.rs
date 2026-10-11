@@ -221,6 +221,10 @@ struct During {
 }
 
 impl Provider for During {
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        fakes::wire_tools(tools)
+    }
+
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         let sent = self.by_call.lock().unwrap().pop_front().unwrap_or_default();
         for delivery in sent {

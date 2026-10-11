@@ -98,6 +98,13 @@ struct Looked {
 }
 
 impl Provider for Looked {
+    fn wire_tools(
+        &self,
+        tools: &[contract::provider::ToolDefinition],
+    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        fakes::wire_tools(tools)
+    }
+
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         let n = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
         let call = self.inner.call(request);

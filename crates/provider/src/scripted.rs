@@ -15,7 +15,7 @@ use contract::clock::{Clock, Wake};
 use contract::events::{ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
     CallError, CallUsage, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply,
-    ReplyAction,
+    ReplyAction, ToolDefinition,
 };
 use contract::shapes::{Failure, Tokens};
 use contract::{ErrorCode, ProviderCallId};
@@ -295,6 +295,15 @@ impl Scripted {
 }
 
 impl Provider for Scripted {
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
+        sorted.sort_by(|a, b| a.name.cmp(&b.name));
+        sorted
+            .into_iter()
+            .filter_map(|tool| serde_json::to_value(tool).ok()?.as_object().cloned())
+            .collect()
+    }
+
     fn call(&self, _request: &ModelRequest) -> Box<dyn ModelCall> {
         let request = self.taken.fetch_add(1, Ordering::SeqCst).saturating_add(1);
         Box::new(Call {

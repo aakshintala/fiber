@@ -239,7 +239,7 @@ of a socket. A script is a list of steps, each one model reply: text, a tool
 call with its arguments, a given error such as a rate limit, or a reply
 streamed slowly. Each request takes the next step, in order. A request is
 never matched against a step, so a prompt that changes does not change the
-reply. A request after the last step fails the turn.
+reply. A request after the last step fails the turn. It takes the session's tools in name order, each as Fiber's own definition serialised to a JSON object, with no vendor wrapping and no `strict` flag.
 
 A script is a JSON file, `{"steps": [...]}`, read whole each time a model on
 it is connected: when a session starts or resumes on it, switches back to it,

@@ -10,10 +10,11 @@ use std::sync::{Mutex, PoisonError};
 use contract::events::TextCompleted;
 use contract::provider::{
     CallError, CallUsage, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply,
-    ReplyAction,
+    ReplyAction, ToolDefinition,
 };
 use contract::shapes::{Failure, Tokens};
 use contract::{ErrorCode, GenerationId};
+use serde_json::{Map, Value};
 
 /// One scripted model call: the fragments it streams, then how it ends.
 #[derive(Debug, Clone, PartialEq)]
@@ -140,6 +141,17 @@ fn unnamed() -> CallUsage {
     CallUsage::unnamed(input_size())
 }
 
+/// Each tool as its own definition serialised to a JSON object, in name
+/// order: what the scripted fakes put in a request for that tool.
+pub fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    sorted
+        .into_iter()
+        .filter_map(|tool| serde_json::to_value(tool).ok()?.as_object().cloned())
+        .collect()
+}
+
 /// Answers each call with the next scripted one, in order. A call past the
 /// end of the script fails with code `script_exhausted`.
 #[derive(Debug, Default)]
@@ -167,6 +179,10 @@ impl ScriptedProvider {
 }
 
 impl Provider for ScriptedProvider {
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        wire_tools(tools)
+    }
+
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         self.requests
             .lock()

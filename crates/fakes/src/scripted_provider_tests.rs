@@ -169,3 +169,42 @@ fn a_cancelled_call_keeps_a_scripted_cancelled_end_and_drops_any_other() {
         })
     );
 }
+
+fn definitions() -> Vec<contract::provider::ToolDefinition> {
+    ["b", "a"]
+        .iter()
+        .map(|name| contract::provider::ToolDefinition {
+            name: (*name).into(),
+            description: format!("the {name} tool"),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: *name == "a",
+            hosted: None,
+        })
+        .collect()
+}
+
+#[test]
+fn wire_tools_is_each_definition_as_an_object_in_name_order() {
+    let tools = definitions();
+    let wired = super::wire_tools(&tools);
+    let names: Vec<&str> = wired
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["a", "b"]);
+    for object in &wired {
+        let tool = tools.iter().find(|t| t.name == object["name"]).unwrap();
+        assert_eq!(
+            serde_json::Value::Object(object.clone()),
+            serde_json::to_value(tool).unwrap()
+        );
+    }
+}
+
+#[test]
+fn both_fake_providers_wire_tools_the_same_way() {
+    let tools = definitions();
+    let want = super::wire_tools(&tools);
+    assert_eq!(ScriptedProvider::new([]).wire_tools(&tools), want);
+    assert_eq!(crate::BlockingProvider::default().wire_tools(&tools), want);
+}
