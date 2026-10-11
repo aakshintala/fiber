@@ -62,6 +62,9 @@ pub(crate) fn plan(
     let jobs = BTreeMap::from([
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
+        // Linux x86_64 alone, so `mutants` can wait for it; `test` runs the
+        // other platforms and a draft skips it (`docs/ci.md`).
+        ("test_linux", test),
         ("test", test),
         ("mutants", shards > 0),
         ("bug_red", pr && code && bug),
