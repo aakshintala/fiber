@@ -8,6 +8,9 @@ use std::fmt;
 
 use contract::Secret;
 
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 
 use crate::configure::{LoginKind, LoginTarget};
@@ -15,6 +18,7 @@ use crate::format;
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::login_worker::{LoginStep, LoginTicket, LoginWorker};
+use crate::mouse::{Target, TargetId};
 use crate::settings_view::{Act, Ctx};
 use crate::swapped::{Frame, Ink, List, Spot, rows_height};
 use crate::view::overlay;
@@ -255,6 +259,131 @@ impl Login {
             .select(self.frame_row(self.selected), frame.rows.len(), shown);
     }
 
+    /// Whether the list is open: exactly in row mode. The panel and
+    /// the browser wait keep today's drawing through the legacy frame.
+    pub(crate) fn list_open(&self) -> bool {
+        matches!(self.mode, Mode::Rows)
+    }
+
+    /// Draws the list in the shared overlay frame, centred: dim
+    /// headings, one choice row per target with its tag, the gap, then
+    /// anything the last action said, at least three body rows before
+    /// the window clips them, and the legend footer. Any other mode
+    /// draws nothing: the caller routes only while the list is open.
+    pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+        if !self.list_open() {
+            return;
+        }
+        let width = overlay::width(u16::MAX, 96, area.width);
+        let inner_w = overlay::inner(width);
+        // The tags keep one column: the widest tag among the targets
+        // stays on screen, so names are cut to what is left first.
+        let tag = self
+            .targets
+            .iter()
+            .map(|target| {
+                format::width(match target.kind {
+                    LoginKind::Browser => "browser",
+                    LoginKind::Key => "key",
+                    LoginKind::Secret => "",
+                })
+            })
+            .max()
+            .unwrap_or(0);
+        let budget = usize::from(inner_w).saturating_sub(4).saturating_sub(tag);
+        // One choice row per target, each exactly one row: the cut
+        // names leave every tag a single row at any area width.
+        let mut cut: Vec<(usize, String, &'static str)> = Vec::new();
+        for (at, item) in self.items.iter().enumerate() {
+            if let Item::Target(t) = *item
+                && let Some(target) = self.targets.get(t)
+            {
+                cut.push((
+                    at,
+                    format::cut(&target.name, budget),
+                    match target.kind {
+                        LoginKind::Browser => "browser",
+                        LoginKind::Key => "key",
+                        LoginKind::Secret => "",
+                    },
+                ));
+            }
+        }
+        let listed: Vec<(&str, &str)> = cut
+            .iter()
+            .map(|(_, name, tag)| (name.as_str(), *tag))
+            .collect();
+        let focused = cut
+            .iter()
+            .position(|(at, _, _)| *at == self.selected)
+            .unwrap_or(0);
+        let mut choices = overlay::choices(&listed, focused, u16::MAX);
+        // Each target row takes clicks over its whole row; headings,
+        // the gap and the note carry none.
+        for (row, (at, _, _)) in choices.iter_mut().zip(cut.iter()) {
+            row.targets.push((0, u16::MAX, TargetId::View(Spot::Row(*at))));
+        }
+        let mut choices = choices.into_iter();
+        let dim = Style::new().add_modifier(Modifier::DIM);
+        let mut body: Vec<overlay::Row> = Vec::new();
+        for item in &self.items {
+            match *item {
+                Item::Heading(Group::Providers) => body.push(text_row("Providers", dim)),
+                Item::Heading(Group::Secrets) => body.push(text_row("Secrets", dim)),
+                Item::Target(_) => body.push(choices.next().unwrap_or_else(blank_row)),
+                Item::Gap => body.push(blank_row()),
+                Item::Note => body.push(text_row(
+                    "No provider is installed, and no installed extension declares a secret.",
+                    dim,
+                )),
+            }
+        }
+        // What the last action said follows the items, one blank row
+        // between; with no items it is the whole body. The rows wrap
+        // at the preferred width and are never cut sideways.
+        if !self.said.is_empty() {
+            if !body.is_empty() {
+                body.push(blank_row());
+            }
+            for line in &self.said {
+                for row in format::wrap(line, usize::from(inner_w)) {
+                    body.push(text_row(row, Style::new()));
+                }
+            }
+        }
+        while body.len() < 3 {
+            body.push(blank_row());
+        }
+        // The footer carries trailing blanks up to the widest of every
+        // body row, not only the shown ones, so the overlay's width
+        // never depends on which rows the window shows.
+        let wide = body
+            .iter()
+            .map(|row| row.spans.iter().map(|span| format::width(&span.content)).sum())
+            .max()
+            .unwrap_or(0);
+        let mut footer = overlay::legend(&[("↑↓", "move"), ("Enter", "log in"), ("Esc", "close")]);
+        let have: usize = footer
+            .spans
+            .iter()
+            .map(|span| format::width(&span.content))
+            .sum();
+        if wide > have {
+            footer.spans.push(Span::raw(" ".repeat(wide.saturating_sub(have))));
+        }
+        let shown = shown_body_rows(usize::from(area.height));
+        let start = window_start(self.selected, shown, body.len());
+        let end = start.saturating_add(shown).min(body.len());
+        let framed = overlay::Overlay {
+            title: Some(("Log in".to_owned(), Some(Span::raw("✕")))),
+            close: Some(TargetId::View(Spot::Close)),
+            body: body.into_iter().skip(start).take(end.saturating_sub(start)).collect(),
+            footer: Some(footer),
+            prefer: 96,
+        };
+        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets);
+    }
+
     /// The target rows' indices in display order.
     fn target_rows(&self) -> Vec<usize> {
         self.items
@@ -303,12 +432,7 @@ impl Login {
         let before = self.selected;
         if *key == Key::Up {
             // The nearest target above, clamped at the first.
-            self.selected = targets
-                .iter()
-                .copied()
-                .filter(|at| *at < before)
-                .next_back()
-                .unwrap_or(before);
+            self.selected = targets.iter().copied().rfind(|at| *at < before).unwrap_or(before);
         } else if *key == Key::Down {
             // The nearest target below, clamped at the last.
             self.selected = targets
@@ -326,8 +450,7 @@ impl Login {
                 self.selected = targets
                     .iter()
                     .copied()
-                    .filter(|at| *at <= land)
-                    .next_back()
+                    .rfind(|at| *at <= land)
                     .or(targets.first().copied())
                     .unwrap_or(before);
             } else {
@@ -739,6 +862,26 @@ impl Login {
                 "No provider is installed, and no installed extension declares a secret.".to_owned()
             }
         }
+    }
+}
+
+/// One overlay body row holding `text` in `style`.
+fn text_row(text: impl Into<String>, style: Style) -> overlay::Row {
+    overlay::Row {
+        spans: vec![Span::styled(text.into(), style)],
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
+    }
+}
+
+/// One blank overlay body row.
+fn blank_row() -> overlay::Row {
+    overlay::Row {
+        spans: Vec::new(),
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
     }
 }
 
