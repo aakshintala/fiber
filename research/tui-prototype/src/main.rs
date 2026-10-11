@@ -13,6 +13,7 @@ mod model_picker;
 mod overlays;
 mod paged;
 mod panel;
+mod rail;
 
 use crossterm::{execute, terminal};
 use input::{Ev, Key, Mouse};
@@ -1902,8 +1903,19 @@ fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) ->
 
 // ============================================================ panel cards
 fn bar(frac: f64, w: usize, c: Color) -> Vec<Span<'static>> {
+    bar_track(frac, w, c, '▆')
+}
+/// The context bar with an explicit track glyph: the panel fills the track
+/// with ▆, while the rail prototype's comparison case draws it with ░.
+fn bar_track(frac: f64, w: usize, c: Color, track: char) -> Vec<Span<'static>> {
     let f = ((frac * w as f64).round() as usize).clamp(if frac > 0.0 { 1 } else { 0 }, w);
-    vec![sp("▆".repeat(f), fg(c)), sp("▆".repeat(w - f), fg(SEL))]
+    vec![
+        sp("▆".repeat(f), fg(c)),
+        sp(
+            std::iter::repeat_n(track, w - f).collect::<String>(),
+            fg(SEL),
+        ),
+    ]
 }
 fn k(n: u64) -> String {
     if n >= 10_000 {
@@ -2267,6 +2279,8 @@ pub(crate) enum SState {
     NeedsInput,
     Ready,
     Crashed,
+    /// quiescent: only the rail prototype's fixture builds one (#1632)
+    Idle,
 }
 struct Fake {
     name: &'static str,
@@ -2462,7 +2476,7 @@ fn wait_glyph(tick: u64, reduced: bool) -> Style {
 }
 /// A session's state glyph, as on the rail and home's list: working `●`
 /// under reduced motion in the accent, waiting `!` attention, died `✗`
-/// error, exited `○` dim (drawn by the caller, not here).
+/// error, idle `○` dim (an exited session's `○` is drawn by the caller, not here).
 pub(crate) fn state_glyph(st: SState, tick: u64, reduced: bool) -> Span<'static> {
     match st {
         // the braille spinner animates on the existing tick, the same frames as the
@@ -2474,6 +2488,7 @@ pub(crate) fn state_glyph(st: SState, tick: u64, reduced: bool) -> Span<'static>
         SState::NeedsInput => sp("!", wait_glyph(tick, reduced)),
         SState::Ready => sp("✓", dim()),
         SState::Crashed => sp("✗", fg(RED).add_modifier(Modifier::BOLD)),
+        SState::Idle => sp("○", dim()),
     }
 }
 fn rail_glyph(s: &Fake, tick: u64, reduced: bool) -> Span<'static> {
@@ -2487,6 +2502,7 @@ fn rail_state_style(s: &Fake, tick: u64, reduced: bool) -> Style {
         SState::NeedsInput => wait_glyph(tick, reduced),
         SState::Ready => dim(),
         SState::Crashed => fg(RED).add_modifier(Modifier::BOLD),
+        SState::Idle => dim(),
     }
 }
 fn rail_state_word(s: &Fake) -> &'static str {
@@ -2496,6 +2512,7 @@ fn rail_state_word(s: &Fake) -> &'static str {
         SState::NeedsInput => "NEEDS INPUT",
         SState::Ready => "READY",
         SState::Crashed => "CRASHED",
+        SState::Idle => "IDLE",
     }
 }
 /// The card's surface tint by state; the on-screen card is brighter (SEL) than the rest.
@@ -2509,6 +2526,7 @@ fn rail_card_bg(s: &Fake, on: bool) -> Color {
         SState::NeedsInput => rgb(0x241a10),
         SState::Ready => rgb(0x121217),
         SState::Crashed => rgb(0x201114),
+        SState::Idle => rgb(0x121217),
     }
 }
 /// The stripe colour by state: the waiting stripe pulses with the glyph.
@@ -2519,6 +2537,7 @@ fn rail_stripe(s: &Fake, tick: u64, reduced: bool) -> Span<'static> {
         SState::NeedsInput => sp("▌", wait_glyph(tick, reduced)),
         SState::Ready => sp("▌", dim()),
         SState::Crashed => sp("▌", fg(RED)),
+        SState::Idle => sp("▌", dim()),
     }
 }
 /// The context bar's colour: normal under 60%, warning 60–85%, danger above.
@@ -2676,6 +2695,18 @@ fn rail_spend_row(
     iw: usize,
     barred: bool,
 ) -> Vec<Span<'static>> {
+    rail_spend_row_track(s, tick, reduced, iw, barred, '▆')
+}
+/// The spend row with an explicit bar track glyph, so the rail prototype can
+/// show the panel's ▆ track beside the ░ one for the owner to pick (#1632).
+fn rail_spend_row_track(
+    s: &Fake,
+    tick: u64,
+    reduced: bool,
+    iw: usize,
+    barred: bool,
+    track: char,
+) -> Vec<Span<'static>> {
     let stripe = rail_stripe(s, tick, reduced);
     let pad = sp("  ", Style::new());
     if !barred {
@@ -2692,7 +2723,7 @@ fn rail_spend_row(
     let barw = iw.saturating_sub(width(&pre) + width(&suf));
     [
         pre,
-        bar(s.ctx as f64 / 100.0, barw, rail_ctx_color(s.ctx)),
+        bar_track(s.ctx as f64 / 100.0, barw, rail_ctx_color(s.ctx), track),
         suf,
     ]
     .concat()
@@ -4765,6 +4796,7 @@ const SURFACES: &[cases::Surface] = &[
     model_picker::SURFACE,
     completions::SURFACE,
     login::SURFACE,
+    rail::SURFACE,
 ];
 
 // ============================================================ main
@@ -4794,6 +4826,8 @@ struct Args {
     home: Option<String>,
     /// the overlay case (`--overlay`), drawn instead of the conversation
     overlay: Option<String>,
+    /// the rail case (`--rail-case`), drawn instead of the conversation
+    rail_case: Option<String>,
     /// the rail design at start: 0 list, 1 cards, 2 tabs
     rail: u8,
     /// the B card density at start: 0 full, 1 medium, 2 compact
@@ -4858,6 +4892,7 @@ fn args() -> Args {
         hover: false,
         home: None,
         overlay: None,
+        rail_case: None,
         rail: 1,
         density: 2,
         rail_share: 15.0,
@@ -4914,6 +4949,7 @@ fn args() -> Args {
                 };
             }
             "--overlay" => a.overlay = it.next(),
+            "--rail-case" => a.rail_case = it.next(),
             "--rail" => {
                 a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
                     Some("A") => 0,
@@ -4956,7 +4992,7 @@ fn args() -> Args {
             "--login" => a.login = it.next(),
             "-h" | "--help" => {
                 print!(
-                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
                     cases::help(SURFACES)
                 );
                 std::process::exit(0);
@@ -5139,6 +5175,8 @@ fn main() -> io::Result<()> {
         overlays::run_overlay(&a, &mut term)
     } else if a.login.is_some() {
         login::run_login(&a, &mut term)
+    } else if a.rail_case.is_some() {
+        rail::run_rail(&a, &mut term)
     } else {
         run(
             &a, &events, &mut f, &mut next, &mut term, t0, pager, open_index,
@@ -5158,10 +5196,12 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    // Home, the overlays and the login draw no session, so there is nothing to
+    // Home, the overlays, the login and the rail cases draw no session, so there is nothing to
     // resume, unless home switched to the conversation, whose replayed
     // session resumes as usual.
-    if a.home.is_none() && a.overlay.is_none() && a.login.is_none() || home_switched {
+    if a.home.is_none() && a.overlay.is_none() && a.login.is_none() && a.rail_case.is_none()
+        || home_switched
+    {
         println!(
             "Session {0} · resume it with fiber --resume {0}",
             f.session_id
@@ -7036,6 +7076,7 @@ mod tests {
                 "--picker list, levels, scoped, scoped-all, refreshing, session-only, filtered, filtered-empty, checklist, checklist-filtered, checklist-empty",
                 "--completions slash, slash-filtered, slash-hint, at, at-empty, narrow-slash, narrow-at",
                 "--login providers, waiting, key, done, failed",
+                "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
             ]
         );
         let h = cases::help(SURFACES);
