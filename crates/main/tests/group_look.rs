@@ -314,10 +314,18 @@ fn the_group_line_and_the_ledger_match_the_doc() {
     let plus = locate(&row, &format!("+{added}")).expect("the added count");
     let minus = locate(&row, &format!("−{removed}")).expect("the removed count");
     for x in plus..plus + added.chars().count() as u16 + 1 {
-        assert_eq!(grid.cell(x, edit).fg, ADDED, "added ({x}, {edit})");
+        assert_eq!(
+            grid.cell(x, edit).fg,
+            ADDED,
+            "added ({x}, {edit}) in {row:?}"
+        );
     }
     for x in minus..minus + removed.chars().count() as u16 + 1 {
-        assert_eq!(grid.cell(x, edit).fg, REMOVED, "removed ({x}, {edit})");
+        assert_eq!(
+            grid.cell(x, edit).fg,
+            REMOVED,
+            "removed ({x}, {edit}) in {row:?}"
+        );
     }
     // The running shell: ○ and "running" in attention, its long command
     // cut with "…" so the result keeps its columns.
