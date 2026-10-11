@@ -587,7 +587,15 @@ fn a_server_that_fails_to_start_carries_its_record() {
 /// resource link, two `resources/list` pages keyed on `params.cursor`,
 /// and `resources/read` keyed on `params.uri`.
 fn resource_server() -> fakes::ProviderServer {
-    fakes::ProviderServer::start_responding(|req: &fakes::Request| {
+    resource_server_dying_once(None)
+}
+
+/// [`resource_server`], except that the first request of `dying` drops its
+/// connection: that call dies, and the next call restarts the server, so
+/// its record is `Ready`.
+fn resource_server_dying_once(dying: Option<&'static str>) -> fakes::ProviderServer {
+    let died = std::sync::atomic::AtomicBool::new(false);
+    fakes::ProviderServer::start_responding(move |req: &fakes::Request| {
         if req.method == "DELETE" {
             return fakes::Response::status(200, "");
         }
@@ -600,7 +608,14 @@ fn resource_server() -> fakes::ProviderServer {
             json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
                 .to_string()
         };
-        match body.get("method").and_then(Value::as_str) {
+        let method = body.get("method").and_then(Value::as_str);
+        if method.is_some()
+            && method == dying
+            && !died.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return fakes::Response::drop_connection();
+        }
+        match method {
             Some("initialize") => fakes::Response::status(
                 200,
                 result(json!({
@@ -813,6 +828,45 @@ fn read_maps_text_and_blob_contents() {
             json!({"uri": "file:///blob.bin"})
         ],
     );
+    setup.stop(started.servers);
+}
+
+/// The one `Ready` record a call after a restart carries, for `docs`.
+fn ready_docs() -> Vec<contract::tool::ServerRecord> {
+    vec![contract::tool::ServerRecord::Ready(
+        contract::events::McpServerReady {
+            server: "docs".to_owned(),
+        },
+    )]
+}
+
+#[test]
+fn list_after_a_restart_names_the_ready_server() {
+    let setup = Setup::new();
+    let server = resource_server_dying_once(Some("resources/list"));
+    let started = live(&setup, &server, "docs");
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let died = run(&tool, json!({"action": "list", "server": "docs"}));
+    assert!(died.error.is_some(), "the first list dies");
+    let listed = run(&tool, json!({"action": "list", "server": "docs"}));
+    assert!(listed.error.is_none());
+    assert_eq!(listed.servers, ready_docs());
+    setup.stop(started.servers);
+}
+
+#[test]
+fn read_after_a_restart_names_the_ready_server() {
+    let setup = Setup::new();
+    let server = resource_server_dying_once(Some("resources/read"));
+    let started = live(&setup, &server, "docs");
+    let tool = live_tool(&started, setup.artifacts().as_path());
+    let read = json!({"action": "read", "server": "docs", "uri": "file:///notes.txt"});
+    let died = run(&tool, read.clone());
+    assert!(died.error.is_some(), "the first read dies");
+    let read = run(&tool, read);
+    assert!(read.error.is_none());
+    assert_eq!(text_of(&read), ["hello"]);
+    assert_eq!(read.servers, ready_docs());
     setup.stop(started.servers);
 }
 
