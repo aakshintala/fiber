@@ -249,32 +249,56 @@ fn the_reviewer_fetches_quota_for_the_lookup_label() {
     .unwrap();
     let config = test_support::load(&home, &workspace, "test", ["reviewer.model=qp/m2"]);
     let (providers, _notices) = extensions::Providers::load(&home).unwrap();
-    let session_extensions = extensions::SessionExtensions::load(
-        &home,
-        &config,
-        fakes::clock::FakeClock::new(),
-        std::sync::Arc::new(tools::PathLocks::new()),
-        None,
-    );
+    // `SessionExtensions::load` can wait on Lua registration, so it runs on
+    // its own thread under a deadline instead of hanging the test.
+    let (ext_done, ext_ready) = std::sync::mpsc::channel();
+    let ext_home = home.clone();
+    let ext_config = config.clone();
+    std::thread::spawn(move || {
+        drop(ext_done.send(extensions::SessionExtensions::load(
+            &ext_home,
+            &ext_config,
+            fakes::clock::FakeClock::new(),
+            std::sync::Arc::new(tools::PathLocks::new()),
+            None,
+        )));
+    });
+    let session_extensions = fakes::Deadline::after(QUOTA_WAIT)
+        .recv(&ext_ready)
+        .expect("extensions loaded in time");
     let lua = session_extensions
         .lua_providers()
         .iter()
         .find(|(_, provider)| provider.name() == "qp")
         .map(|(_, provider)| std::sync::Arc::clone(provider))
         .expect("the package registers its provider");
-    let session = providers.resolve("qp/m1").unwrap();
-    let here = here();
-    let mut lookup = |_: &config::ProviderData| {
-        Ok((
-            "work".to_owned(),
-            crate::lua_providers::Access::new(
-                Some(&lua),
-                (Some(contract::Secret::new("key".to_owned())), None),
-            ),
-        ))
-    };
-    let reviewer =
-        crate::choose_reviewer(&providers, &config, &session, &here, &mut lookup).unwrap();
+    // `choose_reviewer` calls `connect`, which can wait on Lua registration,
+    // so it runs on its own thread under a deadline as well.
+    let (rev_done, rev_ready) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let session = providers.resolve("qp/m1").unwrap();
+        let here = here();
+        let mut lookup = |_: &config::ProviderData| {
+            Ok((
+                "work".to_owned(),
+                crate::lua_providers::Access::new(
+                    Some(&lua),
+                    (Some(contract::Secret::new("key".to_owned())), None),
+                ),
+            ))
+        };
+        drop(rev_done.send(crate::choose_reviewer(
+            &providers,
+            &config,
+            &session,
+            &here,
+            &mut lookup,
+        )));
+    });
+    let reviewer = fakes::Deadline::after(QUOTA_WAIT)
+        .recv(&rev_ready)
+        .expect("choose_reviewer ended in time")
+        .unwrap();
     assert_eq!(reviewer.model.reference, "qp/m2");
     let _call = reviewer.provider.call(&reviewer_request());
     assert!(

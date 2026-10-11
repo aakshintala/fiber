@@ -75,23 +75,31 @@ fn connect_fetches_quota_for_its_label() {
         }],
     }))
     .unwrap();
-    let model = extensions::Model {
-        provider: &data,
-        model: &data.models[0],
-        thinking: None,
-    };
     let here = crate::connect::Here {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
     };
-    let provider = crate::connect::connect(
-        model,
-        Some(contract::Secret::new("k".to_owned())),
-        None,
-        Some((&lua, "work")),
-        &here,
-    )
-    .unwrap();
+    // `connect` can wait on Lua registration, so it runs on its own thread
+    // under a deadline instead of hanging the test.
+    let (done, connected) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let model = extensions::Model {
+            provider: &data,
+            model: &data.models[0],
+            thinking: None,
+        };
+        drop(done.send(crate::connect::connect(
+            model,
+            Some(contract::Secret::new("k".to_owned())),
+            None,
+            Some((&lua, "work")),
+            &here,
+        )));
+    });
+    let provider = fakes::Deadline::after(WAIT)
+        .recv(&connected)
+        .expect("connect ended in time")
+        .unwrap();
     let _call = provider.call(&request());
     assert!(
         server.await_requests(1, WAIT),

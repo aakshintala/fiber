@@ -386,32 +386,40 @@ impl LuaProvider {
         parse_quota(&returned).map_err(|_| ())
     }
 
-    /// Stores a fetch's result when its id still owns the in-flight slot; a
-    /// result for an id no longer in flight is discarded, so a late value
-    /// never replaces the `unreachable` entry. A success stores the value
-    /// and clears the failure; a failure keeps the last value and its fetch
-    /// time. Every stored end wakes the readers.
+    /// Stores a fetch's result when its id still owns the in-flight slot and
+    /// the flight is not overdue; a result for an id no longer in flight is
+    /// discarded, so a late value never replaces the `unreachable` entry. A
+    /// flight overdue at exactly `FETCH_TIMEOUT` is expired instead: the
+    /// slot clears, the fetch is marked failed and the result is discarded,
+    /// with no intervening reader or trigger needed. A success stores the
+    /// value and clears the failure; a failure keeps the last value and its
+    /// fetch time. Every flight end wakes the readers.
     fn finish_quota(&self, pair: &CredentialPair, id: u64, fetched: Result<Option<Quota>, ()>) {
+        let now = self.extension.clock().now();
         {
             let mut states = lock(&self.quotas.state);
             let Some(cache) = states.get_mut(pair) else {
                 return;
             };
-            let current = match &cache.flight {
-                Some(flight) if flight.id == id => true,
-                Some(_) | None => false,
+            let Some(flight) = cache.flight else {
+                return;
             };
-            if !current {
+            if flight.id != id {
                 return;
             }
-            cache.flight = None;
-            match fetched {
-                Ok(value) => {
-                    cache.fetched = Some((value, self.extension.clock().now()));
-                    cache.failed = false;
-                }
-                Err(()) => {
-                    cache.failed = true;
+            if now.saturating_duration_since(flight.started) >= FETCH_TIMEOUT {
+                cache.flight = None;
+                cache.failed = true;
+            } else {
+                cache.flight = None;
+                match fetched {
+                    Ok(value) => {
+                        cache.fetched = Some((value, now));
+                        cache.failed = false;
+                    }
+                    Err(()) => {
+                        cache.failed = true;
+                    }
                 }
             }
         }

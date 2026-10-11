@@ -250,6 +250,111 @@ fn an_overdue_flight_clears_and_its_late_finish_is_discarded() {
     }
 }
 
+#[test]
+fn an_overdue_finish_with_no_reader_is_discarded() {
+    let root = fakes::TempDir::new("fiber-quota-late-finish");
+    let (provider, clock) = quota_provider(&root, "nil");
+    let pair = pair();
+    let stored = percent("primary", 42.5, None);
+    let t0 = clock.now();
+    seed(
+        &provider,
+        Some((Some(stored.clone()), t0)),
+        Some(Flight { id: 7, started: t0 }),
+    );
+    // No reader or trigger runs: the overdue fetch finishes on its own past
+    // the 8 s cap, and the completion expires it instead of caching success.
+    clock.advance(Duration::from_secs(8));
+    let now = clock.now();
+    provider.finish_quota(&pair, 7, Ok(Some(percent("late", 1.0, None))));
+    {
+        let states = lock(&provider.quotas.state);
+        let cache = states.get(&pair).unwrap();
+        assert!(
+            cache.flight.is_none(),
+            "the overdue finish kept the slot: {cache:?}"
+        );
+        assert!(
+            cache.failed,
+            "the overdue finish did not mark the fetch failed: {cache:?}"
+        );
+        let Some((Some(value), at)) = &cache.fetched else {
+            panic!("the late finish replaced the stored value: {cache:?}");
+        };
+        assert_eq!((value, *at), (&stored, t0));
+        assert_eq!(
+            entry(cache, now, clock.wall()),
+            QuotaEntry::Unreachable {
+                last: Some((stored, now.saturating_duration_since(t0))),
+            }
+        );
+    }
+}
+
+#[test]
+fn finish_at_the_eight_second_boundary() {
+    let root = fakes::TempDir::new("fiber-quota-finish-boundary");
+    let (provider, clock) = quota_provider(&root, "nil");
+    let pair = pair();
+    let t0 = clock.now();
+    seed(&provider, None, Some(Flight { id: 7, started: t0 }));
+    // One nanosecond short of the cap the finish is accepted.
+    clock.advance(Duration::from_secs(8) - Duration::from_nanos(1));
+    let fresh = percent("primary", 10.0, None);
+    provider.finish_quota(&pair, 7, Ok(Some(fresh.clone())));
+    let fetched_at = {
+        let states = lock(&provider.quotas.state);
+        let cache = states.get(&pair).unwrap();
+        assert!(
+            !cache.failed,
+            "a finish at 8 s - 1 ns marked failed: {cache:?}"
+        );
+        assert!(cache.flight.is_none());
+        let Some((Some(value), at)) = &cache.fetched else {
+            panic!("a finish at 8 s - 1 ns stored nothing: {cache:?}");
+        };
+        assert_eq!(value, &fresh);
+        *at
+    };
+    // At exactly the cap the finish is discarded: the last value and its
+    // fetch time are unchanged, and the entry stays `unreachable`.
+    {
+        let mut states = lock(&provider.quotas.state);
+        let cache = states.get_mut(&pair).unwrap();
+        cache.flight = Some(Flight {
+            id: 8,
+            started: clock.now(),
+        });
+    }
+    let started = clock.now();
+    clock.advance(Duration::from_secs(8));
+    let now = clock.now();
+    provider.finish_quota(&pair, 8, Ok(Some(percent("late", 1.0, None))));
+    {
+        let states = lock(&provider.quotas.state);
+        let cache = states.get(&pair).unwrap();
+        assert!(cache.flight.is_none());
+        assert!(
+            cache.failed,
+            "a finish at exactly 8 s did not mark the fetch failed: {cache:?}"
+        );
+        let Some((Some(value), at)) = &cache.fetched else {
+            panic!("the late finish replaced the stored value: {cache:?}");
+        };
+        assert_eq!((value, *at), (&fresh, fetched_at));
+        assert_eq!(
+            entry(cache, now, clock.wall()),
+            QuotaEntry::Unreachable {
+                last: Some((fresh, now.saturating_duration_since(fetched_at))),
+            }
+        );
+        assert_eq!(
+            now.saturating_duration_since(started),
+            Duration::from_secs(8)
+        );
+    }
+}
+
 /// A provider `p` whose `quota()` asks `<server>/<label>` over HTTP, raising
 /// on any status but 200 and returning the decoded body, on `clock`. The
 /// declared timeout never ends a call during a test; the cache's own 8 s
