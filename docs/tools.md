@@ -1109,7 +1109,9 @@ closes the connection at once, so it never keeps the target alive
 it answers, so the call answers `delivered` only once the message is in the
 target's inbox. `delivered` means the message is in the target's inbox. A
 shutdown or a rewind of the target before it runs the message drops it, as
-it drops queued steers. Otherwise it fails with one of:
+it drops queued steers, and so does a `close` that fails the target's run
+while a required repository item is unanswered. Otherwise it fails with one
+of:
 
 - `unreachable`: no running session has this id, whether it exited or never
   existed

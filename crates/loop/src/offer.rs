@@ -205,9 +205,8 @@ impl Loop {
         let Some(first) = required.first() else {
             return Ok(());
         };
-        // debt: the run fails with an error anyway, dropping a held session
-        // message with it. Upgrade when a surveyor ruling keeps held messages
-        // on a required-item failure.
+        // A held session message dies with the failed run
+        // (`docs/tools.md`, "Messaging other sessions").
         let names: Vec<String> = required
             .iter()
             .map(|item| format!("the {} `{}`", kind_words(item.kind), item.name))
