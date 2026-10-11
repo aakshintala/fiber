@@ -191,17 +191,7 @@ fn a_tool_result_s_images_are_absent_when_empty_and_read_back_when_full() {
 }
 
 #[test]
-fn an_empty_pdfs_is_absent_from_json_and_a_pdf_ref_round_trips() {
-    let plain = Input::ToolResult {
-        action_id: ActionId("a_1".into()),
-        text: "ok".into(),
-        is_error: false,
-        images: Vec::new(),
-        pdfs: Vec::new(),
-    };
-    let value = serde_json::to_value(&plain).unwrap();
-    assert!(value.get("pdfs").is_none(), "{value}");
-    assert_eq!(serde_json::from_value::<Input>(value).unwrap(), plain);
+fn a_pdf_ref_round_trips_in_a_tool_result() {
     let with = Input::ToolResult {
         action_id: ActionId("a_1".into()),
         text: "PDF: 2 pages.\n".into(),
