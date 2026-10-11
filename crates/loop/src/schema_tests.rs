@@ -275,9 +275,12 @@ fn a_null_is_dropped_only_where_optional() {
     let (repaired, made) = fixes(&json!({"path": "/a", "mode": null})).unwrap();
     assert_eq!(repaired, json!({"path": "/a"}));
     assert_eq!(made, [("/mode".to_owned(), RepairFix::NullDropped)]);
-    // A schema with no type, and one that is only `null`.
-    let untyped = object(json!({"n": {}, "z": {"type": "null"}}));
-    assert_eq!(repair(&untyped, &json!({"n": null, "z": null})), None);
+    // A schema with no type, and one that is only `null`, scalar or listed.
+    let untyped = object(json!({"n": {}, "z": {"type": "null"}, "y": {"type": ["null"]}}));
+    assert_eq!(
+        repair(&untyped, &json!({"n": null, "z": null, "y": null})),
+        None
+    );
 }
 
 #[test]

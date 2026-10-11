@@ -208,14 +208,7 @@ const RAN: &[&str] = &["tool_call_started", "tool_call_completed"];
 /// A tool registration as a line of Lua: `name`, the Lua `effects` and
 /// `run`, and `timeout = <timeout>` unless `timeout` is empty.
 fn tool(name: &str, effects: &str, run: &str, timeout: &str) -> String {
-    let timeout = if timeout.is_empty() {
-        String::new()
-    } else {
-        format!(" timeout = {timeout},")
-    };
-    format!(
-        "fiber.tool(\"{name}\", {{ description = \"The {name} tool.\", input_schema = {{ type = \"object\" }},{timeout} effects = {effects}, run = {run} }})\n"
-    )
+    tool_with_schema(name, "{ type = \"object\" }", effects, run, timeout)
 }
 
 /// A tool `name` that only reads and answers `said`.
