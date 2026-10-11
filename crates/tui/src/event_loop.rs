@@ -855,9 +855,13 @@ impl<B: Backend> Loop<B> {
         self.screen.resize(width, height).err().map(|_| 1)
     }
 
-    /// Shuts the hub stream down both ways and drops it. The reader thread,
-    /// on its clone, then sees the end.
+    /// Stops the hub reader, shuts the hub stream down both ways and drops
+    /// it. The reader thread then sees the end, even when the kernel misses
+    /// the shutdown's wakeup (#1877).
     fn hang_up(&mut self) {
+        if let Some(retry) = &self.retry {
+            retry.end_read();
+        }
         if let Some(hub) = self.hub.take() {
             hub.shutdown(std::net::Shutdown::Both).unwrap_or(());
         }

@@ -111,6 +111,16 @@ fn quit_during_the_timed_wait_returns_false_without_advancing() {
     assert_eq!(clock.now(), clock.origin());
 }
 
+/// A stop whose reader is already gone: only the permit's bookkeeping
+/// is under test.
+fn stop() -> support::stoppable::Stop {
+    let (ours, _theirs) =
+        std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let (_read, stop) =
+        support::stoppable::reader(ours).unwrap_or_else(|err| panic!("reader: {err}"));
+    stop
+}
+
 #[test]
 fn track_succeeds_until_quit_then_refuses() {
     let (_clock, retry) = permit();
@@ -118,7 +128,7 @@ fn track_succeeds_until_quit_then_refuses() {
         std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     assert!(
         retry
-            .track(&ours)
+            .track(&ours, stop())
             .unwrap_or_else(|err| panic!("track: {err}"))
     );
     retry.untrack();
@@ -126,7 +136,7 @@ fn track_succeeds_until_quit_then_refuses() {
     retry.quit();
     assert!(
         !retry
-            .track(&ours)
+            .track(&ours, stop())
             .unwrap_or_else(|err| panic!("track: {err}"))
     );
 }
@@ -136,7 +146,7 @@ fn track_reports_the_clone_failure_and_watches_nothing() {
     let (clock, retry) = permit();
     // Inject the clone failure: exhausting descriptors would depend on
     // the fd limit, which exceeds the loop bound on some hosts.
-    let error = match retry.track_with(|| Err(std::io::Error::other("clone failed"))) {
+    let error = match retry.track_with(|| Err(std::io::Error::other("clone failed")), stop()) {
         Err(error) => error,
         Ok(_) => panic!("track reports the clone failure"),
     };
@@ -149,32 +159,80 @@ fn track_reports_the_clone_failure_and_watches_nothing() {
 }
 
 #[test]
-fn quit_shuts_down_the_watched_read() {
+fn end_read_stops_the_watched_read_and_leaves_the_permit_open() {
     let (_clock, retry) = permit();
-    let (ours, theirs) =
+    let (ours, _theirs) =
         std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let (mut read, stop) = support::stoppable::reader(
+        ours.try_clone()
+            .unwrap_or_else(|err| panic!("clone: {err}")),
+    )
+    .unwrap_or_else(|err| panic!("reader: {err}"));
     assert!(
         retry
-            .track(&ours)
+            .track(&ours, stop)
             .unwrap_or_else(|err| panic!("track: {err}"))
     );
     let (done, finished) = mpsc::channel();
     std::thread::Builder::new()
-        .name("retry-shutdown".to_owned())
+        .name("retry-end-read".to_owned())
         .spawn(move || {
             let mut buf = [0u8; 1];
-            // The peer's end sees the shutdown as the read's end.
-            let ended = std::io::Read::read(&mut &theirs, &mut buf)
-                .map(|read| read == 0)
-                .unwrap_or(true);
-            done.send(ended).unwrap_or(());
+            done.send(std::io::Read::read(&mut read, &mut buf).is_err())
+                .unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    retry.end_read();
+    assert!(
+        finished
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the stopped read: {err}")),
+        "end_read stops the watched read"
+    );
+    assert!(retry.lock().watched.is_none());
+    assert!(!retry.lock().quit, "the permit stays open");
+}
+
+#[test]
+fn quit_ends_the_watched_read_and_shuts_the_stream() {
+    let (_clock, retry) = permit();
+    let (ours, theirs) =
+        std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let (mut read, stop) = support::stoppable::reader(
+        ours.try_clone()
+            .unwrap_or_else(|err| panic!("clone: {err}")),
+    )
+    .unwrap_or_else(|err| panic!("reader: {err}"));
+    assert!(
+        retry
+            .track(&ours, stop)
+            .unwrap_or_else(|err| panic!("track: {err}"))
+    );
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("retry-stop".to_owned())
+        .spawn(move || {
+            let mut buf = [0u8; 1];
+            done.send(std::io::Read::read(&mut read, &mut buf).is_err())
+                .unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     retry.quit();
     assert!(
         finished
             .recv_timeout(DEADLINE)
-            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the shutdown read: {err}")),
-        "the watched shutdown ends the read"
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the stopped read: {err}")),
+        "quit stops the watched read"
+    );
+    // The shutdown already ran, so the peer's read sees the end at once:
+    // nonblocking, a missing shutdown fails as `WouldBlock`, with no wait.
+    theirs
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let mut buf = [0u8; 1];
+    assert_eq!(
+        std::io::Read::read(&mut &theirs, &mut buf).ok(),
+        Some(0),
+        "quit shuts the stream down"
     );
 }

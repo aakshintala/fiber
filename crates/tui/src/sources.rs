@@ -181,14 +181,16 @@ pub(crate) fn spawn_hub(
     let hub = builder("tui-hub").spawn(move || {
         loop {
             let connected = connect().and_then(|(stream, hello)| {
-                let reader = stream.try_clone()?;
-                Ok((stream, reader, hello))
+                let (reader, stop) =
+                    support::stoppable::reader(stream.try_clone()?).map_err(io::Error::other)?;
+                Ok((stream, reader, stop, hello))
             });
             // A failed send means the loop is gone, and its drop quits the
             // wait below. The read is watched so quitting before the loop
-            // adopts the connection still ends it.
+            // adopts the connection still ends it, and its stop ends it
+            // even when `shutdown` misses the wakeup (#1877).
             match connected {
-                Ok((stream, reader, hello)) => match retry.track(&reader) {
+                Ok((stream, reader, stop, hello)) => match retry.track(&stream, stop) {
                     Ok(false) => return,
                     Err(error) => {
                         drop(tx.send(Input::ConnectFailed(error.to_string())));

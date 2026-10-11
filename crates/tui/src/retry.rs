@@ -9,6 +9,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
+use support::stoppable::Stop;
 
 /// The permit between the loop and the hub thread.
 pub(crate) struct Retry {
@@ -22,10 +23,11 @@ struct Gate {
     delay: Option<Duration>,
     /// The loop is gone: the thread ends. Never cleared.
     quit: bool,
-    /// The hub thread's current stream, to shut down on quit: quitting
-    /// before the loop adopts the connection still ends its read
+    /// The hub thread's current stream and the stop of its stoppable read,
+    /// to end on quit: quitting before the loop adopts the connection
+    /// still ends its read
     /// (`docs/tui.md`, "A dropped connection").
-    watched: Option<UnixStream>,
+    watched: Option<(UnixStream, Stop)>,
 }
 
 impl Wake for Retry {
@@ -60,27 +62,33 @@ impl Retry {
         self.changed.notify_all();
     }
 
-    /// Ends the thread's wait, now and for every later one, and shuts
-    /// down the stream it watches, if any, so a read started before the
-    /// loop adopted the connection still ends.
+    /// Ends the thread's wait, now and for every later one, and ends the
+    /// read it watches, if any, so a read started before the loop adopted
+    /// the connection still ends.
     pub(crate) fn quit(&self) {
         let watched = {
             let mut gate = self.lock();
             gate.quit = true;
             std::mem::take(&mut gate.watched)
         };
-        if let Some(stream) = watched {
-            stream.shutdown(std::net::Shutdown::Both).unwrap_or(());
-        }
+        end(watched);
         self.changed.notify_all();
     }
 
-    /// Watches `stream` for [`Retry::quit`]: `Ok(false)` when the loop
-    /// already quit, so the caller ends without reading. `Err` when the
-    /// watch's clone fails, so the caller reports instead of starting a
-    /// read no quit can end. The watch ends at [`Retry::untrack`].
-    pub(crate) fn track(&self, stream: &UnixStream) -> std::io::Result<bool> {
-        self.track_with(|| stream.try_clone())
+    /// Ends the read the thread watches, if any, and leaves the permit as
+    /// it is: the loop hung up on the connection.
+    pub(crate) fn end_read(&self) {
+        let watched = std::mem::take(&mut self.lock().watched);
+        end(watched);
+    }
+
+    /// Watches `stream` and its read's `stop` for [`Retry::quit`] and
+    /// [`Retry::end_read`]: `Ok(false)` when the loop already quit, so the
+    /// caller ends without reading. `Err` when the watch's clone fails, so
+    /// the caller reports instead of starting a read no quit can end. The
+    /// watch ends at [`Retry::untrack`].
+    pub(crate) fn track(&self, stream: &UnixStream, stop: Stop) -> std::io::Result<bool> {
+        self.track_with(|| stream.try_clone(), stop)
     }
 
     /// Watches the stream `clone` returns, so tests inject the clone
@@ -88,12 +96,13 @@ impl Retry {
     pub(crate) fn track_with(
         &self,
         clone: impl FnOnce() -> std::io::Result<UnixStream>,
+        stop: Stop,
     ) -> std::io::Result<bool> {
         let mut gate = self.lock();
         if gate.quit {
             return Ok(false);
         }
-        gate.watched = Some(clone()?);
+        gate.watched = Some((clone()?, stop));
         Ok(true)
     }
 
@@ -158,6 +167,15 @@ impl Retry {
     /// The gate, even after a thread panicked holding it.
     fn lock(&self) -> MutexGuard<'_, Gate> {
         self.gate.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Stops the read and shuts its stream down: the stop ends the blocked
+/// read even when the kernel misses the shutdown's wakeup (#1877).
+fn end(watched: Option<(UnixStream, Stop)>) {
+    if let Some((stream, stop)) = watched {
+        stop.stop();
+        stream.shutdown(std::net::Shutdown::Both).unwrap_or(());
     }
 }
 
