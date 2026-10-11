@@ -12,8 +12,6 @@ mod common;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -23,7 +21,6 @@ use contract::clock::Clock;
 use common::{Setup, drive, manifest, provider, write};
 use contract::ErrorCode;
 use extensions::{Error, Installed, Origin, Provenance, Request, SHORT_NAMES, list, plan, removal};
-use fakes::Deadline;
 use fakes::git::git;
 use serde_json::{Value, json};
 
@@ -1827,50 +1824,9 @@ fn a_failing_install_step_aborts_with_nothing_installed_even_of_the_dependencies
     assert!(dirs(&setup).is_empty());
 }
 
-/// Serves `body` once. The receiver gets whether a request arrived and was
-/// answered. A request that never comes leaves the thread blocked in
-/// `accept`; dropping the receiver does not unblock it.
-fn serve_once(body: &'static [u8]) -> (String, std::sync::mpsc::Receiver<bool>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/tool-1.0", listener.local_addr().unwrap());
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut stream = match listener.accept() {
-            Ok((stream, _)) => stream,
-            Err(_) => {
-                match tx.send(false) {
-                    Ok(()) | Err(std::sync::mpsc::SendError(_)) => {}
-                }
-                return;
-            }
-        };
-        let mut seen = Vec::new();
-        let mut buf = [0; 512];
-        while !seen.ends_with(b"\r\n\r\n") {
-            let n = match stream.read(&mut buf) {
-                Ok(0) | Err(_) => {
-                    match tx.send(false) {
-                        Ok(()) | Err(std::sync::mpsc::SendError(_)) => {}
-                    }
-                    return;
-                }
-                Ok(n) => n,
-            };
-            seen.extend_from_slice(&buf[..n]);
-        }
-        let head = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        let sent = stream
-            .write_all(head.as_bytes())
-            .and_then(|()| stream.write_all(body))
-            .is_ok();
-        match tx.send(sent) {
-            Ok(()) | Err(std::sync::mpsc::SendError(_)) => {}
-        }
-    });
-    (url, rx)
+/// Serves `body` once at `/tool-1.0`, like the binary download expects.
+fn serve_once(body: &'static [u8]) -> fakes::ProviderServer {
+    fakes::ProviderServer::start([fakes::Response::status(200, body.to_vec())]).unwrap()
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -1891,7 +1847,8 @@ fn with_binary(platform: &str, url: &str, sha: &str) -> Value {
 fn this_platforms_binary_is_downloaded_checked_and_made_executable() {
     use std::os::unix::fs::PermissionsExt;
     let setup = Setup::new();
-    let (url, served) = serve_once(b"#!/bin/sh\necho hi\n");
+    let server = serve_once(b"#!/bin/sh\necho hi\n");
+    let url = format!("{}/tool-1.0", server.url());
     let m = with_binary(
         &extensions::platform(),
         &url,
@@ -1900,9 +1857,8 @@ fn this_platforms_binary_is_downloaded_checked_and_made_executable() {
     let source = setup.source("local", &m, &[]);
     common::install(&setup.home(), &source, FIBER).unwrap();
     assert!(
-        Deadline::after(Duration::from_secs(10))
-            .recv(&served)
-            .expect("waited for the binary to be downloaded")
+        server.await_requests(1, Duration::from_secs(10)),
+        "waited for the binary to be downloaded"
     );
     let file = setup.home().join("extensions/acme/bin/tool-1.0");
     assert_eq!(fs::read(&file).unwrap(), b"#!/bin/sh\necho hi\n");
@@ -1915,16 +1871,16 @@ fn this_platforms_binary_is_downloaded_checked_and_made_executable() {
 #[test]
 fn a_binary_whose_checksum_differs_aborts_with_nothing_installed() {
     let setup = Setup::new();
-    let (url, served) = serve_once(b"tampered");
+    let server = serve_once(b"tampered");
+    let url = format!("{}/tool-1.0", server.url());
     let m = with_binary(&extensions::platform(), &url, &sha256(b"original"));
     let source = setup.source("local", &m, &[]);
     let err = common::install(&setup.home(), &source, FIBER).unwrap_err();
     assert!(matches!(err, Error::BinaryChecksum { .. }), "{err}");
     assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
     assert!(
-        Deadline::after(Duration::from_secs(10))
-            .recv(&served)
-            .expect("waited for the binary download")
+        server.await_requests(1, Duration::from_secs(10)),
+        "waited for the binary download"
     );
     assert!(dirs(&setup).is_empty());
 }
@@ -1932,13 +1888,12 @@ fn a_binary_whose_checksum_differs_aborts_with_nothing_installed() {
 #[test]
 fn another_platforms_binary_is_never_downloaded() {
     let setup = Setup::new();
-    let (url, served) = serve_once(b"other");
+    let server = serve_once(b"other");
+    let url = format!("{}/tool-1.0", server.url());
     let m = with_binary("plan9-mips", &url, &sha256(b"other"));
     let source = setup.source("local", &m, &[]);
     common::install(&setup.home(), &source, FIBER).unwrap();
     assert!(!setup.home().join("extensions/acme/bin").exists());
-    // Nothing connected, so the server is still waiting; let it go.
-    drop(served);
 }
 
 #[test]
