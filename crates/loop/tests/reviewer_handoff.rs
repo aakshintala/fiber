@@ -20,6 +20,7 @@ use contract::provider::{Cost, Input, ModelRequest, Provider};
 use contract::shapes::Failure;
 use contract::tool::Tool;
 use contract::{Envelope, ErrorCode, ThinkingLevel};
+use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use r#loop::{BlockLimits, Loop, Model, Permissions, PromptInputs, Reviewer};
 use serde_json::json;
@@ -43,6 +44,7 @@ fn script() -> Vec<Scripted> {
 }
 
 /// One prompt turn, asserting it completes.
+#[track_caller]
 fn prompt_turn(session: &mut Session, text: &str) -> Vec<Envelope> {
     session.inbox.send(delivery(text)).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -50,6 +52,7 @@ fn prompt_turn(session: &mut Session, text: &str) -> Vec<Envelope> {
 }
 
 /// One person handoff turn, asserting it completes.
+#[track_caller]
 fn handoff_turn(session: &mut Session, id: &str) -> Vec<Envelope> {
     session.inbox.send(handoff(id, None)).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -58,6 +61,7 @@ fn handoff_turn(session: &mut Session, id: &str) -> Vec<Envelope> {
 
 /// The shared flow: a reviewed call, "say hi", a person handoff, then a
 /// reviewed call.
+#[track_caller]
 fn run_flow(session: &mut Session) -> Vec<Envelope> {
     let mut lines = Vec::new();
     lines.extend(prompt_turn(session, "never push to main"));
@@ -425,8 +429,8 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
         done.send(outcome).unwrap();
     });
     assert_eq!(
-        finished
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&finished)
             .expect("the turn ended in time"),
         Some(TurnOutcome::Completed)
     );

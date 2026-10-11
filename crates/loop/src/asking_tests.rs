@@ -29,6 +29,7 @@ use contract::{ActionId, Envelope, RequestId, SessionId, TurnId};
 use super::{AskSlot, Fitted, Release};
 use crate::progress::{SharedWake, Stream};
 use crate::{Loop, Model};
+use fakes::Deadline;
 use log::Log;
 
 /// Wall-clock bound on every receive.
@@ -98,7 +99,9 @@ fn a_raise_is_taken_once_and_wakes_the_loop_thread() {
     let slot = Arc::new(AskSlot::default());
     let (wake, woken) = signal();
     let _answers = ask_on(&slot, &wake, 1);
-    woken.recv_timeout(DEADLINE).expect("the raise wakes");
+    Deadline::after(DEADLINE)
+        .recv(&woken)
+        .expect("the raise wakes");
     let raised = slot.take_raised().expect("the raise is there");
     assert_eq!(raised.interaction, confirm());
     assert!(slot.take_raised().is_none(), "a raise is taken once");
@@ -110,7 +113,9 @@ fn resolve_releases_the_asker_with_that_answer() {
     let slot = Arc::new(AskSlot::default());
     let (wake, woken) = signal();
     let answers = ask_on(&slot, &wake, 1);
-    woken.recv_timeout(DEADLINE).expect("the raise wakes");
+    Deadline::after(DEADLINE)
+        .recv(&woken)
+        .expect("the raise wakes");
     let raised = slot.take_raised().unwrap();
     slot.pend(
         RequestId("r_1".into()),
@@ -121,7 +126,10 @@ fn resolve_releases_the_asker_with_that_answer() {
     );
     assert_eq!(slot.pending(), Some((RequestId("r_1".into()), None)));
     slot.resolve(confirmed());
-    assert_eq!(answers.recv_timeout(DEADLINE).unwrap(), confirmed());
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&answers).unwrap(),
+        confirmed()
+    );
     assert_eq!(slot.pending(), None);
 }
 
@@ -158,9 +166,10 @@ fn the_release_frees_a_raised_and_a_pending_ask() {
     );
     drop(release);
     for answers in [raised_answers, pending_answers] {
-        assert_eq!(answers.recv_timeout(DEADLINE).unwrap(), Answered::NoAnswer);
+        let wait = Deadline::after(DEADLINE);
+        assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
         // A second ask on a closed slot returns at once too.
-        assert_eq!(answers.recv_timeout(DEADLINE).unwrap(), Answered::NoAnswer);
+        assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
     }
 }
 
@@ -172,8 +181,9 @@ fn after_the_release_a_first_ask_returns_no_answer_at_once() {
     release.add(Arc::clone(&stream));
     drop(release);
     let answers = ask_stream(&stream);
-    assert_eq!(answers.recv_timeout(DEADLINE).unwrap(), Answered::NoAnswer);
-    assert_eq!(answers.recv_timeout(DEADLINE).unwrap(), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
+    assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
     assert!(
         stream.asking().take_raised().is_none(),
         "nothing was raised"
@@ -185,10 +195,13 @@ fn a_second_ask_after_a_closed_release_returns_no_answer_at_once() {
     let slot = Arc::new(AskSlot::default());
     let (wake, woken) = signal();
     let answers = ask_on(&slot, &wake, 2);
-    woken.recv_timeout(DEADLINE).expect("the raise wakes");
+    Deadline::after(DEADLINE)
+        .recv(&woken)
+        .expect("the raise wakes");
     slot.close();
-    assert_eq!(answers.recv_timeout(DEADLINE).unwrap(), Answered::NoAnswer);
-    assert_eq!(answers.recv_timeout(DEADLINE).unwrap(), Answered::NoAnswer);
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
+    assert_eq!(wait.recv(&answers).unwrap(), Answered::NoAnswer);
     assert!(
         woken.try_recv().is_err(),
         "an ask on a closed slot wakes nobody"
@@ -200,16 +213,24 @@ fn one_call_asks_twice_in_sequence() {
     let slot = Arc::new(AskSlot::default());
     let (wake, woken) = signal();
     let answers = ask_on(&slot, &wake, 2);
-    woken.recv_timeout(DEADLINE).expect("the first raise wakes");
+    Deadline::after(DEADLINE)
+        .recv(&woken)
+        .expect("the first raise wakes");
     slot.take_raised().unwrap();
     slot.resolve(confirmed());
-    assert_eq!(answers.recv_timeout(DEADLINE).unwrap(), confirmed());
-    woken
-        .recv_timeout(DEADLINE)
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&answers).unwrap(),
+        confirmed()
+    );
+    Deadline::after(DEADLINE)
+        .recv(&woken)
         .expect("the second raise wakes");
     slot.take_raised().unwrap();
     slot.resolve(Answered::NoAnswer);
-    assert_eq!(answers.recv_timeout(DEADLINE).unwrap(), Answered::NoAnswer);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&answers).unwrap(),
+        Answered::NoAnswer
+    );
 }
 
 #[test]
@@ -411,6 +432,7 @@ impl Wake for Awake {
 
 /// A loop with the fake clock, a 60 s idle delay and an open inbox: the
 /// clock and the sender stay alive in the test.
+#[track_caller]
 fn suspendable_loop() -> (
     Loop,
     fakes::TempDir,

@@ -25,6 +25,7 @@ use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{Envelope, SessionId};
+use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use log::Log;
 use r#loop::{Loop, Model};
@@ -1241,6 +1242,7 @@ impl Resumed {
     }
 
     /// Sends `prompt`, then runs one turn to completion.
+    #[track_caller]
     fn drive(&self, looped: Loop, tx: &mpsc::Sender<Delivery>, prompt: &str) -> TurnOutcome {
         tx.send(Delivery::Prompt(
             support::message(prompt),
@@ -1253,8 +1255,8 @@ impl Resumed {
             let outcome = looped.turn().unwrap().unwrap();
             done.send(outcome).unwrap();
         });
-        finished
-            .recv_timeout(support::DEADLINE)
+        Deadline::after(support::DEADLINE)
+            .recv(&finished)
             .expect("turn ended")
     }
 

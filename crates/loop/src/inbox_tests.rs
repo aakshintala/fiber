@@ -19,6 +19,7 @@ use log::Log;
 
 use super::{TurnInput, Waited};
 use crate::{Loop, Model};
+use fakes::Deadline;
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -29,10 +30,12 @@ fn logged(message: &str) -> ExtensionLog {
     }
 }
 
+#[track_caller]
 fn diag_text(home: &fakes::TempDir) -> String {
     std::fs::read_to_string(home.path().join("logs").join("session-s_test.log")).unwrap_or_default()
 }
 
+#[track_caller]
 fn saved_kinds(home: &fakes::TempDir) -> Vec<String> {
     log::read(&home.path().join("s_test"))
         .unwrap_or_default()
@@ -55,11 +58,13 @@ fn exec(program: &str) -> ExtensionExec {
     }
 }
 
+#[track_caller]
 fn started() -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
     started_with(None)
 }
 
 /// [`started`] with `worktree` on `session_started`.
+#[track_caller]
 fn started_with(worktree: Option<Worktree>) -> (Loop, Arc<Log>, log::Watcher, fakes::TempDir) {
     let home = fakes::TempDir::new("fiber-exec-inbox");
     let workspace = home.path().join("workspace");
@@ -318,7 +323,7 @@ fn a_resolved_idle_is_written_then_acked() {
         .admit_idle(Delivery::Resolved(resolved("r_1"), ack), &mut input)
         .unwrap();
     assert!(input.pieces.is_empty(), "resolved starts no turn idle");
-    let (accepted, seen) = rx.recv_timeout(DEADLINE).expect("the ack runs");
+    let (accepted, seen) = Deadline::after(DEADLINE).recv(&rx).expect("the ack runs");
     assert!(accepted, "resolved accepts its ack");
     assert_eq!(
         seen.last().map(String::as_str),
@@ -355,7 +360,7 @@ fn a_resolved_mid_turn_is_written_then_acked_and_queues_nothing() {
         .admit_running(Delivery::Resolved(resolved("r_1"), ack), &turn)
         .unwrap();
     assert!(looped.queued.is_empty(), "resolved queues nothing mid-turn");
-    let (accepted, seen) = rx.recv_timeout(DEADLINE).expect("the ack runs");
+    let (accepted, seen) = Deadline::after(DEADLINE).recv(&rx).expect("the ack runs");
     assert!(accepted, "resolved accepts its ack");
     assert_eq!(
         seen.last().map(String::as_str),
@@ -387,14 +392,15 @@ fn interaction_lines_while_an_approval_waits_are_written_and_the_wait_goes_on() 
         .take_while_waiting(&pending, Delivery::Resolved(resolved("r_1"), ack), &turn)
         .unwrap();
     assert!(matches!(waited, Waited::Again));
-    assert!(rx.recv_timeout(DEADLINE).expect("the ack runs"));
+    assert!(Deadline::after(DEADLINE).recv(&rx).expect("the ack runs"));
+    let wait = Deadline::after(DEADLINE);
     let first = watched
-        .recv_timeout(DEADLINE)
+        .recv_timeout(wait.left())
         .expect("interaction_requested arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before interaction_requested");
     let second = watched
-        .recv_timeout(DEADLINE)
+        .recv_timeout(wait.left())
         .expect("interaction_resolved arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before interaction_resolved");

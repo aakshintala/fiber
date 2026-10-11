@@ -50,6 +50,7 @@ fn result(len: usize, seed: u8) -> String {
 /// "Done.", with `hooks` installed when given. Runs the turn on its own
 /// thread inside a counting scope and returns the session, the turn's
 /// lines and the most large blocks alive at once on the loop's thread.
+#[track_caller]
 fn turn(tool: TestTool, hooks: Option<Arc<dyn Hooks>>) -> (Session, Vec<Envelope>, usize) {
     let ((), calibration) =
         large_blocks_during(|| drop(black_box(Vec::<u8>::with_capacity(2 << 20))));

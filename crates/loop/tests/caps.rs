@@ -26,6 +26,7 @@ use support::{Session, TestTool, calls_reply, completed, delivery, kinds, paris,
 /// A session whose first reply makes `calls` and whose second says "Done.",
 /// with `tools` passed through `capped` with `caps` before they are
 /// registered. Runs one turn and returns its lines.
+#[track_caller]
 fn turn(
     tools: Vec<Arc<dyn Tool>>,
     caps: &ResultCaps,

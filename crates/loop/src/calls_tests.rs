@@ -29,6 +29,7 @@ use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender};
 use contract::tool::{Cancel, Effects, EffectsError, Output, ServerRecord, Tool};
 use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId};
+use fakes::Deadline;
 use serde_json::{Map, Value, json};
 
 use super::register;
@@ -102,6 +103,7 @@ fn a_later_tool_of_a_taken_name_replaces_the_earlier_and_is_recorded() {
 
 /// A fresh workspace, symlinks resolved, holding `real/` and a link `out`
 /// to a directory outside it, beside a Fiber home holding nothing yet.
+#[track_caller]
 fn workspace() -> (fakes::TempDir, PathBuf, PathBuf) {
     let root = fakes::TempDir::new("fiber-calls");
     let canon = root.path().canonicalize().unwrap();
@@ -182,6 +184,7 @@ fn executes_and_network_never_take_the_fast_path() {
 /// data directory `projects/k/data/n/`, with a link `out` to a directory
 /// outside the home, a link `link.md` to an outside Markdown file and a
 /// link `code.md` to a Lua file inside, beside a workspace elsewhere.
+#[track_caller]
 fn data_dirs() -> (fakes::TempDir, PathBuf, PathBuf) {
     let root = fakes::TempDir::new("fiber-data");
     let canon = root.path().canonicalize().unwrap();
@@ -363,6 +366,7 @@ impl Rules for FakeRules {
 
 /// A loop on a fresh log with the fakes clock, holding `rules`: the session
 /// is `s_test`. The returned directories keep the log's files alive.
+#[track_caller]
 fn start(rules: Arc<FakeRules>) -> (Loop, fakes::TempDir, PathBuf, PathBuf) {
     let home = fakes::TempDir::new("fiber-remember");
     let workspace = home.path().join("workspace");
@@ -789,6 +793,7 @@ struct Ran {
     homes: Vec<String>,
 }
 
+#[track_caller]
 fn run_turn(
     tools: Vec<Arc<dyn Tool>>,
     script: Vec<fakes::Scripted>,
@@ -856,8 +861,8 @@ fn run_turn(
     thread::spawn(move || {
         let _sent = done_tx.send(looped.turn());
     });
-    let outcome = done_rx
-        .recv_timeout(TURN_DEADLINE)
+    let outcome = Deadline::after(TURN_DEADLINE)
+        .recv(&done_rx)
         .expect("the turn ended")
         .unwrap();
     drop(inbox);

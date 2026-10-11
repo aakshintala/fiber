@@ -25,6 +25,7 @@ use contract::inbox::{Ack, Delivery};
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::tool::Tool;
 use contract::{CommandId, RequestId};
+use fakes::Deadline;
 use fakes::Scripted;
 
 use support::{DEADLINE, Session, calls_reply, delivery, ignore, kinds, shell};
@@ -95,8 +96,8 @@ fn an_empty_inbox_parks_until_the_idle_deadline() {
     wake(&session);
     let rejected = stale_reply(&session);
     assert!(
-        rejected
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&rejected)
             .expect("the early wake was admitted"),
         "a reply while idle is rejected"
     );
@@ -112,8 +113,8 @@ fn an_empty_inbox_parks_until_the_idle_deadline() {
 
     clock.advance(Duration::from_millis(1));
     wake(&session);
-    let ran = finished
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("run ended at the deadline");
     assert!(ran.is_ok(), "{ran:?}");
     assert_eq!(durable(&session), ["session_started"]);
@@ -172,8 +173,8 @@ fn the_delay_restarts_after_a_turn() {
     );
     // Dropping the sender ends the wait, so the thread can finish.
     drop(session.inbox);
-    let ran = finished
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("run ends once the inbox is gone");
     assert!(ran.is_ok(), "{ran:?}");
 }
@@ -190,8 +191,8 @@ fn a_rejected_reply_a_steer_drop_and_a_wake_do_not_move_the_deadline() {
 
     let rejected = stale_reply(&session);
     assert!(
-        rejected
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&rejected)
             .expect("the reply was admitted"),
         "a reply while idle is rejected"
     );
@@ -213,8 +214,8 @@ fn a_rejected_reply_a_steer_drop_and_a_wake_do_not_move_the_deadline() {
         ))
         .unwrap();
     assert!(
-        drop_rx
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&drop_rx)
             .expect("the drop was admitted"),
         "a steer_drop while idle is rejected"
     );
@@ -245,11 +246,13 @@ fn close_ends_the_idle_wait_at_once() {
         }))))
         .unwrap();
     assert!(
-        close_rx.recv_timeout(DEADLINE).expect("close was admitted"),
+        Deadline::after(DEADLINE)
+            .recv(&close_rx)
+            .expect("close was admitted"),
         "close is accepted"
     );
-    let ran = finished
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("close ends the idle wait");
     assert!(ran.is_ok(), "{ran:?}");
     assert_eq!(durable(&session), ["session_started"]);
@@ -270,8 +273,8 @@ fn no_deadline_never_expires() {
     wake(&session);
     let rejected = stale_reply(&session);
     assert!(
-        rejected
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&rejected)
             .expect("the wake was admitted"),
         "a reply while idle is rejected"
     );
@@ -333,8 +336,8 @@ fn an_approval_wait_parks_until_the_idle_deadline_and_writes_nothing_more() {
     wake(&session);
     let rejected = stale_reply(&session);
     assert!(
-        rejected
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&rejected)
             .expect("the early wake was admitted"),
         "a reply naming nothing pending is rejected"
     );
@@ -350,8 +353,8 @@ fn an_approval_wait_parks_until_the_idle_deadline_and_writes_nothing_more() {
 
     clock.advance(Duration::from_millis(1));
     wake(&session);
-    let ran = finished
-        .recv_timeout(DEADLINE)
+    let ran = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("run ended at the approval deadline");
     assert!(ran.is_ok(), "{ran:?}");
     assert_eq!(

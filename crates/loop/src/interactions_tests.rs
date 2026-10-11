@@ -24,6 +24,7 @@ use log::Log;
 
 use crate::progress::{SharedWake, Stream};
 use crate::{Loop, Model};
+use fakes::Deadline;
 
 /// Bound on every wait in this test: the raise park and the answer receive.
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -66,6 +67,7 @@ fn asking() -> Asking {
 
 /// An answerable loop with an inbox wake when `woken`, holding its scratch
 /// directory alive in `home`.
+#[track_caller]
 fn looped(answerable: bool, woken: bool) -> (Loop, fakes::TempDir) {
     let home = fakes::TempDir::new("fiber-interactions-cancel");
     let workspace = home.path().join("workspace");
@@ -119,6 +121,7 @@ fn looped(answerable: bool, woken: bool) -> (Loop, fakes::TempDir) {
     (looped, home)
 }
 
+#[track_caller]
 fn durable(home: &fakes::TempDir) -> Vec<Envelope> {
     log::read(&home.path().join("s_test"))
         .unwrap()
@@ -174,8 +177,8 @@ fn a_cancel_landing_before_the_take_declines_the_ask() {
     assert_eq!(resolved.payload["declined"], true);
     assert!(stream.asking().pending().is_none());
     assert_eq!(
-        answer_rx
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&answer_rx)
             .expect("the cancel declined the ask"),
         Answered::NoAnswer
     );

@@ -32,6 +32,7 @@ use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Question};
 use contract::tool::{Answered, Ask, Asking, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, Envelope, ErrorCode, JobId, RequestId};
+use fakes::Deadline;
 use fakes::Scripted;
 use fakes::clock::FakeClock;
 use r#loop::{Error, Loop};
@@ -268,12 +269,14 @@ fn session(calls: &[&str], tools: Vec<Arc<dyn Tool>>, idle: Option<Duration>) ->
 type Finished = mpsc::Receiver<(Loop, Result<Option<TurnOutcome>, Error>)>;
 
 /// Sends a prompt and runs one turn on its own thread.
+#[track_caller]
 fn start(session: &mut Session) -> Finished {
     session.inbox.send(delivery("go")).unwrap();
     run_turn(session)
 }
 
 /// Runs one turn on its own thread.
+#[track_caller]
 fn run_turn(session: &mut Session) -> Finished {
     let mut looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
@@ -286,9 +289,10 @@ fn run_turn(session: &mut Session) -> Finished {
 }
 
 /// Waits for the turn `start` started, putting the loop back.
+#[track_caller]
 fn finish(session: &mut Session, finished: &Finished) -> Option<TurnOutcome> {
-    let (looped, outcome) = finished
-        .recv_timeout(DEADLINE)
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(finished)
         .expect("the turn ended in time");
     session.looped = Some(looped);
     outcome.unwrap()
@@ -343,6 +347,7 @@ fn no_resolution(tap: &Tap) {
 
 /// Writes `fiber_exited` as the process does at exit, and returns every
 /// line of the session through it.
+#[track_caller]
 fn exit(session: &mut Session, signal: Option<i32>) -> Vec<Envelope> {
     r#loop::fiber_exited(&session.log, &session.dir, Ok(()), false, signal).unwrap();
     session.events_until("fiber_exited", |line| line.kind == "fiber_exited")
@@ -484,6 +489,7 @@ fn a_rejected_reply_does_not_move_the_idle_deadline() {
 /// Runs a step whose form comes before a call of `later`, and checks the
 /// step still waits for the answer past the idle delay, then writes both
 /// completions in request order.
+#[track_caller]
 fn waits_past_the_idle_delay(later: &'static str) {
     let other = Arc::new(TestTool::reads(later, "read"));
     let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(Former::new()), other.clone()];
@@ -893,6 +899,7 @@ type ShutDown = (Session, Envelope, Vec<Envelope>);
 /// with the form still pending; the idle delay never fires. Returns the
 /// session, the form's `interaction_requested`, and the lines through
 /// `fiber_exited`.
+#[track_caller]
 fn shut_down_on_form(former: &Arc<Former>) -> ShutDown {
     let mut session = session(&["former"], vec![former.clone()], Some(IDLE));
     let tap = Tap::new(&session.log);
@@ -975,6 +982,7 @@ fn a_reply_after_a_shutdown_answers_the_form_raised_again() {
 /// Runs a session whose only call is `former`'s form until the idle delay
 /// exits it, and returns it with the form's `interaction_requested`. The
 /// lines through that line are read; the rest are not.
+#[track_caller]
 fn suspended_on_form(former: &Arc<Former>) -> (Session, Envelope) {
     let mut session = session(&["former"], vec![former.clone()], Some(IDLE));
     let tap = Tap::new(&session.log);
@@ -992,6 +1000,7 @@ fn suspended_on_form(former: &Arc<Former>) -> (Session, Envelope) {
 
 /// As [`suspended_on_form`], then `fiber_exited` and a resume with
 /// `former`.
+#[track_caller]
 fn resumed_on_form(former: &Arc<Former>) -> (Session, Envelope) {
     let (mut session, requested) = suspended_on_form(former);
     exit(&mut session, None);
@@ -1023,7 +1032,7 @@ fn a_reply_held_before_the_resume_answers_the_form_raised_again() {
         finish(&mut session, &finished),
         Some(TurnOutcome::Completed)
     );
-    assert_eq!(replied.recv_timeout(DEADLINE).unwrap(), Ok(None));
+    assert_eq!(Deadline::after(DEADLINE).recv(&replied).unwrap(), Ok(None));
     let lines = session.lines();
     assert_kinds(
         &lines,
@@ -1055,7 +1064,7 @@ fn the_rebuilt_conversation_holds_the_form_call_once_then_its_result() {
         finish(&mut session, &finished),
         Some(TurnOutcome::Completed)
     );
-    assert_eq!(replied.recv_timeout(DEADLINE).unwrap(), Ok(None));
+    assert_eq!(Deadline::after(DEADLINE).recv(&replied).unwrap(), Ok(None));
 
     let action = action_of(&requested);
     let request = session.requests().pop().unwrap();
@@ -1179,7 +1188,7 @@ fn a_close_held_before_the_resume_ends_the_finishing_turn_with_the_questions() {
         finish(&mut session, &finished),
         Some(TurnOutcome::Completed)
     );
-    assert_eq!(closed.recv_timeout(DEADLINE).unwrap(), Ok(None));
+    assert_eq!(Deadline::after(DEADLINE).recv(&closed).unwrap(), Ok(None));
     let lines = session.lines();
     ends_on_the_questions(&lines);
 }
@@ -1288,6 +1297,7 @@ fn append(session: &Session, like: &Envelope, kind: &str, payload: Value, action
 /// Suspends on a form, lets `edit` append lines and name the request
 /// `fiber_exited` names, then resumes and runs a prompt: the session
 /// resumes as cut short, and the form's call never runs again.
+#[track_caller]
 fn resumes_as_cut_short(edit: impl FnOnce(&Session, &Envelope) -> String) {
     let former = Arc::new(Former::new());
     let (mut session, requested) = suspended_on_form(&former);

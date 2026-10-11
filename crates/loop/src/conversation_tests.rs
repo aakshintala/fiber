@@ -1066,6 +1066,7 @@ mod window {
     }
 
     impl Session {
+        #[track_caller]
         fn new() -> Self {
             let root = fakes::TempDir::new("fiber-window");
             let log = log::Log::create(
@@ -1094,6 +1095,7 @@ mod window {
             session
         }
 
+        #[track_caller]
         fn dir(&self) -> PathBuf {
             self.root.path().join("s_1")
         }
@@ -1113,6 +1115,7 @@ mod window {
         }
 
         /// Appends a raw line past the writer.
+        #[track_caller]
         fn raw(&self, line: &str) {
             use std::io::Write as _;
             let mut file = std::fs::OpenOptions::new()
@@ -1122,6 +1125,7 @@ mod window {
             writeln!(file, "{line}").unwrap();
         }
 
+        #[track_caller]
         fn lines(&self) -> Vec<Envelope> {
             log::read(&self.dir()).unwrap()
         }
@@ -1381,6 +1385,7 @@ mod window {
 
     /// What the whole log rebuilds, and what `resumed`'s window rebuilds,
     /// asserted equal; returns the pass.
+    #[track_caller]
     fn same_as_whole(session: &Session) -> Resumed {
         let folded = resumed(&session.dir()).unwrap();
         let all = session.lines();
@@ -2199,6 +2204,7 @@ mod from_log {
     }
 
     impl LogLines {
+        #[track_caller]
         fn new() -> Self {
             let root = fakes::TempDir::new("fiber-resume");
             let log = Log::create(
@@ -2225,6 +2231,7 @@ mod from_log {
                 .unwrap();
         }
 
+        #[track_caller]
         fn lines(&self) -> Vec<Envelope> {
             log::read(&self.dir).unwrap()
         }
@@ -2669,6 +2676,7 @@ mod from_log {
     }
 
     /// The conversation before `handoff_started`.
+    #[track_caller]
     fn before(jobs: bool) -> Vec<Input> {
         let log = LogLines::new();
         before_handoff(&log, jobs);
@@ -2899,6 +2907,7 @@ mod from_log {
     /// (`wrapup`, which set `control.handoff`) and `a_w2` (`get_weather`) and
     /// whose results were all written, then the tool handoff and the new
     /// opening message.
+    #[track_caller]
     fn tool_handoff(log: &LogLines, notes: &[(&str, &str)]) {
         log.append(opening_of("old-os"), None);
         log.append(user_turn("one"), None);
@@ -3037,6 +3046,7 @@ mod from_log {
         })
     }
 
+    #[track_caller]
     fn raw(item: serde_json::Value) -> Input {
         Input::Assistant {
             model: MODEL.into(),

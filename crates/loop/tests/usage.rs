@@ -349,6 +349,7 @@ const FAILED_UNNAMED_KINDS: [&str; 9] = [
 /// One turn of `session`, and its one `usage_recorded` payload. `expected`
 /// is the complete ordered list of event kinds, so a duplicated, missing or
 /// reordered event fails (`docs/testing.md`, "Event streams").
+#[track_caller]
 fn only_record(session: &mut Session, expected: &[&str]) -> UsageRecorded {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));

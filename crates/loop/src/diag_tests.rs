@@ -24,6 +24,7 @@ fn setup(name: &str) -> (fakes::TempDir, SessionDiag) {
     (home, diag)
 }
 
+#[track_caller]
 fn log_path(home: &fakes::TempDir) -> PathBuf {
     home.path().join("logs").join("session-s-1.log")
 }

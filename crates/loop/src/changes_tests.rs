@@ -27,6 +27,7 @@ fn clock() -> Arc<FakeClock> {
     FakeClock::new()
 }
 
+#[track_caller]
 fn inputs(home: &Path, clock: &Arc<FakeClock>) -> PromptInputs {
     let owned: Arc<FakeClock> = Arc::clone(clock);
     let clock: Arc<dyn contract::clock::Clock> = owned;
@@ -79,6 +80,7 @@ fn readonly(path: &Path, yes: bool) {
 /// The state after the opening message over `workspace` in `home`: built
 /// from the message and folded into what the model had, as the loop's
 /// render does when it writes the line.
+#[track_caller]
 fn initial(home: &Path, workspace: &Path, clock: &Arc<FakeClock>) -> State {
     let prompt = inputs(home, clock);
     let collected = opening::collect(&prompt, workspace);
@@ -93,6 +95,7 @@ type Sections = Vec<(String, Vec<PathBuf>, Option<u64>)>;
 
 /// `inputs` with `sections` as the prompt's extension sections: each
 /// extension's name, its files' paths, and its budget.
+#[track_caller]
 fn sectioned_inputs(home: &Path, clock: &Arc<FakeClock>, sections: Sections) -> PromptInputs {
     let mut prompt = inputs(home, clock);
     prompt.extension_sections = sections;
@@ -102,6 +105,7 @@ fn sectioned_inputs(home: &Path, clock: &Arc<FakeClock>, sections: Sections) -> 
 /// The state after an opening message over `workspace` with `sections`:
 /// built from the message and folded into what the model had, as the
 /// loop's render does when it writes the line.
+#[track_caller]
 fn initial_sectioned(
     home: &Path,
     workspace: &Path,
@@ -902,6 +906,7 @@ fn finished(action: &str) -> Envelope {
 
 /// A resume over `lines`, then `sub/AGENTS.md` created in `workspace`:
 /// what the next turn-start check sends.
+#[track_caller]
 fn resumed_then_created(
     lines: &[Envelope],
     home: &Path,
@@ -1759,6 +1764,7 @@ fn home_through_a_file_names_its_global_file() {
 
 /// One section file under `home`, with `budget` as its budget: the path
 /// and the manifest entry naming it.
+#[track_caller]
 fn section_file(home: &Path, budget: Option<u64>) -> (PathBuf, Sections) {
     let path = home.join("data/fiber.test-notes/a.md");
     let sections = vec![("fiber.test/notes".into(), vec![path.clone()], budget)];
@@ -2116,6 +2122,7 @@ fn own_deletion_of_a_section_file_is_an_empty_own_edit_with_extension() {
 
 /// A budgeted section file with `content`: the path and the manifest
 /// entry budgeting it at `budget`.
+#[track_caller]
 fn budgeted(home: &Path, name: &str, content: &str, budget: Option<u64>) -> (PathBuf, Sections) {
     let path = home.join(format!("data/{name}/a.md"));
     write(&path, content);

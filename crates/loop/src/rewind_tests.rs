@@ -61,6 +61,7 @@ fn envelope(seq: u64, action: &str, event: &Event) -> Envelope {
     }
 }
 
+#[track_caller]
 fn write_log(dir: &Path, lines: &[Envelope]) {
     fs::create_dir_all(dir).unwrap();
     let mut text = String::new();
@@ -85,6 +86,7 @@ type Call<'a> = (
 
 /// `tool_call_requested` lines by action, with `started` lines after the
 /// point in `calls`.
+#[track_caller]
 fn log_with(dir: &Path, calls: &[Call<'_>]) {
     let mut lines = vec![envelope(
         0,
@@ -114,6 +116,7 @@ fn log_with(dir: &Path, calls: &[Call<'_>]) {
     write_log(dir, &lines);
 }
 
+#[track_caller]
 fn note_for(calls: &[Call<'_>]) -> String {
     let home = fakes::TempDir::new("loop-rewind-note");
     let dir = home.path().join("s_1");

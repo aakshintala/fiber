@@ -43,6 +43,7 @@ fn standing(global: Vec<Rule>, project: Vec<Rule>) -> StandingRules {
 }
 
 /// Sends "go", runs one turn, and returns its lines.
+#[track_caller]
 fn go(session: &mut Session) -> Vec<Envelope> {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -158,6 +159,7 @@ fn a_configured_credential_file_spelled_through_a_symlink_is_resolved_at_start()
 /// Runs one session whose configured `file` source is `configured`, in
 /// which the model reads `read`, and asserts the credential deny refused
 /// the read before it ran.
+#[track_caller]
 fn assert_file_refused(configured: &std::path::Path, read: &std::path::Path) {
     let tool = Arc::new(TestTool::declaring(
         "read",
@@ -194,6 +196,7 @@ fn assert_file_refused(configured: &std::path::Path, read: &std::path::Path) {
 /// Runs one read-only call of `subject` declaring `paths` (relative to the
 /// workspace, which sits in Fiber home beside `credentials/`), and asserts
 /// the credential deny refused it before it ran.
+#[track_caller]
 fn assert_refused_as_credentials(subject: &str, paths: &[&str]) {
     let mut search = TestTool::declaring(
         "shell",

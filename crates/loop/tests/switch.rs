@@ -21,6 +21,7 @@ use contract::events::{CacheLifetime, Notice, TurnOutcome};
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::provider::Provider;
 use contract::{Envelope, ErrorCode, ThinkingLevel};
+use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
 use r#loop::{HandoffSettings, Hosted, Model, NO_SWITCH, Prepare, Prepared, Reviewer, Switchable};
 
@@ -107,6 +108,7 @@ fn with_switch(session: &mut Session, prepare: Prepare, switchable: Switchable) 
     session.looped = Some(looped);
 }
 
+#[track_caller]
 fn run(session: &mut Session, prompt: &str) -> (Option<TurnOutcome>, Vec<Envelope>) {
     session.inbox.send(delivery(prompt)).unwrap();
     let outcome = session.turn();
@@ -196,6 +198,7 @@ fn rejected_answer(name: &str, answer: Answer) -> Rejection {
 /// Runs one switch-pair case: the shared `shape` flow with the `switch`
 /// half's prepare and delivery, then the case-specific assertions. Every
 /// failure message names the case.
+#[track_caller]
 fn run_switch_case(case: &Case) {
     let name = case.name;
     match case.shape {
@@ -244,9 +247,8 @@ fn run_switch_case(case: &Case) {
             let (outcome, lines) = run(&mut session, "again");
             assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
             if let Some(rx) = ack_rx {
-                let answer = rx
-                    .recv_timeout(DEADLINE)
-                    .unwrap_or_else(|_| panic!("case {name}: the credential is answered"));
+                let answer = Deadline::after(DEADLINE)
+                    .recv_or_fail(&rx, &format!("case {name}: the credential is answered"));
                 assert!(answer.is_ok(), "case {name}: accepted");
             }
             assert_case_kinds(name, &lines, &[SWITCHED_OPENING, STEP, REPLY, ENDED]);
@@ -419,9 +421,8 @@ fn run_switch_case(case: &Case) {
                 Switch::Model => "the model is answered",
                 Switch::Credential => "the credential is answered",
             };
-            let answer = rx
-                .recv_timeout(DEADLINE)
-                .unwrap_or_else(|_| panic!("case {name}: {what}"));
+            let answer =
+                Deadline::after(DEADLINE).recv_or_fail(&rx, &format!("case {name}: {what}"));
             let rejection = rejected_answer(name, answer);
             match case.switch {
                 Switch::Model => {
@@ -458,9 +459,8 @@ fn run_switch_case(case: &Case) {
                 Switch::Model => "the model is answered",
                 Switch::Credential => "the credential is answered",
             };
-            let answer = rx
-                .recv_timeout(DEADLINE)
-                .unwrap_or_else(|_| panic!("case {name}: {what}"));
+            let answer =
+                Deadline::after(DEADLINE).recv_or_fail(&rx, &format!("case {name}: {what}"));
             let rejection = rejected_answer(name, answer);
             assert_eq!(rejection.code, ErrorCode::InvalidArguments, "case {name}");
             assert_eq!(rejection.message, NO_SWITCH, "case {name}");
@@ -533,9 +533,8 @@ fn run_switch_case(case: &Case) {
             let outcome = session.turn();
             assert_eq!(outcome, None, "case {name}");
             assert!(
-                close_rx
-                    .recv_timeout(DEADLINE)
-                    .unwrap_or_else(|_| panic!("case {name}: close answered"))
+                Deadline::after(DEADLINE)
+                    .recv_or_fail(&close_rx, &format!("case {name}: close answered"))
                     .is_ok(),
                 "case {name}"
             );
@@ -543,9 +542,8 @@ fn run_switch_case(case: &Case) {
                 Switch::Model => "model answered",
                 Switch::Credential => "credential answered",
             };
-            let answer = switch_rx
-                .recv_timeout(DEADLINE)
-                .unwrap_or_else(|_| panic!("case {name}: {what}"));
+            let answer =
+                Deadline::after(DEADLINE).recv_or_fail(&switch_rx, &format!("case {name}: {what}"));
             let rejected = rejected_answer(name, answer);
             assert_eq!(rejected.code, ErrorCode::Closing, "case {name}");
             assert!(
@@ -667,9 +665,8 @@ fn run_switch_case(case: &Case) {
                 Switch::Model => "the model is answered",
                 Switch::Credential => "the credential is answered",
             };
-            let answer = ack_rx
-                .recv_timeout(DEADLINE)
-                .unwrap_or_else(|_| panic!("case {name}: {what}"));
+            let answer =
+                Deadline::after(DEADLINE).recv_or_fail(&ack_rx, &format!("case {name}: {what}"));
             assert!(
                 answer.is_ok(),
                 "case {name}: accepted before `turn_completed`"
@@ -739,9 +736,8 @@ fn run_switch_case(case: &Case) {
             let (outcome, lines) = run(&mut session, "again");
             assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
             if let Some(rx) = ack_rx {
-                let answer = rx
-                    .recv_timeout(DEADLINE)
-                    .unwrap_or_else(|_| panic!("case {name}: the credential is answered"));
+                let answer = Deadline::after(DEADLINE)
+                    .recv_or_fail(&rx, &format!("case {name}: the credential is answered"));
                 assert!(answer.is_ok(), "case {name}");
             }
             assert_case_kinds(
@@ -947,13 +943,15 @@ fn an_idle_deadline_in_an_approval_wait_writes_no_model_changed() {
             .unwrap();
     };
     // The ack arrives before the deadline ends the wait.
-    let answer = ack_rx
-        .recv_timeout(DEADLINE)
+    let answer = Deadline::after(DEADLINE)
+        .recv(&ack_rx)
         .expect("the model is answered");
     assert!(answer.is_ok());
     clock.advance(Duration::from_secs(60));
     wake();
-    let (looped, outcome) = finished.recv_timeout(DEADLINE).expect("the turn ended");
+    let (looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the turn ended");
     session.looped = Some(looped);
     assert_eq!(
         outcome, None,
@@ -1055,8 +1053,8 @@ fn close_applies_after_the_closing_turn() {
     let outcome = session.turn();
     assert_eq!(outcome, None);
     assert!(
-        close_rx
-            .recv_timeout(DEADLINE)
+        Deadline::after(DEADLINE)
+            .recv(&close_rx)
             .expect("close answered")
             .is_ok()
     );
@@ -1266,8 +1264,8 @@ fn a_new_model_lacking_the_chosen_level_is_invalid_arguments() {
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
     // Admitted while idle ahead of the prompt: rejected, so the turn runs on.
-    let rejected = rx
-        .recv_timeout(DEADLINE)
+    let rejected = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the model is answered")
         .unwrap_err();
     assert_eq!(rejected.code, ErrorCode::InvalidArguments);
@@ -1314,8 +1312,8 @@ fn reviewer_collision_is_invalid_arguments_and_changes_nothing() {
     let (outcome, first) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_kinds(&first, &[OPENING, STEP, REPLY, ENDED]);
-    let rejected = rx
-        .recv_timeout(DEADLINE)
+    let rejected = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the model is answered")
         .unwrap_err();
     assert_eq!(rejected.code, ErrorCode::InvalidArguments);
@@ -1408,6 +1406,7 @@ fn hosted_in(request: &contract::provider::ModelRequest) -> Option<Option<String
 /// One session started with the hosted search of type `type_a`, switched
 /// between turns with `hosted`: the start's request, the switched
 /// request, and the switched turn's lines.
+#[track_caller]
 fn switch_hosted(
     hosted: impl Fn() -> Hosted + Send + Sync + 'static,
 ) -> (
@@ -1568,8 +1567,8 @@ fn applied_never_runs_for_a_rejected_or_noop_switch() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_kinds(&lines, &[OPENING, STEP, REPLY, ENDED]);
-    let rejected = rx
-        .recv_timeout(DEADLINE)
+    let rejected = Deadline::after(DEADLINE)
+        .recv(&rx)
         .expect("the model is answered")
         .unwrap_err();
     assert_eq!(rejected.code, ErrorCode::InvalidArguments);
@@ -1999,9 +1998,10 @@ fn resume_interleaving_holds_arrival_order() {
         done.send((looped, outcome)).unwrap();
     });
     // Wait for the re-raised request, then send the live switch and the reply.
+    let wait = Deadline::after(DEADLINE);
     let request_id = loop {
         let line = watcher
-            .recv_timeout(DEADLINE)
+            .recv_timeout(wait.left())
             .expect("a line in time")
             .expect("log")
             .expect("line");
@@ -2020,8 +2020,8 @@ fn resume_interleaving_holds_arrival_order() {
             support::ignore(),
         ))
         .unwrap();
-    let (mut looped, outcome) = finished
-        .recv_timeout(DEADLINE)
+    let (mut looped, outcome) = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("the finishing turn ended");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
 
@@ -2421,6 +2421,7 @@ struct DeferredCase {
 /// one more turn admits both in arrival order. Checks the prepare calls
 /// and the `model_changed` payloads against the case row; every failure
 /// message names the case.
+#[track_caller]
 fn run_deferred_case(case: &DeferredCase) {
     let name = case.name;
     let held = switch_delivery(case.held.0, case.held.1);
@@ -2640,9 +2641,8 @@ fn run_deferred_case(case: &DeferredCase) {
             support::ignore(),
         ))
         .unwrap();
-    let (mut looped, outcome) = finished
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("case {name}: the finishing turn ended"));
+    let (mut looped, outcome) = Deadline::after(DEADLINE)
+        .recv_or_fail(&finished, &format!("case {name}: the finishing turn ended"));
     assert_eq!(outcome, Some(TurnOutcome::Completed), "case {name}");
 
     // The next turn admits both in arrival order, bounded so a hang

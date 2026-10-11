@@ -20,6 +20,7 @@ use contract::Envelope;
 use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::tool::Tool;
+use fakes::Deadline;
 use fakes::Scripted;
 use log::Watcher;
 use r#loop::{Loop, Model};
@@ -29,6 +30,7 @@ use support::{DEADLINE, MODEL, Session, TestTool, delivery, ignore, tool_call_re
 /// The `session_status` lines from now on, up to and including the first one
 /// `until` accepts, with one [`DEADLINE`]. Takes the watcher and returns it
 /// with the lines.
+#[track_caller]
 fn statuses_until(
     watcher: Watcher,
     until: impl Fn(&Envelope) -> bool + Send + 'static,
@@ -100,8 +102,8 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
         assert_eq!(line.payload["jobs"], 0);
     }
     session.inbox.send(Delivery::Close(ignore())).unwrap();
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("close ended the loop")
         .unwrap();
     let kinds: Vec<String> = log::read(&session.dir)
@@ -121,8 +123,8 @@ fn no_status_follows_the_line_written_after_run_returns() {
     let (watcher, seen) = statuses_until(watcher, idle_named("go"));
     assert_eq!(seen.last().unwrap().payload["state"], "idle");
     session.inbox.send(Delivery::Close(ignore())).unwrap();
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("close ended the loop")
         .unwrap();
     // As `fiber ask` does: `fiber_exited` after `run` returns.
@@ -148,8 +150,8 @@ fn a_resumed_session_writes_one_status_for_its_history() {
     let finished = run(session.looped.take().unwrap());
     let (_first, _seen) = statuses_until(first, idle_named("say hi"));
     session.inbox.send(Delivery::Close(ignore())).unwrap();
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("close ended the loop")
         .unwrap();
 
@@ -189,8 +191,8 @@ fn a_resumed_session_writes_one_status_for_its_history() {
     assert_eq!(seen[0].payload["name"], "say hi");
     assert_eq!(seen[0].payload["state"], "idle");
     drop(inbox);
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("the loop ended with its inbox")
         .unwrap();
     // One status for the whole history, and none after it.

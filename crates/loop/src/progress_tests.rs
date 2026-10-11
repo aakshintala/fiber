@@ -11,6 +11,7 @@ use contract::clock::Wake;
 use contract::emit::Emit;
 use contract::events::{Event, Progress};
 use contract::tool::{Ask, Output};
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
@@ -301,8 +302,8 @@ fn forwarding_passes_on_a_bump_that_landed_before_it_once() {
     let parked = park_on(&wake, &clock);
     assert!(clock.await_parked_unbounded(DEADLINE), "the park waits");
     wake.wake();
-    parked
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&parked)
         .expect("a later bump ends the park");
 }
 
@@ -325,8 +326,8 @@ fn clearing_the_forward_keeps_the_flag_and_drops_the_target() {
     wake.wake();
     wake.forward(None);
     let clock = FakeClock::new();
-    park_on(&wake, &clock)
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&park_on(&wake, &clock))
         .expect("the bump while forwarding ends the next park at once");
     wake.wake();
     assert_eq!(target.count(), 1, "a bump after clearing reaches no target");

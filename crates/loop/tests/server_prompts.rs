@@ -24,6 +24,7 @@ use contract::inbox::{Ack, Answer, Delivery};
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output, ServerRecord};
+use fakes::Deadline;
 use fakes::Scripted;
 
 use support::{Session, accepted, kinds, message, rejected};
@@ -227,12 +228,13 @@ fn a_steer_naming_a_prompt_is_not_fetched() {
 /// `run` until it returns. The session keeps its inbox sender, so the loop
 /// ends because `close` was taken. The log is read directly: no turn runs,
 /// so `Session::lines` would wait for a `turn_completed` that never comes.
+#[track_caller]
 fn run_until_close(session: &mut Session) -> Vec<contract::Envelope> {
     let looped = session.looped.take().unwrap();
     let (done, finished) = mpsc::channel();
     thread::spawn(move || done.send(looped.run()).unwrap());
-    finished
-        .recv_timeout(support::DEADLINE)
+    Deadline::after(support::DEADLINE)
+        .recv(&finished)
         .expect("close ended the loop")
         .unwrap();
     log::read(&session.dir).unwrap()
@@ -446,6 +448,13 @@ impl Latch {
     }
 }
 
+#[track_caller]
+fn entered(entered_rx: &mpsc::Receiver<()>) {
+    Deadline::after(support::DEADLINE)
+        .recv(entered_rx)
+        .expect("the fetch started");
+}
+
 #[test]
 fn a_shutdown_during_retrieval_reaches_the_fetch() {
     let (entered_tx, entered_rx) = mpsc::channel();
@@ -474,9 +483,7 @@ fn a_shutdown_during_retrieval_reaches_the_fetch() {
     let cancel = Arc::clone(&session.cancel);
     thread::scope(|scope| {
         scope.spawn(move || {
-            entered_rx
-                .recv_timeout(support::DEADLINE)
-                .expect("the fetch started");
+            entered(&entered_rx);
             cancel.shutdown(130);
         });
         assert_eq!(session.turn(), None);
@@ -519,8 +526,8 @@ fn a_rejected_prompt_does_not_move_the_idle_deadline() {
         .inbox
         .send(Delivery::Prompt(message("/greet Ada"), ack))
         .unwrap();
-    let answer = answers
-        .recv_timeout(support::DEADLINE)
+    let answer = Deadline::after(support::DEADLINE)
+        .recv(&answers)
         .expect("the prompt was admitted");
     assert_eq!(
         answer,

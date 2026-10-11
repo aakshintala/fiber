@@ -178,6 +178,7 @@ fn image_turn(path: &str) -> Event {
     })
 }
 
+#[track_caller]
 fn write_log(sessions: &Path, session: &str, lines: &[Envelope]) {
     let dir = sessions.join(session);
     fs::create_dir_all(&dir).unwrap();
@@ -189,6 +190,7 @@ fn write_log(sessions: &Path, session: &str, lines: &[Envelope]) {
     fs::write(dir.join("events.jsonl"), text).unwrap();
 }
 
+#[track_caller]
 fn sessions(name: &str) -> (fakes::TempDir, PathBuf) {
     let home = fakes::TempDir::new(&format!("loop-history-{name}"));
     let sessions = home.path().join("sessions");
@@ -198,6 +200,7 @@ fn sessions(name: &str) -> (fakes::TempDir, PathBuf) {
 /// The parent holds a handoff, a later usage record and a later model
 /// switch; the child continues it at the handoff. The fold holds the
 /// parent to the point and the child's own lines after it.
+#[track_caller]
 fn two_segment(sessions: &Path) {
     write_log(
         sessions,

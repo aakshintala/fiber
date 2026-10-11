@@ -2,17 +2,20 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use contract::events::{ArgumentRepair, RepairFix};
+use fakes::Deadline;
 use serde_json::{Value, json};
 
 use super::{check, repair};
 
 /// The check and the repair of `arguments`, each run on its own thread under
 /// a deadline, so a schema that loops fails the test instead of hanging it.
+#[track_caller]
 fn within(schema: &Value, arguments: &Value) -> (Vec<String>, Option<ArgumentRepair>) {
     let (schema, arguments) = (schema.clone(), arguments.clone());
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send((check(&schema, &arguments), repair(&schema, &arguments))));
-    rx.recv_timeout(Duration::from_secs(10))
+    Deadline::after(Duration::from_secs(10))
+        .recv(&rx)
         .expect("the check or the repair never finished")
 }
 
@@ -811,6 +814,7 @@ fn the_check_and_the_repair_agree() {
 }
 
 /// Each row: the schema of `x`, its value, and the lines the check gives.
+#[track_caller]
 fn rows(table: &[(Value, Value, &[&str])]) {
     for (property, value, expected) in table {
         let schema = object(json!({"x": property}));

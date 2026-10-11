@@ -25,6 +25,7 @@ struct Session {
 }
 
 impl Session {
+    #[track_caller]
     fn new() -> Self {
         let root = fakes::TempDir::new("fiber-process-asks");
         let log = log::Log::create(
