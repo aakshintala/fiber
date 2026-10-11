@@ -15,6 +15,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::events::CacheLifetime;
 use contract::provider::{CallError, Delta, Input, ModelCall, ModelRequest, Reply};
+use fakes::Deadline;
 use fakes::{ProviderServer, Response};
 use provider::Endpoint;
 use provider::anthropic_messages::Messages;
@@ -67,8 +68,8 @@ fn run(call: Box<dyn ModelCall>) -> Result<Reply, CallError> {
         let reply = call.run(&mut |d: Delta| deltas.push(d));
         done.send(reply).unwrap();
     });
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for the call to return")
 }
 

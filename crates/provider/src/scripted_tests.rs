@@ -19,6 +19,7 @@ use contract::provider::{
     CallError, Delta, Finish, InputSize, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
 };
 use contract::shapes::Tokens;
+use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
@@ -390,7 +391,10 @@ fn a_slow_reply_waits_on_the_clock_before_every_fragment_after_the_first() {
     });
 
     let pause = Duration::from_millis(200);
-    assert_eq!(received.recv_timeout(WITHIN).unwrap(), text_delta("a"));
+    assert_eq!(
+        Deadline::after(WITHIN).recv(&received).unwrap(),
+        text_delta("a")
+    );
     let first = clock.origin() + pause;
     let mark = clock.mark_parked(first, WITHIN).unwrap();
     assert!(received.try_recv().is_err());
@@ -398,13 +402,22 @@ fn a_slow_reply_waits_on_the_clock_before_every_fragment_after_the_first() {
     assert!(clock.await_parked_since(&mark, Some(first), WITHIN));
     assert!(received.try_recv().is_err());
     clock.advance(Duration::from_millis(1));
-    assert_eq!(received.recv_timeout(WITHIN).unwrap(), text_delta("b"));
+    assert_eq!(
+        Deadline::after(WITHIN).recv(&received).unwrap(),
+        text_delta("b")
+    );
 
     assert!(clock.await_parked(first + pause, WITHIN));
     assert!(received.try_recv().is_err());
     clock.advance(pause);
-    assert_eq!(received.recv_timeout(WITHIN).unwrap(), text_delta("c"));
-    assert_eq!(end.recv_timeout(WITHIN).unwrap().unwrap().text(), "abc");
+    assert_eq!(
+        Deadline::after(WITHIN).recv(&received).unwrap(),
+        text_delta("c")
+    );
+    assert_eq!(
+        Deadline::after(WITHIN).recv(&end).unwrap().unwrap().text(),
+        "abc"
+    );
 }
 
 #[test]
@@ -447,7 +460,7 @@ fn a_cancel_during_a_pause_wakes_it_and_returns_cancelled() {
     });
     assert!(clock.await_parked(clock.origin() + Duration::from_millis(200), WITHIN));
     call.cancel();
-    let (deltas, result) = end.recv_timeout(WITHIN).unwrap();
+    let (deltas, result) = Deadline::after(WITHIN).recv(&end).unwrap();
     assert_eq!(deltas, [text_delta("a")]);
     match result {
         Err(CallError::Cancelled { usage }) => assert_eq!(usage.tokens, tokens(9, 0, 0)),
@@ -478,8 +491,8 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
     let pause_for_helper = Arc::clone(&pause);
     let clock_for_helper = Arc::clone(&clock);
     thread::spawn(move || {
-        entered
-            .recv_timeout(WITHIN)
+        Deadline::after(WITHIN)
+            .recv(&entered)
             .expect("the first clock wait was entered");
         let guard = pause_for_helper.lock();
         let returned = closure_returned.load(Ordering::SeqCst);
@@ -501,14 +514,17 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
     });
 
     let first = fake.origin() + Duration::from_millis(200);
-    assert_eq!(received.recv_timeout(WITHIN).unwrap(), text_delta("a"));
-    let returned_before_lock = observation
-        .recv_timeout(WITHIN)
+    assert_eq!(
+        Deadline::after(WITHIN).recv(&received).unwrap(),
+        text_delta("a")
+    );
+    let returned_before_lock = Deadline::after(WITHIN)
+        .recv(&observation)
         .expect("the helper acquired the pause mutex");
     if !returned_before_lock {
         call.cancel();
-        let result = end
-            .recv_timeout(WITHIN)
+        let result = Deadline::after(WITHIN)
+            .recv(&end)
             .expect("cancellation released the blocked call");
         assert!(
             matches!(result, Err(CallError::Cancelled { .. })),
@@ -533,7 +549,10 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
     assert!(fake.await_parked_since(&parked, Some(first), WITHIN));
     assert!(received.try_recv().is_err(), "b is not due before 200 ms");
     fake.advance(Duration::from_millis(1));
-    assert_eq!(received.recv_timeout(WITHIN).unwrap(), text_delta("b"));
+    assert_eq!(
+        Deadline::after(WITHIN).recv(&received).unwrap(),
+        text_delta("b")
+    );
 
     // A cancel after a wake before the next deadline still ends the pause.
     let second = first + Duration::from_millis(200);
@@ -545,7 +564,7 @@ fn a_wake_before_the_deadline_keeps_the_pause_until_every_ms_passes() {
         "c is not due before its deadline"
     );
     call.cancel();
-    match end.recv_timeout(WITHIN).unwrap() {
+    match Deadline::after(WITHIN).recv(&end).unwrap() {
         Err(CallError::Cancelled { .. }) => {}
         other => panic!("{other:?}"),
     }

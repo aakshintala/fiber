@@ -19,6 +19,7 @@ use contract::provider::{
     CallError, CallUsage, Delta, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
 };
 use contract::shapes::Tokens;
+use fakes::Deadline;
 use fakes::{ProviderServer, Response};
 use provider::Endpoint;
 use serde_json::{Value, json};
@@ -64,8 +65,8 @@ fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
         let reply = call.run(&mut |d| deltas.push(d));
         done.send((reply, deltas)).unwrap();
     });
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for the call to return")
 }
 
@@ -192,10 +193,14 @@ fn anthropic_cancelled_after_usage_carries_what_it_saw() {
         let result = runner.run(&mut |d| first.send(d).unwrap());
         done.send(result).unwrap();
     });
-    let delta = seen.recv_timeout(DEADLINE).expect("a delta in time");
+    let delta = Deadline::after(DEADLINE)
+        .recv(&seen)
+        .expect("a delta in time");
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
     call.cancel();
-    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run returned");
     let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");
     };
@@ -286,10 +291,14 @@ fn responses_cancelled_after_its_generation_carries_zero_counts() {
         let result = runner.run(&mut |d| first.send(d).unwrap());
         done.send(result).unwrap();
     });
-    let delta = seen.recv_timeout(DEADLINE).expect("a delta in time");
+    let delta = Deadline::after(DEADLINE)
+        .recv(&seen)
+        .expect("a delta in time");
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
     call.cancel();
-    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run returned");
     let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");
     };
@@ -418,10 +427,14 @@ fn completions_cancelled_after_usage_carries_what_it_saw() {
         let result = runner.run(&mut |d| first.send(d).unwrap());
         done.send(result).unwrap();
     });
-    let delta = seen.recv_timeout(DEADLINE).expect("a delta in time");
+    let delta = Deadline::after(DEADLINE)
+        .recv(&seen)
+        .expect("a delta in time");
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
     call.cancel();
-    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run returned");
     let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");
     };
@@ -506,10 +519,14 @@ fn gemini_cancelled_after_usage_carries_what_it_saw() {
         let result = runner.run(&mut |d| first.send(d).unwrap());
         done.send(result).unwrap();
     });
-    let delta = seen.recv_timeout(DEADLINE).expect("a delta in time");
+    let delta = Deadline::after(DEADLINE)
+        .recv(&seen)
+        .expect("a delta in time");
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
     call.cancel();
-    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("run returned");
     let Err(CallError::Cancelled { usage }) = result else {
         panic!("{result:?}");
     };
@@ -641,7 +658,9 @@ fn a_call_cancelled_before_its_generation_carries_an_unnamed_usage_on_every_prot
         thread::spawn(move || done.send(runner.run(&mut |_| {})).unwrap());
         assert!(server.await_partial(1, DEADLINE), "{protocol}");
         call.cancel();
-        let result = finished.recv_timeout(DEADLINE).expect("run returned");
+        let result = Deadline::after(DEADLINE)
+            .recv(&finished)
+            .expect("run returned");
         let Err(CallError::Cancelled { usage }) = result else {
             panic!("{protocol}: {result:?}");
         };

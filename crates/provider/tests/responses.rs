@@ -33,6 +33,7 @@ use contract::provider::{
     Reply, ReplyAction, ToolDefinition,
 };
 use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
+use fakes::Deadline;
 use fakes::{ProviderServer, Response};
 use provider::openai_responses::{Responses, decode};
 use provider::{Compat, Endpoint};
@@ -123,8 +124,8 @@ fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
         let reply = call.run(&mut |d| deltas.push(d));
         done.send((reply, deltas)).unwrap();
     });
-    finished
-        .recv_timeout(DEADLINE)
+    Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for the call to return")
 }
 
@@ -874,15 +875,15 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
         let result = runner.run(&mut |delta| first.send(delta).unwrap());
         done.send(result).unwrap();
     });
-    let delta = first_seen
-        .recv_timeout(DEADLINE)
+    let delta = Deadline::after(DEADLINE)
+        .recv(&first_seen)
         .expect("waited for the first delta");
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
 
     // The reader is now blocked waiting for the next bytes.
     call.cancel();
-    let result = finished
-        .recv_timeout(DEADLINE)
+    let result = Deadline::after(DEADLINE)
+        .recv(&finished)
         .expect("waited for run to return after the cancel");
     let sent = InputSize {
         bytes: u64::try_from(server.requests()[0].body.len()).unwrap(),
