@@ -17,6 +17,23 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::testkit::args;
+use crate::{Environments, Mode, Settings};
+use crate::fake::FakeStarter;
+use contract::clock::Clock;
+use fakes::Deadline;
+use std::ffi::OsString;
+use std::io::{BufRead, BufReader, Write};
+use std::net::Shutdown;
+use std::os::unix::net::UnixStream;
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::Duration;
+
+/// How long each wait holds, on the wall clock.
+const WITHIN: Duration = Duration::from_secs(10);
+
+/// One socket call's bound: each wait's deadline is a `Deadline` receive.
+const SOCKET_BOUND: Duration = Duration::from_secs(10);
 
 struct Temp {
     #[expect(dead_code, reason = "Drop removes the directory")]
@@ -261,4 +278,128 @@ fn an_absolute_path_comes_back_byte_for_byte() {
         let got = listed(Some(temp.home()), json!({"path": arg}));
         assert_eq!(got["path"], arg);
     }
+}
+
+#[test]
+fn directories_over_serve_accepts_home_and_rejects_relative() {
+    let held = fakes::TempDir::new("hw");
+    let home = held.path().join("h");
+    fs::create_dir_all(&home).unwrap();
+    let work = held.path().join("work");
+    for name in ["fiber", "fiber-worktrees"] {
+        fs::create_dir_all(work.join(name)).unwrap();
+    }
+    let environments = Environments::new(
+        vec![(OsString::from("HOME"), held.path().as_os_str().to_owned())],
+        &home,
+    );
+    let clock = fakes::clock::FakeClock::new();
+    let origin = clock.origin();
+    let idle_exit = Duration::from_secs(30);
+    let serve_clock = Arc::clone(&clock);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn({
+        let home = home.clone();
+        move || {
+            let starter = Arc::new(FakeStarter::hang(&home));
+            let result = crate::serve(
+                &home,
+                Mode::OnDemand,
+                || {
+                    Ok(Settings {
+                        idle_exit,
+                        level: log::diag::Level::Info,
+                        port: None,
+                    })
+                },
+                "0.0.0",
+                starter,
+                serve_clock,
+                environments,
+            );
+            done_tx.send(result).unwrap_or(());
+        }
+    });
+    let socket = home.join("run").join("hub");
+    let connect_by = Deadline::after(WITHIN);
+    let stream = loop {
+        if let Ok(stream) = UnixStream::connect(&socket) {
+            break stream;
+        }
+        if connect_by.left().is_zero() {
+            panic!("waited for the hub to bind run/hub");
+        }
+        thread::yield_now();
+    };
+    stream.set_read_timeout(Some(SOCKET_BOUND)).unwrap();
+    let mut writer = stream.try_clone().unwrap();
+    let closer = stream.try_clone().unwrap();
+    let (line_tx, line_rx) = mpsc::channel();
+    let (reader_done_tx, reader_done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut read = BufReader::new(stream);
+        loop {
+            let mut text = String::new();
+            match read.read_line(&mut text) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let value: Value = serde_json::from_str(&text).unwrap();
+                    if line_tx.send(value).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        reader_done_tx.send(()).unwrap_or(());
+    });
+    let hello = Deadline::after(WITHIN).recv_or_fail(&line_rx, "hub_hello");
+    assert_eq!(hello["kind"], "hub_hello");
+    writer
+        .write_all(
+            format!(
+                "{}\n",
+                json!({"id": "c_1", "command": "directories", "args": {"path": "~/work/"}})
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let accepted =
+        Deadline::after(WITHIN).recv_or_fail(&line_rx, "the directories acknowledgement");
+    assert_eq!(accepted["kind"], "command_accepted");
+    assert_eq!(accepted["payload"]["command_id"], "c_1");
+    assert_eq!(
+        accepted["payload"]["result"]["directories"],
+        json!(["fiber", "fiber-worktrees"])
+    );
+    assert_eq!(
+        accepted["payload"]["result"]["path"],
+        format!("{}/work/", held.path().to_str().unwrap())
+    );
+    writer
+        .write_all(
+            format!(
+                "{}\n",
+                json!({"id": "c_2", "command": "directories", "args": {"path": "work/"}})
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let rejected =
+        Deadline::after(WITHIN).recv_or_fail(&line_rx, "the directories rejection");
+    assert_eq!(rejected["kind"], "command_rejected");
+    assert_eq!(rejected["payload"]["command_id"], "c_2");
+    assert_eq!(rejected["payload"]["code"], "invalid_arguments");
+    drop(writer);
+    closer.shutdown(Shutdown::Both).unwrap();
+    Deadline::after(WITHIN).recv_or_fail(&reader_done_rx, "the reader thread to end");
+    assert!(
+        clock.await_parked(origin + idle_exit, WITHIN),
+        "the hub parks for its idle exit"
+    );
+    clock.advance(idle_exit + Duration::from_secs(1));
+    let code = Deadline::after(WITHIN)
+        .recv_or_fail(&done_rx, "the hub to exit for idleness")
+        .expect("serve returns");
+    assert_eq!(code, 0);
 }
