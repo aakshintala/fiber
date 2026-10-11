@@ -775,7 +775,7 @@ fn a_wrapped_item_is_revealed_whole() {
         if app
             .lines()
             .get(line)
-            .is_some_and(|text| text.to_string().starts_with(" •"))
+            .is_some_and(|text| text.to_string().starts_with(" ●"))
         {
             assert_eq!(rows, 1, "the summary is one row");
         } else {

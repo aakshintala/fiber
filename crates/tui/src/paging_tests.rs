@@ -2620,7 +2620,7 @@ fn shown_carries_the_spin_marks_of_its_lines() {
     let moving = shown
         .lines
         .iter()
-        .rposition(|(line, _, _)| line.to_string().starts_with(" • Read 1 file"));
+        .rposition(|(line, _, _)| line.to_string().starts_with(" ● Read 1 file"));
     assert_eq!(shown.spins, vec![(moving.unwrap_or(usize::MAX), 1)]);
 }
 

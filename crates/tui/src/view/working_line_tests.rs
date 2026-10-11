@@ -750,7 +750,7 @@ fn untargeted_lines_never_spin() {
     }
     assert_eq!(diffs.len(), 1, "{diffs:?}");
     let (x, _y, before, after) = &diffs[0];
-    assert_eq!((*x, before.as_str()), (1, "•"));
+    assert_eq!((*x, before.as_str()), (1, "●"));
     assert_eq!(after.as_str(), SPINNER[0]);
 }
 
@@ -792,15 +792,17 @@ fn a_clipped_group_line_off_screen_asks_nothing() {
     let summary = all
         .lines
         .iter()
-        .position(|(line, _, _)| line.to_string().starts_with(" • Read"))
+        .position(|(line, _, _)| line.to_string().starts_with(" ● Read"))
         .expect("a group summary");
-    // One row, cut with "…": the tail never draws.
+    // One row, cut with "…": the tail never draws, while the duration
+    // and the toggle keep their columns.
     let text = all
         .lines
         .get(summary)
         .map(|(line, _, _)| line.to_string())
         .expect("a group summary");
-    assert!(text.ends_with('…'), "{text}");
+    assert!(text.contains('…'), "{text}");
+    assert!(text.ends_with("0s ▸"), "{text}");
     assert!(!text.contains("file09.rs"), "{text}");
     let top = all.first.saturating_add(
         all.lines

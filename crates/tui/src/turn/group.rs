@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use super::target_id;
 use crate::app::Target;
-use crate::format::{Kind, Kinds, count, cut, dim, heading, kind, label, opened, seconds, summary};
+use crate::format::{Kind, Kinds, count, dim, heading, kind, label, opened, summary};
 use crate::markdown::style;
 use crate::rows::{RowText, Rows};
 use crate::theme::Role;
@@ -265,6 +265,14 @@ impl Group {
     /// summary line is one row in `width` cells, whatever runs. A
     /// call's images draw as their one line each under its ledger row
     /// (`docs/tui.md`, "Images").
+    /// Its lines. A finished group with no call is its thinking, one line
+    /// a block; otherwise a summary line, and the ledger when open. The
+    /// summary line is one row in `width` cells, whatever runs: the dot,
+    /// the kinds in their fixed order, and, right-aligned, the group's
+    /// duration and ▸ while closed or ▾ while open. What does not fit is
+    /// cut with "…", so the duration and the toggle stay put. A call's
+    /// images draw as their one line each under its ledger row
+    /// (`docs/tui.md`, "Images").
     pub(crate) fn rows(
         &self,
         running: bool,
@@ -278,16 +286,27 @@ impl Group {
             }
             return;
         }
-        let mut parts = Vec::new();
-        let kinds = Line::from(self.kinds().summary()).to_string();
-        if !kinds.is_empty() {
-            parts.push(kinds);
-        }
+        // The body: the kinds with ", thought …", then each joined by
+        // " · ": the failed model call count, the in-flight targets while
+        // running, and the streaming thought's heading. Dim throughout,
+        // the heading italic too (`docs/tui.md`, "Tool groups and the
+        // ledger", "Turns").
+        let mut body: Vec<Span<'static>> = self.kinds().summary();
+        let join = |body: &mut Vec<Span<'static>>| {
+            if !body.is_empty() {
+                body.push(dim_span(" · ".to_owned()));
+            }
+        };
         let failed = self.failed() as u64;
         if failed > 0 {
-            parts.push(count(failed, "failed model call", "failed model calls"));
+            join(&mut body);
+            body.push(dim_span(count(
+                failed,
+                "failed model call",
+                "failed model calls",
+            )));
         }
-        let elapsed = if running {
+        if running {
             let flight: Vec<String> = self
                 .calls()
                 .filter(|call| call.status.is_none())
@@ -299,38 +318,69 @@ impl Group {
                 )
                 .collect();
             if !flight.is_empty() {
-                parts.push(flight.join(", "));
+                join(&mut body);
+                body.push(dim_span(flight.join(", ")));
             }
             if let Some(thought) = self.thoughts().filter(|t| t.ended.is_none()).last() {
-                parts.push(match heading(&thought.text, true) {
+                join(&mut body);
+                let text = match heading(&thought.text, true) {
                     Some(heading) => format!("Thinking: {heading}"),
                     None => "Thinking".to_owned(),
-                });
+                };
+                body.push(Span::styled(
+                    text,
+                    Style::default()
+                        .add_modifier(Modifier::DIM)
+                        .add_modifier(Modifier::ITALIC),
+                ));
             }
-            None
-        } else {
-            seconds(self.last.saturating_sub(self.first))
-        };
-        // A finished group's duration stays whole at the end of the line:
-        // what does not fit is cut from the descriptive part with "…", so
-        // the duration is still there (`docs/tui.md`, "Tool groups and the
-        // ledger").
-        let body = parts.join(" · ");
-        let suffix = elapsed.as_deref().map(|span| {
-            if body.is_empty() {
-                format!(" {span}")
-            } else {
-                format!(" · {span}")
-            }
-        });
-        let head = if body.is_empty() {
-            "•".to_owned()
-        } else {
-            format!("• {body}")
-        };
-        if body.is_empty() && suffix.is_none() {
+        }
+        // An empty body draws no row, as before.
+        if body.is_empty() {
             return;
         }
+        // A running group's dot spins on the working line's tick in the
+        // attention colour; a finished group's dot is dim, as is the
+        // whole line (`docs/tui.md`, "The working line", "Turns").
+        let mut left = Vec::new();
+        if running {
+            left.push(Span::styled("●", style(Role::Attention)));
+        } else {
+            left.push(dim_span("●".to_owned()));
+        }
+        left.push(dim_span(" ".to_owned()));
+        left.extend(body);
+        // The duration and the toggle, right-aligned and dim. The toggle
+        // follows the ledger's draw, not a search draw's (`docs/tui.md`,
+        // "Search").
+        let draws = self.open || self.calls().any(|call| call.asking);
+        let right = vec![dim_span(format!(
+            "{} {}",
+            crate::format::duration(self.last.saturating_sub(self.first)),
+            if draws { "▾" } else { "▸" },
+        ))];
+        // The row fills `width` exactly; what does not fit is cut from
+        // the left part with "…", so the right part keeps its columns.
+        let max = usize::from(width);
+        let right_width = spans_width(&right);
+        let left_width = spans_width(&left);
+        let mut row = if left_width + 1 + right_width <= max {
+            let mut row = left;
+            row.push(dim_span(" ".repeat(max - left_width - right_width)));
+            row.extend(right);
+            row
+        } else if max >= right_width + 2 {
+            let mut row = fit(left, max - right_width - 2);
+            row.push(dim_span("…".to_owned()));
+            row.push(dim_span(" ".to_owned()));
+            row.extend(right);
+            row
+        } else {
+            let mut row = left;
+            row.push(dim_span(" ".to_owned()));
+            row.extend(right);
+            fit(row, max)
+        };
         // A running summary line carries its spinner's cell: the draw
         // site spins it on the working line's tick, so keyed and keyless
         // running groups both move (`docs/tui.md`, "The working line").
@@ -342,26 +392,11 @@ impl Group {
         } else {
             RowText::plain()
         };
-        let mut line = match &suffix {
-            Some(tail) => format!("{head}{tail}"),
-            None => head.clone(),
-        };
-        // What does not fit is cut with "…", so the line never wraps
-        // (`docs/tui.md`, "Tool groups and the ledger").
-        let max = usize::from(width);
-        if crate::format::width(&line) > max {
-            match &suffix {
-                Some(tail) => {
-                    let keep =
-                        max.saturating_sub(crate::format::width(tail) + crate::format::width("…"));
-                    line = format!("{}…{tail}", cut(&head, keep));
-                }
-                None => line = format!("{}…", cut(&line, max.saturating_sub(1))),
-            }
-        }
+        // A row exactly `inner` wide is never split, and the spin column
+        // moves with the card's pad.
         out.push_text(
             (
-                dim(line),
+                Line::from(std::mem::take(&mut row)),
                 self.key.as_deref().map(|key| Target::Group(target_id(key))),
             ),
             text,
@@ -370,7 +405,6 @@ impl Group {
         // A group with no key has no target, and draws as it is on a
         // search draw too: a match there is one nothing could reveal
         // (`docs/tui.md`, "Search").
-        let draws = self.open || self.calls().any(|call| call.asking);
         match self.key.as_deref().map(|key| Target::Group(target_id(key))) {
             Some(target) => {
                 if out.open_scope(target, draws) {
@@ -459,6 +493,46 @@ impl Group {
 
 /// The gutter left blank.
 const GAP: &str = "    ";
+
+/// A dim span.
+fn dim_span(text: String) -> Span<'static> {
+    Span::styled(text, Style::default().add_modifier(Modifier::DIM))
+}
+
+/// How many cells `spans` take on screen.
+fn spans_width(spans: &[Span<'_>]) -> usize {
+    spans
+        .iter()
+        .map(|span| crate::format::width(&span.content))
+        .sum()
+}
+
+/// `spans` cut to at most `max` cells, styles kept: the span crossing
+/// the edge is cut short with "…" in its own style, and the rest is
+/// left out (`docs/tui.md`, "Tool groups and the ledger").
+fn fit(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut taken = 0usize;
+    for span in spans {
+        let cells = crate::format::width(&span.content);
+        if taken >= max {
+            break;
+        }
+        if taken + cells <= max {
+            taken += cells;
+            out.push(span);
+        } else {
+            let style = span.style;
+            let kept = crate::format::cut(&span.content, max - taken - 1);
+            if !kept.is_empty() {
+                out.push(Span::styled(kept, style));
+            }
+            out.push(Span::styled("…", style));
+            break;
+        }
+    }
+    out
+}
 
 /// A thought's line after `gutter`, and its text when open.
 fn thought_rows(thought: &Thought, gutter: &str, out: &mut Rows) {

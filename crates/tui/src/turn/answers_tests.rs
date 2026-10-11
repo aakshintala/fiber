@@ -147,7 +147,7 @@ fn rules(app: &App) -> Vec<Vec<String>> {
 fn ledger(app: &App) -> String {
     texts(app)
         .into_iter()
-        .find(|text| !text.trim_start().starts_with('•') && text.contains(" ask_user "))
+        .find(|text| !text.trim_start().starts_with(['•', '●']) && text.contains(" ask_user "))
         .unwrap_or_default()
 }
 
@@ -487,7 +487,7 @@ fn the_rule_sits_where_the_answer_landed_and_the_group_stays_open() {
     let read = texts.iter().position(|text| text.ends_with("read a.rs"));
     let rule = texts.iter().position(|text| text == " you answered");
     assert!(read.is_some() && read < rule, "{texts:#?}");
-    let groups = texts.iter().filter(|text| text.starts_with(" • ")).count();
+    let groups = texts.iter().filter(|text| text.starts_with(" ● ")).count();
     assert_eq!(groups, 1, "{texts:#?}");
 }
 
@@ -629,7 +629,9 @@ fn the_group_line_counts_the_questions_asked() {
     );
     let texts = texts(&app);
     assert!(
-        texts.contains(&" • Asked 4 questions, called 1 tool".to_owned()),
+        texts
+            .iter()
+            .any(|text| text.starts_with(" ● Asked 4 questions, called 1 tool")),
         "{texts:#?}"
     );
 }

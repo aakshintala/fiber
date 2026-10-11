@@ -668,7 +668,7 @@ fn grouped<B: ratatui::backend::Backend + crate::screen::SyncEmit>(backend: B) -
 fn clicks_open_the_ledger_then_a_call_then_the_thought() {
     let mut lp = grouped(TestBackend::new(60, 12));
     assert!(!shown(&lp).contains("read src/a.rs"), "{}", shown(&lp));
-    let group = row_of(&lp, "• Read");
+    let group = row_of(&lp, "● Read");
     feed(&mut lp, vec![click(40, group)]);
     let read = row_of(&lp, "read src/a.rs");
     assert!(!shown(&lp).contains("fn body_of_a"), "{}", shown(&lp));
@@ -679,7 +679,7 @@ fn clicks_open_the_ledger_then_a_call_then_the_thought() {
     feed(&mut lp, vec![click(0, thought)]);
     assert!(shown(&lp).contains("Read a.rs first."), "{}", shown(&lp));
     // A second click on the summary closes the ledger again.
-    let group = row_of(&lp, "• Read");
+    let group = row_of(&lp, "● Read");
     feed(&mut lp, vec![click(0, group)]);
     assert!(!shown(&lp).contains("read src/a.rs"), "{}", shown(&lp));
 }
@@ -687,7 +687,7 @@ fn clicks_open_the_ledger_then_a_call_then_the_thought() {
 #[test]
 fn hover_over_a_group_line_tints_only_its_row() {
     let lp = grouped(TestBackend::new(60, 12));
-    let group = row_of(&lp, "• Read");
+    let group = row_of(&lp, "● Read");
     let mut lp = grouped(Cells::default());
     lp.screen.backend_mut().drawn.clear();
     feed(&mut lp, vec![motion(5, group)]);
@@ -807,7 +807,7 @@ fn a_click_on_more_lists_every_notice() {
 #[test]
 fn the_open_notice_overlay_hides_the_conversation_targets() {
     let mut lp = grouped(TestBackend::new(60, 12));
-    let group = row_of(&lp, "• Read");
+    let group = row_of(&lp, "● Read");
     feed(&mut lp, notices(1));
     feed(&mut lp, vec![click(36, 0)]);
     assert!(lp.app.notice_overlay().is_some());

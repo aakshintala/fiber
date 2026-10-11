@@ -117,6 +117,8 @@ fn a_resumed_process_closes_the_cut_short_turn() {
     let summary = texts(&app)[7].clone();
     open(&mut app, &summary);
     assert_eq!(texts(&app)[8], "   1 read a.rs · running");
+    // Opening flips the toggle, so the row is read again to close it.
+    let summary = texts(&app)[7].clone();
     open(&mut app, &summary);
     resumed(&mut app, true, 60_000);
     let lines = texts(&app);

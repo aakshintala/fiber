@@ -1015,11 +1015,12 @@ fn styles_reach_the_screen() {
             .map(|cell| cell.style())
             .unwrap_or_default()
     };
-    // The summary line is dim from its dot on; the reply is not. The
-    // summary is one row, whatever runs, so the row after it is the
-    // reply's, not the summary's second row.
-    let summary = row("• Read");
-    assert!(cell(0, summary).add_modifier.contains(Modifier::DIM));
+    // The summary line is dim from its dot on; the reply is not. The dot
+    // sits past the card's one-column padding. The summary is one row,
+    // whatever runs, so the row after it is the reply's, not the summary's
+    // second row.
+    let summary = row("● Read");
+    assert!(cell(1, summary).add_modifier.contains(Modifier::DIM));
     assert!(!cell(0, summary + 1).add_modifier.contains(Modifier::DIM));
     assert!(!cell(0, row("Fixed.")).add_modifier.contains(Modifier::DIM));
     // The bubble is tinted to the last text column, and blank to its
@@ -2246,7 +2247,8 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
     assert!(shown.contains("ask_user 4 questions"), "{shown}");
     assert!(!shown.contains("file08.rs"), "{shown}");
     let row = summary_row(&buf, "ask_user 4 questions");
-    assert!(row.ends_with('…'), "{row}");
+    assert!(row.contains('…'), "{row}");
+    assert!(row.ends_with('▸'), "{row}");
     assert!(crate::format::width(&row) <= usize::from(W), "{row}");
     // At a narrow width the one row is cut there instead.
     app.set_size(40, H);
@@ -2254,8 +2256,9 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
     let mut buf = Buffer::empty(narrow);
     render(&app, narrow, &mut buf, None);
     let shown = text(&buf);
-    let row = summary_row(&buf, "asked 4 questions");
-    assert!(row.ends_with('…'), "{row}");
+    let row = summary_row(&buf, "Read 9 files");
+    assert!(row.contains('…'), "{row}");
+    assert!(row.ends_with('▸'), "{row}");
     assert!(crate::format::width(&row) <= 40, "{row}");
     assert!(!shown.contains("{\""), "{shown}");
 }
