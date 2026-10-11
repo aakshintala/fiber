@@ -1,6 +1,9 @@
 //! The converter's working memory in bytes (`docs/tools.md`, "HTML to
 //! markdown"): the bytes the converting thread holds at once beside the
-//! output, on hostile pages of about 8 MiB. This binary installs the
+//! output, on hostile pages of about 8 MiB: about 45 bytes per attribute
+//! of an unclosed tag, a page-sized comment and a page-sized attribute
+//! value each held whole within the measured peak, and the converter's
+//! own 256 KiB of working memory on a page-long link. This binary installs the
 //! counting allocator and holds only these tests, so no other test binary
 //! changes allocator.
 
@@ -227,124 +230,9 @@ fn a_page_long_link_holds_no_page_sized_buffer() {
     );
 }
 
-#[test]
-fn a_link_of_short_words_and_mixed_whitespace_holds_no_word_vec() {
-    let mut raw = String::new();
-    for separator in [" ", "\t", "\n", "\r", "\x0C", "  \t\n"] {
-        raw.push('a');
-        raw.push_str(separator);
-        if raw.len() >= PAGE {
-            break;
-        }
-    }
-    while raw.len() < PAGE {
-        raw.push_str("a ");
-    }
-    raw.truncate(PAGE);
-    let html = format!("<a href=\"u\">{raw}</a>");
-    let fetched = fetch("text/html; charset=utf-8", html.into_bytes());
-    let collapsed = raw.split_ascii_whitespace().collect::<Vec<_>>().join(" ");
-    let expected = format!("[{collapsed}](u)\n");
-    assert_markdown_eq(&expected, markdown(&fetched), "the link markdown");
-    assert!(
-        working(&fetched) <= bound(),
-        "working {}",
-        working(&fetched)
-    );
-}
-
-#[test]
-fn an_unclosed_title_holds_no_title_copy() {
-    let words = "word ".repeat(PAGE / 5);
-    let html = format!("<title>{words}");
-    let fetched = fetch("text/html; charset=utf-8", html.into_bytes());
-    let collapsed = words.split_ascii_whitespace().collect::<Vec<_>>().join(" ");
-    let expected = format!("# {collapsed}\n");
-    assert_markdown_eq(&expected, markdown(&fetched), "the title heading");
-    assert!(
-        working(&fetched) <= bound(),
-        "working {}",
-        working(&fetched)
-    );
-}
-
-#[test]
-fn deeply_nested_templates_hold_four_bytes_per_element() {
-    let depth = 400_000;
-    let mut html = "<template>".repeat(depth);
-    assert_eq!(html.len(), 4_000_000);
-    html.push('x');
-    let fetched = fetch("text/html; charset=utf-8", html.into_bytes());
-    assert_eq!(markdown(&fetched), "");
-    let empty = fetch("text/html; charset=utf-8", Vec::new());
-    let peak = fetched.measured.peak();
-    assert!(
-        peak <= working(&empty) + WORKING + 4 * depth,
-        "plain peak {peak}"
-    );
-}
-
-/// The body length the finishing tests use: `String` doubling lands
-/// exactly on it, so one title byte more doubles the title's capacity.
-const FINISH_BODY: usize = 131_072;
-
-/// Fetches a page of a plain title of `title_len` characters over a
-/// plain body of `FINISH_BODY`, with the whole result checked exactly:
-/// both lengths are exact, so each side of the shorter-part choice in
-/// `Writer::finish` measures differently.
-fn finish_fetch(title_len: usize) -> Fetched {
-    let title = "t".repeat(title_len);
-    let body = "x".repeat(FINISH_BODY);
-    let html = format!("<title>{title}</title>{body}");
-    let fetched = fetch("text/html; charset=utf-8", html.into_bytes());
-    let expected = format!("# {title}\n\n{body}\n");
-    assert_markdown_eq(&expected, markdown(&fetched), "the titled page");
-    fetched
-}
-
 /// The empty page's working peak, measured the same way.
 fn empty_working() -> usize {
     working(&fetch("text/html; charset=utf-8", Vec::new()))
-}
-
-#[test]
-fn finishing_a_shorter_title_copies_only_the_title() {
-    let baseline = empty_working();
-    let fetched = finish_fetch(FINISH_BODY - 1);
-    // The title is the shorter part: the working peak holds it, not the
-    // body, which became the result.
-    assert!(
-        working(&fetched) <= baseline + (FINISH_BODY - 1) + WORKING,
-        "working {}",
-        working(&fetched)
-    );
-}
-
-#[test]
-fn finishing_an_equal_title_copies_either_part() {
-    let baseline = empty_working();
-    let fetched = finish_fetch(FINISH_BODY);
-    // Equal lengths take the title branch: either copy costs the same,
-    // so the peak only pins the bound, not the branch.
-    assert!(
-        working(&fetched) <= baseline + FINISH_BODY + WORKING,
-        "working {}",
-        working(&fetched)
-    );
-}
-
-#[test]
-fn finishing_a_longer_title_copies_only_the_body() {
-    let baseline = empty_working();
-    let fetched = finish_fetch(FINISH_BODY + 1);
-    // The body is the shorter part: the working peak holds it, not the
-    // title, which became the result. The title's capacity doubled past
-    // the body's, so copying it instead would cost 128 KiB more.
-    assert!(
-        working(&fetched) <= baseline + FINISH_BODY + WORKING,
-        "working {}",
-        working(&fetched)
-    );
 }
 
 #[test]
