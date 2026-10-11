@@ -22,9 +22,9 @@ use serde_json::json;
 
 use super::*;
 use crate::connection::serve_connection;
-use crate::diag::Diag;
 use crate::fake::{FakeStarter, status};
 use crate::recent::{self, RecentRow};
+use crate::testkit::{args, id};
 
 /// One named deadline per receive: the hub answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -37,20 +37,16 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hd");
-        let dir = held.path().join("h");
-        fs::create_dir_all(&dir).unwrap();
+        let (held, dir) = crate::testkit::home("hd");
         Self { dir, held }
     }
 
     fn hub(&self) -> Arc<Hub> {
         let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-        Arc::new(Hub::new(
+        Arc::new(crate::testkit::hub(
             &self.dir,
-            "0.0.0",
             Arc::new(FakeStarter::bind_and_hold(&self.dir)),
-            Arc::clone(&timed),
-            Diag::open(&self.dir, timed),
+            timed,
         ))
     }
 
@@ -74,14 +70,6 @@ impl Temp {
         fs::write(dir.join("session.lock"), b"").unwrap();
         dir
     }
-}
-
-fn id(n: u64) -> String {
-    format!("s_{n:016x}")
-}
-
-fn args(value: serde_json::Value) -> Map<String, Value> {
-    value.as_object().unwrap().clone()
 }
 
 /// Holds session `dir`'s lock, as a running session process does.

@@ -20,11 +20,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
-use log::diag::Level;
+use log::diag::{Level, Severity};
 
 use super::*;
 use crate::connection::Hub;
-use crate::diag::Diag;
 use crate::fake::FakeStarter;
 use crate::listen::Held;
 use fakes::Deadline;
@@ -49,9 +48,7 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hi");
-        let dir = held.path().join("h");
-        fs::create_dir_all(&dir).unwrap();
+        let (held, dir) = crate::testkit::home("hi");
         Self { dir, held }
     }
 
@@ -148,18 +145,20 @@ fn serve_with_hub_at_peak_between(
     peak: fn() -> Option<u64>,
     between: Arc<dyn Fn(bool) + Send + Sync>,
 ) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
+    // Keeps its own hub: the diag carries the test's level, peak reader and between hook.
     let timed: Arc<dyn contract::clock::Clock> = clock;
     let hub = Arc::new(Hub::new(
         &temp.dir,
         "0.0.0",
         Arc::new(FakeStarter::hang(&temp.dir)),
         Arc::clone(&timed),
-        Diag::open(&temp.dir, timed)
+        crate::diag::open(&temp.dir, timed)
             .with_level(level)
             .with_peak(peak)
             .with_between(between),
     ));
-    hub.diag.info("hub_started", "The hub started.");
+    hub.diag
+        .line(Severity::Info, None, "hub_started", "The hub started.");
     let lock = crate::listen::lock(&temp.dir).unwrap().unwrap();
     let bound = crate::listen::bind(&lock, &temp.dir).unwrap().unwrap();
     let held = Held::new(lock, bound);
@@ -422,13 +421,7 @@ fn an_accept_after_the_exit_claim_gets_eof_without_hello() {
     let clock = fakes::clock::FakeClock::new();
     let timed = Arc::clone(&clock);
     let timed: Arc<dyn Clock> = timed;
-    let hub = Hub::new(
-        &temp.dir,
-        "0.0.0",
-        Arc::new(FakeStarter::hang(&temp.dir)),
-        Arc::clone(&timed),
-        Diag::open(&temp.dir, timed),
-    );
+    let hub = crate::testkit::hub(&temp.dir, Arc::new(FakeStarter::hang(&temp.dir)), timed);
     // No thread waits on the clock: the idle wait below runs on this one.
     clock.advance(IDLE);
     let stop = AtomicBool::new(false);

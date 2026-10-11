@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use contract::SessionId;
+use log::diag::Severity;
 use serde_json::Value;
 
 use crate::connection::{Hub, lock};
@@ -81,8 +82,9 @@ pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Optio
         return match crate::resume::resume(hub, next) {
             Ok(stream) => Some(stream),
             Err(refused) => {
-                hub.diag.warn_session(
-                    next,
+                hub.diag.line(
+                    Severity::Warn,
+                    Some(next),
                     &start::code_name(&refused.code),
                     &format!("Session {} could not resume.", next.0),
                 );
@@ -95,8 +97,9 @@ pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Optio
     {
         Some(recorded) => recorded.workspace,
         None => {
-            hub.diag.warn_session(
-                next,
+            hub.diag.line(
+                Severity::Warn,
+                Some(next),
                 "io_failed",
                 &format!("Session {} could not start.", next.0),
             );
@@ -106,8 +109,9 @@ pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Optio
     let started = match hub.starter.rewind(next, &workspace, from) {
         Ok(started) => started,
         Err(_) => {
-            hub.diag.warn_session(
-                next,
+            hub.diag.line(
+                Severity::Warn,
+                Some(next),
                 "io_failed",
                 &format!("Session {} could not start.", next.0),
             );
@@ -116,16 +120,18 @@ pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Optio
     };
     match start::await_bind(hub, &socket, started.as_ref()) {
         Bind::Connected(stream) => {
-            hub.diag.info_session(
-                next,
+            hub.diag.line(
+                Severity::Info,
+                Some(next),
                 "session_started",
                 &format!("Session {} started after a rewind.", next.0),
             );
             Some(stream)
         }
         Bind::Exited | Bind::TimedOut | Bind::Failed(_) => {
-            hub.diag.warn_session(
-                next,
+            hub.diag.line(
+                Severity::Warn,
+                Some(next),
                 "io_failed",
                 &format!("Session {} could not start.", next.0),
             );

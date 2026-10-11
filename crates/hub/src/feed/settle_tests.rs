@@ -22,6 +22,7 @@ use fakes::clock::FakeClock;
 use super::super::{Entry, Feed, RUN_SCAN, lock};
 use crate::fake::{FakeSession, status, status_line};
 use crate::recent::{self, Left, RecentRow};
+use crate::testkit::{id, new_feed, start, stop_within};
 
 /// One named deadline per wait: the feed answers before it.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -34,35 +35,14 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hs");
-        let dir = held.path().join("h");
-        fs::create_dir_all(dir.join("run")).unwrap();
+        let (held, dir) = crate::testkit::with_run("hs");
         Self { dir, held }
     }
-}
-
-fn id(n: u64) -> String {
-    format!("s_{n:016x}")
-}
-
-fn new_feed(temp: &Temp) -> (Arc<Feed>, Arc<FakeClock>) {
-    let clock = FakeClock::new();
-    let timed: Arc<dyn Clock> = Arc::clone(&clock) as Arc<dyn Clock>;
-    (Arc::new(Feed::new(&temp.dir, timed)), clock)
 }
 
 /// The instant the scanner, and a listing started now, park until.
 fn next_scan(clock: &FakeClock) -> Instant {
     clock.now() + RUN_SCAN
-}
-
-/// Starts `feed` and waits until its first scan is done and it parks.
-fn start(feed: &Arc<Feed>, clock: &FakeClock) {
-    feed.start();
-    assert!(
-        clock.await_parked(next_scan(clock), DEADLINE),
-        "the scanner parks"
-    );
 }
 
 /// Runs [`Feed::settled`] on a thread; the receiver gets the live ids
@@ -84,17 +64,6 @@ fn await_listing_parked(clock: &FakeClock, until: Instant) {
         clock.await_parked_count(until, 2, DEADLINE),
         "the listing parks beside the scanner"
     );
-}
-
-#[track_caller]
-fn stop_within(feed: &Arc<Feed>) {
-    let (tx, rx) = mpsc::channel();
-    let stopping = Arc::clone(feed);
-    thread::spawn(move || {
-        stopping.stop();
-        tx.send(()).unwrap_or(());
-    });
-    assert!(Deadline::after(DEADLINE).recv(&rx).is_ok(), "stop returns");
 }
 
 fn pause_settle_wait(feed: &Feed) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
@@ -137,7 +106,7 @@ fn say_idle(session: &FakeSession, id: &str) {
 
 /// A silent session the first scan followed, and a listing parked on it.
 fn parked_on_silent(temp: &Temp) -> (Arc<Feed>, Arc<FakeClock>, FakeSession, Instant) {
-    let (feed, clock) = new_feed(temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let session = FakeSession::bind(&temp.dir, &id(1));
     start(&feed, &clock);
     assert!(session.await_subscribed(1, DEADLINE));
@@ -194,7 +163,7 @@ fn a_silent_session_holds_the_listing_for_one_rescan_at_most() {
 #[test]
 fn stopping_the_feed_releases_a_listing_before_any_scan() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let rx = listing(&feed);
     assert!(
         clock.await_parked_unbounded(DEADLINE),
@@ -211,7 +180,7 @@ fn stopping_the_feed_releases_a_listing_before_any_scan() {
 #[test]
 fn a_stop_between_the_first_scan_check_and_wait_releases_a_listing() {
     let temp = Temp::new();
-    let (feed, _) = new_feed(&temp);
+    let (feed, _) = new_feed(&temp.dir);
     let (arrived, release) = pause_settle_wait(&feed);
     let rx = listing(&feed);
     await_pause(&arrived);
@@ -237,7 +206,7 @@ fn a_stop_between_the_first_scan_check_and_wait_releases_a_listing() {
 #[test]
 fn a_scan_finish_between_the_first_scan_check_and_wait_releases_a_listing() {
     let temp = Temp::new();
-    let (feed, _clock) = new_feed(&temp);
+    let (feed, _clock) = new_feed(&temp.dir);
     let (arrived, release) = pause_settle_wait(&feed);
     let rx = listing(&feed);
     await_pause(&arrived);
@@ -274,7 +243,7 @@ fn a_status_between_the_post_scan_check_and_wait_releases_a_listing() {
 #[test]
 fn a_listing_made_before_the_first_scan_is_answered_by_it() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let rx = listing(&feed);
     assert!(
         clock.await_parked_unbounded(DEADLINE),
@@ -292,7 +261,7 @@ fn a_listing_made_before_the_first_scan_is_answered_by_it() {
 #[test]
 fn a_deadline_passing_before_the_first_scan_does_not_release_the_listing() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     let rx = listing(&feed);
     assert!(
         clock.await_parked_unbounded(DEADLINE),
@@ -315,7 +284,7 @@ fn a_deadline_passing_before_the_first_scan_does_not_release_the_listing() {
 #[test]
 fn a_session_found_after_the_first_scan_is_not_awaited() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     start(&feed, &clock);
     let session = FakeSession::bind(&temp.dir, &id(1));
     clock.advance(RUN_SCAN);
@@ -332,7 +301,7 @@ fn a_session_found_after_the_first_scan_is_not_awaited() {
 #[test]
 fn live_is_every_running_session_in_id_order_and_no_left_one() {
     let temp = Temp::new();
-    let (feed, clock) = new_feed(&temp);
+    let (feed, clock) = new_feed(&temp.dir);
     // A crashed session seeded from `recent.jsonl`: in the feed, not live.
     let crashed = id(5);
     fs::create_dir_all(recent::session_dir(&temp.dir, "p", &crashed)).unwrap();

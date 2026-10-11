@@ -17,7 +17,6 @@ use contract::CommandId;
 use serde_json::json;
 
 use super::*;
-use crate::diag::Diag;
 use crate::fake::{FakeStarter, Handshake};
 use crate::start::Outcome;
 use fakes::Deadline;
@@ -49,13 +48,7 @@ fn setup() -> Setup {
         },
     );
     let timed: Arc<dyn Clock> = Arc::clone(&clock) as Arc<dyn Clock>;
-    let hub = Arc::new(Hub::new(
-        &dir,
-        "0.0.0",
-        Arc::new(starter.clone()),
-        Arc::clone(&timed),
-        Diag::open(&dir, timed),
-    ));
+    let hub = Arc::new(crate::testkit::hub(&dir, Arc::new(starter.clone()), timed));
     Setup {
         held,
         dir,

@@ -32,6 +32,8 @@ mod retire;
 mod rewind;
 mod sessions;
 mod start;
+#[cfg(test)]
+pub(crate) mod testkit;
 mod tick;
 
 use std::io;
@@ -44,9 +46,9 @@ use std::time::Duration;
 use contract::SessionId;
 use contract::clock::{Clock, Wake};
 use contract::shapes::Failure;
+use log::diag::Severity;
 
 use crate::connection::Hub;
-use crate::diag::Diag;
 use crate::listen::Held;
 
 pub use crate::error::StartError;
@@ -144,7 +146,7 @@ pub fn serve(
         },
         Mode::Installed => listen::lock_wait(home)?,
     };
-    let diag = Diag::open(home, Arc::clone(&clock));
+    let diag = crate::diag::open(home, Arc::clone(&clock));
     let bound = match configure_and_bind(&lock, home, configure) {
         Ok(Some(bound)) => Ok(bound),
         Ok(None) => match mode {
@@ -161,7 +163,12 @@ pub fn serve(
     let (bound, settings) = match bound {
         Ok(bound) => bound,
         Err(error) => {
-            diag.error(&start::code_name(&error.code()), &error.to_string());
+            diag.line(
+                Severity::Error,
+                None,
+                &start::code_name(&error.code()),
+                &error.to_string(),
+            );
             return Err(error);
         }
     };
@@ -191,15 +198,17 @@ pub fn serve(
                     .spawn(move || drop(crate::rewind::reach(&hub, &from, &next)))
             };
             if spawned.is_err() {
-                hub.diag.warn_session(
-                    &failed,
+                hub.diag.line(
+                    Severity::Warn,
+                    Some(&failed),
                     "io_failed",
                     &format!("Session {} could not start.", failed.0),
                 );
             }
         })
     });
-    hub.diag.info("hub_started", "The hub started.");
+    hub.diag
+        .line(Severity::Info, None, "hub_started", "The hub started.");
     crate::rejoin::wire(&hub);
     let got = Arc::new(AtomicI32::new(0));
     arm(&got, hub.waker());

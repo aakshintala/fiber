@@ -25,6 +25,7 @@ use crate::Starter as _;
 use crate::connection::{Hub, lock};
 use crate::fake::{FakeSession, FakeStarter};
 use crate::relay::{Kept, Relay, Replayed};
+use crate::testkit::write_log;
 use fakes::Deadline;
 
 /// One hang-guard deadline per wait: every close lands before it.
@@ -48,9 +49,7 @@ struct Fixture {
 
 impl Fixture {
     fn new(tag: &str) -> Self {
-        let held = fakes::TempDir::new(tag);
-        let home = held.path().join("h");
-        std::fs::create_dir_all(&home).unwrap();
+        let (held, home) = crate::testkit::home(tag);
         Self { home, held }
     }
 }
@@ -59,13 +58,7 @@ impl Fixture {
 fn hub(home: &std::path::Path, starter: FakeStarter) -> Arc<Hub> {
     let clock = fakes::clock::FakeClock::new();
     let timed: Arc<dyn contract::clock::Clock> = clock;
-    Arc::new(Hub::new(
-        home,
-        "0.0.0",
-        Arc::new(starter),
-        Arc::clone(&timed),
-        crate::diag::Diag::open(home, timed),
-    ))
+    Arc::new(crate::testkit::hub(home, Arc::new(starter), timed))
 }
 
 /// A kept `subscribe` line with `id` at `level`.
@@ -87,22 +80,6 @@ fn durable(seq: u64, state: &str) -> String {
                 "output": 0}, "cost": 0.0, "subscription_cost": 0.0},
             "delegates": 0, "jobs": 0, "clients": 0}});
     format!("{}\n", serde_json::to_string(&line).unwrap())
-}
-
-/// Writes `id`'s log: a `session_started` recording `workspace`, then each
-/// of `last` in order.
-fn write_log(home: &std::path::Path, id: &str, workspace: &str, last: &[Value]) {
-    let dir = home.join("projects").join("-w").join("sessions").join(id);
-    std::fs::create_dir_all(&dir).unwrap();
-    let mut text = format!(
-        "{}\n",
-        json!({"kind": "session_started", "session_id": id,
-            "payload": {"workspace": workspace}})
-    );
-    for line in last {
-        text.push_str(&format!("{}\n", serde_json::to_string(line).unwrap()));
-    }
-    std::fs::write(dir.join("events.jsonl"), text).unwrap();
 }
 
 fn fiber_exited(id: &str) -> Value {
@@ -476,7 +453,7 @@ fn a_session_whose_socket_refuses_keeps_the_level() {
 fn a_log_ending_fiber_exited_keeps_the_level() {
     let fixture = Fixture::new("cs3");
     let bound = FakeSession::bind(&fixture.home, SID);
-    write_log(&fixture.home, SID, "/w", &[fiber_exited(SID)]);
+    write_log(&fixture.home, SID, "/w", None, &[fiber_exited(SID)]);
     let (rig, client_peer, mut session_peer, reader, _park) =
         rig(&fixture.home, FakeStarter::hang(&fixture.home), SID, false);
     lock(&rig.relays)
@@ -513,7 +490,7 @@ fn a_log_ending_fiber_exited_keeps_the_level() {
 fn a_log_ending_rewound_keeps_the_level() {
     let fixture = Fixture::new("cs4");
     let bound = FakeSession::bind(&fixture.home, SID);
-    write_log(&fixture.home, SID, "/w", &[rewound(SID, NEXT)]);
+    write_log(&fixture.home, SID, "/w", None, &[rewound(SID, NEXT)]);
     let (rig, client_peer, mut session_peer, reader, _park) = rig(
         &fixture.home,
         FakeStarter::bind_and_hold(&fixture.home),
@@ -551,7 +528,7 @@ fn a_relay_that_saw_the_exited_window_sends_no_stream_closed() {
     let starter = FakeStarter::bind_hold_and_append_started(&fixture.home);
     let (rig, client_peer, mut session_peer, reader, _park) =
         rig(&fixture.home, starter.clone(), SID, false);
-    write_log(&fixture.home, SID, "/w", &[fiber_exited(SID)]);
+    write_log(&fixture.home, SID, "/w", None, &[fiber_exited(SID)]);
     lock(&rig.relays)
         .subscribed
         .push((SID.to_owned(), subscribe("c_sub", "full")));

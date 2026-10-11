@@ -17,6 +17,7 @@ use std::thread;
 
 use super::*;
 use crate::fake::status;
+use crate::testkit::id;
 
 struct Temp {
     dir: PathBuf,
@@ -26,9 +27,7 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hr");
-        let dir = held.path().join("h");
-        fs::create_dir_all(&dir).unwrap();
+        let (held, dir) = crate::testkit::home("hr");
         Self { dir, held }
     }
 
@@ -42,10 +41,6 @@ impl Temp {
     fn append(&self, row: &RecentRow) {
         append(&self.dir, row).unwrap();
     }
-}
-
-fn id(n: u64) -> String {
-    format!("s_{n:016x}")
 }
 
 /// A row for session `n` with no directory made.

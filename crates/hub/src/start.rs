@@ -15,6 +15,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use contract::{CommandId, ErrorCode, SessionId};
+use log::diag::Severity;
 use serde_json::Value;
 
 use crate::connection::Hub;
@@ -114,8 +115,12 @@ pub(crate) fn run(
         }
         None => None,
     };
-    hub.diag
-        .info_session(&id, "session_started", "Session started for local.");
+    hub.diag.line(
+        Severity::Info,
+        Some(&id),
+        "session_started",
+        "Session started for local.",
+    );
     Outcome::Accepted {
         session_id: id,
         first,
@@ -190,8 +195,9 @@ fn subscribe_summary(
             // The log keeps the code and a fixed sentence: the session's
             // message may hold model text. The rejection keeps what the
             // session said.
-            hub.diag.warn_session(
-                id,
+            hub.diag.line(
+                Severity::Warn,
+                Some(id),
                 &code_name(&code),
                 &format!("Session {} rejected the hub's subscription.", id.0),
             );
@@ -236,8 +242,9 @@ pub(crate) fn prompt(held: Held, hub: &Hub) -> Result<(), Outcome> {
             ),
         },
     };
-    hub.diag.warn_session(
-        &id,
+    hub.diag.line(
+        Severity::Warn,
+        Some(&id),
         &code_name(&code),
         &format!(
             "Session {} {sentence} the first prompt of command {}.",
@@ -313,8 +320,9 @@ fn acknowledge(stream: &UnixStream, command_id: &str) -> Ack {
 fn exited_or_io(hub: &Hub, id: &SessionId, started: &dyn crate::Started) -> Outcome {
     match started.exited() {
         Some(failure) => {
-            hub.diag.warn_session(
-                id,
+            hub.diag.line(
+                Severity::Warn,
+                Some(id),
                 &code_name(&failure.code),
                 &format!("Session {} exited before it answered.", id.0),
             );
@@ -330,8 +338,9 @@ fn exited_or_io(hub: &Hub, id: &SessionId, started: &dyn crate::Started) -> Outc
 pub(crate) fn io_failed(hub: &Hub, id: &SessionId, detail: &str) -> Outcome {
     // The log keeps the code and a fixed sentence: `detail` may hold an
     // io error, a path, or model text. The rejection keeps what happened.
-    hub.diag.warn_session(
-        id,
+    hub.diag.line(
+        Severity::Warn,
+        Some(id),
         "io_failed",
         &format!("Session {} could not start.", id.0),
     );

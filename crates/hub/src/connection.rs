@@ -22,10 +22,10 @@ use contract::clock::{Clock, Wake, wall_ms};
 use contract::commands::SentPart;
 use contract::events::CommandResult;
 use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
+use log::diag::Severity;
 use serde_json::{Map, Value};
 
 use crate::Starter;
-use crate::diag::Diag;
 use crate::feed::{Feed, answer, on_feed};
 use crate::first::{FIRST_PROMPT_WAIT, First};
 use crate::relay::Relays;
@@ -43,7 +43,7 @@ pub(crate) struct Hub {
     pub(crate) starter: Arc<dyn Starter>,
     /// The injected clock, for `ts`, `start`'s deadline and the idle wait.
     pub(crate) clock: Arc<dyn Clock>,
-    pub(crate) diag: Diag,
+    pub(crate) diag: log::diag::Diag,
     /// The feed `feed`, `dismiss` and `recent` answer from.
     pub(crate) feed: Arc<Feed>,
     next_client: AtomicU64,
@@ -115,7 +115,7 @@ impl Hub {
         fiber_version: &str,
         starter: Arc<dyn Starter>,
         clock: Arc<dyn Clock>,
-        diag: Diag,
+        diag: log::diag::Diag,
     ) -> Self {
         let tick = Arc::new(Tick::default());
         let wake = Arc::clone(&tick);
@@ -331,8 +331,12 @@ pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
 
 /// Serves an accepted connection already counted by [`Hub::poll_accept`].
 pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
-    hub.diag
-        .info("client_connected", &format!("Client {n} connected."));
+    hub.diag.line(
+        Severity::Info,
+        None,
+        "client_connected",
+        &format!("Client {n} connected."),
+    );
     let writer = match stream.try_clone() {
         Ok(writer) => Arc::new(Mutex::new(writer)),
         Err(_) => {
@@ -396,8 +400,12 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
 /// Logs the departure, then releases the count: once the count shows it
 /// gone, the line is written, and the idle exit's `hub_stopped` follows it.
 fn disconnect(hub: &Hub, n: u64) {
-    hub.diag
-        .info("client_disconnected", &format!("Client {n} disconnected."));
+    hub.diag.line(
+        Severity::Info,
+        None,
+        "client_disconnected",
+        &format!("Client {n} disconnected."),
+    );
     hub.release(n);
 }
 

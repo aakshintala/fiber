@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::fake::FakeStarter;
+use crate::testkit::stop_within;
 use crate::{Started, Starter};
 use contract::events::SessionStatus;
 use fakes::Deadline;
@@ -40,21 +41,13 @@ struct Temp {
 
 impl Temp {
     fn new() -> Self {
-        let held = fakes::TempDir::new("hc");
-        let dir = held.path().join("h");
-        fs::create_dir_all(&dir).unwrap();
+        let (held, dir) = crate::testkit::home("hc");
         Self { dir, held }
     }
 
     fn hub(&self, starter: impl Starter + 'static) -> Arc<Hub> {
         let timed: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-        Arc::new(Hub::new(
-            &self.dir,
-            "0.0.0",
-            Arc::new(starter),
-            Arc::clone(&timed),
-            Diag::open(&self.dir, timed),
-        ))
+        Arc::new(crate::testkit::hub(&self.dir, Arc::new(starter), timed))
     }
 
     fn workspace(&self) -> String {
@@ -782,13 +775,7 @@ fn session_ids_outside_the_minted_shape_are_session_not_found() {
 fn hub_on(temp: &Temp, clock: &Arc<fakes::clock::FakeClock>) -> Hub {
     let timed = Arc::clone(clock);
     let timed: Arc<dyn Clock> = timed;
-    Hub::new(
-        &temp.dir,
-        "0.0.0",
-        Arc::new(FakeStarter::hang(&temp.dir)),
-        Arc::clone(&timed),
-        Diag::open(&temp.dir, timed),
-    )
+    crate::testkit::hub(&temp.dir, Arc::new(FakeStarter::hang(&temp.dir)), timed)
 }
 
 #[test]
@@ -1040,22 +1027,7 @@ fn sessions_over_the_wire_answers_live_and_exited_once() {
     let (code, echoed, _) = rejected(&client.next("the bad project"));
     assert_eq!(code, "invalid_arguments");
     assert_eq!(echoed.as_deref(), Some("c_2"));
-    stop_within(&hub);
-}
-
-/// Stops the feed on a thread and receives its return under [`DEADLINE`]:
-/// joining its threads blocks.
-#[track_caller]
-fn stop_within(hub: &Arc<Hub>) {
-    let (done_tx, done_rx) = mpsc::channel();
-    let hub = Arc::clone(hub);
-    thread::spawn(move || {
-        hub.feed.stop();
-        done_tx.send(()).unwrap_or(());
-    });
-    Deadline::after(DEADLINE)
-        .recv(&done_rx)
-        .expect("the feed stops");
+    stop_within(&hub.feed);
 }
 
 /// Waits under [`DEADLINE`] until attention holds `n` listeners.
@@ -1167,7 +1139,7 @@ fn attention_reaches_every_connection_after_hub_hello_with_or_without_a_feed() {
     drop(b);
     drop(c);
     until_listeners(&hub, 0, "after every client left");
-    stop_within(&hub);
+    stop_within(&hub.feed);
 }
 
 #[test]
@@ -1188,7 +1160,7 @@ fn a_client_that_half_closes_without_reading_still_leaves() {
     d.write.shutdown(Shutdown::Write).unwrap();
     until_listeners(&hub, 0, "after D half-closed");
     until_clients(&hub, 0, "after D half-closed");
-    stop_within(&hub);
+    stop_within(&hub.feed);
 }
 
 /// A hub on a fake clock whose sessions accept the first prompt, with the
@@ -1204,12 +1176,10 @@ fn content_hub(temp: &Temp) -> (Arc<Hub>, Arc<fakes::clock::FakeClock>, FakeStar
         },
     );
     let timed: Arc<dyn Clock> = Arc::clone(&clock) as Arc<dyn Clock>;
-    let hub = Arc::new(Hub::new(
+    let hub = Arc::new(crate::testkit::hub(
         &temp.dir,
-        "0.0.0",
         Arc::new(starter.clone()),
-        Arc::clone(&timed),
-        Diag::open(&temp.dir, timed),
+        timed,
     ));
     (hub, clock, starter)
 }
