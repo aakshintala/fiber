@@ -935,6 +935,7 @@ fn a_steer_drop_naming_a_session_message_leaves_it_queued() {
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     assert_eq!(drop_answer.recv_timeout(DEADLINE), Ok(false));
     let lines = world.turn_lines();
+    assert_eq!(kinds(&lines), one_step_with(&[]));
     assert_eq!(lines[0].payload["input"], message_input("c_message"));
 }
 
