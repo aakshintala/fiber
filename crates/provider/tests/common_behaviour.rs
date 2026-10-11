@@ -306,11 +306,7 @@ fn completions_keyed(
 }
 
 /// The call built after declaring `header` as the cache-key header.
-fn gemini_keyed(
-    endpoint: &Endpoint,
-    request: &ModelRequest,
-    header: &str,
-) -> Box<dyn ModelCall> {
+fn gemini_keyed(endpoint: &Endpoint, request: &ModelRequest, header: &str) -> Box<dyn ModelCall> {
     Box::new(
         provider::google_generative_ai::Gemini::new(endpoint.clone())
             .cache_key_header(header)
@@ -320,11 +316,13 @@ fn gemini_keyed(
 
 /// A reply the Responses protocol decodes into `Ok`.
 fn responses_completed() -> Response {
-    Response::stream(harness::responses_sse(&[json!({"type": "response.completed",
+    Response::stream(harness::responses_sse(&[
+        json!({"type": "response.completed",
         "response": {"id": "resp_1", "status": "completed",
             "usage": {"input_tokens": 10,
                 "input_tokens_details": {"cached_tokens": 4},
-                "output_tokens": 3}}} )]))
+                "output_tokens": 3}}} ),
+    ]))
 }
 
 /// The sent tool list in a request body, except Gemini's, which nests its
@@ -1002,20 +1000,16 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
         request.tools = wire_tools::wire_tools_fixture();
         let mut reordered = request.clone();
         reordered.tools.reverse();
-        let server = ProviderServer::start([
-            (wire.completed)(),
-            (wire.completed)(),
-            (wire.completed)(),
-        ])
-        .unwrap();
+        let server =
+            ProviderServer::start([(wire.completed)(), (wire.completed)(), (wire.completed)()])
+                .unwrap();
         let endpoint = harness::endpoint(wire.protocol.name, &server);
         for request in [&request, &request, &reordered] {
             harness::run((wire.protocol.call)(&endpoint, request))
                 .0
                 .unwrap();
         }
-        let bodies: Vec<Vec<u8>> =
-            server.requests().into_iter().map(|r| r.body).collect();
+        let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
         assert_eq!(bodies.len(), 3, "{}", wire.protocol.name);
         assert_eq!(bodies[0], bodies[1], "{}", wire.protocol.name);
         assert_eq!(
@@ -1030,8 +1024,7 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
 fn a_reply_carries_the_size_of_the_body_it_sent() {
     for wire in wires() {
         let (_session, request) = imaged_user_request("look");
-        let server =
-            ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
+        let server = ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
         let endpoint = harness::endpoint(wire.protocol.name, &server);
         let reply = harness::run((wire.protocol.call)(&endpoint, &request))
             .0
@@ -1153,8 +1146,7 @@ fn a_users_unreadable_image_is_named_in_the_text_and_not_sent() {
             session_dir: session.path().to_path_buf(),
             ..harness::request()
         };
-        let server =
-            ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
+        let server = ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
         let endpoint = harness::endpoint(wire.protocol.name, &server);
         for text in ["look", "Image: 2x1 image/png.\n"] {
             let request = imaged(text);
@@ -1189,8 +1181,7 @@ fn a_users_unreadable_image_is_named_in_the_text_and_not_sent() {
 #[test]
 fn the_requests_own_output_limit_is_capped_by_the_models() {
     for wire in wires() {
-        let server =
-            ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
+        let server = ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
         let endpoint = Endpoint {
             max_output_tokens: Some(4096),
             ..harness::endpoint(wire.protocol.name, &server)
@@ -1222,8 +1213,7 @@ fn the_requests_own_output_limit_is_capped_by_the_models() {
 #[test]
 fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
     for wire in wires() {
-        let server =
-            ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
+        let server = ProviderServer::start([(wire.completed)(), (wire.completed)()]).unwrap();
         let endpoint = harness::endpoint(wire.protocol.name, &server);
         let request = harness::request();
         harness::run((wire.protocol.call)(&endpoint, &request))
@@ -1233,7 +1223,12 @@ fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
             .0
             .unwrap();
         let sent = server.requests();
-        assert_eq!(sent[0].header("x-opencode-session"), None, "{}", wire.protocol.name);
+        assert_eq!(
+            sent[0].header("x-opencode-session"),
+            None,
+            "{}",
+            wire.protocol.name
+        );
         assert_eq!(
             sent[1].header("x-opencode-session"),
             Some("session_1"),
