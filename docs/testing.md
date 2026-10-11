@@ -397,7 +397,10 @@ signal the wrong process or lose data, such as the `kill(-1)` refusal
 ("Running tests"). Elsewhere a mutant that changes no behaviour a consumer
 sees takes an exemption in the code, with a written reason, instead of a test
 that pins it. The exemption goes on a function, since an exemption on a
-statement or block is not reliably honoured. How many runners share the
+statement or block is not reliably honoured. It is written
+`#[cfg_attr(false, mutants::skip)]`, with the reason in a comment above it:
+cargo-mutants silently ignores the attribute when it carries a `reason`
+argument. How many runners share the
 mutants is CI's to set.
 
 Mutants run on Linux, so code compiled only on macOS, or on any platform other
