@@ -29,6 +29,10 @@ pub(crate) struct Package {
     pub(crate) drop_deprecated: bool,
     /// Ids models.dev lists that the vendor rejects.
     pub(crate) skip: &'static [&'static str],
+    /// Ids kept from models.dev: empty keeps every model, non-empty
+    /// keeps just these ids and drops the rest silently. An id matching
+    /// no generated model is an error, like a stale table entry.
+    pub(crate) only: &'static [&'static str],
     /// A model's protocol, replacing the rule's, as `(id, protocol)`.
     pub(crate) protocol_overrides: &'static [(&'static str, &'static str)],
     /// A JSON object merged into every model.
@@ -74,6 +78,7 @@ const ANTHROPIC: Package = Package {
     base_url: "https://api.anthropic.com/v1",
     drop_deprecated: false,
     skip: &[],
+    only: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
     by_protocol: &[(
@@ -134,6 +139,7 @@ const GEMINI: Package = Package {
     base_url: "https://generativelanguage.googleapis.com/v1beta",
     drop_deprecated: false,
     skip: &[],
+    only: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
     by_protocol: &[],
@@ -186,6 +192,7 @@ const OPENAI: Package = Package {
     base_url: "https://api.openai.com/v1",
     drop_deprecated: false,
     skip: &["gpt-5.6"],
+    only: &[],
     protocol_overrides: &[],
     every_model: r#"{"compat":{"store":false}}"#,
     by_protocol: &[],
@@ -234,6 +241,31 @@ const OPENAI: Package = Package {
     ],
 };
 
+/// Codex's models: the four subscription models models.dev lists under
+/// `openai`, all on `openai-responses` with the session cache-key header.
+/// The ChatGPT backend serves a 272000-token window, not the 1050000 the
+/// OpenAI API lists, so the table pins `context_window`.
+const CODEX: Package = Package {
+    path: "providers/codex/providers/codex.json",
+    source: "openai",
+    provider: r#"{"headers":{"originator":"fiber"},"login":"browser","name":"codex","reviewer_model":"gpt-6-luna"}"#,
+    protocol: ProtocolRule::Fixed("openai-responses"),
+    base_url: "https://chatgpt.com/backend-api/codex",
+    drop_deprecated: false,
+    skip: &[],
+    only: &["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+    protocol_overrides: &[],
+    every_model: r#"{"compat":{"cache_key_header":"session_id","store":false},"context_window":272000,"subscription":true}"#,
+    by_protocol: &[],
+    by_model: &[],
+    thinking: &[
+        ("gpt-6.1-sol", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("low")),
+        ("gpt-6-sol", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("medium")),
+        ("gpt-6-astra", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("low")),
+        ("gpt-6-luna", LOW_MEDIUM_HIGH_XHIGH_MAX, Some("medium")),
+    ],
+};
+
 /// Meta's models, all on `openai-responses` with its search tool.
 const MUSE: Package = Package {
     path: "providers/muse/providers/muse.json",
@@ -243,6 +275,7 @@ const MUSE: Package = Package {
     base_url: "https://api.meta.ai/v1",
     drop_deprecated: false,
     skip: &[],
+    only: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
     by_protocol: &[(
@@ -277,6 +310,7 @@ const OPENCODE_GO: Package = Package {
     base_url: "https://opencode.ai/zen/go/v1",
     drop_deprecated: true,
     skip: &[],
+    only: &[],
     protocol_overrides: &[("minimax-m2.7", "openai-completions")],
     every_model: r#"{"subscription":true}"#,
     by_protocol: &[
@@ -304,6 +338,7 @@ const OPENCODE_ZEN: Package = Package {
     base_url: "https://opencode.ai/zen/v1",
     drop_deprecated: true,
     skip: &[],
+    only: &[],
     protocol_overrides: &[],
     every_model: r#"{}"#,
     by_protocol: &[
@@ -327,6 +362,13 @@ const OPENCODE_ZEN: Package = Package {
     thinking: &[],
 };
 
-/// The six first-party provider files generated from models.dev.
-pub(crate) const PACKAGES: [Package; 6] =
-    [ANTHROPIC, GEMINI, OPENAI, MUSE, OPENCODE_GO, OPENCODE_ZEN];
+/// The seven first-party provider files generated from models.dev.
+pub(crate) const PACKAGES: [Package; 7] = [
+    ANTHROPIC,
+    GEMINI,
+    OPENAI,
+    CODEX,
+    MUSE,
+    OPENCODE_GO,
+    OPENCODE_ZEN,
+];

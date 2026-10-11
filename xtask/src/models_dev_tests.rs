@@ -47,6 +47,7 @@ fn fixed_package(source: &'static str, protocol: &'static str) -> Package {
         base_url: "https://t/v1",
         drop_deprecated: false,
         skip: &[],
+        only: &[],
         protocol_overrides: &[],
         every_model: r#"{}"#,
         by_protocol: &[],
@@ -151,6 +152,61 @@ fn output_without_text_is_dropped() {
     assert!(generated_model(&output, "voice").is_some());
     assert_eq!(output.models, 1);
     assert_eq!(left_out.len(), 3);
+}
+
+#[test]
+fn only_keeps_exactly_its_ids_silently() {
+    let mut package = fixed_package("s", "openai-responses");
+    package.only = &["b"];
+    let (output, left_out) = generate_one(
+        &package,
+        &[
+            ("a", tool_model(json!({}))),
+            ("b", tool_model(json!({}))),
+            ("c", tool_model(json!({}))),
+        ],
+    );
+    assert!(generated_model(&output, "b").is_some());
+    assert_eq!(output.models, 1);
+    assert!(left_out.is_empty(), "{left_out:?}");
+}
+
+#[test]
+fn empty_only_keeps_every_passing_model() {
+    let package = fixed_package("s", "openai-responses");
+    let (output, left_out) = generate_one(
+        &package,
+        &[("a", tool_model(json!({}))), ("b", tool_model(json!({})))],
+    );
+    assert!(generated_model(&output, "a").is_some());
+    assert!(generated_model(&output, "b").is_some());
+    assert_eq!(output.models, 2);
+    assert!(left_out.is_empty(), "{left_out:?}");
+}
+
+#[test]
+fn an_only_id_absent_from_the_catalog_is_an_error() {
+    let mut package = fixed_package("s", "openai-responses");
+    package.only = &["ghost"];
+    let input = catalog(package.source, &[("m", tool_model(json!({})))]);
+    assert_eq!(
+        generate_err(&package, &input),
+        "t: only entry for `ghost` matches no generated model"
+    );
+}
+
+#[test]
+fn an_only_id_filtered_out_is_an_error() {
+    let mut package = fixed_package("s", "openai-responses");
+    package.only = &["off"];
+    let input = catalog(
+        package.source,
+        &[("off", tool_model(json!({"tool_call": false})))],
+    );
+    assert_eq!(
+        generate_err(&package, &input),
+        "t: only entry for `off` matches no generated model"
+    );
 }
 
 #[test]

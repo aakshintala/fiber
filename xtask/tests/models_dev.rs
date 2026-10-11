@@ -25,10 +25,11 @@ use test_dir::TestDir;
 const WITHIN: Duration = Duration::from_secs(30);
 
 /// Every file the generator writes, from the repository root.
-const GENERATED: [&str; 7] = [
+const GENERATED: [&str; 8] = [
     "providers/anthropic/providers/anthropic.json",
     "providers/gemini/providers/gemini.json",
     "providers/openai/providers/openai.json",
+    "providers/codex/providers/codex.json",
     "providers/muse/providers/muse.json",
     "providers/opencode/providers/opencode-go.json",
     "providers/opencode/providers/opencode-zen.json",
@@ -174,6 +175,36 @@ fn generated_files_match_the_committed_ones() {
         }
     }
     assert!(failures.is_empty(), "drift:\n{}", failures.join("\n"));
+}
+
+#[test]
+fn codex_is_generated_from_the_snapshot() {
+    let dir = TestDir::new("models-dev-codex");
+    let snapshot = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/models-dev.json");
+    let (code, out) = models_dev(&dir, &["--from", &snapshot.display().to_string()]);
+    assert_eq!(code, 0, "{out}");
+    let text = std::fs::read_to_string(dir.path().join("providers/codex/providers/codex.json"))
+        .expect("codex is generated from the snapshot");
+    let file: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let models = file["models"].as_array().unwrap();
+    let mut ids: Vec<&str> = models
+        .iter()
+        .map(|model| model["id"].as_str().unwrap())
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        ["gpt-6-astra", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+        "codex lists exactly its four models"
+    );
+    for model in models {
+        assert_eq!(
+            model["subscription"],
+            true,
+            "codex model {} is a subscription model",
+            model["id"].as_str().unwrap()
+        );
+    }
 }
 
 #[test]
