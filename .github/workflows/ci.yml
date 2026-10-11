@@ -164,7 +164,7 @@ jobs:
             fi
           fi
           echo "mutants in the diff: $count"
-          cargo xtask plan --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
+          cargo xtask plan --base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
             --draft "$DRAFT" --bug "$BUG" --mutants "$MUTANTS" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
 
   lint:
