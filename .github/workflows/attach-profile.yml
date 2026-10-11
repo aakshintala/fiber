@@ -39,9 +39,11 @@ jobs:
       # C code (lua-src, ring) compiles against musl's headers (ci.yml's Release job).
       CC_x86_64_unknown_linux_musl: musl-gcc
       # perf's DWARF unwinder gave every user sample of the static musl binary
-      # an empty stack (run 38109358642); frame pointers unwind it. Job-wide, so the
-      # paging jig reuses fiber's dependency builds.
-      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: -C force-frame-pointers=yes
+      # an empty stack (run 38109358642); frame pointers unwind it. perf resolves no
+      # symbols in a static-pie binary (run 38112545576, where addr2line resolved them),
+      # so the binary is static, not PIE. Job-wide, so the paging jig reuses fiber's
+      # dependency builds.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: -C force-frame-pointers=yes -C relocation-model=static
       FIBER_TARGET: x86_64-unknown-linux-musl
     steps:
       - name: Check out
@@ -140,14 +142,6 @@ jobs:
           perf report -i "$out/perf.data" --pid "$pids" --no-children -g none \
             --sort dso,sym --stdio > "$out/fiber-symbols.txt"
           perf script -i "$out/perf.data" --pid "$pids" | head -n 400 > "$out/fiber-script-head.txt"
-          # perf showed fiber's samples as bare addresses (run 38112087200): record what
-          # the binary holds and resolve the top addresses without perf.
-          bin="target/$FIBER_TARGET/release/fiber"
-          { file "$bin"; readelf -h "$bin" | grep -E 'Type|Entry'
-            echo "symbols: $(nm --defined-only "$bin" | wc -l)"
-            grep -oE 'fiber +\[\.\] 0x[0-9a-f]+' "$out/fiber-symbols.txt" | head -n 20 |
-              awk '{ print $3 }' | xargs -r addr2line -f -C -e "$bin"
-          } > "$out/fiber-binary.txt" 2>&1 || true
           inferno-flamegraph < "$out/folded.txt" > "$out/flamegraph.svg"
           inferno-flamegraph < "$out/fiber-folded.txt" > "$out/fiber-flamegraph.svg"
           exit "$status"
