@@ -322,9 +322,7 @@ fn a_handoff_call_names_nothing() {
 
 /// A session naming `names` whose inbox first takes the person's `name`:
 /// the name is written at the idle drain, before the turn starts.
-fn session_with_person_name(
-    person: Vec<(&str, mpsc::Sender<contract::inbox::Answer>)>,
-) -> Session {
+fn session_with_person_name(person: Vec<(&str, mpsc::Sender<contract::inbox::Answer>)>) -> Session {
     let calls: Vec<(&str, Value)> = ["name"].iter().map(|name| (*name, paris())).collect();
     let session = Session::with_tools(
         vec![calls_reply("", &calls), Scripted::text("Done.")],
@@ -392,8 +390,7 @@ fn a_person_name_pins_the_session_against_a_naming_call() {
 fn a_cleared_person_name_lets_a_naming_call_name_the_session() {
     let (mine_tx, mine_rx) = mpsc::channel();
     let (clear_tx, clear_rx) = mpsc::channel();
-    let mut session =
-        session_with_person_name(vec![("Mine", mine_tx), ("", clear_tx)]);
+    let mut session = session_with_person_name(vec![("Mine", mine_tx), ("", clear_tx)]);
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let mine = Deadline::after(DEADLINE)
         .recv(&mine_rx)

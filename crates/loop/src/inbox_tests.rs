@@ -456,12 +456,7 @@ fn close() -> Delivery {
 }
 
 fn name(text: &str) -> Delivery {
-    Delivery::Name(
-        Name {
-            text: text.into(),
-        },
-        ignore(),
-    )
+    Delivery::Name(Name { text: text.into() }, ignore())
 }
 
 fn control_with(name: Option<&str>) -> Control {
@@ -569,9 +564,7 @@ fn a_person_name_idle_is_written_then_acked_and_pins() {
         )
         .unwrap();
     assert!(input.pieces.is_empty(), "a name starts no turn idle");
-    let (answer, seen) = Deadline::after(DEADLINE)
-        .recv(&rx)
-        .expect("the ack runs");
+    let (answer, seen) = Deadline::after(DEADLINE).recv(&rx).expect("the ack runs");
     assert!(
         matches!(answer, Ok(None)),
         "a name accepts its ack with no answer"
