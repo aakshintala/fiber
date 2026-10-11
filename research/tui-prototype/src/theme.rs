@@ -734,4 +734,142 @@ mod tests {
         // The painted background is the background role's light value.
         assert_eq!(map(LIGHT, Color::Reset, true), Color::Rgb(255, 255, 255));
     }
+
+    #[test]
+    fn edge_is_blank_without_colour_and_keeps_its_row() {
+        let none = Look {
+            theme: Theme::Dark,
+            depth: Depth::None,
+        };
+        let r = crate::edge_for(none, "\u{2584}", crate::BC, Some(crate::BW), 12);
+        assert_eq!(r.spans.len(), 1);
+        assert_eq!(r.spans[0].content.to_string(), " ".repeat(12));
+        assert_eq!(r.spans[0].style, ratatui::style::Style::new());
+        assert_eq!(r.bg, Some(crate::BW));
+        // Any other look draws the half-block in the surface tint.
+        let r = crate::edge_for(Look::DARK, "\u{2584}", crate::BC, Some(crate::BW), 12);
+        assert_eq!(r.spans[0].content.to_string(), "\u{2584}".repeat(12));
+        assert_eq!(r.spans[0].style.fg, Some(crate::BC));
+        assert_eq!(r.spans[0].style.bg, Some(crate::BW));
+        assert_eq!(r.bg, Some(crate::BW));
+    }
+
+    #[test]
+    fn map_cell_keeps_everything_but_colours() {
+        use ratatui::style::Modifier;
+        let mut c = Cell::default();
+        c.set_symbol("x");
+        c.fg = crate::BLUE;
+        c.bg = crate::BC;
+        c.underline_color = crate::RED;
+        c.modifier = Modifier::BOLD | Modifier::DIM | Modifier::ITALIC | Modifier::REVERSED;
+        c.skip = true;
+        let m = map_cell(LIGHT, &c);
+        assert_eq!(m.symbol(), "x");
+        assert_eq!(
+            m.modifier,
+            Modifier::BOLD | Modifier::DIM | Modifier::ITALIC | Modifier::REVERSED
+        );
+        assert!(m.skip);
+        assert_eq!(m.fg, val(0x0969da));
+        assert_eq!(m.bg, val(0xeaeef2));
+        assert_eq!(m.underline_color, val(0xcf222e));
+    }
+
+    /// The fixture's `--static` frame, painted into a buffer: every cell
+    /// the mapper sees on a real run.
+    fn static_frame() -> Vec<Cell> {
+        let text = std::fs::read_to_string(format!(
+            "{}/fixtures/session.jsonl",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let mut f = crate::Fold::default();
+        for line in text.lines() {
+            if let Ok(e) = serde_json::from_str::<serde_json::Value>(line) {
+                f.apply(&e);
+            }
+        }
+        let rows = crate::conversation(&f, 160, &crate::View::default());
+        assert!(!rows.is_empty(), "the fixture builds no rows");
+        let mut buf = ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(
+            0,
+            0,
+            160,
+            rows.len() as u16,
+        ));
+        for (y, r) in rows.iter().enumerate() {
+            crate::paint(&mut buf, 0, y as u16, 160, r);
+        }
+        buf.content.clone()
+    }
+
+    #[test]
+    fn static_frame_has_no_rgb_at_256() {
+        for look in [DARK_256, LIGHT_256] {
+            for c in static_frame() {
+                let m = map_cell(look, &c);
+                for (what, col) in [("fg", m.fg), ("bg", m.bg), ("ul", m.underline_color)] {
+                    assert!(
+                        !matches!(col, Color::Rgb(..)),
+                        "{what} {col:?} under {look:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn static_frame_has_no_colour_at_none() {
+        for c in static_frame() {
+            let m = map_cell(NONE, &c);
+            assert_eq!(m.fg, Color::Reset);
+            assert_eq!(m.bg, Color::Reset);
+            assert_eq!(m.underline_color, Color::Reset);
+        }
+    }
+
+    #[test]
+    fn static_frame_keeps_no_dark_value_under_light() {
+        use std::collections::HashSet;
+        // Every dark value the frame can carry, except black: match
+        // text is black in both themes, so it legitimately survives.
+        let darks: HashSet<(u8, u8, u8)> = [
+            0xff5d73u32,
+            0x6eaafe,
+            0xff9f43,
+            0xb39ddb,
+            0x7dd3fc,
+            0x3a3a4a,
+            0x0c0c11,
+            0x1a1a22,
+            0x343541,
+            0x101017,
+            0x181821,
+            0x1f1a2e,
+            0xce9178,
+            0xb5cea8,
+            0x7a7a8a,
+            0x808080,
+            0x5a4a1a,
+            0x264f78,
+            0x501c20,
+            0x1e1e26,
+            0x262014,
+            0x241a10,
+            0x121217,
+            0x201114,
+        ]
+        .into_iter()
+        .map(hex)
+        .collect();
+        for c in static_frame() {
+            let m = map_cell(LIGHT, &c);
+            for col in [m.fg, m.bg, m.underline_color] {
+                if let Color::Rgb(r, g, b) = col {
+                    assert!(!darks.contains(&(r, g, b)), "dark {r:02x}{g:02x}{b:02x} survives");
+                }
+            }
+        }
+    }
 }
