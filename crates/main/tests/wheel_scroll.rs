@@ -90,9 +90,15 @@ fn thirty_wheel_ups_scroll_the_opened_read_ninety_rows() {
     run.ready();
     run.write(b"say hi\r");
     run.wait_screen("the turn's reply", |grid| grid.contents.contains("Done."));
-    // The turn's title lands late under load: after it, no direct tty
-    // write can fall inside the measured window below.
-    run.wait_bytes(0, "say hi · fiber\x07".as_bytes(), "the turn's title");
+    // The idle title is the last title the turn writes, and it lands late
+    // under load. The working title ends the same way, so wait for the
+    // idle glyph: after it, no direct tty write can fall inside the
+    // measured window below.
+    run.wait_bytes(
+        0,
+        "✓ say hi · fiber\x07".as_bytes(),
+        "the turn's idle title",
+    );
     // Open the ledger, then the read's call, then its output.
     run.write(b"\x0f");
     let ledger = run.wait_screen("the read's ledger row", |grid| {
