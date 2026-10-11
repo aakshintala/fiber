@@ -76,3 +76,53 @@ panic = "abort"
 overflow-checks = true
 lto = "fat"
 codegen-units = 1
+
+# docs/ci.md, "On every pull request that changes code": Fiber's own crates build for size, except
+# tui and picture, which draw and resize images and stay at the default opt-level 3.
+[profile.release.package.main]
+opt-level = "s"
+
+[profile.release.package.cli]
+opt-level = "s"
+
+[profile.release.package.config]
+opt-level = "s"
+
+[profile.release.package.contract]
+opt-level = "s"
+
+[profile.release.package.doors]
+opt-level = "s"
+
+[profile.release.package.extensions]
+opt-level = "s"
+
+[profile.release.package.hub]
+opt-level = "s"
+
+[profile.release.package.jobs]
+opt-level = "s"
+
+[profile.release.package."log:0.0.0"]
+opt-level = "s"
+
+[profile.release.package.loop]
+opt-level = "s"
+
+[profile.release.package.mcp]
+opt-level = "s"
+
+[profile.release.package.net]
+opt-level = "s"
+
+[profile.release.package.provider]
+opt-level = "s"
+
+[profile.release.package.support]
+opt-level = "s"
+
+[profile.release.package.tools]
+opt-level = "s"
+
+[profile.release.package.worktree]
+opt-level = "s"

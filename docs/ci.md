@@ -230,7 +230,11 @@ with none among the 9 ancestors, memory and exact rows are judged against
 the table alone, and the comment says so.
 
 The release profile sets `lto = "fat"` and `codegen-units = 1`, which
-shrinks the binary and lengthens the release build.
+shrinks the binary and lengthens the release build. Fiber's own crates, except
+`tui` and `picture`, build at `opt-level = "s"`: they are the largest share of
+the binary's code, and drawing and image resizing, which stay at the default
+`opt-level = 3`, are the paths where the smaller code costs measurable time.
+Third-party crates stay at 3 (#2042).
 
 Nothing in CI writes a snapshot, calls a live provider or reaches the public
 network (`docs/testing.md`).
