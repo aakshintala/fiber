@@ -58,7 +58,7 @@ impl Setup {
         let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
         );
         write(
             &source.join("providers/fake.json"),
@@ -890,7 +890,7 @@ fn a_bedrock_converse_model_fails_before_the_session() {
     let source = setup.root.path().join("src");
     write(
         &source.join("extension.json"),
-        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
     );
     write(
         &source.join("providers/fake.json"),
@@ -3176,6 +3176,21 @@ fn fixture(setup: &Setup, server: &ProviderServer) {
     .unwrap()
     .commit()
     .unwrap();
+    // The installed manifest declares the fixture provider at the test
+    // server's URL, so the session admits its models.
+    let dir = setup
+        .home()
+        .join("extensions")
+        .join("fiber.test-lua-fixture");
+    let mut installed: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("extension.json")).unwrap()).unwrap();
+    if let Some(into) = installed.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"fixture": [format!("{}/v1", server.url())]}),
+        );
+    }
+    write(&dir.join("extension.json"), &installed);
     config::store_secret(
         &setup.home(),
         "fixture.url",
@@ -3413,10 +3428,15 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     let source = setup.root.path().join("src-plain");
-    write(
-        &source.join("extension.json"),
-        &json!({"name": "plain", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-    );
+    // The manifest declares the URL the script's `models()` serves.
+    let mut manifest = json!({"name": "plain", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"plain": [format!("{}/v1", server.url())]}),
+        );
+    }
+    write(&source.join("extension.json"), &manifest);
     fs::write(
         source.join("init.lua"),
         format!(
@@ -3667,10 +3687,37 @@ fn login_with_an_unknown_key_prints_its_notice_first() {
 /// the configured model.
 fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {
     let source = setup.root.path().join(format!("src-{name}"));
-    write(
-        &source.join("extension.json"),
-        &json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-    );
+    // The manifest declares every `fiber.provider` the script registers
+    // with every `base_url` literal it serves.
+    let mut urls: Vec<&str> = Vec::new();
+    for part in init_lua.split("base_url = \"").skip(1) {
+        if let Some(url) = part.split('"').next()
+            && !urls.contains(&url)
+        {
+            urls.push(url);
+        }
+    }
+    urls.sort();
+    let mut seen: Vec<&str> = Vec::new();
+    for part in init_lua.split("fiber.provider(\"").skip(1) {
+        if let Some(registered) = part.split('"').next()
+            && !seen.contains(&registered)
+        {
+            seen.push(registered);
+        }
+    }
+    let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        let declared: Vec<(String, Value)> = seen
+            .iter()
+            .map(|registered| ((*registered).to_owned(), json!(urls)))
+            .collect();
+        into.insert(
+            "providers".to_owned(),
+            Value::Object(declared.into_iter().collect()),
+        );
+    }
+    write(&source.join("extension.json"), &manifest);
     fs::write(source.join("init.lua"), init_lua).unwrap();
     extensions::plan(
         &setup.home(),
@@ -3792,10 +3839,16 @@ fn provider_with(
                    "context_window": 100000})
         })
         .collect();
-    write(
-        &source.join("extension.json"),
-        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-    );
+    // The manifest declares the models' URL, which the script above
+    // also serves.
+    let mut manifest = json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"fake": [format!("{}/v1", server.url())]}),
+        );
+    }
+    write(&source.join("extension.json"), &manifest);
     write(
         &source.join("providers/fake.json"),
         &json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"},

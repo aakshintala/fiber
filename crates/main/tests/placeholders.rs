@@ -44,6 +44,13 @@ fn an_unconfigured_model_exits_model_unconfigured_naming_the_setting() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
+    // The rewritten template is declared beside the installed URL, so the
+    // session admits the model.
+    write_json(
+        &setup.home().join("extensions/fake/extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+                "providers": {"fake": ["https://{workspace}/v1"]}}),
+    );
     write_json(
         &setup.home().join("extensions/fake/providers/fake.json"),
         &json!({
@@ -70,6 +77,13 @@ fn a_host_value_that_is_not_a_host_never_reaches_the_provider() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
+    // The rewritten template is declared beside the installed URL, so the
+    // session admits the model.
+    write_json(
+        &setup.home().join("extensions/fake/extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+                "providers": {"fake": ["https://{workspace}/v1"]}}),
+    );
     write_json(
         &setup.home().join("extensions/fake/providers/fake.json"),
         &json!({
@@ -96,4 +110,22 @@ fn a_host_value_that_is_not_a_host_never_reaches_the_provider() {
     assert!(!stdout.contains("evil.example"), "{stdout:?}");
     assert!(!stderr.contains("evil.example"), "{stderr:?}");
     assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_model_at_an_unlisted_base_url_is_never_chosen() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    // The installed URL is not listed: the model is left out, so `ask`
+    // exits before any session.
+    write_json(
+        &setup.home().join("extensions/fake/extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+                "providers": {"fake": ["https://other.example/v1"]}}),
+    );
+    let output = run_to_exit(setup.deadline, "fiber ask", setup.fiber(&["ask", "hi"]));
+    assert_pre_session(&output, 1, "no_model");
+    assert!(server.requests().is_empty());
+    assert!(!setup.home().join("projects").exists());
 }

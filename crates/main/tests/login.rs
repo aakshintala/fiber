@@ -63,11 +63,14 @@ impl Setup {
             data["credential"] = source;
         }
         fs::create_dir_all(dir.join("providers")).unwrap();
-        fs::write(
-            dir.join("extension.json"),
-            json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
-        )
-        .unwrap();
+        // The manifest declares the data's URL.
+        let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+        if let Some(into) = manifest.as_object_mut() {
+            let mut declared = serde_json::Map::new();
+            declared.insert(name.to_owned(), json!(["http://127.0.0.1:9/v1"]));
+            into.insert("providers".to_owned(), Value::Object(declared));
+        }
+        fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
         write_record(&dir);
         fs::write(
             dir.join("providers").join(format!("{name}.json")),

@@ -54,10 +54,15 @@ impl Setup {
                 json!({"id": m, "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000})
             })
             .collect();
-        write(
-            &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-        );
+        // The manifest declares the models' URL.
+        let mut manifest = json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+        if let Some(into) = manifest.as_object_mut() {
+            into.insert(
+                "providers".to_owned(),
+                json!({"fake": [format!("{}/v1", server.url())]}),
+            );
+        }
+        write(&source.join("extension.json"), &manifest);
         write(
             &source.join("providers/fake.json"),
             &json!({

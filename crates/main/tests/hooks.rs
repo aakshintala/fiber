@@ -64,7 +64,7 @@ impl Setup {
         let source = self.root.path().join("src").join("fake");
         write(
             &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}).to_string(),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}).to_string(),
         );
         write(
             &source.join("providers/fake.json"),
