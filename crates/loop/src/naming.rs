@@ -26,6 +26,16 @@ pub(crate) enum Named {
     Pinned(Failure),
 }
 
+/// The `session_named` the person's `name` command writes: only the
+/// exact empty string clears, to `name: null`; every other text,
+/// whitespace included, is kept exactly as sent.
+pub(crate) fn by_person(text: String) -> SessionNamed {
+    SessionNamed {
+        name: (!text.is_empty()).then_some(text),
+        by: NamedBy::Person,
+    }
+}
+
 impl Naming {
     /// Folds one event: a `session_named` pins while the person's name
     /// holds, and unpins when cleared or replaced; any other event
