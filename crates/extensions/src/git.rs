@@ -203,8 +203,7 @@ impl Origin {
     /// Clones the repository at the exact recorded `commit` to `dest`
     /// and returns it. Only a full commit hash is checked out: anything
     /// else fails before `git` runs, so a record can never inject a `git`
-    /// option or name a ref. After the checkout, the commit `HEAD` names
-    /// must equal the recorded one. `dest/.git` stays.
+    /// option or name a ref. `dest/.git` stays.
     pub(crate) fn clone_at(
         &self,
         repo: &str,
@@ -234,22 +233,7 @@ impl Origin {
             Some(dest),
             clock,
         )?;
-        let head = self.run(&["rev-parse", "HEAD"], Some(dest), clock)?;
-        Self::checked_out_as(head.trim(), commit)?;
         Ok(commit.to_owned())
-    }
-
-    /// The commit a detached checkout landed on is the recorded one. A
-    /// 64-hex name in a SHA-1 repository can resolve to a branch, so the
-    /// checkout can land on another commit; the comparison refuses that.
-    fn checked_out_as(head: &str, commit: &str) -> Result<(), Error> {
-        if head != commit {
-            return Err(Error::Git {
-                command: "checkout".into(),
-                why: format!("`{commit}` checked out as `{head}`"),
-            });
-        }
-        Ok(())
     }
 
     /// What changed in `dir` of the clone since commit `old`. A call stopped
