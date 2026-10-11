@@ -13,6 +13,7 @@
 
 use std::fs::{self, DirBuilder, File, Permissions, TryLockError};
 use std::io;
+use std::net::{Ipv4Addr, TcpListener};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -46,6 +47,8 @@ pub(crate) struct Held {
     pub(crate) socket: PathBuf,
     dev: u64,
     ino: u64,
+    /// The installed hub's websocket port, bound after `run/hub`.
+    pub(crate) port: Option<crate::port::Listener>,
 }
 
 impl Held {
@@ -56,6 +59,15 @@ impl Held {
             socket: bound.socket,
             dev: bound.dev,
             ino: bound.ino,
+            port: None,
+        }
+    }
+
+        /// Holds the installed hub's bound websocket port.
+    pub(crate) fn with_port(self, listener: crate::port::Listener) -> Self {
+        Self {
+            port: Some(listener),
+            ..self
         }
     }
 
@@ -140,6 +152,13 @@ pub(crate) fn bind(_lock: &Lock, home: &Path) -> Result<Option<Bound>, StartErro
         dev,
         ino,
     }))
+}
+
+/// Binds `127.0.0.1:<port>` for an installed hub's websockets, and no
+/// other address (`docs/invocation.md`, "The hub"). A port of 0 lets the
+/// operating system pick.
+pub(crate) fn bind_port(port: u16) -> io::Result<TcpListener> {
+    TcpListener::bind((Ipv4Addr::LOCALHOST, port))
 }
 
 /// Whether nothing live can hide behind `socket`, whose connect failed

@@ -24,6 +24,7 @@ mod feed;
 mod first;
 mod idle;
 mod listen;
+mod port;
 mod prompt_history;
 mod read_file;
 mod recent;
@@ -195,6 +196,35 @@ pub fn serve(
         Mode::Installed => Duration::MAX,
     };
     let held = Held::new(lock, bound);
+    // Only an installed hub listens on the port, which it reads from
+    // Fiber home's global `config.json` only (`Settings::port`): a hub a
+    // client started ignores it.
+    let held = match mode {
+        Mode::Installed => match &settings.port {
+            Some(port) => match listen::bind_port(port.number) {
+                Ok(tcp) => held.with_port(crate::port::Listener {
+                    tcp,
+                    origins: Arc::from(port.allowed_origins.clone()),
+                }),
+                Err(source) => {
+                    let error = StartError::Port {
+                        port: port.number,
+                        source,
+                    };
+                    diag.line(
+                        Severity::Error,
+                        None,
+                        &start::code_name(&error.code()),
+                        &error.to_string(),
+                    );
+                    held.stop();
+                    return Err(error);
+                }
+            },
+            None => held,
+        },
+        Mode::OnDemand => held,
+    };
     let diag = diag.with_level(settings.level);
     let hub = Arc::new(Hub::new(home, fiber_version, starter, clock, diag));
     // The feed starts a rewound session even when no client relayed the

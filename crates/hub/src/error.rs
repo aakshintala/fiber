@@ -25,6 +25,15 @@ pub enum StartError {
         /// Why.
         source: io::Error,
     },
+    /// `127.0.0.1:<port>` was already taken: only an installed hub binds
+    /// it (`docs/invocation.md`, "The hub").
+    #[error("127.0.0.1:{port}: {source}")]
+    Port {
+        /// The port the hub could not bind.
+        port: u16,
+        /// Why the bind failed.
+        source: io::Error,
+    },
     /// Reading the configuration failed: the failure as the caller built it.
     #[error("{}", .0.message)]
     Configure(Failure),
@@ -36,6 +45,7 @@ impl StartError {
         match self {
             Self::HomeTooLong { .. } => ErrorCode::Usage,
             Self::Io { .. } => ErrorCode::IoFailed,
+            Self::Port { .. } => ErrorCode::IoFailed,
             Self::Configure(failure) => failure.code.clone(),
         }
     }
