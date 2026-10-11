@@ -1,6 +1,6 @@
 use super::{
-    PAGE_BYTES, RESULT_BYTES, TOOL_CALLS, TRIGGER_TOKENS, Turn, busy_turn_samples, count,
-    fdatasync_calls, filler, log_lines, page, turn_bytes,
+    PAGE_BYTES, RESULT_BYTES, RETAINED_SETTLE, TOOL_CALLS, TRIGGER_TOKENS, Turn, busy_turn_samples,
+    count, fdatasync_calls, filler, log_lines, page, retained_anon_kib, turn_bytes,
 };
 
 #[test]
@@ -101,6 +101,67 @@ fn the_busy_turn_reports_its_peak_its_retained_and_its_log() {
 #[test]
 fn a_busy_turn_without_a_whole_turn_has_no_samples() {
     assert!(busy_turn_samples(20480, 19000, &[], 1_520_000).is_err());
+}
+
+const STATUS: &str = "Name:\tfiber\nState:\tS (sleeping)\nVmHWM:\t   10840 kB\nVmRSS:\t   10812 kB\nRssAnon:\t    4100 kB\nRssFile:\t    4800 kB\n";
+
+/// The settle waits `sleeps` records, and the order `events` saw.
+#[derive(Default)]
+struct RetainedRecorder {
+    sleeps: Vec<std::time::Duration>,
+    events: Vec<&'static str>,
+}
+
+#[test]
+fn the_retained_reading_waits_the_settle_then_reads_rss_anon() {
+    let recorder = std::cell::RefCell::new(RetainedRecorder::default());
+    let anon = retained_anon_kib(
+        || {
+            recorder.borrow_mut().events.push("read");
+            Ok(STATUS.to_owned())
+        },
+        |wait| {
+            let mut recorder = recorder.borrow_mut();
+            recorder.sleeps.push(wait);
+            recorder.events.push("sleep");
+        },
+    );
+    assert_eq!(anon, Ok(4100));
+    let recorder = recorder.borrow();
+    // Exactly one settle wait, of ten seconds.
+    assert_eq!(recorder.sleeps, vec![RETAINED_SETTLE]);
+    assert_eq!(RETAINED_SETTLE, std::time::Duration::from_secs(10));
+    // The read follows the wait, so the settled memory is read.
+    assert_eq!(recorder.events, vec!["sleep", "read"]);
+}
+
+#[test]
+fn a_retained_reading_without_rss_anon_is_an_error_not_zero() {
+    let without_anon = STATUS.replace("RssAnon:\t    4100 kB\n", "");
+    let mut sleeps = 0;
+    let anon = retained_anon_kib(
+        || Ok(without_anon.clone()),
+        |_| {
+            sleeps += 1;
+        },
+    );
+    let err = anon.unwrap_err();
+    assert!(err.contains("RssAnon"), "{err}");
+    assert_eq!(sleeps, 1);
+}
+
+#[test]
+fn a_process_gone_during_the_settle_wait_fails_the_reading() {
+    let mut sleeps = 0;
+    let anon = retained_anon_kib(
+        || Err("reading /proc/4101/status: no such file".to_owned()),
+        |_| {
+            sleeps += 1;
+        },
+    );
+    assert!(anon.is_err());
+    // The wait still ran: the process lived through the settle.
+    assert_eq!(sleeps, 1);
 }
 
 #[test]

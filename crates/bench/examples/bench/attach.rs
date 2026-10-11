@@ -330,7 +330,7 @@ fn sample(
     // reads nothing and keeps only its error.
     let memory: Result<(u64, u64), String> = shown.clone().and_then(|()| {
         linux::peak_rss_kib(pid).and_then(|peak| {
-            linux::retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait))
+            busy::retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait))
                 .map(|retained| (peak, retained))
         })
     });

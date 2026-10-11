@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -39,41 +38,11 @@ pub(crate) fn vm_hwm_kib(status: &str) -> Result<u64, String> {
     field(status, "VmHWM")
 }
 
-/// `RssAnon`, the anonymous part of the resident set, in KiB. A status
-/// without it is an error, never 0: a zero would pass a retained budget.
-pub(crate) fn rss_anon_kib(status: &str) -> Result<u64, String> {
-    field(status, "RssAnon")
-}
-
 /// `RssAnon` and `RssFile`, the anonymous and file-backed parts of the
 /// resident set, in KiB. A status without them is an error, never 0: a
 /// zero would invent a diagnostic.
 pub(crate) fn rss_split_kib(status: &str) -> Result<(u64, u64), String> {
-    Ok((rss_anon_kib(status)?, field(status, "RssFile")?))
-}
-
-/// How long a retained reading waits after the work ends before reading
-/// `RssAnon`: freed pages take a moment to leave the resident set.
-pub(crate) const RETAINED_SETTLE: Duration = Duration::from_secs(10);
-
-/// `RssAnon` once the memory the finished work freed has settled: waits
-/// the settle on `sleep`, then reads `RssAnon` from `read_status`. A
-/// missing field, or a process gone during the wait, is an error, never
-/// 0: a zero would pass a retained budget.
-pub(crate) fn retained_anon_kib(
-    read_status: impl FnOnce() -> Result<String, String>,
-    sleep: impl FnOnce(Duration),
-) -> Result<u64, String> {
-    sleep(RETAINED_SETTLE);
-    rss_anon_kib(&read_status()?)
-}
-
-/// `pid`'s `RssAnon` after the settle wait, sleeping on `sleep`.
-pub(crate) fn retained_anon_kib_of(pid: u32, sleep: impl FnOnce(Duration)) -> Result<u64, String> {
-    retained_anon_kib(
-        || read(&Path::new("/proc").join(pid.to_string()).join("status")),
-        sleep,
-    )
+    Ok((field(status, "RssAnon")?, field(status, "RssFile")?))
 }
 
 /// The first character of the `State:` value, `S` in `S (sleeping)`. A

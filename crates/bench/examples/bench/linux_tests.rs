@@ -3,8 +3,7 @@ use std::collections::BTreeMap;
 use serde_json::json;
 
 use super::{
-    Counts, RETAINED_SETTLE, comm, hub_connected, idle_switches, retained_anon_kib, rss_anon_kib,
-    rss_split_kib, switches, unsettled, vm_hwm_kib,
+    Counts, comm, hub_connected, idle_switches, rss_split_kib, switches, unsettled, vm_hwm_kib,
 };
 
 const STATUS: &str = "Name:\tfiber\nState:\tS (sleeping)\nVmHWM:\t   10840 kB\nVmRSS:\t   10812 kB\nRssAnon:\t    4100 kB\nRssFile:\t    4800 kB\nThreads:\t5\nvoluntary_ctxt_switches:\t12\nnonvoluntary_ctxt_switches:\t3\n";
@@ -35,81 +34,6 @@ fn a_status_without_the_split_errors_naming_the_missing_field() {
             .contains("RssFile"),
         "{without_file:?}"
     );
-}
-
-#[test]
-fn rss_anon_is_the_anonymous_part_in_kib() {
-    assert_eq!(rss_anon_kib(STATUS), Ok(4100));
-    let without_anon = STATUS.replace("RssAnon:\t    4100 kB\n", "");
-    assert!(
-        rss_anon_kib(&without_anon)
-            .unwrap_err()
-            .contains("RssAnon"),
-        "{without_anon:?}"
-    );
-    // A file-backed split without the anonymous part is still an error,
-    // never the file half: the retained budget gates the anon half.
-    let anon_as_file = STATUS.replace("RssAnon:", "RssAnonOld:");
-    assert!(rss_anon_kib(&anon_as_file).is_err());
-}
-
-/// The settle waits `sleeps` records, and the order `events` saw.
-#[derive(Default)]
-struct RetainedRecorder {
-    sleeps: Vec<std::time::Duration>,
-    events: Vec<&'static str>,
-}
-
-#[test]
-fn the_retained_reading_waits_the_settle_then_reads_rss_anon() {
-    let recorder = std::cell::RefCell::new(RetainedRecorder::default());
-    let anon = retained_anon_kib(
-        || {
-            recorder.borrow_mut().events.push("read");
-            Ok(STATUS.to_owned())
-        },
-        |wait| {
-            let mut recorder = recorder.borrow_mut();
-            recorder.sleeps.push(wait);
-            recorder.events.push("sleep");
-        },
-    );
-    assert_eq!(anon, Ok(4100));
-    let recorder = recorder.borrow();
-    // Exactly one settle wait, of ten seconds.
-    assert_eq!(recorder.sleeps, vec![RETAINED_SETTLE]);
-    assert_eq!(RETAINED_SETTLE, std::time::Duration::from_secs(10));
-    // The read follows the wait, so the settled memory is read.
-    assert_eq!(recorder.events, vec!["sleep", "read"]);
-}
-
-#[test]
-fn a_retained_reading_without_rss_anon_is_an_error_not_zero() {
-    let without_anon = STATUS.replace("RssAnon:\t    4100 kB\n", "");
-    let mut sleeps = 0;
-    let anon = retained_anon_kib(
-        || Ok(without_anon.clone()),
-        |_| {
-            sleeps += 1;
-        },
-    );
-    let err = anon.unwrap_err();
-    assert!(err.contains("RssAnon"), "{err}");
-    assert_eq!(sleeps, 1);
-}
-
-#[test]
-fn a_process_gone_during_the_settle_wait_fails_the_reading() {
-    let mut sleeps = 0;
-    let anon = retained_anon_kib(
-        || Err("reading /proc/4101/status: no such file".to_owned()),
-        |_| {
-            sleeps += 1;
-        },
-    );
-    assert!(anon.is_err());
-    // The wait still ran: the process lived through the settle.
-    assert_eq!(sleeps, 1);
 }
 
 #[test]

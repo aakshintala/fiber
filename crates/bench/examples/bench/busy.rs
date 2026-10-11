@@ -68,6 +68,33 @@ const PAGE_BYTES: usize = 10 * 1024 * 1024;
 const BUSY_PROMPT: &str = "read each file";
 const FINAL_TEXT: &str = "every file is read";
 
+/// How long a retained reading waits after the work ends before reading
+/// `RssAnon`: freed pages take a moment to leave the resident set.
+pub(crate) const RETAINED_SETTLE: Duration = Duration::from_secs(10);
+
+/// `RssAnon` once the memory the finished work freed has settled: waits
+/// the settle on `sleep`, then reads the anon half of `read_status`'s
+/// split. A missing field, or a process gone during the wait, is an
+/// error, never 0: a zero would pass a retained budget.
+pub(crate) fn retained_anon_kib(
+    read_status: impl FnOnce() -> Result<String, String>,
+    sleep: impl FnOnce(Duration),
+) -> Result<u64, String> {
+    sleep(RETAINED_SETTLE);
+    linux::rss_split_kib(&read_status()?).map(|(anon, _)| anon)
+}
+
+/// `pid`'s `RssAnon` after the settle wait, sleeping on `sleep`.
+pub(crate) fn retained_anon_kib_of(pid: u32, sleep: impl FnOnce(Duration)) -> Result<u64, String> {
+    retained_anon_kib(
+        || {
+            let path = Path::new("/proc").join(pid.to_string()).join("status");
+            fs::read_to_string(&path).map_err(|err| format!("reading {}: {err}", path.display()))
+        },
+        sleep,
+    )
+}
+
 /// An `openai-responses` stream of `events`, then its completion reporting
 /// `input` and `output` tokens.
 fn stream(events: &[Value], input: usize, output: usize) -> Response {
@@ -450,7 +477,7 @@ fn busy_turn(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
         let pid = session.proc.pid();
         let measured = until_stdout(ctx, &session, "turn_completed", TURN).and_then(|()| {
             let rss = linux::peak_rss_kib(pid)?;
-            linux::retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait))
+            retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait))
                 .map(|retained| (rss, retained))
         });
         let stopped = session.proc.stop(ctx.clock);
