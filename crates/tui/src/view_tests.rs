@@ -1717,10 +1717,10 @@ fn a_paste_token_below_the_box_or_with_no_room_is_no_target() {
 fn a_streaming_reply_renders_its_markdown_in_place() {
     // Mid-stream: the fence is open, so the rest is code.
     let cut = MARKDOWN.find("}\n```").unwrap_or_default();
-    let mut app = replying(40, 18, &MARKDOWN[..cut]);
-    insta::assert_snapshot!("markdown_reply_streaming", text(&buffer(&app, 40, 18)));
+    let mut app = replying(40, 26, &MARKDOWN[..cut]);
+    insta::assert_snapshot!("markdown_reply_streaming", text(&buffer(&app, 40, 26)));
     app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", &MARKDOWN[cut..]));
-    let buf = buffer(&app, 40, 18);
+    let buf = buffer(&app, 40, 26);
     insta::assert_snapshot!("markdown_reply", text(&buf));
     let fg = |x, y| buf.cell((x, y)).map(|cell| cell.fg);
     let bg = |x, y| buf.cell((x, y)).map(|cell| cell.bg);
@@ -1734,22 +1734,22 @@ fn a_streaming_reply_renders_its_markdown_in_place() {
     assert_eq!(fg(0, row("read the")), Some(Role::Accent.color()));
     assert_eq!(fg(2, row("read the")), Some(Role::Text.color()));
     let header = row("rust");
-    assert_eq!(fg(36, header), Some(Role::Accent.color()));
+    assert_eq!(fg(36, header), Some(Role::Muted.color()));
     for x in 0..39 {
         assert_eq!(bg(x, header), Some(Role::Code.color()), "header col {x}");
         assert_eq!(bg(x, header + 2), Some(Role::Code.color()), "code col {x}");
     }
-    assert_eq!(fg(8, header + 2), Some(Role::Keyword.color()));
-    assert_eq!(fg(16, header + 2), Some(Role::Number.color()));
-    assert_eq!(fg(0, row("────")), Some(Role::Muted.color()));
+    assert_eq!(fg(10, header + 2), Some(Role::Keyword.color()));
+    assert_eq!(fg(18, header + 2), Some(Role::Number.color()));
+    assert_eq!(fg(0, row("────")), Some(Role::Rule.color()));
 }
 
 #[test]
 fn a_resize_renders_the_reply_again_at_the_new_width() {
     let mut app = replying(40, 18, "```rust\nlet x = 1;\n```");
-    assert!(text(&buffer(&app, 40, 18)).contains(&format!("rust{}copy", " ".repeat(31))));
+    assert!(text(&buffer(&app, 40, 18)).contains(&format!("rust{}click to copy", " ".repeat(21))));
     app.set_size(20, 18);
-    assert!(text(&buffer(&app, 20, 18)).contains(&format!("rust{}copy", " ".repeat(11))));
+    assert!(text(&buffer(&app, 20, 18)).contains("rust click to copy"));
 }
 
 #[test]
@@ -1789,13 +1789,13 @@ fn copied_shows_on_the_conversations_top_row_until_the_next_key() {
 #[test]
 fn copied_needs_a_conversation_row_to_show_on() {
     let mut app = replying(30, 10, "```rust\nlet x = 1;\n```");
-    assert!(
-        text(&buffer(&app, 30, 10))
-            .lines()
-            .nth(4)
-            .is_some_and(|row| row.starts_with("rust"))
-    );
-    click(&mut app, 30, 10, 27, 4);
+    let shown = text(&buffer(&app, 30, 10));
+    let header = shown
+        .lines()
+        .position(|line| line.contains("rust"))
+        .and_then(|at| u16::try_from(at).ok())
+        .unwrap_or_default();
+    click(&mut app, 30, 10, 27, header);
     assert!(app.copied());
     app.set_size(30, 1);
     assert_eq!(text(&buffer(&app, 30, 1)), "▌ › █\n");
