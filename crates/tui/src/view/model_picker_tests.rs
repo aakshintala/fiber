@@ -923,81 +923,53 @@ fn body_lines(text: &str) -> Vec<String> {
 
 #[test]
 fn a_short_overlay_keeps_the_focused_model_row() {
-    // A Choose open with the first model focused, over `catalogue()`:
-    // ten rows hold the filter, the buttons, the heading and the
-    // focused row, eleven add its thinking row, and nine cut the
-    // heading rather than the focused row.
-    for (height, heading, thinking) in [(10u16, true, false), (11, true, true), (9, false, false)] {
-        let mut app = attached(80, height);
-        app.on_models(Ok(catalogue()));
-        open(&mut app);
-        let view = app.model_picker_view().expect("open");
-        let area = Rect::new(0, 0, 80, height);
-        let mut buf = Buffer::empty(area);
-        super::draw(&view, area, &mut buf, &mut Vec::new());
-        let text = crate::view::text(&buf);
-        let lines = body_lines(&text);
-        let mut at = 0;
-        for needle in ["Type to search", "4 models", "m1"] {
-            let pos = lines
-                .iter()
-                .skip(at)
-                .position(|line| line.contains(needle))
-                .unwrap_or_else(|| panic!("{needle:?} missing in order: {text}"));
-            at += pos + 1;
+    // A Choose open and the checklist open, each with the first model
+    // focused over `catalogue()`: ten rows hold the filter, the
+    // buttons, the heading and the focused row, eleven add its
+    // thinking row, and nine cut the heading rather than the focused
+    // row. The checklist differs only in its count.
+    for (choose, count) in [(true, "4 models"), (false, "0 of 4 marked")] {
+        for (height, heading, thinking) in
+            [(10u16, true, false), (11, true, true), (9, false, false)]
+        {
+            let mut app = attached(80, height);
+            app.on_models(Ok(catalogue()));
+            if choose {
+                open(&mut app);
+            } else {
+                assert_eq!(app.scoped_models_command(), Effect::None);
+            }
+            let view = app.model_picker_view().expect("open");
+            let area = Rect::new(0, 0, 80, height);
+            let mut buf = Buffer::empty(area);
+            super::draw(&view, area, &mut buf, &mut Vec::new());
+            let text = crate::view::text(&buf);
+            let lines = body_lines(&text);
+            let mut at = 0;
+            for needle in ["Type to search", count, "m1"] {
+                let pos = lines
+                    .iter()
+                    .skip(at)
+                    .position(|line| line.contains(needle))
+                    .unwrap_or_else(|| panic!("{needle:?} missing in order: {text}"));
+                at += pos + 1;
+            }
+            assert_eq!(
+                lines.iter().any(|line| line.contains("acme")),
+                heading,
+                "{text}"
+            );
+            assert_eq!(
+                lines.iter().any(|line| line.contains("thinking")),
+                thinking,
+                "{text}"
+            );
+            // The focused row sits on the bar.
+            let (y, _) = find_row(&text, "m1");
+            assert!(
+                (0..area.width).any(|x| buf[(x, y)].bg == Role::Accent.color()),
+                "no bar on {text}"
+            );
         }
-        assert_eq!(
-            lines.iter().any(|line| line.contains("acme")),
-            heading,
-            "{text}"
-        );
-        assert_eq!(
-            lines.iter().any(|line| line.contains("thinking")),
-            thinking,
-            "{text}"
-        );
-        // The focused row sits on the bar.
-        let (y, _) = find_row(&text, "m1");
-        assert!(
-            (0..area.width).any(|x| buf[(x, y)].bg == Role::Accent.color()),
-            "no bar on {text}"
-        );
-    }
-    // The checklist keeps its focused row the same way, with its own
-    // count.
-    for (height, heading, thinking) in [(10u16, true, false), (11, true, true), (9, false, false)] {
-        let mut app = attached(80, height);
-        app.on_models(Ok(catalogue()));
-        assert_eq!(app.scoped_models_command(), Effect::None);
-        let view = app.model_picker_view().expect("open");
-        let area = Rect::new(0, 0, 80, height);
-        let mut buf = Buffer::empty(area);
-        super::draw(&view, area, &mut buf, &mut Vec::new());
-        let text = crate::view::text(&buf);
-        let lines = body_lines(&text);
-        let mut at = 0;
-        for needle in ["Type to search", "0 of 4 marked", "m1"] {
-            let pos = lines
-                .iter()
-                .skip(at)
-                .position(|line| line.contains(needle))
-                .unwrap_or_else(|| panic!("{needle:?} missing in order: {text}"));
-            at += pos + 1;
-        }
-        assert_eq!(
-            lines.iter().any(|line| line.contains("acme")),
-            heading,
-            "{text}"
-        );
-        assert_eq!(
-            lines.iter().any(|line| line.contains("thinking")),
-            thinking,
-            "{text}"
-        );
-        let (y, _) = find_row(&text, "m1");
-        assert!(
-            (0..area.width).any(|x| buf[(x, y)].bg == Role::Accent.color()),
-            "no bar on {text}"
-        );
     }
 }
