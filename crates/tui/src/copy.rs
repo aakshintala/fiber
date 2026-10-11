@@ -8,16 +8,26 @@ use super::{App, Effect, Target};
 use crate::markdown::CopyTarget;
 use crate::turn::{Entry, Turn};
 
-/// The code block `target` names among `turns`, rendered at `width`.
+/// The code block `target` names among `turns`, rendered at the card's
+/// inner width with its copy cells shifted past the card's padding, so
+/// the hit lands on the drawn label (`docs/tui.md`, "Turns").
 pub(crate) fn copy_target(turns: &[Turn], target: Target, width: u16) -> Option<CopyTarget> {
     let Target::Copy { reply: id, block } = target else {
         return None;
     };
+    let inner = crate::surface::inset(width);
+    let pad = width.saturating_sub(inner) / 2;
     turns
         .iter()
         .flat_map(|turn| &turn.entries)
         .find_map(|entry| match entry {
-            Entry::Reply { reply, .. } if reply.id() == id => reply.rendered(width).target(block),
+            Entry::Reply { reply, .. } if reply.id() == id => {
+                reply.rendered(inner).target(block).map(|mut target| {
+                    target.cols.start = target.cols.start.saturating_add(pad);
+                    target.cols.end = target.cols.end.saturating_add(pad);
+                    target
+                })
+            }
             Entry::Reply { .. }
             | Entry::Steer(_)
             | Entry::Group(_)

@@ -92,6 +92,45 @@ fn done(cards: &mut Cards) {
     );
 }
 
+fn failed(cards: &mut Cards) {
+    feed(
+        cards,
+        "turn_completed",
+        None,
+        json!({"outcome": "failed", "error": {"code": "io_failed", "message": "boom"}}),
+    );
+}
+
+fn steered(cards: &mut Cards, text: &str) {
+    feed(
+        cards,
+        "steering_applied",
+        None,
+        json!({"content": [{"type": "text", "text": text}], "source": "driver"}),
+    );
+}
+
+fn step(cards: &mut Cards) {
+    feed(cards, "step_started", None, json!({}));
+}
+
+fn requested(cards: &mut Cards, action: &str, name: &str, arguments: Value) {
+    feed(
+        cards,
+        "tool_call_requested",
+        Some(action),
+        json!({"name": name, "arguments": arguments}),
+    );
+}
+
+fn completed(cards: &mut Cards, action: &str, extra: Value) {
+    let mut payload = json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]});
+    if let (Some(payload), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+        payload.extend(extra.clone());
+    }
+    feed(cards, "tool_call_completed", Some(action), payload);
+}
+
 /// The card's rows at `width` with `edges`, and which pieces drew.
 fn draw(turn: &Turn, width: u16, edges: Edges) -> (Vec<Row>, Vec<RowText>, Pieces) {
     let mut out = Rows::default();
@@ -114,10 +153,15 @@ fn surface() -> Option<ratatui::style::Color> {
     Some(Role::Surface.color())
 }
 
+fn turn() -> Option<ratatui::style::Color> {
+    Some(Role::Turn.color())
+}
+
 #[test]
-fn the_card_is_one_surface_below_the_bubble() {
-    // The bubble and its time row float above the card; the card's body
-    // sits on the surface tint between half-block edges
+fn the_card_is_a_turn_surface_below_the_bubble() {
+    // The bubble and its time row float above the card after a blank
+    // row; the card's body sits on the turn tint between half-block
+    // edges, its blocks separated by one blank row
     // (`docs/tui.md`, "Look", "Turns").
     let mut cards = fresh();
     start(&mut cards, "go");
@@ -131,31 +175,49 @@ fn the_card_is_one_surface_below_the_bubble() {
             last: true
         }
     );
-    assert_eq!(rows.len(), 8);
     let shown = shown_rows(&rows);
-    assert_eq!(shown[0], "▄".repeat(5));
-    assert_eq!(shown[1], " go ▐");
-    assert_eq!(shown[2], "▀".repeat(5));
-    assert_eq!(shown[3], "00:00");
-    assert_eq!(shown[4], "▄".repeat(60));
-    assert_eq!(shown[5], "Hello.");
-    assert_eq!(shown[6], "▣ completed");
-    assert_eq!(shown[7], "▀".repeat(60));
-    for (line, target) in rows.iter().take(4) {
+    assert_eq!(
+        shown,
+        [
+            String::new(),
+            "▄".repeat(5),
+            " go ▐".to_owned(),
+            "▀".repeat(5),
+            "you 00:00 ".to_owned(),
+            String::new(),
+            "▄".repeat(60),
+            " Hello.".to_owned(),
+            String::new(),
+            " ▣ completed".to_owned(),
+            "▀".repeat(60),
+        ]
+    );
+    for (line, target) in rows.iter().take(6) {
         assert_eq!(line.style.bg, None);
         assert!(target.is_none());
     }
-    assert_eq!(rows[4].0.spans[0].style.fg, surface());
-    for (line, _) in rows.iter().skip(5).take(2) {
-        assert_eq!(line.style.bg, surface());
+    assert_eq!(rows[6].0.spans[0].style.fg, turn());
+    for (line, _) in rows.iter().skip(7).take(3) {
+        assert_eq!(line.style.bg, turn());
     }
-    assert_eq!(rows[7].0.spans[0].style.fg, surface());
+    assert_eq!(rows[10].0.spans[0].style.fg, turn());
 }
 
 #[test]
-fn a_turn_with_only_its_prompt_has_no_card() {
-    // No entries and no ending: no card edge, no tinted row
+fn a_turn_has_a_blank_row_before_its_bubble_and_before_its_card() {
+    // One blank row opens the turn, and one separates the time row from
+    // the card; a turn with no card draws no blank after its time row
     // (`docs/tui.md`, "Turns").
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    text(&mut cards, "a_1", "Hello.");
+    done(&mut cards);
+    let (rows, texts, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert_eq!(shown[0], "");
+    assert_eq!(shown[5], "");
+    assert_eq!(texts[0], RowText::plain());
+    assert_eq!(texts[5], RowText::plain());
     let mut cards = fresh();
     start(&mut cards, "go");
     let (rows, _, pieces) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
@@ -166,10 +228,40 @@ fn a_turn_with_only_its_prompt_has_no_card() {
             last: false
         }
     );
-    assert_eq!(rows.len(), 4);
+    assert_eq!(
+        shown_rows(&rows),
+        [
+            String::new(),
+            "▄".repeat(5),
+            " go ▐".to_owned(),
+            "▀".repeat(5),
+            "you 00:00 ".to_owned()
+        ]
+    );
     for (line, _) in &rows {
         assert_eq!(line.style.bg, None);
     }
+}
+
+#[test]
+fn the_time_row_reads_you_and_ends_one_column_before_the_edge() {
+    // "you HH:MM" dim with one trailing blank, outside the card's tint
+    // (`docs/tui.md`, "Turns").
+    use ratatui::style::Modifier;
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    text(&mut cards, "a_1", "Hello.");
+    done(&mut cards);
+    let (rows, texts, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let (line, target) = &rows[4];
+    assert_eq!(line.to_string(), "you 00:00 ");
+    assert!(line.to_string().ends_with(' '));
+    assert_eq!(line.alignment, Some(ratatui::layout::Alignment::Right));
+    assert!(line.style.add_modifier.contains(Modifier::DIM));
+    assert_eq!(line.style.bg, None);
+    assert!(target.is_none());
+    assert_eq!(texts[4].skip, 0);
+    assert_eq!(texts[4].tail, 0);
 }
 
 #[test]
@@ -186,10 +278,10 @@ fn a_finished_turn_with_no_entries_is_a_card_of_its_closing_line() {
         }
     );
     let shown = shown_rows(&rows);
-    assert_eq!(shown[4], "▄".repeat(60));
-    assert_eq!(shown[5], "▣ completed");
-    assert_eq!(shown[6], "▀".repeat(60));
-    assert_eq!(rows[5].0.style.bg, surface());
+    assert_eq!(shown[6], "▄".repeat(60));
+    assert_eq!(shown[7], " ▣ completed");
+    assert_eq!(shown[8], "▀".repeat(60));
+    assert_eq!(rows[7].0.style.bg, turn());
 }
 
 #[test]
@@ -213,15 +305,16 @@ fn a_handoff_breaks_the_card_into_two_surfaces() {
         }
     );
     let shown = shown_rows(&rows);
-    assert_eq!(shown[4], "▄".repeat(60));
-    assert_eq!(shown[5], "before");
-    assert_eq!(shown[6], "▀".repeat(60));
-    assert!(shown[7].starts_with("⇄ Handoff"), "{}", shown[7]);
-    assert_eq!(shown[8], "▄".repeat(60));
-    assert_eq!(shown[9], "after");
-    assert_eq!(shown[10], "▣ completed");
-    assert_eq!(shown[11], "▀".repeat(60));
-    assert_eq!(rows[7].0.style.bg, surface());
+    assert_eq!(shown[6], "▄".repeat(60));
+    assert_eq!(shown[7], " before");
+    assert_eq!(shown[8], "▀".repeat(60));
+    assert!(shown[9].starts_with("⇄ Handoff"), "{}", shown[9]);
+    assert_eq!(shown[10], "▄".repeat(60));
+    assert_eq!(shown[11], " after");
+    assert_eq!(shown[12], "");
+    assert_eq!(shown[13], " ▣ completed");
+    assert_eq!(shown[14], "▀".repeat(60));
+    assert_eq!(rows[9].0.style.bg, surface());
 }
 
 #[test]
@@ -333,8 +426,8 @@ fn a_band_first_or_last_draws_no_empty_piece() {
         }
     );
     let shown = shown_rows(&rows);
-    assert!(shown[4].starts_with("⇄ Handoff"), "{shown:?}");
-    assert_eq!(shown[5], "▄".repeat(60));
+    assert!(shown[6].starts_with("⇄ Handoff"), "{shown:?}");
+    assert_eq!(shown[7], "▄".repeat(60));
     let mut cards = fresh();
     start(&mut cards, "go");
     text(&mut cards, "a_1", "before");
@@ -392,6 +485,8 @@ fn edges_the_page_withholds_are_not_drawn() {
     handed_off(&mut cards);
     text(&mut cards, "a_2", "after");
     done(&mut cards);
+    // A page continuation carries no prompt bubble: only the pieces draw.
+    cards.turns[0].prompts.clear();
     let (rows, _, _) = draw(
         &cards.turns[0],
         WIDTH,
@@ -401,11 +496,12 @@ fn edges_the_page_withholds_are_not_drawn() {
         },
     );
     let shown = shown_rows(&rows);
-    assert_eq!(shown[4], "before");
-    assert_eq!(shown[5], "▀".repeat(60));
-    assert!(shown[6].starts_with("⇄ Handoff"), "{shown:?}");
+    assert_eq!(shown[0], "");
+    assert_eq!(shown[1], " before");
+    assert_eq!(shown[2], "▀".repeat(60));
+    assert!(shown[3].starts_with("⇄ Handoff"), "{shown:?}");
     // The piece after the band still opens with an edge.
-    assert_eq!(shown[7], "▄".repeat(60));
+    assert_eq!(shown[4], "▄".repeat(60));
     let (rows, _, _) = draw(
         &cards.turns[0],
         WIDTH,
@@ -415,12 +511,12 @@ fn edges_the_page_withholds_are_not_drawn() {
         },
     );
     let shown = shown_rows(&rows);
-    assert_eq!(shown[4], "▄".repeat(60));
-    assert_eq!(shown[5], "before");
+    assert_eq!(shown[0], "▄".repeat(60));
+    assert_eq!(shown[1], " before");
     // The piece before the band still closes with an edge.
-    assert_eq!(shown[6], "▀".repeat(60));
+    assert_eq!(shown[2], "▀".repeat(60));
     assert!(
-        shown.last().is_some_and(|line| line == "▣ completed"),
+        shown.last().is_some_and(|line| line == " ▣ completed"),
         "{shown:?}"
     );
 }
@@ -559,26 +655,353 @@ fn whether_a_piece_draws_does_not_depend_on_the_width() {
 }
 
 #[test]
-fn nothing_in_the_card_is_indented_or_striped() {
-    // Replies, steering messages and answers all start at the card's edge
-    // (`docs/tui.md`, "Turns").
+fn nothing_in_the_card_is_indented_past_its_padding() {
+    // Replies, steering messages and answers all start at the card's
+    // one-column padding, with no stripe (`docs/tui.md`, "Turns").
     let mut cards = fresh();
     start(&mut cards, "go");
-    feed(
-        &mut cards,
-        "steering_applied",
-        None,
-        json!({"content": [{"type": "text", "text": "use x"}], "source": "driver"}),
-    );
+    steered(&mut cards, "use x");
     text(&mut cards, "a_1", "Hello.");
     done(&mut cards);
     let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
-    for (line, _) in rows.iter().skip(4) {
+    for (line, _) in rows.iter().skip(6) {
         let shown = line.to_string();
         if shown.chars().all(|ch| ch == '▄' || ch == '▀') {
             continue;
         }
-        assert!(!shown.starts_with(' '), "{shown:?}");
-        assert!(!shown.contains('▌'), "{shown:?}");
+        if shown.is_empty() {
+            continue;
+        }
+        assert!(shown.starts_with(' '), "{shown:?}");
+        assert!(!shown.starts_with("  "), "{shown:?}");
+        assert!(!shown.contains('▌') && !shown.contains('▐'), "{shown:?}");
     }
+}
+
+#[test]
+fn the_card_rows_sit_one_column_inside_the_tint() {
+    // At W = 20 every piece row starts with a blank on the turn
+    // background and is at most W - 1 cells, whatever its entry
+    // (`docs/tui.md`, "Turns").
+    use serde_json::json;
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    text(&mut cards, "a_1", "Hello.");
+    steered(&mut cards, "use x");
+    step(&mut cards);
+    requested(&mut cards, "a_2", "read", json!({"path": "src/a.rs"}));
+    completed(&mut cards, "a_2", json!({}));
+    feed(
+        &mut cards,
+        "mcp_server_failed",
+        None,
+        json!({"server": "one", "reason": "died", "will_restart": true,
+            "error": {"code": "mcp_server_unavailable", "message": "one stopped."}}),
+    );
+    requested(
+        &mut cards,
+        "a_q",
+        "ask_user",
+        json!({"questions": [{"header": "Base"}, {"header": "Name"}]}),
+    );
+    feed(
+        &mut cards,
+        "interaction_requested",
+        None,
+        json!({"request_id": "r_1", "kind": "form", "action_ids": ["a_q"],
+            "fields": [{"header": "Base", "question": "Which?"},
+                {"header": "Name", "question": "What?"}]}),
+    );
+    feed(
+        &mut cards,
+        "interaction_resolved",
+        None,
+        json!({"request_id": "r_1", "by": "person",
+            "answers": [{"labels": ["main"]}, {"skipped": true}]}),
+    );
+    completed(&mut cards, "a_q", json!({}));
+    failed(&mut cards);
+    let (rows, _, _) = draw(&cards.turns[0], 20, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert!(shown.iter().any(|row| row.contains("Hello.")), "{shown:?}");
+    assert!(shown.iter().any(|row| row.contains("use x")), "{shown:?}");
+    assert!(shown.iter().any(|row| row.contains("Read")), "{shown:?}");
+    assert!(shown.iter().any(|row| row.contains("⚠")), "{shown:?}");
+    assert!(
+        shown.iter().any(|row| row.contains("you answered")),
+        "{shown:?}"
+    );
+    assert!(shown.iter().any(|row| row.contains("✗")), "{shown:?}");
+    assert!(
+        shown.iter().any(|row| row.contains("▣ failed")),
+        "{shown:?}"
+    );
+    let mut in_card = false;
+    for (line, _) in &rows {
+        let shown = line.to_string();
+        if !shown.is_empty() && shown.chars().all(|ch| ch == '▄' || ch == '▀') {
+            // The card's own edges span the width; the bubble's fit
+            // their block.
+            if line
+                .spans
+                .first()
+                .is_some_and(|span| span.style.fg == turn())
+            {
+                assert_eq!(line.width(), 20, "{shown:?}");
+                in_card = !in_card;
+            }
+            continue;
+        }
+        if shown.is_empty() || !in_card {
+            continue;
+        }
+        assert!(shown.starts_with(' '), "{shown:?}");
+        assert!(line.width() <= 19, "{shown:?}");
+        assert_eq!(line.style.bg, turn(), "{shown:?}");
+    }
+}
+
+#[test]
+fn blocks_in_a_card_are_separated_by_one_blank_row() {
+    // A reply, a group, a steer and the ▣ line: exactly one blank card
+    // row between each pair (`docs/tui.md`, "Turns").
+    use serde_json::json;
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    text(&mut cards, "a_1", "Hello.");
+    step(&mut cards);
+    requested(&mut cards, "a_2", "read", json!({"path": "src/a.rs"}));
+    completed(&mut cards, "a_2", json!({}));
+    steered(&mut cards, "use x");
+    done(&mut cards);
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    let reply = shown
+        .iter()
+        .position(|row| row.contains("Hello."))
+        .expect("a reply");
+    let group = shown
+        .iter()
+        .position(|row| row.contains("Read"))
+        .expect("a group");
+    let steer = shown
+        .iter()
+        .position(|row| row.starts_with(" steer"))
+        .expect("a steer");
+    let closing = shown
+        .iter()
+        .position(|row| row.contains("▣"))
+        .expect("a closing");
+    assert!(
+        reply < group && group < steer && steer < closing,
+        "{shown:?}"
+    );
+    for (first, second) in [(reply, group), (group, steer), (steer, closing)] {
+        let between: Vec<&String> = shown[first + 1..second].iter().collect();
+        assert_eq!(
+            between.iter().filter(|row| row.is_empty()).count(),
+            1,
+            "{shown:?}"
+        );
+        // The blank is the last row before the next block: every block
+        // holds together.
+        assert!(
+            between.last().is_some_and(|row| row.is_empty()),
+            "{shown:?}"
+        );
+    }
+}
+
+#[test]
+fn a_block_that_draws_nothing_adds_no_gap() {
+    // A blank reply between two replies: the two drawn blocks sit one
+    // blank row apart, not two (`docs/tui.md`, "Turns").
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    text(&mut cards, "a_1", "hi");
+    text(&mut cards, "a_2", "   ");
+    text(&mut cards, "a_3", "yo");
+    done(&mut cards);
+    let (rows, _, _) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    let first = shown
+        .iter()
+        .position(|row| row == " hi")
+        .expect("a first reply");
+    let second = shown
+        .iter()
+        .position(|row| row == " yo")
+        .expect("a second reply");
+    assert_eq!(second, first + 2, "{shown:?}");
+    assert_eq!(shown[first + 1], "");
+}
+
+#[test]
+fn a_piece_whose_top_edge_is_withheld_starts_with_a_gap() {
+    // A page cut inside a turn withholds the top edge, and the piece
+    // opens with a blank row instead, so the joined pages draw what one
+    // fold draws (`docs/tui.md`, "History and paging").
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    text(&mut cards, "a_1", "Hello.");
+    done(&mut cards);
+    // A page continuation carries no prompt bubble: only the card draws.
+    cards.turns[0].prompts.clear();
+    let (rows, _, pieces) = draw(
+        &cards.turns[0],
+        WIDTH,
+        Edges {
+            top: false,
+            bottom: true,
+        },
+    );
+    assert_eq!(
+        pieces,
+        Pieces {
+            first: true,
+            last: true
+        }
+    );
+    let shown = shown_rows(&rows);
+    assert_eq!(shown[0], "");
+    assert_eq!(shown[1], " Hello.");
+}
+
+#[test]
+fn a_card_narrower_than_three_columns_has_no_padding() {
+    // Below three columns there is no room past the padding: the pad is
+    // zero and rows keep the width (`docs/tui.md`, "Turns").
+    for (width, inner) in [(2, 2), (3, 1)] {
+        let mut cards = fresh();
+        start(&mut cards, "go");
+        text(&mut cards, "a_1", "hi");
+        done(&mut cards);
+        let (rows, _, _) = draw(&cards.turns[0], width, Edges::BOTH);
+        let shown = shown_rows(&rows);
+        if width == 2 {
+            assert!(
+                shown.iter().any(|row| row.contains("hi")),
+                "{width}: {shown:?}"
+            );
+        }
+        for (line, _) in &rows {
+            // The time row is right-aligned text, never padded: only
+            // the card's own rows keep the width.
+            if line.style.bg.is_some_and(|bg| Some(bg) == turn())
+                || line.to_string().chars().all(|ch| ch == '▄' || ch == '▀')
+            {
+                assert!(line.width() <= usize::from(width), "{width}: {line}");
+            }
+        }
+        if width == 2 {
+            assert!(shown.contains(&"hi".to_owned()), "{shown:?}");
+        } else {
+            assert!(shown.contains(&" h".to_owned()), "{shown:?}");
+            assert!(shown.contains(&" i".to_owned()), "{shown:?}");
+            let _ = inner;
+        }
+    }
+}
+
+#[test]
+fn a_card_at_three_columns_keeps_every_row_inside_its_padding() {
+    // At W = 3 the inner width is 1: a reply with a wide glyph, a timed
+    // steer, an opened edit group with a long path, a failure and the ▣
+    // line all fit in two cells starting with a blank
+    // (`docs/tui.md`, "Turns").
+    use serde_json::json;
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    text(&mut cards, "a_1", "界 x");
+    steered(&mut cards, "use x");
+    step(&mut cards);
+    let path: String = std::iter::repeat_n('p', 60).collect();
+    requested(&mut cards, "a_2", "edit", json!({"path": path}));
+    completed(
+        &mut cards,
+        "a_2",
+        json!({"details": {"diff": "-a\n+b"}, "changes": [{"path": path, "added": 3, "removed": 1}]}),
+    );
+    cards.turns[0].set_open(
+        &crate::app::Target::Group(crate::turn::target_id("a_2")),
+        true,
+    );
+    failed(&mut cards);
+    let (rows, _, _) = draw(&cards.turns[0], 3, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert!(shown.iter().any(|row| row.contains('▣')), "{shown:?}");
+    for (line, _) in &rows {
+        let shown = line.to_string();
+        if !shown.is_empty() && shown.chars().all(|ch| ch == '▄' || ch == '▀') {
+            assert_eq!(line.width(), 3, "{shown:?}");
+            continue;
+        }
+        if shown.is_empty() || !line.style.bg.is_some_and(|bg| Some(bg) == turn()) {
+            continue;
+        }
+        assert_eq!(line.width(), 2, "{shown:?}");
+        assert!(shown.starts_with(' '), "{shown:?}");
+        for ch in shown.chars() {
+            let mut buf = [0u8; 4];
+            assert!(
+                crate::format::width(ch.encode_utf8(&mut buf)) <= 1,
+                "{shown:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_opened_edit_group_wraps_inside_the_padding() {
+    // At W = 30 an opened edit group with a 60-cell path keeps every
+    // ledger row inside columns 1..=28, and its counts keep the added
+    // and removed colours (`docs/tui.md`, "Turns").
+    use serde_json::json;
+    let mut cards = fresh();
+    start(&mut cards, "go");
+    step(&mut cards);
+    let path: String = std::iter::repeat_n('p', 60).collect();
+    requested(&mut cards, "a_2", "edit", json!({"path": path}));
+    completed(
+        &mut cards,
+        "a_2",
+        json!({"details": {"diff": "-a\n+b"}, "changes": [{"path": path, "added": 3, "removed": 1}]}),
+    );
+    cards.turns[0].set_open(
+        &crate::app::Target::Group(crate::turn::target_id("a_2")),
+        true,
+    );
+    done(&mut cards);
+    let (rows, _, _) = draw(&cards.turns[0], 30, Edges::BOTH);
+    let shown = shown_rows(&rows);
+    assert!(shown.iter().any(|row| row.contains("+3")), "{shown:?}");
+    assert!(shown.iter().any(|row| row.contains("−1")), "{shown:?}");
+    let mut ledger = 0;
+    for (line, _) in &rows {
+        let shown = line.to_string();
+        if shown.chars().all(|ch| ch == '▄' || ch == '▀') || shown.is_empty() {
+            continue;
+        }
+        if !line.style.bg.is_some_and(|bg| Some(bg) == turn()) {
+            continue;
+        }
+        assert!(shown.starts_with(' '), "{shown:?}");
+        assert!(line.width() <= 29, "{shown:?}");
+        if shown.contains('p') {
+            ledger += 1;
+        }
+    }
+    assert!(ledger > 0, "{shown:?}");
+    let added = rows
+        .iter()
+        .flat_map(|(line, _)| &line.spans)
+        .find(|span| span.style.fg == Some(Role::Added.color()))
+        .expect("the added count keeps its span");
+    assert!(added.content.contains("+3"), "{added:?}");
+    let removed = rows
+        .iter()
+        .flat_map(|(line, _)| &line.spans)
+        .find(|span| span.style.fg == Some(Role::Removed.color()))
+        .expect("the removed count keeps its span");
+    assert!(removed.content.contains("−1"), "{removed:?}");
 }

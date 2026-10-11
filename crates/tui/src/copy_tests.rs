@@ -83,17 +83,17 @@ fn a_click_on_copy_copies_that_blocks_code_and_shows_copied() {
     );
     assert!(app.copied());
     assert_eq!(
-        click(&mut app, 28, second),
+        click(&mut app, 27, second),
         Effect::Copy("echo b".to_owned())
     );
     // The cells left of `copy` and the rows around it copy nothing, and a
     // click clears "Copied".
     for (col, row) in [(14, first), (0, first), (26, first + 1), (26, first - 1)] {
-        click(&mut app, 28, second);
+        click(&mut app, 27, second);
         assert_eq!(click(&mut app, col, row), Effect::None, "{col},{row}");
         assert!(!app.copied());
     }
-    click(&mut app, 28, second);
+    click(&mut app, 27, second);
     app.on_click(crate::mouse::TargetId::NewBelow);
     assert!(!app.copied());
 }
@@ -169,7 +169,9 @@ fn a_click_below_the_conversation_or_on_a_plain_line_copies_nothing() {
 fn a_resize_moves_the_copy_target_with_the_new_width() {
     let mut app = with_reply(30, 12, TWO_BLOCKS);
     app.set_size(20, 20);
-    let first = row_of(&app, 20, 20, "rust").expect("first header");
+    // At 20 columns the header ellipsizes its language name, so the
+    // label names the row.
+    let first = row_of(&app, 20, 20, "click to copy").expect("first header");
     assert_eq!(click(&mut app, 26, first), Effect::None);
     assert_eq!(
         click(&mut app, 16, first),
@@ -218,7 +220,7 @@ fn a_click_copies_from_the_reply_it_lands_on() {
     ));
     let second = row_of(&app, 30, 14, "sh  ").expect("second reply's header");
     assert_eq!(
-        click(&mut app, 28, second),
+        click(&mut app, 27, second),
         Effect::Copy("echo b".to_owned())
     );
 }
@@ -233,4 +235,31 @@ fn a_copy_target_in_a_quote_is_on_its_drawn_copy_cells() {
     );
     assert_eq!(click(&mut app, 14, header), Effect::None);
     assert_eq!(click(&mut app, 0, header), Effect::None);
+}
+
+#[test]
+fn the_copy_cells_are_the_drawn_label_inside_the_padding() {
+    // At W = 59 the card pads by one, so the copy cells are the drawn
+    // label shifted past it (`docs/tui.md`, "Turns", "Selection and copy").
+    let app = with_reply(60, 20, "```rust\nlet a = 1;\n```");
+    let copy = app
+        .targets()
+        .into_iter()
+        .find_map(|(_, target)| match target {
+            super::super::Target::Copy { .. } => Some(target),
+            _ => None,
+        })
+        .expect("a copy target");
+    let cols = app.copy_cells(copy).expect("copy cells");
+    let area = ratatui::layout::Rect::new(0, 0, 60, 20);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let text = crate::view::text(&buf);
+    let row = text
+        .lines()
+        .find(|line| line.contains("click to copy"))
+        .expect("the drawn label");
+    let start = row.find("click to copy").expect("the label's start");
+    assert_eq!(cols, start as u16..start as u16 + 13);
+    assert_eq!(cols, 45..58);
 }

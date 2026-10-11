@@ -461,7 +461,14 @@ impl Pages {
             return Folded::Nothing;
         };
         let width = self.width;
-        let rows = |summary: &Summary| summary.closing().map(|line| crate::view::rows(line, width));
+        // The ▣ line draws at the card's inner width, split by the same
+        // rule, so its count and its rows cannot drift apart
+        // (`docs/tui.md`, "Turns").
+        let rows = |summary: &Summary| {
+            summary
+                .closing()
+                .map(|line| crate::rows::fitted(&line, crate::surface::inset(width)))
+        };
         let before = rows(summary);
         summary.spend.record(&line);
         let after = rows(summary);
