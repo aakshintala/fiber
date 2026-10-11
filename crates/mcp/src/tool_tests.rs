@@ -34,17 +34,26 @@ fn declare(
         super::Target {
             timeout: Duration::from_secs(30),
             artifacts: artifacts.to_path_buf(),
+            images: crate::test_support::FakeImages::ok(),
             slot,
         },
     )
 }
 
 fn call(artifacts: &std::path::Path) -> Call {
+    call_with_images(artifacts, crate::test_support::FakeImages::ok())
+}
+
+fn call_with_images(
+    artifacts: &std::path::Path,
+    images: std::sync::Arc<crate::test_support::FakeImages>,
+) -> Call {
     Call {
         server: "fx".to_owned(),
         tool: "echo".to_owned(),
         timeout: Duration::from_secs(30),
         artifacts: artifacts.to_path_buf(),
+        images,
         slot: std::sync::Weak::new(),
     }
 }
@@ -171,6 +180,17 @@ fn audio_part(data: Option<Value>, mime_type: Option<&str>) -> Content {
     }
 }
 
+fn image_part(data: Option<Value>, mime_type: Option<&str>) -> Content {
+    Content::Image {
+        data,
+        mime_type: mime_type.map(str::to_owned),
+    }
+}
+
+fn cancel() -> fakes::CancelToken {
+    fakes::CancelToken::new()
+}
+
 fn text_line(text: &str) -> ContentPart {
     ContentPart::Text {
         text: text.to_owned(),
@@ -229,15 +249,6 @@ fn answer_maps_each_part_to_its_own_text_in_order() {
                 is_error: false,
             },
             vec![text_line("")],
-            None,
-        ),
-        (
-            "an image is dropped",
-            CallResult {
-                content: vec![text_part(Some("seen")), Content::Image],
-                is_error: false,
-            },
-            vec![text_line("seen")],
             None,
         ),
         (
@@ -399,7 +410,7 @@ fn answer_maps_each_part_to_its_own_text_in_order() {
         ),
     ];
     for (name, result, content, error) in rows {
-        let out = answer(&call, result);
+        let out = answer(&call, result, &cancel());
         assert_eq!(&out.content, content, "row: {name}");
         match error {
             None => assert!(out.error.is_none(), "row: {name}"),
@@ -433,7 +444,7 @@ fn binary_content_is_written_to_a_content_addressed_file() {
         content: vec![resource_part(None, Some(Value::from(encoded)), None, None)],
         is_error: false,
     };
-    let out = answer(&call, &result);
+    let out = answer(&call, &result, &cancel());
     assert!(out.error.is_none());
     assert_eq!(out.content.len(), 1);
     let ContentPart::Text { text } = &out.content[0] else {
@@ -443,7 +454,7 @@ fn binary_content_is_written_to_a_content_addressed_file() {
     let read = std::fs::read(&path).expect("the artifact is written");
     assert_eq!(read, b"hi");
     // A repeated result rewrites the same file.
-    let again = answer(&call, &result);
+    let again = answer(&call, &result, &cancel());
     assert_eq!(again.content, out.content);
     let read = std::fs::read(&path).expect("the artifact is rewritten");
     assert_eq!(read, b"hi");
@@ -475,7 +486,7 @@ fn binary_failures_report_without_failing_the_call() {
         ),
     ];
     for (name, call, result, prefix) in rows {
-        let out = answer(call, result);
+        let out = answer(call, result, &cancel());
         assert!(out.error.is_none(), "row: {name}");
         assert_eq!(out.content.len(), 1, "row: {name}");
         let ContentPart::Text { text } = &out.content[0] else {
@@ -569,7 +580,8 @@ fn each_outcome_maps_to_its_code_sentence_and_servers() {
         ),
     ];
     for (name, call, called, servers, code, message, records) in rows {
-        let out = output(call, called, servers);
+        let out = output(call, called, servers, &cancel());
+
         match (code, message) {
             (None, None) => {
                 assert!(out.error.is_none(), "row: {name}");
@@ -600,4 +612,275 @@ fn each_outcome_maps_to_its_code_sentence_and_servers() {
             _ => unreachable!(),
         }
     }
+}
+
+fn image_bytes() -> Vec<u8> {
+    b"raw-image".to_vec()
+}
+
+fn image_encoded() -> Value {
+    use base64::Engine as _;
+    Value::from(base64::engine::general_purpose::STANDARD.encode(image_bytes()))
+}
+
+fn image_expected() -> Vec<ContentPart> {
+    vec![
+        ContentPart::Text {
+            text: "Image: 2x3 image/png.\n".to_owned(),
+        },
+        ContentPart::Image {
+            path: "artifacts/mcp-fake.png".to_owned(),
+            mime_type: "image/png".to_owned(),
+            width: 2,
+            height: 3,
+        },
+    ]
+}
+
+#[test]
+fn an_image_part_is_processed_once_and_keeps_its_bytes() {
+    let dir = fakes::TempDir::new("mcp-tool-image");
+    let images = crate::test_support::FakeImages::with(Ok(contract::provider::ImageRef {
+        path: "artifacts/mcp-fake.png".to_owned(),
+        mime_type: "image/png".to_owned(),
+        width: 2,
+        height: 3,
+    }));
+    let call = call_with_images(dir.path(), std::sync::Arc::clone(&images));
+    let result = CallResult {
+        content: vec![image_part(Some(image_encoded()), Some("image/png"))],
+        is_error: false,
+    };
+    let out = answer(&call, &result, &cancel());
+    assert!(out.error.is_none());
+    assert_eq!(out.content, image_expected());
+    assert_eq!(images.calls(), vec![image_bytes()]);
+}
+
+#[test]
+fn image_parts_keep_server_order() {
+    let dir = fakes::TempDir::new("mcp-tool-image-order");
+    let images = crate::test_support::FakeImages::ok();
+    let call = call_with_images(dir.path(), std::sync::Arc::clone(&images));
+    let result = CallResult {
+        content: vec![
+            text_part(Some("before")),
+            image_part(Some(image_encoded()), Some("image/png")),
+            text_part(Some("after")),
+        ],
+        is_error: false,
+    };
+    let out = answer(&call, &result, &cancel());
+    assert!(out.error.is_none());
+    assert_eq!(
+        out.content,
+        vec![
+            ContentPart::Text {
+                text: "before".to_owned()
+            },
+            ContentPart::Text {
+                text: "Image: 2x3 image/png.\n".to_owned(),
+            },
+            ContentPart::Image {
+                path: "artifacts/mcp-fake.png".to_owned(),
+                mime_type: "image/png".to_owned(),
+                width: 2,
+                height: 3,
+            },
+            ContentPart::Text {
+                text: "after".to_owned()
+            },
+        ]
+    );
+    assert_eq!(images.call_count(), 1);
+}
+
+#[test]
+fn an_unreadable_image_fails_without_processing_later_parts() {
+    let dir = fakes::TempDir::new("mcp-tool-image-unreadable");
+    let images = crate::test_support::FakeImages::with(Err(
+        contract::images::ImageError::Unreadable("nope: not a png".to_owned()),
+    ));
+    let call = call_with_images(dir.path(), std::sync::Arc::clone(&images));
+    let result = CallResult {
+        content: vec![
+            image_part(Some(image_encoded()), Some("image/png")),
+            image_part(Some(image_encoded()), Some("image/png")),
+        ],
+        is_error: false,
+    };
+    let out = answer(&call, &result, &cancel());
+    let failure = out.error.expect("failed");
+    assert_eq!(failure.code, ErrorCode::UnsupportedFile);
+    assert!(
+        failure.message.contains("nope: not a png"),
+        "message: {}",
+        failure.message,
+    );
+    assert!(
+        failure.message.contains("image"),
+        "message: {}",
+        failure.message,
+    );
+    assert_eq!(images.call_count(), 1);
+}
+
+#[test]
+fn a_failed_image_ends_tool_error_with_its_message() {
+    let dir = fakes::TempDir::new("mcp-tool-image-failed");
+    let images = crate::test_support::FakeImages::with(Err(contract::images::ImageError::Failed(
+        "the child blew up".to_owned(),
+    )));
+    let call = call_with_images(dir.path(), images);
+    let result = CallResult {
+        content: vec![image_part(Some(image_encoded()), Some("image/png"))],
+        is_error: false,
+    };
+    let out = answer(&call, &result, &cancel());
+    let failure = out.error.expect("failed");
+    assert_eq!(failure.code, ErrorCode::ToolError);
+    assert_eq!(failure.message, "the child blew up");
+}
+
+#[test]
+fn a_cancelled_image_ends_like_a_cancelled_call() {
+    let dir = fakes::TempDir::new("mcp-tool-image-cancelled");
+    let images =
+        crate::test_support::FakeImages::with(Err(contract::images::ImageError::Cancelled));
+    let call = call_with_images(dir.path(), images);
+    let result = CallResult {
+        content: vec![image_part(Some(image_encoded()), Some("image/png"))],
+        is_error: false,
+    };
+    let out = answer(&call, &result, &cancel());
+    let failure = out.error.expect("failed");
+    assert_eq!(failure.code, ErrorCode::McpCancelRequested);
+    assert_eq!(
+        failure.message,
+        "The call to `echo` on the MCP server `fx` was cancelled; the server may still act on it.",
+    );
+}
+
+#[test]
+fn bad_image_data_fails_unsupported() {
+    let dir = fakes::TempDir::new("mcp-tool-image-bad-data");
+    for (name, data, message) in [
+        ("missing data", None, "image content: no data"),
+        (
+            "non-string data",
+            Some(Value::from(7)),
+            "image content: expected a base64 string",
+        ),
+    ] {
+        let images = crate::test_support::FakeImages::ok();
+        let call = call_with_images(dir.path(), std::sync::Arc::clone(&images));
+        let result = CallResult {
+            content: vec![image_part(data, Some("image/png"))],
+            is_error: false,
+        };
+        let out = answer(&call, &result, &cancel());
+        let failure = out.error.expect("failed");
+        assert_eq!(failure.code, ErrorCode::UnsupportedFile, "row: {name}");
+        assert_eq!(failure.message, message, "row: {name}");
+        assert_eq!(images.call_count(), 0, "row: {name}");
+    }
+    let images = crate::test_support::FakeImages::ok();
+    let call = call_with_images(dir.path(), std::sync::Arc::clone(&images));
+    let result = CallResult {
+        content: vec![image_part(Some(Value::from("!!!")), Some("image/png"))],
+        is_error: false,
+    };
+    let out = answer(&call, &result, &cancel());
+    let failure = out.error.expect("failed");
+    assert_eq!(failure.code, ErrorCode::UnsupportedFile);
+    assert!(
+        failure.message.starts_with("image content: ")
+            && failure.message.len() > "image content: ".len(),
+        "message: {}",
+        failure.message,
+    );
+    assert_eq!(images.call_count(), 0);
+}
+
+#[test]
+fn an_embedded_image_resource_is_processed_once() {
+    let dir = fakes::TempDir::new("mcp-tool-image-resource");
+    let images = crate::test_support::FakeImages::ok();
+    let call = call_with_images(dir.path(), std::sync::Arc::clone(&images));
+    let result = CallResult {
+        content: vec![resource_part(
+            None,
+            Some(image_encoded()),
+            None,
+            Some("image/png"),
+        )],
+        is_error: false,
+    };
+    let out = answer(&call, &result, &cancel());
+    assert!(out.error.is_none());
+    assert_eq!(out.content, image_expected());
+    assert_eq!(images.calls(), vec![image_bytes()]);
+}
+
+#[test]
+fn only_image_typed_blobs_take_the_image_path() {
+    use base64::Engine as _;
+    let encoded = Value::from(base64::engine::general_purpose::STANDARD.encode(b"hi"));
+    for (name, mime, processes) in [
+        ("image/png", Some("image/png"), true),
+        ("bare image slash", Some("image/"), true),
+        ("application image", Some("application/image/x"), false),
+        ("pdf", Some("application/pdf"), false),
+        ("octet stream", Some("application/octet-stream"), false),
+        ("missing mime", None, false),
+    ] {
+        let dir = fakes::TempDir::new("mcp-tool-image-mime");
+        let images = crate::test_support::FakeImages::ok();
+        let call = call_with_images(dir.path(), std::sync::Arc::clone(&images));
+        let result = CallResult {
+            content: vec![resource_part(None, Some(encoded.clone()), None, mime)],
+            is_error: false,
+        };
+        let out = answer(&call, &result, &cancel());
+        assert!(out.error.is_none(), "row: {name}");
+        if processes {
+            assert_eq!(out.content, image_expected(), "row: {name}");
+            assert_eq!(images.call_count(), 1, "row: {name}");
+        } else {
+            assert_eq!(out.content.len(), 1, "row: {name}");
+            let ContentPart::Text { text } = &out.content[0] else {
+                panic!("one text line, row: {name}");
+            };
+            assert!(
+                text.starts_with("Saved ") && text.contains("artifacts/mcp-"),
+                "row: {name}, line: {text}",
+            );
+            assert_eq!(images.call_count(), 0, "row: {name}");
+        }
+    }
+}
+
+#[test]
+fn resource_text_wins_over_an_image_blob() {
+    let dir = fakes::TempDir::new("mcp-tool-image-text-wins");
+    let images = crate::test_support::FakeImages::ok();
+    let call = call_with_images(dir.path(), std::sync::Arc::clone(&images));
+    let result = CallResult {
+        content: vec![resource_part(
+            Some("seen"),
+            Some(image_encoded()),
+            None,
+            Some("image/png"),
+        )],
+        is_error: false,
+    };
+    let out = answer(&call, &result, &cancel());
+    assert!(out.error.is_none());
+    assert_eq!(
+        out.content,
+        vec![ContentPart::Text {
+            text: "seen".to_owned()
+        }]
+    );
+    assert_eq!(images.call_count(), 0);
 }

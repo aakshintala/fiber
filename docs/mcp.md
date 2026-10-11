@@ -168,8 +168,11 @@ A result goes through the tool contract in `docs/tools.md`:
 - a resource link becomes one line of text giving its URI, name and MIME type;
   `mcp_resources` `read` fetches it ("Prompts and resources")
 - an embedded text resource becomes text
-- an embedded image or PDF takes the path `read` takes for a file of that kind
+- an embedded image takes the path `read` takes for an image
   (`docs/tools.md`, "read")
+- an embedded PDF is saved to `artifacts/`, and the model gets one line giving
+  its path and size. It reads it with `read`, which handles PDFs
+  (`docs/tools.md`, "read"), as it does a PDF `web_fetch` saves
 - any other content, audio and other binary content included, is written to
   `artifacts/`, and the model gets one line giving its MIME type, size and
   path

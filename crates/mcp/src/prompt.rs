@@ -135,7 +135,7 @@ pub(crate) fn text(result: &PromptResult) -> Result<String, String> {
                     texts.push(found.clone());
                 }
                 Content::Text { .. } => {}
-                Content::Image => return Err("an image".to_owned()),
+                Content::Image { .. } => return Err("an image".to_owned()),
                 Content::Audio { .. } => return Err("audio".to_owned()),
                 Content::Resource { resource } => match &resource.text {
                     Some(found) if !found.is_empty() => texts.push(found.clone()),

@@ -239,7 +239,16 @@ pub(crate) enum Content {
         text: Option<String>,
     },
     /// An image.
-    Image,
+    Image {
+        /// Its base64 data; a missing or `null` value, or an array,
+        /// reads as `None`, while any other value stays for the call
+        /// to report.
+        #[serde(default, deserialize_with = "lenient")]
+        data: Option<Value>,
+        /// Its MIME type; a non-string reads as `None`.
+        #[serde(rename = "mimeType", default, deserialize_with = "lenient")]
+        mime_type: Option<String>,
+    },
     /// Audio.
     Audio {
         /// Its base64 data; a missing or `null` value, or an array,

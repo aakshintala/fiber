@@ -18,10 +18,14 @@ fn empty_servers() -> crate::mcp_servers::SessionServers {
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let images: std::sync::Arc<dyn contract::images::Images> = std::sync::Arc::new(
+        tools::ImageChild::new(std::path::PathBuf::new(), std::path::PathBuf::new()),
+    );
     let started = mcp::start(
         Vec::new(),
         &workspace,
         &root.path().join("artifacts"),
+        std::sync::Arc::clone(&images),
         &workspace.join("cache"),
         &clock,
         "0.0.0",
@@ -31,10 +35,7 @@ fn empty_servers() -> crate::mcp_servers::SessionServers {
         servers: started.servers,
         prompts: started.prompts,
         forget: std::sync::Arc::new(|| {}),
-        images: std::sync::Arc::new(tools::ImageChild::new(
-            std::path::PathBuf::new(),
-            std::path::PathBuf::new(),
-        )),
+        images,
     }
 }
 
