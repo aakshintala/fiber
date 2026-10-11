@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# The self-test for scripts/bug-red: a throwaway git repo with a base
+# commit, a red commit adding crates/a/tests/red.rs, and a later commit
+# adding crates/a/tests/later.rs proves bug-red filters the red commit's
+# own tests (red.rs, not later.rs); further fixtures prove a red commit
+# with no test file exits 1 and a one-commit pull request exits 1.
+#
+# bug-red cds to the top level of its checkout, so each fixture cds into
+# its throwaway repo and calls bug-red by absolute path. A stub cargo
+# first on PATH stands in for the toolchain: docs-only exits 1 (not
+# docs-only), bug-filter records its file args and prints a filter plus
+# one package, and nextest exits 100 (a test failed). No background
+# processes.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+top=$PWD
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() {
+  echo "scripts/test-bug-red: $1" >&2
+  exit 1
+}
+
+bug_red="$top/scripts/bug-red"
+record="$tmp/filter-args.txt"
+
+mkdir -p "$tmp/bin"
+cat >"$tmp/bin/cargo" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1-}" = xtask ] && [ "\${2-}" = docs-only ]; then
+  exit 1
+fi
+if [ "\${1-}" = xtask ] && [ "\${2-}" = bug-filter ]; then
+  shift 2
+  if [ "\$#" -gt 0 ]; then
+    printf '%s\n' "\$@" >"$record"
+    # Like the real bug-filter, only test files reach the filter: a
+    # red commit with no test file prints an empty one.
+    joined=""
+    for f in "\$@"; do
+      case "\$f" in
+        */tests/*)
+          if [ -z "\$joined" ]; then
+            joined="\$f"
+          else
+            joined="\$joined|\$f"
+          fi
+          ;;
+      esac
+    done
+    printf 'filter\t%s\n' "\$joined"
+  else
+    : >"$record"
+    printf 'filter\t\n'
+  fi
+  printf 'package\ta\n'
+  exit 0
+fi
+if [ "\${1-}" = nextest ]; then
+  exit 100
+fi
+echo "stub cargo: unexpected args: \$*" >&2
+exit 1
+EOF
+chmod +x "$tmp/bin/cargo"
+PATH="$tmp/bin:$PATH"
+export PATH
+
+new_repo() {
+  git init -q "$1"
+  git -C "$1" config user.email test@example.com
+  git -C "$1" config user.name Test
+  git -C "$1" commit -q --allow-empty -m base
+}
+
+# The red commit's own tests run at the red commit: the later commit's
+# test file must not reach the filter.
+repo="$tmp/repo"
+new_repo "$repo"
+mkdir -p "$repo/crates/a/tests" "$repo/crates/a/src"
+printf '// red\n' >"$repo/crates/a/tests/red.rs"
+git -C "$repo" add crates/a/tests/red.rs
+git -C "$repo" commit -q -m red
+printf '// later\n' >"$repo/crates/a/tests/later.rs"
+printf '// fix\n' >"$repo/crates/a/src/fix.rs"
+git -C "$repo" add crates/a/tests/later.rs crates/a/src/fix.rs
+git -C "$repo" commit -q -m later
+base=$(git -C "$repo" rev-parse HEAD~2)
+cd "$repo"
+head=$(git rev-parse HEAD)
+rc=0
+"$bug_red" "$base" "$head" >"$tmp/out1.txt" 2>&1 || rc=$?
+cd "$top"
+[ "$rc" -eq 0 ] || { cat "$tmp/out1.txt" >&2; fail "later-commit case exited $rc, want 0"; }
+grep -Fq "crates/a/tests/red.rs" "$record" || fail "filter misses the red commit's test"
+if grep -Fq "crates/a/tests/later.rs" "$record"; then
+  cat "$tmp/out1.txt" >&2
+  fail "filter holds the later commit's test"
+fi
+
+# A red commit with no test file exits 1, even when the later commit
+# adds one.
+repo2="$tmp/repo2"
+new_repo "$repo2"
+mkdir -p "$repo2/crates/a/src" "$repo2/crates/a/tests"
+printf '// lib\n' >"$repo2/crates/a/src/lib.rs"
+git -C "$repo2" add crates/a/src/lib.rs
+git -C "$repo2" commit -q -m red
+printf '// later\n' >"$repo2/crates/a/tests/later.rs"
+git -C "$repo2" add crates/a/tests/later.rs
+git -C "$repo2" commit -q -m later
+base2=$(git -C "$repo2" rev-parse HEAD~2)
+cd "$repo2"
+head2=$(git rev-parse HEAD)
+rc=0
+"$bug_red" "$base2" "$head2" >"$tmp/out2.txt" 2>&1 || rc=$?
+cd "$top"
+[ "$rc" -eq 1 ] || { cat "$tmp/out2.txt" >&2; fail "no-test red commit exited $rc, want 1"; }
+grep -Fq "changes no test file" "$tmp/out2.txt" || { cat "$tmp/out2.txt" >&2; fail "no-test red commit names no missing test file"; }
+
+# A one-commit pull request exits 1.
+repo3="$tmp/repo3"
+new_repo "$repo3"
+mkdir -p "$repo3/crates/a/tests"
+printf '// only\n' >"$repo3/crates/a/tests/only.rs"
+git -C "$repo3" add crates/a/tests/only.rs
+git -C "$repo3" commit -q -m only
+base3=$(git -C "$repo3" rev-parse HEAD~1)
+cd "$repo3"
+head3=$(git rev-parse HEAD)
+rc=0
+"$bug_red" "$base3" "$head3" >"$tmp/out3.txt" 2>&1 || rc=$?
+cd "$top"
+[ "$rc" -eq 1 ] || { cat "$tmp/out3.txt" >&2; fail "one-commit case exited $rc, want 1"; }
+grep -Fq "one commit" "$tmp/out3.txt" || { cat "$tmp/out3.txt" >&2; fail "one-commit case names no one commit"; }
