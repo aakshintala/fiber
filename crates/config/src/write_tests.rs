@@ -7,7 +7,7 @@ use fakes::TempDir;
 use serde_json::json;
 
 use super::atomic::{locked, waiting};
-use super::lines::remove_line;
+use super::lines::{append_line, remove_line};
 use super::*;
 
 /// How long the test waits for a thread before failing.
@@ -122,4 +122,28 @@ fn a_remove_waits_for_the_files_lock_then_keeps_the_other_write() {
     worker.join().unwrap();
     assert!(removed, "the held line is still there");
     assert_eq!(fs::read(&file).unwrap(), "{\"late\": 3}\n".as_bytes());
+}
+
+#[cfg(unix)]
+#[test]
+fn append_line_on_an_unreadable_file_fails_and_keeps_the_file() {
+    use std::os::unix::fs::symlink;
+    let dir = TempDir::new("fiber-append-line");
+    let file = dir.path().join("rules");
+    // A link to itself: reading it fails with a loop error, which is not
+    // NotFound, so the file counts as present. Renaming a new file over
+    // it would succeed, so a wrong guard would report Ok.
+    symlink(&file, &file).unwrap();
+    let result = append_line(&file, "{\"a\": 1}");
+    assert!(
+        matches!(result, Err(ConfigError::Io { .. })),
+        "expected an I/O error, got {result:?}"
+    );
+    assert!(
+        fs::symlink_metadata(&file)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the unreadable file was replaced"
+    );
 }
