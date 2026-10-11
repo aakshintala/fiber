@@ -626,3 +626,18 @@ NO_COLOR=1 cargo run --release -- fixtures/session.jsonl --static
 | `dark-256` | `--theme dark-256`: the dark theme forced to 256 colours |
 | `light-256` | `--theme light-256`: the light theme forced to 256 colours |
 | `dark-no-color` | `--theme dark-no-color`, or `NO_COLOR=1`: no colour anywhere |
+
+## Retries, failed turns, crash recovery and rewind (#1635)
+
+Eight still frames from the fixtures in `src/failures.rs`: the pending retry on the working line, the failed turn, the handoff nudge, the dropped-connection banner, the crashed turn, and the `/rewind` view with its `⟲` line. The wording is docs/tui.md's ("The working line", "Errors and retries", "Handoff", "A dropped connection", "After a crash", "Rewind"); the code names are docs/errors.md's. Each draws over a quiet conversation stub and waits for a key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture still loads but the failures ignore it. Every case also renders at 100x40 for the narrow layout; capture at 160 by 48.
+
+| Case | How to reach it |
+|---|---|
+| `retry` | `cargo run --release -- fixtures/session.jsonl --static --failure-case retry`: the pending retry on the working line, and 1 failed model call on the group line above |
+| `failed` | `cargo run --release -- fixtures/session.jsonl --static --failure-case failed`: the ✗ line with its code, the provider's words dim under it, then ▣ failed |
+| `auth_failed` | `cargo run --release -- fixtures/session.jsonl --static --failure-case auth_failed`: the authentication_failed line with log in |
+| `nudge` | `cargo run --release -- fixtures/session.jsonl --static --failure-case nudge`: the dim ◔ Context at 268k line where it happened |
+| `connection_lost` | `cargo run --release -- fixtures/session.jsonl --static --failure-case connection_lost`: the banner replacing the working line, with the draft kept |
+| `crashed` | `cargo run --release -- fixtures/session.jsonl --static --failure-case crashed`: ▣ cut short, the may-have-run ledger row, the ↺ resumed band, and the orphaned-jobs line |
+| `rewind` | `cargo run --release -- fixtures/session.jsonl --static --failure-case rewind`: the /rewind view with turns and step boundaries |
+| `rewound` | `cargo run --release -- fixtures/session.jsonl --static --failure-case rewound`: the ⟲ line after a rewind |
