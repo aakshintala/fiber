@@ -130,7 +130,7 @@ impl Reader {
                 self.open = Some(Vec::new());
             }
             let mut remaining = len;
-            let mut skipped = 0;
+            let mut masks = key.iter().cycle();
             while remaining > 0 {
                 let want = remaining.min(CHUNK);
                 let mut fragment = Vec::new();
@@ -139,10 +139,9 @@ impl Reader {
                     Ok(n) if n == want => {}
                     Ok(_) | Err(_) => return Incoming::Gone,
                 }
-                for (byte, mask) in fragment.iter_mut().zip(key.iter().cycle().skip(skipped)) {
+                for (byte, mask) in fragment.iter_mut().zip(&mut masks) {
                     *byte ^= *mask;
                 }
-                skipped = (skipped + fragment.len()) % 4;
                 self.total = self.total.saturating_add(fragment.len());
                 if self.total > self.limit {
                     // Past the cap the hub closes 1009.

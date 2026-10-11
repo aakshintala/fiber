@@ -389,6 +389,28 @@ fn authenticate_answers_accepted_then_status_serves() {
 }
 
 #[test]
+fn pumped_lines_drop_the_pair_terminator_from_websocket_text() {
+    let temp = Temp::new();
+    let clock = FakeClock::new();
+    let (port, _hub, _got, _done) = serve_with_port(&temp, Vec::new(), clock);
+    pair_device(&temp.dir, "phone", "t0k3n");
+    let client = helloed(port, None);
+    let accepted = authenticate(&client, "c1", "t0k3n");
+    assert_eq!(accepted["kind"], "command_accepted");
+
+    client.text(r#"{"id":"s1","command":"status"}"#);
+    let Item::Text(bytes) = client.next("the pumped status") else {
+        panic!("the pumped status is text");
+    };
+    assert!(
+        !bytes.ends_with(b"\n"),
+        "the pair line terminator is not in the websocket message"
+    );
+    let status: Value = serde_json::from_slice(&bytes).expect("the pumped status is JSON");
+    assert_eq!(status["payload"]["command_id"], "s1");
+}
+
+#[test]
 fn an_unknown_token_is_unauthenticated_and_closed() {
     let temp = Temp::new();
     let clock = FakeClock::new();

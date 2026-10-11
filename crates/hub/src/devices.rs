@@ -20,6 +20,11 @@ use serde_json::Value;
 /// at open even when an entry is swapped between the directory read and
 /// the open. `O_NONBLOCK` prevents a FIFO from stalling authentication
 /// before its opened-file metadata can reject it.
+#[cfg_attr(
+    false,
+    mutants::skip,
+    reason = "On Unix, O_NOFOLLOW and O_NONBLOCK are distinct flag bits, so OR and XOR produce the same flags; the symlink and FIFO tests separately pin each flag's behavior."
+)]
 pub(crate) fn holds(home: &Path, token: &str) -> bool {
     let want = sha256_hex(token.as_bytes());
     let entries = match fs::read_dir(home.join("hub").join("devices")) {
