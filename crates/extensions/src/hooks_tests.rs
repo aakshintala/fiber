@@ -1489,13 +1489,26 @@ fn a_lua_provider_its_manifest_does_not_declare_fails_the_extension() {
     let names: Vec<String> = session.loaded().iter().map(|e| e.name.clone()).collect();
     assert!(!names.iter().any(|n| n == "fiber.test/rogue"), "{names:?}");
     assert!(names.iter().any(|n| n == "fiber.test/good"), "{names:?}");
-    assert!(session.lua_providers().is_empty() || session.lua_providers().iter().all(|(e, _)| e != "fiber.test/rogue"));
+    assert!(
+        session.lua_providers().is_empty()
+            || session
+                .lua_providers()
+                .iter()
+                .all(|(e, _)| e != "fiber.test/rogue")
+    );
     let notices = session.notices();
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
     assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/rogue"));
-    assert!(notices[0].message.contains("rogue"), "{}", notices[0].message);
-    assert_eq!(after_tool(&session, "c").outcome, AfterToolOutcome::Unchanged);
+    assert!(
+        notices[0].message.contains("rogue"),
+        "{}",
+        notices[0].message
+    );
+    assert_eq!(
+        after_tool(&session, "c").outcome,
+        AfterToolOutcome::Unchanged
+    );
 }
 
 #[test]
@@ -1564,9 +1577,10 @@ fn a_data_provider_its_manifest_does_not_declare_keeps_the_extension_out_without
     let names: Vec<String> = session.loaded().iter().map(|e| e.name.clone()).collect();
     assert!(!names.iter().any(|n| n == "fiber.test/rogue"), "{names:?}");
     assert!(
-        session.notices().iter().all(|notice| {
-            notice.extension.as_deref() != Some("fiber.test/rogue")
-        }),
+        session
+            .notices()
+            .iter()
+            .all(|notice| { notice.extension.as_deref() != Some("fiber.test/rogue") }),
         "{:?}",
         session.notices()
     );
@@ -1586,7 +1600,11 @@ fn an_undeclared_scripted_provider_fails_as_undeclared() {
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
     assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/evil"));
-    assert!(notices[0].message.contains("scripted"), "{}", notices[0].message);
+    assert!(
+        notices[0].message.contains("scripted"),
+        "{}",
+        notices[0].message
+    );
     assert!(
         notices[0].message.contains("does not declare"),
         "{}",

@@ -71,14 +71,24 @@ impl Setup {
                     continue;
                 };
                 let mut urls = Vec::new();
-                for model in data.get("models").and_then(|m| m.as_array()).into_iter().flatten() {
+                for model in data
+                    .get("models")
+                    .and_then(|m| m.as_array())
+                    .into_iter()
+                    .flatten()
+                {
                     if let Some(url) = model.get("base_url").and_then(|u| u.as_str())
                         && !urls.contains(&url)
                     {
                         urls.push(url);
                     }
                 }
-                map.insert(pname.to_owned(), serde_json::Value::Array(urls.into_iter().map(serde_json::Value::from).collect()));
+                map.insert(
+                    pname.to_owned(),
+                    serde_json::Value::Array(
+                        urls.into_iter().map(serde_json::Value::from).collect(),
+                    ),
+                );
             }
             manifest["providers"] = serde_json::Value::Object(map);
         }

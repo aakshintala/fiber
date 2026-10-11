@@ -77,8 +77,11 @@ impl Setup {
         let dir = self.home().join("extensions").join(name);
         fs::create_dir_all(dir.join("providers")).unwrap();
         let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
-        manifest["providers"] =
-            serde_json::Value::Object([(name.to_owned(), json!(["http://x/v1"]))].into_iter().collect());
+        manifest["providers"] = serde_json::Value::Object(
+            [(name.to_owned(), json!(["http://x/v1"]))]
+                .into_iter()
+                .collect(),
+        );
         fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
         write_record(&dir);
         fs::write(
@@ -712,7 +715,8 @@ fn login_with_runs_the_provider_and_prints_its_stored_result() {
     fs::write(
         dir.join("extension.json"),
         json!({ "name": "acme-ext", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
-                "providers": {"acme": ["http://127.0.0.1:1/v1"]} }).to_string(),
+                "providers": {"acme": ["http://127.0.0.1:1/v1"]} })
+        .to_string(),
     )
     .unwrap();
     write_record(&dir);

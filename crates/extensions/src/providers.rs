@@ -291,11 +291,8 @@ impl Providers {
             // the only one; the session refuses the same extension
             // silently, since it cannot run Lua here.
             {
-                let names: Vec<&str> =
-                    datas.iter().map(|data| data.name.as_str()).collect();
-                if let Some(unclaimed) =
-                    declared::first_undeclared(&manifest.providers, names)
-                {
+                let names: Vec<&str> = datas.iter().map(|data| data.name.as_str()).collect();
+                if let Some(unclaimed) = declared::first_undeclared(&manifest.providers, names) {
                     notices.push(Notice {
                         code: ErrorCode::ExtensionFailed,
                         message: Error::UndeclaredProvider {
@@ -372,10 +369,7 @@ impl Providers {
             .and_then(|entries| entries.get(provider))
             .unwrap_or(&empty);
         notices.extend(declared::leave_out_unlisted(
-            provider,
-            extension,
-            listed,
-            models,
+            provider, extension, listed, models,
         ));
         notices
     }
@@ -385,11 +379,7 @@ impl Providers {
     /// each Lua provider's models. The one call every path that runs Lua
     /// makes after `load`, so no caller can forget the drop. It gives no
     /// notice of its own: the rejection's notice is the session's.
-    pub fn add_session(
-        &mut self,
-        extensions: &SessionExtensions,
-        config: &Config,
-    ) -> Vec<Notice> {
+    pub fn add_session(&mut self, extensions: &SessionExtensions, config: &Config) -> Vec<Notice> {
         for name in extensions.rejected() {
             let dropped: Vec<String> = self
                 .extension_of

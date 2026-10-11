@@ -113,7 +113,12 @@ pub(crate) fn install_extension(
         let mut map = serde_json::Map::new();
         for (name, data) in providers {
             let mut urls = Vec::new();
-            for model in data.get("models").and_then(|m| m.as_array()).into_iter().flatten() {
+            for model in data
+                .get("models")
+                .and_then(|m| m.as_array())
+                .into_iter()
+                .flatten()
+            {
                 if let Some(url) = model.get("base_url").and_then(|u| u.as_str())
                     && !urls.contains(&url)
                 {

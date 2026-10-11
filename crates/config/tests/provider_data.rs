@@ -7,7 +7,10 @@
 mod common;
 
 use common::Setup;
-use config::{CredentialSource, Login, Protocol, provider_files, read_manifest, read_package_text, read_providers};
+use config::{
+    CredentialSource, Login, Protocol, provider_files, read_manifest, read_package_text,
+    read_providers,
+};
 use contract::ErrorCode;
 
 const DATABRICKS: &str = r#"{

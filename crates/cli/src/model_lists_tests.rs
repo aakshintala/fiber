@@ -663,7 +663,11 @@ fn a_cached_read_leaves_out_a_cached_model_at_an_unlisted_url() {
     );
     assert_eq!(references(&catalogue), ["acme/m1"]);
     assert_eq!(catalogue.notices.len(), 1);
-    assert!(catalogue.notices[0].contains("acme/m2"), "{:?}", catalogue.notices);
+    assert!(
+        catalogue.notices[0].contains("acme/m2"),
+        "{:?}",
+        catalogue.notices
+    );
 }
 
 #[test]
@@ -709,16 +713,15 @@ fiber.provider("acme", {{
 }})
 "#,
     );
-    setup.install_lua(
-        "acme-ext",
-        &init,
-        &json!({"acme": [format!("{base}/v1")]}),
-    );
+    setup.install_lua("acme-ext", &init, &json!({"acme": [format!("{base}/v1")]}));
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: false }).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);
     assert!(
-        catalogue.notices.iter().any(|notice| notice.contains("acme/m2")),
+        catalogue
+            .notices
+            .iter()
+            .any(|notice| notice.contains("acme/m2")),
         "{:?}",
         catalogue.notices
     );

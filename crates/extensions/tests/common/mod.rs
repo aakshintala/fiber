@@ -250,14 +250,22 @@ fn declared_map(providers: &[Value]) -> Value {
             continue;
         };
         let mut urls = Vec::new();
-        for model in data.get("models").and_then(Value::as_array).into_iter().flatten() {
+        for model in data
+            .get("models")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             if let Some(url) = model.get("base_url").and_then(Value::as_str)
                 && !urls.contains(&url)
             {
                 urls.push(url);
             }
         }
-        map.insert(name.to_owned(), Value::Array(urls.into_iter().map(Value::from).collect()));
+        map.insert(
+            name.to_owned(),
+            Value::Array(urls.into_iter().map(Value::from).collect()),
+        );
     }
     Value::Object(map)
 }

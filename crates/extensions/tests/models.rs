@@ -593,7 +593,13 @@ fn lua_list(ids: &[&str]) -> String {
 #[test]
 fn add_lua_without_a_data_file_creates_the_provider() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     let lua = lua_acme(&setup, "ext", &lua_list(&["m"]));
     let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(notices.is_empty(), "{notices:?}");
@@ -632,7 +638,13 @@ fn add_lua_with_a_data_file_replaces_only_models() {
 #[test]
 fn add_lua_leaves_out_an_invalid_model_with_a_notice() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     let lua = lua_acme(
         &setup,
         "ext",
@@ -662,7 +674,13 @@ fn add_lua_leaves_out_an_invalid_model_with_a_notice() {
 #[test]
 fn add_lua_filters_a_cached_list_without_running_lua() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     write_model_cache(
         &setup.home(),
         "acme",
@@ -688,7 +706,13 @@ fn add_lua_filters_a_cached_list_without_running_lua() {
 #[test]
 fn a_failing_models_leaves_no_models_with_the_errors_code() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     let lua = lua_acme(&setup, "ext", "error(\"boom\")");
     let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert_eq!(providers.names().count(), 0);
@@ -724,14 +748,26 @@ fn providers_debug_names_the_installed_providers() {
 #[test]
 fn add_lua_keeps_the_provider_for_its_signer_even_when_models_fails() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     let lua = lua_acme(&setup, "ext", &lua_list(&["m"]));
     providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(providers.lua("acme").is_some());
     assert!(providers.lua("nobody").is_none());
 
     let setup2 = Setup::new();
-    let mut failing = lua_only(&setup2, "srclua", "broke-ext", "broke", &["http://127.0.0.1:1/v1"]);
+    let mut failing = lua_only(
+        &setup2,
+        "srclua",
+        "broke-ext",
+        "broke",
+        &["http://127.0.0.1:1/v1"],
+    );
     let bad = lua_named(&setup2, "bad", "broke", "error(\"boom\")");
     assert_eq!(
         failing
@@ -838,7 +874,13 @@ fn the_later_extension_wins_the_provider_and_its_addendum() {
 #[test]
 fn add_lua_reads_the_addendum_against_the_lua_extensions_directory() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     write(&setup.home().join("ext/prompts/m.md"), "Lua says hi.\n");
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/m.md"));
     let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
@@ -875,7 +917,13 @@ fn add_lua_replaces_the_data_files_models_and_addenda_together() {
 #[test]
 fn add_lua_with_a_missing_addendum_leaves_no_models_but_keeps_the_provider() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/gone.md"));
     let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert_eq!(providers.names().count(), 0);
@@ -1243,7 +1291,13 @@ fn add_lua_for_a_provider_with_only_cost_keeps_its_data_models_and_its_handle() 
 #[test]
 fn forget_lua_drops_every_handle_and_keeps_the_models() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     write(&setup.home().join("ext/prompts/m.md"), "Lua says hi.\n");
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/m.md"));
     let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
@@ -1276,7 +1330,13 @@ fn cached(id: &str) -> config::ModelData {
 #[test]
 fn add_cached_inserts_an_unheld_provider_with_its_models() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     assert!(providers.add_cached("acme", vec![cached("m1")]).is_some());
     assert_eq!(providers.names().collect::<Vec<_>>(), ["acme"]);
     assert_eq!(
@@ -1296,7 +1356,11 @@ fn add_cached_inserts_an_unheld_provider_with_its_models() {
 fn add_cached_leaves_a_held_provider_alone() {
     let setup = Setup::new();
     let mut providers = installed(&setup, &[("openai", provider("openai", &["gpt-5.6"]))]);
-    assert!(providers.add_cached("openai", vec![cached("other")]).is_none());
+    assert!(
+        providers
+            .add_cached("openai", vec![cached("other")])
+            .is_none()
+    );
     assert_eq!(
         providers
             .get("openai")
@@ -1312,7 +1376,11 @@ fn add_cached_leaves_a_held_provider_alone() {
 #[test]
 fn add_cached_refuses_scripted() {
     let mut providers = Providers::default();
-    assert!(providers.add_cached("scripted", vec![cached("m1")]).is_none());
+    assert!(
+        providers
+            .add_cached("scripted", vec![cached("m1")])
+            .is_none()
+    );
     assert!(providers.get("scripted").is_none());
 }
 
@@ -1337,11 +1405,21 @@ fn set_models_replaces_a_held_providers_models() {
 #[test]
 fn set_models_inserts_an_unheld_provider_and_refuses_scripted() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     let notices = providers.set_models("acme", vec![cached("m1")]);
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/m1").is_ok());
-    assert!(providers.set_models("scripted", vec![cached("m1")]).is_empty());
+    assert!(
+        providers
+            .set_models("scripted", vec![cached("m1")])
+            .is_empty()
+    );
     assert!(providers.get("scripted").is_none());
 }
 
@@ -1379,8 +1457,10 @@ fn data_with(name: &str, models: Vec<serde_json::Value>) -> serde_json::Value {
 #[test]
 fn an_extension_whose_data_names_an_undeclared_provider_loads_none_of_its_providers() {
     let setup = Setup::new();
-    let a_manifest =
-        declared_manifest("a-ext", serde_json::json!({"a1": ["http://127.0.0.1:1/v1"]}));
+    let a_manifest = declared_manifest(
+        "a-ext",
+        serde_json::json!({"a1": ["http://127.0.0.1:1/v1"]}),
+    );
     let source = setup.source(
         "a",
         &a_manifest,
@@ -1409,7 +1489,10 @@ fn a_model_whose_base_url_its_entry_does_not_list_is_left_out_with_extension_fai
     let setup = Setup::new();
     let source = setup.source(
         "a",
-        &declared_manifest("acme-ext", serde_json::json!({"acme": ["http://127.0.0.1:1/v1"]})),
+        &declared_manifest(
+            "acme-ext",
+            serde_json::json!({"acme": ["http://127.0.0.1:1/v1"]}),
+        ),
         &[data_with(
             "acme",
             vec![
@@ -1425,7 +1508,11 @@ fn a_model_whose_base_url_its_entry_does_not_list_is_left_out_with_extension_fai
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
     assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
-    assert!(notices[0].message.contains("acme/m2"), "{}", notices[0].message);
+    assert!(
+        notices[0].message.contains("acme/m2"),
+        "{}",
+        notices[0].message
+    );
 }
 
 #[test]
@@ -1437,7 +1524,10 @@ fn a_listed_pattern_admits_its_template_and_the_filled_url_is_not_compared() {
             "tmpl-ext",
             serde_json::json!({"acme": ["https://{workspace}/v1"]}),
         ),
-        &[data_with("acme", vec![model_at("m", "https://{workspace}/v1")])],
+        &[data_with(
+            "acme",
+            vec![model_at("m", "https://{workspace}/v1")],
+        )],
     );
     install(&setup.home(), &source, "0.1.0").unwrap();
     let (providers, notices) = Providers::load(&setup.home()).unwrap();
@@ -1451,7 +1541,10 @@ fn a_listed_pattern_admits_its_template_and_the_filled_url_is_not_compared() {
             "filled-ext",
             serde_json::json!({"acme": ["https://adb.example/v1"]}),
         ),
-        &[data_with("acme", vec![model_at("m", "https://{workspace}/v1")])],
+        &[data_with(
+            "acme",
+            vec![model_at("m", "https://{workspace}/v1")],
+        )],
     );
     install(&setup2.home(), &source2, "0.1.0").unwrap();
     let (providers2, notices2) = Providers::load(&setup2.home()).unwrap();
@@ -1465,7 +1558,10 @@ fn an_empty_entry_admits_no_model() {
     let source = setup.source(
         "a",
         &declared_manifest("e-ext", serde_json::json!({"acme": []})),
-        &[data_with("acme", vec![model_at("m", "http://127.0.0.1:1/v1")])],
+        &[data_with(
+            "acme",
+            vec![model_at("m", "http://127.0.0.1:1/v1")],
+        )],
     );
     install(&setup.home(), &source, "0.1.0").unwrap();
     let (providers, notices) = Providers::load(&setup.home()).unwrap();
@@ -1478,8 +1574,14 @@ fn a_cached_list_that_replaces_the_data_is_checked_too() {
     let setup = Setup::new();
     let source = setup.source(
         "a",
-        &declared_manifest("acme-ext", serde_json::json!({"acme": ["http://127.0.0.1:1/v1"]})),
-        &[data_with("acme", vec![model_at("a", "http://127.0.0.1:1/v1")])],
+        &declared_manifest(
+            "acme-ext",
+            serde_json::json!({"acme": ["http://127.0.0.1:1/v1"]}),
+        ),
+        &[data_with(
+            "acme",
+            vec![model_at("a", "http://127.0.0.1:1/v1")],
+        )],
     );
     install(&setup.home(), &source, "0.1.0").unwrap();
     write_model_cache(
@@ -1500,7 +1602,10 @@ fn add_lua_leaves_out_a_models_result_at_an_unlisted_url() {
     let setup = Setup::new();
     let source = setup.source(
         "a",
-        &declared_manifest("acme-ext", serde_json::json!({"acme": ["http://127.0.0.1:1/v1"]})),
+        &declared_manifest(
+            "acme-ext",
+            serde_json::json!({"acme": ["http://127.0.0.1:1/v1"]}),
+        ),
         &[],
     );
     install(&setup.home(), &source, "0.1.0").unwrap();
@@ -1526,7 +1631,13 @@ fn add_lua_leaves_out_a_models_result_at_an_unlisted_url() {
 #[test]
 fn add_cached_admits_only_listed_urls_and_adds_nothing_no_extension_declares() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     assert!(providers.add_cached("ghost", vec![cached("m")]).is_none());
     assert!(providers.get("ghost").is_none());
     let notices = providers
@@ -1534,9 +1645,11 @@ fn add_cached_admits_only_listed_urls_and_adds_nothing_no_extension_declares() {
             "acme",
             vec![
                 serde_json::from_value(json!({"id": "m1", "protocol": "openai-responses",
-                    "base_url": "http://127.0.0.1:1/v1", "context_window": 1000})).unwrap(),
+                    "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}))
+                .unwrap(),
                 serde_json::from_value(json!({"id": "m2", "protocol": "openai-responses",
-                    "base_url": "http://127.0.0.1:2/v1", "context_window": 1000})).unwrap(),
+                    "base_url": "http://127.0.0.1:2/v1", "context_window": 1000}))
+                .unwrap(),
             ],
         )
         .unwrap();
@@ -1550,14 +1663,22 @@ fn add_cached_admits_only_listed_urls_and_adds_nothing_no_extension_declares() {
 #[test]
 fn set_models_leaves_out_unlisted_urls_and_records_the_owner() {
     let setup = Setup::new();
-    let mut providers = lua_only(&setup, "srclua", "acme-ext", "acme", &["http://127.0.0.1:1/v1"]);
+    let mut providers = lua_only(
+        &setup,
+        "srclua",
+        "acme-ext",
+        "acme",
+        &["http://127.0.0.1:1/v1"],
+    );
     let notices = providers.set_models(
         "acme",
         vec![
             serde_json::from_value(json!({"id": "m1", "protocol": "openai-responses",
-                "base_url": "http://127.0.0.1:1/v1", "context_window": 1000})).unwrap(),
+                "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}))
+            .unwrap(),
             serde_json::from_value(json!({"id": "m2", "protocol": "openai-responses",
-                "base_url": "http://127.0.0.1:2/v1", "context_window": 1000})).unwrap(),
+                "base_url": "http://127.0.0.1:2/v1", "context_window": 1000}))
+            .unwrap(),
         ],
     );
     assert!(providers.resolve("acme/m1").is_ok());
@@ -1595,10 +1716,11 @@ fn a_cached_lua_only_template_fills_from_its_extensions_setting() {
     .unwrap();
     let notices = providers.add_cached("acme", vec![template]).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
-    let config = config(&setup, &["extensions.\"acme-ext\".settings.workspace=adb.example"]);
-    let notices = providers
-        .fill_placeholders(&config, &|_| None)
-        .unwrap();
+    let config = config(
+        &setup,
+        &["extensions.\"acme-ext\".settings.workspace=adb.example"],
+    );
+    let notices = providers.fill_placeholders(&config, &|_| None).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
     let found = providers.resolve("acme/m").unwrap();
     assert_eq!(found.model.base_url, "https://adb.example/v1");
@@ -1610,10 +1732,7 @@ fn add_session_drops_the_data_of_an_extension_rejected_for_its_lua() {
     use std::sync::Arc;
     let setup = Setup::new();
     let mut cmap = serde_json::Map::new();
-    cmap.insert(
-        "c".to_owned(),
-        serde_json::json!(["http://127.0.0.1:1/v1"]),
-    );
+    cmap.insert("c".to_owned(), serde_json::json!(["http://127.0.0.1:1/v1"]));
     let c_manifest = declared_manifest("c-ext", serde_json::Value::Object(cmap));
     let c_source = setup.source(
         "c",
@@ -1648,8 +1767,7 @@ fn add_session_drops_the_data_of_an_extension_rejected_for_its_lua() {
     let config = config(&setup, &[]);
     let clock = fakes::clock::FakeClock::new();
     let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoopLock);
-    let extensions =
-        SessionExtensions::load(&setup.home(), &config, clock, locks, None);
+    let extensions = SessionExtensions::load(&setup.home(), &config, clock, locks, None);
     assert_eq!(extensions.rejected(), ["c-ext"]);
     let notices = providers.add_session(&extensions, &config);
     assert!(notices.is_empty(), "{notices:?}");

@@ -91,7 +91,8 @@ impl Setup {
         fs::write(
             dir.join("extension.json"),
             json!({"name": "acme", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
-                   "providers": {"acme": ["http://127.0.0.1:9/v1"]}}).to_string(),
+                   "providers": {"acme": ["http://127.0.0.1:9/v1"]}})
+            .to_string(),
         )
         .unwrap();
         write_record(&dir);
@@ -252,7 +253,10 @@ fn models_runs_a_lua_providers_models_with_no_cached_copy() {
     .commit()
     .unwrap();
     {
-        let dir = setup.home().join("extensions").join("fiber.test-lua-fixture");
+        let dir = setup
+            .home()
+            .join("extensions")
+            .join("fiber.test-lua-fixture");
         let mut installed: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("extension.json")).unwrap())
                 .unwrap();
@@ -499,11 +503,15 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
     .commit()
     .unwrap();
     {
-        let dir = setup.home().join("extensions").join("fiber.test-lua-fixture");
+        let dir = setup
+            .home()
+            .join("extensions")
+            .join("fiber.test-lua-fixture");
         let mut installed: Value =
             serde_json::from_str(&std::fs::read_to_string(dir.join("extension.json")).unwrap())
                 .unwrap();
-        installed["providers"] = json!({"fixture": [format!("{}/v1", server.url()), "http://127.0.0.1:9/v1"]});
+        installed["providers"] =
+            json!({"fixture": [format!("{}/v1", server.url()), "http://127.0.0.1:9/v1"]});
         write(&dir.join("extension.json"), &installed);
     }
     config::store_secret(
@@ -613,21 +621,39 @@ fn models_skips_an_extension_whose_data_names_an_undeclared_provider() {
         "a-ext",
         &json!({"a1": ["http://127.0.0.1:9/v1"]}),
         &[
-            ("a1", data_with("a1", json!([model_at("m", "http://127.0.0.1:9/v1")]))),
-            ("a2", data_with("a2", json!([model_at("m", "http://127.0.0.1:9/v1")]))),
+            (
+                "a1",
+                data_with("a1", json!([model_at("m", "http://127.0.0.1:9/v1")])),
+            ),
+            (
+                "a2",
+                data_with("a2", json!([model_at("m", "http://127.0.0.1:9/v1")])),
+            ),
         ],
     );
     install_data(
         &setup.home(),
         "b-ext",
         &json!({"b": ["http://127.0.0.1:9/v1"]}),
-        &[("b", data_with("b", json!([model_at("m", "http://127.0.0.1:9/v1")])) )],
+        &[(
+            "b",
+            data_with("b", json!([model_at("m", "http://127.0.0.1:9/v1")])),
+        )],
     );
     let run = setup.fiber(&["models"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(run.stdout.contains("b/m"), "stdout: {}", run.stdout);
-    assert!(!run.stdout.contains("a1/m") && !run.stdout.contains("a2/m"), "stdout: {}", run.stdout);
-    assert_eq!(run.stderr.matches("a2").count(), 1, "stderr: {}", run.stderr);
+    assert!(
+        !run.stdout.contains("a1/m") && !run.stdout.contains("a2/m"),
+        "stdout: {}",
+        run.stdout
+    );
+    assert_eq!(
+        run.stderr.matches("a2").count(),
+        1,
+        "stderr: {}",
+        run.stderr
+    );
 }
 
 #[test]
@@ -637,14 +663,18 @@ fn models_skips_an_extension_whose_lua_registers_an_undeclared_provider() {
         &setup.home(),
         "c-ext",
         &json!({"c": ["http://127.0.0.1:9/v1"]}),
-        &[("c", data_with("c", json!([model_at("m", "http://127.0.0.1:9/v1")])) )],
+        &[(
+            "c",
+            data_with("c", json!([model_at("m", "http://127.0.0.1:9/v1")])),
+        )],
     );
     let src = setup.root.path().join("src-lua");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(
         src.join("extension.json"),
         json!({"name": "c-ext", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
-               "providers": {"c": ["http://127.0.0.1:9/v1"]}}).to_string(),
+               "providers": {"c": ["http://127.0.0.1:9/v1"]}})
+        .to_string(),
     )
     .unwrap();
     std::fs::write(
@@ -662,7 +692,12 @@ fn models_skips_an_extension_whose_lua_registers_an_undeclared_provider() {
     let run = setup.fiber(&["models"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(!run.stdout.contains("c/m"), "stdout: {}", run.stdout);
-    assert_eq!(run.stderr.matches("rogue").count(), 1, "stderr: {}", run.stderr);
+    assert_eq!(
+        run.stderr.matches("rogue").count(),
+        1,
+        "stderr: {}",
+        run.stderr
+    );
 }
 
 #[test]
@@ -672,10 +707,16 @@ fn models_leaves_out_a_model_whose_base_url_is_not_listed() {
         &setup.home(),
         "fake-ext",
         &json!({"fake": ["http://127.0.0.1:9/v1"]}),
-        &[("fake", data_with("fake", json!([
-            model_at("m", "http://127.0.0.1:9/v1"),
-            model_at("n", "http://127.0.0.1:9/v1/"),
-        ])))],
+        &[(
+            "fake",
+            data_with(
+                "fake",
+                json!([
+                    model_at("m", "http://127.0.0.1:9/v1"),
+                    model_at("n", "http://127.0.0.1:9/v1/"),
+                ]),
+            ),
+        )],
     );
     let run = setup.fiber(&["models"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);

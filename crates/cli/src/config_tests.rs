@@ -649,8 +649,11 @@ fn install_host(home: &Path, extension: &str, name: &str, placeholders: serde_js
     let dir = home.join("extensions").join(extension);
     fs::create_dir_all(dir.join("providers")).unwrap();
     let mut manifest = json!({"name": extension, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
-    manifest["providers"] =
-        serde_json::Value::Object([(name.to_owned(), json!(["https://{workspace}/v1"]))].into_iter().collect());
+    manifest["providers"] = serde_json::Value::Object(
+        [(name.to_owned(), json!(["https://{workspace}/v1"]))]
+            .into_iter()
+            .collect(),
+    );
     fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     write_record(&dir);
     fs::write(

@@ -20,7 +20,9 @@ fn install(home: &std::path::Path, name: &str, provider: &str) {
     fs::create_dir_all(dir.join("providers")).unwrap();
     let mut manifest = json!({ "name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1 });
     manifest["providers"] = serde_json::Value::Object(
-        [(provider.to_owned(), json!(["http://127.0.0.1:1/v1"]))].into_iter().collect(),
+        [(provider.to_owned(), json!(["http://127.0.0.1:1/v1"]))]
+            .into_iter()
+            .collect(),
     );
     fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     write_record(&dir);

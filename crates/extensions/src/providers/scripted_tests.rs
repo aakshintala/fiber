@@ -37,7 +37,8 @@ fn install_scripted_provider(home: &Path, ext: &str, ids: &[&str]) {
     fs::write(
         dir.join("extension.json"),
         json!({ "name": ext, "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
-                "providers": {"scripted": ["http://127.0.0.1:1/v1"]} }).to_string(),
+                "providers": {"scripted": ["http://127.0.0.1:1/v1"]} })
+        .to_string(),
     )
     .unwrap();
     let models: Vec<_> = ids
@@ -56,8 +57,11 @@ fn install_provider(home: &Path, name: &str, ids: &[&str]) {
     let dir = home.join("extensions").join(name);
     fs::create_dir_all(dir.join("providers")).unwrap();
     let mut manifest = json!({ "name": name, "version": "v1.0.0", "fiber": "0.1.0", "api": 1 });
-    manifest["providers"] =
-        serde_json::Value::Object([(name.to_owned(), json!(["http://127.0.0.1:1/v1"]))].into_iter().collect());
+    manifest["providers"] = serde_json::Value::Object(
+        [(name.to_owned(), json!(["http://127.0.0.1:1/v1"]))]
+            .into_iter()
+            .collect(),
+    );
     fs::write(dir.join("extension.json"), manifest.to_string()).unwrap();
     write_record(&dir);
     let models: Vec<_> = ids

@@ -34,8 +34,11 @@ use support::{Deadline, SessionGuard, function_call};
 fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str) {
     let source = setup.root.path().join(format!("src-{name}"));
     let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
-    manifest["providers"] =
-        Value::Object([(name.to_owned(), json!([format!("{url}/v1")]))].into_iter().collect());
+    manifest["providers"] = Value::Object(
+        [(name.to_owned(), json!([format!("{url}/v1")]))]
+            .into_iter()
+            .collect(),
+    );
     support::write_json(&source.join("extension.json"), &manifest);
     support::write_json(
         &source.join(format!("providers/{name}.json")),

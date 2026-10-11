@@ -278,7 +278,9 @@ pub enum Error {
     /// An extension that registers a provider its manifest does not
     /// declare under `providers`: loading skips the registration
     /// (`docs/extensions.md`, "What a package holds").
-    #[error("The extension `{extension}` registers the provider `{provider}`, which its manifest does not declare under `providers`.")]
+    #[error(
+        "The extension `{extension}` registers the provider `{provider}`, which its manifest does not declare under `providers`."
+    )]
     UndeclaredProvider {
         /// The extension.
         extension: String,
