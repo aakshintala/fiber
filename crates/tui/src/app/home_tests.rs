@@ -3406,7 +3406,11 @@ fn an_accepted_delete_closes_its_question() {
     assert_eq!(rows(&app), ["○  older work"]);
     // Its answer closes the question it asked about: the prompt clears,
     // so the drawn question goes with it.
-    assert!(app.home.as_ref().is_some_and(|home| home.prompt.is_none()));
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.questions.prompt().is_none())
+    );
     assert!(
         app.home_screen()
             .is_some_and(|screen| screen.question.is_none())
@@ -3699,7 +3703,7 @@ fn start_sends_worktree_only_when_the_switch_is_on_and_shown() {
     assert!(app.start_args().get("worktree").is_none());
     // Hidden, even with the switch on: the key is absent.
     let mut app = home();
-    app.home.as_mut().unwrap_or_else(|| panic!("home")).worktree = true;
+    assert_eq!(app.home_click(Spot::Worktree), Effect::None);
     let args = app.start_args();
     assert_eq!(args["workspace"], "/w");
     assert!(args.get("worktree").is_none());

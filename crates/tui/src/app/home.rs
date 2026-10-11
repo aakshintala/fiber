@@ -2,28 +2,31 @@
 //! went out, and what home draws (`docs/tui.md`, "Home"). The data it
 //! draws lives in [`crate::home`]; this module is `App`'s home.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-use ratatui::layout::Rect;
 use serde_json::{Value, json};
 
-use super::{App, Effect, Kind, Link, Phase, mint, session_command};
+use super::{App, Effect, Kind, Link, mint};
 use crate::focus::{Area, order};
 use crate::home::{
-    HomeScreen, Launch, Left, Level, QuitChoice, Sessions, Spot, State, Subs, cascade_line,
-    delete_line, dependents, from_status, line, line_with, recent_rows, toggle_line,
+    HomeScreen, Launch, Left, Sessions, Spot, State, cascade_line, delete_line, from_status, line,
+    line_with, recent_rows, toggle_line,
 };
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
-use crate::view::max_question_scroll;
 use contract::SessionId;
 
 mod chips;
-mod exit;
+mod open;
 mod open_at;
+mod prompt;
 mod reset;
+mod workspace;
+
+use open::Subscriptions;
+use prompt::{Prompt, Questions};
+use workspace::Chooser;
 
 /// Home's state: the launch description, and whether a `start` went out in
 /// this run, which hides the input box's placeholder.
@@ -45,87 +48,20 @@ pub(super) struct Home {
     /// The latest `recent` command waiting for its answer, and whether it
     /// asked the first page.
     recent_ask: Option<(String, bool)>,
-    /// This connection's subscription level per session: the accepted
-    /// one, and every subscribe waiting for its answer.
-    subs: Subs,
-    /// The session being opened: lines for it fold into its row and are
-    /// dropped until the last subscribe's acknowledgement, which is the
-    /// first line at the new level.
-    opening: Option<Opening>,
-    /// Lowering lines reconciliation queued, sent from `on_line`'s tail.
-    outbox: Vec<String>,
+    /// This connection's subscriptions, the session opening and the
+    /// lowering lines queued.
+    subs: Subscriptions,
     /// `/resume` asks the next frame to focus the list.
     focus_list: bool,
     /// A rejected `start`'s message, above the box until the next `start`
     /// goes out.
     blockers: Vec<String>,
-    /// The workspace picked for the next `start`, else the launch one.
-    chosen: Option<String>,
-    /// Whether the picked workspace is in git, read when it was
-    /// chosen: the launch flag for the launch directory, else whether
-    /// some row in that workspace was. Reading it back keeps the
-    /// switch while its rows leave the feed.
-    chosen_git: bool,
-    /// The new worktree switch is on: the next `start` asks for a new
-    /// worktree of the workspace. Choosing a workspace turns it off.
-    worktree: bool,
-    /// The workspace picker above the box: its list, fixed at open, and
-    /// the selected index.
-    picker: Option<(Vec<String>, usize)>,
-    /// The foot's question, while one is open: deleting a session.
-    prompt: Option<Prompt>,
-    /// The stops and deletes waiting for their answers, by command id.
-    asks: HashMap<String, Ask>,
-    /// The sessions `close` went out for from the quit question, with
-    /// their close ids: a close never written keeps its resume line.
-    closing: Vec<(SessionId, String)>,
-}
-
-/// A stop or delete waiting for its answer: a refusal becomes the row's
-/// note and a notice, an accepted delete drops the row.
-enum Ask {
-    /// A `close` with `now` for a live row: stopping one session.
-    Stop(SessionId),
-    /// A `delete` for an exited row, cascading when the question named
-    /// the sessions it would remove.
-    Delete(SessionId),
-}
-
-/// The foot's question: deleting an exited session through the hub.
-/// Delete is permanent, so the terminal asks first, naming the session
-/// and everything `--cascade` would add.
-enum Prompt {
-    /// Asking to delete `id`: without `expect` the plain question, with
-    /// it the cascade question naming the sessions the delete removes.
-    /// `scroll` shows later wrapped rows past the screen.
-    Delete {
-        id: SessionId,
-        expect: Option<Vec<SessionId>>,
-        scroll: usize,
-    },
-    /// Asking to quit while sessions work: Enter leaves them running,
-    /// `c` closes them all now, Esc stays. It stores nothing: the
-    /// question recomputes from the current rows on every frame.
-    Quit,
-}
-
-impl Prompt {
-    /// The session the question asks about; none for quitting.
-    fn id(&self) -> Option<&SessionId> {
-        match self {
-            Prompt::Delete { id, .. } => Some(id),
-            Prompt::Quit => None,
-        }
-    }
-}
-
-/// A session opening from home and its last subscribe, whose
-/// acknowledgement ends the gate.
-struct Opening {
-    /// The session opening.
-    session: SessionId,
-    /// The last subscribe's id: only its rejection fails the open.
-    ack: String,
+    /// The workspace chooser: the picked workspace, the new worktree
+    /// switch and the picker.
+    chooser: Chooser,
+    /// The foot's question, the stops and deletes waiting for their
+    /// answers, and the quit question's closes.
+    questions: Questions,
 }
 
 impl App {
@@ -145,19 +81,12 @@ impl App {
             fed: false,
             feed_id: None,
             recent_ask: None,
-            subs: Subs::default(),
-            opening: None,
-            outbox: Vec::new(),
+            subs: Subscriptions::default(),
             focus_list: false,
             last_chip: Spot::Workspace,
             blockers: Vec::new(),
-            chosen: None,
-            chosen_git: false,
-            worktree: false,
-            picker: None,
-            prompt: None,
-            asks: HashMap::new(),
-            closing: Vec::new(),
+            chooser: Chooser::default(),
+            questions: Questions::default(),
         });
     }
 
@@ -175,7 +104,7 @@ impl App {
     pub(crate) fn quit_open(&self) -> bool {
         self.home
             .as_ref()
-            .is_some_and(|home| matches!(home.prompt, Some(Prompt::Quit)))
+            .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::Quit)))
     }
 
     /// Whether a home modal holds the keyboard: the delete question or
@@ -183,10 +112,9 @@ impl App {
     /// question.
     pub(super) fn home_modal(&self) -> bool {
         self.on_home()
-            && self
-                .home
-                .as_ref()
-                .is_some_and(|home| home.prompt.is_some() || home.picker.is_some())
+            && self.home.as_ref().is_some_and(|home| {
+                home.questions.prompt().is_some() || home.chooser.picker().is_some()
+            })
     }
 
     /// What home draws, or `None` unless [`App::on_home`] holds.
@@ -198,8 +126,8 @@ impl App {
         // The workspace in use: the picked one, else the launch
         // directory. Clicking its chip opens the workspace picker.
         let workspace = home
-            .chosen
-            .as_deref()
+            .chooser
+            .chosen()
             .map(PathBuf::from)
             .unwrap_or_else(|| home.launch.workspace.clone());
         let segment = workspace
@@ -210,7 +138,7 @@ impl App {
         // The delete question wraps over as many rows as needed in
         // the list's place, naming the session and everything
         // `--cascade` would add.
-        let (question, question_scroll) = match &home.prompt {
+        let (question, question_scroll) = match home.questions.prompt() {
             Some(Prompt::Delete { id, expect, scroll }) => (
                 home.sessions.row(id).map(|row| match expect {
                     None => delete_line(row),
@@ -254,7 +182,7 @@ impl App {
                 if home.in_git() {
                     chips.push((
                         Some(Spot::Worktree),
-                        if home.worktree {
+                        if home.chooser.worktree() {
                             "[x] new worktree".to_owned()
                         } else {
                             "[ ] new worktree".to_owned()
@@ -292,7 +220,7 @@ impl App {
                     )
                 })
                 .collect(),
-            picker: home.picker.clone(),
+            picker: home.chooser.picker().cloned(),
             blockers: home.blockers.clone(),
             // The toggle shows inside git whenever a row hides, or
             // while everything shows.
@@ -326,7 +254,7 @@ impl App {
             return Vec::new();
         };
         if home.fed {
-            return std::mem::take(&mut home.outbox);
+            return home.subs.take_outbox();
         }
         home.fed = true;
         let feed = mint();
@@ -369,19 +297,8 @@ impl App {
                 "command_accepted" | "command_rejected" => {
                     let id = hub.payload.get("command_id").and_then(Value::as_str)?;
                     let accepted = hub.kind.as_str() == "command_accepted";
-                    if let Some(session) = self.answered(id, accepted) {
-                        if !accepted {
-                            let code = hub
-                                .payload
-                                .get("code")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            self.subscribe_refused(session, code, &refusal(&hub.payload));
-                        }
-                        if !accepted && self.is_ack(id) {
-                            return Some(self.fail_open(refusal(&hub.payload)));
-                        }
-                        return Some(Vec::new());
+                    if let Some(lines) = self.subscribe_answer(id, accepted, &hub.payload) {
+                        return Some(lines);
                     }
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &hub.payload));
@@ -472,12 +389,7 @@ impl App {
                     if was_left {
                         self.reconcile(&session);
                     }
-                    let gated = self
-                        .home
-                        .as_ref()
-                        .and_then(|home| home.opening.as_ref())
-                        .is_some_and(|opening| opening.session == session);
-                    if gated {
+                    if self.gated(&session) {
                         return Some(Vec::new());
                     }
                     return None;
@@ -488,106 +400,22 @@ impl App {
                 ) {
                     let accepted = envelope.kind == "command_accepted";
                     let id = envelope.payload.get("command_id").and_then(Value::as_str)?;
-                    if let Some(session) = self.answered(id, accepted) {
-                        if !accepted {
-                            let code = envelope
-                                .payload
-                                .get("code")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            self.subscribe_refused(
-                                session.clone(),
-                                code,
-                                &refusal(&envelope.payload),
-                            );
-                        }
-                        if !accepted && self.is_ack(id) {
-                            return Some(self.fail_open(refusal(&envelope.payload)));
-                        }
-                        let session = envelope.session_id.clone();
-                        if accepted
-                            && self
-                                .home
-                                .as_ref()
-                                .is_some_and(|home| home.subs.full(&session))
-                        {
-                            self.reconcile(&session);
-                        }
-                        if accepted && self.is_ack(id) {
-                            if let Some(home) = self.home.as_mut() {
-                                home.opening = None;
-                            }
-                            return None;
-                        }
-                        return Some(Vec::new());
+                    if let Some(lines) = self.subscribe_answer(id, accepted, &envelope.payload) {
+                        return if accepted {
+                            self.subscribe_accepted(&envelope.session_id, id)
+                        } else {
+                            Some(lines)
+                        };
                     }
                     if let Some(ask) = self.take_ask(id) {
                         return Some(self.answer_ask(ask, accepted, &envelope.payload));
                     }
                 }
-                let gated = self
-                    .home
-                    .as_ref()
-                    .and_then(|home| home.opening.as_ref())
-                    .is_some_and(|opening| opening.session == envelope.session_id);
-                if gated {
+                if self.gated(&envelope.session_id) {
                     return Some(Vec::new());
                 }
                 None
             }
-        }
-    }
-
-    /// A `subscribe` line for `session` at `level`, recorded as sent:
-    /// the expected level is the last in-flight one, so no path sends a
-    /// subscribe at the level already held or asked for.
-    pub(super) fn subscribe(&mut self, session: &SessionId, level: Level) -> String {
-        let (id, line) = subscribe_line(session, level);
-        if let Some(home) = self.home.as_mut() {
-            home.subs.sent(id, session.clone(), level);
-        }
-        line
-    }
-
-    /// The level this connection holds or asks for `session` at, if any:
-    /// a delegate is subscribed once per attachment (`docs/invocation.md`,
-    /// `subscribe`).
-    pub(super) fn subscribed_level(&self, session: &SessionId) -> Option<Level> {
-        self.home
-            .as_ref()
-            .and_then(|home| home.subs.expected(session))
-    }
-
-    /// Whether a subscribe for `session` waits for its answer.
-    pub(super) fn subscribe_pending(&self, session: &SessionId) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| home.subs.pending(session))
-    }
-
-    /// Leaves the session on screen for home: the conversation cleared
-    /// with the session left running, then lowered to `summary` when this
-    /// connection holds it at `full` and its row is live. `/close` keeps
-    /// `go_home` and lowers nothing: a command for an exited session
-    /// would resume it.
-    pub(super) fn leave(&mut self) -> Effect {
-        let attached = self.session().cloned();
-        self.go_home();
-        let Some(session) = attached else {
-            return Effect::None;
-        };
-        let lowers = self.link == Link::Up
-            && self.home.as_ref().is_some_and(|home| {
-                home.subs.expected(&session) == Some(Level::Full)
-                    && home
-                        .sessions
-                        .row(&session)
-                        .is_some_and(|row| row.left.is_none())
-            });
-        if lowers {
-            Effect::Send(vec![self.subscribe(&session, Level::Summary)])
-        } else {
-            Effect::None
         }
     }
 
@@ -626,123 +454,30 @@ impl App {
     /// on the chip row first: j moves only while the list has focus, and
     /// the draft keeps every printable key typed into it.
     pub(super) fn home_key(&mut self, key: &Key) -> Option<Effect> {
-        // The quit question takes every key first, on home or not:
-        // Enter leaves working sessions running, `c` closes them all
-        // now, Esc stays, and anything else, Ctrl+C included, does
-        // nothing.
-        if self.quit_open() {
-            match key {
-                Key::Enter => return Some(Effect::Quit),
-                Key::Char('c') => return Some(self.close_all()),
-                Key::Esc => {
-                    self.close_prompt();
-                    return Some(Effect::None);
-                }
-                Key::Char(_)
-                | Key::Backspace
-                | Key::Up
-                | Key::Down
-                | Key::PageUp
-                | Key::PageDown
-                | Key::End
-                | Key::AltA
-                | Key::Tab
-                | Key::BackTab
-                | Key::F1
-                | Key::CtrlO
-                | Key::CtrlG
-                | Key::CtrlR
-                | Key::CtrlV
-                | Key::CtrlL
-                | Key::CtrlF
-                | Key::CtrlC
-                | Key::AltUp
-                | Key::AltDown
-                | Key::AltX
-                | Key::AltP
-                | Key::AltR
-                | Key::AltDigit(_) => return Some(Effect::None),
-            }
+        // The quit question takes every key first, on home or not.
+        if let Some(effect) = self.quit_key(key) {
+            return Some(effect);
         }
         if !self.on_home() {
             return None;
         }
-        // The delete question takes every key first: Enter deletes, Esc
-        // keeps the session, Up and Down scroll its wrapped rows past
-        // the screen, Ctrl+C passes through to quit, and anything else
-        // is swallowed.
-        if self.home.as_ref().is_some_and(|home| home.prompt.is_some()) {
-            match key {
-                Key::Enter => return Some(self.send_delete()),
-                Key::Esc => {
-                    self.close_prompt();
-                    return Some(Effect::None);
-                }
-                Key::Up => {
-                    self.scroll_question(false);
-                    return Some(Effect::None);
-                }
-                Key::Down => {
-                    self.scroll_question(true);
-                    return Some(Effect::None);
-                }
-                Key::CtrlC => return None,
-                Key::Char(_)
-                | Key::Backspace
-                | Key::PageUp
-                | Key::PageDown
-                | Key::End
-                | Key::AltA
-                | Key::Tab
-                | Key::BackTab
-                | Key::F1
-                | Key::CtrlO
-                | Key::CtrlG
-                | Key::CtrlR
-                | Key::CtrlV
-                | Key::CtrlL
-                | Key::CtrlF
-                | Key::AltUp
-                | Key::AltDown
-                | Key::AltX
-                | Key::AltP
-                | Key::AltR
-                | Key::AltDigit(_) => return Some(Effect::None),
-            }
+        // The delete question takes every key first.
+        if self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.questions.prompt().is_some())
+        {
+            return self.question_key(key);
         }
         // The picker takes every key first: moving, choosing and closing
         // it, while Ctrl+C passes through and anything else is swallowed
         // so the draft keeps nothing typed into the picker.
-        if self.home.as_ref().is_some_and(|home| home.picker.is_some()) {
-            match key {
-                Key::CtrlC => return None,
-                Key::Up => self.move_picker(false),
-                Key::Down => self.move_picker(true),
-                Key::Enter => self.choose_picker(),
-                Key::Esc => self.close_picker(),
-                Key::Char(_)
-                | Key::Backspace
-                | Key::CtrlO
-                | Key::PageUp
-                | Key::PageDown
-                | Key::End
-                | Key::AltA
-                | Key::Tab
-                | Key::BackTab
-                | Key::F1
-                | Key::CtrlG
-                | Key::CtrlR
-                | Key::CtrlV
-                | Key::CtrlL
-                | Key::CtrlF
-                | Key::AltUp
-                | Key::AltDown
-                | Key::AltX
-                | Key::AltP
-                | Key::AltR
-                | Key::AltDigit(_) => {}
-            }
-            return Some(Effect::None);
+        if self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.chooser.picker().is_some())
+        {
+            return self.picker_key(key);
         }
         // A focused chip takes its keys ahead of focus: arrows move,
         // Enter clicks, typing returns to the entry bar. `None` passes
@@ -819,17 +554,7 @@ impl App {
     /// does while the quit question is open, on home or over a session.
     pub(super) fn home_click(&mut self, spot: Spot) -> Effect {
         if let Spot::Quit(choice) = spot {
-            if !self.quit_open() {
-                return Effect::None;
-            }
-            match choice {
-                QuitChoice::Leave => return Effect::Quit,
-                QuitChoice::CloseAll => return self.close_all(),
-                QuitChoice::Stay => {
-                    self.close_prompt();
-                    return Effect::None;
-                }
-            }
+            return self.quit_click(choice);
         }
         match spot {
             Spot::Entry(key) => self.open_row(key),
@@ -844,125 +569,7 @@ impl App {
         }
     }
 
-    /// A row's ✕: `close` with `now` for a live session, stopping it,
-    /// with a `summary` subscribe first when this connection holds
-    /// nothing for it; the delete question for an exited row. With the
-    /// link down nothing goes out. A refusal of the close becomes the
-    /// row's note and a notice.
-    fn stop_or_ask(&mut self, key: u64) -> Effect {
-        if !self.on_home() || self.link != Link::Up {
-            return Effect::None;
-        }
-        let row = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-            .cloned();
-        let Some(row) = row else {
-            return Effect::None;
-        };
-        if row.state == State::Unreadable {
-            self.notices.push(
-                "Cannot attach: this session's schema is newer than this terminal reads."
-                    .to_owned(),
-            );
-            return Effect::None;
-        }
-        if row.left.is_some() {
-            self.ask_delete(key);
-            return Effect::None;
-        }
-        let session = row.id.clone();
-        let mut lines = Vec::new();
-        if self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.subs.expected(&session).is_none())
-        {
-            lines.push(self.subscribe(&session, Level::Summary));
-        }
-        let id = mint();
-        lines.push(session_command(&id, "close", &session, Some(json!({"now": true}))).to_string());
-        if let Some(home) = self.home.as_mut() {
-            home.asks.insert(id, Ask::Stop(session));
-        }
-        Effect::Send(lines)
-    }
-
-    /// Opens the delete question for the row with `key`. Delete through
-    /// the hub is permanent, so the terminal asks first, naming the
-    /// session.
-    fn ask_delete(&mut self, key: u64) {
-        let id = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-            .map(|row| row.id.clone());
-        if let (Some(home), Some(id)) = (self.home.as_mut(), id) {
-            home.prompt = Some(Prompt::Delete {
-                id,
-                expect: None,
-                scroll: 0,
-            });
-        }
-    }
-
-    /// Closes the foot's question, keeping the session.
-    fn close_prompt(&mut self) {
-        if let Some(home) = self.home.as_mut() {
-            home.prompt = None;
-        }
-    }
-
-    /// Scrolls the delete question one row: Up toward its first rows,
-    /// Down toward its later ones, clamped to the wrapped rows past the
-    /// screen. Scrolling a short question changes nothing drawn, and
-    /// Down past the end holds, so one Up steps back one row.
-    fn scroll_question(&mut self, down: bool) {
-        let max = self
-            .home_screen()
-            .map(|screen| {
-                max_question_scroll(
-                    self,
-                    &screen,
-                    Rect::new(0, 0, self.screen.width(), self.screen.height()),
-                )
-            })
-            .unwrap_or(0);
-        if let Some(home) = self.home.as_mut()
-            && let Some(Prompt::Delete { scroll, .. }) = home.prompt.as_mut()
-        {
-            let clamped = (*scroll).min(max);
-            *scroll = if down {
-                clamped.saturating_add(1).min(max)
-            } else {
-                clamped.saturating_sub(1)
-            };
-        }
-    }
-
-    /// Backspace, or Delete through `home_edit`, on a focused row: the
-    /// delete question when it exited. On a focused live or unreadable
-    /// row it does nothing, and on any other focused stop it is
-    /// swallowed; with the box focused the draft keeps the key.
-    fn delete_key(&mut self) -> Option<Effect> {
-        let key = match self.focus {
-            None => return None,
-            Some(TargetId::Home(Spot::Entry(key) | Spot::Stop(key))) => key,
-            Some(_) => return Some(Effect::None),
-        };
-        if self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-            .is_some_and(|row| row.left.is_some())
-        {
-            self.ask_delete(key);
-        }
-        Some(Effect::None)
-    }
-
-    /// Delete on a focused row, ahead of the focus early return in
+    /// Asks the first `recent` page again, naming the launch project
     /// `on_edit`: the delete question when it exited, swallowed
     /// otherwise. The workspace picker owns every edit while open, so
     /// nothing reaches the chip row or the draft behind it. A focused
@@ -973,10 +580,18 @@ impl App {
         if !self.on_home() {
             return None;
         }
-        if self.home.as_ref().is_some_and(|home| home.prompt.is_some()) {
+        if self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.questions.prompt().is_some())
+        {
             return Some(Effect::None);
         }
-        if self.home.as_ref().is_some_and(|home| home.picker.is_some()) {
+        if self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.chooser.picker().is_some())
+        {
             return Some(Effect::None);
         }
         // A focused chip takes its edits ahead of the row's Delete:
@@ -999,122 +614,6 @@ impl App {
             | Edit::LineStart
             | Edit::LineEnd
             | Edit::Paste(_) => None,
-        }
-    }
-
-    /// Enter in the delete question: `delete` for its session, cascading
-    /// with the confirmed set from the cascade question. With the link
-    /// down nothing goes out and the question stays.
-    fn send_delete(&mut self) -> Effect {
-        let ask = self.home.as_ref().and_then(|home| match &home.prompt {
-            Some(Prompt::Delete { id, expect, .. }) => Some((id.clone(), expect.clone())),
-            Some(Prompt::Quit) | None => None,
-        });
-        let Some((id, expect)) = ask else {
-            return Effect::None;
-        };
-        if self.link != Link::Up {
-            return Effect::None;
-        }
-        let command = mint();
-        let line = match &expect {
-            None => json!({"id": command, "command": "delete", "args": {"session": id.0}}),
-            Some(expect) => json!({
-                "id": command,
-                "command": "delete",
-                "args": {
-                    "session": id.0,
-                    "cascade": true,
-                    "expect": expect.iter().map(|session| &session.0).collect::<Vec<_>>(),
-                },
-            }),
-        }
-        .to_string();
-        if let Some(home) = self.home.as_mut() {
-            home.asks.insert(command, Ask::Delete(id));
-        }
-        Effect::Send(vec![line])
-    }
-
-    /// Takes the stop or delete waiting on command `id`, if any.
-    fn take_ask(&mut self, id: &str) -> Option<Ask> {
-        self.home.as_mut().and_then(|home| home.asks.remove(id))
-    }
-
-    /// A refusal shows on the row, in place of its detail.
-    fn note(&mut self, id: &SessionId, note: String) {
-        if let Some(home) = self.home.as_mut() {
-            home.sessions.note(id, note);
-        }
-    }
-
-    /// Answers a stop or delete. An accepted delete drops the row and
-    /// asks the first `recent` page again. A dependents refusal, or a
-    /// stale cascade refusal, reopens the cascade question naming the
-    /// set the delete would remove now; every other refusal, and one
-    /// naming no other session, becomes the row's note and a notice.
-    fn answer_ask(
-        &mut self,
-        ask: Ask,
-        accepted: bool,
-        payload: &serde_json::Map<String, Value>,
-    ) -> Vec<String> {
-        match ask {
-            Ask::Stop(session) => {
-                if !accepted {
-                    let message = refusal(payload);
-                    self.note(&session, message.clone());
-                    self.notices.push(message);
-                }
-                Vec::new()
-            }
-            Ask::Delete(id) => {
-                if accepted {
-                    self.clear_prompt(&id);
-                    if let Some(home) = self.home.as_mut() {
-                        home.sessions.remove(&id);
-                    }
-                    return self.ask_recent_first();
-                }
-                let (code, message) = refusal_parts(payload);
-                if code == "session_has_dependents" || code == "stale_request" {
-                    // The hub names the root too, so the row goes first
-                    // and the set deduplicates keeping first occurrence.
-                    let mut expect = vec![id.clone()];
-                    for session in dependents(&message) {
-                        if !expect.contains(&session) {
-                            expect.push(session);
-                        }
-                    }
-                    if expect.len() > 1 {
-                        if let Some(home) = self.home.as_mut() {
-                            home.prompt = Some(Prompt::Delete {
-                                id,
-                                expect: Some(expect),
-                                scroll: 0,
-                            });
-                        }
-                        return Vec::new();
-                    }
-                }
-                self.note(&id, message.clone());
-                self.notices.push(message);
-                self.clear_prompt(&id);
-                Vec::new()
-            }
-        }
-    }
-
-    /// Closes the foot's question when it asks about `id`: an answer for
-    /// an older question leaves a newer one open.
-    fn clear_prompt(&mut self, id: &SessionId) {
-        if let Some(home) = self.home.as_mut()
-            && home
-                .prompt
-                .as_ref()
-                .is_some_and(|prompt| prompt.id() == Some(id))
-        {
-            home.prompt = None;
         }
     }
 
@@ -1182,84 +681,6 @@ impl App {
         )]))
     }
 
-    /// Opens the workspace picker above the box: the launch directory
-    /// first, then each distinct workspace from the feed rows and then
-    /// the recent rows, at most ten. Its list is fixed at open.
-    fn open_picker(&mut self) -> Effect {
-        let Some(home) = self.home.as_mut() else {
-            return Effect::None;
-        };
-        let project = home.launch.project.clone();
-        let mut list = vec![home.launch.workspace.display().to_string()];
-        for row in home.sessions.shown(&project, false) {
-            if list.len() == PICKER_CAP {
-                break;
-            }
-            if !list.contains(&row.workspace) {
-                list.push(row.workspace.clone());
-            }
-        }
-        home.picker = Some((list, 0));
-        Effect::None
-    }
-
-    /// Moves the picker's selection one row, clamped to its list.
-    fn move_picker(&mut self, down: bool) {
-        if let Some(home) = self.home.as_mut()
-            && let Some((list, selected)) = home.picker.as_mut()
-        {
-            *selected = if down {
-                (*selected)
-                    .saturating_add(1)
-                    .min(list.len().saturating_sub(1))
-            } else {
-                (*selected).saturating_sub(1)
-            };
-        }
-    }
-
-    /// Chooses the picker's selected workspace for the next `start`,
-    /// turning the new worktree switch off.
-    fn choose_picker(&mut self) {
-        let choice = self
-            .home
-            .as_ref()
-            .and_then(|home| home.picker.as_ref())
-            .and_then(|(list, selected)| list.get(*selected).cloned());
-        if let (Some(home), Some(workspace)) = (self.home.as_mut(), choice) {
-            home.choose(workspace);
-        }
-    }
-
-    /// Closes the picker, keeping the workspace as it was.
-    fn close_picker(&mut self) {
-        if let Some(home) = self.home.as_mut() {
-            home.picker = None;
-        }
-    }
-
-    /// Clicks the picker row `at`: past the list fixed at open it does
-    /// nothing. Choosing a workspace turns the new worktree switch off.
-    fn pick(&mut self, at: usize) -> Effect {
-        let choice = self
-            .home
-            .as_ref()
-            .and_then(|home| home.picker.as_ref())
-            .and_then(|(list, _)| list.get(at).cloned());
-        if let (Some(home), Some(workspace)) = (self.home.as_mut(), choice) {
-            home.choose(workspace);
-        }
-        Effect::None
-    }
-
-    /// Flips the new worktree switch.
-    fn toggle_worktree(&mut self) -> Effect {
-        if let Some(home) = self.home.as_mut() {
-            home.worktree = !home.worktree;
-        }
-        Effect::None
-    }
-
     /// The text y copies and Ctrl+G opens for `spot`: the row's line;
     /// controls copy nothing.
     pub(super) fn home_text(&self, spot: Spot) -> Option<String> {
@@ -1280,126 +701,6 @@ impl App {
         }
     }
 
-    /// The workspace in use on home: the attached session's row
-    /// workspace, else the picked one, else the launch workspace.
-    pub(super) fn home_workspace(&self) -> PathBuf {
-        if let Some(home) = &self.home {
-            if let Some(session) = self.session()
-                && let Some(row) = home.sessions.row(session)
-            {
-                return PathBuf::from(&row.workspace);
-            }
-            if let Some(chosen) = &home.chosen {
-                return PathBuf::from(chosen);
-            }
-            return home.launch.workspace.clone();
-        }
-        self.workspace.clone()
-    }
-
-    /// Opens the row with `key` while home draws.
-    fn open_row(&mut self, key: u64) -> Effect {
-        if !self.on_home() {
-            return Effect::None;
-        }
-        self.open_entry(key)
-    }
-
-    /// Opens the row with `key`: the subscribes its level needs, then the
-    /// session's commands. The conversation clears as going home does,
-    /// and the gate holds until the last subscribe is answered.
-    pub(super) fn open_entry(&mut self, key: u64) -> Effect {
-        if self.link != Link::Up || matches!(self.phase, Phase::Pending { .. }) {
-            return Effect::None;
-        }
-        let Some(row) = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-        else {
-            return Effect::None;
-        };
-        if row.state == crate::home::State::Unreadable {
-            self.notices.push(
-                "Cannot attach: this session's schema is newer than this terminal reads."
-                    .to_owned(),
-            );
-            return Effect::None;
-        }
-        let session = row.id.clone();
-        let expected = self
-            .home
-            .as_ref()
-            .and_then(|home| home.subs.expected(&session));
-        Effect::Send(self.open_session(session, expected))
-    }
-
-    /// Records the acknowledgement of the in-flight subscribe `id`:
-    /// the accepted level changes only on acceptance. Some with its
-    /// session when the id was in flight, either way.
-    fn answered(&mut self, id: &str, accepted: bool) -> Option<SessionId> {
-        self.home
-            .as_mut()
-            .and_then(|home| home.subs.answered(id, accepted))
-    }
-
-    /// Whether `id` is the open's last subscribe: only its rejection
-    /// fails the open, and only its acceptance ends the gate.
-    fn is_ack(&self, id: &str) -> bool {
-        self.home
-            .as_ref()
-            .and_then(|home| home.opening.as_ref())
-            .is_some_and(|opening| opening.ack == id)
-    }
-
-    /// Lowers `session` to `summary` when this connection holds it at
-    /// `full` without showing it: not the attached one, nothing in
-    /// flight, and its row live. Untouched live sessions get no
-    /// subscribe: their rows come from the hub's feed, which the hub
-    /// reads over its own connections, and subscribing each one would
-    /// send a command to every live session.
-    fn reconcile(&mut self, session: &SessionId) {
-        let lowers = self.link == Link::Up
-            && self.session() != Some(session)
-            && self.home.as_ref().is_some_and(|home| {
-                home.subs.full(session)
-                    && !home.subs.pending(session)
-                    && home
-                        .sessions
-                        .row(session)
-                        .is_some_and(|row| row.left.is_none())
-            });
-        if lowers {
-            let line = self.subscribe(session, Level::Summary);
-            if let Some(home) = self.home.as_mut() {
-                home.outbox.push(line);
-            }
-        }
-    }
-
-    /// A rejection of the open's last subscribe fails the open: home again
-    /// when still attached, with the message as the row's note and a
-    /// notice. A rejection of an earlier step changes nothing by itself.
-    fn fail_open(&mut self, message: String) -> Vec<String> {
-        let session = self
-            .home
-            .as_mut()
-            .and_then(|home| home.opening.take())
-            .map(|opening| opening.session);
-        let Some(session) = session else {
-            return Vec::new();
-        };
-        if let Some(home) = self.home.as_mut() {
-            home.sessions.note(&session, message.clone());
-        }
-        let attached = self.session() == Some(&session);
-        self.notices.push(message);
-        if attached {
-            self.go_home();
-        }
-        Vec::new()
-    }
-
     /// The `start` args: the picked workspace on home, else the launch
     /// workspace, and the launch directory as today. The new worktree
     /// switch adds `"worktree": true` only while it shows and is on.
@@ -1411,11 +712,12 @@ impl App {
                 home.prompted = true;
                 home.blockers = Vec::new();
                 let workspace = home
-                    .chosen
-                    .clone()
+                    .chooser
+                    .chosen()
+                    .map(str::to_owned)
                     .unwrap_or_else(|| home.launch.workspace.display().to_string());
                 let mut args = json!({"workspace": workspace});
-                if home.worktree
+                if home.chooser.worktree()
                     && home.in_git()
                     && let Some(object) = args.as_object_mut()
                 {
@@ -1427,36 +729,6 @@ impl App {
         }
     }
 }
-
-impl Home {
-    /// Whether the new worktree switch shows: the workspace in use is
-    /// in git. With none chosen that is the launch directory; else the
-    /// flag read when the workspace was chosen.
-    fn in_git(&self) -> bool {
-        match &self.chosen {
-            None => self.launch.git,
-            Some(_) => self.chosen_git,
-        }
-    }
-
-    /// Records the workspace picked for the next `start`, turning the
-    /// new worktree switch off and keeping whether it is in git: the
-    /// launch flag for the launch directory, else whether some row in
-    /// that workspace is then.
-    pub(super) fn choose(&mut self, workspace: String) {
-        self.chosen_git = if workspace == self.launch.workspace.display().to_string() {
-            self.launch.git
-        } else {
-            self.sessions.in_git(&workspace)
-        };
-        self.chosen = Some(workspace);
-        self.worktree = false;
-        self.picker = None;
-    }
-}
-
-/// The picker's rows: the launch directory and nine row workspaces.
-const PICKER_CAP: usize = 10;
 
 /// A `recent` line: the first page, or past `before`, naming `project`
 /// while scoped.
@@ -1475,25 +747,6 @@ fn recent_line(id: &str, before: Option<&str>, project: Option<&str>) -> String 
     }
 }
 
-/// A `subscribe` line for `session` at `level`, with its id.
-fn subscribe_line(session: &SessionId, level: Level) -> (String, String) {
-    let id = mint();
-    let name = match level {
-        Level::Summary => "summary",
-        Level::Full => "full",
-    };
-    let line = session_command(&id, "subscribe", session, Some(json!({"level": name}))).to_string();
-    (id, line)
-}
-
-/// A refusal's code and message.
-fn refusal_parts(payload: &serde_json::Map<String, Value>) -> (&str, String) {
-    let code = payload
-        .get("code")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    (code, refusal(payload))
-}
 /// A hub refusal's message, for a notice.
 pub(super) fn refusal(payload: &serde_json::Map<String, Value>) -> String {
     payload
