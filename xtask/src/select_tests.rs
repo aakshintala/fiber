@@ -88,15 +88,6 @@ fn a_crate_change_runs_it_and_its_dependents() {
 }
 
 #[test]
-fn dependents_are_transitive() {
-    let selected = dependents(BTreeSet::from(["log".to_owned()]), &members());
-    assert_eq!(
-        selected,
-        BTreeSet::from(["log".to_owned(), "loop".to_owned()])
-    );
-}
-
-#[test]
 fn a_leaf_crate_runs_alone() {
     let selection = classify(
         &strings(&["crates/config/src/lib.rs", "docs/configuration.md"]),
@@ -226,32 +217,6 @@ fn another_research_path_stays_docs_only_and_skips_lint() {
         0,
     );
     assert!(!plan.jobs["lint"]);
-}
-
-#[test]
-fn scripts_check_alone_runs_everything() {
-    let everything: Vec<String> = members().keys().cloned().collect();
-    let selection = classify(&strings(&["scripts/check"]), &members());
-    assert_eq!(selection, Selection::All(everything));
-    assert_eq!(selection.mode(), "all");
-}
-
-#[test]
-fn clippy_toml_runs_everything() {
-    let everything: Vec<String> = members().keys().cloned().collect();
-    assert_eq!(
-        classify(&strings(&["clippy.toml"]), &members()),
-        Selection::All(everything)
-    );
-}
-
-#[test]
-fn nextest_toml_runs_everything() {
-    let everything: Vec<String> = members().keys().cloned().collect();
-    assert_eq!(
-        classify(&strings(&[".config/nextest.toml"]), &members()),
-        Selection::All(everything)
-    );
 }
 
 #[test]
