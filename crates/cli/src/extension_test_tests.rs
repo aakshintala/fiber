@@ -412,20 +412,17 @@ fn the_public_entry_maps_package_and_fiber_outcomes_to_exit_codes() {
 
     let name = module_path!().split_once("::").unwrap().1;
     let test = format!("{name}::the_public_entry_maps_package_and_fiber_outcomes_to_exit_codes");
-    let child = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", &test, "--nocapture", "--test-threads=1"])
-        .env(CHILD, "1")
-        .env("TMPDIR", "/tmp")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let watchdog = Watchdog::group(child.id());
-    let status = wait_child(child);
-    assert!(status.success(), "public entry test child exited {status}");
-    watchdog.stand_down(TEST_WAIT);
+    let output = fakes::rerun_prepared(
+        &test,
+        &[(CHILD, "1"), ("TMPDIR", "/tmp")],
+        TEST_WAIT,
+        |_| {},
+    );
+    assert!(
+        output.status.success(),
+        "public entry test child exited {}",
+        output.status
+    );
 }
 
 fn public_entry_exit_codes() {

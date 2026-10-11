@@ -12,19 +12,15 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use super::{OldFile, PruneArgs, format_age, format_size, prune, prune_run, remove_diagnostics};
+use crate::sessions::Ask;
 use contract::clock::Clock;
 use contract::{ErrorCode, HubLine};
 use serde_json::{Map, Value, json};
-use std::os::unix::process::CommandExt;
-
-use super::{OldFile, PruneArgs, format_age, format_size, prune, prune_run, remove_diagnostics};
-use crate::sessions::Ask;
-use fakes::Deadline;
 
 /// One named deadline for the fake hub's read and the test's receive.
 const HUB_DEADLINE: Duration = Duration::from_secs(10);
@@ -832,9 +828,6 @@ fn the_age_formatter_counts_whole_days_floored() {
     assert_eq!(format_age(41), "41d");
 }
 
-/// How long a killed child or its watchdog may take to be reaped.
-const REAP_DEADLINE: Duration = Duration::from_secs(10);
-
 #[test]
 fn prune_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
     if let Ok(case) = std::env::var("FIBER_CLI_PRUNE_CHILD") {
@@ -871,37 +864,21 @@ fn prune_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
     for (case, code) in [("success", 0), ("usage", 2), ("refusal", 1)] {
         // The fake hub in the child accepts without removing: success
         // still exits 0 with `freed` counting listed minus remaining.
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &format!("{name}::prune_exits_zero_on_success_two_on_usage_and_one_on_refusal"),
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env("FIBER_HOME", setup.home())
-            .env("FIBER_CLI_PRUNE_CHILD", case)
-            .current_dir(setup.workspace())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let group = child.id();
-        let watchdog = fakes::Watchdog::group(group);
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || tx.send(child.wait()));
-        let Ok(status) = Deadline::after(HUB_DEADLINE).recv(&rx) else {
-            assert!(fakes::kill_group(group, "KILL").unwrap());
-            Deadline::after(REAP_DEADLINE)
-                .recv(&rx)
-                .expect("the killed prune child must be reaped")
-                .unwrap();
-            panic!("waited {HUB_DEADLINE:?} for `fiber sessions prune` ({case}) to exit");
-        };
-        let status = status.unwrap();
-        assert!(!fakes::kill_group(group, "0").unwrap(), "a child remains");
-        watchdog.stand_down(REAP_DEADLINE);
-        assert_eq!(status.code(), Some(code), "{case}: {status}");
+        let output = fakes::rerun_prepared(
+            &format!("{name}::prune_exits_zero_on_success_two_on_usage_and_one_on_refusal"),
+            &[("FIBER_CLI_PRUNE_CHILD", case)],
+            HUB_DEADLINE,
+            |command| {
+                command
+                    .env("FIBER_HOME", setup.home())
+                    .current_dir(setup.workspace());
+            },
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{case}: {}",
+            output.status
+        );
     }
 }

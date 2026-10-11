@@ -10,11 +10,7 @@
 
 use std::fs;
 use std::io::{self, BufRead, Read};
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use contract::ErrorCode;
@@ -22,7 +18,6 @@ use contract::shapes::Failure;
 use extensions::{Origin, Request};
 
 use super::{Io, install, list, remove, update_all};
-use fakes::Deadline;
 
 /// The Fiber version an install checks against, as the manifest states.
 const FIBER_VERSION: &str = "0.1.0";
@@ -671,9 +666,6 @@ const CHILD_SOURCE: &str = "FIBER_CLI_EXTENSION_SOURCE";
 /// How long a child may run before the test kills it and fails.
 const CHILD_DEADLINE: Duration = Duration::from_secs(50);
 
-/// How long a killed child or its watchdog may take to be reaped.
-const REAP_DEADLINE: Duration = Duration::from_secs(10);
-
 /// The child's stdout before the test's own lines: the libtest harness
 /// writes its prelude, then names the running test before it runs. No
 /// result line ever follows, since the child exits from inside the
@@ -743,42 +735,18 @@ fn run_case(case: &str) {
         "{}::{test_name}",
         module_path!().split_once("::").unwrap().1
     );
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args([
-            "--exact",
-            &full_test_name,
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", &home)
-        .env(CHILD, case)
-        .env(CHILD_SOURCE, &source)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0);
-    if case == "install-by-name" {
-        // No `git` on the path: the install fails before any fetch.
-        command.env("PATH", "");
-    }
-    let child = command.spawn().unwrap();
-    let group = child.id();
-    let watchdog = fakes::Watchdog::group(group);
-    let (tx, rx) = mpsc::channel();
-    // The outputs are a few lines, so the pipes cannot fill while the child runs.
-    thread::spawn(move || tx.send(child.wait_with_output()));
-    let Ok(output) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        assert!(fakes::kill_group(group, "KILL").unwrap());
-        Deadline::after(REAP_DEADLINE)
-            .recv(&rx)
-            .expect("the killed extension child must be reaped")
-            .unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for `fiber extension {case}` to exit");
-    };
-    let output = output.unwrap();
-    assert!(!fakes::kill_group(group, "0").unwrap(), "a child remains");
-    watchdog.stand_down(REAP_DEADLINE);
+    let output = fakes::rerun_prepared(
+        &full_test_name,
+        &[(CHILD, case)],
+        CHILD_DEADLINE,
+        |command| {
+            command.env("FIBER_HOME", &home).env(CHILD_SOURCE, &source);
+            if case == "install-by-name" {
+                // No `git` on the path: the install fails before any fetch.
+                command.env("PATH", "");
+            }
+        },
+    );
     let stdout_text = String::from_utf8(output.stdout).unwrap();
     let stdout = strip_prelude(&stdout_text, &full_test_name);
     let stderr = String::from_utf8(output.stderr).unwrap();

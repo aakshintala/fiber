@@ -41,7 +41,7 @@ pub use process_group::{
     pids_exit, try_matching_exits,
 };
 pub use provider_server::{ProviderServer, Request, Response, fingerprint};
-pub use rerun::{rerun, rerun_within};
+pub use rerun::{rerun, rerun_prepared, rerun_within};
 pub use scripted_provider::{
     Scripted, ScriptedProvider, call_usage, reply, unnamed_usage, wire_tools,
 };

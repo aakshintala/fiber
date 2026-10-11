@@ -21,7 +21,6 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::shapes::Failure;
-use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -950,35 +949,18 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(10);
 /// its exit code.
 #[track_caller]
 fn child_exit(test: &str, case: &str, vars: &[(&str, &Path)]) -> i32 {
-    use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args([
-            "--exact",
-            &format!("{test}::hub_wrappers_exit_without_the_manager"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD, "1")
-        .env(CASE, case)
-        .env_remove("XDG_CONFIG_HOME")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    command.process_group(0);
-    for (key, value) in vars {
-        command.env(key, value);
-    }
-    let mut child = command.spawn().unwrap();
-    let pid = child.id();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for the hub wrapper child to exit");
-    };
-    status.code().expect("the child exits with a code")
+    let output = fakes::rerun_prepared(
+        &format!("{test}::hub_wrappers_exit_without_the_manager"),
+        &[(CHILD, "1"), (CASE, case)],
+        CHILD_DEADLINE,
+        |command| {
+            command.env_remove("XDG_CONFIG_HOME");
+            for (key, value) in vars {
+                command.env(key, value);
+            }
+        },
+    );
+    output.status.code().expect("the child exits with a code")
 }
 
 #[test]

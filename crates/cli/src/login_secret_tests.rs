@@ -5,7 +5,6 @@
 use std::process::ExitStatus;
 
 use super::*;
-use fakes::Deadline;
 
 const NAME: &str = "acme.api_key";
 
@@ -234,32 +233,21 @@ fn a_declared_secret_over_a_providers_directory_fails_and_leaves_it() {
 #[track_caller]
 fn child(test: &str, home: &Path, stdin: &str) -> ExitStatus {
     let module = module_path!().split_once("::").unwrap().1;
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{module}::{test}"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", home)
-        .env(CHILD, "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    // A child that refuses before it reads may close the pipe first.
-    match child.stdin.take().unwrap().write_all(stdin.as_bytes()) {
-        Ok(()) | Err(_) => {}
-    }
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for `fiber login` in {test} to exit");
-    };
-    status
+    let output = fakes::rerun_prepared(
+        &format!("{module}::{test}"),
+        &[(CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            // The write finishes before spawn, so a child that refuses
+            // before reading no longer races it; every input fits PIPE_BUF.
+            let (reader, mut writer) = std::io::pipe().unwrap();
+            writer.write_all(stdin.as_bytes()).unwrap();
+            drop(writer);
+            command.stdin(reader);
+            command.env("FIBER_HOME", home);
+        },
+    );
+    output.status
 }
 
 #[test]

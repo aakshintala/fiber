@@ -11,7 +11,7 @@
 use crate::test_support::write_record;
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -491,8 +491,10 @@ const SPAWN_DEADLINE: Duration = Duration::from_secs(60);
 /// The child's marker: set, the test runs `models` and exits with its code.
 const CHILD: &str = "FIBER_CLI_TEST_CHILD";
 
-/// How long the child may run before the test kills it and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+/// How long a re-run child may run before the test kills its group and
+/// fails: half of nextest's per-test timeout less the cleanup bound. It
+/// also bounds the `mkfifo` wait below.
+const CHILD_DEADLINE: Duration = Duration::from_secs(50);
 
 /// How long a killed child may take to be reaped.
 const REAP_DEADLINE: Duration = Duration::from_secs(10);
@@ -555,28 +557,16 @@ fn models_exits_zero_and_prints_the_row() {
         }]),
     );
     let name = module_path!().split_once("::").unwrap().1;
-    let child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::models_exits_zero_and_prints_the_row"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", setup.home())
-        .env(CHILD, "1")
-        .current_dir(setup.workspace())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
-    };
+    let output = fakes::rerun_prepared(
+        &format!("{name}::models_exits_zero_and_prints_the_row"),
+        &[(CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            command
+                .env("FIBER_HOME", setup.home())
+                .current_dir(setup.workspace());
+        },
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("acme/big"), "{stdout:?}");
@@ -598,30 +588,16 @@ fn models_with_a_relative_fiber_home_is_a_usage_failure() {
     }
     let setup = Setup::new();
     let name = module_path!().split_once("::").unwrap().1;
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::models_with_a_relative_fiber_home_is_a_usage_failure"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", "relative")
-        .env(CHILD, "1")
-        .current_dir(setup.workspace())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
-    };
+    let output = fakes::rerun_prepared(
+        &format!("{name}::models_with_a_relative_fiber_home_is_a_usage_failure"),
+        &[(CHILD, "1"), ("FIBER_HOME", "relative")],
+        CHILD_DEADLINE,
+        |command| {
+            command.current_dir(setup.workspace());
+        },
+    );
     // `FIBER_HOME must be an absolute path` is a usage error.
-    assert_eq!(status.code(), Some(2), "{status:?}");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
 }
 
 /// The recorded executable the child passes as `models`' own path.
@@ -684,29 +660,17 @@ fn models_spawns_its_refresh_child_from_the_recorded_path() {
     let (fifo_tx, fifo_rx) = mpsc::channel();
     thread::spawn(move || fifo_tx.send(std::fs::read_to_string(&fifo).unwrap()));
     let name = module_path!().split_once("::").unwrap().1;
-    let child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::models_spawns_its_refresh_child_from_the_recorded_path"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", setup.home())
-        .env(CHILD, "1")
-        .env(RECORDED, &stub)
-        .current_dir(setup.workspace())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
-    };
+    let output = fakes::rerun_prepared(
+        &format!("{name}::models_spawns_its_refresh_child_from_the_recorded_path"),
+        &[(CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            command
+                .env("FIBER_HOME", setup.home())
+                .env(RECORDED, &stub)
+                .current_dir(setup.workspace());
+        },
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("acme/old"), "{stdout:?}");
@@ -747,28 +711,16 @@ fn models_with_an_unusable_recorded_path_still_prints_from_the_cache() {
         clock.wall(),
     );
     let name = module_path!().split_once("::").unwrap().1;
-    let child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::models_with_an_unusable_recorded_path_still_prints_from_the_cache"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", setup.home())
-        .env(CHILD, "1")
-        .current_dir(setup.workspace())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
-    };
+    let output = fakes::rerun_prepared(
+        &format!("{name}::models_with_an_unusable_recorded_path_still_prints_from_the_cache"),
+        &[(CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            command
+                .env("FIBER_HOME", setup.home())
+                .current_dir(setup.workspace());
+        },
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("acme/old"), "{stdout:?}");
@@ -1123,7 +1075,6 @@ fn the_refresh_entry_refreshes_a_stale_list() {
 
 #[test]
 fn the_hidden_refresh_child_refreshes_a_stale_list() {
-    use std::os::unix::process::CommandExt;
     // The public entry, run in a child whose `FIBER_HOME` and directory
     // hold a stale Lua provider: the cache holds the new list after it
     // exits. A body replaced with `()` leaves the old list.
@@ -1145,26 +1096,17 @@ fn the_hidden_refresh_child_refreshes_a_stale_list() {
         fakes::clock::FakeClock::new().wall(),
     );
     let name = module_path!().split_once("::").unwrap().1;
-    // Its own process group, so its pid names the group the watchdog and
-    // the kill reach, and nothing another test started.
-    let child = Command::new(std::env::current_exe().unwrap())
-        .process_group(0)
-        .args([
-            "--exact",
-            &format!("{name}::the_hidden_refresh_child_refreshes_a_stale_list"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", setup.home())
-        .env(CHILD, "1")
-        .current_dir(setup.workspace())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let status = reap_group_leader(child, CHILD_DEADLINE, "the refresh child");
-    assert!(status.success(), "{status}");
+    let output = fakes::rerun_prepared(
+        &format!("{name}::the_hidden_refresh_child_refreshes_a_stale_list"),
+        &[(CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            command
+                .env("FIBER_HOME", setup.home())
+                .current_dir(setup.workspace());
+        },
+    );
+    assert!(output.status.success(), "{}", output.status);
     let refreshed: Vec<config::ModelData> = config::read_model_cache(&setup.home(), "stale")
         .unwrap()
         .unwrap();
@@ -1245,28 +1187,16 @@ fn a_repository_settings_file_cannot_supply_the_host() {
     fs::create_dir_all(&repo).unwrap();
     fs::write(repo.join("acme.json"), r#"{"workspace":"evil.example"}"#).unwrap();
     let name = module_path!().split_once("::").unwrap().1;
-    let child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::a_repository_settings_file_cannot_supply_the_host"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", setup.home())
-        .env(CHILD, "1")
-        .current_dir(setup.workspace())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
-    let Ok(output) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for `fiber models` to exit");
-    };
+    let output = fakes::rerun_prepared(
+        &format!("{name}::a_repository_settings_file_cannot_supply_the_host"),
+        &[(CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            command
+                .env("FIBER_HOME", setup.home())
+                .current_dir(setup.workspace());
+        },
+    );
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("acme/plain"), "{stdout:?}");
