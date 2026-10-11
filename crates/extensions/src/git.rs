@@ -239,11 +239,9 @@ impl Origin {
         Ok(commit.to_owned())
     }
 
-    /// The commit a detached checkout landed on is the recorded one. `git`
-    /// never resolves a 40- or 64-hex name to another ref, so checking out a
-    /// full hash either fails or lands on that commit, and no test can make
-    /// this mismatch fire without replacing `git` itself.
-    #[cfg_attr(false, mutants::skip)]
+    /// The commit a detached checkout landed on is the recorded one. A
+    /// 64-hex name in a SHA-1 repository can resolve to a branch, so the
+    /// checkout can land on another commit; the comparison refuses that.
     fn checked_out_as(head: &str, commit: &str) -> Result<(), Error> {
         if head != commit {
             return Err(Error::Git {

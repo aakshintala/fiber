@@ -2728,6 +2728,46 @@ fn a_reinstall_refuses_a_record_naming_a_branch_instead_of_a_commit() {
 }
 
 #[test]
+fn a_reinstall_refuses_a_64_hex_record_naming_a_branch() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/ext";
+    repos.tag(name, "", "v1.0.0", &manifest(name), &[]);
+    install_named(&setup, &repos, name).unwrap();
+    let before = record_text(&setup.home(), "example.com-acme-ext");
+    // A SHA-1 repository records 40-hex commits; a 64-hex record there
+    // can only name a branch.
+    assert_eq!(repos.commit(name, "v1.0.0").len(), 40);
+    let path = setup.root().join("repos").join(name.replace('/', "-"));
+    fs::write(path.join("other.txt"), "other").unwrap();
+    git(&path, &["add", "."]);
+    git(&path, &["commit", "--quiet", "-m", "other"]);
+    let masked = format!("{:064x}", 0xdeadbeefu64);
+    git(&path, &["branch", &masked, "HEAD"]);
+    set_record_commit(&setup.home(), "example.com-acme-ext", &masked);
+    // The 64-hex name resolves to the branch rather than a commit, so
+    // the reinstall fails and leaves the installed directory alone.
+    let err = reinstall(&setup, &repos.origin(), name).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::FetchFailed, "{err}");
+    assert_eq!(
+        record_text(&setup.home(), "example.com-acme-ext"),
+        before.replace(&repos.commit(name, "v1.0.0"), &masked,)
+    );
+    assert!(
+        setup
+            .home()
+            .join("extensions/example.com-acme-ext/extension.json")
+            .is_file()
+    );
+    assert!(
+        !setup
+            .home()
+            .join("extensions/example.com-acme-ext/other.txt")
+            .exists()
+    );
+}
+
+#[test]
 fn a_damaged_directory_whose_manifest_names_another_extension_reinstalls_by_its_directory() {
     let setup = Setup::new();
     let dir = setup.home().join("extensions/opencode");

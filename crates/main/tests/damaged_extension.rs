@@ -32,17 +32,19 @@ const FIX: &str = "`opencode` is damaged; run `fiber extension reinstall opencod
 /// The skip line `install` and `update` print once on stderr.
 const SKIP: &str = "fiber: `opencode` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension reinstall opencode`.";
 
-/// A scripted text turn's durable event kinds, those carrying `seq`, in
-/// order, as `scripted.rs` pins them.
-const TEXT_TURN: [&str; 13] = [
+/// A scripted text turn's event kinds in order, with the damaged-extension
+/// startup notice, as the stream produces it.
+const ASK_KINDS: [&str; 15] = [
     "session_started",
     "fiber_started",
     "extensions_loaded",
+    "notice",
     "preamble_built",
     "opening_message",
     "turn_started",
     "step_started",
     "assistant_message_started",
+    "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
@@ -353,26 +355,15 @@ fn damaged_flow(invalid: bool) {
     .unwrap();
     let (code, lines, stderr) = setup.ask(&["ask", "--model", "scripted/s.json", "hi"]);
     assert_eq!(code, Some(0), "{stderr}");
+    // `session_status` is written by an observer thread with no position
+    // relative to the session's other lines, so it is set aside from the
+    // ordered list (`docs/testing.md`, "Event streams").
     let kinds: Vec<&str> = lines
         .iter()
+        .filter(|line| line["kind"] != "session_status")
         .map(|line| line["kind"].as_str().unwrap())
         .collect();
-    let durable: Vec<&str> = lines
-        .iter()
-        .filter(|line| line.get("seq").is_some())
-        .map(|line| line["kind"].as_str().unwrap())
-        .collect();
-    assert_eq!(durable, TEXT_TURN);
-    assert_eq!(
-        kinds.iter().filter(|kind| **kind == "notice").count(),
-        1,
-        "{kinds:?}"
-    );
-    assert_eq!(
-        kinds.iter().position(|kind| *kind == "notice").unwrap(),
-        3,
-        "{kinds:?}"
-    );
+    assert_eq!(kinds, ASK_KINDS);
     let notice = lines.iter().find(|l| l["kind"] == "notice").unwrap();
     assert_eq!(notice["payload"]["code"], "extension_failed");
     assert_eq!(notice["payload"]["message"], FIX);

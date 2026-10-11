@@ -174,7 +174,6 @@ fn a_loaded_registry_never_holds_the_scripted_provider() {
     let root = fakes::TempDir::new("fiber-scripted-registry");
     let home = root.path().join("home");
     install_provider(&home, "openrouter", &["a.json"]);
-    install_provider(&home, "openrouter", &["a.json"]);
     let (providers, notices) = Providers::load(&home).unwrap();
     assert!(notices.is_empty(), "{notices:?}");
     assert_eq!(providers.names().collect::<Vec<_>>(), ["openrouter"]);
