@@ -49,7 +49,7 @@ fn the_file_stops_at_the_cap_and_later_bytes_are_dropped() {
     assert_eq!(std::fs::read(&path).unwrap(), b"abcdefghij");
     let inner = lock(&shared.inner);
     assert!(inner.cap_fired);
-    assert_eq!(inner.pending, b"abcdefghij");
+    assert_eq!(inner.pending.as_bytes(), b"abcdefghij");
     assert_eq!(inner.written, 10);
 }
 
@@ -103,11 +103,22 @@ fn stream() -> (Arc<FakeClock>, Arc<JobDeltas>, JobStream, Shared) {
 }
 
 fn queue(shared: &Shared, bytes: &[u8]) {
-    lock(&shared.inner).pending.extend_from_slice(bytes);
+    lock(&shared.inner).pending.push(bytes);
 }
 
 fn texts(deltas: &JobDeltas) -> Vec<String> {
     deltas.deltas().into_iter().map(|(_, text)| text).collect()
+}
+
+/// Asserts `actual` equals `expected` by length and first differing
+/// offset, without printing either whole on failure.
+fn assert_delta_eq(actual: &str, expected: &str) {
+    assert_eq!(actual.len(), expected.len(), "delta length");
+    let offset = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(left, right)| left != right);
+    assert_eq!(offset, None, "first differing byte offset");
 }
 
 #[test]
@@ -347,4 +358,87 @@ proptest! {
             u64::try_from(serde_json::to_string(&text).unwrap().len() - 2).unwrap()
         );
     }
+}
+
+#[test]
+fn a_queue_of_exactly_64_kib_sends_it_all_in_one_delta() {
+    let (clock, deltas, mut stream, shared) = stream();
+    queue(&shared, &vec![b'a'; 65_536]);
+    stream.pass(&shared, clock.as_ref());
+    let got = texts(&deltas);
+    assert_eq!(got.len(), 1);
+    assert_delta_eq(&got[0], &"a".repeat(65_536));
+}
+
+#[test]
+fn a_queue_of_one_byte_past_64_kib_sends_the_last_64_kib() {
+    let (clock, deltas, mut stream, shared) = stream();
+    let mut queued = vec![b'X'];
+    queued.extend_from_slice(&vec![b'a'; 65_536]);
+    queue(&shared, &queued);
+    stream.pass(&shared, clock.as_ref());
+    let got = texts(&deltas);
+    assert_eq!(got.len(), 1);
+    assert_delta_eq(&got[0], &"a".repeat(65_536));
+}
+
+#[test]
+fn a_queue_cut_inside_a_two_byte_character_starts_at_the_next_lead_byte() {
+    let (clock, deltas, mut stream, shared) = stream();
+    let mut queued = "é".as_bytes().to_vec();
+    queued.extend_from_slice(&vec![b'a'; 65_535]);
+    assert_eq!(queued.len(), 65_537);
+    queue(&shared, &queued);
+    stream.pass(&shared, clock.as_ref());
+    let got = texts(&deltas);
+    assert_eq!(got.len(), 1);
+    assert_delta_eq(&got[0], &"a".repeat(65_535));
+    assert!(!got[0].contains('\u{fffd}'), "no replacement character");
+}
+
+#[test]
+fn a_dropped_queue_discards_the_carried_tail() {
+    let (clock, deltas, mut stream, shared) = stream();
+    queue(&shared, &[b'a', "é".as_bytes()[0]]);
+    stream.pass(&shared, clock.as_ref());
+    assert_eq!(texts(&deltas), ["a"]);
+    queue(&shared, &vec![b'b'; 65_537]);
+    clock.advance(Duration::from_millis(100));
+    stream.pass(&shared, clock.as_ref());
+    let got = texts(&deltas);
+    assert_eq!(got.len(), 2);
+    assert_delta_eq(&got[1], &"b".repeat(65_536));
+    assert!(!got[1].contains('\u{fffd}'), "no replacement character");
+}
+
+#[test]
+fn a_kept_queue_keeps_the_carried_tail() {
+    let (clock, deltas, mut stream, shared) = stream();
+    queue(&shared, &[b'a', "é".as_bytes()[0]]);
+    stream.pass(&shared, clock.as_ref());
+    assert_eq!(texts(&deltas), ["a"]);
+    clock.advance(Duration::from_millis(100));
+    queue(&shared, &"é".as_bytes()[1..]);
+    stream.pass(&shared, clock.as_ref());
+    assert_eq!(texts(&deltas), ["a", "é"]);
+}
+
+#[test]
+fn held_text_across_not_yet_due_passes_is_capped_at_the_newest_64_kib() {
+    let (clock, deltas, mut stream, shared) = stream();
+    queue(&shared, b"one");
+    stream.pass(&shared, clock.as_ref());
+    assert_eq!(texts(&deltas), ["one"]);
+    queue(&shared, &vec![b'a'; 40_000]);
+    stream.pass(&shared, clock.as_ref());
+    queue(&shared, &vec![b'b'; 40_000]);
+    stream.pass(&shared, clock.as_ref());
+    assert_eq!(texts(&deltas), ["one"], "nothing due yet");
+    clock.advance(Duration::from_millis(100));
+    stream.pass(&shared, clock.as_ref());
+    let got = texts(&deltas);
+    assert_eq!(got.len(), 2);
+    let mut expected = "a".repeat(25_536);
+    expected.push_str(&"b".repeat(40_000));
+    assert_delta_eq(&got[1], &expected);
 }

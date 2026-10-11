@@ -17,6 +17,66 @@ use contract::events::{Event, JobDelta, Progress};
 /// (`docs/tools.md`, "Background jobs").
 pub(super) const OUTPUT_CAP: u64 = 5_000_000_000;
 
+/// The most delta bytes a holder keeps: 64 KiB (`docs/events.md`,
+/// `job_delta`). Past it the oldest bytes are dropped, so only the job's
+/// output file holds the whole output.
+const HELD_MAX: usize = 65_536;
+
+/// Bytes written to the file that no `job_delta` has carried yet. Past
+/// `HELD_MAX` the oldest bytes are dropped and the newest kept, starting
+/// past at most 3 leading continuation bytes (`10xxxxxx`) after the cut;
+/// further continuation bytes are kept, decoding to U+FFFD as they would
+/// have uncut. No marker is inserted.
+#[derive(Default)]
+pub(super) struct Pending {
+    bytes: Vec<u8>,
+    /// The queue dropped bytes since the last take: its taker discards any
+    /// incomplete sequence it carried from that take.
+    dropped: bool,
+}
+
+impl Pending {
+    /// Queues `bytes`, dropping the oldest past `HELD_MAX`.
+    pub(super) fn push(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+        if self.bytes.len() > HELD_MAX {
+            let mut cut = self.bytes.len() - HELD_MAX;
+            let mut skipped = 0;
+            while skipped < 3 {
+                let Some(next) = self.bytes.get(cut) else {
+                    break;
+                };
+                if next & 0xC0 != 0x80 {
+                    break;
+                }
+                cut += 1;
+                skipped += 1;
+            }
+            self.bytes.drain(..cut);
+            self.dropped = true;
+        }
+    }
+
+    /// Takes the queued bytes and whether bytes were dropped since the last
+    /// take, clearing both.
+    pub(super) fn take(&mut self) -> (Vec<u8>, bool) {
+        (
+            std::mem::take(&mut self.bytes),
+            std::mem::take(&mut self.dropped),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+}
+
 pub(super) struct Inner {
     pub(super) reaped: bool,
     pub(super) status: Option<ExitStatus>,
@@ -35,7 +95,7 @@ pub(super) struct Inner {
     /// The output passed `cap`: no byte is written after this is set.
     pub(super) cap_fired: bool,
     /// Bytes written to the file that no `job_delta` has carried yet.
-    pub(super) pending: Vec<u8>,
+    pub(super) pending: Pending,
     /// Types into the command's terminal; `Some` only for a `tty` command,
     /// until the job takes it.
     pub(super) input: Option<contract::jobs::Input>,
@@ -107,7 +167,7 @@ impl Default for Inner {
             written: 0,
             cap: OUTPUT_CAP,
             cap_fired: false,
-            pending: Vec::new(),
+            pending: Pending::default(),
             input: None,
             lines: None,
             errors: None,
@@ -144,7 +204,7 @@ impl Inner {
         self.written = self
             .written
             .saturating_add(u64::try_from(kept.len()).unwrap_or(u64::MAX));
-        self.pending.extend_from_slice(kept);
+        self.pending.push(kept);
         if let Some(lines) = self.lines.as_mut() {
             lines.extend_from_slice(kept);
         }
@@ -323,7 +383,8 @@ pub(super) struct JobStream {
     envelope: u64,
     /// An incomplete UTF-8 sequence waiting for the next bytes.
     carry: Vec<u8>,
-    /// Decoded output no delta has carried yet.
+    /// Decoded output no delta has carried yet: at most its newest
+    /// `HELD_MAX` bytes.
     held: String,
     /// When the held text may go out. `None` is idle.
     next_due: Option<Instant>,
@@ -352,14 +413,20 @@ impl JobStream {
     }
 
     /// Takes the bytes the reader queued, and writes the held text when it
-    /// is due at `clock`'s now.
+    /// is due at `clock`'s now. When the take reports dropped bytes, any
+    /// incomplete sequence carried from the last take is discarded first,
+    /// since its start is gone.
     pub(super) fn pass(&mut self, shared: &Shared, clock: &dyn Clock) {
-        let fresh = std::mem::take(&mut lock(&shared.inner).pending);
+        let (fresh, dropped) = lock(&shared.inner).pending.take();
+        if dropped {
+            self.carry.clear();
+        }
         let mut bytes = std::mem::take(&mut self.carry);
         bytes.extend_from_slice(&fresh);
         let complete = complete_prefix(&bytes);
         self.carry = bytes.split_off(complete);
         self.held.push_str(&String::from_utf8_lossy(&bytes));
+        cap_held(&mut self.held);
         let now = clock.now();
         if !self.held.is_empty() && self.next_due.is_none_or(|due| now >= due) {
             let bytes = self.send();
@@ -380,11 +447,17 @@ impl JobStream {
 
     /// Writes everything left, whatever the interval. An incomplete tail
     /// goes out as U+FFFD, so the texts concatenate to the lossy whole.
+    /// When the take reports dropped bytes, any incomplete sequence carried
+    /// from the last take is discarded first, since its start is gone.
     pub(super) fn flush(&mut self, shared: &Shared) {
-        let fresh = std::mem::take(&mut lock(&shared.inner).pending);
+        let (fresh, dropped) = lock(&shared.inner).pending.take();
+        if dropped {
+            self.carry.clear();
+        }
         self.carry.extend_from_slice(&fresh);
         let rest = std::mem::take(&mut self.carry);
         self.held.push_str(&String::from_utf8_lossy(&rest));
+        cap_held(&mut self.held);
         if !self.held.is_empty() {
             self.send();
         }
@@ -423,6 +496,16 @@ fn escaped_len(text: &str) -> u64 {
         });
     }
     len
+}
+
+/// Drops the oldest bytes past `HELD_MAX`, keeping the newest starting at
+/// a character boundary, so the text stays valid UTF-8.
+fn cap_held(text: &mut String) {
+    if text.len() > HELD_MAX {
+        let cut = text.len() - HELD_MAX;
+        let boundary = text.ceil_char_boundary(cut);
+        text.drain(..boundary);
+    }
 }
 
 pub(super) fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {

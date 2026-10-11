@@ -260,6 +260,86 @@ const DEADLINE: Duration = Duration::from_secs(5);
 #[derive(Default)]
 struct Counting(AtomicUsize);
 
+/// Asserts `actual` equals `expected` by length and first differing
+/// offset, without printing either whole on failure.
+fn assert_held_eq(actual: &str, expected: &str) {
+    assert_eq!(actual.len(), expected.len(), "held length");
+    let offset = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(left, right)| left != right);
+    assert_eq!(offset, None, "first differing byte offset");
+}
+
+/// Takes the held change: every cap test below holds and takes once.
+fn take_held(pacer: &mut Pacer) -> Progress {
+    pacer.take_final().expect("held change")
+}
+
+#[test]
+fn a_hold_of_exactly_64_kib_keeps_everything() {
+    let mut pacer = Pacer::default();
+    pacer.hold(&text(&"a".repeat(65_536)));
+    let taken = take_held(&mut pacer);
+    let body = taken.text.expect("held text");
+    assert_held_eq(&body, &"a".repeat(65_536));
+}
+
+#[test]
+fn a_hold_of_one_byte_past_64_kib_keeps_the_last_64_kib() {
+    let mut pacer = Pacer::default();
+    let mut over = String::from("X");
+    over.push_str(&"a".repeat(65_536));
+    pacer.hold(&text(&over));
+    let taken = take_held(&mut pacer);
+    let body = taken.text.expect("held text");
+    assert_held_eq(&body, &"a".repeat(65_536));
+}
+
+#[test]
+fn two_holds_past_the_cap_keep_the_last_64_kib_in_order() {
+    let mut pacer = Pacer::default();
+    pacer.hold(&text(&"a".repeat(40_000)));
+    pacer.hold(&text(&"b".repeat(40_000)));
+    let taken = take_held(&mut pacer);
+    let body = taken.text.expect("held text");
+    let mut expected = "a".repeat(25_536);
+    expected.push_str(&"b".repeat(40_000));
+    assert_held_eq(&body, &expected);
+}
+
+#[test]
+fn a_cut_inside_a_three_byte_character_starts_at_the_next_character() {
+    let mut pacer = Pacer::default();
+    let mut over = String::from("\u{20ac}");
+    over.push_str(&"a".repeat(65_534));
+    assert_eq!(over.len(), 65_537);
+    pacer.hold(&text(&over));
+    let taken = take_held(&mut pacer);
+    let body = taken.text.expect("held text");
+    assert_eq!(body.len(), 65_534);
+    assert_held_eq(&body, &"a".repeat(65_534));
+}
+
+#[test]
+fn capping_keeps_the_latest_details() {
+    let mut pacer = Pacer::default();
+    pacer.hold(&Progress {
+        text: Some("a".repeat(65_536)),
+        details: Some(json!({"done": 1})),
+    });
+    pacer.hold(&Progress {
+        text: Some("b".into()),
+        details: Some(json!({"done": 2})),
+    });
+    let taken = take_held(&mut pacer);
+    assert_eq!(taken.details, Some(json!({"done": 2})));
+    let body = taken.text.expect("held text");
+    let mut expected = "a".repeat(65_535);
+    expected.push('b');
+    assert_held_eq(&body, &expected);
+}
+
 impl Counting {
     fn count(&self) -> usize {
         self.0.load(Ordering::SeqCst)
