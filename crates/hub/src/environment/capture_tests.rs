@@ -13,6 +13,7 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::io::Write as _;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -20,7 +21,10 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use super::{CAPTURE_DEADLINE, Cancel, Failed, OUTPUT_CAP, capture, parse, shell_command, wait};
+use super::{
+    CAPTURE_DEADLINE, Cancel, Failed, OUTPUT_CAP, capture, marker_suffix, parse, read_all,
+    shell_command, wait,
+};
 use fakes::Deadline;
 
 /// How long a wait that must succeed holds, on the wall clock.
@@ -855,4 +859,214 @@ fn chatter_after_the_end_marker_ignores_the_cap() {
     // `TooLarge`.
     let result = wait_once(framed_sizes("n1", 0, OUTPUT_CAP + 1), true, "n1");
     assert_eq!(result, Ok(Vec::new()));
+}
+
+#[test]
+fn one_past_the_cap_without_a_marker_is_too_large() {
+    // No marker at all: the whole buffer counts, minus no split tail, so
+    // one past the cap fails. A `marker_suffix` stuck at 1 parks here
+    // instead (then `Exited` on the ended reader), so this pins the zero
+    // case.
+    let output = vec![b'x'; OUTPUT_CAP + 1];
+    assert_eq!(wait_once(output, true, "n1"), Err(Failed::TooLarge));
+}
+
+#[test]
+fn marker_suffix_reports_a_split_marker_tail() {
+    let nonce = "suffix";
+    let marker = end(nonce);
+    assert_eq!(marker_suffix(b"hello", &marker), 0);
+    assert_eq!(marker_suffix(b"", &marker), 0);
+    assert_eq!(marker_suffix(b"xyz", &marker), 0);
+    let mut partial = b"hello".to_vec();
+    partial.extend_from_slice(marker.get(..3).expect("the marker is longer than 3"));
+    assert_eq!(marker_suffix(&partial, &marker), 3);
+    let mut max = b"hello".to_vec();
+    max.extend_from_slice(
+        marker
+            .get(..marker.len() - 1)
+            .expect("the marker is longer than 1"),
+    );
+    assert_eq!(marker_suffix(&max, &marker), marker.len() - 1);
+    assert_eq!(
+        marker_suffix(
+            marker.get(..2).expect("the marker is longer than 2"),
+            &marker
+        ),
+        2
+    );
+    let mut one = b"xyz".to_vec();
+    one.push(*marker.first().expect("the marker is not empty"));
+    assert_eq!(marker_suffix(&one, &marker), 1);
+    // A periodic needle: the longest tail wins, so the reverse order is
+    // pinned, not the first match.
+    assert_eq!(marker_suffix(b"XAAAA", b"AAAA"), 3);
+}
+
+/// Runs `wait` on a thread and feeds it `first`, waiting until it scanned
+/// every byte before returning the receiver: the next chunk is really a
+/// later read, so a marker split across the two is split across reads.
+#[allow(clippy::type_complexity, reason = "one test-only thread handle")]
+fn wait_with_first_chunk(
+    first: Vec<u8>,
+    nonce: &str,
+) -> (
+    Arc<Cancel>,
+    mpsc::Receiver<Result<Vec<(OsString, OsString)>, Failed>>,
+) {
+    let clock = fakes::clock::FakeClock::new();
+    let cancel = Cancel::new();
+    let (done_tx, done_rx) = mpsc::channel();
+    let moved = Arc::clone(&cancel);
+    let owned = nonce.to_owned();
+    thread::spawn(move || {
+        let outcome = wait(&moved, &*clock, None, &owned);
+        done_tx.send(outcome).unwrap_or(());
+    });
+    {
+        let mut state = cancel.state.lock().unwrap();
+        state.output = first;
+    }
+    cancel.changed.notify_all();
+    (cancel, done_rx)
+}
+
+/// Waits until the wait scanned at least `scanned` bytes, proving it saw
+/// the fed chunk and decided to park rather than still transferring.
+fn await_scanned(cancel: &Cancel, scanned: usize) {
+    let deadline = Deadline::after(WITHIN);
+    loop {
+        if cancel.state.lock().unwrap().scanned >= scanned {
+            return;
+        }
+        if deadline.left().is_zero() {
+            panic!("waited for the wait to scan {scanned} bytes");
+        }
+        thread::yield_now();
+    }
+}
+
+#[test]
+fn split_end_marker_across_reads_at_the_cap_boundary() {
+    // A valid prefix at cap-1 and at the cap, followed by the end marker
+    // split across two reads, still succeeds: only bytes before the
+    // marker count, and the first half waiting in the buffer is marker,
+    // not output. One past the cap still fails on its first half alone.
+    // Without the suffix the at-cap case reports `TooLarge` as soon as
+    // the first half lands.
+    let nonce = "splitcap";
+    let marker = end(nonce);
+    let split = marker.len() / 2;
+    assert!(split >= 1 && split < marker.len());
+    for (prefix_len, expect_ok) in [
+        (OUTPUT_CAP - 1, true),
+        (OUTPUT_CAP, true),
+        (OUTPUT_CAP + 1, false),
+    ] {
+        let padding = prefix_len - begin(nonce).len();
+        let mut first = vec![b'x'; padding];
+        first.extend_from_slice(&begin(nonce));
+        assert_eq!(first.len(), prefix_len);
+        first.extend_from_slice(marker.get(..split).expect("split is in the marker"));
+        let first_len = first.len();
+        let (cancel, done) = wait_with_first_chunk(first, nonce);
+        await_scanned(&cancel, first_len);
+        if expect_ok {
+            assert!(
+                Deadline::after(QUIET).recv(&done).is_err(),
+                "no result on the split half at prefix {prefix_len}"
+            );
+            {
+                let mut state = cancel.state.lock().unwrap();
+                state
+                    .output
+                    .extend_from_slice(marker.get(split..).expect("split is in the marker"));
+                state.reader_done = true;
+            }
+            cancel.changed.notify_all();
+            assert_eq!(
+                Deadline::after(WITHIN)
+                    .recv(&done)
+                    .unwrap_or_else(|_| panic!(
+                        "waited for the joined marker at prefix {prefix_len}"
+                    )),
+                Ok(Vec::new()),
+                "prefix {prefix_len}"
+            );
+        } else {
+            assert_eq!(
+                Deadline::after(WITHIN)
+                    .recv(&done)
+                    .unwrap_or_else(|_| panic!(
+                        "waited for the over-cap split at prefix {prefix_len}"
+                    )),
+                Err(Failed::TooLarge),
+                "prefix {prefix_len}"
+            );
+        }
+    }
+}
+
+/// Runs `read_all` over `written` (then end of file) starting from an
+/// empty buffer, and returns what it retained and whether the reader
+/// ended. The stream starts with the framed bytes when `written` does, so
+/// a marker split across reads still seals exactly at its end whatever
+/// the chunking.
+fn read_all_with(written: Vec<u8>, nonce: &str) -> (Vec<u8>, bool) {
+    let cancel = Cancel::new();
+    let marker = end(nonce);
+    let (hub_end, mut child_end) = UnixStream::pair().unwrap();
+    let (reader, stop) = support::stoppable::reader(hub_end).unwrap();
+    // The reader runs beside the write: megabytes never fit the socket
+    // buffer, so writing them all before reading would block forever.
+    let moved = Arc::clone(&cancel);
+    let (ended_tx, ended_rx) = mpsc::channel();
+    thread::spawn(move || {
+        read_all(reader, &moved, &marker);
+        ended_tx.send(()).unwrap_or(());
+    });
+    child_end.write_all(&written).unwrap();
+    drop(child_end);
+    Deadline::after(WITHIN)
+        .recv(&ended_rx)
+        .expect("read_all ends on end of file");
+    drop(stop);
+    let state = cancel.state.lock().unwrap();
+    (state.output.clone(), state.reader_done)
+}
+
+#[test]
+fn read_all_bounds_retained_output() {
+    let nonce = "bound";
+    let marker = end(nonce);
+    let bound = OUTPUT_CAP + marker.len();
+    // The framed bytes, then descendant chatter: only through the
+    // marker's end is retained, whatever the chunking, so the copy the
+    // success path parses never rides the chatter along.
+    let mut stream = framed(nonce, b"", b"", b"");
+    stream.extend_from_slice(&vec![b'y'; 200_000]);
+    let (retained, done) = read_all_with(stream, nonce);
+    assert_eq!(
+        retained,
+        framed(nonce, b"", b"", b""),
+        "only through the marker is retained"
+    );
+    assert!(done, "the reader still ends");
+    // Past the cap plus one marker length with no marker, nothing more
+    // is retained: one chunk may overshoot the bound, no more.
+    let (retained, _) = read_all_with(vec![b'x'; bound + 32_768], nonce);
+    assert!(retained.len() > bound, "everything to the bound is kept");
+    assert!(
+        retained.len() <= bound + 8192,
+        "nothing past one chunk over the bound is retained: {}",
+        retained.len()
+    );
+    // At exactly the bound the buffer still grows: this pins the `+`
+    // against a `-` mutant, whose smaller bound would seal here.
+    let (retained, _) = read_all_with(vec![b'x'; bound], nonce);
+    assert_eq!(retained.len(), bound, "the bound itself still retains");
+    // Below every bound, bytes are retained as before.
+    let (retained, done) = read_all_with(b"hello".to_vec(), nonce);
+    assert_eq!(retained, b"hello");
+    assert!(done, "the reader still ends");
 }

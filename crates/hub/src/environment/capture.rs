@@ -87,6 +87,9 @@ struct State {
     reader_done: bool,
     /// How much of `output` the wait already searched for the end marker.
     scanned: usize,
+    /// The reader sealed the buffer: the end marker or the bound is in
+    /// it, so nothing more is retained.
+    sealed: bool,
 }
 
 impl Cancel {
@@ -98,6 +101,7 @@ impl Cancel {
                 output: Vec::new(),
                 reader_done: false,
                 scanned: 0,
+                sealed: false,
             }),
             changed: Arc::new(Condvar::new()),
         })
@@ -269,11 +273,31 @@ fn os_string(bytes: &[u8]) -> OsString {
     String::from_utf8_lossy(bytes).into_owned().into()
 }
 
+/// How much of `output`'s tail could be the end marker's first half:
+/// the longest suffix of `output` that prefixes `needle`, strictly
+/// shorter than `needle`. Zero when none. Only bytes past it count
+/// against the cap while the marker is incomplete, so a valid prefix at
+/// the cap followed by a split marker still parks instead of reporting
+/// `TooLarge`.
+fn marker_suffix(output: &[u8], needle: &[u8]) -> usize {
+    (1..needle.len())
+        .rev()
+        .find(|&len| {
+            needle
+                .get(..len)
+                .is_some_and(|prefix| output.ends_with(prefix))
+        })
+        .unwrap_or(0)
+}
+
 /// Reads `reader` to its end into `cancel`'s output, notifying the wait on
-/// every chunk and at the end. Returns only after the stop ended the read
-/// or the shell and its descendants closed it: the capture joins this, so
-/// no reader outlives its capture.
-fn read_all(mut reader: support::stoppable::Reader, cancel: &Cancel) {
+/// every chunk and at the end. Retains only until the end marker or the
+/// cap plus one marker length: descendant chatter past either no longer
+/// grows the buffer, so retained output stays bounded. One chunk may
+/// overshoot the bound; the next chunk then stops. Returns only after the
+/// stop ended the read or the shell and its descendants closed it: the
+/// capture joins this, so no reader outlives its capture.
+fn read_all(mut reader: support::stoppable::Reader, cancel: &Cancel, end: &[u8]) {
     let mut chunk = [0_u8; 8192];
     loop {
         match reader.read(&mut chunk) {
@@ -282,7 +306,45 @@ fn read_all(mut reader: support::stoppable::Reader, cancel: &Cancel) {
                 let Some(bytes) = chunk.get(..got) else {
                     break;
                 };
-                lock(&cancel.state).output.extend_from_slice(bytes);
+                let mut state = lock(&cancel.state);
+                // Bound retained output: once sealed, descendant chatter
+                // no longer grows the buffer. While unsealed the buffer
+                // holds no complete marker, so only the tail plus the new
+                // bytes can newly hold one: each chunk costs one chunk,
+                // not the whole buffer. Sealing keeps through the marker's
+                // end, or stops past the cap plus one marker length; one
+                // chunk may overshoot the bound, the next then seals.
+                if !state.sealed {
+                    let keep = end.len().saturating_sub(1).min(state.output.len());
+                    let start = state.output.len().saturating_sub(keep);
+                    let found = match state.output.get(start..) {
+                        Some(tail) => {
+                            let mut window = Vec::with_capacity(tail.len() + bytes.len());
+                            window.extend_from_slice(tail);
+                            window.extend_from_slice(bytes);
+                            find(&window, end)
+                        }
+                        // Unreachable: `start` is `len` minus at most `len`.
+                        None => None,
+                    };
+                    match found {
+                        Some(at) => {
+                            let through = at + end.len() - keep;
+                            if let Some(part) = bytes.get(..through) {
+                                state.output.extend_from_slice(part);
+                            }
+                            state.sealed = true;
+                        }
+                        None => {
+                            if state.output.get(OUTPUT_CAP + end.len()).is_some() {
+                                state.sealed = true;
+                            } else {
+                                state.output.extend_from_slice(bytes);
+                            }
+                        }
+                    }
+                }
+                drop(state);
                 cancel.changed.notify_all();
             }
             // Any read error ends the read, with no retry on `Interrupted`:
@@ -347,26 +409,38 @@ fn wait(
         let found = find_from(&state.output, &end, from);
         state.scanned = state.output.len();
         // The cap covers only the bytes before the end marker: the prefix
-        // up to it when found, all buffered bytes otherwise. Past the cap
-        // is `TooLarge` whatever follows, even the end marker. Without a
-        // comparison: the byte at `OUTPUT_CAP` exists inside the prefix
-        // exactly when the prefix runs past the cap, so at the cap parks
-        // while past it fails, with no `>` for a mutant to flip. Chatter
-        // after the end marker never counts, so a valid capture followed
-        // by descendant chatter still succeeds.
-        let before_end = found.unwrap_or(state.output.len());
-        let past_cap = state
-            .output
-            .get(..before_end)
-            .and_then(|prefix| prefix.get(OUTPUT_CAP))
-            .is_some();
+        // up to it when found, all buffered bytes minus a possible split
+        // marker's first half otherwise. Past the cap is `TooLarge`
+        // whatever follows, even the end marker. Without a comparison: the
+        // byte at `OUTPUT_CAP` exists inside the prefix exactly when the
+        // prefix runs past the cap, so at the cap parks while past it
+        // fails, with no `>` for a mutant to flip. Chatter after the end
+        // marker never counts, so a valid capture followed by descendant
+        // chatter still succeeds.
+        let past_cap = match found {
+            Some(at) => state
+                .output
+                .get(..at)
+                .and_then(|prefix| prefix.get(OUTPUT_CAP))
+                .is_some(),
+            None => {
+                let suffix = marker_suffix(&state.output, &end);
+                state.output.get(OUTPUT_CAP + suffix).is_some()
+            }
+        };
         if past_cap {
             return Err(Failed::TooLarge);
         }
-        if found.is_some() {
-            let output = state.output.clone();
+        if let Some(at) = found {
+            // Copy only through the end marker: descendant chatter after
+            // it never rides along in the success copy.
+            let through = at + end.len();
+            let framed = state
+                .output
+                .get(..through)
+                .map_or_else(Vec::new, |prefix| prefix.to_vec());
             drop(state);
-            return parse(&output, nonce);
+            return parse(&framed, nonce);
         }
         if state.reader_done {
             return Err(Failed::Exited);
@@ -477,8 +551,9 @@ pub(crate) fn capture(
         changed: Arc::clone(&cancel.changed),
     });
     clock.subscribe(Arc::downgrade(&wake));
+    let end = end_marker(&nonce);
     let outcome = std::thread::scope(|scope| {
-        scope.spawn(move || read_all(reader, cancel));
+        scope.spawn(move || read_all(reader, cancel, &end));
         let outcome = wait(cancel, clock, deadline, &nonce);
         // Whatever ended the wait, the shell ends now: an error because
         // it already exited is ignored.
