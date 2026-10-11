@@ -8,106 +8,30 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::collections::BTreeMap;
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
+use support::*;
 
-use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::{Clients, Empty, Event, FiberExited};
 use contract::shapes::{Tokens, Usage};
 use contract::{Envelope, SessionId};
-use doors::{Session, Watched, mint};
+use doors::{Watched, mint};
 use fakes::Deadline;
-use fakes::clock::FakeClock;
 use log::Log;
-
-/// A hang bound for one wait, as in the socket tests.
-const DEADLINE: Duration = Duration::from_secs(10);
 
 /// How long the live thread waits for the watch to attach, and then for
 /// its watcher to read the `clients` line that attach wrote.
 const ATTACH_DEADLINE: Duration = Duration::from_secs(5);
 
-struct Temp {
-    home: std::path::PathBuf,
-    _held: fakes::TempDir,
-}
-
-impl Temp {
-    fn new() -> Self {
-        let held = fakes::TempDir::new("dw");
-        let home = held.path().join("h");
-        std::fs::create_dir_all(home.join("run")).unwrap();
-        Self { home, _held: held }
-    }
-}
-
-struct Opened {
-    _temp: Temp,
-    home: std::path::PathBuf,
-    log: Arc<Log>,
-    id: SessionId,
-    session: Option<Session>,
-}
-
-impl Opened {
-    fn open() -> Self {
-        let temp = Temp::new();
-        let sessions = temp.home.join("projects/p/sessions");
-        let id = SessionId(mint("s_"));
-        let dir = sessions.join(&id.0);
-        let clock = FakeClock::new();
-        let timed = Arc::clone(&clock);
-        let timed: Arc<dyn Clock> = timed;
-        let log = Arc::new(Log::create(&sessions, id.clone(), timed.clone()).unwrap());
-        let session = Session::open(
-            &temp.home,
-            &dir,
-            &log,
-            timed,
-            Vec::new(),
-            Box::new(std::io::sink()),
-        )
+/// Appends one durable step to the session's log.
+fn step(log: &Log) {
+    log.append(&Event::StepStarted(Empty {}), None, None)
         .unwrap();
-        Self {
-            home: temp.home.clone(),
-            _temp: temp,
-            log,
-            id,
-            session: Some(session),
-        }
-    }
-
-    fn step(&self) {
-        self.log
-            .append(&Event::StepStarted(Empty {}), None, None)
-            .unwrap();
-    }
-
-    /// Closes the session on a thread bounded by [`DEADLINE`]. The log
-    /// moves in: dropping its last handle ends the stdout copy, so the
-    /// close never waits on it.
-    #[track_caller]
-    fn close(self) {
-        let Self {
-            _temp,
-            home: _,
-            log,
-            id: _,
-            session,
-        } = self;
-        let session = session.unwrap();
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || {
-            session.close(log);
-            let _sent = done.send(());
-        });
-        Deadline::after(DEADLINE)
-            .recv(&finished)
-            .expect("close returned");
-    }
 }
 
 fn usage() -> Usage {
@@ -135,7 +59,7 @@ fn exited() -> FiberExited {
 }
 
 /// The durable `seq`s of `lines`, in order.
-fn seqs(lines: &[Envelope]) -> Vec<u64> {
+fn envelope_seqs(lines: &[Envelope]) -> Vec<u64> {
     lines
         .iter()
         .filter_map(|line| line.seq.map(|seq| seq.0))
@@ -144,9 +68,9 @@ fn seqs(lines: &[Envelope]) -> Vec<u64> {
 
 #[test]
 fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
-    let opened = Opened::open();
-    opened.step();
-    opened.step();
+    let opened = Opened::open(Vec::new());
+    step(&opened.log);
+    step(&opened.log);
     let home = opened.home.clone();
     let id = opened.id.clone();
     let log = Arc::clone(&opened.log);
@@ -182,8 +106,6 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
     let mut seen = Vec::new();
     opened
         .session
-        .as_ref()
-        .unwrap()
         .run(Vec::new(), Arc::new(|| false), |_inbox| {
             let mut lines = Vec::new();
             let watched = doors::watch(&home, &id, &mut |line: &Envelope| {
@@ -195,7 +117,7 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
             .expect("the watch held to fiber_exited");
             assert_eq!(watched, Watched::Exited);
             // The fold first, in seq order, then the live lines.
-            assert_eq!(seqs(&lines), vec![0, 1, 2, 3]);
+            assert_eq!(envelope_seqs(&lines), vec![0, 1, 2, 3]);
             assert_eq!(
                 lines.last().map(|line| line.kind.as_str()),
                 Some("fiber_exited")
@@ -223,7 +145,7 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
 
 #[test]
 fn a_closed_connection_returns_the_last_seq() {
-    let opened = Opened::open();
+    let opened = Opened::open(Vec::new());
     let home = opened.home.clone();
     let id = opened.id.clone();
     let (saw_tx, saw_rx) = mpsc::channel::<()>();
@@ -247,11 +169,9 @@ fn a_closed_connection_returns_the_last_seq() {
     });
     opened
         .session
-        .as_ref()
-        .unwrap()
         .run(Vec::new(), Arc::new(|| false), |_inbox| {
             // Fold or live, the line reaches the watch either way.
-            opened.step();
+            step(&opened.log);
             Deadline::after(DEADLINE)
                 .recv(&saw_rx)
                 .expect("the watch read the line");
@@ -273,8 +193,9 @@ fn a_closed_connection_returns_the_last_seq() {
 #[test]
 fn a_refused_connection_is_an_error() {
     let temp = Temp::new();
+    let home = temp.0.join("h");
     let id = SessionId(mint("s_"));
-    let watched = doors::watch(&temp.home, &id, &mut |_| {
+    let watched = doors::watch(&home, &id, &mut |_| {
         panic!("no line arrives on a refused connection");
     });
     assert!(watched.is_err(), "a refused connect returns Err");

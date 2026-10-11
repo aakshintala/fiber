@@ -14,6 +14,8 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+mod support;
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -21,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use support::*;
 
 use contract::events::{
     Clients, Empty, Event, FiberExited, InputItem, TurnCompleted, TurnOutcome, TurnStarted,
@@ -34,102 +36,43 @@ use fakes::Deadline;
 use log::Log;
 use serde_json::Value;
 
-/// How long one wait may take. Every wait in this file names it.
-const DEADLINE: Duration = Duration::from_secs(10);
-
-/// A temporary directory, removed on drop, with a short name: a session's
-/// socket path must fit in 103 bytes on macOS.
-struct Temp(
-    PathBuf,
-    #[expect(dead_code, reason = "Drop removes the directory")] fakes::TempDir,
-);
-
-impl Temp {
-    fn new() -> Self {
-        let held = fakes::TempDir::new("fa");
-        let dir = held.path().to_path_buf();
-        Self(dir, held)
-    }
-}
-
-struct Opened {
-    _temp: Temp,
-    home: PathBuf,
-    id: SessionId,
-    socket: PathBuf,
-    log: Arc<Log>,
-    session: Option<Session>,
-}
-
-impl Opened {
-    fn open() -> Self {
-        let temp = Temp::new();
-        let home = temp.0.join("h");
-        let sessions = home.join("projects/p/sessions");
-        let id = SessionId(mint("s_"));
-        let dir = sessions.join(&id.0);
-        let clock = fakes::clock::FakeClock::new();
-        let log = Arc::new(Log::create(&sessions, id.clone(), clock).unwrap());
-        let session = Session::open(
-            &home,
-            &dir,
-            &log,
-            fakes::clock::FakeClock::new(),
-            Vec::new(),
-            Box::new(std::io::sink()),
-        )
-        .unwrap();
-        let socket = temp.0.join("h/run").join(&id.0);
-        Self {
-            _temp: temp,
-            home,
-            id: id.clone(),
-            socket,
-            log,
-            session: Some(session),
+/// Runs `session` with `behave` on its inbox, on a thread, while the
+/// test attaches. Returns what the inbox thread sends back, bounded by
+/// [`DEADLINE`]: a hung loop fails the test instead of hanging it.
+fn run(
+    session: Session,
+    behave: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure> + Send + 'static,
+) -> Receiver<(Result<(), Failure>, Session)> {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let ran = session.run(Vec::new(), Arc::new(|| false), behave);
+        match done.send((ran, session)) {
+            Ok(()) | Err(_) => {}
         }
-    }
+    });
+    finished
+}
 
-    /// Runs the session with `behave` on its inbox, on a thread, while the
-    /// test attaches. Returns what the inbox thread sends back, bounded by
-    /// [`DEADLINE`]: a hung loop fails the test instead of hanging it.
-    fn run(
-        &mut self,
-        behave: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure> + Send + 'static,
-    ) -> Receiver<(Result<(), Failure>, Session)> {
-        let session = self.session.take().unwrap();
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || {
-            let ran = session.run(Vec::new(), Arc::new(|| false), behave);
-            match done.send((ran, session)) {
-                Ok(()) | Err(_) => {}
-            }
-        });
-        finished
-    }
-
-    /// Takes the inbox thread's result within [`DEADLINE`], then closes the
-    /// session on a thread, bounded the same way. Consumes the fixture so
-    /// the log is dropped: [`Session::close`] joins the printer, which wakes
-    /// only once the log is gone.
-    #[track_caller]
-    fn close(self, inbox: Receiver<(Result<(), Failure>, Session)>) -> Result<(), Failure> {
-        let (ran, session) = Deadline::after(DEADLINE)
-            .recv(&inbox)
-            .expect("waited for the inbox thread to finish");
-        let log = self.log;
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || {
-            session.close(log);
-            match done.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-        });
-        Deadline::after(DEADLINE)
-            .recv(&finished)
-            .expect("waited for the session to close");
-        ran
-    }
+/// Takes the inbox thread's result within [`DEADLINE`], then closes the
+/// session on a thread, bounded the same way. `log` moves in so the last
+/// handle drops: [`Session::close`] joins the printer, which wakes only
+/// once the log is gone.
+#[track_caller]
+fn close(log: Arc<Log>, inbox: Receiver<(Result<(), Failure>, Session)>) -> Result<(), Failure> {
+    let (ran, session) = Deadline::after(DEADLINE)
+        .recv(&inbox)
+        .expect("waited for the inbox thread to finish");
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        session.close(log);
+        match done.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("waited for the session to close");
+    ran
 }
 
 /// Runs `attach` on a helper thread: a hung attach fails the test at the
@@ -248,7 +191,7 @@ fn completed() -> Event {
     })
 }
 
-fn kinds(text: &str) -> Vec<String> {
+fn kinds_of_text(text: &str) -> Vec<String> {
     text.lines()
         .map(|line| {
             serde_json::from_str::<Value>(line).unwrap()["kind"]
@@ -268,7 +211,7 @@ fn parse(text: &str) -> Vec<Value> {
 
 #[test]
 fn attach_prints_only_its_turn_and_leaves_the_session_up() {
-    let mut opened = Opened::open();
+    let opened = Opened::open(Vec::new());
     // An earlier turn, and the `fiber_exited` of the process before the
     // holder: both are in the fold, and neither is printed.
     let old = CommandId("c_old".into());
@@ -297,7 +240,7 @@ fn attach_prints_only_its_turn_and_leaves_the_session_up() {
         )
         .unwrap();
     let log = Arc::clone(&opened.log);
-    let inbox = opened.run(move |inbox| {
+    let inbox = run(opened.session, move |inbox| {
         let (_, command, ack) = prompt_of(&inbox);
         append(
             &log,
@@ -335,7 +278,7 @@ fn attach_prints_only_its_turn_and_leaves_the_session_up() {
     assert_eq!(code, 0);
     let text = String::from_utf8(out).unwrap();
     assert_eq!(
-        kinds(&text),
+        kinds_of_text(&text),
         ["turn_started", "clients", "step_started", "turn_completed"].map(String::from)
     );
     let lines = parse(&text);
@@ -363,14 +306,14 @@ fn attach_prints_only_its_turn_and_leaves_the_session_up() {
     // Attach sent no `close`, and the session is still up: its socket
     // accepts a connection while the inbox thread is still serving.
     UnixStream::connect(&opened.socket).expect("the session is still up");
-    assert_eq!(opened.close(inbox), Ok(()));
+    assert_eq!(close(opened.log, inbox), Ok(()));
 }
 
 #[test]
 fn a_failed_turn_prints_its_lines_and_returns_1() {
-    let mut opened = Opened::open();
+    let opened = Opened::open(Vec::new());
     let log = Arc::clone(&opened.log);
-    let inbox = opened.run(move |inbox| {
+    let inbox = run(opened.session, move |inbox| {
         let (_, command, ack) = prompt_of(&inbox);
         append(
             &log,
@@ -410,16 +353,16 @@ fn a_failed_turn_prints_its_lines_and_returns_1() {
 
     assert_eq!(code, 1);
     assert_eq!(
-        kinds(&String::from_utf8(out).unwrap()),
+        kinds_of_text(&String::from_utf8(out).unwrap()),
         ["turn_started", "turn_completed"].map(String::from)
     );
-    assert_eq!(opened.close(inbox), Ok(()));
+    assert_eq!(close(opened.log, inbox), Ok(()));
 }
 
 #[test]
 fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
-    let mut opened = Opened::open();
-    let inbox = opened.run(move |inbox| {
+    let opened = Opened::open(Vec::new());
+    let inbox = run(opened.session, move |inbox| {
         match Deadline::after(DEADLINE)
             .recv(&inbox)
             .expect("the prompt arrives")
@@ -464,14 +407,14 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
         "A turn is running; send `steer` to add to it."
     );
     assert!(out.is_empty(), "a rejection prints nothing");
-    assert_eq!(opened.close(inbox), Ok(()));
+    assert_eq!(close(opened.log, inbox), Ok(()));
 }
 
 #[test]
 fn the_session_ending_before_the_turn_completes_is_a_failure_not_a_hang() {
-    let mut opened = Opened::open();
+    let opened = Opened::open(Vec::new());
     let log = Arc::clone(&opened.log);
-    let inbox = opened.run(move |inbox| {
+    let inbox = run(opened.session, move |inbox| {
         let (_, command, ack) = prompt_of(&inbox);
         append(
             &log,
@@ -510,8 +453,8 @@ fn the_session_ending_before_the_turn_completes_is_a_failure_not_a_hang() {
 
     assert_eq!(failed.code, ErrorCode::Closing);
     let text = String::from_utf8(out).unwrap();
-    assert!(text.is_empty() || kinds(&text) == ["turn_started"].map(String::from));
-    assert_eq!(opened.close(inbox), Ok(()));
+    assert!(text.is_empty() || kinds_of_text(&text) == ["turn_started"].map(String::from));
+    assert_eq!(close(opened.log, inbox), Ok(()));
 }
 
 /// A stand-in session socket: answers `subscribe`, then `prompt`, then
@@ -538,7 +481,7 @@ fn stand_in(
         received.push(line.clone());
         let sub: Value = serde_json::from_str(line.trim_end()).unwrap();
         assert_eq!(sub["command"], "subscribe");
-        send(
+        write_line(
             &mut writer,
             &accepted(&sub, schema_version, &SessionId("s_stand".into())),
         );
@@ -560,7 +503,7 @@ fn stand_in(
         }
         let prompted: Value = serde_json::from_str(line.trim_end()).unwrap();
         if prompted["command"] == "prompt" {
-            send(
+            write_line(
                 &mut writer,
                 &accepted(&prompted, schema_version, &SessionId("s_stand".into())),
             );
@@ -596,7 +539,7 @@ fn accepted(command: &Value, schema_version: u32, session: &SessionId) -> String
     .unwrap()
 }
 
-fn send(writer: &mut UnixStream, line: &str) {
+fn write_line(writer: &mut UnixStream, line: &str) {
     writer.write_all(line.as_bytes()).unwrap();
     writer.write_all(b"\n").unwrap();
     writer.flush().unwrap();
@@ -716,9 +659,9 @@ impl Write for Broken {
 
 #[test]
 fn an_unwritable_stdout_is_an_io_failure() {
-    let mut opened = Opened::open();
+    let opened = Opened::open(Vec::new());
     let log = Arc::clone(&opened.log);
-    let inbox = opened.run(move |inbox| {
+    let inbox = run(opened.session, move |inbox| {
         let (_, command, ack) = prompt_of(&inbox);
         append(
             &log,
@@ -744,7 +687,7 @@ fn an_unwritable_stdout_is_an_io_failure() {
     let failed = failed.unwrap_err();
 
     assert_eq!(failed.code, ErrorCode::IoFailed);
-    assert_eq!(opened.close(inbox), Ok(()));
+    assert_eq!(close(opened.log, inbox), Ok(()));
 }
 
 #[test]
@@ -764,7 +707,7 @@ fn attach_with_a_label_sends_credential_before_the_prompt() {
         |mut reader, sub, second, writer| {
             assert_eq!(second["command"], "credential");
             assert_eq!(second["args"], serde_json::json!({"label": "home"}));
-            send(
+            write_line(
                 writer,
                 &accepted(&second, SCHEMA_VERSION, &SessionId("s_stand".into())),
             );
@@ -787,13 +730,13 @@ fn attach_with_a_label_sends_credential_before_the_prompt() {
             assert_ne!(sub["id"], second["id"]);
             assert_ne!(second["id"], prompted["id"]);
             assert_ne!(sub["id"], prompted["id"]);
-            send(
+            write_line(
                 writer,
                 &accepted(&prompted, SCHEMA_VERSION, &SessionId("s_stand".into())),
             );
             // The prompt's turn, as the loop writes it.
             let command = prompted["id"].as_str().unwrap();
-            send(
+            write_line(
                 writer,
                 &serde_json::to_string(&serde_json::json!({
                     "kind": "turn_started",
@@ -802,7 +745,7 @@ fn attach_with_a_label_sends_credential_before_the_prompt() {
                 }))
                 .unwrap(),
             );
-            send(
+            write_line(
                 writer,
                 &serde_json::to_string(&serde_json::json!({
                     "kind": "turn_completed",
@@ -825,7 +768,7 @@ fn attach_with_a_label_sends_credential_before_the_prompt() {
     assert_eq!(code.unwrap(), 0);
     let text = String::from_utf8(out).unwrap();
     assert_eq!(
-        kinds(&text),
+        kinds_of_text(&text),
         ["turn_started", "turn_completed"].map(String::from)
     );
     let received = stood_in(server, "the stand-in to see the connection end");
@@ -846,7 +789,7 @@ fn attach_with_a_rejected_label_fails_printing_nothing() {
     let socket = run.join(&id.0);
     let server = stand_in(&socket, SCHEMA_VERSION, |mut reader, _, second, writer| {
         assert_eq!(second["command"], "credential");
-        send(
+        write_line(
             writer,
             &serde_json::to_string(&serde_json::json!({
                 "kind": "command_rejected",

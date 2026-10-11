@@ -7,6 +7,11 @@
 //! `main` builds the session's parts; this crate never sees a provider or
 //! the loop (`docs/architecture.md`, "The call rules").
 
+// The shared test support names `doors::Session` and `doors::mint`, so the
+// unit tests that include it see this crate under that name too.
+#[cfg(test)]
+extern crate self as doors;
+
 mod attach;
 mod client;
 mod close;

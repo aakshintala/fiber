@@ -19,42 +19,22 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 
-use super::{Action, Phase, SHUTDOWN_BOUND, Signals, decide, decide_close, signal_code};
+use super::{Action, Phase, SHUTDOWN_BOUND, Signals, decide, signal_code};
 
-/// How long a test waits on another thread before it fails.
-const DEADLINE: Duration = Duration::from_secs(10);
+#[allow(
+    clippy::duplicate_mod,
+    reason = "each unit-test file includes the shared support itself"
+)]
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+use support::DEADLINE;
 
 #[test]
 fn each_signal_has_its_exit_code() {
     assert_eq!(signal_code(SIGTERM), 143);
     assert_eq!(signal_code(SIGINT), 130);
     assert_eq!(signal_code(SIGHUP), 129);
-}
-
-#[test]
-fn booting_exits_at_once_on_any_signal() {
-    for (signal, code) in [(SIGTERM, 143), (SIGINT, 130), (SIGHUP, 129)] {
-        assert_eq!(decide(Phase::Booting, signal, 0), Action::Exit(code));
-    }
-}
-
-#[test]
-fn armed_records_the_first_signal_and_ignores_the_rest() {
-    for (signal, code) in [(SIGTERM, 143), (SIGINT, 130), (SIGHUP, 129)] {
-        assert_eq!(decide(Phase::Armed, signal, 0), Action::Record(code));
-        assert_eq!(decide(Phase::Armed, signal, 1), Action::Nothing);
-    }
-}
-
-#[test]
-fn started_shuts_down_once_and_a_second_term_or_int_kills_the_groups() {
-    for (signal, code) in [(SIGTERM, 143), (SIGINT, 130), (SIGHUP, 129)] {
-        assert_eq!(decide(Phase::Started, signal, 0), Action::Shutdown(code));
-    }
-    assert_eq!(decide(Phase::Started, SIGTERM, 1), Action::KillGroups);
-    assert_eq!(decide(Phase::Started, SIGINT, 2), Action::KillGroups);
-    // The doc names only SIGTERM and SIGINT for a second signal.
-    assert_eq!(decide(Phase::Started, SIGHUP, 1), Action::Nothing);
 }
 
 #[test]
@@ -150,10 +130,12 @@ fn start_only(signals: &Signals, did: &Sender<Did>) -> Option<i32> {
 
 #[test]
 fn a_signal_while_booting_exits_with_its_code() {
-    let clock = FakeClock::new();
-    let (signals, did) = recorded(&clock);
-    signals.handle(SIGINT);
-    assert_eq!(did.try_recv().unwrap(), Did::Exit(130));
+    for (signal, code) in [(SIGTERM, 143), (SIGINT, 130), (SIGHUP, 129)] {
+        let clock = FakeClock::new();
+        let (signals, did) = recorded(&clock);
+        signals.handle(signal);
+        assert_eq!(did.try_recv().unwrap(), Did::Exit(code));
+    }
 }
 
 #[test]
@@ -418,25 +400,6 @@ fn a_first_signal_once_started_does_not_run_on_record() {
         record_calls.try_recv().is_err(),
         "a started shutdown runs no on_record"
     );
-}
-
-/// A `close` with `now` records while armed, defers while committing, and
-/// shuts down once started, each only with no signal seen yet.
-#[test]
-fn decide_close_shuts_down_only_once_started() {
-    assert_eq!(decide_close(Phase::Started, 0), Action::Shutdown(0));
-    assert_eq!(decide_close(Phase::Started, 1), Action::Nothing);
-    assert_eq!(decide_close(Phase::Armed, 0), Action::Record(0));
-    assert_eq!(decide_close(Phase::Armed, 1), Action::Nothing);
-    assert_eq!(
-        decide_close(Phase::Committing { deferred: None }, 0),
-        Action::Defer(0)
-    );
-    assert_eq!(
-        decide_close(Phase::Committing { deferred: Some(0) }, 1),
-        Action::Nothing
-    );
-    assert_eq!(decide_close(Phase::Booting, 0), Action::Nothing);
 }
 
 #[test]

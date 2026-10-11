@@ -10,61 +10,26 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::io;
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
-use contract::clock::Clock;
+use contract::ErrorCode;
 use contract::events::{CommandResult, ToolInfo, ToolSource, ToolState};
 use contract::extension::Drive;
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::shapes::Origin;
-use contract::{ErrorCode, SessionId};
 use fakes::Deadline;
-use fakes::clock::FakeClock;
-use log::Log;
 use serde_json::{Map, Value};
 
-use crate::Session;
+#[allow(
+    clippy::duplicate_mod,
+    reason = "each unit-test file includes the shared support itself"
+)]
+#[path = "../tests/support/mod.rs"]
+mod support;
 
-/// A hang bound for one answer or delivery.
-const DEADLINE: Duration = Duration::from_secs(5);
-
-struct Opened {
-    _temp: fakes::TempDir,
-    log: Arc<Log>,
-    session: Session,
-}
-
-fn open(tools: Vec<ToolInfo>) -> Opened {
-    let temp = fakes::TempDir::new("fd");
-    let home = temp.path().join("h");
-    let sessions = home.join("projects/p/sessions");
-    let id = SessionId(crate::mint("s_"));
-    let dir = sessions.join(&id.0);
-    let clock = FakeClock::new();
-    let timed = Arc::clone(&clock);
-    let timed: Arc<dyn Clock> = timed;
-    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
-    let session = Session::open(&home, &dir, &log, timed, tools, Box::new(io::sink())).unwrap();
-    Opened {
-        _temp: temp,
-        log,
-        session,
-    }
-}
-
-#[track_caller]
-fn close_within(session: Session, log: Arc<Log>) {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        session.close(log);
-        if let Ok(()) = tx.send(()) {}
-    });
-    Deadline::after(DEADLINE).recv(&rx).expect("close returned");
-}
+use support::{DEADLINE, Opened, close_within};
 
 fn tool() -> ToolInfo {
     ToolInfo {
@@ -105,7 +70,7 @@ fn rejected(answer: Answer) -> Rejection {
 
 #[test]
 fn drive_steer_is_accepted_with_an_extension_sender() {
-    let opened = open(vec![]);
+    let opened = Opened::open(vec![]);
     let driver = opened.session.driver();
     opened
         .session
@@ -136,7 +101,7 @@ fn drive_steer_is_accepted_with_an_extension_sender() {
 
 #[test]
 fn drive_prompt_answered_busy_rejects_busy() {
-    let opened = open(vec![]);
+    let opened = Opened::open(vec![]);
     let driver = opened.session.driver();
     opened
         .session
@@ -160,7 +125,7 @@ fn drive_prompt_answered_busy_rejects_busy() {
 
 #[test]
 fn drive_tools_answers_with_its_result() {
-    let opened = open(vec![tool()]);
+    let opened = Opened::open(vec![tool()]);
     let driver = opened.session.driver();
     opened
         .session
@@ -184,7 +149,7 @@ fn drive_tools_answers_with_its_result() {
 
 #[test]
 fn drive_approval_reply_is_rejected_before_the_inbox() {
-    let opened = open(vec![]);
+    let opened = Opened::open(vec![]);
     let driver = opened.session.driver();
     opened
         .session
@@ -216,7 +181,7 @@ fn drive_approval_reply_is_rejected_before_the_inbox() {
 
 #[test]
 fn drive_subscribe_is_rejected_as_a_second_one() {
-    let opened = open(vec![]);
+    let opened = Opened::open(vec![]);
     let driver = opened.session.driver();
     opened
         .session
@@ -236,7 +201,7 @@ fn drive_subscribe_is_rejected_as_a_second_one() {
 
 #[test]
 fn drive_unknown_command_is_rejected() {
-    let opened = open(vec![]);
+    let opened = Opened::open(vec![]);
     let driver = opened.session.driver();
     opened
         .session
@@ -261,7 +226,7 @@ fn drive_unknown_command_is_rejected() {
 
 #[test]
 fn drive_after_close_answers_closing() {
-    let opened = open(vec![tool()]);
+    let opened = Opened::open(vec![tool()]);
     let driver = opened.session.driver();
     close_within(opened.session, opened.log);
     let (tx, rx) = mpsc::channel();
@@ -281,7 +246,7 @@ fn drive_after_close_answers_closing() {
 
 #[test]
 fn drive_after_close_answers_closing_with_a_retained_handle() {
-    let opened = open(vec![tool()]);
+    let opened = Opened::open(vec![tool()]);
     let driver = opened.session.driver();
     // A retained handle keeps the gate alive past `Session::close`: the
     // stopped flag, not the upgrade, answers `closing`.
@@ -338,7 +303,7 @@ fn reply_args(request: &str) -> Value {
 
 #[test]
 fn reply_for_a_held_ask_never_reaches_the_inbox() {
-    let opened = open(vec![]);
+    let opened = Opened::open(vec![]);
     opened.session.extensions(Arc::new(AskDoor));
     let driver = opened.session.driver();
     opened
@@ -364,7 +329,7 @@ fn reply_for_a_held_ask_never_reaches_the_inbox() {
 
 #[test]
 fn reply_handed_back_reaches_the_inbox() {
-    let opened = open(vec![]);
+    let opened = Opened::open(vec![]);
     opened.session.extensions(Arc::new(AskDoor));
     let driver = opened.session.driver();
     opened
@@ -394,7 +359,7 @@ fn reply_handed_back_reaches_the_inbox() {
 
 #[test]
 fn reply_with_no_door_reaches_the_inbox() {
-    let opened = open(vec![]);
+    let opened = Opened::open(vec![]);
     let driver = opened.session.driver();
     opened
         .session
@@ -423,7 +388,7 @@ fn reply_with_no_door_reaches_the_inbox() {
 
 #[test]
 fn drive_offer_reply_is_rejected_before_the_inbox() {
-    let opened = open(vec![]);
+    let opened = Opened::open(vec![]);
     let driver = opened.session.driver();
     opened
         .session
