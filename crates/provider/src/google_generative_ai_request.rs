@@ -17,8 +17,7 @@ use crate::{Endpoint, strict};
 /// (`docs/model-routing.md`, "Google Generative AI wire facts").
 /// Nothing rewrites a schema. This is the tools Fiber builds.
 pub(crate) fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let sorted = crate::wire::sorted_by_name(tools);
     sorted
         .into_iter()
         .map(|tool| {
@@ -27,14 +26,11 @@ pub(crate) fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
                 entry.insert(kind.clone(), json!({}));
                 return entry;
             }
-            json!({
+            crate::wire::object(json!({
                 "name": tool.name,
                 "description": tool.description,
                 "parametersJsonSchema": tool.input_schema,
-            })
-            .as_object()
-            .cloned()
-            .unwrap_or_default()
+            }))
         })
         .collect()
 }

@@ -194,8 +194,7 @@ impl ModelCall for Call {
 /// rest are sent `strict: false`, in name order. This is the tools Fiber
 /// builds.
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let sorted = crate::wire::sorted_by_name(tools);
     let mut strict_left = MAX_STRICT_TOOLS;
     sorted
         .into_iter()
@@ -203,10 +202,7 @@ fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
             // A hosted tool is the vendor's own: its type and name only, no
             // schema, and no strict slot.
             if let Some(kind) = &tool.hosted {
-                return json!({"name": tool.name, "type": kind})
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default();
+                return crate::wire::object(json!({"name": tool.name, "type": kind}));
             }
             let strict = strict_left > 0
                 && strict::fits(&tool.input_schema)
@@ -214,15 +210,12 @@ fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
             if strict {
                 strict_left -= 1;
             }
-            json!({
+            crate::wire::object(json!({
                 "name": tool.name,
                 "description": tool.description,
                 "input_schema": tool.input_schema,
                 "strict": strict,
-            })
-            .as_object()
-            .cloned()
-            .unwrap_or_default()
+            }))
         })
         .collect()
 }

@@ -19,8 +19,7 @@ use crate::{Endpoint, strict};
 /// "Deferral is a property of the model"); Chat Completions has no
 /// defer_loading. This is the tools Fiber builds.
 pub(crate) fn wire_tools(endpoint: &Endpoint, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let sorted = crate::wire::sorted_by_name(tools);
     let compat = &endpoint.compat;
     let mut strict_left = MAX_STRICT_TOOLS;
     sorted
@@ -31,7 +30,7 @@ pub(crate) fn wire_tools(endpoint: &Endpoint, tools: &[ToolDefinition]) -> Vec<M
                 strict = strict && strict_left > 0 && !complex_enum(&tool.input_schema);
                 strict_left -= usize::from(strict);
             }
-            json!({
+            crate::wire::object(json!({
                 "type": "function",
                 "function": {
                     "name": tool.name,
@@ -39,10 +38,7 @@ pub(crate) fn wire_tools(endpoint: &Endpoint, tools: &[ToolDefinition]) -> Vec<M
                     "parameters": tool.input_schema,
                     "strict": strict,
                 },
-            })
-            .as_object()
-            .cloned()
-            .unwrap_or_default()
+            }))
         })
         .collect()
 }

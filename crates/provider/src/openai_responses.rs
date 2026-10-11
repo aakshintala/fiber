@@ -176,29 +176,22 @@ impl ModelCall for Call {
 /// vendor's own type alone, with no name or schema (`docs/tools.md`,
 /// "Hosted by the provider"). This is the tools Fiber builds.
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let sorted = crate::wire::sorted_by_name(tools);
     sorted
         .into_iter()
         .map(|tool| {
             if let Some(kind) = &tool.hosted {
-                return json!({"type": kind})
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default();
+                return crate::wire::object(json!({"type": kind}));
             }
             // debt: deferred tools are sent in full until tool search is built
             // (#368); nothing defers a tool yet.
-            json!({
+            crate::wire::object(json!({
                 "type": "function",
                 "name": tool.name,
                 "description": tool.description,
                 "parameters": tool.input_schema,
                 "strict": strict::fits(&tool.input_schema),
-            })
-            .as_object()
-            .cloned()
-            .unwrap_or_default()
+            }))
         })
         .collect()
 }
