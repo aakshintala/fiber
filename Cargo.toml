@@ -103,7 +103,7 @@ opt-level = "s"
 [profile.release.package.jobs]
 opt-level = "s"
 
-[profile.release.package.log]
+[profile.release.package."log:0.0.0"]
 opt-level = "s"
 
 [profile.release.package.loop]
