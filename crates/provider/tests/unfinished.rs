@@ -19,8 +19,7 @@ use contract::provider::{
     CallError, CallUsage, Delta, Input, InputSize, ModelCall, ModelRequest, Provider, Reply,
 };
 use contract::shapes::Tokens;
-use fakes::Deadline;
-use fakes::{ProviderServer, Response};
+use fakes::{Deadline, ProviderServer, Response};
 use provider::Endpoint;
 use serde_json::{Value, json};
 
@@ -58,6 +57,7 @@ fn endpoint(provider: &str, model: &str, server: &ProviderServer) -> Endpoint {
 
 /// Runs `call` on its own thread, so a call that never returns fails the
 /// test at the deadline instead of hanging it.
+#[track_caller]
 fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {

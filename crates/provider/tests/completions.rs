@@ -33,8 +33,7 @@ use contract::provider::{
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, GenerationId, ProviderCallId};
-use fakes::Deadline;
-use fakes::{ProviderServer, Response};
+use fakes::{Deadline, ProviderServer, Response};
 use provider::openai_completions::{Completions, decode};
 use provider::{Compat, Endpoint};
 use serde_json::{Value, json};
@@ -117,6 +116,7 @@ fn request() -> ModelRequest {
 
 /// Runs `call` on its own thread, so a call that never returns fails the
 /// test at the deadline instead of hanging it.
+#[track_caller]
 fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
