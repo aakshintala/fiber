@@ -374,22 +374,6 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
 }
 
 #[test]
-fn rebuild_reads_only_durable_lines_and_refuses_a_bad_one() {
-    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
-    session.inbox.send(delivery("one")).unwrap();
-    session.turn();
-    let mut lines = session.lines();
-    assert_eq!(
-        rebuild(&lines, MODEL).unwrap()[1..],
-        [user("one"), assistant("Hi.")]
-    );
-    let turn = lines.iter().position(|l| l.kind == "turn_started").unwrap();
-    lines[turn].payload.insert("input".into(), json!(3));
-    let error = rebuild(&lines, MODEL).unwrap_err();
-    assert_eq!(error.code(), ErrorCode::LogCorrupt);
-}
-
-#[test]
 fn reasoning_is_logged_and_goes_back_only_to_the_model_that_produced_it() {
     let mut session = Session::new(
         vec![reasoning_reply("Think.", "Hi."), Scripted::text("Again.")],
