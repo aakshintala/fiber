@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use crate::cache::Cached;
 use crate::registry::{Stopping, before_lock, before_signal, lock};
-use crate::rpc::{Named, Outcome, encode_notification, encode_request};
+use crate::rpc::{Outcome, encode_notification, encode_request};
 use crate::server_json::{ListedPrompt, ListedTool, entries};
 use crate::wait::{CancelBridge, NoCancel, Shared, deadline, park};
 use support::group::Listing;
@@ -338,7 +338,17 @@ impl Server {
             } else {
                 Vec::new()
             };
-            Ok(Cached { tools, prompts })
+            // Whether the server offers resources to read: the same
+            // object test the handshake applies to tools and prompts.
+            let resources = initialize
+                .get("capabilities")
+                .and_then(|capabilities| capabilities.get("resources"))
+                .is_some_and(Value::is_object);
+            Ok(Cached {
+                tools,
+                prompts,
+                resources,
+            })
         };
         match handshake(&server) {
             Ok(listed) => Ok(OpenServer { server, listed }),
@@ -358,10 +368,10 @@ impl Server {
     /// Calls `method` with `params`, waiting until `timeout` passes on the
     /// clock or `cancel` fires. A late response to a timed-out or cancelled
     /// id is discarded: the slot is removed on every exit path.
-    pub(crate) fn call(
+    pub(crate) fn call<P: Serialize + ?Sized>(
         &self,
         method: &str,
-        params: &Named<'_>,
+        params: &P,
         timeout: Duration,
         cancel: &dyn Cancel,
     ) -> Result<Value, CallError> {

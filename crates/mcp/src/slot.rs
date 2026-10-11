@@ -19,9 +19,9 @@ use contract::events::{McpServerFailed, McpServerReady, ServerFailure};
 use contract::shapes::Failure;
 use contract::tool::Cancel;
 use contract::tool::ServerRecord;
+use serde::Serialize;
 
 use crate::cache::{self, Cached};
-use crate::rpc::Named;
 use crate::server::{CallError, Server};
 use crate::server_json::ListedTool;
 use crate::start::{ServerSpec, not_started};
@@ -328,11 +328,11 @@ impl Slot {
         clippy::result_large_err,
         reason = "the death record travels with the call that observed it"
     )]
-    pub(crate) fn call(
+    pub(crate) fn call<P: Serialize + ?Sized>(
         &self,
         server: &Arc<Server>,
         method: &str,
-        params: &Named<'_>,
+        params: &P,
         timeout: Duration,
         cancel: &dyn Cancel,
     ) -> Result<Value, Fault> {

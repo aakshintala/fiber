@@ -57,6 +57,12 @@ pub(crate) const TOOLS_CALL: &str = "tools/call";
 /// The `prompts/get` method.
 pub(crate) const PROMPTS_GET: &str = "prompts/get";
 
+/// The `resources/list` method.
+pub(crate) const RESOURCES_LIST: &str = "resources/list";
+
+/// The `resources/read` method.
+pub(crate) const RESOURCES_READ: &str = "resources/read";
+
 /// The params of a `tools/call` or `prompts/get` line: `arguments` before
 /// `name`, so the top-level `name` stays last on the wire when the
 /// arguments hold a `name` key.
@@ -93,8 +99,10 @@ struct Notification<'a, P: serde::Serialize + ?Sized> {
 /// Serialising cannot fail for the params the callers actually pass,
 /// because every map key is a string. Those params are `Named` (a
 /// `Map<String, Value>` and a `&str`), the `json!` `Value`s for
-/// `initialize`, the list pages and `notifications/initialized`, and
-/// `{"requestId": <u64>}` for `notifications/cancelled`.
+/// `initialize`, the list pages and `notifications/initialized`,
+/// `{}` and `{"cursor": ...}` for `resources/list`, `{"uri": ...}`
+/// for `resources/read`, and `{"requestId": <u64>}` for
+/// `notifications/cancelled`.
 pub(crate) fn encode_request<P: serde::Serialize + ?Sized>(
     id: u64,
     method: &str,

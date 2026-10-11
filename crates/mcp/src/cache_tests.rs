@@ -42,6 +42,7 @@ fn cached() -> super::Cached {
     super::Cached {
         tools: tools(),
         prompts: prompts(),
+        resources: false,
     }
 }
 
@@ -223,6 +224,7 @@ fn unknown_fields_survive_a_write_and_read() {
     let lists = super::Cached {
         tools: vec![bare],
         prompts: Vec::new(),
+        resources: false,
     };
     write(&cache, "fx", &declaration, &lists);
     let back = read(&cache, "fx", &declaration).expect("a current write is a hit");
@@ -252,5 +254,56 @@ fn url_key_is_stable_and_shares_nothing_with_the_stdio_key() {
         super::url_key(url),
         super::key(url, &[], &std::collections::BTreeMap::new()),
         "never the stdio key of the same text"
+    );
+}
+
+#[test]
+fn the_resources_flag_round_trips() {
+    for resources in [true, false] {
+        let dir = TempDir::new("fiber-mcp-cache-resources");
+        let cache = dir.path().join("mcp");
+        let declaration = key("fx", &[], &env(&[]));
+        let lists = super::Cached {
+            tools: tools(),
+            prompts: prompts(),
+            resources,
+        };
+        write(&cache, "fx", &declaration, &lists);
+        assert_eq!(
+            read(&cache, "fx", &declaration),
+            Some(lists),
+            "resources: {resources}",
+        );
+        let file: Value =
+            serde_json::from_slice(&std::fs::read(cache.join("fx.json")).expect("cache file"))
+                .expect("cache parses");
+        assert_eq!(
+            file.get("resources").and_then(Value::as_bool),
+            Some(resources),
+            "resources: {resources}",
+        );
+    }
+}
+
+#[test]
+fn a_file_without_the_resources_flag_offers_none() {
+    let dir = TempDir::new("fiber-mcp-cache-resources-missing");
+    let cache = dir.path().join("mcp");
+    let declaration = key("fx", &[], &env(&[]));
+    std::fs::create_dir_all(&cache).expect("cache dir");
+    // A v1 file from before the flag: no `resources`, but with both
+    // lists, so it reads as a hit.
+    std::fs::write(
+        cache.join("fx.json"),
+        json!({"version": 1, "key": declaration, "tools": [], "prompts": []}).to_string(),
+    )
+    .expect("pre-flag cache");
+    assert_eq!(
+        read(&cache, "fx", &declaration),
+        Some(super::Cached {
+            tools: Vec::new(),
+            prompts: Vec::new(),
+            resources: false,
+        }),
     );
 }

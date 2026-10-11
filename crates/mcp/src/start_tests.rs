@@ -1161,6 +1161,7 @@ fn a_remote_server_with_a_matching_cache_starts_lazily() {
         &crate::cache::Cached {
             tools: remote_lists(),
             prompts: Vec::new(),
+            resources: false,
         },
     );
     let started = setup.start(vec![setup.remote_spec("fx", &url)]);
