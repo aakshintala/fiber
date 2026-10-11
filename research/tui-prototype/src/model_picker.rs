@@ -767,19 +767,19 @@ fn footer(s: &State) -> Row {
     if s.checklist {
         return panel::footer_legend(&[
             ("↑↓", "move"),
-            ("enter", "toggle"),
-            ("ctrl+s", "save"),
-            ("esc", "close"),
+            ("Enter", "toggle"),
+            ("Ctrl+S", "save"),
+            ("Esc", "close"),
         ]);
     }
     panel::footer_legend(&[
         ("↑↓", "move"),
         ("←→", "levels"),
-        ("enter", "choose"),
-        ("tab", "all"),
-        ("ctrl+s", "session"),
-        ("ctrl+r", "refresh"),
-        ("esc", "close"),
+        ("Enter", "choose"),
+        ("Tab", "all"),
+        ("Ctrl+S", "session"),
+        ("Ctrl+R", "refresh"),
+        ("Esc", "close"),
     ])
 }
 
@@ -1084,7 +1084,7 @@ mod tests {
             "no blank before the section"
         );
         // The foot is a bold-key legend.
-        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · enter choose · tab all · ctrl+s session · ctrl+r refresh · esc close"));
+        assert!(t.contains("\u{2191}\u{2193} move · \u{2190}\u{2192} levels · Enter choose · Tab all · Ctrl+S session · Ctrl+R refresh · Esc close"));
     }
 
     #[test]
@@ -1735,14 +1735,14 @@ mod tests {
         let lines: Vec<String> = rows.iter().map(plain).collect();
         let y = lines
             .iter()
-            .position(|l| l.contains("ctrl+s save"))
+            .position(|l| l.contains("Ctrl+S save"))
             .unwrap() as u16;
         let foot = lines[y as usize].trim().to_string();
         assert_eq!(
             &foot[foot.find("↑↓").unwrap()..],
-            "↑↓ move · enter toggle · ctrl+s save · esc close"
+            "↑↓ move · Enter toggle · Ctrl+S save · Esc close"
         );
-        let start = lines[y as usize][..lines[y as usize].find("enter").unwrap()]
+        let start = lines[y as usize][..lines[y as usize].find("Enter").unwrap()]
             .chars()
             .count();
         for i in 0..5 {
