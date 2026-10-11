@@ -1,118 +1,38 @@
 {
-  "name": "codex",
-  "login": "browser",
   "headers": {
     "originator": "fiber"
   },
-  "reviewer_model": "gpt-6-luna",
+  "login": "browser",
   "models": [
     {
-      "id": "gpt-6.1-sol",
-      "protocol": "openai-responses",
       "base_url": "https://chatgpt.com/backend-api/codex",
       "compat": {
-        "store": false,
-        "cache_key_header": "session_id"
+        "cache_key_header": "session_id",
+        "store": false
       },
-      "context_window": 272000,
-      "max_output_tokens": 128000,
-      "input": [
-        "text",
-        "image"
-      ],
+      "context_window": 1050000,
       "cost": {
-        "input": 2.0,
-        "output": 10.0,
-        "cache_read": 0.1,
-        "cache_write": 2.5,
-        "tiers": [
-          {
-            "input_tokens_above": 272000,
-            "input": 4.0,
-            "output": 15.0,
-            "cache_read": 0.2,
-            "cache_write": 2.5
-          }
-        ]
-      },
-      "subscription": true,
-      "thinking_default": "low",
-      "thinking_levels": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "id": "gpt-6-sol",
-      "protocol": "openai-responses",
-      "base_url": "https://chatgpt.com/backend-api/codex",
-      "compat": {
-        "store": false,
-        "cache_key_header": "session_id"
-      },
-      "context_window": 272000,
-      "max_output_tokens": 128000,
-      "input": [
-        "text",
-        "image"
-      ],
-      "cost": {
-        "input": 2.0,
-        "output": 10.0,
-        "cache_read": 0.2,
-        "cache_write": 2.5,
-        "tiers": [
-          {
-            "input_tokens_above": 272000,
-            "input": 4.0,
-            "output": 15.0,
-            "cache_read": 0.4,
-            "cache_write": 5.0
-          }
-        ]
-      },
-      "subscription": true,
-      "thinking_default": "medium",
-      "thinking_levels": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
-    },
-    {
-      "id": "gpt-6-astra",
-      "protocol": "openai-responses",
-      "base_url": "https://chatgpt.com/backend-api/codex",
-      "compat": {
-        "store": false,
-        "cache_key_header": "session_id"
-      },
-      "context_window": 272000,
-      "max_output_tokens": 128000,
-      "input": [
-        "text",
-        "image"
-      ],
-      "cost": {
-        "input": 10.0,
-        "output": 50.0,
-        "cache_read": 1.0,
+        "cache_read": 1,
         "cache_write": 12.5,
+        "input": 10,
+        "output": 50,
         "tiers": [
           {
+            "cache_read": 2,
+            "cache_write": 25,
+            "input": 20,
             "input_tokens_above": 272000,
-            "input": 20.0,
-            "output": 75.0,
-            "cache_read": 2.0,
-            "cache_write": 25.0
+            "output": 75
           }
         ]
       },
+      "id": "gpt-6-astra",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "protocol": "openai-responses",
       "subscription": true,
       "thinking_default": "low",
       "thinking_levels": [
@@ -124,36 +44,114 @@
       ]
     },
     {
-      "id": "gpt-6-luna",
-      "protocol": "openai-responses",
       "base_url": "https://chatgpt.com/backend-api/codex",
       "compat": {
-        "store": false,
-        "cache_key_header": "session_id"
+        "cache_key_header": "session_id",
+        "store": false
       },
-      "context_window": 272000,
-      "max_output_tokens": 128000,
-      "input": [
-        "text",
-        "image"
-      ],
+      "context_window": 1050000,
       "cost": {
-        "input": 0.1,
-        "output": 0.5,
         "cache_read": 0.01,
         "cache_write": 0.125,
+        "input": 0.1,
+        "output": 0.5,
         "tiers": [
           {
-            "input_tokens_above": 272000,
-            "input": 0.2,
-            "output": 0.75,
             "cache_read": 0.02,
-            "cache_write": 0.25
+            "cache_write": 0.25,
+            "input": 0.2,
+            "input_tokens_above": 272000,
+            "output": 0.75
           }
         ]
       },
+      "id": "gpt-6-luna",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "protocol": "openai-responses",
       "subscription": true,
       "thinking_default": "medium",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "compat": {
+        "cache_key_header": "session_id",
+        "store": false
+      },
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.2,
+        "cache_write": 2.5,
+        "input": 2,
+        "output": 10,
+        "tiers": [
+          {
+            "cache_read": 0.4,
+            "cache_write": 5,
+            "input": 4,
+            "input_tokens_above": 272000,
+            "output": 15
+          }
+        ]
+      },
+      "id": "gpt-6-sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "protocol": "openai-responses",
+      "subscription": true,
+      "thinking_default": "medium",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "compat": {
+        "cache_key_header": "session_id",
+        "store": false
+      },
+      "context_window": 1050000,
+      "cost": {
+        "cache_read": 0.1,
+        "cache_write": 2.5,
+        "input": 2,
+        "output": 10,
+        "tiers": [
+          {
+            "cache_read": 0.2,
+            "cache_write": 5,
+            "input": 4,
+            "input_tokens_above": 272000,
+            "output": 15
+          }
+        ]
+      },
+      "id": "gpt-6.1-sol",
+      "input": [
+        "text",
+        "image"
+      ],
+      "max_output_tokens": 128000,
+      "protocol": "openai-responses",
+      "subscription": true,
+      "thinking_default": "low",
       "thinking_levels": [
         "low",
         "medium",
@@ -162,5 +160,7 @@
         "max"
       ]
     }
-  ]
+  ],
+  "name": "codex",
+  "reviewer_model": "gpt-6-luna"
 }
