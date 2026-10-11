@@ -261,6 +261,27 @@ fn a_session_message_first_turn_names_nothing_until_a_driver_prompt() {
 }
 
 #[test]
+fn a_session_message_turn_then_a_jobs_only_turn_names_the_next_driver_prompt() {
+    let mut w = world();
+    w.start();
+    w.feed(
+        "turn_started",
+        None,
+        &json!({"input": [{"type": "message", "source": "session", "from_session_id": "sess-2", "content": [{"type": "text", "text": "framed"}]}]}),
+    );
+    w.finish();
+    w.feed(
+        "turn_started",
+        None,
+        &json!({"input": [{"type": "jobs", "job_ids": ["j1"]}]}),
+    );
+    w.finish();
+    assert_eq!(w.status().name, "");
+    w.prompt("hello");
+    assert_eq!(w.status().name, "hello");
+}
+
+#[test]
 fn an_extension_message_first_turn_names_nothing() {
     let mut w = world();
     w.start();
