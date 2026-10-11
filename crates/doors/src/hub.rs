@@ -38,7 +38,13 @@ pub fn connect(
     start: &mut dyn FnMut() -> io::Result<()>,
     clock: &dyn Clock,
 ) -> io::Result<Hub> {
-    connect_within(home, start, clock, CONNECT_DEADLINE)
+    connect_with(
+        home,
+        start,
+        clock,
+        Due::Within(CONNECT_DEADLINE),
+        &mut || {},
+    )
 }
 
 /// [`connect`], with `hub_hello` due by `deadline` on `clock`: the same
@@ -56,42 +62,7 @@ pub fn connect_until(
     before_read: &mut dyn FnMut(),
 ) -> io::Result<Hub> {
     let total = deadline.saturating_duration_since(clock.now());
-    let mut started = false;
-    match poll_until(
-        home,
-        &mut started,
-        start,
-        clock,
-        deadline,
-        total,
-        before_read,
-    ) {
-        Ok(hub) => return Ok(hub),
-        Err(Poll::Race) => {}
-        Err(Poll::Failed(error)) => return Err(error),
-    }
-    // EOF before `hub_hello` is the idle-exit race: the hub exited before
-    // the handshake, so the retry pauses one poll for its listener to go
-    // away, then may start a new hub when the socket is gone.
-    started = false;
-    clock.sleep(CONNECT_POLL);
-    match poll_until(
-        home,
-        &mut started,
-        start,
-        clock,
-        deadline,
-        total,
-        before_read,
-    ) {
-        Ok(hub) => return Ok(hub),
-        Err(Poll::Race) => {}
-        Err(Poll::Failed(error)) => return Err(error),
-    }
-    Err(io::Error::new(
-        io::ErrorKind::UnexpectedEof,
-        "the hub closed the connection before `hub_hello`",
-    ))
+    connect_with(home, start, clock, Due::At { deadline, total }, before_read)
 }
 /// [`connect`], with `hub_hello` due within `hello_within` of the socket
 /// accepting, on `clock`. Between the attempts the client pauses one poll,
@@ -103,8 +74,66 @@ pub fn connect_within(
     clock: &dyn Clock,
     hello_within: Duration,
 ) -> io::Result<Hub> {
+    connect_with(home, start, clock, Due::Within(hello_within), &mut || {})
+}
+
+/// Carries which deadline an attempt and its handshake read use:
+/// [`connect_until`]'s one absolute deadline for both, or
+/// [`connect_within`]'s per-attempt bind wait with a hello deadline from
+/// accept.
+enum Due {
+    /// One absolute `deadline` bounds both attempts and the handshake;
+    /// `total` names it in the hello message.
+    At { deadline: Instant, total: Duration },
+    /// Each attempt's bind wait is [`CONNECT_DEADLINE`] from its start;
+    /// the hello is due this long after the socket accepts.
+    Within(Duration),
+}
+
+impl Due {
+    /// The bind wait's deadline: the shared one for `At`, one
+    /// [`CONNECT_DEADLINE`] from this attempt's start for `Within`. Read
+    /// once per attempt, so a retry under [`connect_until`] gets only what
+    /// remains.
+    fn bind_deadline(&self, now: Instant) -> Instant {
+        match self {
+            Due::At { deadline, .. } => *deadline,
+            Due::Within(_) => now + CONNECT_DEADLINE,
+        }
+    }
+
+    /// The handshake read's deadline: the shared one for `At`, the accept
+    /// plus the hello wait for `Within`, or none when that overflows.
+    fn hello_deadline(&self, accepted_at: Instant) -> Option<Instant> {
+        match self {
+            Due::At { deadline, .. } => Some(*deadline),
+            Due::Within(within) => accepted_at.checked_add(*within),
+        }
+    }
+
+    /// The duration the hello timeout message names.
+    fn named(&self) -> Duration {
+        match self {
+            Due::At { total, .. } => *total,
+            Due::Within(within) => *within,
+        }
+    }
+}
+
+/// The two-attempt skeleton [`connect_until`] and [`connect_within`] share:
+/// one [`attempt`], then exactly one [`CONNECT_POLL`] pause and a second
+/// [`attempt`] with a fresh `started` when the first saw the idle-exit
+/// race. `start` runs at most once per attempt. After the second race the
+/// result is `UnexpectedEof` with no further sleep.
+fn connect_with(
+    home: &Path,
+    start: &mut dyn FnMut() -> io::Result<()>,
+    clock: &dyn Clock,
+    due: Due,
+    before_read: &mut dyn FnMut(),
+) -> io::Result<Hub> {
     let mut started = false;
-    match poll(home, &mut started, start, clock, hello_within) {
+    match attempt(home, &mut started, start, clock, &due, before_read) {
         Ok(hub) => return Ok(hub),
         Err(Poll::Race) => {}
         Err(Poll::Failed(error)) => return Err(error),
@@ -114,7 +143,7 @@ pub fn connect_within(
     // away, then may start a new hub when the socket is gone.
     started = false;
     clock.sleep(CONNECT_POLL);
-    match poll(home, &mut started, start, clock, hello_within) {
+    match attempt(home, &mut started, start, clock, &due, before_read) {
         Ok(hub) => return Ok(hub),
         Err(Poll::Race) => {}
         Err(Poll::Failed(error)) => return Err(error),
@@ -208,67 +237,41 @@ enum Poll {
     Failed(io::Error),
 }
 
-/// Polls the hub's socket until it accepts and speaks `hub_hello`.
-fn poll(
+/// Polls the hub's socket until it accepts and speaks `hub_hello`. The
+/// bind wait ends at `due`'s deadline: the shared one for `At`, one
+/// [`CONNECT_DEADLINE`] from this attempt's start for `Within`.
+fn attempt(
     home: &Path,
     started: &mut bool,
     start: &mut dyn FnMut() -> io::Result<()>,
     clock: &dyn Clock,
-    hello_within: Duration,
-) -> Result<Hub, Poll> {
-    let socket = home.join("run").join("hub");
-    let deadline = clock.now() + CONNECT_DEADLINE;
-    loop {
-        match UnixStream::connect(&socket) {
-            Ok(stream) => return read_hello_with(stream, &socket, hello_within, clock, &mut || {}),
-            Err(error) if is_absent(error.kind()) => {
-                if !*started {
-                    start().map_err(Poll::Failed)?;
-                    *started = true;
-                }
-                if clock.now() >= deadline {
-                    return Err(Poll::Failed(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        format!("the hub did not bind {} in 5 s", socket.display()),
-                    )));
-                }
-                clock.sleep(CONNECT_POLL);
-            }
-            Err(error) => return Err(Poll::Failed(error)),
-        }
-    }
-}
-
-/// Polls the hub's socket until it accepts and speaks `hub_hello`, all by
-/// `deadline` on `clock`: the bind wait and the handshake share it, so a
-/// retry gets only what remains.
-fn poll_until(
-    home: &Path,
-    started: &mut bool,
-    start: &mut dyn FnMut() -> io::Result<()>,
-    clock: &dyn Clock,
-    deadline: Instant,
-    total: Duration,
+    due: &Due,
     before_read: &mut dyn FnMut(),
 ) -> Result<Hub, Poll> {
     let socket = home.join("run").join("hub");
+    let bind = due.bind_deadline(clock.now());
+    let bind_named = match due {
+        Due::At { total, .. } => *total,
+        Due::Within(_) => CONNECT_DEADLINE,
+    };
     loop {
         match UnixStream::connect(&socket) {
             Ok(stream) => {
-                return read_hello_until(stream, &socket, deadline, total, clock, before_read);
+                let hello = due.hello_deadline(clock.now());
+                return read_hello(stream, &socket, hello, due.named(), clock, before_read);
             }
             Err(error) if is_absent(error.kind()) => {
                 if !*started {
                     start().map_err(Poll::Failed)?;
                     *started = true;
                 }
-                if clock.now() >= deadline {
+                if clock.now() >= bind {
                     return Err(Poll::Failed(io::Error::new(
                         io::ErrorKind::TimedOut,
                         format!(
                             "the hub did not bind {} in {} s",
                             socket.display(),
-                            total.as_secs_f64()
+                            bind_named.as_secs_f64()
                         ),
                     )));
                 }
@@ -281,15 +284,17 @@ fn poll_until(
 
 /// Reads the first line byte by byte, without buffered over-read, and
 /// requires `hub_hello` on this build's `schema_version`. The line is due
-/// by `deadline` on `clock`: before each read the stream's read timeout is
-/// set to the time left, and with none left the read fails `TimedOut`.
-/// `total` names the deadline in the timeout message. `before_read` runs
-/// just before each read. The timeout is cleared once the line is read.
-fn read_hello_until(
+/// by `deadline` on `clock`, fixed when the socket accepted, or with no
+/// timeout when the accept plus the hello wait overflowed: before each
+/// read the stream's read timeout is set to the time left, and with none
+/// left the read fails `TimedOut`. `named` names the deadline in the
+/// timeout message. `before_read` runs after the time-left check, just
+/// before each read. The timeout is cleared once the line is read.
+fn read_hello(
     mut stream: UnixStream,
     socket: &Path,
-    deadline: Instant,
-    total: Duration,
+    deadline: Option<Instant>,
+    named: Duration,
     clock: &dyn Clock,
     before_read: &mut dyn FnMut(),
 ) -> Result<Hub, Poll> {
@@ -299,82 +304,7 @@ fn read_hello_until(
             format!(
                 "the hub at {} accepted but did not say hub_hello in {} s",
                 socket.display(),
-                total.as_secs_f64()
-            ),
-        ))
-    };
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        let left = deadline
-            .checked_duration_since(clock.now())
-            .filter(has_time_left)
-            .ok_or_else(timed_out)?;
-        set_read_timeout(&stream, Some(left)).map_err(Poll::Failed)?;
-        before_read();
-        match classify_hello_read(stream.read(&mut byte)) {
-            HelloRead::Race => return Err(Poll::Race),
-            HelloRead::TimedOut => return Err(timed_out()),
-            HelloRead::Failed(error) => return Err(Poll::Failed(error)),
-            HelloRead::Byte => {
-                if byte[0] == b'\n' {
-                    break;
-                }
-                buf.push(byte[0]);
-            }
-        }
-    }
-    set_read_timeout(&stream, None).map_err(Poll::Failed)?;
-    // A carriage return ends the line too.
-    while strips_cr(buf.last()) {
-        buf.pop();
-    }
-    let hello: HubLine = serde_json::from_slice(&buf).map_err(|_| {
-        Poll::Failed(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "the hub did not speak `hub_hello` first",
-        ))
-    })?;
-    if rejects_hello(&hello.kind) {
-        return Err(Poll::Failed(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "the hub did not speak `hub_hello` first",
-        )));
-    }
-    if rejects_schema(hello.schema_version) {
-        return Err(Poll::Failed(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "the hub runs schema version {}, this Fiber runs schema version {SCHEMA_VERSION}; \
-                 update Fiber or restart the hub, then reconnect",
-                hello.schema_version,
-            ),
-        )));
-    }
-    Ok((stream, hello))
-}
-
-/// Reads the first line byte by byte, without buffered over-read, and
-/// requires `hub_hello` on this build's `schema_version`. The line is due
-/// within `within` of the call on `clock`: before each read the stream's
-/// read timeout is set to the time left, and with none left the read fails
-/// `TimedOut`. `before_read` runs just before each read. The timeout is
-/// cleared once the line is read.
-fn read_hello_with(
-    mut stream: UnixStream,
-    socket: &Path,
-    within: Duration,
-    clock: &dyn Clock,
-    before_read: &mut dyn FnMut(),
-) -> Result<Hub, Poll> {
-    let deadline = clock.now().checked_add(within);
-    let timed_out = || {
-        Poll::Failed(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!(
-                "the hub at {} accepted but did not say hub_hello in {} s",
-                socket.display(),
-                within.as_secs_f64()
+                named.as_secs_f64()
             ),
         ))
     };
@@ -382,10 +312,12 @@ fn read_hello_with(
     let mut byte = [0u8; 1];
     loop {
         let left = match deadline {
-            Some(deadline) => match deadline.checked_duration_since(clock.now()) {
-                Some(left) if !left.is_zero() => Some(left),
-                _ => return Err(timed_out()),
-            },
+            Some(deadline) => Some(
+                deadline
+                    .checked_duration_since(clock.now())
+                    .filter(has_time_left)
+                    .ok_or_else(timed_out)?,
+            ),
             None => None,
         };
         set_read_timeout(&stream, left).map_err(Poll::Failed)?;
