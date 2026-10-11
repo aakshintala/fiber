@@ -536,3 +536,221 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
     // the build at the point, whose label is unchanged: no `model_changed`.
     assert_eq!(kinds, ["session_started"]);
 }
+
+/// A parent log holding `events` in order, and the rewound child loop
+/// continuing it from `point_seq`: the child's directory and loop. Copies
+/// the `Loop::rewound` setup above: the session-started preamble the fold
+/// needs, the injected fake clock, and the standing rules that allow
+/// nothing.
+fn rewound_from_parent(
+    home: &Path,
+    parent_id: &str,
+    child_id: &str,
+    events: Vec<(&str, Event)>,
+    point_seq: u64,
+) -> (std::path::PathBuf, Loop) {
+    let parent = home.join(parent_id);
+    std::fs::create_dir_all(&parent).unwrap();
+    let mut text = String::new();
+    for (index, (kind, event)) in events.iter().enumerate() {
+        let seq = u64::try_from(index).unwrap();
+        let line = Envelope {
+            kind: (*kind).to_owned(),
+            session_id: SessionId(parent_id.to_owned()),
+            ts: 1_759_150_000_000 + seq,
+            schema_version: SCHEMA_VERSION,
+            turn_id: None,
+            action_id: None,
+            seq: Some(Seq(seq)),
+            payload: event.payload().unwrap(),
+        };
+        text.push_str(&serde_json::to_string(&line).unwrap());
+        text.push('\n');
+    }
+    std::fs::write(parent.join("events.jsonl"), text).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let log = std::sync::Arc::new(
+        log::Log::create(home, SessionId(child_id.to_owned()), clock.clone()).unwrap(),
+    );
+    let dir = log.dir().to_path_buf();
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = clock;
+    let mut prompt = crate::PromptInputs::new(
+        home.to_path_buf(),
+        "/bin/sh".to_owned(),
+        dir.join("events.jsonl").display().to_string(),
+        clock,
+        100_000,
+    );
+    prompt.credential = Some("work".to_owned());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let _tx = tx;
+    let rules: std::sync::Arc<dyn contract::rules::Rules> = std::sync::Arc::new(NoRules);
+    let looped = Loop::rewound(
+        crate::Session {
+            log,
+            provider: std::sync::Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: crate::Model {
+                reference: "fake/model-1".to_owned(),
+                cost: None,
+                subscription: false,
+            },
+            prompt,
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: home.display().to_string(),
+                credentials: home.to_path_buf(),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
+        Rewound {
+            from: contract::shapes::Point {
+                session_id: SessionId(parent_id.to_owned()),
+                seq: Seq(point_seq),
+            },
+            note: String::new(),
+            worktree: None,
+        },
+    )
+    .unwrap();
+    (dir, looped)
+}
+
+fn parent_started() -> Event {
+    use contract::events::{SessionStarted, Variables, VariablesSource};
+    Event::SessionStarted(SessionStarted {
+        workspace: "/w".to_owned(),
+        variables: Variables {
+            path: "/usr/bin".to_owned(),
+            names: Vec::new(),
+            source: VariablesSource::Inherited,
+        },
+        parent: None,
+        forked_from: None,
+        rewind: None,
+        worktree: None,
+    })
+}
+
+fn parent_named(name: &str, by: contract::events::NamedBy) -> Event {
+    Event::SessionNamed(contract::events::SessionNamed {
+        name: Some(name.to_owned()),
+        by,
+    })
+}
+
+fn parent_built() -> Event {
+    use contract::events::{CacheLifetime, PreambleBuilt, PreambleReason};
+    Event::PreambleBuilt(PreambleBuilt {
+        reason: PreambleReason::Start,
+        model: "fake/model-1".to_owned(),
+        context_window: 200_000,
+        trigger_at: None,
+        budget: None,
+        thinking: None,
+        tool_choice: "auto".to_owned(),
+        cache_lifetime: CacheLifetime::OneHour,
+        credential: None,
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        replaced: Vec::new(),
+    })
+}
+
+fn pinned(looped_dir: &Path) -> bool {
+    use contract::events::{CallStatus, Control};
+    let folded = crate::resume::resumed(looped_dir).unwrap();
+    let control = Control {
+        handoff: None,
+        questions: None,
+        skill: None,
+        name: Some("a later name".to_owned()),
+    };
+    matches!(
+        folded.naming.judge(CallStatus::Completed, Some(&control)),
+        crate::naming::Named::Pinned(_)
+    )
+}
+
+#[test]
+fn a_rewound_loop_copies_the_parents_person_name_and_pins() {
+    // The name goes with the conversation: the new log holds the parent's
+    // `session_named` verbatim after its `session_started`, and the pin
+    // holds, so a later `name_session` call is refused.
+    use contract::events::NamedBy;
+    let root = fakes::TempDir::new("loop-rewound-name");
+    let home = root.path().to_path_buf();
+    let (dir, _looped) = rewound_from_parent(
+        &home,
+        "s_parent00000001",
+        "s_child00000001",
+        vec![
+            ("session_started", parent_started()),
+            ("session_named", parent_named("Mine", NamedBy::Person)),
+        ],
+        1,
+    );
+    let lines = log::read(&dir).unwrap();
+    let kinds: Vec<String> = lines.iter().map(|line| line.kind.clone()).collect();
+    assert_eq!(kinds, ["session_started", "session_named"]);
+    let Some(Event::SessionNamed(named)) = Event::from_envelope(&lines[1]).unwrap() else {
+        panic!("the second line is the copied session_named");
+    };
+    assert_eq!(named.name.as_deref(), Some("Mine"));
+    assert_eq!(named.by, NamedBy::Person);
+    assert!(pinned(&dir));
+}
+
+#[test]
+fn a_rewound_loop_copies_the_latest_session_named_past_other_lines() {
+    // Reading from the end backwards, past a non-name line: the latest
+    // `session_named` wins, `by` included, so the model's later name
+    // replaces the person's earlier one.
+    use contract::events::NamedBy;
+    let root = fakes::TempDir::new("loop-rewound-latest-name");
+    let home = root.path().to_path_buf();
+    let (dir, _looped) = rewound_from_parent(
+        &home,
+        "s_parent00000001",
+        "s_child00000001",
+        vec![
+            ("session_started", parent_started()),
+            ("session_named", parent_named("Mine", NamedBy::Person)),
+            ("preamble_built", parent_built()),
+            ("session_named", parent_named("Later", NamedBy::Model)),
+        ],
+        3,
+    );
+    let lines = log::read(&dir).unwrap();
+    let kinds: Vec<String> = lines.iter().map(|line| line.kind.clone()).collect();
+    assert_eq!(kinds, ["session_started", "session_named"]);
+    let Some(Event::SessionNamed(named)) = Event::from_envelope(&lines[1]).unwrap() else {
+        panic!("the second line is the copied session_named");
+    };
+    assert_eq!(named.name.as_deref(), Some("Later"));
+    assert_eq!(named.by, NamedBy::Model);
+    assert!(!pinned(&dir));
+}
+
+#[test]
+fn a_rewound_loop_with_an_unnamed_parent_writes_no_session_named() {
+    // No `session_named` in the parent: the new log holds only its
+    // `session_started`, and nothing pins the session.
+    let root = fakes::TempDir::new("loop-rewound-no-name");
+    let home = root.path().to_path_buf();
+    let (dir, _looped) = rewound_from_parent(
+        &home,
+        "s_parent00000001",
+        "s_child00000001",
+        vec![
+            ("session_started", parent_started()),
+            ("preamble_built", parent_built()),
+        ],
+        1,
+    );
+    let lines = log::read(&dir).unwrap();
+    let kinds: Vec<String> = lines.iter().map(|line| line.kind.clone()).collect();
+    assert_eq!(kinds, ["session_started"]);
+    assert!(!pinned(&dir));
+}
