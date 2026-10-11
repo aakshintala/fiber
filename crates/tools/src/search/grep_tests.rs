@@ -1601,3 +1601,51 @@ fn errors_match_grep_exit_codes() {
     matches_like_grep(&files, &["needle", "sub"], None, &[], None, false);
     matches_like_grep(&files, &["absent", "a.txt"], None, &[], Some(b""), false);
 }
+
+/// Standard output that plants a late file on its first write: the walk has
+/// not listed `b/` yet when the first match prints, so a streaming walk
+/// finds the planted file and a collected one never sees it.
+struct PlantOnFirstWrite {
+    out: Vec<u8>,
+    dir: std::path::PathBuf,
+    planted: bool,
+}
+
+impl Write for PlantOnFirstWrite {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if !self.planted {
+            self.planted = true;
+            fs::write(self.dir.join("b/z.txt"), "needle\n").unwrap();
+        }
+        self.out.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn grep_r_writes_its_first_match_before_the_walk_ends() {
+    let dir = text_tree(&BTreeMap::from([("a/x.txt", "needle\n")]));
+    fs::create_dir_all(dir.path().join("b")).unwrap();
+    let owned: Vec<OsString> =
+        ["-r", "needle", "."].iter().map(OsString::from).collect();
+    let mut input = Cursor::new(Vec::new());
+    let mut stdout = PlantOnFirstWrite {
+        out: Vec::new(),
+        dir: dir.path().to_path_buf(),
+        planted: false,
+    };
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut input, &mut stdout, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    assert_eq!(code, 0);
+    assert_eq!(
+        String::from_utf8(stdout.out).unwrap(),
+        "./a/x.txt:needle\n./b/z.txt:needle\n"
+    );
+}

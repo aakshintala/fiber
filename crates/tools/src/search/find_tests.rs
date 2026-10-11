@@ -665,3 +665,51 @@ fn globs_match_bytes() {
         );
     }
 }
+
+/// Standard output that plants a late file once the walk has printed `./a`:
+/// `find` prints `.` before the walk starts, so the first write holding
+/// `./a` lands mid-walk. A streaming walk lists the planted file; a
+/// collected one never sees it.
+struct PlantOnFirstEntry {
+    out: Vec<u8>,
+    dir: std::path::PathBuf,
+    planted: bool,
+}
+
+impl Write for PlantOnFirstEntry {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.out.extend_from_slice(buf);
+        if !self.planted && self.out.windows(3).any(|pane| pane == b"./a") {
+            self.planted = true;
+            fs::write(self.dir.join("b/new.txt"), "new").unwrap();
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn find_prints_its_first_path_before_the_walk_ends() {
+    let dir = tree(&BTreeMap::from([("a/x.txt", "x")]));
+    fs::create_dir_all(dir.path().join("b")).unwrap();
+    let owned: Vec<OsString> = [OsString::from(".")].to_vec();
+    let mut stdout = PlantOnFirstEntry {
+        out: Vec::new(),
+        dir: dir.path().to_path_buf(),
+        planted: false,
+    };
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut stdout, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    assert_eq!(code, 0);
+    let printed = String::from_utf8(stdout.out).unwrap();
+    assert!(
+        printed.lines().any(|line| line == "./b/new.txt"),
+        "{printed}"
+    );
+}

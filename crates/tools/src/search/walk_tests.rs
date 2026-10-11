@@ -81,7 +81,7 @@ fn entries_come_sorted_with_the_root_first() {
             show: PathBuf::from("."),
         },
         None,
-    );
+    ).collect::<Vec<_>>();
     let entries = found(&results);
     assert_eq!(
         entries
@@ -109,7 +109,7 @@ fn entries_come_sorted_with_the_root_first() {
 #[test]
 fn paths_print_below_the_root_as_given() {
     let dir = tree(&BTreeMap::from([("sub/f_hay.txt", "hay")]));
-    let results = walk(dir.path(), &shown(dir.path(), "sub"), None);
+    let results = walk(dir.path(), &shown(dir.path(), "sub"), None).collect::<Vec<_>>();
     let entries = found(&results);
     assert_eq!(
         entries
@@ -127,7 +127,7 @@ fn a_gitignored_directory_is_skipped() {
         ("skipped_dir/hay.txt", "hay"),
         ("kept_dir/hay.txt", "hay"),
     ]));
-    let results = walk(dir.path(), &dir_root(dir.path(), "."), None);
+    let results = walk(dir.path(), &dir_root(dir.path(), "."), None).collect::<Vec<_>>();
     let entries = found(&results);
     let names: Vec<PathBuf> = entries.into_iter().map(|(path, _, _)| path).collect();
     assert!(
@@ -149,7 +149,7 @@ fn an_ignore_file_is_read_too() {
         ("skipped_two/hay.txt", "hay"),
         ("kept_two/hay.txt", "hay"),
     ]));
-    let results = walk(dir.path(), &dir_root(dir.path(), "."), None);
+    let results = walk(dir.path(), &dir_root(dir.path(), "."), None).collect::<Vec<_>>();
     let entries = found(&results);
     let names: Vec<PathBuf> = entries.into_iter().map(|(path, _, _)| path).collect();
     assert!(
@@ -172,7 +172,7 @@ fn version_control_directories_are_always_skipped() {
         (".hg/store", "store"),
         ("plain/hay.txt", "hay"),
     ]));
-    let results = walk(dir.path(), &dir_root(dir.path(), "."), None);
+    let results = walk(dir.path(), &dir_root(dir.path(), "."), None).collect::<Vec<_>>();
     let entries = found(&results);
     let names: Vec<PathBuf> = entries.into_iter().map(|(path, _, _)| path).collect();
     for buried in [".git", ".svn", ".hg"] {
@@ -192,7 +192,7 @@ fn version_control_directories_are_always_skipped() {
 #[test]
 fn hidden_files_are_searched() {
     let dir = tree(&BTreeMap::from([(".hid_needle.txt", "hay")]));
-    let results = walk(dir.path(), &dir_root(dir.path(), "."), None);
+    let results = walk(dir.path(), &dir_root(dir.path(), "."), None).collect::<Vec<_>>();
     let entries = found(&results);
     let names: Vec<PathBuf> = entries.into_iter().map(|(path, _, _)| path).collect();
     assert!(
@@ -207,7 +207,7 @@ fn a_named_ignored_path_is_always_entered() {
         (".gitignore", "skipped_dir/\n"),
         ("skipped_dir/hay.txt", "hay"),
     ]));
-    let results = walk(dir.path(), &dir_root(dir.path(), "skipped_dir"), None);
+    let results = walk(dir.path(), &dir_root(dir.path(), "skipped_dir"), None).collect::<Vec<_>>();
     let entries = found(&results);
     let names: Vec<PathBuf> = entries.into_iter().map(|(path, _, _)| path).collect();
     assert_eq!(
@@ -220,7 +220,7 @@ fn a_named_ignored_path_is_always_entered() {
 fn a_named_link_to_a_directory_is_walked_through_the_link() {
     let dir = tree(&BTreeMap::from([("real_dir/f_hay.txt", "hay")]));
     symlink("real_dir", dir.path().join("lnk_dir")).unwrap();
-    let results = walk(dir.path(), &dir_root(dir.path(), "lnk_dir"), None);
+    let results = walk(dir.path(), &dir_root(dir.path(), "lnk_dir"), None).collect::<Vec<_>>();
     let entries = found(&results);
     assert_eq!(
         entries
@@ -242,7 +242,7 @@ fn links_the_walk_finds_are_listed_never_followed() {
     ]));
     symlink("real_file.txt", dir.path().join("lnk_file.txt")).unwrap();
     symlink("real_dir", dir.path().join("lnk_sub")).unwrap();
-    let results = walk(dir.path(), &dir_root(dir.path(), "."), None);
+    let results = walk(dir.path(), &dir_root(dir.path(), "."), None).collect::<Vec<_>>();
     let entries = found(&results);
     let names: Vec<PathBuf> = entries.iter().map(|(path, _, _)| path.clone()).collect();
     assert!(
@@ -268,7 +268,7 @@ fn links_the_walk_finds_are_listed_never_followed() {
 #[test]
 fn a_named_version_control_directory_is_entered() {
     let dir = tree(&BTreeMap::from([(".git/HEAD", "ref")]));
-    let results = walk(dir.path(), &dir_root(dir.path(), ".git"), None);
+    let results = walk(dir.path(), &dir_root(dir.path(), ".git"), None).collect::<Vec<_>>();
     let entries = found(&results);
     let names: Vec<PathBuf> = entries.into_iter().map(|(path, _, _)| path).collect();
     assert_eq!(names, joined(dir.path(), &[".git", ".git/HEAD"]));
@@ -277,7 +277,7 @@ fn a_named_version_control_directory_is_entered() {
 #[test]
 fn a_file_named_like_a_vcs_directory_is_kept() {
     let dir = tree(&BTreeMap::from([("sub/.git", "not a directory")]));
-    let results = walk(dir.path(), &dir_root(dir.path(), "."), None);
+    let results = walk(dir.path(), &dir_root(dir.path(), "."), None).collect::<Vec<_>>();
     let entries = found(&results);
     let names: Vec<PathBuf> = entries.into_iter().map(|(path, _, _)| path).collect();
     assert!(names.contains(&dir.path().join("sub/.git")), "{names:?}");
@@ -286,7 +286,7 @@ fn a_file_named_like_a_vcs_directory_is_kept() {
 #[test]
 fn max_depth_caps_the_walk() {
     let dir = tree(&BTreeMap::from([("sub/deep/f_hay.txt", "hay")]));
-    let shallow = walk(dir.path(), &dir_root(dir.path(), "."), Some(1));
+    let shallow = walk(dir.path(), &dir_root(dir.path(), "."), Some(1)).collect::<Vec<_>>();
     let entries = found(&shallow);
     let names: Vec<PathBuf> = entries.into_iter().map(|(path, _, _)| path).collect();
     assert!(names.contains(&dir.path().join("sub")), "{names:?}");
@@ -296,7 +296,7 @@ fn max_depth_caps_the_walk() {
             .any(|name| name.starts_with(dir.path().join("sub/deep"))),
         "{names:?}"
     );
-    let full = walk(dir.path(), &dir_root(dir.path(), "."), None);
+    let full = walk(dir.path(), &dir_root(dir.path(), "."), None).collect::<Vec<_>>();
     let entries = found(&full);
     let names: Vec<PathBuf> = entries.into_iter().map(|(path, _, _)| path).collect();
     assert!(
@@ -330,7 +330,7 @@ fn an_unreadable_directory_is_reported_and_the_walk_continues() {
         path: locked.clone(),
         kept,
     };
-    let results = walk(dir.path(), &dir_root(dir.path(), "."), None);
+    let results = walk(dir.path(), &dir_root(dir.path(), "."), None).collect::<Vec<_>>();
     let mut failures = Vec::new();
     let mut names = Vec::new();
     for result in &results {
@@ -447,4 +447,24 @@ fn io_message_speaks_gnu() {
         "Is a directory"
     );
     assert_eq!(io_message(&std::io::Error::other("boom")), "boom");
+}
+
+#[test]
+fn the_walk_yields_its_first_entry_before_it_reads_the_root() {
+    let dir = tree(&BTreeMap::from([("a/x.txt", "x"), ("b/", "")]));
+    let root = dir_root(dir.path(), ".");
+    let mut walked = walk(dir.path(), &root, None);
+    let first = walked.next().unwrap().unwrap();
+    assert_eq!(first.depth, 0);
+    fs::write(dir.path().join("b/new.txt"), "new").unwrap();
+    let rest: Vec<_> = walked.collect();
+    let names: Vec<PathBuf> = rest
+        .iter()
+        .filter_map(|result| result.as_ref().ok())
+        .map(|found| found.display.clone())
+        .collect();
+    assert!(
+        names.contains(&dir.path().join("b/new.txt")),
+        "{names:?}"
+    );
 }
