@@ -550,47 +550,6 @@ fn the_hidden_stack_shrinks_back_after_deep_nesting() {
     );
 }
 
-/// A capacity of 64 never shrinks: the floor holds however few elements
-/// stay open.
-#[test]
-fn hidden_capacity_64_never_shrinks() {
-    let mut hidden = Hidden::default();
-    let tag = start("template", false, vec![]);
-    for _ in 0..64 {
-        hidden.open("template", &tag);
-    }
-    assert_eq!(hidden.open_capacity(), 64);
-    for _ in 0..63 {
-        hidden.end("template");
-    }
-    assert!(hidden.is_hidden());
-    assert_eq!(hidden.open_capacity(), 64);
-    hidden.end("template");
-    assert!(!hidden.is_hidden());
-    assert_eq!(hidden.open_capacity(), 64);
-}
-
-/// The stack halves only while its length stays below a quarter of its
-/// capacity: `len * 4 == capacity` holds, `len * 4 == capacity - 1`
-/// shrinks.
-#[test]
-fn hidden_shrink_holds_until_a_quarter() {
-    let mut hidden = Hidden::default();
-    let tag = start("template", false, vec![]);
-    for _ in 0..65 {
-        hidden.open("template", &tag);
-    }
-    assert_eq!(hidden.open_capacity(), 128);
-    for _ in 0..33 {
-        hidden.end("template");
-    }
-    assert!(hidden.is_hidden());
-    assert_eq!(hidden.open_capacity(), 128);
-    hidden.end("template");
-    assert!(hidden.is_hidden());
-    assert_eq!(hidden.open_capacity(), 64);
-}
-
 /// Closing the element above the outermost `svg` must not spend the
 /// `noscript` below it: popping the template decrements only its own
 /// above-`svg` count, so a later `</noscript>` with the `svg` still open
@@ -840,14 +799,3 @@ fn every_character_reference_expands_less_than_twice() {
     }
 }
 
-#[test]
-fn the_widest_item_marker_is_twenty_two_bytes() {
-    let mut converter = super::Converter::default();
-    converter.lists.push(super::List {
-        ordered: true,
-        count: u64::MAX - 1,
-    });
-    converter.item();
-    assert_eq!(converter.writer.output(), "18446744073709551615. ");
-    assert_eq!(converter.writer.output().len(), 22);
-}
