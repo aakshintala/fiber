@@ -1068,3 +1068,70 @@ fn fetch_quota_reports_a_bad_return_and_a_raise_as_errors() {
     .unwrap_err();
     assert_eq!(err.code(), contract::ErrorCode::ExtensionFailed);
 }
+
+/// A provider `p` whose `credential()` returns a fixed token and whose
+/// `quota()` names the token and account id it was given.
+fn token_quota_provider(root: &fakes::TempDir) -> Arc<LuaProvider> {
+    verbatim_provider(
+        root,
+        "fiber.provider(\"p\", {\n\
+         credential = { timeout = 60000, run = function()\n\
+         return { token = \"tok-1\", expires_at = 4102444800,\n\
+         headers = { [\"chatgpt-account-id\"] = \"acct-1\" } }\n\
+         end },\n\
+         quota = { timeout = 60000, run = function(a)\n\
+         return { windows = { { name = a.token .. \"/\" .. a.headers[\"chatgpt-account-id\"], used_percent = 0 } } }\n\
+         end },\n\
+         })\n",
+    )
+}
+
+#[test]
+fn fetch_quota_passes_the_current_token_and_headers() {
+    let root = fakes::TempDir::new("fiber-quota-token-arg");
+    let provider = token_quota_provider(&root);
+    let (quota, raw) = {
+        let provider = Arc::clone(&provider);
+        within(move || provider.fetch_quota(&pair(), None))
+    }
+    .unwrap();
+    assert_eq!(
+        quota,
+        Some(percent("tok-1/acct-1", 0.0, None)),
+        "the credential() token and headers did not reach quota()"
+    );
+    assert_eq!(raw["windows"][0]["name"], serde_json::json!("tok-1/acct-1"));
+}
+
+#[test]
+fn fetch_quota_sends_no_token_or_headers_to_a_key_provider() {
+    let root = fakes::TempDir::new("fiber-quota-no-token-for-keys");
+    let provider = verbatim_provider(
+        &root,
+        "fiber.provider(\"p\", { quota = { timeout = 60000, run = function(a)\n\
+         if a.token ~= nil then error(\"quota got token \" .. tostring(a.token)) end\n\
+         if a.headers ~= nil then error(\"quota got headers\") end\n\
+         return { windows = {} }\n\
+         end } })\n",
+    );
+    let key = Secret::new("sk-test".to_owned());
+    let (quota, _) = {
+        let provider = Arc::clone(&provider);
+        within(move || provider.fetch_quota(&pair(), Some(&key)))
+    }
+    .unwrap();
+    assert_eq!(quota, Some(Quota::Windows(Vec::new())));
+}
+
+#[test]
+fn a_credential_failure_marks_the_fetch_failed() {
+    let root = fakes::TempDir::new("fiber-quota-credential-failure");
+    let provider = verbatim_provider(
+        &root,
+        "fiber.provider(\"p\", {\n\
+         credential = { timeout = 60000, run = function() error(\"no login\") end },\n\
+         quota = { timeout = 60000, run = function() return { windows = {} } end },\n\
+         })\n",
+    );
+    assert_eq!(read(&provider), QuotaEntry::Unreachable { last: None });
+}

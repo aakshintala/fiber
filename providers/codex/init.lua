@@ -5,6 +5,17 @@
 -- in. What is stored is the token, its expiry, the refresh token and the
 -- account id, nothing else. The wire constants are pi's flow and the codex
 -- CLI's strings (research/codex-responses-probe/README.md, "Login").
+--
+-- Codex's usage quota (docs/tools.md, "Where it comes from"): the percent
+-- used of a primary and a secondary window, with reset times, from GET
+-- https://chatgpt.com/backend-api/wham/usage for the label's login. A
+-- reply with no `rate_limit`, or with neither window present, reports
+-- nothing. Anything else unreadable raises, so the cache reports
+-- `unreachable`: a status other than 200, a body that is not a JSON
+-- object, or a present window whose `used_percent` is not a number or
+-- whose `reset_at` is not an integer. JSON null decodes to a light
+-- userdata, never nil, so every read here tests the type
+-- (research/codex-usage/README.md).
 
 local AUTH = "https://auth.openai.com"
 local PORT = 1455
@@ -262,6 +273,25 @@ local function refresh_session(stored)
   return read_token_reply(reply, stored, {})
 end
 
+-- One usage window of the `rate_limit` table `limit`: the entry `key`
+-- becomes the Fiber window `name`, or nil when the entry is absent or
+-- null. A present entry whose `used_percent` is not a number, or whose
+-- `reset_at` is not an integer, raises. JSON null decodes to a light
+-- userdata, never nil, so the entry read tests the type.
+local function usage_window(limit, key, name)
+  local window = limit[key]
+  if type(window) ~= "table" then
+    return nil
+  end
+  if type(window.used_percent) ~= "number" then
+    error("codex quota: the " .. name .. " window holds no percent used", 0)
+  end
+  if math.type(window.reset_at) ~= "integer" then
+    error("codex quota: the " .. name .. " window holds no reset time", 0)
+  end
+  return { name = name, used_percent = window.used_percent, resets_at = window.reset_at }
+end
+
 fiber.provider("codex", {
   credential = { timeout = 900000, run = function(arg)
     local email = {}
@@ -291,6 +321,55 @@ fiber.provider("codex", {
       returned.email = email.address
     end
     return returned
+  end },
+  quota = { timeout = 8000, run = function(arg)
+    -- The label's current token and headers arrive in the argument,
+    -- refreshed as a request's are; only `credential()` refreshes, so
+    -- this reads them and never calls `host.oauth` itself
+    -- (`docs/model-routing.md`, "Keys, tokens and OAuth").
+    local token = arg.token
+    if type(token) ~= "string" or token == "" then
+      error("codex quota: no token; run `fiber login codex` again", 0)
+    end
+    local headers = arg.headers
+    local account_id = type(headers) == "table" and headers["chatgpt-account-id"] or nil
+    if type(account_id) ~= "string" or account_id == "" then
+      error("codex quota: the stored credential holds no account id;"
+        .. " run `fiber login codex` again", 0)
+    end
+    local reply = host.http({
+      url = "https://chatgpt.com/backend-api/wham/usage",
+      headers = {
+        authorization = "Bearer " .. token,
+        ["chatgpt-account-id"] = account_id,
+      },
+    })
+    if reply.status ~= 200 then
+      error("codex quota: unexpected status " .. tostring(reply.status), 0)
+    end
+    local ok, body = pcall(json.decode, reply.body)
+    -- A JSON array decodes to a Lua table too: only a `{` after any space
+    -- opens the object the usage reply is.
+    if not ok or type(body) ~= "table" or reply.body:match("^%s*(.)") ~= "{" then
+      error("codex quota: the usage reply is not a JSON object", 0)
+    end
+    local limit = body.rate_limit
+    if type(limit) ~= "table" then
+      return nil
+    end
+    local windows = {}
+    local primary = usage_window(limit, "primary_window", "primary")
+    if primary ~= nil then
+      windows[#windows + 1] = primary
+    end
+    local secondary = usage_window(limit, "secondary_window", "secondary")
+    if secondary ~= nil then
+      windows[#windows + 1] = secondary
+    end
+    if #windows == 0 then
+      return nil
+    end
+    return { windows = windows }
   end },
 })
 

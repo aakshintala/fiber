@@ -486,9 +486,11 @@ declares, and why, is `docs/model-routing.md`. The file is
 A provider may have five pieces of Lua:
 
 - `models()`, which discovers its models
-- `quota()`, which receives `{ label, credential, key }`, where `key` is
-  the label's key (absent when the provider's token comes from
-  `credential()`), and reports its quota
+- `quota()`, which receives `{ label, credential, key, token, headers }`,
+  where `key` is the label's key (absent when the provider's token comes
+  from `credential()`), and `token` and `headers` are what `credential()`
+  last returned for the label, refreshed as a request's are (absent for a
+  key provider), and reports its quota
   (`docs/model-routing.md`, "Quota"): `{ windows = { { name, used_percent,
   resets_at } } }` with `resets_at` in Unix seconds where the vendor reports
   one, `{ credit = { remaining, limit } }` with `limit` where there is one,
