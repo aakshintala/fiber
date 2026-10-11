@@ -1,5 +1,7 @@
 //! Owns the render state a handoff reads and the restart conversation.
 
+use std::collections::HashSet;
+
 use contract::ActionId;
 use contract::events::{ContextNudged, Control, Event, HandoffCompleted, Note, SkillLoad};
 use contract::provider::Input;
@@ -12,6 +14,8 @@ use crate::prompt::{fill, message};
 /// sent").
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Carry {
+    /// Inner actions never enter the model's conversation or handoff carry.
+    pub(crate) inner: HashSet<ActionId>,
     /// The conversation's length at the open `handoff_started`.
     pub(crate) window: Option<usize>,
     /// This turn's input: its message items and the steering messages
