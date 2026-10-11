@@ -127,7 +127,10 @@ impl Setup {
             ),
         )
         .unwrap();
-        let mut args = vec![Value::String("srv/run.sh".to_owned()), Value::String(dir.display().to_string())];
+        let mut args = vec![
+            Value::String("srv/run.sh".to_owned()),
+            Value::String(dir.display().to_string()),
+        ];
         args.extend(more_args.iter().cloned().map(Value::String));
         let mut entry = json!({
             "command": "/bin/bash",
@@ -294,16 +297,30 @@ fn an_approved_server_runs_from_its_pinned_copy() {
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(!run.notice("repository_code_skipped", "db"), "no notice");
-    assert!(run.declares("mcp__db__echo"), "the first request declares the server's tools");
+    assert!(
+        run.declares("mcp__db__echo"),
+        "the first request declares the server's tools"
+    );
     // The session runs the copy, never the repository's files, in the
     // session's workspace.
     assert_eq!(
         fs::read_to_string(dir.join("argv0.txt")).unwrap().trim(),
-        setup.home().join("pinned").join(&hash).join("srv/run.sh").display().to_string().as_str()
+        setup
+            .home()
+            .join("pinned")
+            .join(&hash)
+            .join("srv/run.sh")
+            .display()
+            .to_string()
+            .as_str()
     );
     assert_eq!(
         fs::read_to_string(dir.join("cwd.txt")).unwrap().trim(),
-        fs::canonicalize(&workspace).unwrap().display().to_string().as_str()
+        fs::canonicalize(&workspace)
+            .unwrap()
+            .display()
+            .to_string()
+            .as_str()
     );
 }
 
@@ -321,10 +338,23 @@ fn a_changed_pinned_file_needs_a_new_approval() {
     fs::write(workspace.join("srv/run.sh"), "# changed\n").unwrap();
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(run.notice("repository_code_skipped", "`db`"), "skipped with a notice");
-    assert!(!run.declares("mcp__db__echo"), "the changed server's tools are not declared");
+    assert!(
+        run.notice("repository_code_skipped", "`db`"),
+        "skipped with a notice"
+    );
+    assert!(
+        !run.declares("mcp__db__echo"),
+        "the changed server's tools are not declared"
+    );
     // The old copy is still in `pinned/`.
-    assert!(setup.home().join("pinned").join(&hash).join("srv/run.sh").is_file());
+    assert!(
+        setup
+            .home()
+            .join("pinned")
+            .join(&hash)
+            .join("srv/run.sh")
+            .is_file()
+    );
 }
 
 #[test]
@@ -343,8 +373,14 @@ fn a_changed_declaration_needs_a_new_approval() {
     fs::write(&file, config.to_string()).unwrap();
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(run.notice("repository_code_skipped", "`db`"), "skipped with a notice");
-    assert!(!run.declares("mcp__db__echo"), "the changed server's tools are not declared");
+    assert!(
+        run.notice("repository_code_skipped", "`db`"),
+        "skipped with a notice"
+    );
+    assert!(
+        !run.declares("mcp__db__echo"),
+        "the changed server's tools are not declared"
+    );
 }
 
 #[test]
@@ -385,7 +421,14 @@ fn a_pruned_copy_is_rebuilt() {
     assert!(run.declares("mcp__db__echo"), "the rebuilt copy runs");
     assert_eq!(
         fs::read_to_string(dir.join("argv0.txt")).unwrap().trim(),
-        setup.home().join("pinned").join(&hash).join("srv/run.sh").display().to_string().as_str()
+        setup
+            .home()
+            .join("pinned")
+            .join(&hash)
+            .join("srv/run.sh")
+            .display()
+            .to_string()
+            .as_str()
     );
 }
 
@@ -403,9 +446,21 @@ fn a_required_server_that_fails_to_start_exits_before_the_session() {
     let run = setup.run(&["ask", "hi"]);
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
     assert!(server.requests().is_empty(), "no model request");
-    let exited = run.lines.iter().find(|line| line["kind"] == "fiber_exited").unwrap();
-    assert_eq!(exited["payload"]["error"]["code"], "mcp_required_server_failed");
-    assert!(!run.lines.iter().any(|line| line["kind"] == "preamble_built"), "no session line");
+    let exited = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "fiber_exited")
+        .unwrap();
+    assert_eq!(
+        exited["payload"]["error"]["code"],
+        "mcp_required_server_failed"
+    );
+    assert!(
+        !run.lines
+            .iter()
+            .any(|line| line["kind"] == "preamble_built"),
+        "no session line"
+    );
 }
 
 #[test]
@@ -420,7 +475,10 @@ fn a_reapproved_file_change_keeps_the_cached_tool_list() {
 
     let first = setup.run(&["ask", "hi"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
-    assert!(dir.join("pid.txt").exists(), "the first run starts the server");
+    assert!(
+        dir.join("pid.txt").exists(),
+        "the first run starts the server"
+    );
     // The declaration is unchanged, so the tool-list cache stays keyed to
     // it across the re-approval of the changed file.
     fs::write(workspace.join("srv/run.sh"), "# changed\n").unwrap();
@@ -428,8 +486,14 @@ fn a_reapproved_file_change_keeps_the_cached_tool_list() {
     fs::remove_file(dir.join("pid.txt")).unwrap();
     let second = setup.run(&["ask", "hi"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
-    assert!(second.declares("mcp__db__echo"), "the cached list still declares");
-    assert!(!dir.join("pid.txt").exists(), "the cached server never spawns");
+    assert!(
+        second.declares("mcp__db__echo"),
+        "the cached list still declares"
+    );
+    assert!(
+        !dir.join("pid.txt").exists(),
+        "the cached server never spawns"
+    );
 }
 
 #[test]
@@ -437,7 +501,10 @@ fn a_repositorys_hints_do_not_change_the_declared_effects() {
     let setup = Setup::new();
     let dir = setup.fixture(
         &json!([echo_tool()]),
-        &[("call-echo.json", r#"{"content":[{"type":"text","text":"hi"}]}"#)],
+        &[(
+            "call-echo.json",
+            r#"{"content":[{"type":"text","text":"hi"}]}"#,
+        )],
     );
     let server = ProviderServer::start([
         stream(&[function_call("call_echo", "mcp__db__echo", &json!({}))]),
@@ -569,14 +636,20 @@ fn a_file_created_after_gathering_is_refused_on_a_lazy_start() {
     let first = setup.run(&["ask", "hi"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     assert!(first.declares("mcp__db__echo"));
-    assert!(dir.join("pid.txt").exists(), "the first run starts the server");
+    assert!(
+        dir.join("pid.txt").exists(),
+        "the first run starts the server"
+    );
     fs::remove_file(dir.join("pid.txt")).unwrap();
 
     // The hub session declares the server from the cache and spawns nothing.
     let id = doors::mint("s_");
     let (session, stdout) = spawn_session(&setup, &id, &[]);
     started(setup.deadline, &stdout);
-    assert!(!dir.join("pid.txt").exists(), "a cached server starts on its first call");
+    assert!(
+        !dir.join("pid.txt").exists(),
+        "a cached server starts on its first call"
+    );
     let client = attach(&setup, &id);
 
     // Created after gathering: the approval does not cover it. The prompt
@@ -613,7 +686,8 @@ fn a_file_created_after_gathering_is_refused_on_a_lazy_start() {
     let failed = lines
         .iter()
         .find(|line| {
-            line["kind"] == "tool_call_completed" && line["payload"]["error"]["code"] == "mcp_server_unavailable"
+            line["kind"] == "tool_call_completed"
+                && line["payload"]["error"]["code"] == "mcp_server_unavailable"
         })
         .unwrap_or_else(|| panic!("a refused call completes the tool call"));
     assert!(
@@ -624,9 +698,14 @@ fn a_file_created_after_gathering_is_refused_on_a_lazy_start() {
         "{failed}"
     );
     assert!(!workspace.join("marker").exists(), "late.sh never runs");
-    assert!(!dir.join("pid.txt").exists(), "a refused spawn starts nothing");
+    assert!(
+        !dir.join("pid.txt").exists(),
+        "a refused spawn starts nothing"
+    );
 
-    client.send(r#"{"id":"c_close","command":"close"}"#).unwrap();
+    client
+        .send(r#"{"id":"c_close","command":"close"}"#)
+        .unwrap();
     session.kill("TERM");
     session.wait();
 }
