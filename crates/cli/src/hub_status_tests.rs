@@ -696,6 +696,13 @@ fn slow_hub(home: &Path, answer: String) -> Sender<()> {
 }
 
 #[test]
+fn the_status_window_is_the_connect_deadline_plus_the_capture_limit() {
+    // 5 s connect + 10 s capture (`docs/invocation.md`, "A session's
+    // environment"): the sum, not the product.
+    assert_eq!(STATUS_WITHIN, Duration::from_secs(15));
+}
+
+#[test]
 fn a_hub_answering_six_seconds_in_is_read_within_the_status_window() {
     for (within, reads) in [(STATUS_WITHIN, true), (Duration::from_secs(5), false)] {
         let (_dir, home) = home();
