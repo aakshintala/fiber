@@ -205,3 +205,9 @@ fn a_rerun_child_has_no_crash_exception_port() {
         String::from_utf8_lossy(&output.stdout)
     );
 }
+
+#[test]
+fn half_of_the_cleanup_bound_is_half() {
+    assert_eq!(half(Duration::from_secs(10)), Duration::from_secs(5));
+    assert_eq!(half(Duration::ZERO), Duration::ZERO);
+}

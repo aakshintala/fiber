@@ -161,7 +161,7 @@ fn rerun_bounded(
     match Deadline::after(within).recv(&finished) {
         Ok(Ok(output)) => {
             let cleanup = Deadline::after(reap);
-            if crate::group_empties(group, reap / 2) {
+            if crate::group_empties(group, half(reap)) {
                 watchdog.stand_down(cleanup.left());
                 return output;
             }
@@ -197,6 +197,12 @@ fn rerun_bounded(
             );
         }
     }
+}
+
+/// Half of `reap`: the share of the cleanup bound a normal exit spends waiting
+/// for its group to empty before the group is killed.
+fn half(reap: Duration) -> Duration {
+    reap / 2
 }
 
 #[cfg(test)]
