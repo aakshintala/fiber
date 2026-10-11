@@ -205,8 +205,9 @@ pub enum Error {
         /// The name.
         name: String,
     },
-    /// An extension whose install record is missing or unreadable: remove
-    /// it, then install it again (`docs/extensions.md`, "Installing").
+    /// An extension whose install record is missing or unreadable:
+    /// `fiber extension reinstall <name>` fixes it (`docs/extensions.md`,
+    /// "Installing").
     #[error("{0}")]
     Damaged(Damaged),
     /// An install record that is missing or does not read.
