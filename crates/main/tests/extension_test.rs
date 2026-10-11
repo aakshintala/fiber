@@ -10,63 +10,48 @@
 
 mod support;
 
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
-
-use doors::mint;
-use serde_json::{Value, json};
 use support::{SESSION_KINDS, Setup, expected};
 
 // Rooted at `/tmp` on purpose: case sockets bind under this root and must stay under 104 bytes on macOS, while `fakes::TempDir` follows a long `TMPDIR`.
-struct TempRoot(PathBuf);
+struct TempRoot(fakes::TempDir);
 
 impl TempRoot {
     fn new() -> Self {
-        let path = Path::new("/tmp").join(mint("ft"));
-        fs::create_dir(&path).unwrap();
-        Self(path)
+        Self(fakes::TempDir::under(Path::new("/tmp"), "ft"))
     }
 
     fn path(&self) -> &Path {
-        &self.0
+        self.0.path()
     }
 
     fn is_empty(&self) -> bool {
-        fs::read_dir(&self.0).unwrap().next().is_none()
-    }
-}
-
-impl Drop for TempRoot {
-    fn drop(&mut self) {
-        let _removed = fs::remove_dir_all(&self.0);
+        fs::read_dir(self.0.path()).unwrap().next().is_none()
     }
 }
 
 /// A `TMPDIR` of about 50 bytes under `/tmp`, the length of macOS's default:
 /// a case's session socket stays inside the 104-byte limit only if the
 /// runner keeps its own directory names short. Removed on drop.
-struct LongRoot(PathBuf);
+struct LongRoot(fakes::TempDir);
 
 impl LongRoot {
     fn new() -> Self {
-        let path = Path::new("/tmp").join(format!("long-tmp-dir-{}{}", mint(""), mint("")));
-        fs::create_dir(&path).unwrap();
-        Self(path)
+        Self(fakes::TempDir::under(
+            Path::new("/tmp"),
+            "long-tmp-dir-0123456789abcdefghijklmno",
+        ))
     }
 
     fn path(&self) -> &Path {
-        &self.0
+        self.0.path()
     }
 
     fn is_empty(&self) -> bool {
-        fs::read_dir(&self.0).unwrap().next().is_none()
-    }
-}
-
-impl Drop for LongRoot {
-    fn drop(&mut self) {
-        let _removed = fs::remove_dir_all(&self.0);
+        fs::read_dir(self.0.path()).unwrap().next().is_none()
     }
 }
 
