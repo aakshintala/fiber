@@ -1188,8 +1188,8 @@ fn a_server_that_stops_reading_stdin_ends_every_call_gone() {
         .expect("mkfifo runs");
     assert!(status.success(), "mkfifo creates hold");
     let mut spec = setup.spec("fx");
-    spec.command = "/bin/bash".to_owned();
-    spec.args = vec![
+    spec.stdio_mut().command = "/bin/bash".to_owned();
+    spec.stdio_mut().args = vec![
         "-c".to_owned(),
         script.to_owned(),
         "wedged".to_owned(),

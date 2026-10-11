@@ -15,7 +15,28 @@ use serde_json::Value;
 use crate::prompt::Prompts;
 use crate::server::{OpenServer, StartError};
 use crate::slot::{Served, Slot};
-use crate::start::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Servers, Started};
+use crate::start::{
+    DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Servers, Started, StdioSpec,
+    Transport,
+};
+
+impl ServerSpec {
+    /// The stdio half of the spec, panicking for a remote one: tests
+    /// that only run stdio servers read every declaration field through
+    /// here, so the transport enum stays exhaustive at each site.
+    pub(crate) fn stdio(&self) -> &StdioSpec {
+        match &self.transport {
+            Transport::Stdio(stdio) => stdio,
+        }
+    }
+
+    /// The mutable stdio half of the spec, panicking for a remote one.
+    pub(crate) fn stdio_mut(&mut self) -> &mut StdioSpec {
+        match &mut self.transport {
+            Transport::Stdio(stdio) => stdio,
+        }
+    }
+}
 
 /// How long a test waits for a thread or a child, in real time.
 ///
@@ -123,10 +144,12 @@ impl Setup {
     pub(crate) fn spec(&self, name: &str) -> ServerSpec {
         ServerSpec {
             name: name.to_owned(),
-            command: fakes::mcp_fixture().display().to_string(),
-            args: vec![self.dir.path().display().to_string()],
-            env: BTreeMap::new(),
-            run: None,
+            transport: Transport::Stdio(StdioSpec {
+                command: fakes::mcp_fixture().display().to_string(),
+                args: vec![self.dir.path().display().to_string()],
+                env: BTreeMap::new(),
+                run: None,
+            }),
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             call_timeout: DEFAULT_CALL_TIMEOUT,
             enabled: None,

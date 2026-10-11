@@ -24,7 +24,7 @@ impl Setup {
         crate::cache::write(
             &self.cache(),
             &spec.name,
-            &crate::cache::key(&spec.command, &spec.args, &spec.env),
+            &spec.key(),
             &crate::cache::Cached {
                 tools: tools.to_vec(),
                 prompts: Vec::new(),
@@ -224,8 +224,8 @@ fn two_concurrent_first_calls_spawn_once() {
 fn a_cached_server_whose_command_fails_dies_on_the_first_call() {
     let setup = Setup::new();
     let mut spec = setup.spec("bad");
-    spec.command = "/no/such/command".to_owned();
-    spec.args = Vec::new();
+    spec.stdio_mut().command = "/no/such/command".to_owned();
+    spec.stdio_mut().args = Vec::new();
     setup.write_cache(&spec, &Setup::listed("echo"));
     let started = setup.start(vec![spec]);
     assert!(started.failed.is_empty());
@@ -273,8 +273,8 @@ fn a_lazy_start_that_misses_its_deadline_fails_with_deadline() {
     let watchdog = fakes::Watchdog::matching(&marker);
     let quoted = marker.replace('\'', "'\\''");
     let mut spec = setup.spec("slow");
-    spec.command = "/bin/bash".to_owned();
-    spec.args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
+    spec.stdio_mut().command = "/bin/bash".to_owned();
+    spec.stdio_mut().args = vec!["-c".to_owned(), format!("exec -a '{quoted}' /bin/sleep 30")];
     setup.write_cache(&spec, &Setup::listed("echo"));
     let started = setup.start(vec![spec]);
     let tool = setup.tool(&started, "mcp__slow__echo");
@@ -881,9 +881,9 @@ fn declared_spec(
     gate: &Arc<std::sync::atomic::AtomicBool>,
 ) -> ServerSpec {
     let mut spec = setup.spec(name);
-    spec.command = "/no/such/declared".to_owned();
-    spec.args = vec![format!("--declared-{name}")];
-    spec.run = Some(refusing_run(setup, gate));
+    spec.stdio_mut().command = "/no/such/declared".to_owned();
+    spec.stdio_mut().args = vec![format!("--declared-{name}")];
+    spec.stdio_mut().run = Some(refusing_run(setup, gate));
     spec
 }
 
@@ -979,7 +979,7 @@ fn a_prompt_run_the_guard_refuses_fails_without_a_spawn() {
     crate::cache::write(
         &setup.cache(),
         &spec.name,
-        &crate::cache::key(&spec.command, &spec.args, &spec.env),
+        &spec.key(),
         &crate::cache::Cached {
             tools: Setup::listed("echo"),
             prompts: vec![serde_json::from_value(json!({"name": "hello"})).expect("a prompt")],

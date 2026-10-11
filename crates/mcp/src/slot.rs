@@ -224,19 +224,14 @@ impl Slot {
         // Every spawn runs the spec's guard first: a cached server keeps
         // its spec unspawned until its first call, so a check at
         // preparation alone would run a file created in between unapproved.
-        match crate::start::spawn(&self.spec, &self.workspace, &self.clock, &self.version) {
+        match crate::start::launch(&self.spec, &self.workspace, &self.clock, &self.version) {
             Ok(open) => {
                 // The session keeps the tools it declared, because a tool
                 // set that changes mid-session misses the whole prompt
                 // cache; the cache is updated for the next session.
                 let live = open.listed;
                 if live != listed {
-                    cache::write(
-                        &self.cache,
-                        &name,
-                        &cache::key(&self.spec.command, &self.spec.args, &self.spec.env),
-                        &live,
-                    );
+                    cache::write(&self.cache, &name, &self.spec.key(), &live);
                 }
                 let tools = names(&live.tools);
                 let server = Arc::new(open.server);

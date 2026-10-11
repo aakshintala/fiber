@@ -15,6 +15,14 @@ use serde_json::{Value, json};
 use super::{Later, Waiting, pinned_spec, prepare};
 use crate::mcp_servers::{RepositorySpec, specs};
 
+/// The stdio half of `spec`: an exhaustive match, so a new transport
+/// breaks every site that assumes stdio.
+fn stdio(spec: &mcp::ServerSpec) -> &mcp::StdioSpec {
+    match &spec.transport {
+        mcp::Transport::Stdio(stdio) => stdio,
+    }
+}
+
 struct Setup {
     rig: crate::test_support::Rig,
     project: ProjectKey,
@@ -159,20 +167,23 @@ fn prepare_starts_an_approved_server_from_its_copy() {
         panic!("one ready spec");
     };
     // The declaration stays the cache-key input; the program runs the copy.
-    assert_eq!(spec.command, "./srv/run.sh");
-    assert_eq!(spec.args, vec!["srv/run.sh".to_owned()]);
-    assert_eq!(spec.env.get("MODE").map(String::as_str), Some("fast"));
+    assert_eq!(stdio(spec).command, "./srv/run.sh");
+    assert_eq!(stdio(spec).args, vec!["srv/run.sh".to_owned()]);
+    assert_eq!(
+        stdio(spec).env.get("MODE").map(String::as_str),
+        Some("fast")
+    );
     assert_eq!(spec.call_timeout, std::time::Duration::from_millis(2000));
     assert!(spec.required);
     assert!(
         spec.hints.is_empty(),
         "a repository's hints never reach the spec"
     );
-    let run = spec.run.as_ref().expect("a program");
+    let run = stdio(spec).run.as_ref().expect("a program");
     let copy = setup.home().join("pinned").join(&hash).join("srv/run.sh");
     assert_eq!(run.command, copy.display().to_string());
     assert_eq!(run.args, vec![copy.display().to_string()]);
-    let (command, args) = spec.program();
+    let (command, args) = stdio(spec).program();
     assert_eq!(command, run.command.as_str());
     assert_eq!(args, run.args.as_slice());
     // The built spec's guard passes, and holds the copy while it lives.
@@ -229,7 +240,7 @@ fn pinned_spec_maps_each_string_through_the_frozen_resolutions() {
         .unwrap()
         .display()
         .to_string();
-    let run = spec.run.as_ref().expect("a program");
+    let run = stdio(&spec).run.as_ref().expect("a program");
     assert_eq!(run.command, bash);
     assert_eq!(
         run.args,
@@ -240,7 +251,7 @@ fn pinned_spec_maps_each_string_through_the_frozen_resolutions() {
             "bare".to_owned(),
         ]
     );
-    assert_eq!(spec.command, "/bin/bash");
+    assert_eq!(stdio(&spec).command, "/bin/bash");
 }
 
 #[test]
@@ -421,7 +432,7 @@ fn a_persons_layer_never_drifts() {
     let [spec] = prepared.ready.as_slice() else {
         panic!("one ready spec");
     };
-    assert_eq!(spec.env.get("SAFE").map(String::as_str), Some("1"));
+    assert_eq!(stdio(spec).env.get("SAFE").map(String::as_str), Some("1"));
 }
 
 #[test]
@@ -436,7 +447,7 @@ fn the_guard_recovers_when_the_new_file_goes_away() {
     let [spec] = prepared.ready.as_slice() else {
         panic!("one ready spec");
     };
-    let guard = spec.run.as_ref().expect("a program").guard.clone();
+    let guard = stdio(spec).run.as_ref().expect("a program").guard.clone();
     assert!(guard().is_ok());
     fs::write(setup.workspace().join("late.sh"), "late\n").unwrap();
     let error = guard().expect_err("the new repository file is refused");

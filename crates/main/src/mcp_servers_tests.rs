@@ -8,6 +8,14 @@ use serde_json::json;
 
 use super::specs;
 
+/// The stdio half of `spec`: an exhaustive match, so a new transport
+/// breaks every site that assumes stdio.
+fn stdio(spec: &mcp::ServerSpec) -> &mcp::StdioSpec {
+    match &spec.transport {
+        mcp::Transport::Stdio(stdio) => stdio,
+    }
+}
+
 struct Setup {
     rig: crate::test_support::Rig,
 }
@@ -54,9 +62,9 @@ fn a_persons_server_becomes_a_spec_with_defaults() {
     assert_eq!(specs.specs.len(), 1);
     let spec = &specs.specs[0];
     assert_eq!(spec.name, "fx");
-    assert_eq!(spec.command, "/bin/bash");
-    assert!(spec.args.is_empty());
-    assert!(spec.env.is_empty());
+    assert_eq!(stdio(spec).command, "/bin/bash");
+    assert!(stdio(spec).args.is_empty());
+    assert!(stdio(spec).env.is_empty());
     assert_eq!(spec.startup_timeout, Duration::from_millis(5000));
     assert_eq!(spec.call_timeout, Duration::from_millis(600_000));
     assert_eq!(spec.enabled, None);
@@ -92,8 +100,8 @@ fn timeouts_lists_and_overrides_reach_the_spec() {
     let specs = setup.specs();
     assert_eq!(specs.specs.len(), 1);
     let spec = &specs.specs[0];
-    assert_eq!(spec.args, vec!["--version".to_owned()]);
-    assert_eq!(spec.env.get("FX").map(String::as_str), Some("1"));
+    assert_eq!(stdio(spec).args, vec!["--version".to_owned()]);
+    assert_eq!(stdio(spec).env.get("FX").map(String::as_str), Some("1"));
     assert_eq!(spec.startup_timeout, Duration::from_millis(1000));
     assert_eq!(spec.call_timeout, Duration::from_millis(2000));
     assert_eq!(spec.enabled, Some(vec!["echo".to_owned()]));
@@ -116,7 +124,7 @@ fn a_persons_empty_env_does_not_mask_a_repositorys_entry() {
         panic!("the server is the repository's");
     };
     assert_eq!(gated.spec.name, "fx");
-    assert_eq!(gated.spec.command, "/bin/bash");
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
     // Exactly the repository-supplied values: the person's command and
     // empty `env` are the person's own.
     assert_eq!(gated.fields.command, None);
@@ -158,8 +166,8 @@ fn a_repositorys_server_is_repository_code() {
         panic!("the server is the repository's");
     };
     assert_eq!(gated.spec.name, "repo");
-    assert_eq!(gated.spec.command, "/bin/bash");
-    assert!(gated.spec.run.is_none());
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
+    assert!(stdio(&gated.spec).run.is_none());
     assert_eq!(gated.fields.command, Some(json!("/bin/bash")));
     assert_eq!(gated.fields.args, None);
     assert!(gated.fields.env.is_empty());
@@ -177,7 +185,7 @@ fn a_persons_command_with_a_repositorys_args_is_repository_code() {
         panic!("the server is the repository's");
     };
     assert_eq!(gated.spec.name, "fx");
-    assert_eq!(gated.spec.args, vec!["evil.sh".to_owned()]);
+    assert_eq!(stdio(&gated.spec).args, vec!["evil.sh".to_owned()]);
     assert_eq!(gated.fields.command, None);
     assert_eq!(gated.fields.args, Some(json!(["evil.sh"])));
     assert!(gated.fields.env.is_empty());
@@ -436,8 +444,8 @@ fn repository_fields_hold_exactly_what_the_repository_supplied() {
     };
     // The merged spec carries both layers; the fields carry only the
     // repository's share.
-    assert_eq!(gated.spec.command, "/bin/bash");
-    assert_eq!(gated.spec.args, vec!["run.sh".to_owned()]);
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
+    assert_eq!(stdio(&gated.spec).args, vec!["run.sh".to_owned()]);
     assert_eq!(gated.fields.command, None);
     assert_eq!(gated.fields.args, Some(json!(["run.sh"])));
     assert_eq!(

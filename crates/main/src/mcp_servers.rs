@@ -297,10 +297,12 @@ fn spec(config: &Config, name: &str) -> Option<mcp::ServerSpec> {
         server_field(config, name, "env").map_or(BTreeMap::new(), |(value, _)| string_map(&value));
     Some(mcp::ServerSpec {
         name: name.to_owned(),
-        command,
-        args,
-        env,
-        run: None,
+        transport: mcp::Transport::Stdio(mcp::StdioSpec {
+            command,
+            args,
+            env,
+            run: None,
+        }),
         startup_timeout: millis(
             config,
             name,

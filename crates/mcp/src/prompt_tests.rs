@@ -391,8 +391,8 @@ fn a_dead_slot_is_not_run_without_spawning() {
     use contract::ErrorCode;
     let setup = Setup::new();
     let mut spec = setup.spec("fx");
-    spec.command = "/no/such/command".to_owned();
-    spec.args = Vec::new();
+    spec.stdio_mut().command = "/no/such/command".to_owned();
+    spec.stdio_mut().args = Vec::new();
     let slot = crate::slot::Slot::lazy(
         spec,
         setup.dir.path(),
@@ -458,8 +458,8 @@ fn a_failed_start_is_not_run_with_its_record() {
     use contract::ErrorCode;
     let setup = Setup::new();
     let mut spec = setup.spec("fx");
-    spec.command = "/no/such/command".to_owned();
-    spec.args = Vec::new();
+    spec.stdio_mut().command = "/no/such/command".to_owned();
+    spec.stdio_mut().args = Vec::new();
     let slot = crate::slot::Slot::lazy(
         spec,
         setup.dir.path(),

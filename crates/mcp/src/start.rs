@@ -27,11 +27,17 @@ use crate::server_json::{ListedPrompt, ListedTool};
 use crate::slot::Slot;
 use crate::tool::McpTool;
 
-/// One configured stdio server: what [`start`] spawns.
+/// How Fiber reaches a server (`docs/mcp.md`, "What Fiber does with MCP").
 #[derive(Clone)]
-pub struct ServerSpec {
-    /// The configured name: the middle of every qualified tool name.
-    pub name: String,
+pub enum Transport {
+    /// A child process Fiber starts.
+    Stdio(StdioSpec),
+}
+
+/// A stdio server's declaration, and with `run` the pinned copy that runs
+/// instead.
+#[derive(Clone)]
+pub struct StdioSpec {
     /// The program.
     pub command: String,
     /// Its arguments.
@@ -42,6 +48,26 @@ pub struct ServerSpec {
     /// repository server's pinned copy. `command`/`args`/`env` stay the
     /// declaration, the only cache-key input.
     pub run: Option<Program>,
+}
+
+impl StdioSpec {
+    /// What spawns: the program that runs when one is set, else the
+    /// declared command and arguments.
+    pub fn program(&self) -> (&str, &[String]) {
+        match self.run.as_ref() {
+            Some(run) => (&run.command, &run.args),
+            None => (&self.command, &self.args),
+        }
+    }
+}
+
+/// One configured server: what [`launch`] starts.
+#[derive(Clone)]
+pub struct ServerSpec {
+    /// The configured name: the middle of every qualified tool name.
+    pub name: String,
+    /// How Fiber reaches it.
+    pub transport: Transport,
     /// The startup deadline.
     pub startup_timeout: Duration,
     /// Each call's timeout.
@@ -60,25 +86,31 @@ pub struct ServerSpec {
 // counts print (`docs/code-quality.md`, "Errors").
 impl std::fmt::Debug for ServerSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServerSpec")
-            .field("name", &self.name)
-            .field("command", &self.command)
-            .field("args", &self.args.len())
-            .field(
-                "env",
-                &self
-                    .env
-                    .keys()
-                    .map(|name| (name, "redacted"))
-                    .collect::<BTreeMap<_, _>>(),
-            )
+        let mut debug = f.debug_struct("ServerSpec");
+        debug.field("name", &self.name);
+        match &self.transport {
+            Transport::Stdio(stdio) => {
+                debug
+                    .field("command", &stdio.command)
+                    .field("args", &stdio.args.len())
+                    .field(
+                        "env",
+                        &stdio
+                            .env
+                            .keys()
+                            .map(|name| (name, "redacted"))
+                            .collect::<BTreeMap<_, _>>(),
+                    )
+                    .field("run", &stdio.run);
+            }
+        }
+        debug
             .field("startup_timeout", &self.startup_timeout)
             .field("call_timeout", &self.call_timeout)
             .field("enabled", &self.enabled)
             .field("disabled", &self.disabled)
             .field("hints", &self.hints)
             .field("required", &self.required)
-            .field("run", &self.run)
             .finish()
     }
 }
@@ -119,42 +151,44 @@ impl std::fmt::Debug for Program {
 }
 
 impl ServerSpec {
-    /// What spawns: the program that runs when one is set, else the
-    /// declared command and arguments.
-    pub fn program(&self) -> (&str, &[String]) {
-        match self.run.as_ref() {
-            Some(run) => (&run.command, &run.args),
-            None => (&self.command, &self.args),
+    /// The cache key of the declaration (`docs/mcp.md`, "Starting
+    /// servers").
+    pub(crate) fn key(&self) -> String {
+        match &self.transport {
+            Transport::Stdio(stdio) => cache::key(&stdio.command, &stdio.args, &stdio.env),
         }
     }
 }
 
-/// Starts one spec: runs its guard, then [`Server::start`] with what
-/// [`ServerSpec::program`] gives. The only production caller of
-/// [`Server::start`]: session start ([`open`]) and every lazy first
-/// start and restart ([`Slot::serve`]) both go through here, so the guard
-/// runs immediately before each spawn.
-pub(crate) fn spawn(
+/// Starts one spec on its transport and runs the handshake: the only
+/// production caller of [`Server::start`]. Session start ([`open`]) and
+/// every lazy first start and restart ([`Slot::serve`]) both go through
+/// here, so the guard runs immediately before each spawn.
+pub(crate) fn launch(
     spec: &ServerSpec,
     workspace: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
 ) -> Result<crate::server::OpenServer, crate::server::StartError> {
-    if let Some(run) = spec.run.as_ref()
-        && let Err(message) = (run.guard)()
-    {
-        return Err(crate::server::StartError::StartFailed(message));
+    match &spec.transport {
+        Transport::Stdio(stdio) => {
+            if let Some(run) = stdio.run.as_ref()
+                && let Err(message) = (run.guard)()
+            {
+                return Err(crate::server::StartError::StartFailed(message));
+            }
+            let (command, args) = stdio.program();
+            Server::start(
+                command,
+                args,
+                &stdio.env,
+                workspace,
+                clock,
+                spec.startup_timeout,
+                version,
+            )
+        }
     }
-    let (command, args) = spec.program();
-    Server::start(
-        command,
-        args,
-        &spec.env,
-        workspace,
-        clock,
-        spec.startup_timeout,
-        version,
-    )
 }
 
 /// What [`start`] started: the tools for the loop, their infos, the
@@ -250,11 +284,7 @@ pub fn start(
         let hit = if spec.required {
             None
         } else {
-            cache::read(
-                cache,
-                &spec.name,
-                &cache::key(&spec.command, &spec.args, &spec.env),
-            )
+            cache::read(cache, &spec.name, &spec.key())
         };
         match hit {
             Some(cached) => lazy.push((index, spec, cached)),
@@ -367,7 +397,7 @@ pub(crate) fn open(
     let name = spec.name.clone();
     let required = spec.required;
     let timeout = spec.startup_timeout;
-    let open = match spawn(&spec, workspace, clock, version) {
+    let open = match launch(&spec, workspace, clock, version) {
         Ok(open) => open,
         Err(error) => {
             return if required {
@@ -384,12 +414,7 @@ pub(crate) fn open(
         }
     };
     let live = open.listed;
-    cache::write(
-        cache,
-        &name,
-        &cache::key(&spec.command, &spec.args, &spec.env),
-        &live,
-    );
+    cache::write(cache, &name, &spec.key(), &live);
     let listed_prompts = live.prompts.clone();
     let tools = live.tools.clone();
     let slot = Slot::running(

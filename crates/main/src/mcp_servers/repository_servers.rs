@@ -220,30 +220,27 @@ pub(crate) fn pinned_spec(
             return Err(drifted);
         }
     }
-    let command = if candidate.spec.command.contains('/') {
-        approved.arg(&candidate.spec.command)
+    let mcp::Transport::Stdio(stdio) = &candidate.spec.transport;
+    let command = if stdio.command.contains('/') {
+        approved.arg(&stdio.command)
     } else {
-        candidate.spec.command.clone()
+        stdio.command.clone()
     };
-    let args: Vec<String> = candidate
-        .spec
-        .args
-        .iter()
-        .map(|arg| approved.arg(arg))
-        .collect();
+    let args: Vec<String> = stdio.args.iter().map(|arg| approved.arg(arg)).collect();
     // What the guard re-checks at every spawn: the command when it names a
     // path, and the merged arguments. A string the declaration named is
     // frozen and never given to it; a bare-word command is looked up on
     // the `PATH`.
     let mut given = Vec::new();
-    if candidate.spec.command.contains('/') {
-        given.push(candidate.spec.command.clone());
+    if stdio.command.contains('/') {
+        given.push(stdio.command.clone());
     }
-    given.extend(candidate.spec.args.iter().cloned());
+    given.extend(stdio.args.iter().cloned());
     let guard = approved.guard(&given);
     let guard_name = name.clone();
     let mut spec = candidate.spec.clone();
-    spec.run = Some(mcp::Program {
+    let mcp::Transport::Stdio(pinned) = &mut spec.transport;
+    pinned.run = Some(mcp::Program {
         command,
         args,
         guard: Arc::new(move || {
