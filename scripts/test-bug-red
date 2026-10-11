@@ -83,3 +83,19 @@ rc=0
 cd "$top"
 [ "$rc" -eq 1 ] || { cat "$tmp/out2.txt" >&2; fail "no-test red commit exited $rc, want 1"; }
 grep -Fq "changes no test file" "$tmp/out2.txt" || { cat "$tmp/out2.txt" >&2; fail "no-test red commit names no missing test file"; }
+
+# A one-commit branch with no HEAD argument reports the one-commit
+# message: the default HEAD resolves to a SHA, so the guard fires.
+repo3="$tmp/repo3"
+new_repo "$repo3"
+mkdir -p "$repo3/crates/a/tests"
+printf '// red\n' >"$repo3/crates/a/tests/red.rs"
+git -C "$repo3" add crates/a/tests/red.rs
+git -C "$repo3" commit -q -m only
+base3=$(git -C "$repo3" rev-parse HEAD~1)
+cd "$repo3"
+rc=0
+"$bug_red" "$base3" >"$tmp/out3.txt" 2>&1 || rc=$?
+cd "$top"
+[ "$rc" -eq 1 ] || { cat "$tmp/out3.txt" >&2; fail "one-commit case exited $rc, want 1"; }
+grep -Fq "has one commit" "$tmp/out3.txt" || { cat "$tmp/out3.txt" >&2; fail "one-commit case misses the one-commit message"; }
