@@ -420,8 +420,13 @@ fn stalled_client(addr: SocketAddr) -> (TcpStream, std::io::BufReader<TcpStream>
     (stream, reader)
 }
 
+/// How long an already-satisfied wait may take to answer: it returns at
+/// once, so this bound fails a mutant that waits out its `within` before
+/// the mutation run's own per-test timeout does.
+const SATISFIED_WITHIN: Duration = Duration::from_secs(5);
+
 /// Runs one wait on its own thread and receives its answer within
-/// `READ_WITHIN`, so a wait that never ends fails the test instead of
+/// `SATISFIED_WITHIN`, so a wait that never ends fails the test instead of
 /// hanging it.
 fn answered_within(
     server: &Arc<ProviderServer>,
@@ -430,9 +435,9 @@ fn answered_within(
     let (tx, rx) = mpsc::channel();
     let server = Arc::clone(server);
     thread::spawn(move || tx.send(wait(&server)).unwrap());
-    Deadline::after(READ_WITHIN)
+    Deadline::after(SATISFIED_WITHIN)
         .recv(&rx)
-        .unwrap_or_else(|_| panic!("the wait returns within {READ_WITHIN:?}"))
+        .unwrap_or_else(|_| panic!("the wait returns within {SATISFIED_WITHIN:?}"))
 }
 
 #[test]
