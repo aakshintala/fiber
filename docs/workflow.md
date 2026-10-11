@@ -165,8 +165,8 @@ A pull request that resolves an issue labelled `bug` proves its fix with a
 red commit, then green. Its first commit, the red commit, holds the test that
 reproduces the bug and any new signature or test seam that test needs, but
 not the fix. The red commit builds, and at least one new or changed test
-fails there. The head passes. CI runs the red commit's new and changed tests there, and every new and changed test at the head
-(`docs/testing.md`, "Proving a test bites"). The squash merge still
+fails there. The head passes. CI runs the red commit's new and changed tests there, and every new and
+changed test at the head (`docs/testing.md`, "Proving a test bites"). The squash merge still
 lands one commit. A pull request whose every changed file is a docs file, as
 "Selection" defines it, passes the check with a message saying so: the doc
 was wrong and the code was right, so no test can show the bug.

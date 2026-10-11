@@ -411,9 +411,10 @@ turn must add up to well under that timeout.
 A bug fix must also show that its test reproduces the bug. A pull request
 where any issue its body resolves is labelled `bug` starts with a red commit:
 the reproducing test and any new signature or test seam it needs, without the
-fix (`docs/workflow.md`, "The pull request"). CI runs the tests the red commit adds or changes at the red commit, and every test the pull request adds or changes at the head.
-The red commit must build, at least
-one of its tests must fail there, and all of them must pass at the head.
+fix (`docs/workflow.md`, "The pull request"). CI runs the tests the red commit adds or changes at the red commit, and
+every test the pull request adds or changes at the head. The red commit must
+build, at least one of its tests must fail there, and all of them must pass
+at the head.
 A pull request whose every changed file is a docs file, as "Selection"
 defines it, passes the check with a message saying so: the doc was wrong and
 the code was right, so no test can show the bug.
