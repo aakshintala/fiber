@@ -5,11 +5,7 @@
 
 use crate::test_support::write_record;
 use std::fs;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use config::Layer;
@@ -18,7 +14,6 @@ use contract::shapes::Failure;
 use serde_json::json;
 
 use super::{run_get, run_set};
-use fakes::Deadline;
 
 /// Fiber home and a workspace in a temporary directory, removed on drop.
 struct Setup {
@@ -332,68 +327,23 @@ fn set_of_a_person_only_key_at_the_repository_layer_is_a_usage_error() {
 /// The child's marker: set, the test runs one wrapper and exits with its code.
 const CHILD: &str = "FIBER_CLI_TEST_CHILD";
 
-/// How long the child may run before the test kills it and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+/// How long the re-run child may run before the test kills its group and
+/// fails: half of nextest's per-test timeout less the cleanup bound.
+const CHILD_DEADLINE: Duration = Duration::from_secs(50);
 
-/// How long a killed child may take to be reaped.
-const REAP_DEADLINE: Duration = Duration::from_secs(10);
-
-/// Waits for `child`, the leader of its own process group, at most
-/// `deadline`, and returns what it wrote. A watchdog on that group kills
-/// it if the test process dies first, so a hung or broken run leaves
-/// nothing behind. On expiry the test kills the group, checks within
-/// [`REAP_DEADLINE`] that the child was reaped as killed, and fails naming
-/// `what`.
-#[track_caller]
-fn reap_group_leader(
-    child: std::process::Child,
-    deadline: Duration,
-    what: &str,
-) -> std::process::Output {
-    use std::os::unix::process::ExitStatusExt;
-    let group = child.id();
-    let watchdog = fakes::Watchdog::group(group);
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(child.wait_with_output()));
-    let Ok(received) = Deadline::after(deadline).recv(&finished) else {
-        fakes::kill_group(group, "KILL").unwrap();
-        let killed = Deadline::after(REAP_DEADLINE)
-            .recv(&finished)
-            .map(|output| output.map(|output| output.status.signal()));
-        assert!(
-            matches!(killed, Ok(Ok(Some(9)))),
-            "{what} was not reaped as killed within {REAP_DEADLINE:?}: {killed:?}"
-        );
-        panic!("waited {deadline:?} for {what} to exit");
-    };
-    watchdog.stand_down(REAP_DEADLINE);
-    received.unwrap()
-}
-
-/// Spawns this test binary filtered to `test`, with `FIBER_HOME` and the
+/// Runs this test binary filtered to `test`, with `FIBER_HOME` and the
 /// working directory set, and waits for it under a deadline.
 #[track_caller]
 fn spawn_child(name: &str, test: &str, setup: &Setup) -> std::process::Output {
-    let child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::{test}"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", setup.home())
-        .env(CHILD, "1")
-        .current_dir(setup.workspace())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    reap_group_leader(
-        child,
+    fakes::rerun_prepared(
+        &format!("{name}::{test}"),
+        &[(CHILD, "1")],
         CHILD_DEADLINE,
-        &format!("the config child for {test}"),
+        |command| {
+            command
+                .env("FIBER_HOME", setup.home())
+                .current_dir(setup.workspace());
+        },
     )
 }
 

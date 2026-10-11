@@ -4,7 +4,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -13,7 +12,6 @@ use contract::ErrorCode;
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 
 use contract::HubLine;
 use serde_json::{Map, Value, json};
@@ -182,8 +180,9 @@ fn an_ambiguous_prefix_names_both_matches() {
 /// The child's marker: set, the test runs `export` and exits with its code.
 const CHILD: &str = "FIBER_CLI_TEST_CHILD";
 
-/// How long the child may run before the test kills it and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+/// How long the re-run child may run before the test kills its group and
+/// fails: half of nextest's per-test timeout less the cleanup bound.
+const CHILD_DEADLINE: Duration = Duration::from_secs(50);
 
 /// The session the child exports.
 const CHILD_ID: &str = "s_childexport01";
@@ -200,29 +199,17 @@ fn export_exits_zero_and_writes_the_export() {
     let setup = Setup::new();
     setup.session(CHILD_ID);
     let name = module_path!().split_once("::").unwrap().1;
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::export_exits_zero_and_writes_the_export"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", setup.home())
-        .env(CHILD, "1")
-        .current_dir(setup.workspace())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for `fiber sessions export` to exit");
-    };
-    assert_eq!(status.code(), Some(0), "{status:?}");
+    let output = fakes::rerun_prepared(
+        &format!("{name}::export_exits_zero_and_writes_the_export"),
+        &[(CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            command
+                .env("FIBER_HOME", setup.home())
+                .current_dir(setup.workspace());
+        },
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", output.status);
     assert_eq!(
         fs::read(setup.workspace().join(CHILD_ID).join("events.jsonl")).unwrap(),
         format!("{}{SECOND}", started(CHILD_ID, &setup.workspace(), None)).into_bytes()
@@ -357,9 +344,6 @@ fn run_delete(
     )
 }
 
-/// How long a killed child or its watchdog may take to be reaped.
-const REAP_DEADLINE: Duration = Duration::from_secs(10);
-
 #[test]
 fn delete_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
     if let Ok(case) = std::env::var("FIBER_CLI_DELETE_CHILD") {
@@ -389,38 +373,22 @@ fn delete_exits_zero_on_success_two_on_usage_and_one_on_refusal() {
     setup.started(ROOT, None);
     let name = module_path!().split_once("::").unwrap().1;
     for (case, code) in [("success", 0), ("usage", 2), ("refusal", 1)] {
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &format!("{name}::delete_exits_zero_on_success_two_on_usage_and_one_on_refusal"),
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env("FIBER_HOME", setup.home())
-            .env("FIBER_CLI_DELETE_CHILD", case)
-            .current_dir(setup.workspace())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let group = child.id();
-        let watchdog = fakes::Watchdog::group(group);
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || tx.send(child.wait()));
-        let Ok(status) = Deadline::after(HUB_DEADLINE).recv(&rx) else {
-            assert!(fakes::kill_group(group, "KILL").unwrap());
-            Deadline::after(REAP_DEADLINE)
-                .recv(&rx)
-                .expect("the killed delete child must be reaped")
-                .unwrap();
-            panic!("waited {HUB_DEADLINE:?} for `fiber sessions delete` ({case}) to exit");
-        };
-        let status = status.unwrap();
-        assert!(!fakes::kill_group(group, "0").unwrap(), "a child remains");
-        watchdog.stand_down(REAP_DEADLINE);
-        assert_eq!(status.code(), Some(code), "{case}: {status}");
+        let output = fakes::rerun_prepared(
+            &format!("{name}::delete_exits_zero_on_success_two_on_usage_and_one_on_refusal"),
+            &[("FIBER_CLI_DELETE_CHILD", case)],
+            HUB_DEADLINE,
+            |command| {
+                command
+                    .env("FIBER_HOME", setup.home())
+                    .current_dir(setup.workspace());
+            },
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{case}: {}",
+            output.status
+        );
     }
 }
 

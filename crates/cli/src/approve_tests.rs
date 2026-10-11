@@ -4,19 +4,15 @@
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
+use std::process::Command;
 use std::time::Duration;
 
 use contract::ErrorCode;
 
 const APPROVE_CHILD: &str = "FIBER_CLI_APPROVE_EXIT_CHILD";
 const CHILD_DEADLINE: Duration = Duration::from_secs(5);
-const REAP_DEADLINE: Duration = Duration::from_secs(5);
 
 use super::{run, says_yes};
-use fakes::Deadline;
 
 /// A git repository declaring one hook, with Fiber home beside it.
 struct Setup {
@@ -261,37 +257,17 @@ fn approve_returns_zero_on_success_and_two_on_refusal() {
     let setup = Setup::new();
     let name = module_path!().split_once("::").unwrap().1;
     for (case, expected) in [("refuse", 2), ("yes", 0)] {
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &format!("{name}::approve_returns_zero_on_success_and_two_on_refusal"),
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(APPROVE_CHILD, case)
-            .env("FIBER_HOME", setup.home())
-            .current_dir(setup.repo())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        let (status_tx, status_rx) = mpsc::channel();
-        thread::spawn(move || {
-            let _sent = status_tx.send(child.wait().unwrap());
-        });
-        let status = match Deadline::after(CHILD_DEADLINE).recv(&status_rx) {
-            Ok(status) => status,
-            Err(_) => {
-                let _killed = fakes::kill_pid(pid, "KILL").unwrap();
-                Deadline::after(REAP_DEADLINE)
-                    .recv(&status_rx)
-                    .expect("the killed approve child is reaped");
-                panic!("waited {CHILD_DEADLINE:?} for `fiber approve` ({case}) to exit");
-            }
-        };
-        assert_eq!(status.code(), Some(expected), "{case}");
+        let output = fakes::rerun_prepared(
+            &format!("{name}::approve_returns_zero_on_success_and_two_on_refusal"),
+            &[(APPROVE_CHILD, case)],
+            CHILD_DEADLINE,
+            |command| {
+                command
+                    .env("FIBER_HOME", setup.home())
+                    .current_dir(setup.repo());
+            },
+        );
+        assert_eq!(output.status.code(), Some(expected), "{case}");
     }
 }
 

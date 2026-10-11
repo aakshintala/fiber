@@ -11,9 +11,7 @@ use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -823,15 +821,12 @@ fn device_on_a_key_provider_is_a_usage_error() {
 /// The child's marker: set, the test runs `run_login` and exits with its code.
 const CHILD: &str = "FIBER_CLI_TEST_CHILD";
 
-/// How long the child may run before the test kills its group and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(60);
-
-/// How long a reaped child may take to report after its group is killed.
-const REAP_DEADLINE: Duration = Duration::from_secs(10);
+/// How long the re-run child may run before the test kills its group and
+/// fails: half of nextest's per-test timeout less the cleanup bound.
+const CHILD_DEADLINE: Duration = Duration::from_secs(50);
 
 #[test]
 fn run_login_of_a_key_provider_with_device_is_a_usage_failure() {
-    use std::os::unix::process::ExitStatusExt;
     // Fails before any prompt or read of stdin. It runs in a child with a
     // Fiber home holding a key provider and no stdin.
     if std::env::var_os(CHILD).is_some() {
@@ -841,38 +836,14 @@ fn run_login_of_a_key_provider_with_device_is_a_usage_failure() {
     let setup = Setup::new();
     setup.install_key("acme");
     let name = module_path!().split_once("::").unwrap().1;
-    let child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::run_login_of_a_key_provider_with_device_is_a_usage_failure"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", setup.home())
-        .env(CHILD, "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let group = child.id();
-    let watchdog = fakes::Watchdog::group(group);
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || done.send(child.wait_with_output()));
-    let Ok(received) = Deadline::after(CHILD_DEADLINE).recv(&finished) else {
-        fakes::kill_group(group, "KILL").unwrap();
-        let killed = Deadline::after(REAP_DEADLINE)
-            .recv(&finished)
-            .map(|output| output.map(|output| output.status.signal()));
-        assert!(
-            matches!(killed, Ok(Ok(Some(9)))),
-            "the device child was not reaped as killed within {REAP_DEADLINE:?}: {killed:?}"
-        );
-        panic!("waited {CHILD_DEADLINE:?} for the device child to exit");
-    };
-    watchdog.stand_down(REAP_DEADLINE);
-    let output = received.unwrap();
+    let output = fakes::rerun_prepared(
+        &format!("{name}::run_login_of_a_key_provider_with_device_is_a_usage_failure"),
+        &[(CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            command.env("FIBER_HOME", setup.home());
+        },
+    );
     assert_eq!(output.status.code(), Some(2), "{output:?}");
 }
 

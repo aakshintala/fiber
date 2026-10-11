@@ -13,9 +13,6 @@ use std::fs;
 use std::io::{self, BufRead, Cursor, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use config::{
@@ -27,7 +24,6 @@ use extensions::Providers;
 use serde_json::{Value, json};
 
 use doors::failure;
-use fakes::Deadline;
 
 use super::{
     KeyReader, LoginIo, LoginName, LoginStored, LogoutTarget, Plain, credential_key, finish, login,
@@ -795,8 +791,9 @@ fn logout_without_a_provider_is_a_usage_failure() {
 /// The child's marker: set, the test runs `run_login` and exits with its code.
 const CHILD: &str = "FIBER_CLI_TEST_CHILD";
 
-/// How long the child may run before the test kills it and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+/// How long the re-run child may run before the test kills its group and
+/// fails: half of nextest's per-test timeout less the cleanup bound.
+const CHILD_DEADLINE: Duration = Duration::from_secs(50);
 
 #[test]
 fn login_of_an_unknown_provider_is_a_usage_failure() {
@@ -813,28 +810,15 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
     }
     let home = fakes::TempDir::new("fiber-login-child");
     let name = module_path!().split_once("::").unwrap().1;
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::login_of_an_unknown_provider_is_a_usage_failure"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env("FIBER_HOME", home.path())
-        .env(CHILD, "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(child.wait().unwrap()));
-    let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for `fiber login` of an unknown provider to exit");
-    };
-    assert_eq!(status.code(), Some(2), "{status}");
+    let output = fakes::rerun_prepared(
+        &format!("{name}::login_of_an_unknown_provider_is_a_usage_failure"),
+        &[(CHILD, "1")],
+        CHILD_DEADLINE,
+        |command| {
+            command.env("FIBER_HOME", home.path());
+        },
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", output.status);
 }
 
 #[test]

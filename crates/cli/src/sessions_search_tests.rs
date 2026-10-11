@@ -13,18 +13,13 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::os::unix::fs::symlink;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use contract::events::Event;
 use contract::session_search::LIMIT;
 use contract::{Envelope, ErrorCode, SessionId};
-use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
@@ -34,8 +29,6 @@ use super::{run, utc};
 const CHILD_DEADLINE: Duration = Duration::from_secs(10);
 
 /// How long a killed child may take to be reaped.
-const REAP_DEADLINE: Duration = Duration::from_secs(10);
-
 /// The query every fixture matches.
 const QUERY: &str = "retry budget";
 
@@ -732,37 +725,21 @@ fn search_exits_zero_on_success_and_usage_on_a_bad_home() {
         ("bad-home", "relative/home".to_owned(), 2),
         ("empty-home", String::new(), 2),
     ] {
-        let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                &format!("{name}::search_exits_zero_on_success_and_usage_on_a_bad_home"),
-                "--nocapture",
-                "--test-threads=1",
-            ])
-            .env(CHILD, case)
-            .env("FIBER_HOME", &home_value)
-            .current_dir(&workspace)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let group = child.id();
-        let watchdog = fakes::Watchdog::group(group);
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || tx.send(child.wait()));
-        let Ok(status) = Deadline::after(CHILD_DEADLINE).recv(&rx) else {
-            assert!(fakes::kill_group(group, "KILL").unwrap());
-            Deadline::after(REAP_DEADLINE)
-                .recv(&rx)
-                .expect("the killed search child must be reaped")
-                .unwrap();
-            panic!("waited {CHILD_DEADLINE:?} for `fiber sessions search` ({case}) to exit");
-        };
-        let status = status.unwrap();
-        assert!(!fakes::kill_group(group, "0").unwrap(), "a child remains");
-        watchdog.stand_down(REAP_DEADLINE);
-        assert_eq!(status.code(), Some(code), "{case}: {status}");
+        let output = fakes::rerun_prepared(
+            &format!("{name}::search_exits_zero_on_success_and_usage_on_a_bad_home"),
+            &[(CHILD, case)],
+            CHILD_DEADLINE,
+            |command| {
+                command
+                    .env("FIBER_HOME", &home_value)
+                    .current_dir(&workspace);
+            },
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{case}: {}",
+            output.status
+        );
     }
 }
