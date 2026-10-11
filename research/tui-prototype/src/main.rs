@@ -15,6 +15,7 @@ mod overlays;
 mod paged;
 mod panel;
 mod rail;
+mod theme;
 mod views;
 
 use crossterm::{execute, terminal};
@@ -245,6 +246,20 @@ fn tint(spans: Vec<Span<'static>>, bg: Color) -> Vec<Span<'static>> {
         .collect()
 }
 fn edge(ch: &str, inner: Color, outer: Option<Color>, w: usize) -> Row {
+    edge_for(theme::get(), ch, inner, outer, w)
+}
+/// The edge row for a look, so tests can pass theirs directly: under
+/// `NO_COLOR` there is no tint and no surface to edge, so the row is a
+/// blank that keeps its place; the logo's glyphs and stripes never pass
+/// through here and stay drawn.
+fn edge_for(look: theme::Look, ch: &str, inner: Color, outer: Option<Color>, w: usize) -> Row {
+    if look.depth == theme::Depth::None {
+        return Row {
+            spans: vec![sp(" ".repeat(w), Style::new())],
+            bg: outer,
+            ..Default::default()
+        };
+    }
     let mut s = fg(inner);
     if let Some(o) = outer {
         s = s.bg(o);
@@ -4801,6 +4816,7 @@ const SURFACES: &[cases::Surface] = &[
     rail::SURFACE,
     views::SURFACE,
     offers::SURFACE,
+    theme::SURFACE,
 ];
 
 // ============================================================ main
@@ -4836,6 +4852,8 @@ struct Args {
     view_case: Option<String>,
     /// the offer and one-question-form case (`--offer-case`), drawn instead of the conversation
     offer_case: Option<String>,
+    /// the theme case (`--theme`), combined with any other flag
+    theme: Option<String>,
     /// the rail design at start: 0 list, 1 cards, 2 tabs
     rail: u8,
     /// the B card density at start: 0 full, 1 medium, 2 compact
@@ -4903,6 +4921,7 @@ fn args() -> Args {
         rail_case: None,
         view_case: None,
         offer_case: None,
+        theme: None,
         rail: 1,
         density: 2,
         rail_share: 15.0,
@@ -4962,6 +4981,7 @@ fn args() -> Args {
             "--rail-case" => a.rail_case = it.next(),
             "--view-case" => a.view_case = it.next(),
             "--offer-case" => a.offer_case = it.next(),
+            "--theme" => a.theme = it.next(),
             "--rail" => {
                 a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
                     Some("A") => 0,
@@ -5004,7 +5024,7 @@ fn args() -> Args {
             "--login" => a.login = it.next(),
             "-h" | "--help" => {
                 print!(
-                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--theme CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
                     cases::help(SURFACES)
                 );
                 std::process::exit(0);
@@ -5106,6 +5126,10 @@ fn settle(mut ev: Vec<Value>) -> Vec<Value> {
 fn main() -> io::Result<()> {
     let t0 = Instant::now();
     let mut a = args();
+    // The look is set once, before the terminal is touched, so an
+    // unknown `--theme` case stays a plain error with no cleanup owed.
+    let look = theme::resolve(a.theme.as_deref(), |k| std::env::var(k).ok())?;
+    theme::init(look);
     if a.no_pending {
         // the settled lines go to a file of their own, so the paged mode reads them too
         let ev: Vec<Value> = std::fs::read_to_string(&a.path)?
@@ -5168,7 +5192,12 @@ fn main() -> io::Result<()> {
     if a.hover {
         out.write_all(HOVER_ON.as_bytes())?;
     }
-    let mut term = Terminal::new(CrosstermBackend::new(out))?;
+    let mut term = Terminal::new(theme::Themed::new(CrosstermBackend::new(out)))?;
+    if theme::needs_clear(look) {
+        // The light background is painted, not the terminal's: clear
+        // with it once so unpainted cells match every drawn one.
+        term.clear()?;
+    }
     let mut home_switched = false;
     let res: io::Result<String> = if a.home.is_some() {
         match home_next(home::run_home(&a, &mut term)) {
@@ -5231,7 +5260,7 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-type Term = Terminal<CrosstermBackend<Counting<BufWriter<io::Stdout>>>>;
+type Term = Terminal<theme::Themed<CrosstermBackend<Counting<BufWriter<io::Stdout>>>>>;
 
 #[allow(clippy::too_many_arguments)]
 fn run(
@@ -7100,6 +7129,7 @@ mod tests {
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
                 "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills",
                 "--offer-case offer, confirm, select, multi_select, text_input",
+                "--theme light, dark-256, light-256, dark-no-color",
             ]
         );
         let h = cases::help(SURFACES);

@@ -22,6 +22,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--home [CASE]` | draws the home screen case instead of the conversation, or the live home with no case; see "Home (#1628, #1657)" |
 | `--overlay CASE` | draws one overlay case over a dimmed conversation; see "Overlays (#1630)" |
 | `--rail-case CASE` | draws one rail-cards case instead of the conversation; see "The rail (#692)" |
+| `--theme CASE` | draws the screen in another theme or colour depth; combines with any other flag; see "Themes (#1634)" |
 | `--rail A\|B\|C` | the session rail design at start: list, cards, or tabs; the default is B; F2 cycles; see "The rail (#692)" |
 | `--rail-share P` | the rail's width at start, as a percent of the window; the default is 15, clamped to [22, 48] columns |
 | `--panel-share P` | the panel's width at start, as a percent of the window; the default is 21 (34 columns at 160), clamped to [30, 60] columns |
@@ -598,3 +599,30 @@ Five still frames from the fixtures in `src/offers.rs`: the repository's offer o
 | `select` | `cargo run --release -- fixtures/session.jsonl --static --offer-case select`: the question with labelled options and descriptions, and Chat about this with no Submit row |
 | `multi_select` | `cargo run --release -- fixtures/session.jsonl --static --offer-case multi_select`: the question with toggles and choose any, the Submit row, then Chat about this |
 | `text_input` | `cargo run --release -- fixtures/session.jsonl --static --offer-case text_input`: the question with only the answer-in-words row, the Submit row, then Chat about this |
+
+## Themes (#1634)
+
+`--theme CASE` draws the screen in another theme or colour depth and
+combines with any other flag: the same `--static` fixture frame, overlay,
+home screen or swapped view, recoloured once at the backend. The default is
+dark truecolour. `NO_COLOR` set and not empty turns colour off whatever the
+flag says. At 256 colours each colour is the nearest xterm palette entry:
+neutral tints take the grey ramp, other tints the colour cube, text either;
+the terminal's own 16 colours are never used. With colour off every role is
+the terminal's default, bold, dim, reversed and underline stay, and
+half-block edges draw blank but keep their rows.
+
+```sh
+cargo run --release -- fixtures/session.jsonl --static --theme light
+cargo run --release -- fixtures/session.jsonl --static --theme dark-256
+cargo run --release -- fixtures/session.jsonl --static --theme light-256
+cargo run --release -- fixtures/session.jsonl --static --theme dark-no-color
+NO_COLOR=1 cargo run --release -- fixtures/session.jsonl --static
+```
+
+| Case | How to reach it |
+|---|---|
+| `light` | `--theme light`: the light theme in truecolour |
+| `dark-256` | `--theme dark-256`: the dark theme forced to 256 colours |
+| `light-256` | `--theme light-256`: the light theme forced to 256 colours |
+| `dark-no-color` | `--theme dark-no-color`, or `NO_COLOR=1`: no colour anywhere |
