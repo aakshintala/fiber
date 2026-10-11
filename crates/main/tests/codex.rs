@@ -146,7 +146,6 @@ impl Drop for KillGroup {
     }
 }
 
-/// A stored codex token carrying `account`, expiring in 2100.
 /// The turn's own requests. The background quota() fetch races the turn: it
 /// may or may not be recorded yet, so it is left out.
 fn turn_requests(server: &ProviderServer) -> Vec<Request> {
@@ -157,6 +156,7 @@ fn turn_requests(server: &ProviderServer) -> Vec<Request> {
         .collect()
 }
 
+/// A stored codex token carrying `account`, expiring in 2100.
 fn token(account: &str) -> String {
     fakes::jwt(&json!({
         "https://api.openai.com/auth": { "chatgpt_account_id": account },
