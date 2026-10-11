@@ -172,10 +172,14 @@ On Linux x86_64 alone:
 - mutation testing: `cargo-mutants --in-diff`, split across runners. It runs
   on a ready pull request and on a draft pull request
   that carries the label `mutants`, never on a push to `main`; an unlabelled draft skips it, and adding
-  the label starts a run. Shards start once the `test` job passes on every
-  platform the run tests (a job can wait for another job, not one platform's
-  leg of it),
-  so a run whose tests fail starts none, and a run that selects no tests
+  the label starts a run. Shards start once the Linux x86_64 test job, its own
+  job `test_linux` (a job can wait for another job, not one platform's leg of
+  it), passes on the head; the arm64 and macOS legs, the `test` job, run in
+  parallel and still gate `CI`. Each shard runs `cargo mutants --baseline=skip`,
+  since the tests it would rerun as a baseline just passed on this head.
+  Selection lists the diff's mutants (`cargo mutants --in-diff --list`) to its
+  job summary on every code pull request event, draft or not, whether or not
+  shards will run. A run whose Linux x86_64 tests fail starts none, and a run that selects no tests
   runs no mutants. The selection counts the diff's mutants
   (`cargo mutants --list`) and plans one shard per 15 of them, rounded up, at
   most 16; a diff with no mutants starts none. Recent runs (#1461, #1395)

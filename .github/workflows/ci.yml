@@ -144,10 +144,23 @@ jobs:
           MUTANTS: ${{ github.event_name == 'pull_request' && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'mutants')) }}
         run: |
           # The shard count follows the diff's mutant count (docs/ci.md, "Mutation testing").
+          # Every code pull request lists the diff's mutants, draft or not, so a
+          # lane reads them before CI runs its shards; only `MUTANTS` starts shards.
           count=0
-          if [ "$MUTANTS" = true ] && [ "$MODE" != docs ]; then
+          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$MODE" != docs ]; then
             git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
-            count=$(cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --list | wc -l)
+            cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --list >"$RUNNER_TEMP/mutants.txt"
+            {
+              echo "### Mutants in the diff: $(wc -l <"$RUNNER_TEMP/mutants.txt")"
+              echo '```'
+              cat "$RUNNER_TEMP/mutants.txt"
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+            # A lane on the command line reads the log: `gh run view` prints no summaries.
+            cat "$RUNNER_TEMP/mutants.txt"
+            if [ "$MUTANTS" = true ]; then
+              count=$(wc -l <"$RUNNER_TEMP/mutants.txt")
+            fi
           fi
           echo "mutants in the diff: $count"
           cargo xtask plan --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
@@ -198,23 +211,24 @@ jobs:
             echo "Cargo.lock is unchanged"
           fi
 
-  test:
+  # Linux x86_64 is its own job so `mutants` can wait for it alone (a job
+  # cannot wait for one leg of a matrix). `test` below runs the other
+  # platforms with the same steps.
+  test_linux:
     name: Tests (${{ matrix.runner }})
     needs: select
     if: fromJSON(needs.select.outputs.jobs).test
     strategy:
-      fail-fast: false
       matrix:
-        # A draft runs Linux x86_64 only; marking it ready runs all three (docs/ci.md).
-        runner: ${{ github.event.pull_request.draft && fromJSON('["ubuntu-24.04"]') || fromJSON('["ubuntu-24.04", "ubuntu-24.04-arm", "macos-26"]') }}
+        runner: [ubuntu-24.04]
     runs-on: ${{ matrix.runner }}
-    # Warm medians: Linux 4 min, macOS 7 min. The slowest passing run of the last
-    # 25, a window that holds the cache-eviction runs, took 9 min on Linux and
-    # 12 min on macOS; the bound is twice that (docs/ci.md, "Job time limits").
-    timeout-minutes: ${{ matrix.runner == 'macos-26' && 25 || 20 }}
+    # Warm median 4 min; the slowest passing run of the last 25, a window that
+    # holds the cache-eviction runs, took 9 min; the bound is twice that
+    # (docs/ci.md, "Job time limits").
+    timeout-minutes: 20
     env:
       BASE: ${{ needs.select.outputs.base }}
-    steps:
+    steps: &test-steps
       - *checkout-full
       - *toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -322,9 +336,27 @@ jobs:
           path: ${{ runner.temp }}/flaky-tests-${{ matrix.runner }}.txt
           if-no-files-found: ignore
 
+  # Linux arm64 and macOS. A draft skips it: a draft runs Linux x86_64 only,
+  # and marking it ready runs all three (docs/ci.md).
+  test:
+    name: Tests (${{ matrix.runner }})
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).test && !github.event.pull_request.draft
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, macos-26]
+    runs-on: ${{ matrix.runner }}
+    # Warm medians: Linux 4 min, macOS 7 min. The slowest passing run of the last
+    # 25 took 12 min on macOS; the bound is twice that (docs/ci.md, "Job time limits").
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 25 || 20 }}
+    env:
+      BASE: ${{ needs.select.outputs.base }}
+    steps: *test-steps
+
   mutants:
     name: Mutants (shard ${{ matrix.shard }})
-    needs: [select, test]
+    needs: [select, test_linux]
     if: fromJSON(needs.select.outputs.jobs).mutants
     strategy:
       fail-fast: false
@@ -361,8 +393,10 @@ jobs:
             echo "no mutants in shard $SHARD"
             exit 0
           fi
+          # The Linux x86_64 tests passed on this head before the shard
+          # started, so the baseline run adds nothing (docs/ci.md).
           cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --test-tool nextest \
-            --shard "$SHARD/$SHARD_TOTAL"
+            --baseline=skip --shard "$SHARD/$SHARD_TOTAL"
 
   bug_red:
     name: Bug fix fails at the red commit
@@ -567,7 +601,7 @@ jobs:
 
   backstop_report:
     name: Report a failed backstop
-    needs: [select, lint, test, mutants, release]
+    needs: [select, lint, test_linux, test, mutants, release]
     if: failure() && github.event_name == 'push'
     runs-on: ubuntu-24.04
     # No history: it makes only gh calls.
@@ -596,8 +630,8 @@ jobs:
   # needs: a failed prune leaves the cache larger, and the next backstop retries.
   cache_prune:
     name: Prune the build cache
-    needs: [test, release]
-    if: always() && github.event_name == 'push' && needs.test.result == 'success' && needs.release.result == 'success'
+    needs: [test_linux, test, release]
+    if: always() && github.event_name == 'push' && needs.test_linux.result == 'success' && needs.test.result == 'success' && needs.release.result == 'success'
     runs-on: ubuntu-24.04
     # No build: it makes only git and gh calls.
     timeout-minutes: 5
@@ -665,8 +699,8 @@ jobs:
   # Not in `ci`'s needs: a flake never fails the merge.
   flake_report:
     name: Report flaky tests
-    needs: test
-    if: always() && needs.test.result != 'skipped'
+    needs: [test_linux, test]
+    if: always() && (needs.test_linux.result != 'skipped' || needs.test.result != 'skipped')
     runs-on: ubuntu-24.04
     # No history: it makes only gh calls.
     timeout-minutes: 5
@@ -735,7 +769,7 @@ jobs:
   ci:
     # On a draft the required `CI` check stays pending, so a draft's partial run never satisfies it.
     name: ${{ github.event.pull_request.draft && 'CI (draft)' || 'CI' }}
-    needs: [select, lint, test, mutants, bug_red, release]
+    needs: [select, lint, test_linux, test, mutants, bug_red, release]
     if: always()
     runs-on: ubuntu-24.04
     # Median 46 s; floor.
@@ -750,4 +784,11 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           JOBS: ${{ needs.select.outputs.jobs }}
-        run: cargo xtask verdict
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          # A draft skips the arm64 and macOS `test` job (docs/ci.md).
+          if [ "$DRAFT" = true ]; then
+            JOBS=$(jq -c '.test = false' <<<"$JOBS")
+            export JOBS
+          fi
+          cargo xtask verdict

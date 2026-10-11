@@ -10,6 +10,7 @@ fn jobs(
 ) -> BTreeMap<&'static str, bool> {
     BTreeMap::from([
         ("lint", lint),
+        ("test_linux", test),
         ("test", test),
         ("mutants", mutants),
         ("bug_red", bug_red),
