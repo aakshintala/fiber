@@ -115,17 +115,12 @@ impl Log {
 /// Words, `len` characters of them.
 fn words(len: usize, seed: usize) -> String {
     let source = "the session log holds every durable line and the terminal pages it by seq ";
-    let mut text = String::with_capacity(len);
-    let mut at = seed % source.len();
-    while text.len() < len {
-        let rest = source.get(at..).unwrap_or_default();
-        text.push_str(
-            rest.get(..len.saturating_sub(text.len()).min(rest.len()))
-                .unwrap_or(rest),
-        );
-        at = 0;
-    }
-    text
+    source
+        .chars()
+        .cycle()
+        .skip(seed % source.len())
+        .take(len)
+        .collect()
 }
 
 /// The heavy session, repeated `scale` times, then a turn still running.
