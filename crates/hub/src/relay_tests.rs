@@ -277,6 +277,11 @@ fn only_an_acknowledgement_of_the_replayed_id_is_dropped() {
     ));
 }
 
+/// Maps `acknowledgement` to the `(id, verdict)` its old shape returned.
+fn verdict(line: &[u8]) -> Option<(String, Verdict)> {
+    acknowledgement(line).map(|ack| (ack.id, ack.verdict))
+}
+
 #[test]
 fn an_acknowledgement_names_its_command_and_whether_it_is_closing() {
     let line = |kind: &str, payload: Value| {
@@ -284,36 +289,76 @@ fn an_acknowledgement_names_its_command_and_whether_it_is_closing() {
     };
     let closing = json!({"command_id": "c_1", "code": "closing", "message": "m"});
     assert_eq!(
-        acknowledgement(&line("command_rejected", closing.clone())),
+        verdict(&line("command_rejected", closing.clone())),
         Some(("c_1".to_owned(), Verdict::Closing))
     );
     assert_eq!(
-        acknowledgement(&line("command_accepted", closing.clone())),
+        verdict(&line("command_accepted", closing.clone())),
         Some(("c_1".to_owned(), Verdict::Accepted))
     );
     let other = json!({"command_id": "c_1", "code": "busy", "message": "m"});
     assert_eq!(
-        acknowledgement(&line("command_rejected", other)),
+        verdict(&line("command_rejected", other)),
         Some(("c_1".to_owned(), Verdict::Rejected))
     );
     assert_eq!(
-        acknowledgement(&line("command_rejected", json!({"command_id": "c_1"}))),
+        verdict(&line("command_rejected", json!({"command_id": "c_1"}))),
         Some(("c_1".to_owned(), Verdict::Rejected))
     );
     // No acknowledgement at all.
-    assert_eq!(acknowledgement(&line("session_status", closing)), None);
+    assert_eq!(verdict(&line("session_status", closing)), None);
     assert_eq!(
-        acknowledgement(&line("command_rejected", json!({"code": "closing"}))),
+        verdict(&line("command_rejected", json!({"code": "closing"}))),
         None
     );
+    assert_eq!(verdict(&line("command_rejected", Value::Null)), None);
+    assert_eq!(verdict(b"not json\n"), None);
     assert_eq!(
-        acknowledgement(&line("command_rejected", Value::Null)),
+        verdict(&serde_json::to_vec(&json!({"payload": {"command_id": "c_1"}})).unwrap()),
         None
     );
-    assert_eq!(acknowledgement(b"not json\n"), None);
+    // `rewound` names the session an accepted `rewind` starts.
+    let rewound = |next: Value| {
+        acknowledgement(&line(
+            "command_accepted",
+            json!({"command_id": "c_rw", "result": {"new_session_id": next}}),
+        ))
+        .and_then(|ack| ack.rewound)
+    };
     assert_eq!(
-        acknowledgement(&serde_json::to_vec(&json!({"payload": {"command_id": "c_1"}})).unwrap()),
-        None
+        rewound(json!("s_bbbbbbbbbbbbbbbb")),
+        Some(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned())),
+        "an accepted acknowledgement naming a minted session"
+    );
+    // A rejection starts nothing, whatever it names.
+    assert_eq!(
+        acknowledgement(&line(
+            "command_rejected",
+            json!({"command_id": "c_rw", "code": "busy", "message": "m", "result": {"new_session_id": "s_bbbbbbbbbbbbbbbb"}}),
+        ))
+        .and_then(|ack| ack.rewound),
+        None,
+    );
+    // A minted shape only: the wrong length, the wrong case, a non-string
+    // and a missing `result` all start nothing.
+    for next in [
+        json!("s_x"),
+        json!(format!("s_{}", "b".repeat(17))),
+        json!(format!("s_{}", "B".repeat(16))),
+        Value::Null,
+        json!({"id": "x"}),
+    ] {
+        assert_eq!(
+            rewound(next.clone()),
+            None,
+            "an accepted acknowledgement naming {next} starts nothing"
+        );
+    }
+    assert_eq!(
+        acknowledgement(&line("command_accepted", json!({"command_id": "c_rw"})))
+            .and_then(|ack| ack.rewound),
+        None,
+        "an accepted acknowledgement with no result starts nothing"
     );
 }
 
@@ -407,7 +452,16 @@ fn an_accepted_prompt_ack_settles_to_nothing() {
         command("c_1", "prompt"),
         true,
     )]));
-    assert!(settle(&ack("c_1"), &kept, &hub, sid, false).is_none());
+    assert!(
+        settle(
+            acknowledgement(&ack("c_1")).as_ref(),
+            &kept,
+            &hub,
+            sid,
+            false
+        )
+        .is_none()
+    );
     assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
     assert_eq!(
         relays.subscription(sid),
@@ -420,7 +474,13 @@ fn an_accepted_prompt_ack_settles_to_nothing() {
         command("c_2", "subscribe"),
         true,
     )]));
-    match settle(&ack("c_2"), &kept, &hub, sid, false) {
+    match settle(
+        acknowledgement(&ack("c_2")).as_ref(),
+        &kept,
+        &hub,
+        sid,
+        false,
+    ) {
         Some(Settled::Subscribed(line)) => assert_eq!(line, command("c_2", "subscribe")),
         settled => panic!("an accepted subscribe replaces, got {}", settled.is_some()),
     }
@@ -451,7 +511,7 @@ fn a_rejected_subscribe_settles_to_nothing() {
     )]));
     assert!(
         settle(
-            &rejected("c_1", "invalid_arguments"),
+            acknowledgement(&rejected("c_1", "invalid_arguments")).as_ref(),
             &kept,
             &hub,
             sid,
@@ -467,7 +527,16 @@ fn a_rejected_subscribe_settles_to_nothing() {
         subscribe("c_2"),
         true,
     )]));
-    assert!(settle(&rejected("c_2", "closing"), &kept, &hub, sid, false).is_none());
+    assert!(
+        settle(
+            acknowledgement(&rejected("c_2", "closing")).as_ref(),
+            &kept,
+            &hub,
+            sid,
+            false
+        )
+        .is_none()
+    );
     assert!(kept.lock().unwrap().is_empty(), "the rejection is consumed");
 }
 
@@ -616,7 +685,7 @@ fn an_accepted_rewind_settles_to_the_session_it_names() {
         "payload": {"command_id": "c_rw1", "result": {"new_session_id": next}},
     }))
     .unwrap();
-    match settle(&ack, &kept, &hub, sid, false) {
+    match settle(acknowledgement(&ack).as_ref(), &kept, &hub, sid, false) {
         Some(Settled::Rewound(started)) => assert_eq!(started.0, next),
         settled => panic!("an accepted rewind starts, got {}", settled.is_some()),
     }
@@ -643,7 +712,14 @@ fn a_rewind_without_a_minted_session_settles_to_nothing() {
     }))
     .unwrap();
     assert!(
-        settle(&rejected, &kept_for(rewind.clone()), &hub, sid, false).is_none(),
+        settle(
+            acknowledgement(&rejected).as_ref(),
+            &kept_for(rewind.clone()),
+            &hub,
+            sid,
+            false
+        )
+        .is_none(),
         "a rejected rewind starts nothing"
     );
     // An acknowledgement naming no minted session starts nothing.
@@ -654,7 +730,14 @@ fn a_rewind_without_a_minted_session_settles_to_nothing() {
         }))
         .unwrap();
         assert!(
-            settle(&ack, &kept_for(rewind.clone()), &hub, sid, false).is_none(),
+            settle(
+                acknowledgement(&ack).as_ref(),
+                &kept_for(rewind.clone()),
+                &hub,
+                sid,
+                false
+            )
+            .is_none(),
             "an acknowledgement naming {next} starts nothing"
         );
     }
@@ -665,7 +748,14 @@ fn a_rewind_without_a_minted_session_settles_to_nothing() {
     }))
     .unwrap();
     assert!(
-        settle(&bare, &kept_for(rewind), &hub, sid, false).is_none(),
+        settle(
+            acknowledgement(&bare).as_ref(),
+            &kept_for(rewind),
+            &hub,
+            sid,
+            false
+        )
+        .is_none(),
         "an acknowledgement with no result starts nothing"
     );
 }
@@ -691,7 +781,7 @@ fn an_accepted_prompt_naming_a_minted_session_starts_nothing() {
     }))
     .unwrap();
     assert!(
-        settle(&ack, &kept, &hub, sid, false).is_none(),
+        settle(acknowledgement(&ack).as_ref(), &kept, &hub, sid, false).is_none(),
         "an accepted prompt starts nothing, even with a minted-shape session"
     );
     assert!(kept.lock().unwrap().is_empty(), "the ack is consumed");
@@ -708,14 +798,23 @@ fn muted_drops_each_replay_once() {
     };
     let replayed: Replayed = Replayed::default();
     replayed.lock().unwrap().push("c_hub".to_owned());
-    assert!(muted(&ack("c_hub"), &replayed));
+    assert!(muted(acknowledgement(&ack("c_hub")).as_ref(), &replayed));
     assert!(
         replayed.lock().unwrap().is_empty(),
         "a replayed acknowledgement is consumed"
     );
-    assert!(!muted(&ack("c_hub"), &replayed), "only once");
-    assert!(!muted(&ack("c_1"), &replayed), "other ids pass through");
-    assert!(!muted(b"not json\n", &replayed), "not an acknowledgement");
+    assert!(
+        !muted(acknowledgement(&ack("c_hub")).as_ref(), &replayed),
+        "only once"
+    );
+    assert!(
+        !muted(acknowledgement(&ack("c_1")).as_ref(), &replayed),
+        "other ids pass through"
+    );
+    assert!(
+        !muted(acknowledgement(b"not json\n").as_ref(), &replayed),
+        "not an acknowledgement"
+    );
 }
 
 #[test]
@@ -1856,4 +1955,137 @@ fn a_transfer_does_not_use_another_sessions_live_relay() {
     assert!(!relays.transfer(sid, &line));
     assert_eq!(relays.subscription(sid), Some(line));
     assert!(replayed.lock().unwrap().is_empty());
+}
+
+#[test]
+fn the_relay_parses_each_session_line_once() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+    const DEADLINE: Duration = Duration::from_secs(10);
+    const SID: &str = "s_0123456789abcdef";
+    const NEXT: &str = "s_bbbbbbbbbbbbbbbb";
+    let held = fakes::TempDir::new("rp");
+    let hub = Arc::new(hub(&held));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
+    // `kept` holds `c_1` (a `prompt`) and `c_rw` (a `rewind`, sent).
+    let kept: Kept = Arc::new(Mutex::new(vec![
+        (
+            "c_1".to_owned(),
+            json!({"id": "c_1", "command": "prompt", "args": {}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            true,
+        ),
+        (
+            "c_rw".to_owned(),
+            json!({"id": "c_rw", "command": "rewind", "args": {}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            true,
+        ),
+    ]));
+    // `replayed` holds `c_hub`.
+    let replayed: Replayed = Arc::new(Mutex::new(vec!["c_hub".to_owned()]));
+    let (order, gone) = {
+        let held = crate::connection::lock(&relays);
+        (held.order.clone(), held.rejoin.closed_flag())
+    };
+    order.enqueue(SID, "c_1");
+    order.enqueue(SID, "c_rw");
+    let line = |text: &str| format!("{text}\n");
+    let session_lines = [
+        line(r#"{"kind":"session_status","ts":1,"schema_version":1,"payload":{}}"#),
+        line("not json"),
+        line(
+            r#"{"kind":"command_accepted","ts":1,"schema_version":1,"payload":{"command_id":"c_hub"}}"#,
+        ),
+        line(
+            r#"{"kind":"command_accepted","ts":1,"schema_version":1,"payload":{"command_id":"c_1"}}"#,
+        ),
+        line(
+            r#"{"kind":"command_rejected","ts":1,"schema_version":1,"payload":{"command_id":"c_9","code":"busy","message":"m"}}"#,
+        ),
+        line(&format!(
+            r#"{{"kind":"command_accepted","ts":1,"schema_version":1,"payload":{{"command_id":"c_rw","result":{{"new_session_id":"{NEXT}"}}}}}}"#
+        )),
+    ];
+    // Every line is written, and the session half dropped, before the
+    // relay starts reading, so the count never depends on its timing.
+    let (session, mut session_peer) = UnixStream::pair().unwrap();
+    for text in &session_lines {
+        session_peer.write_all(text.as_bytes()).unwrap();
+    }
+    session_peer.flush().unwrap();
+    drop(session_peer);
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client = Arc::new(Mutex::new(client_write));
+    let epoch = crate::connection::lock(&relays).mint();
+    let (count_tx, count_rx) = mpsc::channel();
+    let thread = std::thread::Builder::new()
+        .name("hub-relay-count".to_owned())
+        .spawn({
+            let hub = Arc::clone(&hub);
+            let relays = Arc::clone(&relays);
+            move || {
+                relay(
+                    RelayThread {
+                        epoch,
+                        replayed,
+                        kept,
+                        order,
+                        gone,
+                    },
+                    SID,
+                    session,
+                    &hub,
+                    &client,
+                    &relays,
+                );
+                count_tx.send(ack_parses()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    // The client reads what the relay passes back: every line but the
+    // muted replay and the unknown acknowledgement, in order. One
+    // deadline for the whole wait.
+    let (lines_tx, lines_rx) = mpsc::channel();
+    let reader = std::thread::Builder::new()
+        .name("hub-relay-client".to_owned())
+        .spawn(move || {
+            let mut read = BufReader::new(client_read);
+            let mut got = Vec::new();
+            for _ in 0..4 {
+                let mut text = String::new();
+                match read.read_line(&mut text) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => got.push(text),
+                }
+            }
+            lines_tx.send(got).unwrap_or(());
+        })
+        .unwrap();
+    let got = Deadline::after(DEADLINE)
+        .recv(&lines_rx)
+        .expect("the client reads the four forwarded lines before its deadline");
+    reader.join().unwrap();
+    assert_eq!(
+        got,
+        vec![
+            session_lines[0].clone(),
+            session_lines[1].clone(),
+            session_lines[3].clone(),
+            session_lines[5].clone(),
+        ],
+        "the relay forwards every line but the muted replay and the unknown acknowledgement"
+    );
+    join_within_deadline(thread);
+    assert_eq!(
+        Deadline::after(DEADLINE).recv(&count_rx).ok(),
+        Some(6),
+        "the relay parses each session line once"
+    );
 }
