@@ -526,11 +526,7 @@ fn copy_cols(width: u16) -> Option<Range<u16>> {
 /// none, and too narrow for `copy` it has neither.
 fn header(label: &str, width: usize) -> Line<'static> {
     let copy = if width >= COPY.len() { COPY } else { "" };
-    let room = if width >= COPY.len().saturating_add(2) {
-        width.saturating_sub(COPY.len().saturating_add(2))
-    } else {
-        0
-    };
+    let room = width.saturating_sub(COPY.len().saturating_add(2));
     let shown = truncate(label, room);
     let lead = if width > COPY.len() { " " } else { "" };
     let pad = width.saturating_sub(
