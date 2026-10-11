@@ -386,49 +386,60 @@ pub(crate) fn run_new(
         run_one_turn,
         cancel,
         |inbox, cancel| {
-            // `Loop::start` writes `session_started`, which `fiber_started`
-            // follows (`docs/events.md`); a rewind's start writes the
+            // The commit writes the session's first lines together, so a
+            // signal recorded before them writes nothing: `Loop::start`
+            // writes `session_started`, which `fiber_started` follows
+            // (`docs/events.md`); a rewind's start writes the
             // `session_started` that continues the old log instead, and a
             // delegate opens through `Loop::delegate`, naming its parent.
-            let started = match (rewound, parent) {
-                (Some(start), _) => Loop::rewound(
-                    Arc::clone(&log),
-                    start,
-                    provider,
-                    model,
-                    prompt_inputs,
-                    inbox,
-                    r#loop::capped(tools, &caps),
-                    permissions,
-                ),
-                (None, Some(parent)) => Loop::delegate(
-                    Arc::clone(&log),
-                    provider,
-                    model,
-                    prompt_inputs,
-                    inbox,
-                    r#loop::capped(tools, &caps),
-                    permissions,
-                    parent,
-                ),
-                (None, None) => Loop::start(
-                    Arc::clone(&log),
-                    provider,
-                    model,
-                    prompt_inputs,
-                    inbox,
-                    r#loop::capped(tools, &caps),
-                    permissions,
-                    worktree,
-                ),
-            };
-            finish(
+            let committed = signals.commit(|| {
+                let started = match (rewound, parent) {
+                    (Some(start), _) => Loop::rewound(
+                        Arc::clone(&log),
+                        start,
+                        provider,
+                        model,
+                        prompt_inputs,
+                        inbox,
+                        r#loop::capped(tools, &caps),
+                        permissions,
+                    ),
+                    (None, Some(parent)) => Loop::delegate(
+                        Arc::clone(&log),
+                        provider,
+                        model,
+                        prompt_inputs,
+                        inbox,
+                        r#loop::capped(tools, &caps),
+                        permissions,
+                        parent,
+                    ),
+                    (None, None) => Loop::start(
+                        Arc::clone(&log),
+                        provider,
+                        model,
+                        prompt_inputs,
+                        inbox,
+                        r#loop::capped(tools, &caps),
+                        permissions,
+                        worktree,
+                    ),
+                };
                 started.and_then(|looped| {
                     r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
                     session_extensions::written(&log, &extensions)?;
                     r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
+                    Ok(looped)
+                })
+            });
+            let started = match committed {
+                Err(code) => return Ok(Some(code)),
+                Ok(started) => started,
+            };
+            finish(
+                started.map(|looped| {
                     let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
-                    Ok(looped
+                    looped
                         .reviewer_notes(reviewer_notes)
                         .handoff(handoff)
                         .on_handoff(forget)
@@ -439,7 +450,7 @@ pub(crate) fn run_new(
                             rows: prompt_rows,
                             fetch,
                         })
-                        .inbox_wake(inbox_wake))
+                        .inbox_wake(inbox_wake)
                 }),
                 budget,
                 idle,
@@ -453,6 +464,7 @@ pub(crate) fn run_new(
                 retry,
                 cancel,
             )
+            .map(|()| None)
         },
     );
     if let Some(case_driver) = case_driver {

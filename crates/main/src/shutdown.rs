@@ -2,8 +2,7 @@
 //! "Shutdown"): the callbacks the signals thread runs, wired to the turn's
 //! cancel, the session's jobs, the door side, a switch's credential read,
 //! and every listed process group, MCP servers' included. A `close` with
-//! `now` takes the same path with exit code 0,
-//! takes the same path with exit code 0, through the hook wired here.
+//! `now` takes the same path with exit code 0, through the hook wired here.
 
 use std::sync::Arc;
 
@@ -46,7 +45,8 @@ pub(crate) fn arm_isolating(signals: &Signals, reads: &Arc<crate::switch::Reads>
     );
 }
 /// Starts the session just before its first line: the code of a signal
-/// that came while armed, or `None` with the shutdown wired. A shutdown
+/// that came while armed, or `None` with the shutdown wired, still armed
+/// until [`Signals::commit`] decides recorded versus started. A shutdown
 /// cancels the turn for good, ends a switch's credential read and kills its
 /// command, wakes the loop, and stops every job; a second SIGTERM or SIGINT
 /// kills every command group at once. With `None`, a
