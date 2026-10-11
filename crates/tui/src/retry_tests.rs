@@ -189,11 +189,15 @@ fn quit_ends_the_watched_read_and_shuts_the_stream() {
             .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the stopped read: {err}")),
         "quit stops the watched read"
     );
-    // The shutdown already ran, so the peer's read sees the end at once.
+    // The shutdown already ran, so the peer's read sees the end at once:
+    // nonblocking, a missing shutdown fails as `WouldBlock`, with no wait.
+    theirs
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
     let mut buf = [0u8; 1];
     assert_eq!(
-        std::io::Read::read(&mut &theirs, &mut buf).unwrap_or(0),
-        0,
+        std::io::Read::read(&mut &theirs, &mut buf).ok(),
+        Some(0),
         "quit shuts the stream down"
     );
 }
