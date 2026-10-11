@@ -34,9 +34,26 @@ use support::{
     session_dir, start_session, subscribe, until, write_json,
 };
 
-/// Declares the MCP server `db` in the workspace's repository file.
+/// Declares the MCP server `db` in the workspace's repository file: a
+/// server that really answers, so an approval starts it. `/bin/bash`
+/// runs the repository's copy of the MCP fixture on a directory beside
+/// the workspace; the copy is what the approval pins.
 fn declare_db(setup: &Setup, extra: &Value) {
-    let mut entry = json!({"command": "/bin/echo"});
+    let script = std::fs::read(fakes::mcp_fixture()).unwrap();
+    let srv = setup.workspace().join("srv");
+    std::fs::create_dir_all(&srv).unwrap();
+    std::fs::write(srv.join("server.sh"), script).unwrap();
+    let dir = setup.root.path().join("fx");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("tools.json"),
+        json!([{"name": "echo"}]).to_string(),
+    )
+    .unwrap();
+    let mut entry = json!({
+        "command": "/bin/bash",
+        "args": ["srv/server.sh", dir.display().to_string()],
+    });
     for (key, value) in extra.as_object().unwrap() {
         entry[key] = value.clone();
     }
@@ -270,6 +287,21 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
     drop(client);
     assert!(session.wait().success());
     assert_eq!(server.requests().len(), 1);
+    // The server approved in the session's own offer starts before the
+    // first model request: the preamble declares its tools.
+    let text = fs::read_to_string(session_dir(&setup, &id).join("events.jsonl")).unwrap();
+    let built = text
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    let tools: Vec<&str> = built["payload"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(tools.iter().any(|name| *name == "mcp__db__echo"), "{tools:?}");
     // The complete, ordered durable kinds: the offer is raised and resolved
     // before the preamble, then the turn runs.
     assert_eq!(

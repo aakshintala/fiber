@@ -30,12 +30,24 @@ fn empty_servers() -> crate::mcp_servers::SessionServers {
         &clock,
         "0.0.0",
     );
+    let servers = std::sync::Arc::new(started.servers);
     crate::mcp_servers::SessionServers {
         failed: Vec::new(),
-        servers: started.servers,
+        servers: std::sync::Arc::clone(&servers),
         prompts: started.prompts,
         forget: std::sync::Arc::new(|| {}),
-        images,
+        images: std::sync::Arc::clone(&images),
+        later: crate::mcp_servers::repository_servers::Later {
+            home: root.path().to_path_buf(),
+            project: config::ProjectKey::new("test").unwrap(),
+            workspace: workspace.clone(),
+            artifacts: root.path().join("artifacts"),
+            images,
+            cache: workspace.join("cache"),
+            clock,
+            waiting: Vec::new(),
+            servers,
+        },
     }
 }
 

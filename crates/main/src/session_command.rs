@@ -288,7 +288,10 @@ pub(crate) fn run_new(
         &clock,
         &jobs,
         &locks,
+        &project,
         mcp.specs,
+        mcp.repository,
+        &[],
         web_search,
         &delegates,
         skills,
@@ -329,6 +332,11 @@ pub(crate) fn run_new(
             return Err(e);
         }
     };
+    // What the session loads once its offer step has run, before its first
+    // preamble: the repository code approved since the process started.
+    let load = session_servers
+        .later
+        .into_load(session.declarer(), caps.clone());
     session.shell(driver);
     session.jobs(jobs.clone());
     session.images(Arc::clone(&session_servers.images));
@@ -453,6 +461,7 @@ pub(crate) fn run_new(
                         .on_handoff(forget)
                         .switcher(switching.closure(door), switchable)
                         .repository_code(offer)
+                        .approved_code(load)
                         .skill_set(skill_set)
                         .server_prompts(r#loop::ServerPrompts {
                             rows: prompt_rows,
