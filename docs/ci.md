@@ -84,7 +84,8 @@ A pull request runs only what its diff can affect.
   depend on it. This covers Markdown anywhere, and any file outside the
   crate. A change to `docs/events.md`, `docs/errors.md` or
   `docs/invocation.md` runs `contract`, whose tests check
-  the code against them. A change to `docs/tui.md` runs `contract` and
+  the code against them. A change to `docs/extensions.md` runs `extensions`,
+  whose tests check its hook keys table against the code. A change to `docs/tui.md` runs `contract` and
   `tui`. A change to `docs/ci.md` runs `xtask`. A change to a built-in skill under `docs/skills/` runs `loop`, whose
   tests check it parses, and `main`, whose tests install it. The selector lists these files. The gate fails when
   the list and the source disagree, or when an include's argument is not a

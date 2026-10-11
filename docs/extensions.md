@@ -811,6 +811,26 @@ used. The hook does not run for a handoff a tool started, which already has
 its note. The hook is handed the whole conversation, so a Lua extension that
 registers it raises `memory_mib` to fit the conversations it handles.
 
+### What a hook is given and returns
+
+A Lua hook's `run` gets one table and returns `nil` or one table, with the
+keys below; values use the shapes of `docs/events.md` ("Content parts",
+"Declared effects").
+
+| Hook point | What `run` is given | What it may return |
+|---|---|---|
+| `before_message` | `content`, the message's content parts as logged | `content`, a non-empty list of parts that replaces the message: text parts, and image or pdf parts the message holds; `context`, a non-empty string to add; or `refuse`, a non-empty string, alone |
+| `before_tool` | `tool`; `arguments`; `effects`, a list of effect names; `paths`, absent when the call declares none; `reversible` | `arguments`, a table that replaces the arguments, or `refuse`, a non-empty string, alone |
+| `after_tool` | `tool`; `arguments`; `status`; `content`, the output's text parts joined; `details` and `process`, each absent when the call has none; what a job delivery is given is in the after_tool paragraph above | `content`, a string; `details`, any value; `artifact`, a string |
+
+Returning `nil` or an empty table changes nothing. A key a hook returns is a
+change, even when its value is the one it was given, so a `check` hook that
+returns `arguments`, `content` or `context` has failed; a `check` hook refuses
+with `refuse`. Any other key, or a value of another kind, is the hook's
+failure, which its `on_failure` decides ("When a hook fails"). Lua cannot tell
+an empty table from an empty list: `arguments = {}` is an empty object, but an
+empty table inside it comes back as a list.
+
 ### When several hooks share a point
 
 Hooks at the same point run one after another, in three phases. A hook names

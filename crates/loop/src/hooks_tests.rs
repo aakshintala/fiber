@@ -14,7 +14,11 @@ use std::time::Duration;
 
 use contract::emit::Emit;
 use contract::events::{CallStatus, Notice, TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
-use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
+use contract::hook::{
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
+    BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
+    CheckOutcome, Hooks,
+};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::rules::{Rules, RulesError, StandingRules};
@@ -74,6 +78,30 @@ impl Hooks for FakeHooks {
             process: call.process.cloned(),
         });
         self.answer.clone()
+    }
+
+    fn before_tool(&self, _call: &BeforeToolCall<'_>) -> BeforeToolAnswer {
+        BeforeToolAnswer {
+            outcome: BeforeToolOutcome::Unchanged,
+            notices: Vec::new(),
+        }
+    }
+
+    fn check_tool(&self, _call: &BeforeToolCall<'_>) -> CheckAnswer {
+        CheckAnswer {
+            outcome: CheckOutcome::Passed,
+            notices: Vec::new(),
+        }
+    }
+
+    fn before_message(&self, _message: &BeforeMessage<'_>) -> BeforeMessageAnswer {
+        BeforeMessageAnswer {
+            outcome: BeforeMessageOutcome::Passed {
+                replaced: None,
+                context: Vec::new(),
+            },
+            notices: Vec::new(),
+        }
     }
 
     fn deliver_to(&self, _inbox: std::sync::mpsc::Sender<Delivery>) {}

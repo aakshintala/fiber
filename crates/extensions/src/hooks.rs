@@ -12,7 +12,10 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{LoadedExtension, Notice};
 use contract::files::PathLock;
-use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
+use contract::hook::{
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
+    BeforeToolAnswer, BeforeToolCall, CheckAnswer, Hooks,
+};
 use contract::inbox::Delivery;
 use serde_json::{Map, Value};
 
@@ -21,9 +24,11 @@ use contract::tool::Tool;
 
 use crate::commands::{CommandSource, SessionCommands};
 use crate::git::short_name;
-use crate::lua::{DeclaredHooks, HookPhase, LuaExtension};
+use crate::lua::{DeclaredHooks, LuaExtension};
 use crate::{API, Error, LuaProvider, LuaTool};
 
+mod before;
+mod chain;
 mod door;
 mod settle;
 mod start;
@@ -64,8 +69,12 @@ pub struct SessionExtensions {
     /// in load order. A data refusal is not listed: `Providers::load`
     /// never admitted that data.
     rejected: Vec<String>,
+    /// The `before_tool` chain, in run order.
+    before_tool: Vec<chain::Entry>,
+    /// The `before_message` chain, in run order.
+    before_message: Vec<chain::Entry>,
     /// The `after_tool` chain, in run order.
-    after_tool: Vec<Entry>,
+    after_tool: Vec<chain::Entry>,
     /// Whether any hook registered at any point.
     any: bool,
     /// The session's extension commands, built once from the same final names.
@@ -75,15 +84,6 @@ pub struct SessionExtensions {
     /// The search backend Fiber's own `web_search` runs, chosen at load
     /// from what is installed and `web_search.backend`.
     search_backend: Option<Arc<dyn SearchBackend>>,
-}
-
-/// One hook in a chain.
-struct Entry {
-    /// Its extension, in [`SessionExtensions::lua`].
-    extension: usize,
-    /// Its place among its extension's hooks at the point, from 0.
-    index: usize,
-    blocking: bool,
 }
 
 impl SessionExtensions {
@@ -126,7 +126,7 @@ impl SessionExtensions {
             ));
         }
         let found = entries.found;
-        let mut chain = Vec::new();
+        let mut chain = chain::Builder::default();
         // debt: entry scripts load one after another, each up to its load
         // timeout; start every VM before waiting on any if session start
         // shows the sum (docs/performance.md).
@@ -366,22 +366,7 @@ impl SessionExtensions {
                 version: s.version,
             });
         }
-        let order: Vec<String> = config
-            .get(&format!("hooks.order.{AFTER_TOOL}"), None)
-            .and_then(|(value, _)| serde_json::from_value(value).ok())
-            .unwrap_or_default();
-        let rank = |name: &str| order.iter().position(|named| named == name);
-        // Within a phase: the extensions `hooks.order` names, in its order,
-        // then the rest by name; one extension's hooks in registration order.
-        chain.sort_by_key(|(phase, name, entry): &(HookPhase, String, Entry)| {
-            (
-                *phase,
-                rank(name).map_or((1, 0), |at| (0, at)),
-                name.clone(),
-                entry.index,
-            )
-        });
-        session.after_tool = chain.into_iter().map(|(_, _, entry)| entry).collect();
+        chain.fill(config, &mut session);
         session
             .lua_providers
             .sort_by(|a, b| a.1.name().cmp(b.1.name()));
@@ -514,36 +499,17 @@ impl SessionExtensions {
     }
 
     /// Records `name`'s registrations: a notice per hook that did not
-    /// register, and its `after_tool` hooks onto `chain`.
-    fn register(
-        &mut self,
-        name: &str,
-        declared: DeclaredHooks,
-        chain: &mut Vec<(HookPhase, String, Entry)>,
-    ) {
-        for problem in declared.problems {
-            self.notices
-                .push(notice(ErrorCode::ExtensionFailed, problem, Some(name)));
-        }
-        self.any |= declared.by_point.values().any(|hooks| !hooks.is_empty());
-        let extension = self.lua.len();
-        for (index, hook) in declared
-            .by_point
-            .get(AFTER_TOOL)
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
-            chain.push((
-                hook.phase,
-                name.to_owned(),
-                Entry {
-                    extension,
-                    index,
-                    blocking: hook.blocking,
-                },
+    /// register, and its hooks onto `chain`.
+    fn register(&mut self, name: &str, declared: DeclaredHooks, chain: &mut chain::Builder) {
+        for problem in &declared.problems {
+            self.notices.push(notice(
+                ErrorCode::ExtensionFailed,
+                problem.clone(),
+                Some(name),
             ));
         }
+        self.any |= declared.by_point.values().any(|hooks| !hooks.is_empty());
+        chain.push(name, self.lua.len(), &declared);
     }
 
     /// An extension that failed to load: a notice, and it is not loaded.
@@ -626,6 +592,18 @@ impl Hooks for SessionExtensions {
             changed_by,
             notices,
         }
+    }
+
+    fn before_tool(&self, call: &BeforeToolCall<'_>) -> BeforeToolAnswer {
+        before::before_tool(self, call)
+    }
+
+    fn check_tool(&self, call: &BeforeToolCall<'_>) -> CheckAnswer {
+        before::check_tool(self, call)
+    }
+
+    fn before_message(&self, message: &BeforeMessage<'_>) -> BeforeMessageAnswer {
+        before::before_message(self, message)
     }
 
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<Delivery>) {

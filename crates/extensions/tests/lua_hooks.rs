@@ -1,4 +1,4 @@
-//! A session's `after_tool` hooks under their timeouts, on the fake clock
+//! A session's hooks under their timeouts, on the fake clock
 //! (`docs/extensions.md`, "When a hook fails" and "How an extension runs").
 
 mod common;
@@ -12,8 +12,12 @@ use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{CallStatus, ExtensionExec, ExtensionLog};
-use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
+use contract::hook::{
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
+    BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, Context, Hooks,
+};
 use contract::inbox::Delivery;
+use contract::shapes::{ContentPart, DeclaredEffects};
 use extensions::{LuaExtension, SessionExtensions};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -42,17 +46,27 @@ const WAIT: Duration = Duration::from_secs(5);
 /// (`docs/extensions.md`, "How an extension runs").
 const GRACE: Duration = Duration::from_secs(1);
 
-/// A hook that spins on its first call, after reading the signal module
-/// `go_spin`, and appends `|<short>` on every later call.
-fn spinning(on_failure: &str, timeout: u64, short: &str) -> String {
+/// A hook at `point` that spins on its first call, after reading the signal
+/// module `go_spin`, and returns `returned` on every later call.
+fn spinning_at(point: &str, on_failure: &str, timeout: u64, returned: &str) -> String {
     format!(
         "local calls = 0\n\
-         fiber.hook(\"after_tool\", {{ timeout = {timeout}, on_failure = \"{on_failure}\",\n\
+         fiber.hook(\"{point}\", {{ timeout = {timeout}, on_failure = \"{on_failure}\",\n\
            run = function(call)\n\
              calls = calls + 1\n\
              if calls == 1 then require(\"go_spin\") while true do end end\n\
-             return {{ content = call.content .. \"|{short}\" }}\n\
-           end }})\n"
+             return {returned} end }})\n"
+    )
+}
+
+/// A hook that spins on its first call, after reading the signal module
+/// `go_spin`, and appends `|<short>` on every later call.
+fn spinning(on_failure: &str, timeout: u64, short: &str) -> String {
+    spinning_at(
+        "after_tool",
+        on_failure,
+        timeout,
+        &format!("{{ content = call.content .. \"|{short}\" }}"),
     )
 }
 
@@ -109,15 +123,15 @@ fn ask(session: &Arc<SessionExtensions>) -> mpsc::Receiver<AfterToolAnswer> {
 /// `timeout`, and returns the answer.
 #[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 #[track_caller]
-fn timed_out(
-    session: &Arc<SessionExtensions>,
+fn timed_out<T>(
+    ask: impl FnOnce() -> mpsc::Receiver<T>,
     clock: &Arc<FakeClock>,
     went: &mpsc::Receiver<()>,
     timeout: Duration,
     wait: &Deadline,
-) -> AfterToolAnswer {
+) -> T {
     let asked = clock.now();
-    let answer = ask(session);
+    let answer = ask();
     wait.recv(went).expect("waited for the hook to start");
     assert!(
         clock.await_parked(asked + timeout + GRACE, WAIT),
@@ -153,7 +167,7 @@ fn a_non_blocking_hook_past_its_timeout_is_dropped_and_the_next_extension_still_
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock.clone());
     let answer = timed_out(
-        &session,
+        || ask(&session),
         &clock,
         &went,
         Duration::from_millis(50),
@@ -186,7 +200,7 @@ fn a_blocking_hook_past_its_timeout_withholds_the_output() {
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock.clone());
     let answer = timed_out(
-        &session,
+        || ask(&session),
         &clock,
         &went,
         Duration::from_millis(50),
@@ -214,7 +228,7 @@ fn hook_timeout_ms_is_the_timeout_the_hook_is_stopped_at() {
         clock.clone(),
     );
     let answer = timed_out(
-        &session,
+        || ask(&session),
         &clock,
         &went,
         Duration::from_millis(20),
@@ -225,6 +239,127 @@ fn hook_timeout_ms_is_the_timeout_the_hook_is_stopped_at() {
         AfterToolOutcome::Withheld {
             extension: "fiber.test/a".into()
         }
+    );
+}
+
+/// Asks the `before_tool` hooks about a call, on its own thread.
+fn ask_tool(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeToolAnswer> {
+    let (tx, rx) = mpsc::channel();
+    let session = Arc::clone(session);
+    std::thread::spawn(move || {
+        let arguments = Map::new();
+        let declared = DeclaredEffects {
+            effects: Vec::new(),
+            reversible: false,
+            paths: None,
+        };
+        let answer = session.before_tool(&BeforeToolCall {
+            tool: "read",
+            arguments: &arguments,
+            declared: &declared,
+        });
+        match tx.send(answer) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+/// Asks the `before_message` hooks about a text message, on its own thread.
+fn ask_message(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeMessageAnswer> {
+    let (tx, rx) = mpsc::channel();
+    let session = Arc::clone(session);
+    std::thread::spawn(move || {
+        let content = vec![ContentPart::Text { text: "x".into() }];
+        let answer = session.before_message(&BeforeMessage { content: &content });
+        match tx.send(answer) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+#[test]
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+fn a_blocking_before_tool_hook_past_its_timeout_fails_the_call() {
+    let setup = Setup::new();
+    let dir = install_lua(
+        &setup,
+        "a",
+        &json!({}),
+        &spinning_at("before_tool", "blocking", 50, "{ arguments = {} }"),
+    );
+    let went = go_module(&dir, "spin");
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock.clone());
+    let answer = timed_out(
+        || ask_tool(&session),
+        &clock,
+        &went,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
+    let BeforeToolOutcome::Failed(failure) = answer.outcome else {
+        panic!("the hook fails: {:?}", answer.outcome);
+    };
+    assert_eq!(failure.extension, "fiber.test/a");
+    assert!(
+        failure.message.contains("50 ms timeout"),
+        "{}",
+        failure.message
+    );
+}
+
+#[test]
+#[allow(clippy::expect_used, reason = "a failure is the test's")]
+fn a_non_blocking_before_message_hook_past_its_timeout_is_dropped() {
+    let setup = Setup::new();
+    let dir = install_lua(
+        &setup,
+        "a",
+        &json!({}),
+        &spinning_at(
+            "before_message",
+            "non-blocking",
+            50,
+            "{ context = \"late\" }",
+        ),
+    );
+    install_lua(
+        &setup,
+        "b",
+        &json!({}),
+        "fiber.hook(\"before_message\", { timeout = 1000, on_failure = \"blocking\",\n\
+           run = function(call) return { context = \"early\" } end })\n",
+    );
+    let went = go_module(&dir, "spin");
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock.clone());
+    let answer = timed_out(
+        || ask_message(&session),
+        &clock,
+        &went,
+        Duration::from_millis(50),
+        &Deadline::after(WAIT),
+    );
+    let BeforeMessageOutcome::Passed { replaced, context } = answer.outcome else {
+        panic!("the message passes: {:?}", answer.outcome);
+    };
+    assert_eq!(replaced, None);
+    assert_eq!(
+        context,
+        vec![Context {
+            extension: "fiber.test/b".into(),
+            text: "early".into(),
+        }]
+    );
+    assert_eq!(answer.notices.len(), 1);
+    assert_eq!(answer.notices[0].code, ErrorCode::HookFailed);
+    assert_eq!(answer.notices[0].extension.as_deref(), Some("fiber.test/a"));
+    assert!(
+        answer.notices[0].message.contains("50 ms timeout"),
+        "{}",
+        answer.notices[0].message
     );
 }
 
