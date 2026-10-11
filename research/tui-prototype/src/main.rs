@@ -5,6 +5,7 @@
 mod cases;
 mod completions;
 mod home;
+mod images;
 mod input;
 mod login;
 mod logo;
@@ -4801,6 +4802,7 @@ const SURFACES: &[cases::Surface] = &[
     rail::SURFACE,
     views::SURFACE,
     offers::SURFACE,
+    images::SURFACE,
 ];
 
 // ============================================================ main
@@ -4836,6 +4838,10 @@ struct Args {
     view_case: Option<String>,
     /// the offer and one-question-form case (`--offer-case`), drawn instead of the conversation
     offer_case: Option<String>,
+    /// the image and link case (`--image-case`), drawn instead of the conversation
+    image_case: Option<String>,
+    /// the flat screen-reader form: still frames and no animation
+    screen_reader: bool,
     /// the rail design at start: 0 list, 1 cards, 2 tabs
     rail: u8,
     /// the B card density at start: 0 full, 1 medium, 2 compact
@@ -4903,6 +4909,8 @@ fn args() -> Args {
         rail_case: None,
         view_case: None,
         offer_case: None,
+        image_case: None,
+        screen_reader: false,
         rail: 1,
         density: 2,
         rail_share: 15.0,
@@ -4962,6 +4970,8 @@ fn args() -> Args {
             "--rail-case" => a.rail_case = it.next(),
             "--view-case" => a.view_case = it.next(),
             "--offer-case" => a.offer_case = it.next(),
+            "--image-case" => a.image_case = it.next(),
+            "--screen-reader" => a.screen_reader = true,
             "--rail" => {
                 a.rail = match it.next().as_deref().map(|v| v.to_uppercase()).as_deref() {
                     Some("A") => 0,
@@ -5004,7 +5014,7 @@ fn args() -> Args {
             "--login" => a.login = it.next(),
             "-h" | "--help" => {
                 print!(
-                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
+                    "tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--screen-reader] [--hover] [--home [CASE]] [--overlay CASE] [--rail-case CASE] [--view-case CASE] [--offer-case CASE] [--image-case CASE] [--rail A|B|C] [--density full|medium|three|compact] [--rail-share P] [--panel-share P] [--panel-stripe none|both|left] [--picker CASE] [--completions CASE] [--login CASE] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]\n{}",
                     cases::help(SURFACES)
                 );
                 std::process::exit(0);
@@ -5013,6 +5023,10 @@ fn args() -> Args {
         }
     }
     if std::env::var_os("FIBER_REDUCED_MOTION").is_some() {
+        a.reduced = true;
+    }
+    // A screen reader gets the still forms: docs/tui.md, "Reduced motion".
+    if a.screen_reader {
         a.reduced = true;
     }
     a
@@ -5193,6 +5207,8 @@ fn main() -> io::Result<()> {
         views::run_view(&a, &mut term)
     } else if a.offer_case.is_some() {
         offers::run_offer(&a, &mut term)
+    } else if a.image_case.is_some() {
+        images::run_images(&a, &mut term)
     } else {
         run(
             &a, &events, &mut f, &mut next, &mut term, t0, pager, open_index,
@@ -5212,7 +5228,8 @@ fn main() -> io::Result<()> {
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
     }
-    // Home, the overlays, the login, the rail cases, the swapped views and the offers draw no
+    // Home, the overlays, the login, the rail cases, the swapped views, the offers and the
+    // images draw no
     // session, so there is nothing to resume, unless home switched to the conversation, whose
     // replayed session resumes as usual.
     if a.home.is_none()
@@ -5221,6 +5238,7 @@ fn main() -> io::Result<()> {
         && a.rail_case.is_none()
         && a.view_case.is_none()
         && a.offer_case.is_none()
+        && a.image_case.is_none()
         || home_switched
     {
         println!(
@@ -7100,6 +7118,7 @@ mod tests {
                 "--rail-case all-states, hovered, context-bars, floor-ceiling, hidden",
                 "--view-case delegate-view, job-pty, running, usage, changed-files, search-results, tools, rules, settings, skills",
                 "--offer-case offer, confirm, select, multi_select, text_input",
+                "--image-case tool_image, fallback",
             ]
         );
         let h = cases::help(SURFACES);
