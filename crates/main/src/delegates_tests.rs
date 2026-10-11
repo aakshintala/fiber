@@ -17,6 +17,7 @@ use contract::SessionId;
 use serde_json::json;
 
 use super::{launcher, resolver, watcher};
+use fakes::Deadline;
 
 /// Installs a provider `fake` with a leveled model `m` and a plain model
 /// `plain`, and returns the loaded registry with an empty configuration.
@@ -230,6 +231,7 @@ fn a_refused_watch_is_an_error() {
 /// blocking socket read happens there, so a watch that never returns
 /// fails the test instead of hanging it. Seen envelope kinds arrive over
 /// the shared record.
+#[track_caller]
 fn watch_bounded(
     watch: &jobs::Watch,
     id: &str,
@@ -245,7 +247,7 @@ fn watch_bounded(
         };
         done.send(watch(&id, &mut on_line)).unwrap_or(());
     });
-    finished
-        .recv_timeout(std::time::Duration::from_secs(5))
+    Deadline::after(std::time::Duration::from_secs(5))
+        .recv(&finished)
         .unwrap_or_else(|_| panic!("the watch returned within 5 s"))
 }

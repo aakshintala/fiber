@@ -17,6 +17,7 @@ use std::time::Duration;
 use hub::Started;
 
 use super::*;
+use fakes::Deadline;
 
 /// One named deadline per wait: the drain finishes before it.
 const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
@@ -49,6 +50,7 @@ fn printing(lines: &[String]) -> Child {
         .unwrap()
 }
 
+#[track_caller]
 fn drained(child: Child) -> Arc<Mutex<State>> {
     let state = Arc::new(Mutex::new(State {
         exited: false,
@@ -69,8 +71,8 @@ fn drained(child: Child) -> Arc<Mutex<State>> {
             }
         })
         .unwrap();
-    done_rx
-        .recv_timeout(DRAIN_DEADLINE)
+    Deadline::after(DRAIN_DEADLINE)
+        .recv(&done_rx)
         .expect("drain finishes before its deadline");
     state
 }
@@ -371,6 +373,7 @@ fn stub_binary(root: &fakes::TempDir, marker: &str) -> PathBuf {
 }
 
 /// The failure a started session reports once it has exited.
+#[track_caller]
 fn exit_of(started: Box<dyn hub::Started>) -> Failure {
     let (done_tx, done_rx) = mpsc::channel();
     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -389,7 +392,7 @@ fn exit_of(started: Box<dyn hub::Started>) -> Failure {
             }
         })
         .unwrap();
-    let exit = done_rx.recv_timeout(DRAIN_DEADLINE);
+    let exit = Deadline::after(DRAIN_DEADLINE).recv(&done_rx);
     // The poll thread ends with the wait, whichever way the wait ended.
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     exit.expect("the session exits before its deadline")

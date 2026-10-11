@@ -23,6 +23,7 @@ use extensions::{LuaProvider, Providers};
 use serde_json::json;
 
 use super::{Credentials, Door, Loader, Switching, hosted_stands, prepare};
+use fakes::Deadline;
 
 /// The deadline of each preparation: one may start a Lua provider or run a
 /// credential command.
@@ -369,6 +370,7 @@ fn declared_type(hosted: &r#loop::Hosted) -> Option<Option<String>> {
 
 /// `prepare` on its own thread under [`DEADLINE`], keeping the provider's
 /// selected label.
+#[track_caller]
 fn bounded(
     switching: &Arc<Switching>,
     args: &ModelArgs,
@@ -381,6 +383,7 @@ fn bounded(
 }
 
 /// `prepare` on its own thread under [`DEADLINE`], switching to `label`.
+#[track_caller]
 fn bounded_with(
     switching: &Arc<Switching>,
     args: &ModelArgs,
@@ -399,6 +402,7 @@ fn bounded_with(
 
 /// A prepared switch: `prepare` succeeds, and `Prepared` is no `Debug`, so
 /// no `unwrap`.
+#[track_caller]
 fn prepared(
     switching: &Arc<Switching>,
     args: &ModelArgs,
@@ -412,6 +416,7 @@ fn prepared(
 
 /// A prepared switch to `label`: `prepare` succeeds, and `Prepared` is no
 /// `Debug`, so no `unwrap`.
+#[track_caller]
 fn prepared_with(
     switching: &Arc<Switching>,
     args: &ModelArgs,
@@ -426,6 +431,7 @@ fn prepared_with(
 
 /// A rejected switch: `prepare` fails, and `Prepared` is no `Debug`, so no
 /// `unwrap_err`.
+#[track_caller]
 fn rejected(
     switching: &Arc<Switching>,
     args: &ModelArgs,
@@ -439,6 +445,7 @@ fn rejected(
 
 /// A rejected switch to `label`: `prepare` fails, and `Prepared` is no
 /// `Debug`, so no `unwrap_err`.
+#[track_caller]
 fn rejected_with(
     switching: &Arc<Switching>,
     args: &ModelArgs,
@@ -1883,11 +1890,13 @@ fn a_read_cancelled_in_progress_publishes_nothing() {
         if started.exists() {
             break;
         }
-        let _waited = tock.recv_timeout(Duration::from_millis(50));
+        let _waited = Deadline::after(Duration::from_millis(50)).recv(&tock);
     }
     assert!(started.exists(), "the credential command started");
     switching.reads().cancel();
-    let answered = rx.recv_timeout(DEADLINE).expect("the preparation answered");
+    let answered = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the preparation answered");
     let rejection = match answered {
         Ok(_) => panic!("the cancelled read prepared"),
         Err(rejection) => rejection,

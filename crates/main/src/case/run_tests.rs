@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 
 use super::super::format::{ClockAdvance, Host, Selector};
 use super::{CaseRun, WaitBounds, session_verdict};
+use fakes::Deadline;
 
 const LOOP_WAIT: Duration = Duration::from_millis(20);
 const EXIT_WAIT: Duration = Duration::from_millis(2);
@@ -421,11 +422,11 @@ fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
         let until = waiter_clock.now() + Duration::from_millis(200);
         waiter_clock.wait_until(Some(until), &mut |_| {
             let _ignored = parked_tx.send(());
-            let _ignored = release_rx.recv_timeout(Duration::from_secs(5));
+            let _ignored = Deadline::after(Duration::from_secs(5)).recv(&release_rx);
         });
     });
-    parked_rx
-        .recv_timeout(Duration::from_secs(5))
+    Deadline::after(Duration::from_secs(5))
+        .recv(&parked_rx)
         .expect("the waiter parks before the driver runs");
     // Ephemeral lines appended after the watcher registers still reach
     // the driver, so the dump must list them in order.
@@ -591,7 +592,9 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
         result
     });
     assert!(
-        done_rx.recv_timeout(Duration::from_secs(5)).is_ok(),
+        Deadline::after(Duration::from_secs(5))
+            .recv(&done_rx)
+            .is_ok(),
         "the case driver did not finish within 5s"
     );
     joiner

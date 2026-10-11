@@ -130,7 +130,12 @@ pub(crate) fn run_case(case: CallCase, name: String, process_clock: Arc<dyn Cloc
                         break;
                     }
                 }
-                match received.recv_timeout(CALL_WAIT) {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "the case runner's bounded wait for a provider call on a real channel"
+                )]
+                let received = received.recv_timeout(CALL_WAIT);
+                match received {
                     Ok((actual, actual_pair)) => {
                         pair = actual_pair;
                         failures.extend(compare_result(&outcome, actual).into_iter().map(

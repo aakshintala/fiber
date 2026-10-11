@@ -16,6 +16,7 @@ use serde_json::json;
 use tools::PathLocks;
 
 use super::{add_lua, session_credential};
+use fakes::Deadline;
 
 /// How long the test waits for the credential lookup.
 const WAIT: Duration = Duration::from_secs(5);
@@ -164,8 +165,8 @@ fn the_session_label_and_shared_credential_name_reach_credential() {
             || panic!("no key is read when credential() is registered"),
         )))
     });
-    let (key, signer) = looked_up
-        .recv_timeout(WAIT)
+    let (key, signer) = Deadline::after(WAIT)
+        .recv(&looked_up)
         .expect("the lookup ended in time")
         .unwrap();
     assert!(key.is_none(), "no key file is needed past credential()");

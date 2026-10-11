@@ -315,7 +315,12 @@ impl CaseRun {
                 drop(answer.send(result));
             })),
         );
-        match received.recv_timeout(self.waits.close) {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the case runner's wait for the session's close acknowledgement, bounded by waits.close"
+        )]
+        let answer = received.recv_timeout(self.waits.close);
+        match answer {
             Ok(Ok(_)) => {}
             Ok(Err(rejection)) => failures.push(format!(
                 "closing the case session: {} ({:?})",

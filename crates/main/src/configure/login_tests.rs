@@ -193,6 +193,7 @@ mod browser {
     use std::thread;
     use std::time::Duration;
 
+    use fakes::Deadline;
     use fakes::clock::FakeClock;
     use fakes::{OauthReply, OauthServer, jwt};
     use serde_json::{Value, json};
@@ -277,12 +278,14 @@ mod browser {
         )
     }
 
-    fn await_opened(opened: &mpsc::Receiver<String>) -> String {
-        opened.recv_timeout(BROWSER_WAIT).unwrap_or_else(|_| {
+    #[track_caller]
+    fn await_opened(opened: &mpsc::Receiver<String>, wait: &Deadline) -> String {
+        wait.recv(opened).unwrap_or_else(|_| {
             panic!("the package never opened the authorize URL within {BROWSER_WAIT:?}")
         })
     }
 
+    #[track_caller]
     fn redirect(port: u16, target: &str) {
         let target = target.to_owned();
         fakes::within("the callback to listen", BROWSER_WAIT, move || {
@@ -360,13 +363,13 @@ mod browser {
         thread::spawn(move || match done.send(login.run()) {
             Ok(()) | Err(_) => {}
         });
-        let url = await_opened(&opened);
+        let url = await_opened(&opened, &Deadline::after(BROWSER_WAIT));
         redirect(
             port_of(&url),
             &format!("/auth/callback?code=authcode-1&state={}", state_of(&url)),
         );
-        let stored = finished
-            .recv_timeout(WAIT)
+        let stored = Deadline::after(WAIT)
+            .recv(&finished)
             .unwrap_or_else(|_| panic!("the login did not return within {WAIT:?}"))
             .unwrap();
         assert_eq!(
@@ -416,11 +419,11 @@ mod browser {
         thread::spawn(move || match done.send(running.run()) {
             Ok(()) | Err(_) => {}
         });
-        let url = await_opened(&opened);
+        let url = await_opened(&opened, &Deadline::after(BROWSER_WAIT));
         let callback_port = port_of(&url);
         login.cancel();
-        let result = finished
-            .recv_timeout(WAIT)
+        let result = Deadline::after(WAIT)
+            .recv(&finished)
             .unwrap_or_else(|_| panic!("the cancelled login did not return within {WAIT:?}"));
         assert!(result.is_err(), "{result:?}");
         assert!(!home.join("credentials/codex").join(EMAIL).exists());
