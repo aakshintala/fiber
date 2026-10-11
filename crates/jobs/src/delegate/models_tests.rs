@@ -33,7 +33,7 @@ fn delegate_models_definition_takes_no_arguments_and_lists_nothing() {
             "additionalProperties": false
         })
     );
-    assert_eq!(definition.deferred, false);
+    assert!(!definition.deferred);
     assert_eq!(definition.hosted, None);
     let encoded = serde_json::to_value(&definition).unwrap().to_string();
     assert!(!encoded.contains("deep"), "{encoded}");
@@ -46,9 +46,9 @@ fn delegate_models_reads_only_and_is_never_always_reviewed() {
         .effects(&serde_json::Map::new())
         .expect("no arguments classify");
     assert_eq!(effects.declared.effects, [contract::shapes::Effect::Reads]);
-    assert_eq!(effects.declared.reversible, true);
+    assert!(effects.declared.reversible);
     assert_eq!(effects.declared.paths, None);
-    assert_eq!(effects.always_reviewed, false);
+    assert!(!effects.always_reviewed);
 }
 
 #[test]

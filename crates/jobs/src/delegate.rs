@@ -63,17 +63,20 @@ pub struct DelegateSpawn {
 /// wrongly typed one reaches the tool's own check, which lists the valid
 /// roles and references (`docs/delegates.md`, "Choosing a model").
 fn check_effects_arguments(arguments: &Map<String, Value>) -> Result<(String, String), String> {
-    check_strings(arguments, &["description", "prompt"])
-        .map(|values| (values[0].clone(), values[1].clone()))
+    check_pair(arguments, "description", "prompt")
 }
 
-/// Reads each of `names` from the call's arguments: each is required,
-/// and each is a string.
-fn check_strings(arguments: &Map<String, Value>, names: &[&str]) -> Result<Vec<String>, String> {
+/// Reads each of the two names from the call's arguments: each is
+/// required, and each is a string.
+fn check_pair(
+    arguments: &Map<String, Value>,
+    first: &str,
+    second: &str,
+) -> Result<(String, String), String> {
     let mut missing = Vec::new();
-    for name in names {
-        if !arguments.contains_key(*name) {
-            missing.push(*name);
+    for name in [first, second] {
+        if !arguments.contains_key(name) {
+            missing.push(name);
         }
     }
     if !missing.is_empty() {
@@ -88,9 +91,9 @@ fn check_strings(arguments: &Map<String, Value>, names: &[&str]) -> Result<Vec<S
         ));
     }
     let mut wrong = Vec::new();
-    for name in names {
-        if !arguments[*name].is_string() {
-            wrong.push(*name);
+    for name in [first, second] {
+        if !arguments[name].is_string() {
+            wrong.push(name);
         }
     }
     if !wrong.is_empty() {
@@ -104,10 +107,13 @@ fn check_strings(arguments: &Map<String, Value>, names: &[&str]) -> Result<Vec<S
             }
         ));
     }
-    Ok(names
-        .iter()
-        .map(|name| arguments[*name].as_str().unwrap_or_default().to_owned())
-        .collect())
+    Ok((string(arguments, first), string(arguments, second)))
+}
+
+/// The argument's text. The caller checked it is a string; anything else
+/// reads as empty and never reaches here.
+fn string(arguments: &Map<String, Value>, name: &str) -> String {
+    arguments[name].as_str().unwrap_or_default().to_owned()
 }
 
 impl Tool for DelegateSpawn {

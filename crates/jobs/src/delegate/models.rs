@@ -28,6 +28,10 @@ use serde_json::{Map, Value, json};
 pub struct Resolve {
     /// Resolves the argument to `provider/model[:level]`, or refuses it
     /// with one reason sentence, without the catalogue.
+    #[allow(
+        clippy::type_complexity,
+        reason = "the resolver seam: one closure type shared by the session resolver and every test stub"
+    )]
     pub lookup: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>,
     /// The full text `delegate_models` returns and every model refusal
     /// lists.
