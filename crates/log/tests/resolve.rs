@@ -25,13 +25,30 @@ fn setup() -> (fakes::TempDir, std::path::PathBuf) {
 
 /// Session `id` whose log begins with `session_started` in `workspace`.
 fn session(sessions: &std::path::Path, id: &str, workspace: &str) {
+    session_with_worktree(sessions, id, workspace, Value::Null)
+}
+
+/// Session `id` whose `session_started` records `workspace` and `worktree`:
+/// `Value::Null` writes no `worktree` key, any other value writes it whole.
+fn session_with_worktree(
+    sessions: &std::path::Path,
+    id: &str,
+    workspace: &str,
+    worktree: Value,
+) {
     let log = Log::create(
         sessions,
         SessionId(id.into()),
         fakes::clock::FakeClock::new(),
     )
     .unwrap();
-    log.append(&started(workspace), None, None).unwrap();
+    let mut payload = json!({"workspace": workspace,
+        "variables": {"path": "/usr/bin", "names": [], "source": "inherited"}});
+    if !worktree.is_null() {
+        payload["worktree"] = worktree;
+    }
+    log.append(&event("session_started", payload), None, None)
+        .unwrap();
 }
 
 fn started(workspace: &str) -> Event {
@@ -484,4 +501,78 @@ fn a_symlink_to_a_session_directory_is_skipped() {
     std::os::unix::fs::symlink(sessions.join("s_real"), sessions.join("s_zlink")).unwrap();
 
     assert_eq!(log::most_recent(&sessions, &|_| true).unwrap().0, "s_real");
+}
+
+#[test]
+fn resolve_checks_the_recorded_repository_when_present() {
+    let (_root, sessions) = setup();
+    session_with_worktree(
+        &sessions,
+        "s_repo",
+        "/gone",
+        json!({"path": "/gone", "branch": "fiber/s", "repository": "/r/.git"}),
+    );
+
+    assert_eq!(
+        log::resolve(&sessions, "s_repo", &|recorded| recorded == "/r/.git")
+            .unwrap()
+            .0,
+        "s_repo"
+    );
+    assert!(matches!(
+        log::resolve(&sessions, "s_repo", &|recorded| recorded == "/gone"),
+        Err(log::Error::NotFound(_))
+    ));
+}
+
+#[test]
+fn most_recent_checks_the_recorded_repository_when_present() {
+    let (_root, sessions) = setup();
+    session_with_worktree(
+        &sessions,
+        "s_repo",
+        "/gone",
+        json!({"path": "/gone", "branch": "fiber/s", "repository": "/r/.git"}),
+    );
+
+    assert_eq!(
+        log::most_recent(&sessions, &|recorded| recorded == "/r/.git")
+            .unwrap()
+            .0,
+        "s_repo"
+    );
+    assert!(
+        log::most_recent(&sessions, &|recorded| recorded == "/gone").is_none()
+    );
+}
+
+#[test]
+fn lookup_checks_the_workspace_without_a_recorded_repository() {
+    let (_root, sessions) = setup();
+    session_with_worktree(
+        &sessions,
+        "s_legacy",
+        "/w",
+        json!({"path": "/w", "branch": "fiber/s"}),
+    );
+
+    assert_eq!(
+        log::resolve(&sessions, "s_legacy", &|recorded| recorded == "/w")
+            .unwrap()
+            .0,
+        "s_legacy"
+    );
+    assert!(matches!(
+        log::resolve(&sessions, "s_legacy", &|recorded| recorded == "/r/.git"),
+        Err(log::Error::NotFound(_))
+    ));
+    assert_eq!(
+        log::most_recent(&sessions, &|recorded| recorded == "/w")
+            .unwrap()
+            .0,
+        "s_legacy"
+    );
+    assert!(
+        log::most_recent(&sessions, &|recorded| recorded == "/r/.git").is_none()
+    );
 }
