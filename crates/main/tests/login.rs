@@ -34,19 +34,13 @@ use fakes::Watchdog;
 use rustix::pty;
 use rustix::termios::{self, LocalModes};
 use serde_json::{Value, json};
-use support::{Deadline, group_alive};
+use support::{Deadline, Setup, group_alive};
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
     #[track_caller]
-    fn new() -> Self {
+    fn new_with_fl_root() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fl");
         fs::create_dir_all(root.path().join("h")).unwrap();
@@ -54,13 +48,9 @@ impl Setup {
         Self { deadline, root }
     }
 
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
     /// Installs the provider `name`, reading the stored credential
     /// `credential_name` when it is set, and declaring `source` for its key.
-    fn provider(&self, name: &str, credential_name: Option<&str>, source: Option<Value>) {
+    fn install_provider(&self, name: &str, credential_name: Option<&str>, source: Option<Value>) {
         let dir = self.home().join("extensions").join(name);
         let mut data = json!({
             "name": name,
@@ -115,7 +105,7 @@ impl Setup {
 
     /// Runs `fiber` with `args` and `input` on a closed pipe for stdin.
     #[track_caller]
-    fn fiber(&self, args: &[&str], input: &str) -> Run {
+    fn run_with_input(&self, args: &[&str], input: &str) -> Run {
         let mut command = self.command(args);
         command
             .stdin(Stdio::piped())
@@ -427,9 +417,9 @@ impl OnTerminal {
 
 #[test]
 fn a_key_on_a_pipe_is_stored_then_deleted_and_never_printed() {
-    let setup = Setup::new();
-    setup.provider("acme", None, None);
-    let login = setup.fiber(&["login", "acme"], &format!("  {KEY}  \n"));
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    let login = setup.run_with_input(&["login", "acme"], &format!("  {KEY}  \n"));
     assert_eq!(login.code, Some(0), "{}", login.stderr);
     assert_eq!(login.stdout, "");
     assert_eq!(login.stderr, "fiber: stored credentials/acme/default\n");
@@ -460,7 +450,7 @@ fn a_key_on_a_pipe_is_stored_then_deleted_and_never_printed() {
         json!({"providers": {"acme": {"credential": "default"}}})
     );
 
-    let again = setup.fiber(&["login", "acme"], "other\n");
+    let again = setup.run_with_input(&["login", "acme"], "other\n");
     assert_eq!(again.code, Some(2));
     assert!(
         again
@@ -471,12 +461,12 @@ fn a_key_on_a_pipe_is_stored_then_deleted_and_never_printed() {
     );
     assert_eq!(fs::read_to_string(&file).unwrap(), KEY);
 
-    let logout = setup.fiber(&["logout", "acme"], "");
+    let logout = setup.run_with_input(&["logout", "acme"], "");
     assert_eq!(logout.code, Some(0), "{}", logout.stderr);
     assert_eq!(logout.stdout, "");
     assert_eq!(logout.stderr, "fiber: removed credentials/acme/default\n");
     assert!(!file.exists());
-    let missing = setup.fiber(&["logout", "acme"], "");
+    let missing = setup.run_with_input(&["logout", "acme"], "");
     assert_eq!(missing.code, Some(1));
     assert_eq!(missing.stderr, "fiber: no stored credential for acme\n");
     assert!(!format!("{}{}", login.stderr, missing.stderr).contains(KEY));
@@ -484,13 +474,13 @@ fn a_key_on_a_pipe_is_stored_then_deleted_and_never_printed() {
 
 #[test]
 fn providers_sharing_a_credential_log_in_and_out_through_either() {
-    let setup = Setup::new();
-    setup.provider("opencode-go", Some("opencode"), None);
-    setup.provider("opencode-zen", Some("opencode"), None);
-    let login = setup.fiber(&["login", "opencode-go"], &format!("{KEY}\n"));
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("opencode-go", Some("opencode"), None);
+    setup.install_provider("opencode-zen", Some("opencode"), None);
+    let login = setup.run_with_input(&["login", "opencode-go"], &format!("{KEY}\n"));
     assert_eq!(login.code, Some(0), "{}", login.stderr);
     assert_eq!(login.stderr, "fiber: stored credentials/opencode/default\n");
-    let logout = setup.fiber(&["logout", "opencode-zen"], "");
+    let logout = setup.run_with_input(&["logout", "opencode-zen"], "");
     assert_eq!(logout.code, Some(0), "{}", logout.stderr);
     assert_eq!(
         logout.stderr,
@@ -501,13 +491,13 @@ fn providers_sharing_a_credential_log_in_and_out_through_either() {
 
 #[test]
 fn logout_prints_a_configuration_notice_and_keeps_its_status() {
-    let setup = Setup::new();
-    setup.provider("acme", None, None);
-    let login = setup.fiber(&["login", "acme"], &format!("{KEY}\n"));
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    let login = setup.run_with_input(&["login", "acme"], &format!("{KEY}\n"));
     assert_eq!(login.code, Some(0), "{}", login.stderr);
     let file = setup.home().join("config.json");
     fs::write(&file, r#"{"no_such_key": 1}"#).unwrap();
-    let logout = setup.fiber(&["logout", "acme"], "");
+    let logout = setup.run_with_input(&["logout", "acme"], "");
     assert_eq!(logout.code, Some(0), "{}", logout.stderr);
     let lines: Vec<&str> = logout.stderr.lines().collect();
     assert_eq!(lines.len(), 2, "{}", logout.stderr);
@@ -518,9 +508,9 @@ fn logout_prints_a_configuration_notice_and_keeps_its_status() {
 
 #[test]
 fn a_key_from_the_environment_is_named_and_the_exit_is_non_zero() {
-    let setup = Setup::new();
-    setup.provider("acme", None, Some(json!({"env": "ACME_API_KEY"})));
-    let run = setup.fiber(&["logout", "acme"], "");
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, Some(json!({"env": "ACME_API_KEY"})));
+    let run = setup.run_with_input(&["logout", "acme"], "");
     assert_eq!(run.code, Some(1));
     assert_eq!(
         run.stderr,
@@ -531,29 +521,29 @@ fn a_key_from_the_environment_is_named_and_the_exit_is_non_zero() {
 
 #[test]
 fn no_provider_is_a_usage_error_without_a_terminal() {
-    let setup = Setup::new();
-    setup.provider("acme", None, None);
-    let login = setup.fiber(&["login"], "acme\n");
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    let login = setup.run_with_input(&["login"], "acme\n");
     assert_eq!(login.code, Some(2));
     assert!(login.stderr.contains("no terminal"), "{}", login.stderr);
     assert_eq!(login.stdout, "");
     assert!(!setup.home().join("credentials").exists());
-    let logout = setup.fiber(&["logout"], "");
+    let logout = setup.run_with_input(&["logout"], "");
     assert_eq!(logout.code, Some(2));
     assert_eq!(
         logout.stderr,
         "fiber: `fiber logout` takes the provider to log out of. Run `fiber --help` for usage.\n"
     );
-    let unknown = setup.fiber(&["login", "nope"], "k\n");
+    let unknown = setup.run_with_input(&["login", "nope"], "k\n");
     assert_eq!(unknown.code, Some(2));
     assert!(unknown.stderr.contains("the installed providers are acme"));
 }
 
 #[test]
 fn a_declared_secret_on_a_pipe_is_stored_then_replaced_and_never_printed() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fl_root();
     setup.declare("acme", &["acme.api_key"]);
-    let login = setup.fiber(&["login", "acme.api_key"], "  v1-7f3a9c0d  \n");
+    let login = setup.run_with_input(&["login", "acme.api_key"], "  v1-7f3a9c0d  \n");
     assert_eq!(login.code, Some(0), "{}", login.stderr);
     assert_eq!(login.stdout, "");
     assert_eq!(login.stderr, "fiber: stored credentials/acme.api_key\n");
@@ -569,7 +559,7 @@ fn a_declared_secret_on_a_pipe_is_stored_then_replaced_and_never_printed() {
         "the value is in the secret's file alone"
     );
     assert!(!setup.home().join("config.json").exists());
-    let again = setup.fiber(&["login", "acme.api_key"], "v2-1e2b\n");
+    let again = setup.run_with_input(&["login", "acme.api_key"], "v2-1e2b\n");
     assert_eq!(again.code, Some(0), "{}", again.stderr);
     assert_eq!(again.stderr, "fiber: replaced credentials/acme.api_key\n");
     assert_eq!(fs::read_to_string(&file).unwrap(), "v2-1e2b");
@@ -577,10 +567,10 @@ fn a_declared_secret_on_a_pipe_is_stored_then_replaced_and_never_printed() {
 
 #[test]
 fn a_mistyped_secret_or_one_with_as_is_a_usage_error_that_writes_nothing() {
-    let setup = Setup::new();
-    setup.provider("acme", None, None);
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
     setup.declare("acme-secrets", &["acme.api_key"]);
-    let typo = setup.fiber(&["login", "acme.api_kye"], "v1\n");
+    let typo = setup.run_with_input(&["login", "acme.api_kye"], "v1\n");
     assert_eq!(typo.code, Some(2));
     assert!(
         typo.stderr.contains("the installed providers are acme"),
@@ -594,7 +584,7 @@ fn a_mistyped_secret_or_one_with_as_is_a_usage_error_that_writes_nothing() {
         typo.stderr
     );
     assert!(!setup.home().join("credentials").exists());
-    let labelled = setup.fiber(&["login", "acme.api_key", "--as", "work"], "v1\n");
+    let labelled = setup.run_with_input(&["login", "acme.api_key", "--as", "work"], "v1\n");
     assert_eq!(labelled.code, Some(2));
     assert_eq!(
         labelled.stderr,
@@ -606,8 +596,8 @@ fn a_mistyped_secret_or_one_with_as_is_a_usage_error_that_writes_nothing() {
 
 #[test]
 fn a_key_typed_on_a_terminal_is_not_echoed_and_echo_comes_back() {
-    let setup = Setup::new();
-    setup.provider("acme", None, None);
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
     let mut run = setup.on_terminal(&["login", "acme"]);
     // Sent the moment the prompt shows, with no wait for echo to go off: echo
     // is already off when the prompt is written.
@@ -628,9 +618,9 @@ fn a_key_typed_on_a_terminal_is_not_echoed_and_echo_comes_back() {
 
 #[test]
 fn the_provider_menu_on_a_terminal_picks_by_number() {
-    let setup = Setup::new();
-    setup.provider("acme", None, None);
-    setup.provider("beta", None, None);
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    setup.install_provider("beta", None, None);
     setup.declare("acme-secrets", &["acme.api_key"]);
     let mut run = setup.on_terminal(&["login"]);
     let menu = run
@@ -656,8 +646,8 @@ fn the_provider_menu_on_a_terminal_picks_by_number() {
 
 #[test]
 fn end_of_input_at_the_key_prompt_restores_echo_and_stores_nothing() {
-    let setup = Setup::new();
-    setup.provider("acme", None, None);
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
     let mut run = setup.on_terminal(&["login", "acme"]);
     run.screen.wait_for("Key for acme: ");
     run.terminal.wait_for_echo_off(setup.deadline);
@@ -672,8 +662,8 @@ fn end_of_input_at_the_key_prompt_restores_echo_and_stores_nothing() {
 
 #[test]
 fn an_interrupt_at_the_key_prompt_restores_echo_and_ends_the_login() {
-    let setup = Setup::new();
-    setup.provider("acme", None, None);
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
     let mut run = setup.on_terminal(&["login", "acme"]);
     run.screen.wait_for("Key for acme: ");
     run.terminal.wait_for_echo_off(setup.deadline);
@@ -687,8 +677,8 @@ fn an_interrupt_at_the_key_prompt_restores_echo_and_ends_the_login() {
 
 #[test]
 fn a_pipe_on_stdin_is_no_terminal_even_when_stderr_is_one() {
-    let setup = Setup::new();
-    setup.provider("acme", None, None);
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
     let mut run = setup.stderr_on_terminal(&["login"], "acme\n");
     // The usage line ends the message; a menu would not print it.
     let shown = run.screen.wait_for("Run `fiber --help` for usage.");
@@ -701,9 +691,9 @@ fn a_pipe_on_stdin_is_no_terminal_even_when_stderr_is_one() {
 
 #[test]
 fn labels_are_stored_and_deleted_through_argv() {
-    let setup = Setup::new();
-    setup.provider("acme", None, None);
-    let work = setup.fiber(&["login", "acme", "--as", "work"], &format!("{KEY}\n"));
+    let setup = Setup::new_with_fl_root();
+    setup.install_provider("acme", None, None);
+    let work = setup.run_with_input(&["login", "acme", "--as", "work"], &format!("{KEY}\n"));
     assert_eq!(work.code, Some(0), "{}", work.stderr);
     assert_eq!(work.stdout, "");
     assert_eq!(work.stderr, "fiber: stored credentials/acme/work\n");
@@ -712,9 +702,9 @@ fn labels_are_stored_and_deleted_through_argv() {
         fs::metadata(&file).unwrap().permissions().mode() & 0o777,
         0o600
     );
-    let home = setup.fiber(&["login", "acme", "--as", "home"], "other-key\n");
+    let home = setup.run_with_input(&["login", "acme", "--as", "home"], "other-key\n");
     assert_eq!(home.code, Some(0), "{}", home.stderr);
-    let same = setup.fiber(&["login", "acme", "--as", "work"], "third-key\n");
+    let same = setup.run_with_input(&["login", "acme", "--as", "work"], "third-key\n");
     assert_eq!(same.code, Some(2));
     assert!(same.stderr.contains("--as"), "{}", same.stderr);
     assert_eq!(setup.files_holding(KEY), std::slice::from_ref(&file));
@@ -726,17 +716,17 @@ fn labels_are_stored_and_deleted_through_argv() {
         json!({"providers": {"acme": {"credential": "work"}}})
     );
 
-    let bare = setup.fiber(&["logout", "acme"], "");
+    let bare = setup.run_with_input(&["logout", "acme"], "");
     assert_eq!(bare.code, Some(2));
     assert!(file.exists());
-    let both = setup.fiber(&["logout", "acme", "--as", "work", "--all"], "");
+    let both = setup.run_with_input(&["logout", "acme", "--as", "work", "--all"], "");
     assert_eq!(both.code, Some(2));
     assert!(file.exists());
-    let one = setup.fiber(&["logout", "acme", "--as", "work"], "");
+    let one = setup.run_with_input(&["logout", "acme", "--as", "work"], "");
     assert_eq!(one.code, Some(0), "{}", one.stderr);
     assert_eq!(one.stderr, "fiber: removed credentials/acme/work\n");
     assert!(!file.exists());
-    let all = setup.fiber(&["logout", "acme", "--all"], "");
+    let all = setup.run_with_input(&["logout", "acme", "--all"], "");
     assert_eq!(all.code, Some(0), "{}", all.stderr);
     assert_eq!(all.stderr, "fiber: removed credentials/acme/home\n");
     assert!(!setup.home().join("credentials/acme/home").exists());
@@ -847,7 +837,7 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str) -> Run {
 
 #[test]
 fn a_device_login_stores_the_email_label_then_logs_out() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fl_root();
     let oauth = fakes::OauthServer::start(vec![
         fakes::OauthReply::raw(
             200,
@@ -890,7 +880,7 @@ fn a_device_login_stores_the_email_label_then_logs_out() {
     assert_eq!(stored["account_id"], "acct_1");
     assert_eq!(stored["refresh_token"], "rt_1");
 
-    let logout = setup.fiber(&["logout", "codex", "--as", "alice@example.com"], "");
+    let logout = setup.run_with_input(&["logout", "codex", "--as", "alice@example.com"], "");
     assert_eq!(logout.code, Some(0), "{}", logout.stderr);
     assert_eq!(
         logout.stderr,
@@ -901,7 +891,7 @@ fn a_device_login_stores_the_email_label_then_logs_out() {
 
 #[test]
 fn a_device_login_with_as_to_an_already_stored_label_contacts_nothing() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fl_root();
     let oauth = fakes::OauthServer::start(vec![]);
     install_codex(&setup, &oauth.url());
     let dir = setup.home().join("credentials/codex");
@@ -918,7 +908,7 @@ fn a_device_login_with_as_to_an_already_stored_label_contacts_nothing() {
         .to_string(),
     )
     .unwrap();
-    let login = setup.fiber(&["login", "codex", "--as", "x"], "");
+    let login = setup.run_with_input(&["login", "codex", "--as", "x"], "");
     assert_eq!(login.code, Some(2), "{}", login.stderr);
     assert!(login.stderr.contains("--as"), "{}", login.stderr);
     assert_eq!(oauth.request_count(), 0);

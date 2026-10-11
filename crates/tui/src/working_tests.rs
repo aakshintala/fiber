@@ -48,7 +48,7 @@ fn text_is_working_elapsed_and_the_interrupt() {
         let laid = lay(&working(Some(started)), Some(started + elapsed_ms), "⠋", 80);
         assert_eq!(
             laid.text,
-            format!("  ⠋ Working {elapsed} · esc to interrupt"),
+            format!("  ⠋ Working {elapsed} · Esc to interrupt"),
             "{elapsed_ms}ms"
         );
         assert!(!laid.retrying);
@@ -64,8 +64,8 @@ fn the_spinner_travels_with_the_line() {
     // cell and the interrupt move with it, whatever it shows.
     let live = lay(&working(Some(started)), Some(started + 5_000), "⠋", 80);
     let still = lay(&working(Some(started)), Some(started + 5_000), "●", 80);
-    assert_eq!(live.text, "  ⠋ Working 5s · esc to interrupt");
-    assert_eq!(still.text, "  ● Working 5s · esc to interrupt");
+    assert_eq!(live.text, "  ⠋ Working 5s · Esc to interrupt");
+    assert_eq!(still.text, "  ● Working 5s · Esc to interrupt");
     assert_eq!(live.word, still.word);
     assert_eq!(live.spinner, still.spinner);
     assert_eq!(live.interrupt, still.interrupt);
@@ -76,11 +76,11 @@ fn without_now_or_start_there_is_no_time() {
     let started = 1_000_000;
     for now in [None, Some(started + 5_000)] {
         let laid = lay(&working(None), now, "⠋", 80);
-        assert_eq!(laid.text, "  ⠋ Working · esc to interrupt");
+        assert_eq!(laid.text, "  ⠋ Working · Esc to interrupt");
         assert_eq!(laid.next_ms, None);
     }
     let laid = lay(&working(Some(started)), None, "⠋", 80);
-    assert_eq!(laid.text, "  ⠋ Working · esc to interrupt");
+    assert_eq!(laid.text, "  ⠋ Working · Esc to interrupt");
     assert_eq!(laid.next_ms, None);
     // The interrupt target covers its cells while it shows.
     assert_eq!(laid.interrupt, Some(14..30));
@@ -92,12 +92,12 @@ fn detail_sheds_interrupt_then_time_then_cuts_the_word() {
     let started = 1_000_000;
     let now = started + 674_000;
     let laid = lay(&working(Some(started)), Some(now), "⠋", 80);
-    assert_eq!(laid.text, "  ⠋ Working 11m 14s · esc to interrupt");
+    assert_eq!(laid.text, "  ⠋ Working 11m 14s · Esc to interrupt");
     // One below the full line sheds the interrupt with its target.
     for width in [38, 37, 36] {
         let laid = lay(&working(Some(started)), Some(now), "⠋", width);
         if width == 38 {
-            assert_eq!(laid.text, "  ⠋ Working 11m 14s · esc to interrupt");
+            assert_eq!(laid.text, "  ⠋ Working 11m 14s · Esc to interrupt");
             assert_eq!(laid.interrupt, Some(22..38));
         } else {
             assert_eq!(laid.text, "  ⠋ Working 11m 14s", "{width}");

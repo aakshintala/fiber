@@ -10,66 +10,22 @@ use std::fs;
 use std::io::{BufRead, BufReader, ErrorKind};
 use std::net::TcpListener;
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus};
 use std::sync::{Mutex, mpsc};
 use std::thread;
 
-use crate::support::{Deadline, group_alive};
-use fakes::{ProviderServer, Response, Watchdog};
+use crate::support::{Deadline, Setup, group_alive};
+use fakes::{Response, Watchdog};
 use serde_json::{Value, json};
 
-pub(crate) struct Setup {
-    pub(crate) root: fakes::TempDir,
-    pub(crate) deadline: Deadline,
-}
-
 impl Setup {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new_with_fm_root() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fm");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { deadline, root }
-    }
-
-    pub(crate) fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    pub(crate) fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
-    pub(crate) fn provider(&self, server: &ProviderServer) {
-        let source = self.root.path().join("src");
-        write_json(
-            &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-        );
-        write_json(
-            &source.join("providers/fake.json"),
-            &json!({
-                "name": "fake",
-                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
-            }),
-        );
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
-        write_json(
-            &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
-        );
     }
 
     /// Installs `fiber.test/<short>`, whose entry script is `init`, with
@@ -101,24 +57,6 @@ impl Setup {
 
     pub(crate) fn socket(&self, id: &str) -> PathBuf {
         self.home().join("run").join(id)
-    }
-
-    pub(crate) fn fiber(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
-        command
-            .args(args)
-            .current_dir(self.root.path())
-            .env_clear()
-            .envs(fakes::check_run())
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", self.root.path())
-            .env("FIBER_HOME", self.home())
-            .env("FIBER_TEST_FAKE_KEY", "sk-test")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
-        command
     }
 
     #[track_caller]

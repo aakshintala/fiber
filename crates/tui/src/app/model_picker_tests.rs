@@ -1524,11 +1524,11 @@ fn the_footer_names_the_picker_keys() {
         Some(vec![
             ("↑↓", "move"),
             ("←→", "levels"),
-            ("enter", "choose"),
-            ("tab", "all"),
-            ("ctrl+s", "session"),
-            ("ctrl+r", "refresh"),
-            ("esc", "close"),
+            ("Enter", "choose"),
+            ("Tab", "all"),
+            ("Ctrl+S", "session"),
+            ("Ctrl+R", "refresh"),
+            ("Esc", "close"),
         ])
     );
 }
@@ -2126,11 +2126,11 @@ fn bare_thinking_opens_the_picker_on_the_current_models_chips() {
         Some(vec![
             ("↑↓", "move"),
             ("←→", "levels"),
-            ("enter", "choose"),
-            ("tab", "all"),
-            ("ctrl+s", "session"),
-            ("ctrl+r", "refresh"),
-            ("esc", "close"),
+            ("Enter", "choose"),
+            ("Tab", "all"),
+            ("Ctrl+S", "session"),
+            ("Ctrl+R", "refresh"),
+            ("Esc", "close"),
         ])
     );
 }

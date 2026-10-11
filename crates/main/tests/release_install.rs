@@ -15,7 +15,6 @@ mod support;
 
 use std::fs;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -23,20 +22,13 @@ use std::thread;
 use fakes::Watchdog;
 use fakes::ustar::{archive, gzip, header, sha256};
 use serde_json::json;
-use support::Deadline;
+use support::{Deadline, Setup};
 
 /// The version the binary under test was built as.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// A temporary root holding Fiber home, removed on drop, and the test's
-/// deadline.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
-    fn new() -> Self {
+    fn new_without_dirs() -> Self {
         let deadline = Deadline::start();
         Self {
             deadline,
@@ -44,14 +36,10 @@ impl Setup {
         }
     }
 
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
     /// Runs `fiber` with `args` and waits for it under the test's
     /// [`Deadline`].
     #[track_caller]
-    fn fiber(&self, args: &[&str]) -> Run {
+    fn run_in_root(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
             .args(args)
@@ -146,7 +134,7 @@ fn serve() -> fakes::ProviderServer {
 /// The commit `fiber --version` shows, if the build recorded one.
 #[track_caller]
 fn commit(setup: &Setup) -> Option<String> {
-    let run = setup.fiber(&["--version"]);
+    let run = setup.run_in_root(&["--version"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let line = run.stdout.trim();
     let open = line.find('(')?;
@@ -155,10 +143,10 @@ fn commit(setup: &Setup) -> Option<String> {
 
 #[test]
 fn the_step_installs_what_extension_list_reads_as_healthy() {
-    let setup = Setup::new();
+    let setup = Setup::new_without_dirs();
     let server = serve();
     let url = server.url();
-    let run = setup.fiber(&["release-install", VERSION, "--base-url", &url]);
+    let run = setup.run_in_root(&["release-install", VERSION, "--base-url", &url]);
     let Some(commit) = commit(&setup) else {
         assert_eq!(run.code, Some(1), "{}", run.stderr);
         assert_eq!(
@@ -177,7 +165,7 @@ fn the_step_installs_what_extension_list_reads_as_healthy() {
         fs::read_to_string(setup.home().join("docs/README.md")).unwrap(),
         "docs"
     );
-    let listed = setup.fiber(&["extension", "list"]);
+    let listed = setup.run_in_root(&["extension", "list"]);
     assert_eq!(listed.code, Some(0), "{}", listed.stderr);
     assert_eq!(
         listed.stdout.lines().collect::<Vec<_>>(),
@@ -193,10 +181,10 @@ fn the_step_installs_what_extension_list_reads_as_healthy() {
 
 #[test]
 fn another_version_is_refused_and_creates_no_home() {
-    let setup = Setup::new();
+    let setup = Setup::new_without_dirs();
     let server = serve();
     let url = server.url();
-    let run = setup.fiber(&["release-install", "999.0.0", "--base-url", &url]);
+    let run = setup.run_in_root(&["release-install", "999.0.0", "--base-url", &url]);
     assert_eq!(run.code, Some(2), "{}", run.stderr);
     assert_eq!(
         run.stderr,

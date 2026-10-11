@@ -15,7 +15,7 @@ use crate::mouse::{Target, TargetId};
 /// The queue's heading above its rows (`docs/tui.md`, "Steering").
 const HEADING: &str = "• Steering, joins the turn at the next step";
 /// The queue's footer under its rows (`docs/tui.md`, "Steering").
-const FOOTER: &str = "⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop";
+const FOOTER: &str = "⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop";
 /// The queue's two-column indent (`docs/tui.md`, "Steering").
 const INDENT: &str = "  ";
 /// A droppable row's `✕` with its two-space gap (`docs/tui.md`,

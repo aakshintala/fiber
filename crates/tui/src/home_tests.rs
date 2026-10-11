@@ -645,7 +645,7 @@ fn control_characters_in_a_name_draw_as_spaces_in_the_delete_question() {
     assert_eq!(
         delete_line(&row),
         "Delete a b c d e (s_aaaaaaaaaaaaaaaa)? \
-         It cannot be undone · enter delete · esc keep"
+         It cannot be undone · Enter delete · Esc keep"
     );
     assert_eq!(
         row.name, "a\nb\tc\u{1b}d\u{07}e",
@@ -660,7 +660,7 @@ fn a_name_without_control_characters_draws_unchanged() {
     assert_eq!(
         delete_line(&row),
         "Delete fix the parser (s_aaaaaaaaaaaaaaaa)? \
-         It cannot be undone · enter delete · esc keep"
+         It cannot be undone · Enter delete · Esc keep"
     );
 }
 

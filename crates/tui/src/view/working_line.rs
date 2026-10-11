@@ -15,7 +15,7 @@ use crate::working::lay;
 
 /// Draws the working line on the row above `bottom`, above the running
 /// delegates, and moves `bottom` up to it; nothing while no turn runs.
-/// The glimmer runs across its word on the tick, and `esc to interrupt`
+/// The glimmer runs across its word on the tick, and `Esc to interrupt`
 /// clicks like Esc.
 pub(super) fn draw(
     app: &App,

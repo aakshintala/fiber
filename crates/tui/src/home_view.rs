@@ -575,8 +575,8 @@ fn draw_picker(
         body,
         footer: Some(super::overlay::legend(&[
             ("↑↓", "move"),
-            ("enter", "open"),
-            ("esc", "closes"),
+            ("Enter", "open"),
+            ("Esc", "closes"),
         ])),
         prefer: 55,
     };

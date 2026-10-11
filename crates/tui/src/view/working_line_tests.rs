@@ -474,7 +474,7 @@ fn the_interrupt_target_covers_its_cells() {
         .iter()
         .find(|target| target.id == crate::mouse::TargetId::Interrupt)
         .unwrap_or_else(|| panic!("no interrupt target\n{shown}"));
-    // The sixteen cells of `esc to interrupt` on the working line's row.
+    // The sixteen cells of `Esc to interrupt` on the working line's row.
     assert_eq!((interrupt.rect.width, interrupt.rect.height), (16, 1));
     let buf = buffer_sized(&app, 80, 24);
     let mut text = String::new();
@@ -485,7 +485,7 @@ fn the_interrupt_target_covers_its_cells() {
                 .unwrap_or("?"),
         );
     }
-    assert_eq!(text, "esc to interrupt");
+    assert_eq!(text, "Esc to interrupt");
 }
 
 #[test]

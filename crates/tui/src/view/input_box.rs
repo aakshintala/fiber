@@ -15,7 +15,7 @@ use crate::surface;
 
 /// The hint at the box's right end while a queued message is edited
 /// (`docs/tui.md`, "Steering").
-const EDITING_HINT: &str = "editing a queued message · enter amends · ⌥x drops · esc stops";
+const EDITING_HINT: &str = "editing a queued message · Enter amends · ⌥X drops · Esc stops";
 
 /// Draws the input box on the rows above `bottom`: its rows on the surface
 /// tint with edges where they fit, token targets over them, and the Ctrl+R

@@ -24,38 +24,14 @@ use std::thread;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
 use support::{
-    Deadline, KillGroup, function_call, hello_single_delta as hello, is_status, on_disk,
+    KillGroup, Run, Setup, function_call, hello_single_delta as hello, is_status, on_disk,
     spawn_watched, stream,
 };
 
 /// The fixture extension's name.
 const FIXTURE: &str = "fiber.test/lua-fixture";
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
-    fn new() -> Self {
-        let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fh");
-        fs::create_dir_all(root.path().join("h")).unwrap();
-        fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { deadline, root }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
     /// Installs the extension in `source`.
     fn install(&self, source: PathBuf) {
         extensions::plan(
@@ -84,7 +60,7 @@ impl Setup {
 
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
     /// fake server, and writes configuration naming `fake/m` with `extra`.
-    fn provider(&self, server: &ProviderServer, extra: &Value) {
+    fn provider_with_extra(&self, server: &ProviderServer, extra: &Value) {
         let source = self.root.path().join("src").join("fake");
         write(
             &source.join("extension.json"),
@@ -163,7 +139,7 @@ impl Setup {
             hello(),
         ])
         .unwrap();
-        self.provider(&server, config);
+        self.provider_with_extra(&server, config);
         let run = self.run(&["ask", "read the note"]);
         assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
         (run, server)
@@ -178,13 +154,6 @@ fn write(file: &Path, text: &str) {
 // debt: the runner, `spawn_watched` and `KillGroup` copy `tools.rs`'s, as
 // the six other binary test files in this crate each do; move all seven
 // copies into `fakes` together when a change to one has to be made in all.
-
-/// One finished run: its exit code, stdout's lines parsed, and stderr.
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
-    stderr: String,
-}
 
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
@@ -203,27 +172,6 @@ impl From<Output> for Run {
 }
 
 impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn first(&self, kind: &str) -> &Value {
-        self.lines
-            .iter()
-            .find(|line| line["kind"] == kind)
-            .unwrap_or_else(|| panic!("no {kind} line"))
-    }
-
-    fn all(&self, kind: &str) -> Vec<&Value> {
-        self.lines
-            .iter()
-            .filter(|line| line["kind"] == kind)
-            .collect()
-    }
-
     fn completed(&self) -> &Value {
         &self.first("tool_call_completed")["payload"]
     }

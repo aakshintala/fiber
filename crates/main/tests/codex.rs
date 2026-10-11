@@ -17,32 +17,21 @@ mod support;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::{ProviderServer, Request, Response, fingerprint};
 use serde_json::{Value, json};
-use support::{Deadline, group_alive, hello_inline_completed as hello};
-
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
+use support::{Deadline, Run, Setup, group_alive, hello_inline_completed as hello};
 
 impl Setup {
-    fn new() -> Self {
+    fn new_with_fx_root() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fx");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { deadline, root }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
     }
 
     /// Installs the codex package copy with the ChatGPT origin rewritten to
@@ -51,7 +40,7 @@ impl Setup {
     fn install(&self, server: &ProviderServer) {
         let to = self.root.path().join("pkg-codex");
         support::package::copy_package("codex", &to, "https://chatgpt.com", &server.url());
-        let run = self.fiber(&["extension", "install", to.to_str().unwrap()], "");
+        let run = self.run_with_input(&["extension", "install", to.to_str().unwrap()], "");
         assert_eq!(run.code, Some(0), "{}", run.stderr);
     }
 
@@ -90,7 +79,7 @@ impl Setup {
     /// Runs `fiber` with `args` to completion under the deadline, in its own
     /// process group with a watchdog beside it.
     #[track_caller]
-    fn fiber(&self, args: &[&str], input: &str) -> Run {
+    fn run_with_input(&self, args: &[&str], input: &str) -> Run {
         let mut command = self.command(args);
         command
             .stdin(Stdio::piped())
@@ -130,12 +119,6 @@ impl Setup {
     }
 }
 
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
-    stderr: String,
-}
-
 impl Run {
     fn last(&self) -> &Value {
         self.lines.last().unwrap()
@@ -173,13 +156,13 @@ fn token(account: &str) -> String {
 
 #[test]
 fn a_codex_turn_sends_the_codex_wire_shape() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fx_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.install(&server);
     let access = token("acct_secret");
     setup.store(&access, "acct_secret");
 
-    let run = setup.fiber(&["ask", "--model", "codex/gpt-6-luna", "hi"], "");
+    let run = setup.run_with_input(&["ask", "--model", "codex/gpt-6-luna", "hi"], "");
 
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
@@ -212,7 +195,7 @@ fn a_codex_turn_sends_the_codex_wire_shape() {
 
 #[test]
 fn a_codex_usage_limit_is_quota_exceeded_with_its_wait_and_not_retried() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fx_root();
     let server = ProviderServer::start([Response::status(
         429,
         r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"plus","resets_at":1791396000}}"#,
@@ -222,7 +205,7 @@ fn a_codex_usage_limit_is_quota_exceeded_with_its_wait_and_not_retried() {
     setup.install(&server);
     setup.store(&token("acct_secret"), "acct_secret");
 
-    let run = setup.fiber(&["ask", "--model", "codex/gpt-6-luna", "hi"], "");
+    let run = setup.run_with_input(&["ask", "--model", "codex/gpt-6-luna", "hi"], "");
 
     assert_eq!(run.code, Some(1), "{}", run.stderr);
     let error = &run.last()["payload"]["error"];
@@ -240,12 +223,12 @@ fn a_codex_usage_limit_is_quota_exceeded_with_its_wait_and_not_retried() {
 
 #[test]
 fn a_thinking_suffix_is_sent_and_an_undeclared_level_is_invalid_arguments() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fx_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.install(&server);
     setup.store(&token("acct_secret"), "acct_secret");
 
-    let run = setup.fiber(&["ask", "--model", "codex/gpt-6-luna:xhigh", "hi"], "");
+    let run = setup.run_with_input(&["ask", "--model", "codex/gpt-6-luna:xhigh", "hi"], "");
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     let requests = server.requests();
@@ -253,7 +236,7 @@ fn a_thinking_suffix_is_sent_and_an_undeclared_level_is_invalid_arguments() {
     let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(body["reasoning"], json!({"effort": "xhigh"}));
 
-    let bad = setup.fiber(&["ask", "--model", "codex/gpt-6-luna:minimal", "hi"], "");
+    let bad = setup.run_with_input(&["ask", "--model", "codex/gpt-6-luna:minimal", "hi"], "");
     assert_eq!(bad.code, Some(1), "{}", bad.stderr);
     assert_eq!(bad.last()["payload"]["error"]["code"], "invalid_arguments");
     assert_eq!(server.requests().len(), 1, "no second request is sent");
@@ -261,11 +244,11 @@ fn a_thinking_suffix_is_sent_and_an_undeclared_level_is_invalid_arguments() {
 
 #[test]
 fn a_codex_ask_with_nothing_stored_is_authentication_failed_naming_login() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fx_root();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.install(&server);
 
-    let run = setup.fiber(&["ask", "--model", "codex/gpt-6-luna", "hi"], "");
+    let run = setup.run_with_input(&["ask", "--model", "codex/gpt-6-luna", "hi"], "");
 
     assert_eq!(run.code, Some(1), "{}", run.stderr);
     let error = &run.last()["payload"]["error"];

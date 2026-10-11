@@ -58,7 +58,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
         when: "",
         description: "Close what is on top; interrupt the turn when nothing is open",
         keys: "Esc",
-        other_paths: "click the overlay's ✕ or outside it; click \"esc to interrupt\"",
+        other_paths: "click the overlay's ✕ or outside it; click \"Esc to interrupt\"",
         contexts: Contexts::ALL,
         defaults: &["esc"],
         events: &[Canon::Key(Key::Esc)],

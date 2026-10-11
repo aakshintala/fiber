@@ -22,10 +22,9 @@ use std::process::Output;
 use std::sync::mpsc;
 use std::thread;
 
-use extension_harness::Setup;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
-use support::{function_call, hello_single_delta as hello, on_disk, outputs_sent, stream};
+use support::{Setup, function_call, hello_single_delta as hello, on_disk, outputs_sent, stream};
 
 /// One finished `fiber ask`: its exit code, its stdout lines parsed (less
 /// `session_status`, which an observer thread writes), its raw stdout and
@@ -231,7 +230,7 @@ fn saying(name: &str, said: &str) -> String {
 
 #[test]
 fn an_extension_tool_is_declared_in_full_runs_and_its_result_passes_the_hooks() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     fs::write(setup.workspace().join("note.txt"), "a\nb\nc\n").unwrap();
     let server = calling(&[function_call("call_notes", "note_count", &json!({}))]);
     setup.provider(&server);
@@ -277,7 +276,7 @@ fn an_extension_tool_is_declared_in_full_runs_and_its_result_passes_the_hooks() 
 
 #[test]
 fn each_call_is_judged_on_the_effects_its_arguments_declare() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     fs::write(setup.workspace().join("note.txt"), "a\n").unwrap();
     let secret = setup.home().join("credentials").join("k");
     fs::create_dir_all(secret.parent().unwrap()).unwrap();
@@ -341,7 +340,7 @@ fn resolved_action(run: &Run) -> Value {
 
 #[test]
 fn an_executes_call_with_no_reviewer_is_denied_and_never_runs() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = calling(&[function_call("call_exec", "launch", &json!({}))]);
     setup.provider(&server);
     setup.lua(
@@ -376,7 +375,7 @@ fn an_executes_call_with_no_reviewer_is_denied_and_never_runs() {
 
 #[test]
 fn a_declared_replacement_of_read_is_the_read_tool() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     fs::write(setup.workspace().join("note.txt"), "the file\n").unwrap();
     let server = calling(&[function_call(
         "call_read",
@@ -401,7 +400,7 @@ fn a_declared_replacement_of_read_is_the_read_tool() {
 
 #[test]
 fn an_undeclared_replacement_of_read_unloads_its_extension() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     fs::write(setup.workspace().join("note.txt"), "the file\n").unwrap();
     let server = calling(&[function_call(
         "call_read",
@@ -438,7 +437,7 @@ fn an_undeclared_replacement_of_read_unloads_its_extension() {
 
 #[test]
 fn a_tool_without_a_timeout_is_not_declared_and_its_neighbour_is() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = calling(&[function_call("call_kept", "kept", &json!({}))]);
     setup.provider(&server);
     setup.lua(
@@ -471,7 +470,7 @@ fn a_tool_without_a_timeout_is_not_declared_and_its_neighbour_is() {
 
 #[test]
 fn two_extensions_registering_one_tool_name_both_lose_it() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = calling(&[function_call("call_a", "only_a", &json!({}))]);
     setup.provider(&server);
     setup.lua(
@@ -500,7 +499,7 @@ fn two_extensions_registering_one_tool_name_both_lose_it() {
 
 #[test]
 fn a_tool_spinning_past_its_timeout_fails_timeout_and_the_session_goes_on() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     let server = calling(&[function_call("call_spin", "spin", &json!({}))]);
     setup.provider(&server);
     setup.lua(

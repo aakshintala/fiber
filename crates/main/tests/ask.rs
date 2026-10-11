@@ -29,7 +29,7 @@ use fakes::{ProviderServer, Request, Response, Watchdog, fingerprint};
 use rustix::pty;
 use serde_json::{Value, json};
 use support::{
-    Deadline, HELLO_KINDS, git, group_alive, hello_inline_completed as hello, is_status,
+    Deadline, HELLO_KINDS, Setup, git, group_alive, hello_inline_completed as hello, is_status,
 };
 
 #[path = "../../provider/tests/support/probes.rs"]
@@ -39,17 +39,9 @@ mod probes;
 /// returns without spawning anything.
 const WATCHDOG_STAND_IN_ENV: &str = "FIBER_WATCHDOG_STAND_IN";
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
     #[track_caller]
-    fn new() -> Self {
+    fn new_with_started_deadline() -> Self {
         Self::within(Deadline::start())
     }
 
@@ -58,42 +50,6 @@ impl Setup {
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { deadline, root }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    /// Installs a provider `fake` with model `m` on `openai-responses` at the
-    /// fake server, and makes `fake/m` the configured model.
-    fn provider(&self, server: &ProviderServer) {
-        let source = self.root.path().join("src");
-        write(
-            &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-        );
-        write(
-            &source.join("providers/fake.json"),
-            &json!({
-                "name": "fake",
-                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
-            }),
-        );
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
-        write(
-            &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
-        );
     }
 
     /// As [`Setup::provider`], with the model declaring the `low` and
@@ -250,7 +206,7 @@ impl Setup {
     }
 
     #[track_caller]
-    fn fiber(&self, args: &[&str], stdin: Option<&str>) -> Run {
+    fn run_with_stdin(&self, args: &[&str], stdin: Option<&str>) -> Run {
         self.fiber_with_home(self.home().to_str().unwrap(), args, stdin)
     }
 
@@ -571,11 +527,11 @@ fn turn_input(run: &Run) -> &str {
 
 #[test]
 fn a_prompt_as_an_argument_runs_one_turn_and_stdout_is_the_log() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -661,12 +617,12 @@ fn opening_skills(run: &Run) -> Vec<(String, String, String)> {
 
 #[test]
 fn the_opening_message_lists_the_built_in_skills_from_home_docs() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
     install_docs_skills(&setup.home());
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -691,7 +647,7 @@ fn the_opening_message_lists_the_built_in_skills_from_home_docs() {
     );
 
     fs::remove_dir_all(home.join("docs")).unwrap();
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -700,11 +656,11 @@ fn the_opening_message_lists_the_built_in_skills_from_home_docs() {
 
 #[test]
 fn a_prompt_on_stdin_runs_one_turn() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
 
-    let run = setup.fiber(&["ask"], Some("review the brief\n"));
+    let run = setup.run_with_stdin(&["ask"], Some("review the brief\n"));
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -714,12 +670,12 @@ fn a_prompt_on_stdin_runs_one_turn() {
 
 #[test]
 fn a_failed_turn_exits_1_with_the_turns_error() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([Response::status(503, "{}")]).unwrap();
     setup.provider(&server);
     setup.no_retry();
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(1));
     assert_eq!(
@@ -765,20 +721,28 @@ fn assert_pre_session(run: &Run, exit: i32, code: &str) {
 
 #[test]
 fn two_prompts_or_none_is_a_usage_error() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
 
-    assert_pre_session(&setup.fiber(&["ask"], None), 2, "usage");
-    assert_pre_session(&setup.fiber(&["ask", "a", "b"], None), 2, "usage");
-    assert_pre_session(&setup.fiber(&["ask", "--model", "x"], None), 2, "usage");
-    assert_pre_session(&setup.fiber(&["ask", "--verbose"], None), 2, "usage");
+    assert_pre_session(&setup.run_with_stdin(&["ask"], None), 2, "usage");
+    assert_pre_session(&setup.run_with_stdin(&["ask", "a", "b"], None), 2, "usage");
     assert_pre_session(
-        &setup.fiber(&["ask", "x", "fake/m", "hi"], None),
+        &setup.run_with_stdin(&["ask", "--model", "x"], None),
         2,
         "usage",
     );
-    let run = setup.fiber(&["ask", "--model"], None);
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "--verbose"], None),
+        2,
+        "usage",
+    );
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "x", "fake/m", "hi"], None),
+        2,
+        "usage",
+    );
+    let run = setup.run_with_stdin(&["ask", "--model"], None);
     assert_pre_session(&run, 2, "usage");
     assert!(
         run.stderr
@@ -792,12 +756,12 @@ fn two_prompts_or_none_is_a_usage_error() {
 
 #[test]
 fn opencode_providers_name_the_opencode_extension() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     for reference in [
         "opencode-go/muse-spark-1.3-contributor",
         "opencode-zen/muse-spark-1.3",
     ] {
-        let run = setup.fiber(&["ask", "--model", reference, "hi"], None);
+        let run = setup.run_with_stdin(&["ask", "--model", reference, "hi"], None);
         assert_pre_session(&run, 1, "extension_missing");
         let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
         let provider = reference.split('/').next().unwrap();
@@ -812,8 +776,8 @@ fn opencode_providers_name_the_opencode_extension() {
 
 #[test]
 fn a_bare_model_id_nobody_has_is_no_model_pointing_at_fiber_models() {
-    let setup = Setup::new();
-    let run = setup.fiber(&["ask", "--model", "nope", "hi"], None);
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["ask", "--model", "nope", "hi"], None);
     assert_pre_session(&run, 1, "no_model");
     let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
     assert!(
@@ -824,8 +788,8 @@ fn a_bare_model_id_nobody_has_is_no_model_pointing_at_fiber_models() {
 
 #[test]
 fn a_provider_no_first_party_package_serves_names_no_extension() {
-    let setup = Setup::new();
-    let run = setup.fiber(&["ask", "--model", "nobody-serves/x", "hi"], None);
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["ask", "--model", "nobody-serves/x", "hi"], None);
     assert_pre_session(&run, 1, "extension_missing");
     let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
     assert_eq!(
@@ -836,9 +800,9 @@ fn a_provider_no_first_party_package_serves_names_no_extension() {
 
 #[test]
 fn a_failure_before_any_session_ends_stdout_with_fiber_exited_and_no_session_id() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
 
-    assert_pre_session(&setup.fiber(&["ask", "hi"], None), 1, "no_model");
+    assert_pre_session(&setup.run_with_stdin(&["ask", "hi"], None), 1, "no_model");
     assert_pre_session(&setup.fiber_with_home("", &["ask", "hi"], None), 2, "usage");
     assert_pre_session(
         &setup.fiber_with_home("rel", &["ask", "hi"], None),
@@ -850,7 +814,7 @@ fn a_failure_before_any_session_ends_stdout_with_fiber_exited_and_no_session_id(
 
 #[test]
 fn a_model_with_no_context_window_is_left_out_before_the_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     let source = setup.home().join("extensions/fake/providers/fake.json");
@@ -860,7 +824,7 @@ fn a_model_with_no_context_window_is_left_out_before_the_session() {
     assert!(!text.contains("context_window"), "{text}");
     fs::write(&source, text).unwrap();
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_pre_session(&run, 1, "no_model");
     assert!(server.requests().is_empty());
@@ -868,11 +832,11 @@ fn a_model_with_no_context_window_is_left_out_before_the_session() {
 
 #[test]
 fn preamble_built_records_the_models_declared_window() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -886,7 +850,7 @@ fn preamble_built_records_the_models_declared_window() {
 
 #[test]
 fn a_missing_credential_fails_before_the_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     let source = setup.home().join("extensions/fake/providers/fake.json");
@@ -895,12 +859,16 @@ fn a_missing_credential_fails_before_the_session() {
         .replace("FIBER_TEST_FAKE_KEY", "FIBER_TEST_UNSET_KEY");
     fs::write(&source, text).unwrap();
 
-    assert_pre_session(&setup.fiber(&["ask", "hi"], None), 1, "credential_missing");
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "hi"], None),
+        1,
+        "credential_missing",
+    );
 }
 
 #[test]
 fn a_failing_credential_command_is_named_by_its_program_alone() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     write(
@@ -908,7 +876,7 @@ fn a_failing_credential_command_is_named_by_its_program_alone() {
         &json!({"model": "fake/m", "providers": {"fake": {"credentials": {"default": {"command": ["false", "sk-in-argument"]}}}}}),
     );
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
     assert_pre_session(&run, 1, "credential_missing");
     assert!(run.stderr.contains("`false` failed"), "{}", run.stderr);
     assert!(!run.stdout.contains("sk-in-argument"), "{}", run.stdout);
@@ -917,7 +885,7 @@ fn a_failing_credential_command_is_named_by_its_program_alone() {
 
 #[test]
 fn a_bedrock_converse_model_fails_before_the_session() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     let source = setup.root.path().join("src");
     write(
@@ -962,14 +930,14 @@ fn a_bedrock_converse_model_fails_before_the_session() {
 
 #[test]
 fn fiber_without_ask_is_a_usage_error_naming_fiber_ask() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
 
-    let bare = setup.fiber(&[], None);
+    let bare = setup.run_with_stdin(&[], None);
     assert_eq!(bare.code, Some(2));
     assert!(bare.stderr.contains("fiber ask"), "stderr: {}", bare.stderr);
     assert!(bare.lines.is_empty());
 
-    let unknown = setup.fiber(&["hi"], None);
+    let unknown = setup.run_with_stdin(&["hi"], None);
     assert_eq!(unknown.code, Some(2));
     assert!(unknown.lines.is_empty());
     assert!(
@@ -1050,9 +1018,9 @@ fn assert_help(run: &Run, about: &str) {
 
 #[test]
 fn help_prints_the_menu() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     for args in [&["-h"][..], &["--help"], &["help"]] {
-        let run = setup.fiber(args, None);
+        let run = setup.run_with_stdin(args, None);
         assert_eq!(run.code, Some(0), "{args:?} stderr: {}", run.stderr);
         assert_eq!(run.stderr, "");
         assert_eq!(printed(&run), MENU, "{args:?}");
@@ -1061,19 +1029,19 @@ fn help_prints_the_menu() {
 
 #[test]
 fn ask_help_prints_no_event_stream() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     for args in [&["ask", "--help"][..], &["ask", "-h"], &["help", "ask"]] {
-        let run = setup.fiber(args, None);
+        let run = setup.run_with_stdin(args, None);
         assert_help(&run, "Run one session of one turn; its events go to stdout");
     }
 }
 
 #[test]
 fn help_for_every_command_matches_the_flag() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     for name in ["ask", "extension", "version", "help"] {
-        let via_help = setup.fiber(&["help", name], None);
-        let via_flag = setup.fiber(&[name, "--help"], None);
+        let via_help = setup.run_with_stdin(&["help", name], None);
+        let via_flag = setup.run_with_stdin(&[name, "--help"], None);
         assert_eq!(via_help.code, Some(0), "{name}: {}", via_help.stderr);
         assert_eq!(via_flag.code, Some(0), "{name}: {}", via_flag.stderr);
         assert_eq!(via_help.stderr, "");
@@ -1098,8 +1066,8 @@ fn help_for_every_command_matches_the_flag() {
         ("config", "get"),
         ("config", "set"),
     ] {
-        let via_help = setup.fiber(&["help", noun, verb], None);
-        let via_flag = setup.fiber(&[noun, verb, "--help"], None);
+        let via_help = setup.run_with_stdin(&["help", noun, verb], None);
+        let via_flag = setup.run_with_stdin(&[noun, verb, "--help"], None);
         assert_eq!(via_help.code, Some(0), "{noun} {verb}: {}", via_help.stderr);
         assert_eq!(via_flag.code, Some(0), "{noun} {verb}: {}", via_flag.stderr);
         assert_eq!(via_help.stderr, "");
@@ -1118,7 +1086,7 @@ fn help_for_every_command_matches_the_flag() {
 
 #[test]
 fn each_command_prints_its_own_help() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let commands = [
         (
             "extension install",
@@ -1146,10 +1114,13 @@ fn each_command_prints_its_own_help() {
     for (name, about) in commands {
         if name.starts_with("extension ") {
             let verb = name.strip_prefix("extension ").unwrap();
-            assert_help(&setup.fiber(&["extension", verb, "--help"], None), about);
+            assert_help(
+                &setup.run_with_stdin(&["extension", verb, "--help"], None),
+                about,
+            );
         } else {
             for args in [vec![name, "--help"], vec!["help", name]] {
-                assert_help(&setup.fiber(&args, None), about);
+                assert_help(&setup.run_with_stdin(&args, None), about);
             }
         }
     }
@@ -1157,7 +1128,7 @@ fn each_command_prints_its_own_help() {
 
 #[test]
 fn version_prints_the_package_version() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let line = match option_env!("FIBER_COMMIT") {
         Some(commit) => {
             assert!(
@@ -1172,7 +1143,7 @@ fn version_prints_the_package_version() {
         None => "fiber 0.0.0\n".to_owned(),
     };
     for args in [&["-v"][..], &["--version"], &["version"]] {
-        let run = setup.fiber(args, None);
+        let run = setup.run_with_stdin(args, None);
         assert_eq!(run.code, Some(0), "{args:?} stderr: {}", run.stderr);
         assert_eq!(run.stderr, "");
         assert_eq!(printed(&run), line, "{args:?}");
@@ -1181,8 +1152,8 @@ fn version_prints_the_package_version() {
 
 #[test]
 fn a_capital_v_is_an_unknown_argument() {
-    let setup = Setup::new();
-    let run = setup.fiber(&["-V"], None);
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["-V"], None);
     assert_eq!(run.code, Some(2));
     assert!(run.lines.is_empty());
     assert_eq!(
@@ -1193,8 +1164,8 @@ fn a_capital_v_is_an_unknown_argument() {
 
 #[test]
 fn an_unknown_subcommand_suggests_the_nearest() {
-    let setup = Setup::new();
-    let run = setup.fiber(&["extension", "i"], None);
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["extension", "i"], None);
     assert_eq!(run.code, Some(2));
     assert!(run.lines.is_empty());
     assert_eq!(
@@ -1205,8 +1176,8 @@ fn an_unknown_subcommand_suggests_the_nearest() {
 
 #[test]
 fn an_ask_parse_error_is_one_exited_line() {
-    let setup = Setup::new();
-    let run = setup.fiber(&["ask", "--modle", "x", "hi"], None);
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["ask", "--modle", "x", "hi"], None);
     assert_pre_session(&run, 2, "usage");
     assert_eq!(
         run.stderr,
@@ -1216,10 +1187,10 @@ fn an_ask_parse_error_is_one_exited_line() {
 
 #[test]
 fn ask_with_the_wrong_shape_is_one_exited_line() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let sentence = "fiber: `fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.\n";
     for args in [&["ask", "a", "b"][..], &["ask", "-", "a"]] {
-        let run = setup.fiber(args, None);
+        let run = setup.run_with_stdin(args, None);
         assert_pre_session(&run, 2, "usage");
         assert_eq!(run.stderr, sentence, "{args:?}");
     }
@@ -1227,8 +1198,8 @@ fn ask_with_the_wrong_shape_is_one_exited_line() {
 
 #[test]
 fn bare_fiber_names_ask_and_prints_nothing() {
-    let setup = Setup::new();
-    let run = setup.fiber(&[], None);
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&[], None);
     assert_eq!(run.code, Some(2));
     assert!(run.lines.is_empty());
     assert_eq!(
@@ -1239,7 +1210,7 @@ fn bare_fiber_names_ask_and_prints_nothing() {
 
 #[test]
 fn a_prompt_argument_does_not_wait_on_an_open_stdin() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let (reader, writer) = std::io::pipe().unwrap();
@@ -1252,10 +1223,10 @@ fn a_prompt_argument_does_not_wait_on_an_open_stdin() {
 
 #[test]
 fn a_prompt_argument_leaves_stdin_unread() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    let run = setup.fiber(&["ask", "hi"], Some("and this"));
+    let run = setup.run_with_stdin(&["ask", "hi"], Some("and this"));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "hi");
@@ -1263,10 +1234,10 @@ fn a_prompt_argument_leaves_stdin_unread() {
 
 #[test]
 fn a_prompt_and_a_dash_append_stdin() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    let run = setup.fiber(&["ask", "hi", "-"], Some("more"));
+    let run = setup.run_with_stdin(&["ask", "hi", "-"], Some("more"));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "hi\nmore");
@@ -1274,10 +1245,10 @@ fn a_prompt_and_a_dash_append_stdin() {
 
 #[test]
 fn a_dash_reads_stdin_as_the_prompt() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
-    let run = setup.fiber(&["ask", "-"], Some("brief"));
+    let run = setup.run_with_stdin(&["ask", "-"], Some("brief"));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "brief");
@@ -1285,19 +1256,19 @@ fn a_dash_reads_stdin_as_the_prompt() {
 
 #[test]
 fn help_does_not_read_home_or_a_provider() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let menu = setup.fiber_with_home("", &["--help"], None);
     assert_eq!(menu.code, Some(0), "stderr: {}", menu.stderr);
     assert_eq!(menu.stderr, "");
     assert_eq!(printed(&menu), MENU);
 
-    let ask = setup.fiber(&["ask", "--help"], None);
+    let ask = setup.run_with_stdin(&["ask", "--help"], None);
     assert_help(&ask, "Run one session of one turn; its events go to stdout");
 }
 
 #[test]
 fn no_prompt_with_stdin_on_a_terminal_is_a_usage_error() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
 
@@ -1309,7 +1280,7 @@ fn no_prompt_with_stdin_on_a_terminal_is_a_usage_error() {
 
 #[test]
 fn a_prompt_argument_with_stdin_on_a_terminal_runs_without_reading_it() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
 
@@ -1344,14 +1315,14 @@ fn go_exchange() -> [Response; 2] {
 /// terminal, so it does not ask.
 #[track_caller]
 fn install(setup: &Setup, path: &Path) {
-    let run = setup.fiber(&["extension", "install", path.to_str().unwrap()], None);
+    let run = setup.run_with_stdin(&["extension", "install", path.to_str().unwrap()], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(!run.stderr.contains("Go ahead?"), "{}", run.stderr);
 }
 
 #[test]
 fn install_in_a_terminal_shows_the_providers_and_their_urls_and_asks() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let opencode = package("opencode");
     let path = opencode.to_str().unwrap();
     let installed = setup.home().join("extensions/opencode");
@@ -1379,21 +1350,26 @@ fn install_in_a_terminal_shows_the_providers_and_their_urls_and_asks() {
 
 #[test]
 fn list_and_remove_show_and_delete_what_an_install_put_in_home() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let muse = package("muse");
     install(&setup, &muse);
     let name = "github.com/aakshintala/fiber/providers/muse";
-    let listed = setup.fiber(&["extension", "list"], None);
+    let listed = setup.run_with_stdin(&["extension", "list"], None);
     assert_eq!(listed.code, Some(0), "stderr: {}", listed.stderr);
     assert_eq!(listed.raw, [format!("{name} 0.0.0 local")]);
-    let updated = setup.fiber(&["extension", "update", "muse"], None);
+    let updated = setup.run_with_stdin(&["extension", "update", "muse"], None);
     assert_eq!(updated.code, Some(0), "stderr: {}", updated.stderr);
     assert_eq!(updated.stderr, format!("fiber: installed {name}\n"));
-    let removed = setup.fiber(&["extension", "remove", "muse"], None);
+    let removed = setup.run_with_stdin(&["extension", "remove", "muse"], None);
     assert_eq!(removed.code, Some(0), "stderr: {}", removed.stderr);
     assert_eq!(removed.stderr, format!("fiber: removed {name}\n"));
-    assert!(setup.fiber(&["extension", "list"], None).raw.is_empty());
-    let again = setup.fiber(&["extension", "remove", "muse"], None);
+    assert!(
+        setup
+            .run_with_stdin(&["extension", "list"], None)
+            .raw
+            .is_empty()
+    );
+    let again = setup.run_with_stdin(&["extension", "remove", "muse"], None);
     assert_eq!(again.code, Some(1));
     assert!(
         again.stderr.contains("is not installed"),
@@ -1404,7 +1380,7 @@ fn list_and_remove_show_and_delete_what_an_install_put_in_home() {
 
 #[test]
 fn install_by_name_without_git_fails_as_usage_and_says_to_install_it() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let run = setup.fiber_with_env(&["extension", "install", "openrouter"], &[("PATH", "")]);
     assert_eq!(run.code, Some(2), "{}", run.stderr);
     assert!(run.stderr.contains("Install git"), "{}", run.stderr);
@@ -1412,7 +1388,7 @@ fn install_by_name_without_git_fails_as_usage_and_says_to_install_it() {
 
 #[test]
 fn the_extension_commands_take_their_arguments() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     for args in [
         vec!["extension", "install"],
         vec!["extension", "install", "a", "b"],
@@ -1420,17 +1396,17 @@ fn the_extension_commands_take_their_arguments() {
         vec!["extension", "list", "x"],
         vec!["extension", "update", "a", "b"],
     ] {
-        let run = setup.fiber(&args, None);
+        let run = setup.run_with_stdin(&args, None);
         assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
     }
 }
 
 #[test]
 fn extension_update_all_updates_every_requested_extension() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     install(&setup, &package("muse"));
     install(&setup, &package("opencode"));
-    let run = setup.fiber(&["extension", "update"], None);
+    let run = setup.run_with_stdin(&["extension", "update"], None);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert!(run.raw.is_empty());
     assert!(
@@ -1445,8 +1421,8 @@ fn extension_update_all_updates_every_requested_extension() {
 
 #[test]
 fn extension_update_all_on_an_empty_home_exits_zero() {
-    let setup = Setup::new();
-    let run = setup.fiber(&["extension", "update"], None);
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["extension", "update"], None);
     assert_eq!(run.code, Some(0));
     assert_eq!(run.stderr, "");
     assert!(run.raw.is_empty());
@@ -1454,7 +1430,7 @@ fn extension_update_all_on_an_empty_home_exits_zero() {
 
 #[test]
 fn extension_update_all_skips_unrequested_dependencies() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
     gh.release_needs_muse("v1.0.0", "v0.1.0");
@@ -1492,23 +1468,28 @@ fn extension_update_all_skips_unrequested_dependencies() {
         listed.raw
     );
     // muse is still a dependency only: removing what needed it removes it.
-    let removed = setup.fiber(&["extension", "remove", NEEDS_MUSE], None);
+    let removed = setup.run_with_stdin(&["extension", "remove", NEEDS_MUSE], None);
     assert_eq!(removed.code, Some(0), "{}", removed.stderr);
     assert_eq!(
         removed.stderr,
         format!("fiber: removed {NEEDS_MUSE}\nfiber: removed {MUSE}\n")
     );
-    assert!(setup.fiber(&["extension", "list"], None).raw.is_empty());
+    assert!(
+        setup
+            .run_with_stdin(&["extension", "list"], None)
+            .raw
+            .is_empty()
+    );
 }
 
 #[test]
 fn extension_update_all_stops_at_the_first_failure() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let muse = setup.package("muse", "", "");
     install(&setup, &package("opencode"));
     install(&setup, &muse);
     fs::remove_dir_all(&muse).unwrap();
-    let run = setup.fiber(&["extension", "update"], None);
+    let run = setup.run_with_stdin(&["extension", "update"], None);
     assert_ne!(run.code, Some(0), "{}", run.stderr);
     assert!(
         !run.stderr
@@ -1520,14 +1501,14 @@ fn extension_update_all_stops_at_the_first_failure() {
 
 #[test]
 fn old_extension_command_names_are_unknown() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     for args in [
         &["install", "x"][..],
         &["update"][..],
         &["remove", "x"][..],
         &["list"][..],
     ] {
-        let run = setup.fiber(args, None);
+        let run = setup.run_with_stdin(args, None);
         assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
         assert!(run.raw.is_empty());
         let lines: Vec<_> = run.stderr.lines().collect();
@@ -1610,7 +1591,7 @@ const NEEDS_MUSE: &str = "github.com/aakshintala/fiber/providers/needs-muse";
 
 #[test]
 fn install_by_short_name_fetches_from_git_headless_and_list_shows_the_commit() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
     let commit = git(setup.deadline, &gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
@@ -1629,7 +1610,7 @@ fn install_by_short_name_fetches_from_git_headless_and_list_shows_the_commit() {
 
 #[test]
 fn install_by_name_in_a_terminal_shows_the_version_asks_and_can_show_the_source() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
     let installed = setup.home().join("extensions/muse");
@@ -1651,7 +1632,7 @@ fn install_by_name_in_a_terminal_shows_the_version_asks_and_can_show_the_source(
 
 #[test]
 fn update_moves_to_the_newest_tag_and_a_terminal_shows_what_changed() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
     let run = setup.fiber_with_env(&["extension", "install", "muse"], &gh.env());
@@ -1669,7 +1650,7 @@ fn update_moves_to_the_newest_tag_and_a_terminal_shows_what_changed() {
 
 #[test]
 fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
     assert_eq!(
@@ -1718,7 +1699,7 @@ fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
         Some(0)
     );
     fs::create_dir_all(&data).unwrap();
-    let headless = setup.fiber(&["extension", "remove", "muse"], None);
+    let headless = setup.run_with_stdin(&["extension", "remove", "muse"], None);
     assert_eq!(headless.code, Some(0), "stderr: {}", headless.stderr);
     assert!(!data.exists());
 }
@@ -1776,7 +1757,7 @@ fn assert_weather(run: &Run) {
 
 #[test]
 fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start(go_exchange()).unwrap();
     install(
         &setup,
@@ -1819,7 +1800,7 @@ fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
 
 #[test]
 fn a_zero_budget_fails_the_turn_before_the_provider_is_called() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     write(
@@ -1827,7 +1808,7 @@ fn a_zero_budget_fails_the_turn_before_the_provider_is_called() {
         &json!({"model": "fake/m", "budget": {"usd": 0}}),
     );
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
     assert_eq!(
@@ -1861,7 +1842,7 @@ fn a_zero_budget_fails_the_turn_before_the_provider_is_called() {
 
 #[test]
 fn the_configured_budget_reaches_preamble_built() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     write(
@@ -1869,7 +1850,7 @@ fn the_configured_budget_reaches_preamble_built() {
         &json!({"model": "fake/m", "budget": {"usd": 1.5}}),
     );
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -1899,7 +1880,7 @@ fn muse_recording() -> Response {
 
 #[test]
 fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([muse_recording()]).unwrap();
     install(
         &setup,
@@ -1987,7 +1968,7 @@ fn allow_text() -> Response {
 
 #[test]
 fn the_providers_reviewer_model_decides_a_reviewed_call() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
     install(
         &setup,
@@ -2059,7 +2040,7 @@ fn probe(path: &str, label: &str) -> Response {
 
 #[test]
 fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         probe(
             "research/anthropic-messages-probe/raw/stream.json",
@@ -2126,7 +2107,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
 
 #[test]
 fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         probe(
             "research/openai-responses-probe/raw/probe.json",
@@ -2191,7 +2172,7 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
 
 #[test]
 fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         probe(
             "research/google-generative-ai-probe/raw/id-emitted-gemini-3.1-flash-lite.json",
@@ -2272,7 +2253,7 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
 
 #[test]
 fn anthropic_installed_by_path_completes_a_turn_on_a_scripted_stream() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([anthropic_hello()]).unwrap();
     install(
         &setup,
@@ -2295,7 +2276,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_a_scripted_stream() {
 
 #[test]
 fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     install(
         &setup,
@@ -2320,7 +2301,7 @@ fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
 
 #[test]
 fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         Response::status(200, support::package::openrouter_listing()),
         completions_hello("gen-abc123", json!(0.0000072)),
@@ -2383,7 +2364,7 @@ const EARLY_CLOSE_KINDS: [&str; 20] = [
 
 #[test]
 fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     // The first stream names its generation and closes: no usage, no
     // `[DONE]`. The retry completes with the vendor's own figure.
     let early = json!({"id": "gen-early", "object": "chat.completion.chunk", "choices": [
@@ -2455,7 +2436,7 @@ fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
 
 #[test]
 fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         Response::status(200, support::package::openrouter_listing()),
         completions_hello("gen-one", json!(0.0001)),
@@ -2558,7 +2539,7 @@ fn assert_five_minute_markers(run: &Run, body: &Value) {
 
 #[test]
 fn a_per_model_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         Response::status(200, support::package::openrouter_listing()),
         completions_hello("gen-one", json!(0.0001)),
@@ -2575,7 +2556,7 @@ fn a_per_model_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
 
 #[test]
 fn a_repository_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         Response::status(200, support::package::openrouter_listing()),
         completions_hello("gen-one", json!(0.0001)),
@@ -2612,7 +2593,7 @@ fn the_openrouter_data_file_holds_no_models_for_models_to_supply() {
 
 #[test]
 fn gemini_installed_by_path_completes_a_turn_on_a_scripted_stream() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([gemini_hello()]).unwrap();
     install(
         &setup,
@@ -2785,7 +2766,7 @@ fn first_party_reviewer_models_name_a_shipped_non_contributor_model() {
 
 #[test]
 fn a_contributor_or_unshipped_reviewer_model_is_not_valid() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let package = setup.root.path().join("pkg");
     let read = |reviewer: Option<&str>, models: &[&str]| {
         let models: Vec<Value> = models
@@ -2815,7 +2796,7 @@ fn a_contributor_or_unshipped_reviewer_model_is_not_valid() {
 
 #[test]
 fn a_zen_model_is_sent_to_zens_url() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     install(
         &setup,
@@ -2960,20 +2941,20 @@ fn the_codex_entries_declare_the_thinking_levels_their_routes_accept() {
 
 #[test]
 fn install_takes_one_name_or_path() {
-    let setup = Setup::new();
-    let missing = setup.fiber(&["extension", "install"], None);
+    let setup = Setup::new_with_started_deadline();
+    let missing = setup.run_with_stdin(&["extension", "install"], None);
     assert_eq!(missing.code, Some(2));
     assert_eq!(
         missing.stderr,
         "fiber: The following required arguments were not provided: <name or path>. Run `fiber --help` for usage.\n"
     );
-    let extra = setup.fiber(&["extension", "install", "a", "b"], None);
+    let extra = setup.run_with_stdin(&["extension", "install", "a", "b"], None);
     assert_eq!(extra.code, Some(2));
     assert_eq!(
         extra.stderr,
         "fiber: Unexpected argument 'b' found. Run `fiber --help` for usage.\n"
     );
-    let run = setup.fiber(&["extension", "install", "/nonexistent"], None);
+    let run = setup.run_with_stdin(&["extension", "install", "/nonexistent"], None);
     assert_eq!(run.code, Some(1));
     let root = setup.home().join("extensions");
     let installed = fs::read_dir(&root).is_ok_and(|entries| {
@@ -3067,13 +3048,13 @@ fn live_gemini_completes_one_turn() {
 
 #[test]
 fn two_runs_send_byte_identical_preambles() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     setup.provider(&server);
 
-    let first = setup.fiber(&["ask", "one"], None);
+    let first = setup.run_with_stdin(&["ask", "one"], None);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
-    let second = setup.fiber(&["ask", "two"], None);
+    let second = setup.run_with_stdin(&["ask", "two"], None);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
 
     let requests = server.requests();
@@ -3120,12 +3101,12 @@ fn install_review_skill(setup: &Setup) {
 
 #[test]
 fn a_slash_prompt_runs_the_skill_with_the_rest_as_its_arguments() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     install_review_skill(&setup);
 
-    let run = setup.fiber(&["ask", "/review-pr 42"], None);
+    let run = setup.run_with_stdin(&["ask", "/review-pr 42"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -3142,12 +3123,12 @@ fn a_slash_prompt_runs_the_skill_with_the_rest_as_its_arguments() {
 
 #[test]
 fn a_prompt_naming_no_skill_is_sent_as_written() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     install_review_skill(&setup);
 
-    let run = setup.fiber(&["ask", "/nope x"], None);
+    let run = setup.run_with_stdin(&["ask", "/nope x"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -3162,7 +3143,7 @@ fn a_prompt_naming_no_skill_is_sent_as_written() {
 
 #[test]
 fn a_slash_prompt_runs_a_prompt_template() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     // A prompt template: a skill with `disable-model-invocation: true`. It
@@ -3175,7 +3156,7 @@ fn a_slash_prompt_runs_a_prompt_template() {
     )
     .unwrap();
 
-    let run = setup.fiber(&["ask", "/plan 42"], None);
+    let run = setup.run_with_stdin(&["ask", "/plan 42"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -3261,7 +3242,7 @@ fn only_model_request(server: &ProviderServer) -> Request {
 
 #[test]
 fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     // With no cache discovery runs synchronously once and no refresh
     // runs: one reply each for discovery, the token and the model request.
     let server = ProviderServer::start_with_fallback(
@@ -3271,7 +3252,7 @@ fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
     .unwrap();
     fixture(&setup, &server);
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let exited = &run.last()["payload"];
@@ -3312,7 +3293,7 @@ fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
 
 #[test]
 fn a_provider_whose_listing_fails_with_no_cache_is_listed_once() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start_routed(
         [
             (
@@ -3329,7 +3310,7 @@ fn a_provider_whose_listing_fails_with_no_cache_is_listed_once() {
     .unwrap();
     fixture(&setup, &server);
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_ne!(run.code, Some(0), "no model was discovered: {}", run.stderr);
     // With no cached copy the synchronous discovery is the only listing: the
@@ -3347,7 +3328,7 @@ fn a_provider_whose_listing_fails_with_no_cache_is_listed_once() {
 
 #[test]
 fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     // Answered by path: the background refresh races the session's own
     // requests, so no order of arrival is fixed. The listing path fails, so
     // a startup that fetched the list synchronously would fail the run: the
@@ -3387,7 +3368,7 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
         .unwrap()
         .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1))
         .unwrap();
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let exited = &run.last()["payload"];
     assert_eq!(exited["exit_code"], 0);
@@ -3411,7 +3392,7 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
 
 #[test]
 fn a_credential_that_errors_fails_before_any_session_line() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([
         Response::status(
             200,
@@ -3422,14 +3403,14 @@ fn a_credential_that_errors_fails_before_any_session_line() {
     .unwrap();
     fixture(&setup, &server);
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_pre_session(&run, 1, "credential_failed");
 }
 
 #[test]
 fn a_lua_provider_without_credential_uses_the_stored_key() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     let source = setup.root.path().join("src-plain");
     write(
@@ -3466,7 +3447,7 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
         &json!({"model": "plain/m1"}),
     );
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
@@ -3487,11 +3468,11 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
 
 #[test]
 fn a_thinking_suffix_is_recorded_and_an_unsupported_level_fails_first() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_with_thinking(&server);
 
-    let run = setup.fiber(&["ask", "--model", "fake/m:high", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "--model", "fake/m:high", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     let built = run
@@ -3502,7 +3483,7 @@ fn a_thinking_suffix_is_recorded_and_an_unsupported_level_fails_first() {
     assert_eq!(built["payload"]["thinking"], "high");
 
     assert_pre_session(
-        &setup.fiber(&["ask", "--model", "fake/m:max", "hi"], None),
+        &setup.run_with_stdin(&["ask", "--model", "fake/m:max", "hi"], None),
         1,
         "invalid_arguments",
     );
@@ -3510,11 +3491,11 @@ fn a_thinking_suffix_is_recorded_and_an_unsupported_level_fails_first() {
 
 #[test]
 fn a_declared_thinking_default_is_sent_when_no_level_is_given() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_with_thinking(&server);
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(
         server.await_requests(1, setup.deadline.left()),
@@ -3528,7 +3509,7 @@ fn a_declared_thinking_default_is_sent_when_no_level_is_given() {
 
 #[test]
 fn a_configured_level_the_model_does_not_declare_logs_one_notice_and_runs() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider_with_thinking(&server);
     write(
@@ -3536,7 +3517,7 @@ fn a_configured_level_the_model_does_not_declare_logs_one_notice_and_runs() {
         &json!({"model": "fake/m", "thinking": "max"}),
     );
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let mut expected = HELLO_KINDS.to_vec();
     expected.insert(3, "notice");
@@ -3557,7 +3538,7 @@ fn a_configured_level_the_model_does_not_declare_logs_one_notice_and_runs() {
 
 #[test]
 fn an_unknown_config_key_logs_one_notice_and_runs() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     write(
@@ -3565,7 +3546,7 @@ fn an_unknown_config_key_logs_one_notice_and_runs() {
         &json!({"model": "fake/m", "frobnicate": 1}),
     );
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let mut expected = HELLO_KINDS.to_vec();
     expected.insert(3, "notice");
@@ -3583,7 +3564,7 @@ fn an_unknown_config_key_logs_one_notice_and_runs() {
 
 #[test]
 fn an_incompatible_extension_logs_one_notice_and_runs() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
     let dir = setup.home().join("extensions/old");
@@ -3595,7 +3576,7 @@ fn an_incompatible_extension_logs_one_notice_and_runs() {
     .unwrap();
     support::write_record(&dir);
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let mut expected = HELLO_KINDS.to_vec();
     expected.insert(3, "notice");
@@ -3611,7 +3592,7 @@ fn an_incompatible_extension_logs_one_notice_and_runs() {
 
 #[test]
 fn config_get_with_an_unknown_key_prints_its_notice_as_one_line() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     write(
@@ -3619,7 +3600,7 @@ fn config_get_with_an_unknown_key_prints_its_notice_as_one_line() {
         &json!({"model": "fake/m", "frobnicate": 1}),
     );
 
-    let run = setup.fiber(&["config", "get", "model"], None);
+    let run = setup.run_with_stdin(&["config", "get", "model"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(
         run.stdout,
@@ -3639,7 +3620,7 @@ fn config_get_with_an_unknown_key_prints_its_notice_as_one_line() {
 
 #[test]
 fn models_with_an_unknown_key_prints_its_notice_as_one_line() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     write(
@@ -3647,7 +3628,7 @@ fn models_with_an_unknown_key_prints_its_notice_as_one_line() {
         &json!({"model": "fake/m", "frobnicate": 1}),
     );
 
-    let run = setup.fiber(&["models"], None);
+    let run = setup.run_with_stdin(&["models"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(run.stdout.contains("fake/m"), "{}", run.stdout);
     assert_eq!(
@@ -3661,7 +3642,7 @@ fn models_with_an_unknown_key_prints_its_notice_as_one_line() {
 
 #[test]
 fn login_with_an_unknown_key_prints_its_notice_first() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
     write(
@@ -3669,7 +3650,7 @@ fn login_with_an_unknown_key_prints_its_notice_first() {
         &json!({"model": "fake/m", "frobnicate": 1}),
     );
 
-    let run = setup.fiber(&["login", "fake"], Some("sk-test-login\n"));
+    let run = setup.run_with_stdin(&["login", "fake"], Some("sk-test-login\n"));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.stdout, "");
     assert_eq!(
@@ -3709,7 +3690,7 @@ fn inline_extension(setup: &Setup, name: &str, init_lua: &str) {
 
 #[test]
 fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provider() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     inline_extension(
         &setup,
@@ -3720,7 +3701,7 @@ fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provid
         ),
     );
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_pre_session(&run, 1, "credential_failed");
     let error = &run.last()["payload"]["error"];
@@ -3737,7 +3718,7 @@ fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provid
 
 #[test]
 fn a_sign_error_keeps_the_token_out_of_every_line() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     inline_extension(
         &setup,
@@ -3748,7 +3729,7 @@ fn a_sign_error_keeps_the_token_out_of_every_line() {
         ),
     );
 
-    let run = setup.fiber(&["ask", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
     assert_eq!(
@@ -3855,7 +3836,7 @@ fn only_body(server: &ProviderServer) -> Value {
 
 #[test]
 fn a_run_flag_model_wins_over_every_file() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello(), hello()]).unwrap();
     provider_with(
         &setup,
@@ -3870,7 +3851,7 @@ fn a_run_flag_model_wins_over_every_file() {
     );
     write_project_config(&setup, &json!({"model": "fake/m"}));
 
-    let run = setup.fiber(&["ask", "-c", "model=fake/m2", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "-c", "model=fake/m2", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(only_body(&server)["model"], "m2");
@@ -3886,7 +3867,7 @@ fn a_run_flag_model_wins_over_every_file() {
         &json!({"model": "fake/nope"}),
     );
     write_project_config(&setup, &json!({"model": "fake/nope"}));
-    let run = setup.fiber(&["ask", "-c", "model=fake/m2", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "-c", "model=fake/m2", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     let requests = server.requests();
@@ -3897,7 +3878,7 @@ fn a_run_flag_model_wins_over_every_file() {
 
 #[test]
 fn a_later_run_flag_wins_over_an_earlier_one() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     provider_with(
         &setup,
@@ -3907,7 +3888,7 @@ fn a_later_run_flag_wins_over_an_earlier_one() {
         &json!({"model": "fake/m"}),
     );
 
-    let run = setup.fiber(
+    let run = setup.run_with_stdin(
         &["ask", "-c", "model=fake/nope", "-c", "model=fake/m2", "hi"],
         None,
     );
@@ -3918,7 +3899,7 @@ fn a_later_run_flag_wins_over_an_earlier_one() {
 
 #[test]
 fn a_run_flag_model_wins_over_the_model_flag() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     provider_with(
         &setup,
@@ -3928,7 +3909,7 @@ fn a_run_flag_model_wins_over_the_model_flag() {
         &json!({"model": "fake/m"}),
     );
 
-    let run = setup.fiber(
+    let run = setup.run_with_stdin(
         &["ask", "--model", "fake/nope", "-c", "model=fake/m2", "hi"],
         None,
     );
@@ -3939,22 +3920,22 @@ fn a_run_flag_model_wins_over_the_model_flag() {
 
 #[test]
 fn a_numeric_run_flag_sets_a_number() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
 
-    let run = setup.fiber(&["ask", "-c", "handoff.tokens=200000", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "-c", "handoff.tokens=200000", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
 }
 
 #[test]
 fn a_quoted_run_flag_value_is_rejected_as_the_wrong_type() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
 
-    let run = setup.fiber(&["ask", "-c", "handoff.tokens=\"200000\"", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "-c", "handoff.tokens=\"200000\"", "hi"], None);
     assert_pre_session(&run, 1, "config_invalid");
     let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
     assert!(message.starts_with("-c: "), "{message}");
@@ -3964,11 +3945,11 @@ fn a_quoted_run_flag_value_is_rejected_as_the_wrong_type() {
 
 #[test]
 fn a_run_flag_without_an_equals_is_a_usage_error() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
 
-    let run = setup.fiber(&["ask", "-c", "nokey", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "-c", "nokey", "hi"], None);
     assert_pre_session(&run, 2, "usage");
     assert_eq!(
         run.last()["payload"]["error"]["message"].as_str().unwrap(),
@@ -3981,11 +3962,11 @@ fn a_run_flag_without_an_equals_is_a_usage_error() {
 
 #[test]
 fn a_run_flag_with_no_key_path_is_a_usage_error() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
 
-    let run = setup.fiber(&["ask", "-c", "a..b=1", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "-c", "a..b=1", "hi"], None);
     assert_pre_session(&run, 2, "usage");
     assert_eq!(
         run.last()["payload"]["error"]["message"].as_str().unwrap(),
@@ -3997,8 +3978,8 @@ fn a_run_flag_with_no_key_path_is_a_usage_error() {
 
 #[test]
 fn ask_help_names_the_run_flag() {
-    let setup = Setup::new();
-    let run = setup.fiber(&["help", "ask"], None);
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["help", "ask"], None);
     assert_help(&run, "-c <key>=<value>");
 }
 
@@ -4031,7 +4012,7 @@ fn cache_controls(body: &Value) -> Vec<Value> {
 
 #[test]
 fn a_per_run_cache_lifetime_marks_anthropic_markers_without_ttl() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([anthropic_hello()]).unwrap();
     provider_with(
         &setup,
@@ -4041,7 +4022,7 @@ fn a_per_run_cache_lifetime_marks_anthropic_markers_without_ttl() {
         &json!({"model": "fake/m"}),
     );
 
-    let run = setup.fiber(&["ask", "-c", "cache.lifetime=5m", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "-c", "cache.lifetime=5m", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
     let built = run

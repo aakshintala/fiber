@@ -861,7 +861,7 @@ fn queued_hub_lines_draw_one_frame() {
     assert_eq!(flushes.get(), 1, "one frame for the queued lines");
     let screen = crate::view::text(lp.screen.backend().inner.buffer());
     assert!(screen.contains("marker three"), "{screen}");
-    assert!(!screen.contains("esc to interrupt"), "{screen}");
+    assert!(!screen.contains("Esc to interrupt"), "{screen}");
 }
 
 /// Runs `lp` over `inputs` queued before it starts, to the end of input.
@@ -968,7 +968,7 @@ fn lines_a_key_and_lines_draw_three_frames() {
     assert_eq!(lp.app.draft(), "a");
     let screen = counted(&lp);
     assert!(screen.contains("marker two"), "{screen}");
-    assert!(!screen.contains("esc to interrupt"), "{screen}");
+    assert!(!screen.contains("Esc to interrupt"), "{screen}");
 }
 
 #[test]
@@ -987,7 +987,7 @@ fn more_than_a_batch_of_lines_draws_two_frames() {
     assert_eq!(flushes.get(), 2);
     let screen = counted(&lp);
     assert!(screen.contains(&format!("marker {full}")), "{screen}");
-    assert!(!screen.contains("esc to interrupt"), "{screen}");
+    assert!(!screen.contains("Esc to interrupt"), "{screen}");
 }
 
 #[test]
@@ -1001,7 +1001,7 @@ fn a_tick_among_queued_lines_draws_no_frame_of_its_own() {
     assert_eq!(flushes.get(), 1);
     let screen = counted(&lp);
     assert!(screen.contains("marker two"), "{screen}");
-    assert!(!screen.contains("esc to interrupt"), "{screen}");
+    assert!(!screen.contains("Esc to interrupt"), "{screen}");
 }
 
 #[test]

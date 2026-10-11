@@ -20,7 +20,7 @@ expression: "screen(&app, 80, 24)"
 ●  fix the parser       /repo7                                                 ✕
 ●  fix the parser     › /repo8                                                 ✕
 ●  fix the parser                                                              ✕
-●  fix the parser     ↑↓ move · enter open · esc closes                        ✕
+●  fix the parser     ↑↓ move · Enter open · Esc closes                        ✕
 ●  fix the parser                                                              ✕
 ●  fix the parser   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                   ✕
 ●  fix the parser                                                              ✕

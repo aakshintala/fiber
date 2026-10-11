@@ -22,36 +22,12 @@ use std::thread;
 
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, is_status, spawn_watched};
+use support::{KillGroup, Run, Setup, is_status, spawn_watched};
 
 /// The fixture extension's name.
 const FIXTURE: &str = "fiber.test/notes";
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
-    fn new() -> Self {
-        let deadline = Deadline::start();
-        let root = fakes::TempDir::new("fh");
-        fs::create_dir_all(root.path().join("h")).unwrap();
-        fs::create_dir_all(root.path().join("w")).unwrap();
-        Self { deadline, root }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
-    }
-
     /// Installs `fiber.test/<short>` as a data-only extension whose
     /// manifest `opening` is `opening`.
     fn section_fixture(&self, short: &str, opening: &Value) {
@@ -107,7 +83,7 @@ impl Setup {
 
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
     /// fake server, and writes configuration naming `fake/m` with `extra`.
-    fn provider(&self, server: &ProviderServer, extra: &Value) {
+    fn provider_with_extra(&self, server: &ProviderServer, extra: &Value) {
         let source = self.root.path().join("src").join("fake");
         write(
             &source.join("extension.json"),
@@ -186,7 +162,7 @@ impl Setup {
     #[track_caller]
     fn ask(&self, config: &Value) -> (Run, ProviderServer) {
         let server = ProviderServer::start([hello()]).unwrap();
-        self.provider(&server, config);
+        self.provider_with_extra(&server, config);
         let run = self.run(&["ask", "hi"]);
         assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
         (run, server)
@@ -202,13 +178,6 @@ fn write(file: &Path, text: &str) {
 // the six other binary test files in this crate each do; move all seven
 // copies into `fakes` together when a change to one has to be made in all.
 
-/// One finished run: its exit code, stdout's lines parsed, and stderr.
-struct Run {
-    code: Option<i32>,
-    lines: Vec<Value>,
-    stderr: String,
-}
-
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
         let lines = String::from_utf8(output.stdout)
@@ -222,22 +191,6 @@ impl From<Output> for Run {
             lines,
             stderr: String::from_utf8(output.stderr).unwrap(),
         }
-    }
-}
-
-impl Run {
-    fn kinds(&self) -> Vec<&str> {
-        self.lines
-            .iter()
-            .map(|line| line["kind"].as_str().unwrap())
-            .collect()
-    }
-
-    fn first(&self, kind: &str) -> &Value {
-        self.lines
-            .iter()
-            .find(|line| line["kind"] == kind)
-            .unwrap_or_else(|| panic!("no {kind} line"))
     }
 }
 
@@ -378,7 +331,7 @@ fn the_model_addendum_and_the_extension_prompt_reach_the_system_prompt() {
     let setup = Setup::new();
     setup.prompt_fixture("guide", "Read before shell.\n");
     let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider(&server, &json!({}));
+    setup.provider_with_extra(&server, &json!({}));
     // The installed model names an addendum file holding its own text.
     write(
         &setup.home().join("extensions/fake/providers/fake.json"),

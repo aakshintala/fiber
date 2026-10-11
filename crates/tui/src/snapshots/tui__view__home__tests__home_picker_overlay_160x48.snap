@@ -18,7 +18,7 @@ expression: "screen(&picking(160, 48), 160, 48)"
                               › █? for shortcuts
 
 
-                              [w]  [no model]  [thinking: default]  enter starts a session
+                              [w]  [no model]  [thinking: default]  Enter starts a session
                               ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
                               ●  fix the parser                                                                                  ✕
 
@@ -29,7 +29,7 @@ expression: "screen(&picking(160, 48), 160, 48)"
                                                               › /w
                                                                 /repo0
 
-                                                              ↑↓ move · enter open · esc closes
+                                                              ↑↓ move · Enter open · Esc closes
 
                                                             ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 

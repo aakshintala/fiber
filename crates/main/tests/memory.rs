@@ -23,8 +23,8 @@ use std::thread;
 use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::{
-    Deadline, HELLO_KINDS, KillGroup, function_call, hello, is_status, spawn_watched, stream,
-    write_json,
+    Deadline, HELLO_KINDS, KillGroup, Setup, function_call, hello, is_status, spawn_watched,
+    stream, write_json,
 };
 
 /// The shipped extension's full name.
@@ -34,29 +34,13 @@ const MEMORY: &str = "github.com/aakshintala/fiber/extensions/memory";
 /// "What each part holds").
 const SLUG: &str = "memory";
 
-/// A temporary root holding Fiber home and the workspace, removed on drop.
-/// Its name is short: a session's socket path must fit in 103 bytes on
-/// macOS.
-struct Setup {
-    root: fakes::TempDir,
-    deadline: Deadline,
-}
-
 impl Setup {
-    fn new() -> Self {
+    fn new_with_fm_root() -> Self {
         let deadline = Deadline::start();
         let root = fakes::TempDir::new("fm");
         fs::create_dir_all(root.path().join("h")).unwrap();
         fs::create_dir_all(root.path().join("w")).unwrap();
         Self { deadline, root }
-    }
-
-    fn home(&self) -> PathBuf {
-        self.root.path().join("h")
-    }
-
-    fn workspace(&self) -> PathBuf {
-        self.root.path().join("w")
     }
 
     /// Installs the repo's shipped `extensions/memory` package from its
@@ -73,38 +57,6 @@ impl Setup {
         .unwrap()
         .commit()
         .unwrap();
-    }
-
-    /// Installs a provider `fake` with model `m` on `openai-responses` at the
-    /// fake server, and makes `fake/m` the configured model.
-    fn provider(&self, server: &ProviderServer) {
-        let source = self.root.path().join("src");
-        write_json(
-            &source.join("extension.json"),
-            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-        );
-        write_json(
-            &source.join("providers/fake.json"),
-            &json!({
-                "name": "fake",
-                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
-            }),
-        );
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.0.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
-        write_json(
-            &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
-        );
     }
 
     /// The project's key: the canonical workspace with every `/` as `-`.
@@ -251,7 +203,7 @@ fn loads_memory(run: &Run) -> bool {
 
 #[test]
 fn a_fresh_install_lists_memory_enabled_and_starts_no_vm() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     setup.memory();
 
     let listed = setup.run(&["extension", "list"]);
@@ -289,7 +241,7 @@ fn a_fresh_install_lists_memory_enabled_and_starts_no_vm() {
 
 #[test]
 fn a_scripted_page_write_takes_the_fast_path() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     setup.memory();
     let page = setup
         .home()
@@ -356,7 +308,7 @@ fn a_scripted_page_write_takes_the_fast_path() {
 
 #[test]
 fn an_over_budget_store_ends_the_section_with_the_prune_line() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     setup.memory();
     let machine = "m".repeat(15_000);
     let project = "p".repeat(15_000);
@@ -388,7 +340,7 @@ fn an_over_budget_store_ends_the_section_with_the_prune_line() {
 
 #[test]
 fn after_remove_memory_the_opening_message_has_no_memory_section() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     setup.memory();
     setup.machine_file("index.md", "- [[notes]] — what matters\n");
     let project = setup.project_file("index.md", "- [[here]] — this project\n");
@@ -416,7 +368,7 @@ fn after_remove_memory_the_opening_message_has_no_memory_section() {
 
 #[test]
 fn disabling_memory_by_its_short_name_stops_it_loading_and_keeps_its_store() {
-    let setup = Setup::new();
+    let setup = Setup::new_with_fm_root();
     setup.memory();
     let page = setup.machine_file("index.md", "- [[notes]] — what matters\n");
     let server = ProviderServer::start(vec![hello()]).unwrap();
