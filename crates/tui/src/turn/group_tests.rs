@@ -1110,3 +1110,166 @@ fn an_opened_thought_is_not_capped() {
     assert_eq!(shown[29], "        line 30");
     assert!(!shown.iter().any(|row| row.contains('…')));
 }
+
+fn write_call(id: usize, path: &str) -> Call {
+    Call {
+        id,
+        action: format!("a_{id}"),
+        name: "write".to_owned(),
+        arguments: json!({"path": path}),
+        status: Some(CallStatus::Completed),
+        started: true,
+        ..Call::default()
+    }
+}
+
+fn missing_call(id: usize, name: &str) -> Call {
+    Call {
+        id,
+        action: format!("a_{id}"),
+        name: name.to_owned(),
+        arguments: json!({}),
+        status: Some(CallStatus::Completed),
+        started: true,
+        ..Call::default()
+    }
+}
+
+fn missing_edit_call(id: usize) -> Call {
+    Call {
+        id,
+        action: format!("a_{id}"),
+        name: "edit".to_owned(),
+        arguments: json!({}),
+        status: Some(CallStatus::Completed),
+        started: true,
+        ..Call::default()
+    }
+}
+
+/// Two distinct paths plus one call with no path count three: the `+`
+/// in `kinds` adds both operands, so `-` (1) and `*` (2) fail.
+#[test]
+fn kinds_add_missing_paths_to_distinct_paths() {
+    let group = Group {
+        key: Some("a_0".to_owned()),
+        first: 0,
+        last: 0,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                read_call(1, "r1.rs"),
+                read_call(2, "r2.rs"),
+                missing_call(3, "read"),
+                edit_call(4, "e1.rs", 0, 0),
+                edit_call(5, "e2.rs", 0, 0),
+                missing_edit_call(6),
+                write_call(7, "w1.rs"),
+                write_call(8, "w2.rs"),
+                missing_call(9, "write"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let width = 80u16;
+    let (rows, _) = summary_row(&group, false, width);
+    assert_eq!(rows.len(), 1);
+    let left = "● Read 3 files, edited 3 files, wrote 3 files";
+    let right = "0s ▸";
+    let filler =
+        " ".repeat(usize::from(width) - crate::format::width(left) - crate::format::width(right));
+    assert_eq!(rows[0].0.to_string(), format!("{left}{filler}{right}"));
+}
+
+/// A repeated path counts once, then the missing call still adds one:
+/// deleting the `!` dedupe counts 0 distinct plus 1 missing (1 file),
+/// not 3 files.
+#[test]
+fn kinds_dedupe_repeated_paths_before_adding_missing() {
+    let group = Group {
+        key: Some("a_0".to_owned()),
+        first: 0,
+        last: 0,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                read_call(1, "r1.rs"),
+                read_call(2, "r1.rs"),
+                read_call(3, "r2.rs"),
+                missing_call(4, "read"),
+                edit_call(5, "e1.rs", 0, 0),
+                edit_call(6, "e1.rs", 0, 0),
+                edit_call(7, "e2.rs", 0, 0),
+                missing_edit_call(8),
+                write_call(9, "w1.rs"),
+                write_call(10, "w1.rs"),
+                write_call(11, "w2.rs"),
+                missing_call(12, "write"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let width = 80u16;
+    let (rows, _) = summary_row(&group, false, width);
+    assert_eq!(rows.len(), 1);
+    let left = "● Read 3 files, edited 3 files, wrote 3 files";
+    let right = "0s ▸";
+    let filler =
+        " ".repeat(usize::from(width) - crate::format::width(left) - crate::format::width(right));
+    assert_eq!(rows[0].0.to_string(), format!("{left}{filler}{right}"));
+    // Without the missing calls the same duplicates still count two.
+    let group = Group {
+        key: Some("a_0".to_owned()),
+        first: 0,
+        last: 0,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![
+                write_call(1, "w1.rs"),
+                write_call(2, "w1.rs"),
+                write_call(3, "w2.rs"),
+            ],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let (rows, _) = summary_row(&group, false, width);
+    assert_eq!(rows.len(), 1);
+    let left = "● Wrote 2 files";
+    let right = "0s ▸";
+    let filler =
+        " ".repeat(usize::from(width) - crate::format::width(left) - crate::format::width(right));
+    assert_eq!(rows[0].0.to_string(), format!("{left}{filler}{right}"));
+}
+
+/// At `right_width + 2 <= max < right_width * 2` the summary keeps the
+/// right part and cuts the left with "…": `*` would take the
+/// whole-row cut and lose the duration.
+#[test]
+fn a_narrow_summary_keeps_the_right_part() {
+    let group = Group {
+        key: Some("a_1".to_owned()),
+        first: 0,
+        last: 0,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![read_call(1, "a.rs")],
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    // Right part "0s ▸" is 4 cells: `+ 2` admits 6, `* 2` needs 8.
+    assert_eq!(summary_row(&group, false, 7).0[0].0.to_string(), "●… 0s ▸");
+    assert_eq!(summary_row(&group, false, 6).0[0].0.to_string(), "… 0s ▸");
+}
+
+/// A target exactly filling its room is kept whole with no padding:
+/// `>=` would cut it to room − 1 plus "…".
+#[test]
+fn pad_target_keeps_a_target_that_fills_its_room() {
+    assert_eq!(super::pad_target("abcd", 4), "abcd");
+    assert_eq!(super::pad_target("ab", 4), "ab  ");
+    assert_eq!(super::pad_target("abcde", 4), "abc…");
+}
