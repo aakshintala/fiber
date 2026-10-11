@@ -383,16 +383,20 @@ impl LuaProvider {
         }
     }
 
-    /// Calls `quota({ label, credential, key })` and checks what it
-    /// returned, returning the checked quota with the raw return. `key` is
-    /// the label's resolved key, absent from the argument when none was
-    /// given. Any failure (a raised error, a bad return, the hub's own
-    /// timeout) is an error, which the cache path reports as a failed
-    /// fetch. With no stored credential the call carries none, so
-    /// `host.oauth.refresh` refuses inside it, as for `models()` and
-    /// `cost()`. Uncached: it never touches `Quotas`.
+    /// Calls `quota({ label, credential, key, token, headers })` and checks
+    /// what it returned, returning the checked quota with the raw return.
+    /// `key` is the label's resolved key, absent from the argument when none
+    /// was given. For a provider that registers `credential()`, `token` and
+    /// `headers` are what `credential()` last returned for the label, read
+    /// through `current` exactly as a request's are: refreshed when absent
+    /// or expired, refreshed in the background when close to expiry. A
+    /// `current` failure is an error here, which the cache path reports as
+    /// a failed fetch. A provider with no `credential()` gets no
+    /// `token` or `headers`, so `host.oauth.refresh` refuses inside its
+    /// `quota()` as it does for `models()` and `cost()`; only `credential()`
+    /// refreshes a stored credential. Uncached: it never touches `Quotas`.
     pub fn fetch_quota(
-        &self,
+        self: &Arc<Self>,
         pair: &CredentialPair,
         key: Option<&Secret>,
     ) -> Result<(Option<Quota>, Value), Error> {
@@ -401,6 +405,18 @@ impl LuaProvider {
         arg.insert("credential".into(), json!(pair.credential));
         if let Some(key) = key {
             arg.insert("key".into(), json!(key.expose()));
+        }
+        if self.registers("credential")? {
+            // The token and headers `credential()` last returned, read as
+            // a request's are; built as `credential_value` builds them.
+            let current = self.current(pair)?;
+            arg.insert("token".into(), json!(current.secret.expose()));
+            let headers: Map<String, Value> = current
+                .headers
+                .iter()
+                .map(|(name, value)| (name.clone(), Value::String(value.expose().to_owned())))
+                .collect();
+            arg.insert("headers".into(), Value::Object(headers));
         }
         let returned = self.call("quota", Value::Object(arg))?;
         let parsed =
