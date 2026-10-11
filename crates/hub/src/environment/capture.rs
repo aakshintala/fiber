@@ -130,11 +130,11 @@ impl Wake for ClockWake {
     // Best-effort on top of the wall-clock poll: without the notify the
     // deadline still lands on the next poll, so the wait's outcome never
     // depends on this running, only its promptness, which no test pins.
-    #[cfg_attr(
-        false,
-        mutants::skip,
-        reason = "a best-effort notify on top of the wall-clock poll: dropping it delays the deadline by one poll, which no test can pin without flakiness"
-    )]
+    // Skipped with a bare `cfg_attr`: cargo-mutants does not honour
+    // `reason = "..."` inside one (its skip check errors on the unconsumed
+    // value and silently treats the item as unskipped), so the reason
+    // lives in this comment.
+    #[cfg_attr(false, mutants::skip)]
     fn wake(&self) {
         self.changed.notify_all();
     }
@@ -261,28 +261,12 @@ fn os_string(bytes: &[u8]) -> OsString {
 
 /// `bytes` as an `OsString` where `OsStrExt` is missing.
 // Mutants run on Linux, where this is not compiled; the macOS test job
-// still runs its tests.
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "mutants run on Linux, where this function is not compiled"
-)]
+// still runs its tests. Skipped with a bare `cfg_attr` (`reason = "..."`
+// inside one is not honoured), so the reason lives in this comment.
+#[cfg_attr(false, mutants::skip)]
 #[cfg(not(unix))]
 fn os_string(bytes: &[u8]) -> OsString {
     String::from_utf8_lossy(bytes).into_owned().into()
-}
-
-/// Whether a failed read retries: an `Interrupted` read saw a signal,
-/// not the end of output. The stop reports `ConnectionAborted`, which
-/// always breaks, so this only ever retries a signal mid-read, which no
-/// test delivers deterministically.
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "only a signal mid-read retries, and no test delivers one deterministically; the stop reports ConnectionAborted, which always breaks"
-)]
-fn should_retry(error: &std::io::Error) -> bool {
-    error.kind() == std::io::ErrorKind::Interrupted
 }
 
 /// Reads `reader` to its end into `cancel`'s output, notifying the wait on
@@ -301,7 +285,11 @@ fn read_all(mut reader: support::stoppable::Reader, cancel: &Cancel) {
                 lock(&cancel.state).output.extend_from_slice(bytes);
                 cancel.changed.notify_all();
             }
-            Err(error) if should_retry(&error) => continue,
+            // Any read error ends the read, with no retry on `Interrupted`:
+            // its only source is a signal mid-read, and the hub's signals
+            // all cancel the capture anyway, so the read would end either
+            // way. The feed reader over the same stoppable reader breaks
+            // the same way.
             Err(_) => break,
         }
     }
@@ -313,12 +301,9 @@ fn read_all(mut reader: support::stoppable::Reader, cancel: &Cancel) {
 /// the bytes already searched, with an overlap holding a split marker.
 /// Single-poll outputs leave `from` at zero, where the offset arithmetic
 /// is invisible, and multi-poll splits depend on read timing, so no test
-/// pins it.
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "offset arithmetic no test pins: single-poll outputs leave from at zero and multi-poll splits depend on read timing"
-)]
+/// pins it. Skipped with a bare `cfg_attr` (`reason = "..."` inside one
+/// is not honoured), so the reason lives in this comment.
+#[cfg_attr(false, mutants::skip)]
 fn find_from(output: &[u8], needle: &[u8], from: usize) -> Option<usize> {
     output
         .get(from..)
@@ -329,11 +314,9 @@ fn find_from(output: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 /// only. Every condition is re-checked after every park, and the
 /// wall-clock poll bounds each park, so a missed or spurious hint only
 /// moves the next check by one poll: the outcome never depends on it.
-#[cfg_attr(
-    false,
-    mutants::skip,
-    reason = "a wake-up hint re-checked under a wall-clock poll: narrowing or widening it moves the next check by one poll, which no test can pin without flakiness"
-)]
+/// Skipped with a bare `cfg_attr` (`reason = "..."` inside one is not
+/// honoured), so the reason lives in this comment.
+#[cfg_attr(false, mutants::skip)]
 fn progressed(state: &State, done: bool, seen: usize) -> bool {
     state.cancelled || state.reader_done != done || state.output.len() != seen
 }

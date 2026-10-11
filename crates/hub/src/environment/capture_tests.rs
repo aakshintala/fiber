@@ -691,6 +691,19 @@ fn a_success_with_a_held_output_still_returns() {
     reap_group(pid, watchdog);
 }
 
+/// `is_cancelled` reports cancellation, in both polarities. The
+/// capture-level test cannot pin the `false` mutant: a pre-cancelled
+/// capture still reports `Cancelled` through the wait's own flag check,
+/// and the shell it spawns under the mutant is killed before its pid file
+/// could witness the spawn.
+#[test]
+fn cancel_reports_cancellation() {
+    let cancel = Cancel::new();
+    assert!(!cancel.is_cancelled(), "a fresh capture is not cancelled");
+    cancel.cancel();
+    assert!(cancel.is_cancelled(), "cancelling is observed");
+}
+
 #[test]
 fn an_already_cancelled_capture_fails_without_spawning() {
     let fake = Shell::new("exit 0");
