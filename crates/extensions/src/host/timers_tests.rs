@@ -53,7 +53,7 @@ fn after_needs_a_whole_ms_at_or_above_0() {
             "{message}"
         );
     }
-    assert!(hub.lock().timers.is_empty(), "nothing registered");
+    assert!(hub.lock().timers.listed().is_empty(), "nothing registered");
 }
 
 /// The boundaries: 0 ms is due at once, and a 1 ms timeout is the least.
@@ -64,7 +64,7 @@ fn zero_ms_and_a_1_ms_timeout_are_accepted() {
         .exec()
         .unwrap();
     let shared = hub.lock();
-    let timer = shared.timers.values().next().unwrap();
+    let timer = shared.timers.listed().values().next().unwrap();
     assert_eq!(timer.due, clock.now(), "0 ms is due at its set time");
     assert_eq!(timer.timeout, Duration::from_millis(1));
 }
@@ -99,7 +99,7 @@ fn after_needs_a_whole_timeout_above_0() {
             "{message}"
         );
     }
-    assert!(hub.lock().timers.is_empty(), "nothing registered");
+    assert!(hub.lock().timers.listed().is_empty(), "nothing registered");
 }
 
 #[test]
@@ -109,8 +109,8 @@ fn after_registers_due_at_set_plus_ms() {
         .exec()
         .unwrap();
     let shared = hub.lock();
-    assert_eq!(shared.timers.len(), 1);
-    let timer = shared.timers.values().next().unwrap();
+    assert_eq!(shared.timers.listed().len(), 1);
+    let timer = shared.timers.listed().values().next().unwrap();
     assert_eq!(timer.every, None, "an `after` fires once");
     assert_eq!(timer.timeout, Duration::from_millis(100));
     assert_eq!(timer.due, clock.now() + Duration::from_millis(50));
@@ -124,9 +124,9 @@ fn every_registers_its_period() {
     lua.load("h = host.every(25, function() end, {timeout = 100})")
         .exec()
         .unwrap();
-    let timer = hub.lock().timers.values().next().unwrap().id;
+    let timer = hub.lock().timers.listed().values().next().unwrap().id;
     assert_eq!(
-        hub.lock().timers.get(&timer).unwrap().every,
+        hub.lock().timers.listed().get(&timer).unwrap().every,
         Some(Duration::from_millis(25))
     );
 }
@@ -138,6 +138,6 @@ fn cancel_before_the_due_time_stops_it_and_twice_is_a_no_op() {
         .exec()
         .unwrap();
     lua.load("h:cancel()").exec().unwrap();
-    assert!(hub.lock().timers.is_empty(), "the timer is gone");
+    assert!(hub.lock().timers.listed().is_empty(), "the timer is gone");
     lua.load("h:cancel()").exec().unwrap();
 }

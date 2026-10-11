@@ -209,7 +209,7 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
             if let Target::Timer { id: timer_id } = p.target {
                 // A firing past its timeout ends; an `every` keeps firing.
                 shared.calls.remove(&p.id);
-                shared.timer_end(timer_id, now);
+                shared.timers.end_firing(timer_id, now);
             } else {
                 shared.finish(p.id, Err(timed_out(name, &p.target, p.timeout)));
             }
@@ -302,7 +302,7 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
         // Timers run in the gaps: the block above returns when a queued
         // call started, so reaching here means none could start. One firing
         // at a time.
-        if let Some((timer_id, timeout)) = shared.timer_fire(now) {
+        if let Some((timer_id, timeout)) = shared.timers.fire(now) {
             let (job, timeout, deadline) = shared.push_timer(timer_id, timeout, now);
             return Some(Work::Start(job, timeout, deadline));
         }
@@ -310,7 +310,7 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
             .iter()
             .flat_map(|p| [p.deadline, p.wake])
             .flatten()
-            .chain(shared.timer_wake())
+            .chain(shared.timers.next_due())
             .min();
         shared = hub.wait(shared, wake);
     }

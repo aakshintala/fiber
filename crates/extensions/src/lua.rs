@@ -752,6 +752,7 @@ mod router;
 mod schedule;
 mod search;
 mod setup;
+mod timers;
 mod tool;
 mod vm;
 

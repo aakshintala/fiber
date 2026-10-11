@@ -14,13 +14,12 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::{Event, ExtensionExec, ExtensionUi, Ui};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 
-use super::super::hub::{Hub, Timer, Window};
+use super::super::hub::{Hub, Window};
 use super::*;
 
 fn exec(tag: &str) -> ExtensionExec {
@@ -627,50 +626,4 @@ fn an_evicted_delivery_drops_after_the_hub_lock_is_released() {
         Ok(false),
         "the evicted delivery drops with the hub lock released"
     );
-}
-
-// Moved to timers_tests.rs in the next commit.
-fn timer(firing: bool) -> Timer {
-    Timer {
-        id: 0,
-        every: Some(Duration::from_millis(50)),
-        due: FakeClock::new().now(),
-        timeout: Duration::from_millis(100),
-        cancelled: false,
-        firing,
-    }
-}
-
-/// Cancelling a firing timer marks it and leaves it to end its firing;
-/// twice changes nothing. Cancelling an idle one removes it and lists it
-/// once for its Lua function to be freed; twice is a no-op.
-#[test]
-fn cancel_twice_is_a_no_op() {
-    let hub = Hub::new(FakeClock::new());
-    hub.lock().timers.insert(0, timer(true));
-    hub.cancel_timer(0);
-    hub.cancel_timer(0);
-    {
-        let shared = hub.lock();
-        assert!(shared.timers.get(&0).unwrap().cancelled);
-        assert!(
-            shared.timer_cleanup.is_empty(),
-            "a firing frees nothing yet"
-        );
-    }
-    hub.lock().timers.insert(0, timer(false));
-    hub.cancel_timer(0);
-    hub.cancel_timer(0);
-    let shared = hub.lock();
-    assert!(shared.timers.is_empty(), "an idle cancel removes it");
-    assert_eq!(shared.timer_cleanup, vec![0], "listed once to be freed");
-}
-
-/// `take_timer_cleanup` hands over what is listed and empties the list.
-#[test]
-fn take_timer_cleanup_takes_the_list() {
-    let hub = Hub::new(FakeClock::new());
-    hub.lock().timer_cleanup.extend([3, 5]);
-    assert_eq!(hub.take_timer_cleanup(), vec![3, 5]);
-    assert!(hub.take_timer_cleanup().is_empty());
 }

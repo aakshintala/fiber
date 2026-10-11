@@ -221,55 +221,6 @@ impl Hub {
         self.notify();
     }
 
-    /// Registers a timer `host.after` or `host.every` set: `every` holds
-    /// its period for rescheduling, `None` for a one-shot `after`.
-    /// Returns its id, assigned in set order from 0.
-    pub(crate) fn add_timer(
-        &self,
-        every: Option<Duration>,
-        due: Instant,
-        timeout: Duration,
-    ) -> u64 {
-        let mut shared = self.lock();
-        let id = shared.next_timer;
-        shared.next_timer = shared.next_timer.wrapping_add(1);
-        shared.timers.insert(
-            id,
-            Timer {
-                id,
-                every,
-                due,
-                timeout,
-                cancelled: false,
-                firing: false,
-            },
-        );
-        drop(shared);
-        self.notify();
-        id
-    }
-
-    /// Stops a timer: a due firing never starts, and a mid-firing `every`
-    /// does not fire again. Unknown or finished ids are a no-op.
-    pub(crate) fn cancel_timer(&self, id: u64) {
-        let mut shared = self.lock();
-        // A listed timer is never both cancelled and idle: an idle cancel
-        // removes it, and a cancelled firing leaves at its end.
-        let remove = match shared.timers.get_mut(&id) {
-            Some(timer) => {
-                timer.cancelled = true;
-                !timer.firing
-            }
-            None => false,
-        };
-        if remove {
-            shared.timers.remove(&id);
-            shared.timer_cleanup.push(id);
-        }
-        drop(shared);
-        self.notify();
-    }
-
     /// Ends a timer firing: an `every` that was not cancelled fires again
     /// `ms` after its end; anything else is removed. The callback's result
     /// goes nowhere, and a failure is silent.
@@ -277,12 +228,7 @@ impl Hub {
         let now = self.clock.now();
         let mut shared = self.lock();
         shared.calls.remove(&call_id);
-        shared.timer_end(timer_id, now);
-    }
-
-    /// The timer ids whose Lua functions the extension's thread frees.
-    pub(super) fn take_timer_cleanup(&self) -> Vec<u64> {
-        std::mem::take(&mut self.lock().timer_cleanup)
+        shared.timers.end_firing(timer_id, now);
     }
 }
 
@@ -305,10 +251,8 @@ pub(crate) struct Shared {
     pub(super) answerable: bool,
     /// Where the extension's deliveries, ephemeral events and drives go.
     pub(super) router: super::router::Router,
-    /// The timers `host.after` and `host.every` set, by id.
-    pub(crate) timers: HashMap<u64, Timer>,
-    /// Timer ids whose Lua functions the extension's thread still frees.
-    pub(crate) timer_cleanup: Vec<u64>,
+    /// The timers `host.after` and `host.every` set.
+    pub(crate) timers: super::timers::Timers,
     next_id: u64,
     /// Started calls whose caller cancelled them (`docs/tools.md`,
     /// "Cancellation"), until the thread ends them.
@@ -318,26 +262,6 @@ pub(crate) struct Shared {
     /// Raised into running Lua by the deadline hook while a cancelled call
     /// runs; set and cleared only under this lock.
     pub(super) interrupt: Arc<std::sync::atomic::AtomicBool>,
-    /// The next timer's id, assigned in set order from 0.
-    pub(crate) next_timer: u64,
-}
-
-/// A timer `host.after` or `host.every` set: when its callback fires next,
-/// on the extension's clock (`docs/extensions.md`, "Host calls").
-#[derive(Debug)]
-pub(crate) struct Timer {
-    /// Assigned in set order from 0.
-    pub(crate) id: u64,
-    /// The period an `every` reschedules with; `None` for an `after`.
-    pub(crate) every: Option<Duration>,
-    /// When the callback fires next.
-    pub(crate) due: Instant,
-    /// The firing's timeout, from its start.
-    pub(crate) timeout: Duration,
-    /// `:cancel()` stopped it; a mid-firing cancel finishes the firing.
-    pub(crate) cancelled: bool,
-    /// A firing is running; one firing at a time.
-    pub(crate) firing: bool,
 }
 
 #[derive(Default)]
@@ -447,50 +371,6 @@ impl Shared {
             timeout,
             deadline,
         )
-    }
-
-    /// Starts the earliest due timer, when one waits: due, neither
-    /// cancelled nor firing. Marks it firing and returns its id and
-    /// timeout. One firing at a time.
-    pub(super) fn timer_fire(&mut self, now: Instant) -> Option<(u64, Duration)> {
-        let timer = self
-            .timers
-            .values_mut()
-            .filter(|timer| !timer.cancelled && !timer.firing && timer.due <= now)
-            .min_by_key(|timer| (timer.due, timer.id))?;
-        timer.firing = true;
-        Some((timer.id, timer.timeout))
-    }
-
-    /// Ends a timer firing at `now`: an `every` that was not cancelled
-    /// fires again `ms` after its end; anything else leaves, freeing its
-    /// Lua function on the extension's thread.
-    pub(super) fn timer_end(&mut self, id: u64, now: Instant) {
-        let reschedule = match self.timers.get_mut(&id) {
-            Some(timer) if !timer.cancelled => timer.every,
-            Some(_) | None => None,
-        };
-        match reschedule {
-            Some(every) => {
-                if let Some(timer) = self.timers.get_mut(&id) {
-                    timer.due = now.checked_add(every).unwrap_or(now);
-                    timer.firing = false;
-                }
-            }
-            None => {
-                self.timers.remove(&id);
-                self.timer_cleanup.push(id);
-            }
-        }
-    }
-
-    /// The earliest a waiting timer fires, for the thread's next wake.
-    pub(super) fn timer_wake(&self) -> Option<Instant> {
-        self.timers
-            .values()
-            .filter(|timer| !timer.cancelled && !timer.firing)
-            .map(|timer| timer.due)
-            .min()
     }
 
     /// Whether registration is done, still running, or has stopped the
