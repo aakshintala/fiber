@@ -231,7 +231,7 @@ pub(crate) fn commit_all(
     // cleanup failure after it no longer fails the command: the next
     // operation's lock finishes that cleanup, and a committed journal
     // only ever deletes the `old` and `fresh` copies.
-    let _ = recover(&dir);
+    let _cleanup = recover(&dir);
     Ok(())
 }
 
