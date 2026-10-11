@@ -97,7 +97,8 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 - `content`: text and image parts. It is exactly what the model is sent,
   including after an `after_tool` hook has rewritten it. The hook runs on the
   full output before the cut, so the completed line and the artifact both hold
-  what the hook returned (`docs/extensions.md`, "Hooks").
+  what the hook returned (`docs/extensions.md`, "Hooks"). A foreground `shell`
+  call's output past 1 MiB is cut before the hook runs ("Result and output").
 - `details`: JSON for clients, such as an edit's diff for the terminal to draw.
   It is never sent to the model and the loop never reads it. A client that does
   not recognise a tool's `details` shows `content` instead: tool identity is an
@@ -551,6 +552,18 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   where it reports how it finished. The full output is in the
   session's `artifacts/`, and output streams as `tool_call_delta` while the call runs. After a
   move to the background, output goes to the job's output file.
+- Up to 1 MiB of output, the shell holds it, and the loop cuts it and writes
+  the artifact. Past 1 MiB, the shell writes the output, from its first byte,
+  to the call's artifact file in the session's `artifacts/` as it arrives, and
+  holds only the first and the last 8 KiB, or the two ends of a configured cap
+  ("Bounded results"). The file ends with the result's closing lines, such as
+  `Exit code 0.`. The loop writes no second artifact, and the `after_tool`
+  hooks get the cut output with the file's `path` and `size`
+  (`docs/extensions.md`, "Hooks"). When the file cannot be created or
+  written, or its path is not UTF-8, the shell keeps only the two ends and the
+  command runs on: the notice says the full output could not be saved, and the
+  result names no artifact. A move to the background carries the file's output
+  into the job's output file.
 
 ### Terminal (`tty`)
 

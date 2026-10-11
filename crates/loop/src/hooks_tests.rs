@@ -23,7 +23,9 @@ use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender};
-use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
+use contract::tool::{
+    Bound, Cancel, Effects, EffectsError, Output, SpillFile, Spilled, Tool, Unsaved,
+};
 use contract::{CommandId, Envelope, ErrorCode, SessionId};
 use fakes::Deadline;
 use log::Log;
@@ -42,6 +44,7 @@ struct Seen {
     content: String,
     details: Option<Value>,
     process: Option<Process>,
+    spilled: Option<(std::path::PathBuf, u64)>,
 }
 
 /// Hooks that record each call and give one scripted answer.
@@ -76,6 +79,7 @@ impl Hooks for FakeHooks {
             content: call.content.to_owned(),
             details: call.details.cloned(),
             process: call.process.cloned(),
+            spilled: call.spilled.map(|file| (file.path.clone(), file.size)),
         });
         self.answer.clone()
     }
@@ -129,6 +133,8 @@ struct Fixed {
     cancel: Option<Arc<TurnCancel>>,
     /// Starts a shutdown on this signal while the call runs.
     shutdown: Option<Arc<TurnCancel>>,
+    /// Builds the output when the call runs, instead of returning `output`.
+    make: Option<Arc<dyn Fn() -> Output + Send + Sync>>,
 }
 
 fn fixed(output: Output) -> Fixed {
@@ -138,6 +144,7 @@ fn fixed(output: Output) -> Fixed {
         effects: vec![Effect::Reads],
         cancel: None,
         shutdown: None,
+        make: None,
     }
 }
 
@@ -172,7 +179,10 @@ impl Tool for Fixed {
         if let Some(cancel) = &self.shutdown {
             cancel.shutdown(143);
         }
-        self.output.clone()
+        match &self.make {
+            Some(make) => make(),
+            None => self.output.clone(),
+        }
     }
 
     fn bound(&self) -> Bound {
@@ -292,7 +302,29 @@ fn run_with(
     break_artifacts: bool,
     pinned: bool,
 ) -> Ran {
-    let home = fakes::TempDir::new("fiber-hooks");
+    run_in(
+        fakes::TempDir::new("fiber-hooks"),
+        tool,
+        script,
+        hooks,
+        cancel,
+        break_artifacts,
+        pinned,
+    )
+}
+
+/// [`run_with`], with the test's own `home`: a tool building its output at
+/// run time can write its spill file into the session's `artifacts/`.
+#[track_caller]
+fn run_in(
+    home: fakes::TempDir,
+    tool: Fixed,
+    script: Vec<fakes::Scripted>,
+    hooks: Option<Arc<FakeHooks>>,
+    cancel: Arc<TurnCancel>,
+    break_artifacts: bool,
+    pinned: bool,
+) -> Ran {
     let workspace = home.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
@@ -1327,4 +1359,525 @@ fn a_pinned_call_is_cut_to_its_bound() {
         content.starts_with("the person\n[19 bytes cut"),
         "{content}"
     );
+}
+
+/// The spill file's name in the session's `artifacts/`.
+const SPILL_NAME: &str = "s_spill.txt";
+
+/// A tool that writes `bytes` to the session's `artifacts/` when it runs
+/// and returns them spilled, holding `head` and `tail` with `removed`
+/// bytes between them.
+fn spilling(
+    home: &fakes::TempDir,
+    bytes: Vec<u8>,
+    head: &str,
+    tail: &str,
+    removed: u64,
+    bound: Bound,
+) -> Fixed {
+    let dir = home.path().join("s_test").join("artifacts");
+    let (head, tail) = (head.to_owned(), tail.to_owned());
+    Fixed {
+        output: text("unused"),
+        bound,
+        effects: vec![Effect::Reads],
+        cancel: None,
+        shutdown: None,
+        make: Some(Arc::new(move || {
+            std::fs::write(dir.join(SPILL_NAME), &bytes).unwrap();
+            Output {
+                content: Vec::new(),
+                spilled: Some(Spilled {
+                    head: head.clone(),
+                    tail: tail.clone(),
+                    removed,
+                    file: Ok(SpillFile {
+                        path: dir.join(SPILL_NAME),
+                        size: u64::try_from(bytes.len()).unwrap(),
+                    }),
+                }),
+                ..Output::default()
+            }
+        })),
+    }
+}
+
+/// Runs one `probe` call of `tool` under `hooks` in `home`'s session.
+fn run_spilled(home: fakes::TempDir, tool: Fixed, hooks: Option<Arc<FakeHooks>>) -> Ran {
+    run_in(
+        home,
+        tool,
+        script("probe", json!({})),
+        hooks,
+        Arc::new(TurnCancel::default()),
+        false,
+        false,
+    )
+}
+
+/// The cut text of 100 spilled `a` bytes held as `HHHH` and `TTTT`: what
+/// the completion and the hook both see.
+fn cut_of(path: &std::path::Path) -> String {
+    format!(
+        "HHHH\n[92 bytes cut. The full output is in {}; read it with `read`.]\nTTTT",
+        path.display()
+    )
+}
+
+#[test]
+fn a_spilled_call_without_hooks_completes_cut_with_its_file_as_artifact() {
+    let home = fakes::TempDir::new("fiber-spilled-plain");
+    let tool = spilling(&home, vec![b'a'; 100], "HHHH", "TTTT", 92, Bound::DEFAULT);
+    let ran = run_spilled(home, tool, None);
+    let completed = ran.completed();
+    let path = ran.session.join("artifacts").join(SPILL_NAME);
+    let full = cut_of(&path);
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": full}])
+    );
+    assert_eq!(completed.payload["artifact"], "artifacts/s_spill.txt");
+    assert_eq!(ran.result_sent(), full);
+    // No second artifact: the directory holds only the spill.
+    let entries: Vec<_> = std::fs::read_dir(ran.session.join("artifacts"))
+        .unwrap()
+        .collect();
+    assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn a_recording_hook_sees_the_cut_text_with_the_path_and_size() {
+    let home = fakes::TempDir::new("fiber-spilled-seen");
+    let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    let tool = spilling(&home, vec![b'a'; 100], "HHHH", "TTTT", 92, Bound::DEFAULT);
+    let ran = run_spilled(home, tool, Some(Arc::clone(&hooks)));
+    let path = ran.session.join("artifacts").join(SPILL_NAME);
+    let seen = hooks.seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].content, cut_of(&path));
+    assert_eq!(seen[0].spilled, Some((path, 100)));
+}
+
+#[test]
+fn a_hooks_artifact_text_replaces_the_spilled_file() {
+    let home = fakes::TempDir::new("fiber-spilled-replaced");
+    let hooks = FakeHooks::new(changed(None, None, Some("replaced")), &["acme"], Vec::new());
+    let tool = spilling(&home, vec![b'a'; 100], "HHHH", "TTTT", 92, Bound::DEFAULT);
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    let path = ran.session.join("artifacts").join(SPILL_NAME);
+    assert_eq!(completed.payload["content"][0]["text"], cut_of(&path));
+    assert_eq!(completed.payload["artifact"], "artifacts/s_spill.txt");
+    assert_eq!(completed.payload["changed_by"], json!(["acme"]));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "replaced");
+    let entries: Vec<_> = std::fs::read_dir(ran.session.join("artifacts"))
+        .unwrap()
+        .collect();
+    assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn a_hooks_content_over_the_cap_is_cut_naming_the_spilled_file() {
+    let home = fakes::TempDir::new("fiber-spilled-hook-cap");
+    let returned = "r".repeat(20);
+    let hooks = FakeHooks::new(changed(Some(&returned), None, None), &["acme"], Vec::new());
+    let tool = spilling(
+        &home,
+        vec![b'a'; 100],
+        "HHHH",
+        "TTTT",
+        92,
+        Bound { start: 4, end: 0 },
+    );
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    let path = ran.session.join("artifacts").join(SPILL_NAME);
+    assert_eq!(
+        completed.payload["content"][0]["text"],
+        json!(format!(
+            "rrrr\n[16 bytes cut. The full output is in {}; read it with `read`.]",
+            path.display()
+        ))
+    );
+    // Nothing is written for it: the file stays the artifact, alone.
+    assert_eq!(completed.payload["artifact"], "artifacts/s_spill.txt");
+    assert_eq!(std::fs::read(&path).unwrap(), vec![b'a'; 100]);
+    let entries: Vec<_> = std::fs::read_dir(ran.session.join("artifacts"))
+        .unwrap()
+        .collect();
+    assert_eq!(entries.len(), 1);
+}
+
+#[test]
+fn a_withheld_spill_replaces_the_file_and_names_no_artifact() {
+    let home = fakes::TempDir::new("fiber-spilled-withheld");
+    let hooks = FakeHooks::new(
+        AfterToolOutcome::Withheld {
+            extension: "acme".into(),
+        },
+        &["acme"],
+        Vec::new(),
+    );
+    let tool = spilling(&home, vec![b'a'; 100], "HHHH", "TTTT", 92, Bound::DEFAULT);
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    let withheld = "Output withheld: the `after_tool` hook of extension acme failed.";
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": withheld}])
+    );
+    assert!(completed.payload.get("artifact").is_none());
+    assert_eq!(completed.payload["changed_by"], json!(["acme"]));
+    assert_eq!(
+        std::fs::read_to_string(ran.session.join("artifacts").join(SPILL_NAME)).unwrap(),
+        format!("{withheld}\n")
+    );
+}
+
+#[test]
+fn a_spilled_call_shaped_under_a_shutdown_keeps_no_file() {
+    let home = fakes::TempDir::new("fiber-spilled-shutdown");
+    let cancel = Arc::new(TurnCancel::default());
+    let dir = home.path().join("s_test").join("artifacts");
+    let bytes = vec![b'a'; 100];
+    let tool = Fixed {
+        output: text("unused"),
+        bound: Bound::DEFAULT,
+        effects: vec![Effect::Reads],
+        cancel: None,
+        shutdown: Some(Arc::clone(&cancel)),
+        make: Some(Arc::new(move || {
+            std::fs::write(dir.join(SPILL_NAME), &bytes).unwrap();
+            Output {
+                content: Vec::new(),
+                spilled: Some(Spilled {
+                    head: "HHHH".into(),
+                    tail: "TTTT".into(),
+                    removed: 92,
+                    file: Ok(SpillFile {
+                        path: dir.join(SPILL_NAME),
+                        size: 100,
+                    }),
+                }),
+                ..Output::default()
+            }
+        })),
+    };
+    let ran = run_in(
+        home,
+        tool,
+        script("probe", json!({})),
+        None,
+        cancel,
+        false,
+        false,
+    );
+    let completed = ran.completed();
+    assert_eq!(completed.payload["content"], json!([]));
+    assert!(completed.payload.get("artifact").is_none());
+    assert!(
+        std::fs::read_dir(ran.session.join("artifacts"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "the spill was removed"
+    );
+}
+
+/// A tool that returns `spilled` as its whole output, without writing any file.
+fn unsaved(
+    head: &str,
+    tail: &str,
+    removed: u64,
+    message: String,
+    left: Option<std::path::PathBuf>,
+) -> Fixed {
+    let (head, tail) = (head.to_owned(), tail.to_owned());
+    Fixed {
+        output: text("unused"),
+        bound: Bound::DEFAULT,
+        effects: vec![Effect::Reads],
+        cancel: None,
+        shutdown: None,
+        make: Some(Arc::new(move || Output {
+            content: Vec::new(),
+            spilled: Some(Spilled {
+                head: head.clone(),
+                tail: tail.clone(),
+                removed,
+                file: Err(Unsaved {
+                    message: message.clone(),
+                    left: left.clone(),
+                }),
+            }),
+            ..Output::default()
+        })),
+    }
+}
+
+#[test]
+fn a_spill_that_was_not_kept_names_no_artifact_and_shows_no_file() {
+    let home = fakes::TempDir::new("fiber-spilled-unsaved");
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    let tool = unsaved("HHHH", "TTTT", 92, message.clone(), None);
+    let ran = run_spilled(home, tool, Some(Arc::clone(&hooks)));
+    let completed = ran.completed();
+    let notice = format!("[92 bytes cut. The full output could not be saved: {message}.]");
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": format!("HHHH\n{notice}\nTTTT")}])
+    );
+    assert!(completed.payload.get("artifact").is_none());
+    let seen = hooks.seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].spilled, None);
+}
+
+#[test]
+fn a_hooks_artifact_text_on_an_unsaved_spill_goes_to_the_action_file() {
+    let home = fakes::TempDir::new("fiber-spilled-unsaved-artifact");
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let hooks = FakeHooks::new(changed(None, None, Some("replaced")), &["acme"], Vec::new());
+    let tool = unsaved("HHHH", "TTTT", 92, message, None);
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    let artifact = completed.payload["artifact"].as_str().unwrap();
+    assert!(artifact.ends_with(".txt"), "{artifact}");
+    assert_ne!(artifact, "artifacts/s_spill.txt");
+    assert_eq!(
+        std::fs::read_to_string(ran.session.join(artifact)).unwrap(),
+        "replaced"
+    );
+}
+
+#[test]
+fn a_left_file_is_removed_before_the_completion_is_written() {
+    let home = fakes::TempDir::new("fiber-spilled-left");
+    let dir = home.path().join("s_test").join("artifacts");
+    let left = dir.join("s_left.txt");
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let tool = {
+        let (left, message) = (left.clone(), message.clone());
+        Fixed {
+            output: text("unused"),
+            bound: Bound::DEFAULT,
+            effects: vec![Effect::Reads],
+            cancel: None,
+            shutdown: None,
+            make: Some(Arc::new(move || {
+                std::fs::write(&left, b"partial").unwrap();
+                Output {
+                    content: Vec::new(),
+                    spilled: Some(Spilled {
+                        head: "HHHH".into(),
+                        tail: "TTTT".into(),
+                        removed: 92,
+                        file: Err(Unsaved {
+                            message: message.clone(),
+                            left: Some(left.clone()),
+                        }),
+                    }),
+                    ..Output::default()
+                }
+            })),
+        }
+    };
+    let ran = run_spilled(home, tool, None);
+    assert!(ran.turn.is_ok());
+    assert!(!ran.session.join("artifacts").join("s_left.txt").exists());
+}
+
+#[test]
+fn a_left_file_that_survives_fails_the_turn() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = fakes::TempDir::new("fiber-spilled-left-stuck");
+    let other = fakes::TempDir::new("fiber-spilled-left-other");
+    let left = other.path().join("s_left.txt");
+    std::fs::write(&left, b"partial").unwrap();
+    std::fs::set_permissions(other.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let tool = unsaved("HHHH", "TTTT", 92, message, Some(left.clone()));
+    let ran = run_spilled(home, tool, None);
+    std::fs::set_permissions(other.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let Err(crate::Error::Log(_)) = &ran.turn else {
+        panic!("a surviving file went on: {:?}", ran.turn);
+    };
+    assert!(left.is_file());
+}
+
+#[test]
+fn a_spill_with_nothing_removed_joins_head_and_tail_with_no_notice() {
+    let home = fakes::TempDir::new("fiber-spilled-whole");
+    let tool = spilling(
+        &home,
+        b"HHHHTTTT".to_vec(),
+        "HHHH",
+        "TTTT",
+        0,
+        Bound::DEFAULT,
+    );
+    let ran = run_spilled(home, tool, None);
+    let completed = ran.completed();
+    assert_eq!(completed.payload["content"][0]["text"], "HHHHTTTT");
+    assert_eq!(completed.payload["artifact"], "artifacts/s_spill.txt");
+}
+
+#[test]
+fn text_parts_beside_a_spill_are_ignored_and_images_are_kept() {
+    let home = fakes::TempDir::new("fiber-spilled-images");
+    let dir = home.path().join("s_test").join("artifacts");
+    let bytes = vec![b'a'; 100];
+    let tool = Fixed {
+        output: text("unused"),
+        bound: Bound::DEFAULT,
+        effects: vec![Effect::Reads],
+        cancel: None,
+        shutdown: None,
+        make: Some(Arc::new(move || {
+            std::fs::write(dir.join(SPILL_NAME), &bytes).unwrap();
+            Output {
+                content: vec![
+                    ContentPart::Text {
+                        text: "ignored".into(),
+                    },
+                    ContentPart::Image {
+                        path: "artifacts/shot.png".into(),
+                        mime_type: "image/png".into(),
+                        width: 1,
+                        height: 1,
+                    },
+                ],
+                spilled: Some(Spilled {
+                    head: "HHHH".into(),
+                    tail: "TTTT".into(),
+                    removed: 92,
+                    file: Ok(SpillFile {
+                        path: dir.join(SPILL_NAME),
+                        size: 100,
+                    }),
+                }),
+                ..Output::default()
+            }
+        })),
+    };
+    let ran = run_spilled(home, tool, None);
+    let completed = ran.completed();
+    let content = completed.payload["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2);
+    assert_eq!(
+        content[0]["text"],
+        cut_of(&ran.session.join("artifacts").join(SPILL_NAME))
+    );
+    assert_eq!(content[1]["type"], "image");
+    assert!(!ran.on_disk().contains("ignored"));
+}
+
+#[test]
+fn a_spill_outside_the_session_is_replaced_at_its_own_path() {
+    let home = fakes::TempDir::new("fiber-spilled-outside");
+    let elsewhere = fakes::TempDir::new("fiber-spilled-elsewhere");
+    let path = elsewhere.path().join("s_out.txt");
+    std::fs::write(&path, b"raw output bytes").unwrap();
+    let hooks = FakeHooks::new(changed(None, None, Some("replaced")), &["acme"], Vec::new());
+    let tool = Fixed {
+        output: text("unused"),
+        bound: Bound::DEFAULT,
+        effects: vec![Effect::Reads],
+        cancel: None,
+        shutdown: None,
+        make: Some(Arc::new(move || Output {
+            content: Vec::new(),
+            spilled: Some(Spilled {
+                head: "raw ".into(),
+                tail: "bytes".into(),
+                removed: 6,
+                file: Ok(SpillFile {
+                    path: path.clone(),
+                    size: 16,
+                }),
+            }),
+            ..Output::default()
+        })),
+    };
+    let ran = run_spilled(home, tool, Some(Arc::clone(&hooks)));
+    let completed = ran.completed();
+    // Not under the session directory, so the artifact is the absolute path.
+    assert_eq!(
+        completed.payload["artifact"],
+        json!(elsewhere.path().join("s_out.txt").display().to_string())
+    );
+    assert_eq!(
+        std::fs::read_to_string(elsewhere.path().join("s_out.txt")).unwrap(),
+        "replaced"
+    );
+    let seen = hooks.seen();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].content.contains("raw "), "{}", seen[0].content);
+    assert_eq!(
+        seen[0].spilled,
+        Some((elsewhere.path().join("s_out.txt"), 16))
+    );
+}
+
+#[test]
+fn a_shutdown_with_an_unsaved_spill_removes_its_left_file() {
+    let home = fakes::TempDir::new("fiber-spilled-shutdown-left");
+    let dir = home.path().join("s_test").join("artifacts");
+    let left = dir.join("s_left.txt");
+    let cancel = Arc::new(TurnCancel::default());
+    let message = "could not save the output to /nowhere/s_x.txt: boom".to_owned();
+    let tool = Fixed {
+        output: text("unused"),
+        bound: Bound::DEFAULT,
+        effects: vec![Effect::Reads],
+        cancel: None,
+        shutdown: Some(Arc::clone(&cancel)),
+        make: Some(Arc::new(move || {
+            std::fs::write(&left, b"partial").unwrap();
+            Output {
+                content: Vec::new(),
+                spilled: Some(Spilled {
+                    head: "HHHH".into(),
+                    tail: "TTTT".into(),
+                    removed: 92,
+                    file: Err(Unsaved {
+                        message: message.clone(),
+                        left: Some(left.clone()),
+                    }),
+                }),
+                ..Output::default()
+            }
+        })),
+    };
+    let ran = run_in(
+        home,
+        tool,
+        script("probe", json!({})),
+        None,
+        cancel,
+        false,
+        false,
+    );
+    let completed = ran.completed();
+    assert_eq!(completed.payload["content"], json!([]));
+    assert!(completed.payload.get("artifact").is_none());
+    assert!(
+        std::fs::read_dir(ran.session.join("artifacts"))
+            .unwrap()
+            .next()
+            .is_none(),
+        "the left file was removed"
+    );
+}
+
+#[test]
+fn empty_replaced_content_on_a_spill_sends_no_text_part() {
+    let home = fakes::TempDir::new("fiber-spilled-empty");
+    let hooks = FakeHooks::new(changed(Some(""), None, None), &["acme"], Vec::new());
+    let tool = spilling(&home, vec![b'a'; 100], "HHHH", "TTTT", 92, Bound::DEFAULT);
+    let ran = run_spilled(home, tool, Some(hooks));
+    let completed = ran.completed();
+    assert_eq!(completed.payload["content"], json!([]));
+    assert_eq!(completed.payload["artifact"], "artifacts/s_spill.txt");
 }

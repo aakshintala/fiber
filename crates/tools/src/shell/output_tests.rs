@@ -32,7 +32,7 @@ fn attached(dir: &TempDir, copy: &[u8], cap: u64) -> (Shared, std::path::PathBuf
     let path = dir.path().join("out.log");
     let shared = Shared::default();
     lock(&shared.inner).output.extend_from_slice(copy);
-    lock(&shared.inner).attach(std::fs::File::create(&path).unwrap(), cap);
+    lock(&shared.inner).attach(std::fs::File::create(&path).unwrap(), &path, cap);
     (shared, path)
 }
 
@@ -292,7 +292,7 @@ fn a_monitors_output_is_kept_for_its_lines_from_the_move_on() {
         let mut inner = lock(&shared.inner);
         inner.lines = Some(Vec::new());
         inner.output = b"before\n".to_vec();
-        inner.attach(std::fs::File::create(&path).unwrap(), 100);
+        inner.attach(std::fs::File::create(&path).unwrap(), &path, 100);
     }
     read_output(Chunks(vec![b"after\n".to_vec()]), &shared);
     assert_eq!(
@@ -301,10 +301,8 @@ fn a_monitors_output_is_kept_for_its_lines_from_the_move_on() {
     );
     // Any other job keeps none.
     let plain = Shared::default();
-    lock(&plain.inner).attach(
-        std::fs::File::create(dir.path().join("p.log")).unwrap(),
-        100,
-    );
+    let job = dir.path().join("p.log");
+    lock(&plain.inner).attach(std::fs::File::create(&job).unwrap(), &job, 100);
     read_output(Chunks(vec![b"x\n".to_vec()]), &plain);
     assert!(lock(&plain.inner).lines.is_none());
 }
@@ -547,4 +545,194 @@ fn a_pending_take_clears_both_bytes_and_flag() {
     assert!(pending.bytes.is_empty());
     let (_, dropped) = pending.take();
     assert!(!dropped);
+}
+
+use super::super::spill::{Config as SpillConfig, SPILL_AT};
+use super::check_start;
+use contract::tool::Bound;
+
+/// Arms `shared`'s spill into `dir`: the reader routes past 1 MiB there.
+fn arm(shared: &Shared, dir: &TempDir) {
+    lock(&shared.inner).spill_config = Some(SpillConfig {
+        dir: dir.path().to_path_buf(),
+        bound: Bound {
+            start: 8192,
+            end: 8192,
+        },
+        wrap: None,
+        name: None,
+    });
+}
+
+/// `n` bytes in 8 KiB pieces, the reader's own read size.
+fn pieces(n: usize) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut left = n;
+    while left > 0 {
+        let take = left.min(8192);
+        out.push(vec![b'y'; take]);
+        left -= take;
+    }
+    out
+}
+
+#[test]
+fn one_byte_short_of_a_mebibyte_never_spills() {
+    let artifacts = TempDir::new("fiber-spill-under-artifacts");
+    let shared = Shared::default();
+    arm(&shared, &artifacts);
+    let owned = pieces(SPILL_AT - 1);
+    let refs: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+    feed(&shared, &refs);
+    assert!(lock(&shared.inner).spill.is_none());
+    assert_eq!(lock(&shared.inner).output.len(), SPILL_AT - 1);
+    assert!(
+        std::fs::read_dir(artifacts.path())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn exactly_a_mebibyte_never_spills() {
+    let artifacts = TempDir::new("fiber-spill-exact-artifacts");
+    let shared = Shared::default();
+    arm(&shared, &artifacts);
+    let owned = pieces(SPILL_AT);
+    let refs: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+    feed(&shared, &refs);
+    assert!(lock(&shared.inner).spill.is_none());
+    assert_eq!(lock(&shared.inner).output.len(), SPILL_AT);
+    assert!(
+        std::fs::read_dir(artifacts.path())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[test]
+fn one_byte_past_a_mebibyte_spills_from_the_first_byte() {
+    let artifacts = TempDir::new("fiber-spill-over-artifacts");
+    let shared = Shared::default();
+    arm(&shared, &artifacts);
+    let owned = pieces(SPILL_AT + 1);
+    let refs: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+    feed(&shared, &refs);
+    assert!(lock(&shared.inner).spill.is_some());
+    let inner = lock(&shared.inner);
+    assert!(inner.output.is_empty());
+    assert_eq!(inner.output.capacity(), 0);
+    drop(inner);
+    let entries: Vec<_> = std::fs::read_dir(artifacts.path()).unwrap().collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        std::fs::read(entries[0].as_ref().unwrap().path())
+            .unwrap()
+            .len(),
+        SPILL_AT + 1
+    );
+}
+
+#[test]
+fn sixty_four_mebibytes_leave_only_the_ends_and_the_capped_queue() {
+    let artifacts = TempDir::new("fiber-spill-64-artifacts");
+    let shared = Shared::default();
+    arm(&shared, &artifacts);
+    read_output(io::repeat(b'y').take(64 << 20), &shared);
+    let inner = lock(&shared.inner);
+    assert!(inner.spill.is_some());
+    assert!(inner.output.is_empty());
+    assert_eq!(inner.output.capacity(), 0);
+    let spill = inner.spill.as_ref().unwrap();
+    assert!(spill.head.len() <= 8192);
+    assert!(spill.ring.bytes.len() <= 8192);
+    assert!(inner.stream.bytes.len() <= HELD_MAX);
+    assert_eq!(spill.total, 64 << 20);
+    drop(inner);
+    let entries: Vec<_> = std::fs::read_dir(artifacts.path()).unwrap().collect();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        std::fs::read(entries[0].as_ref().unwrap().path())
+            .unwrap()
+            .len(),
+        64 << 20
+    );
+}
+
+#[test]
+fn without_an_armed_spill_the_buffer_is_unbounded() {
+    let shared = Shared::default();
+    let owned = pieces(SPILL_AT + 1);
+    let refs: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+    feed(&shared, &refs);
+    assert!(lock(&shared.inner).spill.is_none());
+    assert_eq!(lock(&shared.inner).output.len(), SPILL_AT + 1);
+}
+
+#[test]
+fn check_start_arms_nothing_without_a_configuration() {
+    let shared = Shared::default();
+    {
+        let mut inner = lock(&shared.inner);
+        inner.output = vec![b'y'; SPILL_AT + 1];
+        check_start(&mut inner, 0);
+        assert!(inner.spill.is_none());
+    }
+}
+
+#[test]
+fn attach_without_a_spill_copies_whole_and_returns_no_line() {
+    let artifacts = TempDir::new("fiber-spill-attach-artifacts");
+    let shared = Shared::default();
+    arm(&shared, &artifacts);
+    let owned = pieces(1000);
+    let refs: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+    feed(&shared, &refs);
+    // Under the threshold the whole-copy path still returns no line.
+    let job = artifacts.path().join("j_1.log");
+    let line = lock(&shared.inner).attach(std::fs::File::create(&job).unwrap(), &job, 10);
+    assert_eq!(line, None);
+    assert_eq!(std::fs::read(&job).unwrap().len(), 1000);
+}
+
+#[test]
+fn attach_after_a_spill_moves_the_file_into_the_job() {
+    let artifacts = TempDir::new("fiber-spill-attach-spilled");
+    let shared = Shared::default();
+    arm(&shared, &artifacts);
+    let owned = pieces(SPILL_AT + 100);
+    let refs: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+    feed(&shared, &refs);
+    let job = artifacts.path().join("j_1.log");
+    let line =
+        lock(&shared.inner).attach(std::fs::File::create(&job).unwrap(), &job, 5_000_000_000);
+    assert_eq!(line, None);
+    let inner = lock(&shared.inner);
+    assert_eq!(inner.written, (SPILL_AT + 100) as u64);
+    assert!(!inner.cap_fired);
+    drop(inner);
+    assert_eq!(std::fs::read(&job).unwrap().len(), SPILL_AT + 100);
+    // Later output follows into the job's file.
+    feed(&shared, &[b"more"]);
+    assert_eq!(std::fs::read(&job).unwrap().len(), SPILL_AT + 104);
+}
+
+#[test]
+fn attach_after_a_spill_with_a_cap_below_its_size_fires_at_once() {
+    let artifacts = TempDir::new("fiber-spill-attach-capped");
+    let shared = Shared::default();
+    arm(&shared, &artifacts);
+    // A spill started directly, past the tiny cap the attach carries.
+    {
+        let mut inner = lock(&shared.inner);
+        let config = inner.spill_config.clone().unwrap();
+        inner.spill = Some(super::super::spill::Spill::start(config, vec![b'y'; 100]));
+    }
+    let job = artifacts.path().join("j_1.log");
+    lock(&shared.inner).attach(std::fs::File::create(&job).unwrap(), &job, 50);
+    let inner = lock(&shared.inner);
+    assert_eq!(inner.written, 100);
+    assert!(inner.cap_fired);
 }

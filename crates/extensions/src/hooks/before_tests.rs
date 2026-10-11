@@ -183,6 +183,7 @@ fn after_tool(session: &Arc<SessionExtensions>, content: &str) -> AfterToolAnswe
             content: &content,
             details: None,
             process: None,
+            spilled: None,
         })
     })
 }

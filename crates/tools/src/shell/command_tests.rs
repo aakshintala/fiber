@@ -59,7 +59,15 @@ fn bump_advances_the_sequence() {
 #[test]
 fn an_open_pipe_is_discarded_once_the_run_returns() {
     let shared = Shared::default();
-    finish(&shared, None, false, true, false, &Recorder::default(), 0);
+    finish(
+        &shared,
+        None,
+        false,
+        true,
+        false,
+        &Recorder::default(),
+        &mut Vec::new(),
+    );
     assert!(lock(&shared.inner).discard);
 }
 
@@ -72,7 +80,7 @@ fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
         true,
         false,
         &Recorder::default(),
-        0,
+        &mut Vec::new(),
     );
     assert!(held.held_open);
     assert!(!held.indeterminate);
@@ -84,7 +92,7 @@ fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
         true,
         true,
         &Recorder::default(),
-        0,
+        &mut Vec::new(),
     );
     assert!(!closed.held_open);
     assert!(!closed.indeterminate);
@@ -96,7 +104,7 @@ fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
         false,
         false,
         &Recorder::default(),
-        0,
+        &mut Vec::new(),
     );
     assert!(!still_occupied.held_open);
 
@@ -107,7 +115,7 @@ fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
         true,
         false,
         &Recorder::default(),
-        0,
+        &mut Vec::new(),
     );
     assert!(stopped_open.indeterminate);
     assert!(!stopped_open.held_open);
@@ -119,7 +127,7 @@ fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
         false,
         true,
         &Recorder::default(),
-        0,
+        &mut Vec::new(),
     );
     assert!(stopped_occupied.indeterminate);
     assert!(!stopped_occupied.held_open);
@@ -131,7 +139,7 @@ fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
         true,
         true,
         &Recorder::default(),
-        0,
+        &mut Vec::new(),
     );
     assert!(!stopped_clean.indeterminate);
     assert!(!stopped_clean.held_open);
@@ -303,6 +311,7 @@ fn run(dir: &std::path::Path, command: String) -> mpsc::Receiver<super::Finished
             &Recorder::default(),
             MovePolicy::Stay,
             None,
+            None,
         )
         .unwrap();
         let super::Ran::Finished(finished) = ran else {
@@ -434,37 +443,60 @@ fn a_complete_prefix_ends_on_a_character_boundary() {
 fn an_incomplete_tail_waits_for_the_next_chunk_and_streams_once_whole() {
     let shared = Shared::default();
     let recorder = Recorder::default();
-    lock(&shared.inner).output.extend_from_slice(b"a\xC3");
-    let streamed = stream_output(&shared, &recorder, 0);
+    let mut carry = Vec::new();
+    read_output(
+        Scripted {
+            steps: vec![Ok(b"a\xC3".to_vec())],
+        },
+        &shared,
+    );
+    stream_output(&shared, &recorder, &mut carry);
     assert_eq!(recorder.text(), "a");
-    assert_eq!(streamed, 1);
-    lock(&shared.inner).output.extend_from_slice(b"\xA9b");
-    let streamed = stream_output(&shared, &recorder, streamed);
+    assert_eq!(carry, b"\xC3");
+    read_output(
+        Scripted {
+            steps: vec![Ok(b"\xA9b".to_vec())],
+        },
+        &shared,
+    );
+    stream_output(&shared, &recorder, &mut carry);
     assert_eq!(recorder.text(), "a\u{e9}b");
-    assert_eq!(streamed, 4);
+    assert!(carry.is_empty());
 }
 
 #[test]
 fn an_invalid_byte_streams_as_the_replacement_character() {
     let shared = Shared::default();
     let recorder = Recorder::default();
-    lock(&shared.inner).output.extend_from_slice(b"\xFFx");
-    let streamed = stream_output(&shared, &recorder, 0);
+    read_output(
+        Scripted {
+            steps: vec![Ok(b"\xFFx".to_vec())],
+        },
+        &shared,
+    );
+    stream_output(&shared, &recorder, &mut Vec::new());
     assert_eq!(recorder.text(), "�x");
-    assert_eq!(streamed, 2);
 }
 
 #[test]
-fn finish_streams_the_tail_from_the_taken_snapshot() {
+fn finish_streams_the_queued_tail_lossily() {
     let shared = Shared::default();
     let recorder = Recorder::default();
-    lock(&shared.inner).output.extend_from_slice(b"a\xE2\x82");
-    let streamed = stream_output(&shared, &recorder, 0);
-    assert_eq!(streamed, 1);
-    let finished = finish(&shared, None, false, true, true, &recorder, streamed);
-    assert_eq!(finished.output, b"a\xE2\x82");
-    // The tail streams once, from the snapshot the result took: "a" is not
-    // repeated, and the concatenated texts equal the lossy whole output.
+    let mut carry = Vec::new();
+    read_output(
+        Scripted {
+            steps: vec![Ok(b"a\xE2\x82".to_vec())],
+        },
+        &shared,
+    );
+    stream_output(&shared, &recorder, &mut carry);
+    let finished = finish(&shared, None, false, true, true, &recorder, &mut carry);
+    assert!(
+        matches!(finished.output, super::Kept::Whole(bytes) if bytes == b"a\xE2\x82"),
+        "the result keeps the whole output"
+    );
+    // The tail streams once: "a" is not repeated, and the concatenated
+    // texts equal the lossy whole output.
     assert_eq!(
         recorder.text(),
         String::from_utf8_lossy(b"a\xE2\x82").into_owned()
@@ -788,7 +820,7 @@ fn attaching_a_file_keeps_each_byte_once_in_order() {
     let shared = Arc::new(Shared::default());
     lock(&shared.inner).output.extend_from_slice(b"ab");
     let moved = parked(Arc::clone(&shared));
-    moved.attach_output(std::fs::File::create(&path).unwrap());
+    moved.attach_output(std::fs::File::create(&path).unwrap(), &path);
     assert!(lock(&shared.inner).output.is_empty());
     assert_eq!(std::fs::read(&path).unwrap(), b"ab");
     read_output(
@@ -807,7 +839,7 @@ fn bytes_after_discard_are_not_written_to_the_file() {
     let path = dir.path().join("out.log");
     let shared = Arc::new(Shared::default());
     lock(&shared.inner).output.extend_from_slice(b"ab");
-    parked(Arc::clone(&shared)).attach_output(std::fs::File::create(&path).unwrap());
+    parked(Arc::clone(&shared)).attach_output(std::fs::File::create(&path).unwrap(), &path);
     lock(&shared.inner).discard = true;
     read_output(
         Scripted {
@@ -827,7 +859,7 @@ fn parked(shared: Arc<Shared>) -> Moved {
             stop: None,
             sent_signal: false,
             seen_empty: false,
-            streamed: 0,
+            stream_carry: Vec::new(),
             timeout_at: None,
             move_at: None,
             pgid: 2,
@@ -838,6 +870,7 @@ fn parked(shared: Arc<Shared>) -> Moved {
             feed: None,
         },
         cap: OUTPUT_CAP,
+        spill: None,
     }
 }
 
@@ -853,7 +886,17 @@ fn the_cap_stops_a_running_job_like_a_cancel() {
 #[test]
 fn finish_reports_a_fired_cap() {
     let shared = Shared::default();
-    let open = |shared: &Shared| finish(shared, None, false, true, true, &Recorder::default(), 0);
+    let open = |shared: &Shared| {
+        finish(
+            shared,
+            None,
+            false,
+            true,
+            true,
+            &Recorder::default(),
+            &mut Vec::new(),
+        )
+    };
     assert!(!open(&shared).capped);
     lock(&shared.inner).cap_fired = true;
     assert!(open(&shared).capped);
@@ -916,6 +959,7 @@ impl Job {
             &Recorder::default(),
             MovePolicy::Background,
             None,
+            None,
         )
         .unwrap();
         let super::Ran::Moved(mut moved) = ran else {
@@ -925,7 +969,7 @@ impl Job {
         let watchdog = fakes::Watchdog::group(pgid);
         moved.cap = cap;
         let out = dir.path().join("job.log");
-        moved.attach_output(std::fs::File::create(&out).unwrap());
+        moved.attach_output(std::fs::File::create(&out).unwrap(), &out);
         moved.arm(&cancel);
         moved.detach_call_cancel();
         let deltas = Arc::new(fakes::jobs::JobDeltas::default());
@@ -1086,4 +1130,114 @@ fn a_monitor_moves_on_the_first_pass_after_its_deadline_and_an_empty_group() {
         ),
         Some(deadline)
     );
+}
+
+use super::super::spill::Config as SpillConfig;
+
+fn spill_config(dir: &std::path::Path) -> SpillConfig {
+    SpillConfig {
+        dir: dir.to_path_buf(),
+        bound: contract::tool::Bound {
+            start: 8192,
+            end: 8192,
+        },
+        wrap: None,
+        name: None,
+    }
+}
+
+#[test]
+fn a_foreground_command_past_a_mebibyte_spills() {
+    let dir = fakes::TempDir::new("fiber-shell-foreground-spill");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let ran = super::execute(
+        std::path::Path::new("/bin/sh"),
+        "head -c 1048577 /dev/zero | tr '\\0' a",
+        dir.path(),
+        Duration::from_secs(60),
+        FakeClock::new().as_ref(),
+        &CancelToken::new(),
+        &Recorder::default(),
+        MovePolicy::Foreground,
+        None,
+        Some(spill_config(&artifacts)),
+    )
+    .unwrap();
+    let super::Ran::Finished(finished) = ran else {
+        panic!("a quick command moved");
+    };
+    let super::Kept::Spilled(spill) = finished.output else {
+        panic!("a command past a mebibyte spills");
+    };
+    let spilled = spill.close(None, "Exit code 0.");
+    assert!(spilled.file.is_ok());
+    assert_eq!(spilled.removed, 1048577 + 14 - 16_384);
+}
+
+#[test]
+fn a_command_moved_at_once_never_spills() {
+    let dir = fakes::TempDir::new("fiber-shell-background-no-spill");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let clock = FakeClock::new();
+    let cancel = CancelToken::new();
+    let ran = super::execute(
+        std::path::Path::new("/bin/sh"),
+        "exit 0",
+        dir.path(),
+        Duration::from_secs(60),
+        clock.as_ref(),
+        &cancel,
+        &Recorder::default(),
+        MovePolicy::Background,
+        None,
+        Some(spill_config(&artifacts)),
+    )
+    .unwrap();
+    let super::Ran::Moved(moved) = ran else {
+        panic!("a background command did not move");
+    };
+    {
+        let inner = super::super::output::lock(&moved.progress.shared.inner);
+        assert!(inner.spill_config.is_none());
+        assert!(inner.spill.is_none());
+    }
+    // The move's command ends cleanly back in the foreground.
+    let finished = moved.resume(clock.as_ref(), &cancel, &Recorder::default());
+    assert!(matches!(finished.output, super::Kept::Whole(_)));
+    assert!(std::fs::read_dir(&artifacts).unwrap().next().is_none());
+}
+
+#[test]
+fn a_resumed_command_arms_the_spill() {
+    let dir = fakes::TempDir::new("fiber-shell-resume-spill");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let clock = FakeClock::new();
+    let cancel = CancelToken::new();
+    let ran = super::execute(
+        std::path::Path::new("/bin/sh"),
+        "head -c 2097152 /dev/zero | tr '\\0' a",
+        dir.path(),
+        Duration::from_secs(60),
+        clock.as_ref(),
+        &cancel,
+        &Recorder::default(),
+        MovePolicy::Background,
+        None,
+        Some(spill_config(&artifacts)),
+    )
+    .unwrap();
+    let super::Ran::Moved(moved) = ran else {
+        panic!("a background command did not move");
+    };
+    // A move on the first pass never spills; the resume arms it, and the
+    // command's output past 1 MiB spills from there.
+    let finished = moved.resume(clock.as_ref(), &cancel, &Recorder::default());
+    let super::Kept::Spilled(spill) = finished.output else {
+        panic!("a resumed command past a mebibyte spills");
+    };
+    let spilled = spill.close(None, "Exit code 0.");
+    assert!(spilled.file.is_ok());
 }

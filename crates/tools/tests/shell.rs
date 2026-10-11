@@ -1571,7 +1571,7 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
     assert!(body.contains("AFTER\n"), "{body}");
     assert!(body.contains("Exit code 0."), "{body}");
     assert!(
-        body.ends_with("Exit code 0.\nIt could not move to the background: the job's output file jobs/unavailable.log could not be created: background jobs are unavailable.\n"),
+        body.ends_with("It could not move to the background: the job's output file jobs/unavailable.log could not be created: background jobs are unavailable.\nExit code 0.\n"),
         "{body}"
     );
     assert!(output.error.is_none(), "{body}");
@@ -2447,4 +2447,88 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
     assert_eq!(texts, ["partial"]);
     assert!(!group_alive(pgid));
     watchdog.stand_down(DEADLINE);
+}
+
+/// One shell call with `artifacts`, on its own thread under the deadline.
+#[track_caller]
+fn run_spilling(dir: &Path, artifacts: &Path, command: &str) -> contract::tool::Output {
+    let shell = Arc::new(
+        Shell::new(dir.to_path_buf(), FakeClock::new()).with_artifacts(artifacts.to_path_buf()),
+    );
+    run_on(&shell, args(command), &Arc::new(Recorder::default()))
+}
+
+#[test]
+fn output_at_a_mebibyte_is_whole_with_no_spill() {
+    let dir = fakes::TempDir::new("fiber-shell-public-whole");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let output = run_spilling(
+        dir.path(),
+        &artifacts,
+        "head -c 1048576 /dev/zero | tr '\\0' a",
+    );
+    assert!(output.error.is_none());
+    assert!(output.spilled.is_none());
+    let text = text(&output);
+    assert_eq!(text.len(), 1_048_576 + 14);
+    assert_eq!(&text[..100], &"a".repeat(100));
+    assert!(text.ends_with("\nExit code 0.\n"));
+    assert!(std::fs::read_dir(&artifacts).unwrap().next().is_none());
+}
+
+#[test]
+fn output_past_a_mebibyte_spills_into_the_call_artifact_file() {
+    let dir = fakes::TempDir::new("fiber-shell-public-spill");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let output = run_spilling(
+        dir.path(),
+        &artifacts,
+        "head -c 1048577 /dev/zero | tr '\\0' a",
+    );
+    assert!(output.error.is_none());
+    assert!(output.content.is_empty());
+    let spilled = output.spilled.expect("spilled is set");
+    let kept = spilled.file.as_ref().expect("the file is kept");
+    assert_eq!(kept.size, 1_048_577 + 14);
+    assert_eq!(std::fs::read(&kept.path).unwrap().len(), 1_048_577 + 14);
+    let entries: Vec<_> = std::fs::read_dir(&artifacts).unwrap().collect();
+    assert_eq!(entries.len(), 1);
+    assert!(kept.path.starts_with(&artifacts));
+}
+
+#[test]
+fn a_shell_without_artifacts_never_spills() {
+    let dir = fakes::TempDir::new("fiber-shell-public-no-spill");
+    let output = run(dir.path(), "head -c 1048577 /dev/zero | tr '\\0' a");
+    assert!(output.error.is_none());
+    assert!(output.spilled.is_none());
+    assert_eq!(text(&output).len(), 1_048_577 + 14);
+}
+
+#[test]
+fn a_relative_artifacts_directory_spills_under_its_absolute_form() {
+    let dir = fakes::TempDir::new("fiber-shell-public-relative");
+    // Resolved against the process's directory: created and removed here.
+    let name = "fiber-shell-public-relative-artifacts";
+    let absolute = std::env::current_dir().unwrap().join(name);
+    if absolute.is_dir() {
+        std::fs::remove_dir_all(&absolute).unwrap();
+    }
+    std::fs::create_dir(&absolute).unwrap();
+    let shell = Arc::new(
+        Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_artifacts(name.into()),
+    );
+    let output = run_on(
+        &shell,
+        args("head -c 1048577 /dev/zero | tr '\\0' a"),
+        &Arc::new(Recorder::default()),
+    );
+    assert!(output.error.is_none());
+    let spilled = output.spilled.expect("spilled is set");
+    let kept = spilled.file.as_ref().expect("the file is kept");
+    assert!(kept.path.is_absolute());
+    assert!(kept.path.starts_with(&absolute));
+    std::fs::remove_dir_all(&absolute).unwrap();
 }
