@@ -86,7 +86,7 @@ impl contract::extension::Drive for Driver {
                 return;
             }
         };
-        if !gate.reserve(&classified.id) {
+        if !gate.accepted.reserve(&classified.id) {
             answer.0(Err(Rejection {
                 code: ErrorCode::DuplicateCommand,
                 message: client::DUPLICATE.to_owned(),
@@ -95,7 +95,7 @@ impl contract::extension::Drive for Driver {
         }
         if classified.command == "subscribe" {
             // drive_subscribe_is_rejected: already subscribed, as a second one.
-            gate.release(&classified.id);
+            gate.accepted.release(&classified.id);
             answer.0(Err(Rejection {
                 code: ErrorCode::InvalidArguments,
                 message: client::ALREADY.to_owned(),
@@ -106,7 +106,7 @@ impl contract::extension::Drive for Driver {
             Ok(parsed) => parsed,
             Err((id, code, message)) => {
                 // drive_unknown_command_is_rejected: frees the minted id.
-                gate.release(&id);
+                gate.accepted.release(&id);
                 answer.0(Err(Rejection { code, message }));
                 return;
             }
@@ -116,7 +116,7 @@ impl contract::extension::Drive for Driver {
         {
             // drive_approval_reply_is_rejected, drive_offer_reply_is_rejected:
             // never reaches the inbox.
-            gate.release(&parsed.id);
+            gate.accepted.release(&parsed.id);
             answer.0(Err(Rejection {
                 code: ErrorCode::InvalidArguments,
                 message: message.to_owned(),

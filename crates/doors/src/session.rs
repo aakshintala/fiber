@@ -3,7 +3,6 @@
 //! stream copied to stdout, the clients on that socket, and what is left
 //! when it exits.
 
-use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::os::unix::net::UnixListener;
@@ -26,12 +25,16 @@ use contract::{CommandId, ErrorCode, SessionId};
 use log::{Injector, Log, Watcher};
 
 mod accept;
+mod accepted;
+mod clients;
 mod conns;
 mod event;
 mod shells;
 #[cfg(test)]
 use accept::accept_error_waits;
 use accept::accept_loop;
+use accepted::Accepted;
+use clients::Clients as ClientCounts;
 use conns::Conns;
 #[cfg(test)]
 use conns::{GRACE, grace_remains};
@@ -66,9 +69,7 @@ pub(crate) struct Gate {
     /// What the `skills` command answers with, set by [`Session::skills`];
     /// empty until then.
     skills: Mutex<Vec<SkillInfo>>,
-    /// The id of every command this process accepted or is running, across
-    /// connections, so a repeat is rejected `duplicate_command` (`docs/invocation.md`).
-    accepted: Mutex<HashSet<String>>,
+    pub(crate) accepted: Accepted,
     inbox: Mutex<Option<Sender<Delivery>>>,
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.
@@ -106,8 +107,7 @@ pub(crate) struct Gate {
     #[cfg(test)]
     pub(crate) probe: Mutex<Option<tests::Prober>>,
     stop: AtomicBool,
-    /// The `full` connections, and whether `clients` lines are sealed.
-    clients: Mutex<(u32, bool)>,
+    clients: ClientCounts,
     /// Paired with [`Gate::conns`].
     writers: Condvar,
     conns: Mutex<Conns>,
@@ -360,7 +360,7 @@ impl Session {
     /// `fiber_exited`. Idempotent; [`Session::close`] behaves as before.
     pub fn quiesce(&self) {
         // An emission holds this lock, so one in flight finishes first.
-        lock(&self.gate.clients).1 = true;
+        self.gate.clients.seal();
         if let Some(door) = lock(&self.gate.door).clone() {
             door.seal();
         }
@@ -434,17 +434,6 @@ impl Session {
 }
 
 impl Gate {
-    /// Claims `id` before its command is dispatched. False when an earlier
-    /// command holds it, running or accepted.
-    pub(crate) fn reserve(&self, id: &CommandId) -> bool {
-        lock(&self.accepted).insert(id.0.clone())
-    }
-
-    /// Frees `id` once its command is rejected, so a client may retry it.
-    pub(crate) fn release(&self, id: &CommandId) {
-        lock(&self.accepted).remove(&id.0);
-    }
-
     #[cfg(test)]
     pub(crate) fn note(&self, point: tests::Probe) {
         let probe = lock(&self.probe).clone();
@@ -455,20 +444,12 @@ impl Gate {
 
     /// One more `full` connection, and the `clients` line for it.
     pub(crate) fn attach(&self) {
-        let mut clients = lock(&self.clients);
-        clients.0 += 1;
-        if !clients.1 {
-            self.emit_clients(clients.0);
-        }
+        self.clients.attach(|count| self.emit_clients(count));
     }
 
     /// One fewer `full` connection, and the `clients` line for it.
     pub(crate) fn detach(&self) {
-        let mut clients = lock(&self.clients);
-        clients.0 = clients.0.saturating_sub(1);
-        if !clients.1 {
-            self.emit_clients(clients.0);
-        }
+        self.clients.detach(|count| self.emit_clients(count));
     }
 
     fn emit_clients(&self, count: u32) {
@@ -570,7 +551,7 @@ fn open_in(
         tools: Mutex::new(tools),
         commands: Mutex::new(Vec::new()),
         skills: Mutex::new(Vec::new()),
-        accepted: Mutex::new(HashSet::new()),
+        accepted: Accepted::new(),
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),
         close_now: Mutex::new(None),
@@ -589,7 +570,7 @@ fn open_in(
         #[cfg(test)]
         probe: Mutex::new(None),
         stop: AtomicBool::new(false),
-        clients: Mutex::new((0, false)),
+        clients: ClientCounts::new(),
         writers: Condvar::new(),
         conns: Mutex::new(Conns {
             live: Vec::new(),

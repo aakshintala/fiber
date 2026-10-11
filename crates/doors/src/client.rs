@@ -187,7 +187,7 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
             return;
         }
     };
-    if !conn.gate.reserve(&line.id) {
+    if !conn.gate.accepted.reserve(&line.id) {
         reject(conn, Some(line.id), ErrorCode::DuplicateCommand, DUPLICATE);
         return;
     }
@@ -585,7 +585,7 @@ pub(crate) fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, me
     if let Some(id) = &id
         && !matches!(code, ErrorCode::Malformed | ErrorCode::DuplicateCommand)
     {
-        conn.gate.release(id);
+        conn.gate.accepted.release(id);
     }
     send(
         conn,
@@ -645,7 +645,7 @@ pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
         let gate = Arc::clone(&conn.gate);
         return guard(move |result| {
             if result.is_err() {
-                gate.release(&id);
+                gate.accepted.release(&id);
             }
             answer.0(result);
         });
@@ -661,7 +661,7 @@ pub(crate) fn inbox_ack(conn: &mut Conn, id: CommandId) -> Ack {
                 result,
             }),
             Err(rejection) => {
-                gate.release(&id);
+                gate.accepted.release(&id);
                 Event::CommandRejected(CommandRejected {
                     command_id: Some(id),
                     code: rejection.code,
