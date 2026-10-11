@@ -1,5 +1,4 @@
-//! A second client on a session's socket (`docs/testing.md`, "Fakes"),
-//! including one that reads nothing until told.
+//! A second client on a session's socket (`docs/testing.md`, "Fakes").
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -24,8 +23,7 @@ const READER_STOP: Duration = Duration::from_secs(2);
 const CHUNK: usize = 4096;
 
 /// A client connected to a session socket. It sends command lines and reads
-/// the JSON lines that come back. [`Client::slow`] stops it reading, so the
-/// session's writer blocks instead of the test.
+/// the JSON lines that come back.
 pub struct Client {
     state: Arc<Mutex<State>>,
     ready: Arc<Condvar>,
@@ -38,14 +36,13 @@ pub struct Client {
 
 struct State {
     lines: VecDeque<String>,
-    slow: bool,
     stop: bool,
     closed: bool,
 }
 
 impl Client {
     /// Connects to the session socket at `path`. Nothing is read until
-    /// [`Client::recv`] or [`Client::slow`]`(false)`.
+    /// [`Client::recv`].
     pub fn connect(path: &Path) -> std::io::Result<Self> {
         let stream = UnixStream::connect(path)?;
         let write = stream.try_clone()?;
@@ -53,7 +50,6 @@ impl Client {
         Ok(Self {
             state: Arc::new(Mutex::new(State {
                 lines: VecDeque::new(),
-                slow: false,
                 stop: false,
                 closed: false,
             })),
@@ -122,9 +118,7 @@ impl Client {
     /// is not JSON. The lines before it are dropped. `None` when none arrives
     /// within `within` or the socket closes first; then nothing is consumed.
     pub fn recv_until(&self, within: Duration, matches: impl Fn(&Value) -> bool) -> Option<Value> {
-        if !lock(&self.state).slow {
-            self.ensure_reader();
-        }
+        self.ensure_reader();
         let guard = lock(&self.state);
         let (mut guard, _) = self
             .ready
@@ -152,21 +146,11 @@ impl Client {
         self.recv_until(within, |_| true)
     }
 
-    /// When `paused`, reads nothing from the socket until `slow(false)`.
-    /// One read already in progress may finish; a client paused before its
-    /// first [`Client::recv`] has not started one.
-    pub fn slow(&self, paused: bool) {
-        lock(&self.state).slow = paused;
-        self.ready.notify_all();
-        if !paused {
-            self.ensure_reader();
-        }
-    }
-
     /// Test-only pause point for the unwind regression test: the reader
     /// sends once per loop after passing its stop check, so the test can
     /// wait until the reader is about to block in `read` before dropping
     /// the client (`docs/testing.md`, "Waits and timeouts").
+    #[cfg(test)]
     pub fn notify_when_blocked(&self, tx: mpsc::Sender<()>) {
         *lock(&self.blocked) = Some(tx);
     }
@@ -200,7 +184,6 @@ impl Drop for Client {
         {
             let mut state = lock(&self.state);
             state.stop = true;
-            state.slow = false;
         }
         self.ready.notify_all();
         if let Some(stream) = lock(&self.shutdown).take() {
@@ -241,10 +224,7 @@ fn read_lines(
     let mut buf = Vec::new();
     loop {
         {
-            let mut guard = lock(&state);
-            while guard.slow && !guard.stop {
-                guard = ready.wait(guard).unwrap_or_else(PoisonError::into_inner);
-            }
+            let guard = lock(&state);
             if guard.stop {
                 return;
             }

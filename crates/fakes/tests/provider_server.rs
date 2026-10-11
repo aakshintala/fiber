@@ -166,6 +166,8 @@ fn it_serves_a_scripted_sequence_one_response_per_request() {
     assert_eq!(second.status, 429);
     assert_eq!(header(&second, "retry-after"), Some("7"));
     assert_eq!(header(&second, "content-type"), Some("application/json"));
+    let length = second.body.len().to_string();
+    assert_eq!(header(&second, "content-length"), Some(length.as_str()));
     assert_eq!(second.body, br#"{"error":"rate_limited"}"#);
     assert_eq!((third.status, third.body), (200, text.as_bytes().to_vec()));
 }
@@ -183,6 +185,18 @@ fn a_request_past_the_end_of_the_script_gets_a_500_naming_why() {
             .unwrap()
             .contains("no scripted response left")
     );
+    assert_eq!(server.requests().len(), 2);
+}
+
+#[test]
+fn a_request_past_the_script_gets_the_configured_fallback() {
+    let server = ProviderServer::start_with_fallback([], Response::status(503, "busy")).unwrap();
+
+    let first = post(&server, "/a", &[], b"");
+    let second = post(&server, "/b", &[], b"");
+
+    assert_eq!((first.status, first.body), (503, b"busy".to_vec()));
+    assert_eq!((second.status, second.body), (503, b"busy".to_vec()));
     assert_eq!(server.requests().len(), 2);
 }
 
@@ -293,6 +307,28 @@ fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
         &server,
         b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab",
     );
+    // Each malformed framing answers 400 over the wire and keeps the
+    // script's response.
+    let bad_hex = exchange(
+        &server,
+        b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nabc\r\n0\r\n\r\n",
+    );
+    let bare_lf = exchange(
+        &server,
+        b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\nabc\r\n0\r\n\r\n",
+    );
+    let cut_mid_body = exchange(
+        &server,
+        b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n",
+    );
+    let cut_mid_trailers = exchange(
+        &server,
+        b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n",
+    );
+    let cut_at_end = exchange(
+        &server,
+        b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r",
+    );
     let next = post(&server, "/v1/messages", &[], b"{}");
 
     assert_eq!(reply.status, 400);
@@ -301,12 +337,31 @@ fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
     assert_eq!(truncated.status, 400);
     let why = String::from_utf8(truncated.body).unwrap();
     assert!(why.contains("ends before its framing does"), "{why}");
+    assert_eq!(bad_hex.status, 400);
+    let why = String::from_utf8(bad_hex.body).unwrap();
+    assert!(why.contains("not a hex number"), "{why}");
+    assert_eq!(bare_lf.status, 400);
+    let why = String::from_utf8(bare_lf.body).unwrap();
+    assert!(why.contains("does not end in CRLF"), "{why}");
+    for (reply, name) in [
+        (cut_mid_body, "cut mid-body"),
+        (cut_mid_trailers, "cut mid-trailers"),
+        (cut_at_end, "cut at the end"),
+    ] {
+        assert_eq!(reply.status, 400, "{name}");
+        let why = String::from_utf8(reply.body).unwrap();
+        assert!(
+            why.contains("ends before its framing does"),
+            "{name}: {why}"
+        );
+    }
     // The script kept its response for the next well-formed request.
     assert_eq!((next.status, next.body), (200, b"ok".to_vec()));
     let requests = server.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 8);
     assert_eq!(requests[0].body, b"abc");
     assert_eq!(requests[1].body, b"ab");
+    assert_eq!(requests[4].body, b"abc");
 }
 
 /// `await_requests` on a helper, so a mutant that waits out its 30 s `within`
@@ -348,36 +403,4 @@ fn await_requests_is_true_when_more_than_the_count_are_recorded() {
     post(&server, "/two", &[], b"");
     assert!(server.requests().len() > 1);
     assert!(await_requests_within(&server, 1));
-}
-
-#[test]
-fn only_the_newest_bodies_are_kept_and_older_requests_keep_their_size() {
-    let server = ProviderServer::start_with_fallback([], Response::stream("ok"))
-        .unwrap()
-        .keep_last_bodies(1);
-
-    post(&server, "/v1/messages", &[], b"body-0");
-    post(&server, "/v1/messages", &[], b"body-1");
-
-    let requests = server.requests();
-    assert_eq!(requests.len(), 2);
-    assert!(requests[0].body.is_empty());
-    assert_eq!(requests[1].body, b"body-1");
-    assert!(requests.iter().all(|r| r.body_len == 6), "{requests:?}");
-    assert_eq!(requests[0].path, "/v1/messages");
-}
-
-#[test]
-fn keep_all_bodies_overrides_a_smaller_limit() {
-    let server = ProviderServer::start_with_fallback([], Response::stream("ok"))
-        .unwrap()
-        .keep_last_bodies(0)
-        .keep_all_bodies();
-
-    post(&server, "/v1/messages", &[], b"body-0");
-    post(&server, "/v1/messages", &[], b"body-1");
-
-    let requests = server.requests();
-    assert_eq!(requests[0].body, b"body-0");
-    assert_eq!(requests[1].body, b"body-1");
 }

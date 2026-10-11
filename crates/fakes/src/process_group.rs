@@ -54,11 +54,7 @@ fn signal_group(
     signal: &str,
     deliver: impl FnOnce(Pid, Option<Signal>) -> rustix::io::Result<()>,
 ) -> io::Result<bool> {
-    assert!(
-        group > 1,
-        "refusing to signal process group {group}: kill(-1) signals every process the user owns"
-    );
-    send(group, signal, deliver)
+    send(checked(group, "process group")?, signal, deliver)
 }
 
 /// [`kill_pid`] with the kernel call injected: the refusal of a pid of 1 or
@@ -68,25 +64,32 @@ fn signal_pid(
     signal: &str,
     deliver: impl FnOnce(Pid, Option<Signal>) -> rustix::io::Result<()>,
 ) -> io::Result<bool> {
-    assert!(
-        pid > 1,
-        "refusing to signal pid {pid}: kill -- 0 signals the caller's own process group"
-    );
-    send(pid, signal, deliver)
+    send(checked(pid, "pid")?, signal, deliver)
 }
 
-/// Reads `signal`'s name and `id`, then delivers; `None` is the probe `0`.
-/// Called only after a refusal of an id of 1 or less.
+/// The pid `id` names for `kind` (`"pid"` or `"process group"`): panics
+/// when `id` is 1 or less, before anything runs, since the signal would
+/// reach processes the test does not own. An id past the pid range is an
+/// `InvalidInput` error that sends nothing.
+pub(crate) fn checked(id: u32, kind: &str) -> io::Result<Pid> {
+    assert!(
+        id > 1,
+        "refusing to signal {kind} {id}: an id of 1 or less reaches processes the test does not own"
+    );
+    i32::try_from(id)
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{id} is not a pid")))
+}
+
+/// Delivers `signal` to the checked `id`; `None` is the probe `0`.
+/// Called only after the refusal of an id of 1 or less.
 fn send(
-    id: u32,
+    id: Pid,
     signal: &str,
     deliver: impl FnOnce(Pid, Option<Signal>) -> rustix::io::Result<()>,
 ) -> io::Result<bool> {
     let signal = signal_named(signal)?;
-    let id = i32::try_from(id)
-        .ok()
-        .and_then(Pid::from_raw)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{id} is not a pid")))?;
     Ok(deliver(id, signal).is_ok())
 }
 
@@ -123,10 +126,7 @@ pub fn group_empties(group: u32, deadline: Duration) -> bool {
     let (stop, stopped) = mpsc::channel::<()>();
     thread::spawn(move || {
         while group_lives(group) {
-            if !matches!(
-                Deadline::after(Duration::from_millis(50)).recv(&stopped),
-                Err(mpsc::RecvTimeoutError::Timeout)
-            ) {
+            if stop_closed(&stopped) {
                 return;
             }
         }
@@ -251,12 +251,6 @@ pub fn matching(text: &str) -> io::Result<Vec<u32>> {
         .collect())
 }
 
-/// How long [`bounded`]'s worker waits between `try_wait` polls, on a
-/// channel that never sends, so the wait holds no lock. The lock is free
-/// between polls, so a timeout can always kill the child; the bound only
-/// delays reaping a child that already exited.
-const REAP_POLL: Duration = Duration::from_millis(10);
-
 /// What a bounded child left: its exit status and everything it wrote to
 /// stdout.
 type Finished = (ExitStatus, Vec<u8>);
@@ -292,9 +286,9 @@ fn bounded(mut child: Child, what: &str, deadline: Duration) -> io::Result<Finis
                     Ok(None) => {}
                     Err(err) => break Err(err),
                 }
-                match Deadline::after(REAP_POLL).recv(&tock) {
-                    Ok(()) | Err(_) => {}
-                }
+                // `tock` never carries a message: this is the shared pause
+                // between polls, holding no lock.
+                stop_closed(&tock);
             }
         });
         drop(tick);
@@ -341,49 +335,50 @@ pub fn kill_matching(text: &str) -> io::Result<()> {
 
 /// Whether `pid` exists: kill(pid, 0), starting no process. Panics when
 /// `pid` is 1 or less.
+#[allow(
+    clippy::expect_used,
+    reason = "a probe of an id past the pid range panics, like a refused id"
+)]
 fn alive(pid: u32) -> bool {
-    assert!(
-        pid > 1,
-        "refusing to probe pid {pid}: kill -- 0 signals the caller's own process group"
-    );
-    let raw = i32::try_from(pid).ok().and_then(Pid::from_raw);
-    assert!(raw.is_some(), "pid {pid} does not fit in an i32");
-    match raw {
-        Some(id) => rustix::process::test_kill_process(id).is_ok(),
-        None => false,
-    }
+    let id = checked(pid, "pid").expect("a pid past the pid range is never alive");
+    rustix::process::test_kill_process(id).is_ok()
 }
 
 /// Whether process group `group` has a member: kill(-group, 0), starting no
-/// process. Panics when `group` is 1 or less, with kill_group's message.
+/// process. Panics when `group` is 1 or less.
+#[allow(
+    clippy::expect_used,
+    reason = "a probe of an id past the pid range panics, like a refused id"
+)]
 fn group_lives(group: u32) -> bool {
-    assert!(
-        group > 1,
-        "refusing to signal process group {group}: kill(-1) signals every process the user owns"
-    );
-    let raw = i32::try_from(group).ok().and_then(Pid::from_raw);
-    assert!(
-        raw.is_some(),
-        "process group {group} does not fit in an i32"
-    );
-    match raw {
-        Some(id) => rustix::process::test_kill_process_group(id).is_ok(),
-        None => false,
-    }
+    let id = checked(group, "process group").expect("a group past the pid range is never live");
+    rustix::process::test_kill_process_group(id).is_ok()
 }
 
-/// The probe loop: true once every pid fails kill(pid, 0); false once
-/// `stop` disconnects.
-fn wait_exits(pids: &[u32], stop: &mpsc::Receiver<()>) -> bool {
+/// How long each liveness wait holds between probes: one bounded wait
+/// against its stop channel, so no wait spins.
+const POLL: Duration = Duration::from_millis(10);
+
+/// True once `stop` sent or disconnected: the one bounded wait every probe
+/// loop shares, holding no lock between probes.
+fn stop_closed(stop: &mpsc::Receiver<()>) -> bool {
+    !matches!(
+        Deadline::after(POLL).recv(stop),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    )
+}
+
+/// The probe loop: true once every pid fails the probe; false once `stop`
+/// disconnects. The first probe runs at once, the rest one shared poll
+/// interval apart, so the wait holds no core between them.
+fn wait_exits(pids: &[u32], stop: &mpsc::Receiver<()>, mut probe: impl FnMut(u32) -> bool) -> bool {
     loop {
-        if !pids.iter().any(|pid| alive(*pid)) {
+        if !pids.iter().any(|pid| probe(*pid)) {
             return true;
         }
-        match stop.try_recv() {
-            Err(mpsc::TryRecvError::Empty) => {}
-            Ok(()) | Err(mpsc::TryRecvError::Disconnected) => return false,
+        if stop_closed(stop) {
+            return false;
         }
-        thread::yield_now();
     }
 }
 
@@ -397,7 +392,7 @@ pub fn pids_exit(pids: &[u32], deadline: Duration) -> bool {
     let (done, finished) = mpsc::channel::<bool>();
     let (stop, stopped) = mpsc::channel::<()>();
     thread::spawn(move || {
-        let exited = wait_exits(&pids, &stopped);
+        let exited = wait_exits(&pids, &stopped, alive);
         match done.send(exited) {
             Ok(()) | Err(_) => {}
         }
@@ -517,7 +512,7 @@ fn listed_exit(
         };
         loop {
             publish(&published, &pids);
-            if !wait_exits(&pids, &stopped) {
+            if !wait_exits(&pids, &stopped, alive) {
                 match done.send(Err(expiry_error(&pids))) {
                     Ok(()) | Err(_) => {}
                 }

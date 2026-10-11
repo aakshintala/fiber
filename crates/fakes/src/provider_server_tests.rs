@@ -1,4 +1,4 @@
-use std::io::{Cursor, Read, Write};
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc;
 use std::thread;
@@ -10,58 +10,6 @@ use crate::deadline::Deadline;
 const READ_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
 
 const STATUS_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
-
-fn decode(bytes: &[u8]) -> (Result<(), Malformed>, Vec<u8>, String) {
-    let mut reader = Cursor::new(bytes.to_vec());
-    let mut body = Vec::new();
-    let result = read_chunked(&mut reader, &mut body);
-    let mut rest = String::new();
-    reader.read_to_string(&mut rest).unwrap();
-    (result, body, rest)
-}
-
-#[test]
-fn a_chunked_body_is_decoded_and_its_trailers_consumed() {
-    let (result, body, rest) =
-        decode(b"3\r\nabc\r\n2;ext=1\r\nde\r\n0\r\nx-trailer: t\r\n\r\nNEXT");
-
-    assert_eq!(result, Ok(()));
-    assert_eq!(body, b"abcde");
-    assert_eq!(rest, "NEXT");
-}
-
-#[test]
-fn malformed_or_truncated_chunked_framing_is_rejected_naming_why() {
-    let cases: [(&[u8], Malformed); 7] = [
-        (
-            b"3\r\nabcX\r\n0\r\n\r\n",
-            "a chunk's data is not followed by CRLF",
-        ),
-        (
-            b"zz\r\nabc\r\n0\r\n\r\n",
-            "a chunk size is not a hex number",
-        ),
-        (
-            b"3\nabc\r\n0\r\n\r\n",
-            "a chunked framing line does not end in CRLF",
-        ),
-        (b"5\r\nab", TRUNCATED),
-        (b"3\r\nabc\r\n", TRUNCATED),
-        (b"3\r\nabc\r\n0\r\n", TRUNCATED),
-        (b"3\r\nabc\r\n0\r\n\r", TRUNCATED),
-    ];
-    for (bytes, why) in cases {
-        let (result, _, _) = decode(bytes);
-        assert_eq!(result, Err(why), "{}", String::from_utf8_lossy(bytes));
-    }
-}
-
-#[test]
-fn a_rejected_body_keeps_what_decoded_before_the_fault() {
-    let (_, body, _) = decode(b"3\r\nabc\r\n4\r\nde");
-
-    assert_eq!(body, b"abcde");
-}
 
 #[test]
 fn a_dropped_connection_records_the_request_and_answers_nothing() {
@@ -256,17 +204,6 @@ fn get_status(server: &ProviderServer) -> String {
     text.split(' ').nth(1).unwrap().to_owned()
 }
 
-#[test]
-fn a_request_past_the_script_gets_the_fallback_or_the_default_500() {
-    let with = ProviderServer::start_with_fallback([], Response::status(503, "")).unwrap();
-    assert_eq!(get_status(&with), "503");
-    assert_eq!(get_status(&with), "503");
-
-    let without = ProviderServer::start([Response::status(200, "")]).unwrap();
-    assert_eq!(get_status(&without), "200");
-    assert_eq!(get_status(&without), "500");
-}
-
 fn get_status_of(server: &ProviderServer, target: &str) -> String {
     let mut stream = TcpStream::connect(server.addr).unwrap();
     stream.set_read_timeout(Some(STATUS_WITHIN)).unwrap();
@@ -331,6 +268,7 @@ fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
         .unwrap_or_else(|e| panic!("the stall's status line arrives within {READ_WITHIN:?}: {e}"));
     assert!(status.starts_with("HTTP/1.1 200"), "{status}");
     let mut content_length = String::new();
+    let mut content_lengths = 0;
     let mut content_type = String::new();
     loop {
         let mut line = String::new();
@@ -343,12 +281,19 @@ fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
         }
         let (name, value) = line.split_once(':').unwrap();
         match name.trim().to_ascii_lowercase().as_str() {
-            "content-length" => content_length = value.trim().to_owned(),
+            "content-length" => {
+                content_length = value.trim().to_owned();
+                content_lengths += 1;
+            }
             "content-type" => content_type = value.trim().to_owned(),
             _ => {}
         }
     }
     assert_eq!(content_length, "100");
+    assert_eq!(
+        content_lengths, 1,
+        "the stall's head carries its one scripted content-length"
+    );
     assert_eq!(content_type, "text/plain");
     let mut prefix = vec![0u8; 7];
     reader
@@ -399,13 +344,8 @@ fn a_scripted_content_length_past_the_body_without_stall_is_sent_and_closed() {
     assert!(text.ends_with("ok"), "{text}");
     assert!(!server.await_partial(1, Duration::from_millis(200)));
     assert!(!server.await_closed(1, Duration::from_millis(200)));
-}
-
-#[test]
-fn fewer_than_ends_exactly_at_the_count() {
-    assert!(fewer_than(0, 1));
-    assert!(!fewer_than(1, 1));
-    assert!(!fewer_than(2, 1));
+    // Past the count the wait is already over, as at it.
+    assert!(server.await_closed(0, READ_WITHIN), "zero closes needed");
 }
 
 #[test]
@@ -440,6 +380,8 @@ fn await_partial_needs_every_counted_partial() {
         server.await_partial(1, READ_WITHIN),
         "the one partial arrived"
     );
+    // Past the count the wait is already over, as at it.
+    assert!(server.await_partial(0, READ_WITHIN), "zero partials needed");
     assert!(
         !server.await_partial(2, Duration::from_millis(200)),
         "no second partial is coming"
@@ -450,6 +392,89 @@ fn await_partial_needs_every_counted_partial() {
         server.await_closed(1, READ_WITHIN),
         "the client close ends the stall"
     );
+}
+
+/// Sends a GET, reads the head and the 7-byte prefix of a stall, and returns
+/// both halves of the connection still open: the client is blocked mid-body.
+fn stalled_client(addr: SocketAddr) -> (TcpStream, std::io::BufReader<TcpStream>) {
+    use std::io::BufRead;
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream.set_read_timeout(Some(READ_WITHIN)).unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .unwrap_or_else(|e| panic!("the head line arrives within {READ_WITHIN:?}: {e}"));
+        if line.trim_end_matches(['\r', '\n']).is_empty() {
+            break;
+        }
+    }
+    let mut prefix = vec![0u8; 7];
+    reader
+        .read_exact(&mut prefix)
+        .unwrap_or_else(|e| panic!("the stall's body prefix arrives within {READ_WITHIN:?}: {e}"));
+    (stream, reader)
+}
+
+/// How long an already-satisfied wait may take to answer: it returns at
+/// once, so this bound fails a mutant that waits out its `within` before
+/// the mutation run's own per-test timeout does.
+const SATISFIED_WITHIN: Duration = Duration::from_secs(5);
+
+/// Runs one wait on its own thread and receives its answer within
+/// `SATISFIED_WITHIN`, so a wait that never ends fails the test instead of
+/// hanging it.
+fn answered_within(
+    server: &Arc<ProviderServer>,
+    wait: impl FnOnce(&ProviderServer) -> bool + Send + 'static,
+) -> bool {
+    let (tx, rx) = mpsc::channel();
+    let server = Arc::clone(server);
+    thread::spawn(move || tx.send(wait(&server)).unwrap());
+    Deadline::after(SATISFIED_WITHIN)
+        .recv(&rx)
+        .unwrap_or_else(|_| panic!("the wait returns within {SATISFIED_WITHIN:?}"))
+}
+
+#[test]
+fn waits_count_stalls_already_past_their_event() {
+    // Every wait starts after its events have happened, so each answer is
+    // decided by its count and comparison alone, never by thread timing.
+    let event_within = Duration::from_secs(30);
+    let server = Arc::new(
+        ProviderServer::start([
+            Response::stall(200, b"partial".to_vec(), 100),
+            Response::stall(200, b"partial".to_vec(), 100),
+        ])
+        .unwrap(),
+    );
+
+    let (first_stream, first_reader) = stalled_client(server.addr);
+    assert!(server.await_partial(1, READ_WITHIN), "one partial arrived");
+    assert!(answered_within(&server, move |s| s.await_partial(1, event_within)));
+
+    let (second_stream, second_reader) = stalled_client(server.addr);
+    assert!(server.await_partial(2, READ_WITHIN), "two partials arrived");
+    assert!(answered_within(&server, move |s| s.await_partial(1, event_within)));
+    assert!(answered_within(&server, move |s| s.await_partial(2, event_within)));
+    assert!(
+        !server.await_partial(3, Duration::from_millis(50)),
+        "no third partial is coming"
+    );
+
+    drop(first_reader);
+    drop(first_stream);
+    assert!(server.await_closed(1, READ_WITHIN), "one client closed");
+    assert!(answered_within(&server, move |s| s.await_closed(1, event_within)));
+
+    drop(second_reader);
+    drop(second_stream);
+    assert!(server.await_closed(2, READ_WITHIN), "both clients closed");
+    assert!(answered_within(&server, move |s| s.await_closed(2, event_within)));
 }
 
 /// A thread that finishes only once the returned sender drops.
@@ -498,60 +523,6 @@ fn stop_joins_an_accept_thread_that_sees_stopping() {
         joined,
         "waited {STATUS_WITHIN:?} for the accept thread to stop"
     );
-}
-
-fn recorded(limit: Option<usize>, count: usize) -> Vec<Request> {
-    let mut state = State {
-        body_limit: limit,
-        ..State::default()
-    };
-    for n in 0..count {
-        let body = format!("body-{n}").into_bytes();
-        state.record(Request {
-            method: "POST".to_owned(),
-            path: "/".to_owned(),
-            headers: Vec::new(),
-            body_len: body.len(),
-            body,
-        });
-    }
-    state.requests
-}
-
-#[test]
-fn by_default_the_newest_64_bodies_are_kept() {
-    let requests = recorded(State::default().body_limit, 65);
-
-    assert!(requests[0].body.is_empty());
-    assert_eq!(requests[0].body_len, 6);
-    assert_eq!(requests[1].body, b"body-1");
-    assert_eq!(requests[64].body, b"body-64");
-}
-
-#[test]
-fn a_limit_of_zero_keeps_no_bodies() {
-    let requests = recorded(Some(0), 2);
-
-    assert!(
-        requests
-            .iter()
-            .all(|r| r.body.is_empty() && r.body_len == 6)
-    );
-}
-
-#[test]
-fn a_limit_past_the_request_count_drops_nothing_and_cannot_overflow() {
-    let requests = recorded(Some(usize::MAX), 3);
-
-    assert_eq!(requests[0].body, b"body-0");
-}
-
-#[test]
-fn no_limit_keeps_every_body() {
-    let requests = recorded(None, 70);
-
-    assert_eq!(requests[0].body, b"body-0");
-    assert_eq!(requests[69].body, b"body-69");
 }
 
 /// Posts `body` and reads the whole response.

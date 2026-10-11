@@ -130,9 +130,7 @@ pub struct Request {
     /// Headers in the order received, names lowercased, credential values
     /// replaced by their fingerprints.
     pub headers: Vec<(String, String)>,
-    /// The body bytes, as received. Empty once the request is older than the
-    /// server's body limit ([`ProviderServer::keep_last_bodies`]); `body_len`
-    /// still gives its size.
+    /// The body bytes, as received.
     pub body: Vec<u8>,
     /// The size of the body as received, in bytes.
     pub body_len: usize,
@@ -148,10 +146,6 @@ impl Request {
     }
 }
 
-/// How many of the newest requests keep their bodies unless a test asks for
-/// more.
-const DEFAULT_BODY_LIMIT: usize = 64;
-
 /// How long [`ProviderServer::hold`] keeps a response for its release: the
 /// whole test budget, so a test's own deadline (`WAITS` inside `BUDGET`)
 /// fails it before the fake answers a 500 the test never asked for.
@@ -159,7 +153,7 @@ const HELD_LIMIT: Duration = crate::deadline::BUDGET;
 
 /// Answers one request from its content: the recorded request, so an answer
 /// can depend on the request's body or on an earlier request's.
-pub type Responder = std::sync::Arc<dyn Fn(&Request) -> Response + Send + Sync>;
+type Responder = std::sync::Arc<dyn Fn(&Request) -> Response + Send + Sync>;
 
 struct State {
     script: VecDeque<Response>,
@@ -171,8 +165,6 @@ struct State {
     /// The response of every request past the script.
     fallback: Option<Response>,
     requests: Vec<Request>,
-    /// How many of the newest requests keep their bodies; `None` keeps all.
-    body_limit: Option<usize>,
     stopping: bool,
     /// When set, a recorded request is not answered until [`ProviderServer::release`].
     hold: bool,
@@ -196,7 +188,6 @@ impl Default for State {
             responder: None,
             fallback: None,
             requests: Vec::new(),
-            body_limit: Some(DEFAULT_BODY_LIMIT),
             stopping: false,
             hold: false,
             hold_from: 1,
@@ -204,24 +195,6 @@ impl Default for State {
             permits: 0,
             partial: 0,
             closed: 0,
-        }
-    }
-}
-
-impl State {
-    /// Records `request`, then drops the body of the one request that has
-    /// just fallen out of the body limit.
-    fn record(&mut self, request: Request) {
-        self.requests.push(request);
-        if let Some(limit) = self.body_limit
-            && let Some(old) = self
-                .requests
-                .len()
-                .checked_sub(limit)
-                .and_then(|n| n.checked_sub(1))
-            && let Some(request) = self.requests.get_mut(old)
-        {
-            request.body = Vec::new();
         }
     }
 }
@@ -249,24 +222,10 @@ impl ProviderServer {
         script: impl IntoIterator<Item = Response>,
         fallback: Response,
     ) -> io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let addr = listener.local_addr()?;
-        let state = Arc::new(Mutex::new(State {
+        Self::start_with(State {
             script: script.into_iter().collect(),
             fallback: Some(fallback),
             ..State::default()
-        }));
-        let arrived = Arc::new(Condvar::new());
-        let shared = Arc::clone(&state);
-        let wake = Arc::clone(&arrived);
-        let accept = thread::Builder::new()
-            .name("fake-provider".to_owned())
-            .spawn(move || accept_loop(&listener, &shared, &wake))?;
-        Ok(Self {
-            addr,
-            state,
-            arrived,
-            accept: Some(accept),
         })
     }
 
@@ -296,12 +255,19 @@ impl ProviderServer {
     pub fn start_responding(
         responder: impl Fn(&Request) -> Response + Send + Sync + 'static,
     ) -> io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let addr = listener.local_addr()?;
-        let state = Arc::new(Mutex::new(State {
+        Self::start_with(State {
             responder: Some(Arc::new(responder)),
             ..State::default()
-        }));
+        })
+    }
+
+    /// Listens on a free port on 127.0.0.1 with `state` and serves it: the
+    /// one start path behind every constructor. The port accepts
+    /// connections when this returns.
+    fn start_with(state: State) -> io::Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
+        let state = Arc::new(Mutex::new(state));
         let arrived = Arc::new(Condvar::new());
         let shared = Arc::clone(&state);
         let wake = Arc::clone(&arrived);
@@ -320,23 +286,6 @@ impl ProviderServer {
     /// definition's base URL.
     pub fn url(&self) -> String {
         format!("http://{}", self.addr)
-    }
-
-    /// Keeps full bodies for only the newest `limit` requests (64 by
-    /// default); older requests keep their metadata and `body_len`. Call it
-    /// before the first request arrives.
-    #[must_use]
-    pub fn keep_last_bodies(self, limit: usize) -> Self {
-        lock(&self.state).body_limit = Some(limit);
-        self
-    }
-
-    /// Keeps every request's full body, for a test that reads back more than
-    /// the default limit.
-    #[must_use]
-    pub fn keep_all_bodies(self) -> Self {
-        lock(&self.state).body_limit = None;
-        self
     }
 
     /// Every request received so far, in arrival order. A request is
@@ -403,7 +352,7 @@ impl ProviderServer {
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived
-            .wait_timeout_while(guard, within, |state| fewer_than(state.partial, count))
+            .wait_timeout_while(guard, within, |state| state.partial < count)
             .unwrap_or_else(PoisonError::into_inner);
         guard.partial >= count
     }
@@ -415,7 +364,7 @@ impl ProviderServer {
         let guard = lock(&self.state);
         let (guard, _) = self
             .arrived
-            .wait_timeout_while(guard, within, |state| fewer_than(state.closed, count))
+            .wait_timeout_while(guard, within, |state| state.closed < count)
             .unwrap_or_else(PoisonError::into_inner);
         guard.closed >= count
     }
@@ -456,13 +405,6 @@ fn stop(addr: SocketAddr, accept: JoinHandle<()>, deadline: Duration) -> bool {
         }
     });
     Deadline::after(deadline).recv(&joined).is_ok()
-}
-
-/// Whether `have` arrivals are still fewer than the `count` waited for.
-/// The boundary is exact: below the count the wait continues, at it the
-/// wait is already over, so `==`, `>` and `<=` here each read differently.
-fn fewer_than(have: usize, count: usize) -> bool {
-    have < count
 }
 
 /// A lock that outlives a panicked holder: the state is plain data, and a
@@ -506,7 +448,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
     let answered = request.clone();
     let response = {
         let mut state = lock(state);
-        state.record(request);
+        state.requests.push(request);
         arrived.notify_all();
         // A malformed body is the client's bug: it gets a 400 and the script
         // keeps its next response.
@@ -711,17 +653,25 @@ fn fingerprint_query(target: &str) -> String {
 }
 
 fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()> {
+    stream.write_all(head(response, true).as_bytes())?;
+    stream.write_all(&response.body)?;
+    stream.flush()
+}
+
+/// The response head: the status line, the scripted headers, the body's
+/// measured length when `with_length`, and `connection: close`. A stalled
+/// response carries its scripted `content-length` instead, since its body
+/// is only a prefix of what it declares.
+fn head(response: &Response, with_length: bool) -> String {
     let mut head = format!("HTTP/1.1 {} Fake\r\n", response.status);
     for (name, value) in &response.headers {
         head.push_str(&format!("{name}: {value}\r\n"));
     }
-    head.push_str(&format!(
-        "content-length: {}\r\nconnection: close\r\n\r\n",
-        response.body.len()
-    ));
-    stream.write_all(head.as_bytes())?;
-    stream.write_all(&response.body)?;
-    stream.flush()
+    if with_length {
+        head.push_str(&format!("content-length: {}\r\n", response.body.len()));
+    }
+    head.push_str("connection: close\r\n\r\n");
+    head
 }
 
 /// Sends the head with its declared `content-length` and the prefix it
@@ -734,12 +684,7 @@ fn write_stall(
     state: &Mutex<State>,
     arrived: &Condvar,
 ) -> io::Result<()> {
-    let mut head = format!("HTTP/1.1 {} Fake\r\n", response.status);
-    for (name, value) in &response.headers {
-        head.push_str(&format!("{name}: {value}\r\n"));
-    }
-    head.push_str("connection: close\r\n\r\n");
-    stream.write_all(head.as_bytes())?;
+    stream.write_all(head(response, false).as_bytes())?;
     stream.write_all(&response.body)?;
     stream.flush()?;
     {

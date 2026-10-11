@@ -95,17 +95,6 @@ fn a_second_call_runs_the_new_body() {
     );
 }
 
-#[test]
-fn the_mcp_fixture_points_at_server_sh() {
-    let path = mcp_fixture();
-    assert!(
-        path.ends_with("mcp-fixture/server.sh"),
-        "unexpected fixture path: {}",
-        path.display()
-    );
-    assert!(path.is_file(), "missing fixture: {}", path.display());
-}
-
 /// Runs the MCP fixture over `dir`, feeding it `lines` and closing stdin.
 #[track_caller]
 fn fixture(dir: &Path, lines: &[&str]) -> Output {

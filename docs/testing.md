@@ -247,7 +247,7 @@ is a real child session process, because it is Fiber. The fakes are:
 - a local OAuth token endpoint
 - a refused address, loopback port 1: a connect is reset, and a bind of port 0
   never draws it, so no concurrent listener can take it
-- a second client on a session's socket, including a slow watcher
+- a second client on a session's socket
 - a fake clock, whose time moves only when the test advances it;
   `advance_marked` marks each thread's latest park, so `await_parked_since`
   waits for that thread's next park after the advance even when an event

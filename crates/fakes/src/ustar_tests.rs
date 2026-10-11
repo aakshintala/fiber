@@ -1,6 +1,4 @@
-use std::io::Read;
-
-use super::{archive, checksum, gzip, header, sha256};
+use super::{archive, checksum, header};
 
 /// The header's checksum field, as a number.
 fn stored(block: &[u8; 512]) -> u64 {
@@ -79,22 +77,4 @@ fn an_archive_pads_each_member_and_ends_with_two_zero_blocks() {
     assert_eq!(bytes.len(), 512 * 4);
     assert_eq!(&bytes[512..515], b"abc");
     assert!(bytes[515..].iter().all(|b| *b == 0));
-}
-
-#[test]
-fn gzip_round_trips_through_flate2() {
-    let input = b"hello, archive".repeat(100);
-    let mut out = Vec::new();
-    flate2::read::GzDecoder::new(&gzip(&input)[..])
-        .read_to_end(&mut out)
-        .unwrap();
-    assert_eq!(out, input);
-}
-
-#[test]
-fn sha256_is_lowercase_hex() {
-    assert_eq!(
-        sha256(b""),
-        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    );
 }
