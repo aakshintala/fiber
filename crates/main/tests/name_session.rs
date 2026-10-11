@@ -14,15 +14,19 @@
 mod support;
 
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::sync::Arc;
+use std::process::Child;
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 
 use contract::SessionId;
 use contract::events::{Event, NamedBy, SessionNamed};
-use fakes::ProviderServer;
+use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Setup, SystemClock, function_call, hello, is_status, read_kinds, run_to_exit, stream,
+    Deadline, Setup, Socket, SystemClock, answered, expired, function_call, group_alive, hello,
+    is_status, read_kinds, run_to_exit, stream, until,
 };
 
 /// A finished `function_call` for `name_session` with `arguments`.
@@ -434,4 +438,301 @@ fn a_person_name_pins_the_session_after_a_resume() {
         .next_back()
         .expect("a session_status line");
     assert_eq!(status["payload"]["name"], "Mine");
+}
+
+/// `fiber ask` with its stdout kept drained and its stderr kept for a failure
+/// (as in `tests/tools_tokens.rs`: the held provider parks the loop, so the
+/// test drives the session through its socket while it runs).
+struct Running {
+    child: Child,
+    watchdog: Watchdog,
+    group: u32,
+    stdout: mpsc::Receiver<String>,
+    stderr: Arc<Mutex<String>>,
+    deadline: Deadline,
+}
+
+#[track_caller]
+fn start(setup: &Setup, args: &[&str]) -> Running {
+    let mut command = setup.fiber(args);
+    command.current_dir(setup.workspace());
+    let mut child = command.spawn().unwrap();
+    let group = child.id();
+    let watchdog = Watchdog::group(group);
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let stderr_text = Arc::new(Mutex::new(String::new()));
+    let stderr_copy = Arc::clone(&stderr_text);
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut buf = String::new();
+        match std::io::Read::read_to_string(&mut reader, &mut buf) {
+            Ok(_) | Err(_) => {}
+        }
+        *stderr_copy.lock().unwrap() = buf;
+    });
+    let (tx, stdout_rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match tx.send(line.unwrap()) {
+                Ok(()) => {}
+                Err(mpsc::SendError(_)) => break,
+            }
+        }
+    });
+    Running {
+        child,
+        watchdog,
+        group,
+        stdout: stdout_rx,
+        stderr: stderr_text,
+        deadline: setup.deadline,
+    }
+}
+
+#[track_caller]
+fn finish(running: Running) {
+    let Running {
+        mut child,
+        watchdog,
+        group,
+        stdout,
+        stderr,
+        deadline,
+    } = running;
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    let status = match deadline.recv(&finished) {
+        Ok(status) => status.unwrap(),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            expired(deadline, group, &finished, "fiber to exit")
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("fiber's wait thread ended before fiber exited")
+        }
+    };
+    assert!(status.success(), "stderr: {}", stderr.lock().unwrap());
+    assert!(
+        !group_alive(deadline, group),
+        "fiber left a process in its group"
+    );
+    drop(stdout);
+    watchdog.stand_down(deadline.cleanup());
+}
+
+#[test]
+fn the_person_name_pins_refuses_the_model_and_clears() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        stream(&[name_call("c1", &json!({"name": "first"}))]),
+        stream(&[name_call("c2", &json!({"name": "Theirs"}))]),
+        stream(&[name_call("c3", &json!({"name": "Again"}))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    server.hold();
+    let running = start(&setup, &["ask", "go"]);
+    // The first stdout line names the session. It is read as raw text: the
+    // byte-for-byte check below needs every durable line's exact bytes, and
+    // parsing the first line away would lose them.
+    let first_raw: String = setup
+        .deadline
+        .recv(&running.stdout)
+        .expect("waited until the deadline for fiber_started");
+    let started: Value = serde_json::from_str(&first_raw).unwrap();
+    let id = started["session_id"].as_str().unwrap().to_owned();
+    assert!(
+        server.await_requests(1, setup.deadline.left()),
+        "the held response was requested"
+    );
+
+    let client = Socket::connect(setup.deadline, &setup.session_socket(&id));
+    client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
+    let subscribed = until(&client, "the subscribe acknowledgement", |line| {
+        line["payload"]["command_id"] == "c_sub"
+    });
+    assert_eq!(
+        answered(&subscribed, "c_sub")["kind"],
+        "command_accepted",
+        "{subscribed:?}"
+    );
+
+    // The reader hands a line to the inbox before it reads the next, so the
+    // `tools` probe's answer proves the `name` is queued; a send alone
+    // proves only that the bytes were written. The name is taken at step 2's
+    // drain, after `c1` completed.
+    client.send(r#"{"id":"c_pin","command":"name","args":{"text":"Mine"}}"#);
+    client.send(r#"{"id":"c_q1","command":"tools"}"#);
+    let queued = until(&client, "the answer to c_q1", |line| {
+        line["payload"]["command_id"] == "c_q1"
+    });
+    assert_eq!(
+        answered(&queued, "c_q1")["kind"],
+        "command_accepted",
+        "{queued:?}"
+    );
+    server.release_one();
+    let pinned = until(&client, "the answer to c_pin", |line| {
+        line["payload"]["command_id"] == "c_pin"
+    });
+    assert_eq!(
+        answered(&pinned, "c_pin")["kind"],
+        "command_accepted",
+        "{pinned:?}"
+    );
+    assert!(
+        server.await_requests(2, setup.deadline.left()),
+        "the pinned call sent a second request"
+    );
+
+    client.send(r#"{"id":"c_clear","command":"name","args":{"text":""}}"#);
+    client.send(r#"{"id":"c_q2","command":"tools"}"#);
+    let queued = until(&client, "the answer to c_q2", |line| {
+        line["payload"]["command_id"] == "c_q2"
+    });
+    assert_eq!(
+        answered(&queued, "c_q2")["kind"],
+        "command_accepted",
+        "{queued:?}"
+    );
+    server.release_one();
+    let cleared = until(&client, "the answer to c_clear", |line| {
+        line["payload"]["command_id"] == "c_clear"
+    });
+    assert_eq!(
+        answered(&cleared, "c_clear")["kind"],
+        "command_accepted",
+        "{cleared:?}"
+    );
+    assert!(
+        server.await_requests(3, setup.deadline.left()),
+        "the unpinned call sent a third request"
+    );
+
+    server.release();
+    until(&client, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    });
+
+    // Stdout's lines, in order: the first line read above, then every line
+    // through `fiber_exited`, each under the test's deadline.
+    let mut raw = vec![first_raw];
+    loop {
+        let line: String = setup
+            .deadline
+            .recv(&running.stdout)
+            .expect("waited until the deadline for fiber_exited");
+        let parsed: Value = serde_json::from_str(&line).unwrap();
+        let done = parsed["kind"] == "fiber_exited";
+        raw.push(line);
+        if done {
+            break;
+        }
+    }
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    finish(running);
+
+    // The complete, ordered kinds, with `session_status` and `clients` set
+    // aside: only the subscribe's attach writes `clients`.
+    let kinds: Vec<&str> = lines
+        .iter()
+        .filter(|line| line["kind"] != "session_status" && line["kind"] != "clients")
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "session_named",
+            "tool_call_completed",
+            "step_started",
+            "session_named",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "session_named",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "session_named",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let clients: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "clients")
+        .collect();
+    assert_eq!(clients.len(), 1, "{lines:?}");
+    assert_eq!(clients[0]["payload"]["count"], 1);
+
+    // The four `session_named` payloads, in order; the person's lines are
+    // about the session, not a turn, so they carry no `turn_id`.
+    let log = read_lines(&session_dir(&setup, &id).join("events.jsonl"));
+    let named: Vec<&Value> = log
+        .iter()
+        .filter(|l| l["kind"] == "session_named")
+        .collect();
+    assert_eq!(named.len(), 4, "{log:?}");
+    assert_eq!(named[0]["payload"], json!({"name": "first", "by": "model"}));
+    assert_eq!(named[1]["payload"], json!({"name": "Mine", "by": "person"}));
+    assert_eq!(named[2]["payload"], json!({"name": null, "by": "person"}));
+    assert_eq!(named[3]["payload"], json!({"name": "Again", "by": "model"}));
+    assert!(named[1].get("turn_id").is_none(), "{}", named[1]);
+    assert!(named[2].get("turn_id").is_none(), "{}", named[2]);
+    assert!(named[1].get("action_id").is_none(), "{}", named[1]);
+    assert!(named[2].get("action_id").is_none(), "{}", named[2]);
+
+    // The pinned call fails `name_pinned`; the call after the clear completes.
+    let completed: Vec<&Value> = log
+        .iter()
+        .filter(|l| l["kind"] == "tool_call_completed")
+        .collect();
+    assert_eq!(completed.len(), 3, "{log:?}");
+    assert_eq!(completed[1]["payload"]["status"], "failed");
+    assert_eq!(completed[1]["payload"]["error"]["code"], "name_pinned");
+    assert_eq!(
+        completed[1]["payload"]["error"]["message"],
+        "the person named this session"
+    );
+    assert_eq!(completed[2]["payload"]["status"], "completed");
+
+    // Stdout's durable lines are the log, byte for byte.
+    let stdout_durable: String = raw
+        .iter()
+        .zip(lines.iter())
+        .filter(|(_, line)| line.get("seq").is_some())
+        .map(|(line, _)| format!("{line}\n"))
+        .collect();
+    let log_text = fs::read_to_string(session_dir(&setup, &id).join("events.jsonl")).unwrap();
+    assert_eq!(stdout_durable, log_text);
 }
