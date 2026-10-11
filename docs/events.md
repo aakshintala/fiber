@@ -1419,6 +1419,7 @@ earlier point. A person starts one from the terminal, a driver with the
   (`docs/invocation.md`). The client lists them from the log before it sends
   the command, so no interaction is raised. Stopping is the normal job stop. An adopted job's later `job_line` and
   `job_completed` go to the new session's log.
+- **It keeps the name.** The new session's first lines after `session_started` include the parent's latest `session_named`, unchanged, when there is one. A fork does not.
 - **It never starts a turn.** The new session waits for a prompt, whichever
   point it continues from, including one just after the person's input or
   after a step.

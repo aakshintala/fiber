@@ -1302,6 +1302,7 @@ fn start_rewound(
             },
             note,
             worktree: None,
+            name: r#loop::latest_name(&session.dir),
         },
     )
     .unwrap()

@@ -61,6 +61,8 @@ pub(crate) fn session_rewound(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let worktree = forked.worktree.clone();
+    // The name is the rewound session's, not the point's session's.
+    let name = r#loop::latest_name(&old_dir);
     match super::session_command::run_new(
         new,
         Vec::new(),
@@ -77,6 +79,7 @@ pub(crate) fn session_rewound(
             from: point,
             note,
             worktree,
+            name,
         }),
     ) {
         Ok(code) => code,
