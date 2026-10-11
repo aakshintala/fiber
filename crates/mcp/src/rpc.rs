@@ -25,6 +25,8 @@ pub(crate) enum Outcome {
         /// The JSON-RPC error message.
         message: String,
     },
+    /// The HTTP exchange ended without a JSON-RPC answer; Fiber's sentence.
+    Http(String),
 }
 
 /// A request from the server: `ping`, answered with `{}`, or any other

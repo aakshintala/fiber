@@ -80,6 +80,25 @@ fn serve_in(
     mode: Mode,
     configure: impl FnOnce() -> Result<Duration, Failure> + Send + 'static,
 ) -> Result<i32, StartError> {
+    serve_in_env(
+        home,
+        mode,
+        configure,
+        crate::Environments::ready(crate::Environment {
+            vars: Vec::new(),
+            source: contract::events::VariablesSource::Inherited,
+        }),
+    )
+}
+
+/// [`serve_in`] with the hub's shared environment.
+#[track_caller]
+fn serve_in_env(
+    home: &Path,
+    mode: Mode,
+    configure: impl FnOnce() -> Result<Duration, Failure> + Send + 'static,
+    environments: Arc<crate::Environments>,
+) -> Result<i32, StartError> {
     let home = home.to_path_buf();
     let (done_tx, done_rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -97,6 +116,7 @@ fn serve_in(
             "0.0.0",
             starter,
             fakes::clock::FakeClock::new(),
+            environments,
         );
         done_tx.send(result).unwrap_or(());
     });
@@ -121,6 +141,10 @@ fn serve_in_with(home: &Path, mode: Mode, settings: crate::Settings) -> Result<i
             "0.0.0",
             starter,
             fakes::clock::FakeClock::new(),
+            crate::Environments::ready(crate::Environment {
+                vars: Vec::new(),
+                source: contract::events::VariablesSource::Inherited,
+            }),
         );
         done_tx.send(result).unwrap_or(());
     });
@@ -336,4 +360,71 @@ fn an_installed_hub_with_another_process_on_the_socket_is_io_failed_and_logged()
         "the other process's socket stays"
     );
     drop(live);
+}
+
+#[test]
+fn serve_captures_first_then_reports_the_fallback() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let origin = clock.origin();
+    let idle = Duration::from_secs(1);
+    // No `SHELL`: the first capture falls back to the inherited
+    // environment.
+    let inherited = vec![
+        ("HOME".into(), temp.dir.as_os_str().to_owned()),
+        ("USER".into(), std::ffi::OsString::from("fiber-test")),
+    ];
+    let environments = crate::Environments::new(inherited, &temp.dir);
+    let home = temp.dir.clone();
+    let clock_serve = Arc::clone(&clock);
+    let (done_tx, done_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let starter = Arc::new(FakeStarter::hang(&home));
+        let result = serve(
+            &home,
+            Mode::OnDemand,
+            || {
+                Ok(crate::Settings {
+                    idle_exit: idle,
+                    level: log::diag::Level::Info,
+                    port: None,
+                })
+            },
+            "0.0.0",
+            starter,
+            clock_serve,
+            environments,
+        );
+        done_tx.send(result).unwrap_or(());
+    });
+    // The idle wait parks past the capture: only after the first capture
+    // publishes does the test end the hub.
+    crate::testkit::await_true("the first capture publishes", {
+        let home = temp.dir.clone();
+        move || {
+            fs::read_to_string(home.join("logs").join("hub.log"))
+                .unwrap_or_default()
+                .contains("environment_built")
+        }
+    });
+    assert!(
+        clock.await_parked(origin + idle, WITHIN),
+        "the hub idles past the capture"
+    );
+    clock.advance(idle + Duration::from_secs(1));
+    let code = Deadline::after(WITHIN)
+        .recv(&done_rx)
+        .expect("the hub exits for idleness")
+        .expect("serve returns");
+    assert_eq!(code, 0);
+    let lines = log_lines(&temp.dir);
+    assert_eq!(lines.len(), 3, "{lines:?}");
+    assert_eq!(lines[0]["code"], "hub_started");
+    assert_eq!(lines[1]["level"], "warn");
+    assert_eq!(lines[1]["code"], "environment_built");
+    assert_eq!(
+        lines[1]["message"],
+        "The login-shell capture failed because SHELL is not set, so sessions start with the hub's inherited environment."
+    );
+    assert_eq!(lines[2]["code"], "hub_stopped");
 }

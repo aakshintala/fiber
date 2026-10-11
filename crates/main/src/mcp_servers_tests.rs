@@ -1,12 +1,22 @@
 //! Configuration to [`ServerSpec`], without starting a process: every
 //! server becomes a spec, a repository's stays out (the repository's offer
-//! names it), and a `url` server is skipped silently.
+//! names it), a `url` server becomes a remote spec, and an entry with
+//! both is never started.
 
 use std::time::Duration;
 
 use serde_json::json;
 
 use super::specs;
+
+/// The stdio half of `spec`: an exhaustive match, so a new transport
+/// breaks every site that assumes stdio.
+fn stdio(spec: &mcp::ServerSpec) -> &mcp::StdioSpec {
+    match &spec.transport {
+        mcp::Transport::Stdio(stdio) => stdio,
+        mcp::Transport::Http { .. } => panic!("a stdio-only test met a remote spec"),
+    }
+}
 
 struct Setup {
     rig: crate::test_support::Rig,
@@ -31,9 +41,15 @@ impl Setup {
         .unwrap();
     }
 
+    fn project(&self, value: &serde_json::Value) {
+        let dir = self.rig.home.join("projects").join("test");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.json"), value.to_string()).unwrap();
+    }
+
     fn specs(&self) -> super::Specs {
         let config = self.rig.config(Vec::<String>::new());
-        specs(&config)
+        specs(&config).expect("the specs read")
     }
 }
 
@@ -54,9 +70,9 @@ fn a_persons_server_becomes_a_spec_with_defaults() {
     assert_eq!(specs.specs.len(), 1);
     let spec = &specs.specs[0];
     assert_eq!(spec.name, "fx");
-    assert_eq!(spec.command, "/bin/bash");
-    assert!(spec.args.is_empty());
-    assert!(spec.env.is_empty());
+    assert_eq!(stdio(spec).command, "/bin/bash");
+    assert!(stdio(spec).args.is_empty());
+    assert!(stdio(spec).env.is_empty());
     assert_eq!(spec.startup_timeout, Duration::from_millis(5000));
     assert_eq!(spec.call_timeout, Duration::from_millis(600_000));
     assert_eq!(spec.enabled, None);
@@ -92,8 +108,8 @@ fn timeouts_lists_and_overrides_reach_the_spec() {
     let specs = setup.specs();
     assert_eq!(specs.specs.len(), 1);
     let spec = &specs.specs[0];
-    assert_eq!(spec.args, vec!["--version".to_owned()]);
-    assert_eq!(spec.env.get("FX").map(String::as_str), Some("1"));
+    assert_eq!(stdio(spec).args, vec!["--version".to_owned()]);
+    assert_eq!(stdio(spec).env.get("FX").map(String::as_str), Some("1"));
     assert_eq!(spec.startup_timeout, Duration::from_millis(1000));
     assert_eq!(spec.call_timeout, Duration::from_millis(2000));
     assert_eq!(spec.enabled, Some(vec!["echo".to_owned()]));
@@ -116,7 +132,7 @@ fn a_persons_empty_env_does_not_mask_a_repositorys_entry() {
         panic!("the server is the repository's");
     };
     assert_eq!(gated.spec.name, "fx");
-    assert_eq!(gated.spec.command, "/bin/bash");
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
     // Exactly the repository-supplied values: the person's command and
     // empty `env` are the person's own.
     assert_eq!(gated.fields.command, None);
@@ -148,6 +164,24 @@ fn a_repositorys_entry_wins_over_the_global_one() {
 }
 
 #[test]
+fn a_repository_declaration_gates_a_persons_command_without_command_provenance() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"required": true}}}}));
+    let specs = setup.specs();
+    assert!(
+        specs.specs.is_empty(),
+        "the declaration is not person-owned"
+    );
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the repository declaration gates the person's command");
+    };
+    assert_eq!(gated.spec.name, "fx");
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
+    assert_eq!(gated.fields.command, None, "command provenance is global");
+}
+
+#[test]
 fn a_repositorys_server_is_repository_code() {
     let setup = Setup::new();
     setup.repository(&json!({"mcp": {"servers": {"repo": {"command": "/bin/bash"}}}}));
@@ -158,8 +192,8 @@ fn a_repositorys_server_is_repository_code() {
         panic!("the server is the repository's");
     };
     assert_eq!(gated.spec.name, "repo");
-    assert_eq!(gated.spec.command, "/bin/bash");
-    assert!(gated.spec.run.is_none());
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
+    assert!(stdio(&gated.spec).run.is_none());
     assert_eq!(gated.fields.command, Some(json!("/bin/bash")));
     assert_eq!(gated.fields.args, None);
     assert!(gated.fields.env.is_empty());
@@ -177,10 +211,33 @@ fn a_persons_command_with_a_repositorys_args_is_repository_code() {
         panic!("the server is the repository's");
     };
     assert_eq!(gated.spec.name, "fx");
-    assert_eq!(gated.spec.args, vec!["evil.sh".to_owned()]);
+    assert_eq!(stdio(&gated.spec).args, vec!["evil.sh".to_owned()]);
     assert_eq!(gated.fields.command, None);
     assert_eq!(gated.fields.args, Some(json!(["evil.sh"])));
     assert!(gated.fields.env.is_empty());
+}
+
+#[test]
+fn a_persons_command_with_repository_args_stays_gated_after_declaration_removed() {
+    // With the declaration gone, args are the only effective program
+    // field supplied by the repository.
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"args": ["run.sh"]}}}}));
+    let config = setup.rig.config(Vec::<String>::new());
+    setup.repository(&json!({}));
+    let specs = specs(&config).expect("the specs read");
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's through args provenance alone");
+    };
+    assert_eq!(gated.spec.name, "fx");
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
+    assert_eq!(stdio(&gated.spec).args, vec!["run.sh".to_owned()]);
+    assert_eq!(gated.fields.command, None);
+    assert_eq!(gated.fields.args, Some(json!(["run.sh"])));
+    assert!(gated.fields.env.is_empty());
+    assert_eq!(gated.fields.url, None);
 }
 
 #[test]
@@ -196,21 +253,26 @@ fn a_repositorys_hints_never_reach_the_spec() {
 }
 
 #[test]
-fn a_declaration_removed_after_load_still_gates_through_command_provenance() {
+fn a_persons_command_overridden_by_repository_stays_gated_after_declaration_removed() {
     // The declaration is removed between `Config::load` and `specs`:
-    // the merged `command` still comes from the repository's layer, so
-    // the fail-closed provenance fallback keeps the server the
-    // repository's even though the declaration read no longer names it.
+    // only the effective command's repository provenance keeps the
+    // person's server behind approval.
     let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/sh"}}}}));
     setup.repository(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
     let config = setup.rig.config(Vec::<String>::new());
     setup.repository(&json!({}));
-    let specs = specs(&config);
+    let specs = specs(&config).expect("the specs read");
     assert!(specs.specs.is_empty());
     let [gated] = specs.repository.as_slice() else {
-        panic!("the server is the repository's through provenance alone");
+        panic!("the server is the repository's through command provenance alone");
     };
     assert_eq!(gated.spec.name, "fx");
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
+    assert_eq!(gated.fields.command, Some(json!("/bin/bash")));
+    assert_eq!(gated.fields.args, None);
+    assert!(gated.fields.env.is_empty());
+    assert_eq!(gated.fields.url, None);
 }
 
 #[test]
@@ -223,7 +285,7 @@ fn a_declaration_removed_after_load_still_gates_through_env_provenance() {
     setup.repository(&json!({"mcp": {"servers": {"fx": {"env": {"BASH_ENV": "/tmp/evil"}}}}}));
     let config = setup.rig.config(Vec::<String>::new());
     setup.repository(&json!({}));
-    let specs = specs(&config);
+    let specs = specs(&config).expect("the specs read");
     assert!(specs.specs.is_empty());
     let [gated] = specs.repository.as_slice() else {
         panic!("the server is the repository's through provenance alone");
@@ -254,12 +316,25 @@ fn program_fields_debug_prints_no_token_or_env_value() {
 }
 
 #[test]
-fn a_url_server_is_skipped_silently() {
+fn a_url_server_becomes_a_remote_spec() {
     let setup = Setup::new();
     setup.global(&json!({"mcp": {"servers": {"remote": {"url": "https://example.com/mcp"}}}}));
     let specs = setup.specs();
-    assert!(specs.specs.is_empty());
     assert!(specs.notices.is_empty());
+    let [spec] = specs.specs.as_slice() else {
+        panic!("one remote spec");
+    };
+    assert_eq!(spec.name, "remote");
+    let mcp::Transport::Http { url } = &spec.transport else {
+        panic!("a remote transport");
+    };
+    assert_eq!(url, "https://example.com/mcp");
+    assert_eq!(spec.startup_timeout, Duration::from_millis(5000));
+    assert_eq!(spec.call_timeout, Duration::from_millis(600_000));
+    assert_eq!(spec.enabled, None);
+    assert!(spec.disabled.is_empty());
+    assert!(spec.hints.is_empty());
+    assert!(!spec.required);
 }
 
 #[test]
@@ -436,12 +511,126 @@ fn repository_fields_hold_exactly_what_the_repository_supplied() {
     };
     // The merged spec carries both layers; the fields carry only the
     // repository's share.
-    assert_eq!(gated.spec.command, "/bin/bash");
-    assert_eq!(gated.spec.args, vec!["run.sh".to_owned()]);
+    assert_eq!(stdio(&gated.spec).command, "/bin/bash");
+    assert_eq!(stdio(&gated.spec).args, vec!["run.sh".to_owned()]);
     assert_eq!(gated.fields.command, None);
     assert_eq!(gated.fields.args, Some(json!(["run.sh"])));
     assert_eq!(
         gated.fields.env,
         std::collections::BTreeMap::from([("MODE".to_owned(), json!("fast"))])
     );
+}
+
+#[test]
+fn a_server_with_both_command_and_url_is_never_started_with_a_notice() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {
+        "command": "/bin/bash",
+        "url": "https://example.com/mcp",
+    }}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    assert!(specs.repository.is_empty());
+    let [notice] = specs.notices.as_slice() else {
+        panic!("exactly one notice");
+    };
+    assert_eq!(notice.code, contract::ErrorCode::ConfigInvalid);
+    assert_eq!(
+        notice.message,
+        "The MCP server `fx` declares both `command` and `url`, so Fiber starts neither. Keep the one you mean."
+    );
+}
+
+#[test]
+fn a_required_server_with_both_command_and_url_fails_the_session() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {
+        "command": "/bin/bash",
+        "url": "https://example.com/mcp",
+        "required": true,
+    }}}}));
+    let config = setup.rig.config(Vec::<String>::new());
+    let error = match specs(&config) {
+        Ok(_) => panic!("a required both-keys entry fails"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, contract::ErrorCode::ConfigInvalid);
+    assert_eq!(
+        error.message,
+        "The required MCP server `fx` declares both `command` and `url`, so Fiber cannot start it. Keep the one you mean."
+    );
+}
+
+#[test]
+fn command_and_url_from_different_layers_are_still_both() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash"}}}}));
+    setup.project(&json!({"mcp": {"servers": {"fx": {"url": "https://example.com/mcp"}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    assert!(specs.repository.is_empty());
+    let [notice] = specs.notices.as_slice() else {
+        panic!("exactly one notice");
+    };
+    assert_eq!(notice.code, contract::ErrorCode::ConfigInvalid);
+    assert!(notice.message.contains("`fx`"), "{}", notice.message);
+}
+
+#[test]
+fn a_server_with_neither_command_nor_url_is_skipped_silently() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"timeout_ms": 1}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    assert!(specs.repository.is_empty());
+    assert!(specs.notices.is_empty());
+}
+
+#[test]
+fn a_repositorys_url_server_is_repository_code_with_its_url_in_fields() {
+    let setup = Setup::new();
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"url": "https://example.com/mcp"}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    assert!(specs.notices.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    let mcp::Transport::Http { url } = &gated.spec.transport else {
+        panic!("a remote transport");
+    };
+    assert_eq!(url, "https://example.com/mcp");
+    assert_eq!(gated.fields.url, Some(json!("https://example.com/mcp")));
+    // A token can ride in the URL, so only its presence prints.
+    let printed = format!("{:?}", gated.fields);
+    assert!(!printed.contains("example.com"), "{printed}");
+}
+
+#[test]
+fn a_persons_url_server_the_repository_only_retimes_is_repository_code() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"url": "https://example.com/mcp"}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"timeout_ms": 1}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    let [gated] = specs.repository.as_slice() else {
+        panic!("the server is the repository's");
+    };
+    let mcp::Transport::Http { url } = &gated.spec.transport else {
+        panic!("a remote transport");
+    };
+    assert_eq!(url, "https://example.com/mcp");
+    assert_eq!(gated.fields.url, None);
+}
+
+#[test]
+fn a_dotted_name_reads_its_own_url() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"my.server": {"url": "https://example.com/mcp"}}}}));
+    let specs = setup.specs();
+    assert_eq!(specs.specs.len(), 1);
+    let mcp::Transport::Http { url } = &specs.specs[0].transport else {
+        panic!("a remote transport");
+    };
+    assert_eq!(url, "https://example.com/mcp");
 }

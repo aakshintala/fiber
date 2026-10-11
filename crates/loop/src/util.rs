@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, hash_map::RandomState};
 use std::hash::BuildHasher;
+use std::sync::OnceLock;
 
 use contract::events::{Class, Event, TurnCompleted, TurnOutcome, Variables, VariablesSource};
 use contract::provider::Input;
@@ -28,26 +29,24 @@ pub(crate) fn mint(prefix: &str) -> String {
     format!("{prefix}{:016x}", RandomState::new().hash_one(()))
 }
 
+/// Where this process's environment came from; first call wins. Set once, by the session command.
+static SOURCE: OnceLock<VariablesSource> = OnceLock::new();
+
+/// Where this process's environment came from; first call wins. Set once, by the session command.
+pub fn set_variables_source(source: VariablesSource) {
+    let _ignored: Result<(), VariablesSource> = SOURCE.set(source);
+}
+
+/// `Inherited` until set.
+pub fn variables_source() -> VariablesSource {
+    SOURCE.get().copied().unwrap_or(VariablesSource::Inherited)
+}
+
 /// This process's environment, as `session_started` records it: the `PATH`
-/// and the other names, never a value. No hub starts a session yet, so the
-/// source is always `inherited` (`docs/invocation.md`, "A session's
+/// and the other names, never a value (`docs/invocation.md`, "A session's
 /// environment").
 pub(crate) fn variables() -> Variables {
-    let mut path = String::new();
-    let mut names = Vec::new();
-    for (name, value) in std::env::vars_os() {
-        if name == "PATH" {
-            path = value.to_string_lossy().into_owned();
-        } else {
-            names.push(name.to_string_lossy().into_owned());
-        }
-    }
-    names.sort();
-    Variables {
-        path,
-        names,
-        source: VariablesSource::Inherited,
-    }
+    Variables::of(std::env::vars_os(), variables_source())
 }
 
 /// The render sinks every durable line is written into.
@@ -121,3 +120,7 @@ impl crate::Loop {
         self.write(event, Some(turn), action)
     }
 }
+
+#[cfg(test)]
+#[path = "util_tests.rs"]
+mod tests;

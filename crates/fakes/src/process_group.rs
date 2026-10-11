@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use rustix::process::{Pid, Signal};
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions};
 
 use crate::deadline::Deadline;
 
@@ -333,15 +333,23 @@ pub fn kill_matching(text: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Whether `pid` exists: kill(pid, 0), starting no process. Panics when
-/// `pid` is 1 or less.
+/// Whether `pid` runs: a child of this process that has exited is gone even
+/// before it is reaped (waitid with WNOWAIT leaves its status for
+/// `Child::wait`); any other pid, or a pid that is no child, is probed with
+/// kill(pid, 0). Starts no process. Panics when `pid` is 1 or less.
 #[allow(
     clippy::expect_used,
     reason = "a probe of an id past the pid range panics, like a refused id"
 )]
 fn alive(pid: u32) -> bool {
     let id = checked(pid, "pid").expect("a pid past the pid range is never alive");
-    rustix::process::test_kill_process(id).is_ok()
+    let options = WaitIdOptions::EXITED
+        .union(WaitIdOptions::NOHANG)
+        .union(WaitIdOptions::NOWAIT);
+    match rustix::process::waitid(WaitId::Pid(id), options) {
+        Ok(Some(_)) => false,
+        Ok(None) | Err(_) => rustix::process::test_kill_process(id).is_ok(),
+    }
 }
 
 /// Whether process group `group` has a member: kill(-group, 0), starting no

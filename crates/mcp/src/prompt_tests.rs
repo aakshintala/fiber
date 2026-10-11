@@ -327,6 +327,14 @@ fn each_outcome_maps_to_its_sentence() {
             "was not run",
             0,
         ),
+        (
+            "expired",
+            None,
+            Err(Fault::Expired),
+            Some(ErrorCode::McpPromptFailed),
+            "was not run",
+            0,
+        ),
     ];
     for (name, appended, called, code, fragment, records) in rows {
         let out = super::output(&entry, appended.clone(), called, vec![]);
@@ -391,8 +399,8 @@ fn a_dead_slot_is_not_run_without_spawning() {
     use contract::ErrorCode;
     let setup = Setup::new();
     let mut spec = setup.spec("fx");
-    spec.command = "/no/such/command".to_owned();
-    spec.args = Vec::new();
+    spec.stdio_mut().command = "/no/such/command".to_owned();
+    spec.stdio_mut().args = Vec::new();
     let slot = crate::slot::Slot::lazy(
         spec,
         setup.dir.path(),
@@ -458,8 +466,8 @@ fn a_failed_start_is_not_run_with_its_record() {
     use contract::ErrorCode;
     let setup = Setup::new();
     let mut spec = setup.spec("fx");
-    spec.command = "/no/such/command".to_owned();
-    spec.args = Vec::new();
+    spec.stdio_mut().command = "/no/such/command".to_owned();
+    spec.stdio_mut().args = Vec::new();
     let slot = crate::slot::Slot::lazy(
         spec,
         setup.dir.path(),

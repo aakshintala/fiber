@@ -108,3 +108,62 @@ fn the_override_replaces_rather_than_merges() {
         }
     );
 }
+
+#[test]
+fn declared_for_adds_network_for_a_remote_server_whatever_the_hints() {
+    use super::Hints;
+    use contract::shapes::Effect;
+    // The `remote &&` mutant drops `network` from every remote tool here;
+    // the absent-check mutant lists it twice for the rows that already
+    // carry it.
+    let rows = [
+        Hints::default(),
+        Hints {
+            open_world: Some(true),
+            ..Hints::default()
+        },
+        Hints {
+            open_world: Some(false),
+            ..Hints::default()
+        },
+        Hints {
+            read_only: Some(true),
+            open_world: Some(false),
+            ..Hints::default()
+        },
+    ];
+    for hints in rows {
+        let declared = hints.declared_for(true);
+        assert_eq!(
+            declared
+                .effects
+                .iter()
+                .filter(|effect| **effect == Effect::Network)
+                .count(),
+            1,
+            "a remote tool declares network exactly once: {hints:?}",
+        );
+    }
+}
+
+#[test]
+fn declared_for_leaves_a_local_tool_untouched() {
+    use super::Hints;
+    assert_eq!(
+        Hints::default().declared_for(false),
+        Hints::default().declared()
+    );
+    assert_eq!(
+        Hints {
+            open_world: Some(false),
+            ..Hints::default()
+        }
+        .declared_for(false),
+        Hints {
+            open_world: Some(false),
+            ..Hints::default()
+        }
+        .declared(),
+        "a local `openWorldHint: false` tool declares no network",
+    );
+}
