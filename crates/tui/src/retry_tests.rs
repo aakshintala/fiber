@@ -159,6 +159,41 @@ fn track_reports_the_clone_failure_and_watches_nothing() {
 }
 
 #[test]
+fn end_read_stops_the_watched_read_and_leaves_the_permit_open() {
+    let (_clock, retry) = permit();
+    let (ours, _theirs) =
+        std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let (mut read, stop) = support::stoppable::reader(
+        ours.try_clone()
+            .unwrap_or_else(|err| panic!("clone: {err}")),
+    )
+    .unwrap_or_else(|err| panic!("reader: {err}"));
+    assert!(
+        retry
+            .track(&ours, stop)
+            .unwrap_or_else(|err| panic!("track: {err}"))
+    );
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("retry-end-read".to_owned())
+        .spawn(move || {
+            let mut buf = [0u8; 1];
+            done.send(std::io::Read::read(&mut read, &mut buf).is_err())
+                .unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    retry.end_read();
+    assert!(
+        finished
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for the stopped read: {err}")),
+        "end_read stops the watched read"
+    );
+    assert!(retry.lock().watched.is_none());
+    assert!(!retry.lock().quit, "the permit stays open");
+}
+
+#[test]
 fn quit_ends_the_watched_read_and_shuts_the_stream() {
     let (_clock, retry) = permit();
     let (ours, theirs) =
