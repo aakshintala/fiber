@@ -13,8 +13,8 @@ use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::Value;
 
-use crate::{API, Error, LuaProvider, SessionExtensions};
 use crate::git::short_name;
+use crate::{API, Error, LuaProvider, SessionExtensions};
 use contract::ThinkingLevel;
 
 mod declared;

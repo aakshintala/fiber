@@ -30,7 +30,10 @@ use serde_json::{Value, json};
 pub(crate) mod package;
 pub(crate) mod pty;
 
-#[allow(unused_imports, reason = "each test binary uses its own subset of the helpers")]
+#[allow(
+    unused_imports,
+    reason = "each test binary uses its own subset of the helpers"
+)]
 pub(crate) use fakes::write_record;
 
 /// The test's one deadline and its bounds, shared from `fakes`

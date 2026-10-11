@@ -20,10 +20,7 @@ fn a_record_names_the_manifest_and_claims_a_path_source() {
     let record: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(dir.join(".fiber.json")).unwrap()).unwrap();
     assert_eq!(record.get("name").and_then(|n| n.as_str()), Some("a"));
-    assert_eq!(
-        record.get("version").and_then(|v| v.as_str()),
-        Some("v2")
-    );
+    assert_eq!(record.get("version").and_then(|v| v.as_str()), Some("v2"));
     assert_eq!(
         record.get("requested").and_then(|r| r.as_bool()),
         Some(true)

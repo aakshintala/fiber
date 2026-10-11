@@ -367,7 +367,10 @@ impl Ctx<'_, '_> {
         let clone = plan.scratch.join(slug(name)?);
         remove(&clone)?;
         let (commit, changes) = match pin {
-            Some(commit) => (self.origin.clone_at(repo, commit, &clone, self.clock)?, None),
+            Some(commit) => (
+                self.origin.clone_at(repo, commit, &clone, self.clock)?,
+                None,
+            ),
             None => {
                 let old = self
                     .installed
