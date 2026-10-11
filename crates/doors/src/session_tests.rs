@@ -227,9 +227,8 @@ fn many_connections_leave_nothing_held() {
             let _ack = recv(&client);
             {
                 assert!(
-                    gate.conns.wait_while(DEADLINE, |state| {
-                        state.live_len() != 1 || state.writers_open() == 0
-                    }),
+                    gate.conns
+                        .wait_while(DEADLINE, |state| !state.has_full_entry()),
                     "a live connection keeps its reader, its writer and its shutdown"
                 );
             }
@@ -331,7 +330,7 @@ fn close_returns_while_a_silent_client_stays_open() {
     {
         assert!(
             gate.conns
-                .wait_while(DEADLINE, |state| state.live_len() != 1),
+                .wait_while(DEADLINE, |state| !state.has_reader_shutdown()),
             "the silent client's reader is published and blocked"
         );
     }
@@ -743,8 +742,7 @@ fn a_published_reader_is_shut_down_before_it_is_joined() {
         )
         .expect("the gate is running");
     assert!(
-        gate.conns
-            .wait_while(DEADLINE, |state| !state.published(id)),
+        gate.conns.published(id),
         "the reader is published under its id"
     );
     let (done_tx, done_rx) = mpsc::channel();
@@ -805,8 +803,7 @@ fn a_reading_writer_records_fiber_exited_before_it_ends() {
     );
     {
         assert!(
-            gate.conns
-                .wait_while(DEADLINE, |state| state.writers_open() == 0),
+            gate.conns.writers_open() > 0,
             "fiber_exited arrives before the writer ends"
         );
     }
@@ -2798,8 +2795,7 @@ fn a_reader_published_after_stop_is_rejected_not_leaked() {
         "the rejection shuts the stream"
     );
     assert!(
-        gate.conns
-            .wait_while(DEADLINE, |state| state.live_len() != 0),
+        gate.conns.live_len() == 0,
         "the rejected reader is never published"
     );
     drop(id_tx);
