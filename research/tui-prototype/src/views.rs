@@ -44,6 +44,12 @@ const CASES: &[Case<Look>] = &[
             kind: Kind::Running,
         },
     },
+    Case {
+        name: "usage",
+        help: "usage by turn, model and delegate with billed cost",
+        check: "usage broken down by turn, by model and by delegate, each with tokens by kind, billed and subscription cost, and the budget left.",
+        build: || Look { kind: Kind::Usage },
+    },
 ];
 
 /// `--view-case`, for `--help` and `check/views.md`.
@@ -59,6 +65,7 @@ enum Kind {
     Delegate,
     JobPty,
     Running,
+    Usage,
 }
 
 struct Look {
@@ -193,6 +200,41 @@ fn running_rows() -> Vec<super::Row> {
     ]
 }
 
+/// The usage view: the session's usage broken down by turn, by model and
+/// by delegate, each with tokens by kind, cost billed and cost on
+/// subscription, and the budget left while `budget.usd` is set.
+fn usage_rows() -> Vec<super::Row> {
+    vec![
+        row(vec![sp("By turn", bold())]),
+        row(vec![sp(
+            "turn 3 · 120k in · 15k out · $1.35 billed · $0.00 subscription",
+            Style::new(),
+        )]),
+        row(vec![sp(
+            "turn 2 · 200k in · 30k out · $0.90 billed · $0.00 subscription",
+            Style::new(),
+        )]),
+        super::Row::default(),
+        row(vec![sp("By model", bold())]),
+        row(vec![sp(
+            "opus-5-5 · 400k in · 60k out · $2.10 billed · $0.00 subscription",
+            Style::new(),
+        )]),
+        row(vec![sp(
+            "gpt-6.1-sol · 80k in · 10k out · $0.45 billed · $0.00 subscription",
+            Style::new(),
+        )]),
+        super::Row::default(),
+        row(vec![sp("By delegate", bold())]),
+        row(vec![sp(
+            "◆ review · 60k in · 8k out · $0.40 billed · $0.00 subscription",
+            Style::new(),
+        )]),
+        super::Row::default(),
+        row(vec![sp("budget left $17.90 of $20.00", dim())]),
+    ]
+}
+
 fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
     match c.kind {
         Kind::Delegate => {
@@ -214,6 +256,12 @@ fn body_rows(c: &Look, cols: usize) -> Vec<super::Row> {
             let mut out = vec![view_header("Running", "delegates · jobs")];
             out.push(super::Row::default());
             out.extend(running_rows());
+            out
+        }
+        Kind::Usage => {
+            let mut out = vec![view_header("Usage", "/usage")];
+            out.push(super::Row::default());
+            out.extend(usage_rows());
             out
         }
         Kind::JobPty => {
@@ -416,7 +464,7 @@ mod tests {
                 .iter()
                 .all(|c| crate::cases::lookup(CASES, c.name).is_some())
         );
-        assert_eq!(CASES.len(), 3);
+        assert_eq!(CASES.len(), 4);
         assert!(parse("nope").is_none());
     }
 
@@ -532,6 +580,32 @@ mod tests {
                 "delegates are not in start order"
             );
             assert!(t.contains("opens that item's view"), "no row hint");
+        }
+    }
+
+    #[test]
+    fn usage_header_row() {
+        for cols in [160, NARROW] {
+            let c = parse_case("usage");
+            let buf = buffer(&c, cols, 48);
+            assert_header(&buf, "usage", "Usage", "/usage", cols);
+        }
+    }
+
+    #[test]
+    fn usage_breaks_down_turns_models_and_delegates() {
+        for cols in [160, NARROW] {
+            let c = parse_case("usage");
+            let t = text(&c, cols, 48);
+            assert!(t.contains("By turn"), "no turn section");
+            assert!(t.contains("By model"), "no model section");
+            assert!(t.contains("By delegate"), "no delegate section");
+            assert!(t.contains("turn 3"), "no turn row");
+            assert!(t.contains("opus-5-5"), "no model row");
+            assert!(t.contains("◆ review"), "no delegate row");
+            assert!(t.contains("billed"), "no billed cost");
+            assert!(t.contains("subscription"), "no subscription cost");
+            assert!(t.contains("budget left"), "no budget left");
         }
     }
 
