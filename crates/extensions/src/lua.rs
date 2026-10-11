@@ -748,6 +748,7 @@ pub(crate) mod asks;
 mod declared;
 mod errors;
 mod hub;
+mod router;
 mod schedule;
 mod search;
 mod setup;

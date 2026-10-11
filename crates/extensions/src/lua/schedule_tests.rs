@@ -128,7 +128,10 @@ fn a_stopped_extension_starts_no_exec_for_a_suspended_callback() {
     );
     assert!(parked.is_empty(), "nothing is parked");
     assert_eq!(script.unmet().len(), 1, "the scripted run is unused");
-    assert!(hub.lock().buffer.is_empty(), "no extension_exec is routed");
+    assert!(
+        hub.lock().router.buffer().is_empty(),
+        "no extension_exec is routed"
+    );
 }
 
 /// The caller's result for the tool call `id`.

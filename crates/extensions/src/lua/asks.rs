@@ -13,7 +13,7 @@ use contract::inbox::{Ack, Delivery, Rejection};
 use contract::shapes::True;
 use contract::{ErrorCode, RequestId};
 
-use super::hub::{Hub, MAX_PENDING_DELIVERIES, Shared};
+use super::hub::{Hub, Shared};
 use crate::host;
 
 /// Reads `kind` with its `spec` table, as JSON, into the [`Interaction`] a
@@ -192,34 +192,6 @@ pub(super) struct PendingAsk {
 const UNFIT: &str = "That answer does not fit the pending request.";
 
 impl Shared {
-    /// Routes an extension delivery to the loop's inbox, or buffers it when
-    /// no inbox arrived yet. Returns what could not be sent: after `seal`
-    /// or the drop, or the inbox's `SendError` on a disconnected receiver.
-    /// The caller drops it only after the hub lock is released: a dropped
-    /// `Resolved` answers its driver, which may re-enter this hub.
-    pub(super) fn route(&mut self, delivery: Delivery) -> Option<Delivery> {
-        if self.disposed || self.sealed {
-            return Some(delivery);
-        }
-        match self.inbox.clone() {
-            Some(inbox) => match inbox.send(delivery) {
-                Ok(()) => None,
-                Err(failed) => Some(failed.0),
-            },
-            None => {
-                self.buffer.push_back(delivery);
-                // At most the cap is held: the evicted delivery returns
-                // unsent, for the caller to drop after the hub lock is
-                // released.
-                if self.buffer.len() > MAX_PENDING_DELIVERIES {
-                    self.buffer.pop_front()
-                } else {
-                    None
-                }
-            }
-        }
-    }
-
     /// Registers `requested` for the parked call `call`, then routes its
     /// `Interaction`, both under the one hub lock the caller holds.
     /// Returns what could not be sent, for the caller to drop after the
@@ -232,7 +204,7 @@ impl Shared {
                 call,
             },
         );
-        self.route(Delivery::Interaction(requested))
+        self.router.route(Delivery::Interaction(requested))
     }
 
     /// Removes `request` when held and routes its decline by `fiber`.
@@ -247,7 +219,7 @@ impl Shared {
             by: ResolvedBy::Fiber,
             answer: Answer::Declined { declined: True },
         };
-        self.route(Delivery::Resolved(resolved, noop()))
+        self.router.route(Delivery::Resolved(resolved, noop()))
     }
 }
 
@@ -279,7 +251,7 @@ impl Hub {
         ack: Ack,
     ) -> Option<(contract::commands::Reply, Ack)> {
         let mut shared = self.lock();
-        if shared.sealed || shared.disposed {
+        if shared.router.closed() {
             // answer_after_seal_hands_back: the loop has gone; the door's
             // dropped ack answers `closing`.
             return Some((reply, ack));
@@ -307,7 +279,7 @@ impl Hub {
             (ack.0)(Ok(None));
             hub.deliver(held.call, host::Reply::Ask(answer));
         }));
-        let unsent = shared.route(Delivery::Resolved(resolved, composite));
+        let unsent = shared.router.route(Delivery::Resolved(resolved, composite));
         drop(shared);
         drop(unsent);
         None

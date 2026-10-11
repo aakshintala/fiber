@@ -450,7 +450,7 @@ fn admit<'a>(
     } = call;
     match request {
         Request::Ask(interaction) => {
-            if !shared.answerable || shared.sealed || shared.disposed {
+            if !shared.answerable || shared.router.closed() {
                 // nobody_to_answer_returns_declined_at_once: as headless
                 // approvals write no request.
                 drop(shared);

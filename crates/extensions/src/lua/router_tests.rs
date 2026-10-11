@@ -1,8 +1,8 @@
 //! `send` against `set_inbox`: buffered deliveries flush in order,
 //! and a `deliver_to` racing a delivery's end strands nothing
-//! (`docs/extensions.md`, "Host calls"). `cancel_timer` twice. `emit`
-//! and the `set_emit` flush hold the hub lock past `seal`, so no extension
-//! line follows `fiber_exited`.
+//! (`docs/extensions.md`, "Host calls"). `emit` and the `set_emit` flush
+//! hold the hub lock past `seal`, so no extension line follows
+//! `fiber_exited`.
 
 #![allow(
     clippy::unwrap_used,
@@ -10,14 +10,17 @@
     clippy::panic,
     reason = "test code"
 )]
-use std::sync::TryLockError;
+use std::sync::Arc;
 use std::sync::mpsc;
+use std::time::Duration;
 
+use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::{Event, ExtensionExec, ExtensionUi, Ui};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 
+use super::super::hub::{Hub, Timer, Window};
 use super::*;
 
 fn exec(tag: &str) -> ExtensionExec {
@@ -68,7 +71,7 @@ fn a_run_before_any_sender_flushes_on_the_first_one() {
     hub.set_inbox(tx);
     assert_eq!(received(&rx).as_deref(), Some("first"));
     assert_eq!(received(&rx).as_deref(), Some("second"));
-    assert!(hub.lock().buffer.is_empty());
+    assert!(hub.lock().router.buffer.is_empty());
 }
 
 /// How long a test waits on a worker before it fails.
@@ -101,7 +104,7 @@ fn a_run_ending_after_dispose_is_dropped() {
         .expect("waited for the late run to be routed");
     assert!(received(&rx).is_none(), "nothing arrives after the drop");
     assert!(
-        hub.lock().buffer.is_empty(),
+        hub.lock().router.buffer.is_empty(),
         "nothing is buffered after the drop"
     );
 }
@@ -115,7 +118,7 @@ fn a_run_ending_after_dispose_is_dropped() {
 fn a_sender_after_dispose_flushes_nothing() {
     let hub = Hub::new(FakeClock::new());
     hub.send(Delivery::ExtensionExec(exec("early")));
-    assert_eq!(hub.lock().buffer.len(), 1, "the run is buffered");
+    assert_eq!(hub.lock().router.buffer.len(), 1, "the run is buffered");
     let (tx, rx) = mpsc::channel();
     let (proceed_tx, proceed_rx) = mpsc::channel::<()>();
     let (done_tx, done_rx) = mpsc::channel();
@@ -134,7 +137,7 @@ fn a_sender_after_dispose_flushes_nothing() {
         .expect("waited for the late sender to be routed");
     assert!(received(&rx).is_none(), "nothing flushes after the drop");
     assert_eq!(
-        hub.lock().buffer.len(),
+        hub.lock().router.buffer.len(),
         1,
         "the buffered run is never flushed nor delivered"
     );
@@ -143,7 +146,7 @@ fn a_sender_after_dispose_flushes_nothing() {
 /// Whether the hub lock is held: at a window it must be, so the other half
 /// of the race cannot run inside it.
 fn locked(hub: &Hub) -> bool {
-    matches!(hub.shared.try_lock(), Err(TryLockError::WouldBlock))
+    hub.try_lock().is_none()
 }
 
 /// A run ending against `deliver_to`, paused where `send` has chosen
@@ -182,7 +185,7 @@ fn deliver_to_at_a_runs_buffer_choice_flushes_the_run() {
         .recv(&done_rx)
         .expect("waited for the racing deliver_to to return");
     assert_eq!(received(&rx).as_deref(), Some("run"), "the run was flushed");
-    assert!(hub.lock().buffer.is_empty(), "nothing is stranded");
+    assert!(hub.lock().router.buffer.is_empty(), "nothing is stranded");
 }
 
 /// A run ending against `deliver_to`, paused where `set_inbox` has
@@ -222,51 +225,6 @@ fn a_run_ending_at_a_flush_follows_the_buffered_runs() {
     assert_eq!(received(&rx).as_deref(), Some("second"));
 }
 
-fn timer(firing: bool) -> Timer {
-    Timer {
-        id: 0,
-        every: Some(Duration::from_millis(50)),
-        due: FakeClock::new().now(),
-        timeout: Duration::from_millis(100),
-        cancelled: false,
-        firing,
-    }
-}
-
-/// Cancelling a firing timer marks it and leaves it to end its firing;
-/// twice changes nothing. Cancelling an idle one removes it and lists it
-/// once for its Lua function to be freed; twice is a no-op.
-#[test]
-fn cancel_twice_is_a_no_op() {
-    let hub = Hub::new(FakeClock::new());
-    hub.lock().timers.insert(0, timer(true));
-    hub.cancel_timer(0);
-    hub.cancel_timer(0);
-    {
-        let shared = hub.lock();
-        assert!(shared.timers.get(&0).unwrap().cancelled);
-        assert!(
-            shared.timer_cleanup.is_empty(),
-            "a firing frees nothing yet"
-        );
-    }
-    hub.lock().timers.insert(0, timer(false));
-    hub.cancel_timer(0);
-    hub.cancel_timer(0);
-    let shared = hub.lock();
-    assert!(shared.timers.is_empty(), "an idle cancel removes it");
-    assert_eq!(shared.timer_cleanup, vec![0], "listed once to be freed");
-}
-
-/// `take_timer_cleanup` hands over what is listed and empties the list.
-#[test]
-fn take_timer_cleanup_takes_the_list() {
-    let hub = Hub::new(FakeClock::new());
-    hub.lock().timer_cleanup.extend([3, 5]);
-    assert_eq!(hub.take_timer_cleanup(), vec![3, 5]);
-    assert!(hub.take_timer_cleanup().is_empty());
-}
-
 /// After `seal`, a delivery reaches neither the inbox nor the buffer: one
 /// in flight finishes first and every later emission or delivery is dropped.
 #[test]
@@ -277,7 +235,7 @@ fn a_delivery_after_seal_is_dropped() {
     hub.seal();
     hub.send(Delivery::ExtensionExec(exec("late")));
     assert!(received(&rx).is_none(), "nothing arrives after the seal");
-    assert!(hub.lock().buffer.is_empty());
+    assert!(hub.lock().router.buffer.is_empty());
 }
 
 fn status(text: &str) -> Event {
@@ -375,7 +333,7 @@ fn an_emission_holds_the_lock_past_seal() {
 fn a_buffered_flush_holds_the_lock_past_seal() {
     let hub = Hub::new(FakeClock::new());
     hub.emit(status("early"));
-    assert_eq!(hub.lock().emit_buffer.len(), 1);
+    assert_eq!(hub.lock().router.emit_buffer.len(), 1);
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let emit = Arc::new(BlockingEmit {
@@ -449,9 +407,9 @@ fn set_emit_after_dispose_installs_nothing_and_flushes_nothing() {
     // nothing, so the `||` becoming `&&` would wrongly install and flush.
     let hub = Hub::new(FakeClock::new());
     hub.emit(status("early"));
-    assert_eq!(hub.lock().emit_buffer.len(), 1);
+    assert_eq!(hub.lock().router.emit_buffer.len(), 1);
     hub.dispose("ext");
-    assert!(!hub.lock().sealed, "dispose alone does not seal");
+    assert!(!hub.lock().router.sealed, "dispose alone does not seal");
     let recorder = Arc::new(Recorder::default());
     hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
     assert!(
@@ -459,11 +417,11 @@ fn set_emit_after_dispose_installs_nothing_and_flushes_nothing() {
         "nothing flushes after dispose"
     );
     assert!(
-        hub.lock().emitter.is_none(),
+        hub.lock().router.emitter.is_none(),
         "no emitter is installed after dispose"
     );
     assert_eq!(
-        hub.lock().emit_buffer.len(),
+        hub.lock().router.emit_buffer.len(),
         1,
         "the buffered line stays buffered"
     );
@@ -480,9 +438,9 @@ fn set_emit_after_seal_installs_nothing_and_flushes_nothing() {
     // nothing, so the `||` becoming `&&` would wrongly install and flush.
     let hub = Hub::new(FakeClock::new());
     hub.emit(status("early"));
-    assert_eq!(hub.lock().emit_buffer.len(), 1);
+    assert_eq!(hub.lock().router.emit_buffer.len(), 1);
     hub.seal();
-    assert!(!hub.lock().disposed, "seal alone does not dispose");
+    assert!(!hub.lock().router.disposed, "seal alone does not dispose");
     let recorder = Arc::new(Recorder::default());
     hub.set_emit(Arc::clone(&recorder) as Arc<dyn Emit>);
     assert!(
@@ -490,11 +448,11 @@ fn set_emit_after_seal_installs_nothing_and_flushes_nothing() {
         "nothing flushes after seal"
     );
     assert!(
-        hub.lock().emitter.is_none(),
+        hub.lock().router.emitter.is_none(),
         "no emitter is installed after seal"
     );
     assert_eq!(
-        hub.lock().emit_buffer.len(),
+        hub.lock().router.emit_buffer.len(),
         1,
         "the buffered line stays buffered"
     );
@@ -528,7 +486,7 @@ fn driver_after_dispose_alone_is_none() {
     hub.set_driver(Arc::new(TestDrive) as Arc<dyn contract::extension::Drive>);
     assert!(hub.driver().is_some(), "a driver is bound before the drop");
     hub.dispose("ext");
-    assert!(!hub.lock().sealed, "dispose alone does not seal");
+    assert!(!hub.lock().router.sealed, "dispose alone does not seal");
     assert!(hub.driver().is_none(), "no drive follows the drop");
 }
 
@@ -540,7 +498,7 @@ fn driver_after_seal_alone_is_none() {
     hub.set_driver(Arc::new(TestDrive) as Arc<dyn contract::extension::Drive>);
     assert!(hub.driver().is_some(), "a driver is bound before the seal");
     hub.seal();
-    assert!(!hub.lock().disposed, "seal alone does not dispose");
+    assert!(!hub.lock().router.disposed, "seal alone does not dispose");
     assert!(hub.driver().is_none(), "no drive follows fiber_exited");
 }
 
@@ -669,4 +627,50 @@ fn an_evicted_delivery_drops_after_the_hub_lock_is_released() {
         Ok(false),
         "the evicted delivery drops with the hub lock released"
     );
+}
+
+// Moved to timers_tests.rs in the next commit.
+fn timer(firing: bool) -> Timer {
+    Timer {
+        id: 0,
+        every: Some(Duration::from_millis(50)),
+        due: FakeClock::new().now(),
+        timeout: Duration::from_millis(100),
+        cancelled: false,
+        firing,
+    }
+}
+
+/// Cancelling a firing timer marks it and leaves it to end its firing;
+/// twice changes nothing. Cancelling an idle one removes it and lists it
+/// once for its Lua function to be freed; twice is a no-op.
+#[test]
+fn cancel_twice_is_a_no_op() {
+    let hub = Hub::new(FakeClock::new());
+    hub.lock().timers.insert(0, timer(true));
+    hub.cancel_timer(0);
+    hub.cancel_timer(0);
+    {
+        let shared = hub.lock();
+        assert!(shared.timers.get(&0).unwrap().cancelled);
+        assert!(
+            shared.timer_cleanup.is_empty(),
+            "a firing frees nothing yet"
+        );
+    }
+    hub.lock().timers.insert(0, timer(false));
+    hub.cancel_timer(0);
+    hub.cancel_timer(0);
+    let shared = hub.lock();
+    assert!(shared.timers.is_empty(), "an idle cancel removes it");
+    assert_eq!(shared.timer_cleanup, vec![0], "listed once to be freed");
+}
+
+/// `take_timer_cleanup` hands over what is listed and empties the list.
+#[test]
+fn take_timer_cleanup_takes_the_list() {
+    let hub = Hub::new(FakeClock::new());
+    hub.lock().timer_cleanup.extend([3, 5]);
+    assert_eq!(hub.take_timer_cleanup(), vec![3, 5]);
+    assert!(hub.take_timer_cleanup().is_empty());
 }
