@@ -569,3 +569,20 @@ Typing `/` opens one completion panel above the input box. Commands, skills, pro
 | `narrow-slash`, `narrow-at` | the same panels; run in a 100x40 terminal for the existing narrow layout |
 
 Live keys: typing `/` or `@` at the start of the input opens the panel. While it is open: ↑/↓ move, Tab completes and keeps the panel open, Enter on a `/` row completes it and runs it at once (`/context` and `/model` open their views, anything else sends), Enter on an `@` row inserts its path as text, Esc closes.
+
+## Swapped views (#1633)
+
+Ten still frames from the fixtures in `src/views.rs`, one per swapped view docs/tui.md lists past the context breakdown and the model picker. Each takes the conversation area under its header row (the view's name bold, its command dim, `Esc returns` dim right-aligned) and waits for a key; Esc, q or Ctrl+C quits. Combine with `--static`; the fixture still loads but the views ignore it. Every case also renders at 100x40 for the narrow layout; capture at 160 by 48.
+
+| Case | How to reach it |
+|---|---|
+| `delegate-view` | `cargo run --release -- fixtures/session.jsonl --static --view-case delegate-view`: the breadcrumb, the status card (harness, model, calls, elapsed, session, stop target), the transcript in turn cards, and the input box sending steering to the delegate |
+| `job-pty` | `cargo run --release -- fixtures/session.jsonl --static --view-case job-pty`: the job's live 80x24 screen from attach, its status with the stop target, and the input box typing into it |
+| `running` | `cargo run --release -- fixtures/session.jsonl --static --view-case running`: two rows per running delegate and one row per running job, in start order |
+| `usage` | `cargo run --release -- fixtures/session.jsonl --static --view-case usage`: usage by turn, by model and by delegate, with billed and subscription cost and the budget left |
+| `changed-files` | `cargo run --release -- fixtures/session.jsonl --static --view-case changed-files`: the changed files with the chosen file's hunks as a diff against HEAD; the untracked file wholly added |
+| `search-results` | `cargo run --release -- fixtures/session.jsonl --static --view-case search-results`: every match one row each with its surrounding lines, the current match brighter |
+| `tools` | `cargo run --release -- fixtures/session.jsonl --static --view-case tools`: every tool by source with state and size, two on/off switches per MCP or extension tool, built-ins without a switch |
+| `rules` | `cargo run --release -- fixtures/session.jsonl --static --view-case rules`: global rules then this project's, each with its prefix, origin and revoke mark |
+| `settings` | `cargo run --release -- fixtures/session.jsonl --static --view-case settings`: the keys with their effective values and layers, and the reload cost |
+| `skills` | `cargo run --release -- fixtures/session.jsonl --static --view-case skills`: one row per skill with its source, visibility, shadowed skill and switches |
