@@ -473,9 +473,10 @@ fn exchange(
         }
         return;
     }
-    // A request's non-404 answer carrying the session id proves it. The
-    // `initialize` answer never does, and neither does a notification's.
-    if !is_init && carried && status != 404 {
+    // A non-initialize 404 carrying a session id returned above. Marking a
+    // sessionless link proven is harmless: only a 404 carrying its session
+    // consults this flag.
+    if !is_init {
         link.set_proven();
     }
     if !(200..300).contains(&status) || status == 202 {

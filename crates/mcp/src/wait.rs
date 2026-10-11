@@ -142,9 +142,7 @@ impl Shared {
             state.seq = state.seq.wrapping_add(1);
         }
         drop(state);
-        if awaiting && live {
-            self.cv.notify_all();
-        }
+        self.cv.notify_all();
         awaiting && live
     }
 }

@@ -59,9 +59,6 @@ enum State {
     },
     /// One death seen and its restart unused: the next call restarts.
     Down { listed: Cached },
-    /// The remote session expired: the next call starts a new one, keeping
-    /// `restarted`, with no record.
-    Expired { listed: Cached, restarted: bool },
     /// A second death, or a stop: every call fails `error`, no spawn again.
     Dead { error: Failure },
 }
@@ -224,7 +221,6 @@ impl Slot {
                 }
             }
             State::Down { listed } => (listed.clone(), true, true),
-            State::Expired { listed, restarted } => (listed.clone(), *restarted, false),
             State::Dead { error } => {
                 return Served::Failed(Box::new(RunFailed {
                     error: error.clone(),
@@ -306,7 +302,6 @@ impl Slot {
                     State::Running { .. }
                     | State::NotStarted { .. }
                     | State::Down { .. }
-                    | State::Expired { .. }
                     | State::Dead { .. } => {
                         return Run::Failed(Box::new(RunFailed {
                             error: crate::fail::failure(
@@ -347,39 +342,12 @@ impl Slot {
             Err(CallError::Cancelled) => Err(Fault::Cancelled),
             Err(CallError::JsonRpc { message, .. }) => Err(Fault::Refused(message)),
             Err(CallError::Http(message)) => Err(Fault::Refused(message)),
-            Err(CallError::Expired) => {
-                self.expire(server);
-                Err(Fault::Expired)
-            }
+            Err(CallError::Expired) => Err(Fault::Expired),
             Err(CallError::Gone) => match self.died(server) {
                 Some(record) => Err(Fault::Died(record)),
                 None => Err(Fault::Gone),
             },
         }
-    }
-
-    /// Moves a running slot holding `expired` to expired: the next call
-    /// starts a new session, keeping the restart, with no record. A stale
-    /// server never moves a newer slot: the move needs the same server
-    /// the slot still runs.
-    pub(crate) fn expire(&self, expired: &Arc<Server>) {
-        let mut state = lock(&self.state);
-        let State::Running {
-            server,
-            listed,
-            restarted,
-            ..
-        } = &*state
-        else {
-            return;
-        };
-        if !Arc::ptr_eq(server, expired) {
-            return;
-        }
-        *state = State::Expired {
-            listed: listed.clone(),
-            restarted: *restarted,
-        };
     }
 
     /// Records that `gone`, which a call found gone mid-call, died: the
@@ -421,13 +389,12 @@ impl Slot {
         let mut state = lock(&self.state);
         let error = match &*state {
             State::Dead { error } => error.clone(),
-            State::NotStarted { .. }
-            | State::Running { .. }
-            | State::Down { .. }
-            | State::Expired { .. } => crate::fail::failure(
-                ErrorCode::McpServerUnavailable,
-                unavailable(&self.spec.name),
-            ),
+            State::NotStarted { .. } | State::Running { .. } | State::Down { .. } => {
+                crate::fail::failure(
+                    ErrorCode::McpServerUnavailable,
+                    unavailable(&self.spec.name),
+                )
+            }
         };
         let previous = std::mem::replace(&mut *state, State::Dead { error });
         drop(state);
