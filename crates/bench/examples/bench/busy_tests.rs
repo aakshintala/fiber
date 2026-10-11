@@ -1,6 +1,6 @@
 use super::{
-    PAGE_BYTES, RESULT_BYTES, TOOL_CALLS, TRIGGER_TOKENS, Turn, count, fdatasync_calls, filler,
-    log_lines, page, turn_bytes,
+    PAGE_BYTES, RESULT_BYTES, TOOL_CALLS, TRIGGER_TOKENS, Turn, busy_turn_samples, count,
+    fdatasync_calls, filler, log_lines, page, turn_bytes,
 };
 
 #[test]
@@ -65,6 +65,42 @@ fn a_log_without_a_whole_turn_has_no_turn_bytes() {
     let none = log_lines(&LOG[..LOG.find(r#"{"kind":"turn_started""#).unwrap()]).unwrap();
     assert!(turn_bytes(&none).unwrap_err().contains("no turn_started"));
     assert!(log_lines("{\"kind\":\n").is_err());
+}
+
+#[test]
+fn the_busy_turn_reports_its_peak_its_retained_and_its_log() {
+    let lines = log_lines(LOG).unwrap();
+    let samples = busy_turn_samples(20480, 19000, &lines, 1_520_000).unwrap();
+    let value = |id: &str| {
+        samples
+            .iter()
+            .find(|(metric, _)| *metric == id)
+            .unwrap_or_else(|| panic!("{id} is not sampled"))
+            .1
+            .clone()
+    };
+    assert_eq!(value("busy_turn_rss_kib"), serde_json::json!(20480));
+    assert_eq!(value("busy_turn_retained_kib"), serde_json::json!(19000));
+    // The peak and the retained never swap: equal medians must not hide
+    // one standing in for the other.
+    assert_ne!(
+        samples,
+        busy_turn_samples(19000, 20480, &lines, 1_520_000).unwrap()
+    );
+    // A different retained reading is a different sample.
+    assert_ne!(
+        samples,
+        busy_turn_samples(20480, 19001, &lines, 1_520_000).unwrap()
+    );
+    let log = value("turn_log_bytes");
+    assert_eq!(log.get("bytes"), Some(&serde_json::json!(turn_bytes(&lines).unwrap())));
+    assert_eq!(log.get("content"), Some(&serde_json::json!(1_520_000)));
+    assert_eq!(log.get("tool_calls"), Some(&serde_json::json!(1)));
+}
+
+#[test]
+fn a_busy_turn_without_a_whole_turn_has_no_samples() {
+    assert!(busy_turn_samples(20480, 19000, &[], 1_520_000).is_err());
 }
 
 #[test]

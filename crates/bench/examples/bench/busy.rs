@@ -414,7 +414,31 @@ fn busy_home(ctx: &Ctx<'_>, turn: &Turn) -> Result<Home, String> {
     Ok(home)
 }
 
-/// The 429-call turn: peak RSS once it completes, then the turn's log bytes.
+/// The busy turn's samples from its peak RSS, the anon RSS still
+/// resident once the turn's freed pages settle, and its log lines:
+/// the peak, the retained anon RSS, and the turn's log bytes.
+pub(crate) fn busy_turn_samples(
+    rss: u64,
+    retained: u64,
+    lines: &[(usize, Value)],
+    content: usize,
+) -> Result<Samples, String> {
+    Ok(vec![
+        ("busy_turn_rss_kib", json!(rss)),
+        ("busy_turn_retained_kib", json!(retained)),
+        (
+            "turn_log_bytes",
+            json!({
+                "bytes": turn_bytes(lines)?,
+                "content": content,
+                "tool_calls": count(lines, "tool_call_started", "", ""),
+            }),
+        ),
+    ])
+}
+
+/// The 429-call turn: peak RSS once it completes, the anon RSS still
+/// resident 10 s later, then the turn's log bytes.
 fn busy_turn(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> {
     let turn = Turn::new();
     in_home(busy_home(ctx, &turn)?, |home| {
@@ -424,24 +448,17 @@ fn busy_turn(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
             ctx.clock,
         )?;
         let pid = session.proc.pid();
-        let measured = until_stdout(ctx, &session, "turn_completed", TURN)
-            .and_then(|()| linux::peak_rss_kib(pid));
+        let measured = until_stdout(ctx, &session, "turn_completed", TURN).and_then(|()| {
+            let rss = linux::peak_rss_kib(pid)?;
+            linux::retained_anon_kib_of(pid, |wait| ctx.clock.sleep(wait))
+                .map(|retained| (rss, retained))
+        });
         let stopped = session.proc.stop(ctx.clock);
-        let rss = measured?;
+        let (rss, retained) = measured?;
         stopped?;
         let lines = read_log(home, &id)?;
         check_turn(notes, home.server(), &lines, TOOL_CALLS);
-        Ok(vec![
-            ("busy_turn_rss_kib", json!(rss)),
-            (
-                "turn_log_bytes",
-                json!({
-                    "bytes": turn_bytes(&lines)?,
-                    "content": turn.content,
-                    "tool_calls": count(&lines, "tool_call_started", "", ""),
-                }),
-            ),
-        ])
+        busy_turn_samples(rss, retained, &lines, turn.content)
     })
 }
 
