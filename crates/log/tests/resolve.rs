@@ -37,13 +37,14 @@ fn session_with_worktree(sessions: &std::path::Path, id: &str, workspace: &str, 
         fakes::clock::FakeClock::new(),
     )
     .unwrap();
-    let mut payload = json!({"workspace": workspace,
-        "variables": {"path": "/usr/bin", "names": [], "source": "inherited"}});
+    let mut started = started(workspace);
     if !worktree.is_null() {
-        payload["worktree"] = worktree;
+        let Event::SessionStarted(ref mut session) = started else {
+            panic!("session_started builds a session_started event");
+        };
+        session.worktree = Some(serde_json::from_value(worktree).unwrap());
     }
-    log.append(&event("session_started", payload), None, None)
-        .unwrap();
+    log.append(&started, None, None).unwrap();
 }
 
 fn started(workspace: &str) -> Event {
