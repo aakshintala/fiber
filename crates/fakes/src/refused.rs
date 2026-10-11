@@ -10,7 +10,7 @@
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 /// The port connecting to which is refused.
-pub const PORT: u16 = 1;
+const PORT: u16 = 1;
 
 /// The address a connect to is refused.
 pub const ADDR: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::LOCALHOST, PORT);

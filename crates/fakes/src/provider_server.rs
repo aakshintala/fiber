@@ -130,9 +130,7 @@ pub struct Request {
     /// Headers in the order received, names lowercased, credential values
     /// replaced by their fingerprints.
     pub headers: Vec<(String, String)>,
-    /// The body bytes, as received. Empty once the request is older than the
-    /// server's body limit ([`ProviderServer::keep_last_bodies`]); `body_len`
-    /// still gives its size.
+    /// The body bytes, as received.
     pub body: Vec<u8>,
     /// The size of the body as received, in bytes.
     pub body_len: usize,
@@ -148,10 +146,6 @@ impl Request {
     }
 }
 
-/// How many of the newest requests keep their bodies unless a test asks for
-/// more.
-const DEFAULT_BODY_LIMIT: usize = 64;
-
 /// How long [`ProviderServer::hold`] keeps a response for its release: the
 /// whole test budget, so a test's own deadline (`WAITS` inside `BUDGET`)
 /// fails it before the fake answers a 500 the test never asked for.
@@ -159,7 +153,7 @@ const HELD_LIMIT: Duration = crate::deadline::BUDGET;
 
 /// Answers one request from its content: the recorded request, so an answer
 /// can depend on the request's body or on an earlier request's.
-pub type Responder = std::sync::Arc<dyn Fn(&Request) -> Response + Send + Sync>;
+type Responder = std::sync::Arc<dyn Fn(&Request) -> Response + Send + Sync>;
 
 struct State {
     script: VecDeque<Response>,
@@ -171,8 +165,6 @@ struct State {
     /// The response of every request past the script.
     fallback: Option<Response>,
     requests: Vec<Request>,
-    /// How many of the newest requests keep their bodies; `None` keeps all.
-    body_limit: Option<usize>,
     stopping: bool,
     /// When set, a recorded request is not answered until [`ProviderServer::release`].
     hold: bool,
@@ -196,7 +188,6 @@ impl Default for State {
             responder: None,
             fallback: None,
             requests: Vec::new(),
-            body_limit: Some(DEFAULT_BODY_LIMIT),
             stopping: false,
             hold: false,
             hold_from: 1,
@@ -209,20 +200,9 @@ impl Default for State {
 }
 
 impl State {
-    /// Records `request`, then drops the body of the one request that has
-    /// just fallen out of the body limit.
+    /// Records `request`.
     fn record(&mut self, request: Request) {
         self.requests.push(request);
-        if let Some(limit) = self.body_limit
-            && let Some(old) = self
-                .requests
-                .len()
-                .checked_sub(limit)
-                .and_then(|n| n.checked_sub(1))
-            && let Some(request) = self.requests.get_mut(old)
-        {
-            request.body = Vec::new();
-        }
     }
 }
 
@@ -320,23 +300,6 @@ impl ProviderServer {
     /// definition's base URL.
     pub fn url(&self) -> String {
         format!("http://{}", self.addr)
-    }
-
-    /// Keeps full bodies for only the newest `limit` requests (64 by
-    /// default); older requests keep their metadata and `body_len`. Call it
-    /// before the first request arrives.
-    #[must_use]
-    pub fn keep_last_bodies(self, limit: usize) -> Self {
-        lock(&self.state).body_limit = Some(limit);
-        self
-    }
-
-    /// Keeps every request's full body, for a test that reads back more than
-    /// the default limit.
-    #[must_use]
-    pub fn keep_all_bodies(self) -> Self {
-        lock(&self.state).body_limit = None;
-        self
     }
 
     /// Every request received so far, in arrival order. A request is
