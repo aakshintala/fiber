@@ -1,9 +1,10 @@
 //! The wheel workload (`docs/performance.md`, "Budgets"): a scripted burst
 //! of wheel-up reports at a fixed rate against a `fiber` binary under a
 //! pseudo-terminal at 160x48, in two sessions: the `paging` jig's session
-//! at scale 1, and one turn with an opened `read` of 300 lines. Each run
-//! records, per report, the time from writing the report to the frame
-//! showing the scrolled rows, plus every frame's bytes.
+//! at scale 1, and one turn with a 150-item reply and an opened `read` of
+//! 300 lines, of which Fiber draws the first 20. Each run records, per
+//! report, the time from writing the report to the frame showing the
+//! scrolled rows, plus every frame's bytes.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -55,6 +56,12 @@ const POINTER: (u16, u16) = (20, 10);
 // debt: 300 lines is picked, not measured; the owner's "a few hundred
 // lines" would set it once measured.
 const READ_LINES: usize = 300;
+
+/// The opened output's mark: the start of every output line, drawn only
+/// once the output opens. Both binaries draw it: the head draws the
+/// first 20 lines, while the base follows the bottom and shows the last
+/// lines. The filler reply, the prompt and the ledger row hold no "L0".
+const OUTPUT_MARK: &str = "L0";
 
 /// Conversation columns kept for compares: everything left of the panel,
 /// which is 21% of 160, so 34 columns plus its edge (`docs/tui.md`,
@@ -297,9 +304,15 @@ fn write_paging_log(home: &Home, id: &str) -> Result<(), String> {
 }
 
 /// One turn with a `read` of [`READ_LINES`] lines, written straight to a
-/// new log: a short reply, the call, its output, and the turn's close.
+/// new log: the 150-item reply, the call, its output, and the turn's
+/// close. The reply keeps 90 rows to scroll above the bottom once the
+/// opened call draws only its first 20 lines.
 fn write_read_log(home: &Home, id: &str) -> Result<(), String> {
     let log = create_log(home, id)?;
+    let reply = (1..=150)
+        .map(|n| format!("- T{n:04}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     let output = (1..=READ_LINES)
         .map(|n| format!("L{n:04}"))
         .collect::<Vec<_>>()
@@ -331,7 +344,7 @@ fn write_read_log(home: &Home, id: &str) -> Result<(), String> {
         ),
         (
             Event::TextCompleted(TextCompleted {
-                text: "The notes are filed.".to_owned(),
+                text: reply,
                 provider_item: None,
             }),
             None,
@@ -687,25 +700,22 @@ fn click(col: usize, row: usize) -> String {
     )
 }
 
-/// Opens the read session's call: the ledger, its row, the call, and the
-/// output's last line on screen.
+/// Opens the read session's call: the group line both binaries draw, the
+/// ledger, its row, the call, and the output on screen.
 fn open_read_call(
     clock: &dyn Clock,
     terminal: &mut Terminal,
     spawned: Instant,
 ) -> Result<(), String> {
-    terminal.wait_for(clock, spawned + READY, "• Read")?;
+    terminal.wait_for(clock, spawned + READY, "Read 1 file")?;
+    // A running group's line names the call too ("· read notes.txt"), and
+    // a click on it would close the ledger: wait for the finished turn.
+    terminal.wait_for(clock, spawned + READY, "completed")?;
     terminal.write(b"\x0f")?;
     let until = clock.now() + READY;
-    let (row, col) = wait_text(
-        clock,
-        terminal,
-        until,
-        "the read's ledger row",
-        "read notes.txt",
-    )?;
+    let (row, col) = wait_text(clock, terminal, until, "the read's ledger row", "notes.txt")?;
     terminal.write(click(col, row).as_bytes())?;
-    terminal.wait_for(clock, clock.now() + READY, "L0300")?;
+    terminal.wait_for(clock, clock.now() + READY, OUTPUT_MARK)?;
     Ok(())
 }
 
@@ -740,7 +750,7 @@ fn sample_once(
         open_read_call(ctx.clock, &mut terminal, spawned)?;
     }
     let bottom = to_bottom(ctx.clock, &mut terminal)?;
-    if open_call && !bottom.lines().any(|line| line.contains("L0300")) {
+    if open_call && !bottom.lines().any(|line| line.contains(OUTPUT_MARK)) {
         return Err("the bottom settled without the read's output".to_owned());
     }
     let calibration = calibrate(ctx.clock, &mut terminal, &bottom)?;

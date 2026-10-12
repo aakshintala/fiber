@@ -2,9 +2,78 @@
 
 use serde_json::json;
 
+use ratatui::style::Modifier;
+use ratatui::text::Line;
+
 use super::{
-    Kind, Kinds, count, cut, duration, heading, kind, money, seconds, summary, tokens, wrap,
+    Kind, Kinds, count, cut, detail, duration, heading, kind, money, seconds, summary, tokens, wrap,
 };
+
+fn text(kinds: &Kinds) -> String {
+    Line::from(kinds.summary()).to_string()
+}
+
+#[test]
+fn shell_kinds_follow_the_command_first_word() {
+    let command = |command: &str| json!({"command": command});
+    assert!(matches!(
+        kind("shell", &command("rg -n foo a")),
+        Kind::Search
+    ));
+    assert!(matches!(
+        kind("shell", &command("grep -n foo a")),
+        Kind::Search
+    ));
+    assert!(matches!(
+        kind("shell", &command("find . -name x")),
+        Kind::List
+    ));
+    assert!(matches!(kind("shell", &command("ls -la")), Kind::List));
+    assert!(matches!(kind("shell", &command("fd foo")), Kind::List));
+    assert!(matches!(kind("shell", &command("cargo test")), Kind::Shell));
+    assert!(matches!(kind("shell", &json!({})), Kind::Shell));
+    assert!(matches!(kind("read", &json!({})), Kind::Read));
+    assert!(matches!(kind("edit", &json!({})), Kind::Edit));
+    assert!(matches!(kind("write", &json!({})), Kind::Write));
+    assert!(matches!(kind("delegate_spawn", &json!({})), Kind::Delegate));
+    assert!(matches!(kind("delegate_fork", &json!({})), Kind::Delegate));
+    assert!(matches!(kind("jobs", &json!({})), Kind::Jobs));
+    assert!(matches!(kind("mystery", &json!({})), Kind::Other));
+    // `ask_user` with no questions is no question asked.
+    assert!(matches!(
+        kind("ask_user", &json!({"questions": []})),
+        Kind::Other
+    ));
+    assert!(matches!(
+        kind("ask_user", &json!({"questions": [{}, {}]})),
+        Kind::Ask(2)
+    ));
+}
+
+#[test]
+fn a_failed_call_details_its_code_and_message() {
+    use contract::events::{CallStatus, ToolCallCompleted};
+    use contract::shapes::Failure;
+    let done = ToolCallCompleted {
+        status: CallStatus::Failed,
+        reason: None,
+        error: Some(Failure {
+            code: contract::ErrorCode::AmbiguousMatch,
+            message: "boom".to_owned(),
+            retry_after_ms: None,
+            provider: None,
+        }),
+        process: None,
+        content: vec![],
+        details: None,
+        artifact: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+    };
+    assert_eq!(detail(&done), "ambiguous_match: boom");
+}
 
 #[test]
 fn durations_truncate_to_whole_seconds_at_each_threshold() {
@@ -58,18 +127,23 @@ fn every_kind_in_order_capitalised() {
     let kinds = Kinds {
         read: 34,
         searched: 84,
+        listed: 12,
         edited: 24,
         added: 175,
         removed: 83,
+        wrote: 5,
         ran: 9,
+        delegates: 2,
+        jobs: 3,
         asked: 4,
-        other: 3,
+        called: 3,
         thoughts: 4,
     };
     assert_eq!(
-        kinds.summary(),
-        "Read 34 files, searched 84 patterns, edited 24 files +175 −83, ran 9 commands, \
-         asked 4 questions, 3 other calls, thought 4 times"
+        text(&kinds),
+        "Read 34 files, searched 84 patterns, listed 12 directories, edited 24 files +175 −83, \
+         wrote 5 files, ran 9 commands, started 2 delegates, checked 3 jobs, asked 4 questions, \
+         called 3 tools, thought 4 times"
     );
 }
 
@@ -78,24 +152,29 @@ fn every_kind_singular() {
     let kinds = Kinds {
         read: 1,
         searched: 1,
+        listed: 1,
         edited: 1,
         added: 3,
         removed: 1,
+        wrote: 1,
         ran: 1,
+        delegates: 1,
+        jobs: 1,
         asked: 1,
-        other: 1,
+        called: 1,
         thoughts: 1,
     };
     assert_eq!(
-        kinds.summary(),
-        "Read 1 file, searched 1 pattern, edited 1 file +3 −1, ran 1 command, \
-         asked 1 question, 1 other call, thought once"
+        text(&kinds),
+        "Read 1 file, searched 1 pattern, listed 1 directory, edited 1 file +3 −1, wrote 1 file, \
+         ran 1 command, started 1 delegate, checked 1 job, asked 1 question, called 1 tool, \
+         thought once"
     );
 }
 
 #[test]
 fn kinds_with_no_calls_are_left_out() {
-    let only = |kinds: Kinds| kinds.summary();
+    let only = |kinds: Kinds| text(&kinds);
     assert_eq!(only(Kinds::default()), "");
     assert_eq!(
         only(Kinds {
@@ -103,6 +182,13 @@ fn kinds_with_no_calls_are_left_out() {
             ..Kinds::default()
         }),
         "Searched 2 patterns"
+    );
+    assert_eq!(
+        only(Kinds {
+            listed: 2,
+            ..Kinds::default()
+        }),
+        "Listed 2 directories"
     );
     assert_eq!(
         only(Kinds {
@@ -129,10 +215,31 @@ fn kinds_with_no_calls_are_left_out() {
     );
     assert_eq!(
         only(Kinds {
+            wrote: 2,
+            ..Kinds::default()
+        }),
+        "Wrote 2 files"
+    );
+    assert_eq!(
+        only(Kinds {
             ran: 2,
             ..Kinds::default()
         }),
         "Ran 2 commands"
+    );
+    assert_eq!(
+        only(Kinds {
+            delegates: 2,
+            ..Kinds::default()
+        }),
+        "Started 2 delegates"
+    );
+    assert_eq!(
+        only(Kinds {
+            jobs: 2,
+            ..Kinds::default()
+        }),
+        "Checked 2 jobs"
     );
     assert_eq!(
         only(Kinds {
@@ -143,17 +250,24 @@ fn kinds_with_no_calls_are_left_out() {
     );
     assert_eq!(
         only(Kinds {
-            other: 2,
+            called: 2,
             ..Kinds::default()
         }),
-        "2 other calls"
+        "Called 2 tools"
+    );
+    assert_eq!(
+        only(Kinds {
+            thoughts: 1,
+            ..Kinds::default()
+        }),
+        "Thought once"
     );
     assert_eq!(
         only(Kinds {
             thoughts: 2,
             ..Kinds::default()
         }),
-        "Thought twice"
+        "Thought 2 times"
     );
     assert_eq!(
         only(Kinds {
@@ -162,6 +276,49 @@ fn kinds_with_no_calls_are_left_out() {
         }),
         "Thought 3 times"
     );
+    // Totals of 0 and 0 are left out.
+    assert_eq!(
+        only(Kinds {
+            edited: 1,
+            ..Kinds::default()
+        }),
+        "Edited 1 file"
+    );
+}
+
+#[test]
+fn summary_counts_keep_their_added_and_removed_styles() {
+    use crate::theme::Role;
+    let kinds = Kinds {
+        edited: 1,
+        added: 2,
+        removed: 1,
+        ..Kinds::default()
+    };
+    let spans = kinds.summary();
+    let plus = spans
+        .iter()
+        .find(|span| span.content == "+2")
+        .expect("plus");
+    let minus = spans
+        .iter()
+        .find(|span| span.content == "−1")
+        .expect("minus");
+    for span in [&plus, &minus] {
+        assert!(span.style.add_modifier.contains(Modifier::DIM));
+    }
+    assert_eq!(plus.style.fg, crate::markdown::style(Role::Added).fg);
+    assert_eq!(minus.style.fg, crate::markdown::style(Role::Removed).fg);
+    // Every other span is dim.
+    for span in &spans {
+        if span.content == "+2" || span.content == "−1" {
+            continue;
+        }
+        assert!(
+            span.style.add_modifier.contains(Modifier::DIM),
+            "{span:?} is dim"
+        );
+    }
 }
 
 #[test]
@@ -298,7 +455,15 @@ fn answer_rows_escape_headers_and_labels_onto_one_line() {
 fn ask_user_counts_its_questions_when_it_has_any() {
     let questions = |arguments| match kind("ask_user", &arguments) {
         Kind::Ask(n) => Some(n),
-        Kind::Read | Kind::Edit | Kind::Search | Kind::Ran | Kind::Other => None,
+        Kind::Read
+        | Kind::Search
+        | Kind::List
+        | Kind::Edit
+        | Kind::Write
+        | Kind::Shell
+        | Kind::Delegate
+        | Kind::Jobs
+        | Kind::Other => None,
     };
     assert_eq!(questions(json!({"questions": [{}]})), Some(1));
     assert_eq!(questions(json!({"questions": [{}, {}, {}]})), Some(3));
@@ -371,4 +536,49 @@ fn summaries_show_parsed_arguments_never_json() {
     // holds it until the call is requested.
     let raw = summary("ask_user", &serde_json::Value::String("{\"q".to_owned()));
     assert_eq!(raw, "");
+}
+
+#[test]
+fn kinds_name_the_ledgers_kind_word() {
+    let word = |name: &str, arguments: serde_json::Value| kind(name, &arguments).word();
+    assert_eq!(word("read", json!({})), "read");
+    assert_eq!(word("shell", json!({"command": "rg x"})), "search");
+    assert_eq!(word("shell", json!({"command": "fd x"})), "list");
+    assert_eq!(word("edit", json!({})), "edit");
+    assert_eq!(word("write", json!({})), "write");
+    assert_eq!(word("shell", json!({"command": "cargo t"})), "shell");
+    assert_eq!(word("delegate_spawn", json!({})), "delegate");
+    assert_eq!(word("delegate_fork", json!({})), "delegate");
+    assert_eq!(word("jobs", json!({})), "jobs");
+    assert_eq!(word("ask_user", json!({"questions": [{}]})), "ask");
+    assert_eq!(word("mystery", json!({})), "other");
+    // Every word fits the nine-column kind cell.
+    for name in [
+        "read",
+        "shell",
+        "edit",
+        "write",
+        "delegate_spawn",
+        "jobs",
+        "ask_user",
+        "mystery",
+    ] {
+        assert!(word(name, json!({"command": "cargo t", "questions": [{}]})).len() <= 9);
+    }
+}
+
+#[test]
+fn opened_notes_draw_every_line_uncapped() {
+    use super::opened;
+    use crate::rows::Rows;
+    let text = (1..=30)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut out = Rows::default();
+    opened(&text, "  ", &mut out);
+    let (rows, _) = out.into_parts();
+    assert_eq!(rows.len(), 30);
+    assert_eq!(rows[0].0.to_string(), "  line 1");
+    assert_eq!(rows[29].0.to_string(), "  line 30");
 }

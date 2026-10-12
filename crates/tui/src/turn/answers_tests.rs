@@ -143,11 +143,18 @@ fn rules(app: &App) -> Vec<Vec<String>> {
         .collect()
 }
 
-/// The ledger row of the `ask_user` call.
+/// The ledger row of the `ask_user` call: its kind cell reads `ask`.
+/// The step's first row carries its number ahead of the glyph, so the
+/// glyph is searched, not first.
 fn ledger(app: &App) -> String {
     texts(app)
         .into_iter()
-        .find(|text| !text.trim_start().starts_with('•') && text.contains(" ask_user "))
+        .find(|text| {
+            let trimmed = text.trim_start();
+            !trimmed.starts_with('●')
+                && trimmed.contains(['○', '✓', '⊘', '✗', '?'])
+                && trimmed.contains("ask")
+        })
         .unwrap_or_default()
 }
 
@@ -180,7 +187,7 @@ fn an_answered_form_adds_the_rule_and_reads_answered() {
             " note: \"by friday\"",
         ]]
     );
-    assert!(ledger(&app).ends_with(" · answered"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("answered"), "{}", ledger(&app));
 }
 
 #[test]
@@ -195,7 +202,7 @@ fn a_declined_form_adds_no_rule_and_reads_declined() {
         ],
     );
     assert!(rules(&app).is_empty());
-    assert!(ledger(&app).ends_with(" · declined"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("declined"), "{}", ledger(&app));
 }
 
 #[test]
@@ -209,7 +216,7 @@ fn a_decline_the_cancel_overtook_still_reads_declined() {
             completed("a_1", "cancelled", 0),
         ],
     );
-    assert!(ledger(&app).ends_with(" · declined"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("declined"), "{}", ledger(&app));
     assert!(!ledger(&app).contains("cancelled"));
 }
 
@@ -225,7 +232,7 @@ fn a_turn_cancel_reads_cancelled() {
         ],
     );
     assert!(rules(&app).is_empty());
-    assert!(ledger(&app).ends_with(" · cancelled"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("cancelled"), "{}", ledger(&app));
 }
 
 #[test]
@@ -241,14 +248,14 @@ fn a_close_reads_as_a_completed_row() {
     );
     let row = ledger(&app);
     assert!(rules(&app).is_empty());
-    assert!(row.ends_with("ask_user 2 questions"), "{row}");
+    assert!(row.ends_with("ok"), "{row}");
 }
 
 #[test]
-fn a_pending_form_reads_running() {
+fn a_pending_form_waits_on_you() {
     let mut app = app();
     feed(&mut app, asking());
-    assert!(ledger(&app).ends_with(" · running"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("waiting on you"), "{}", ledger(&app));
     assert!(rules(&app).is_empty());
 }
 
@@ -277,7 +284,7 @@ fn a_re_raised_form_draws_one_rule() {
         ],
     );
     assert_eq!(rules(&app).len(), 1);
-    assert!(ledger(&app).ends_with(" · answered"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("answered"), "{}", ledger(&app));
 }
 
 /// Folds `lines` into fresh turns, returning them with each fold's result.
@@ -310,7 +317,7 @@ fn a_confirm_interaction_naming_a_call_changes_nothing() {
     assert!(turns.iter().all(|turn| turn.entries.len() == 1));
     let mut app = app();
     feed(&mut app, lines);
-    assert!(ledger(&app).ends_with(" · running"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("waiting on you"), "{}", ledger(&app));
 }
 
 #[test]
@@ -350,7 +357,7 @@ fn a_duplicate_resolution_draws_one_rule() {
     let mut app = app();
     feed(&mut app, lines);
     assert_eq!(rules(&app).len(), 1);
-    assert!(ledger(&app).ends_with(" · answered"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("answered"), "{}", ledger(&app));
 }
 
 #[test]
@@ -362,10 +369,10 @@ fn a_person_answer_of_another_kind_changes_nothing() {
     let mut app = app();
     feed(&mut app, lines);
     assert!(rules(&app).is_empty());
-    assert!(ledger(&app).ends_with(" · running"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("waiting on you"), "{}", ledger(&app));
     // It is still waiting: the person's answer that follows counts.
     feed(&mut app, [resolved("r_4f", "person", answers())]);
-    assert!(ledger(&app).ends_with(" · answered"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("answered"), "{}", ledger(&app));
 }
 
 #[test]
@@ -399,7 +406,7 @@ fn a_new_request_id_on_the_same_call_replaces_asked() {
         rules(&app),
         vec![vec![" you answered", " Name: \"fiber-cli\""]]
     );
-    assert!(ledger(&app).ends_with(" · answered"), "{}", ledger(&app));
+    assert!(ledger(&app).ends_with("answered"), "{}", ledger(&app));
 }
 
 #[test]
@@ -484,10 +491,15 @@ fn the_rule_sits_where_the_answer_landed_and_the_group_stays_open() {
         ],
     );
     let texts = texts(&app);
-    let read = texts.iter().position(|text| text.ends_with("read a.rs"));
+    let read = texts.iter().position(|text| {
+        let trimmed = text.trim_start();
+        !trimmed.starts_with('●')
+            && trimmed.contains(['○', '✓', '⊘', '✗', '?'])
+            && trimmed.contains("read")
+    });
     let rule = texts.iter().position(|text| text == " you answered");
     assert!(read.is_some() && read < rule, "{texts:#?}");
-    let groups = texts.iter().filter(|text| text.starts_with(" • ")).count();
+    let groups = texts.iter().filter(|text| text.starts_with(" ● ")).count();
     assert_eq!(groups, 1, "{texts:#?}");
 }
 
@@ -629,7 +641,9 @@ fn the_group_line_counts_the_questions_asked() {
     );
     let texts = texts(&app);
     assert!(
-        texts.contains(&" • Asked 4 questions, 1 other call".to_owned()),
+        texts
+            .iter()
+            .any(|text| text.starts_with(" ● Asked 4 questions, called 1 tool")),
         "{texts:#?}"
     );
 }
