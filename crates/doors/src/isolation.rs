@@ -14,6 +14,8 @@ use log::diag::{Diag, Level, Process, Severity};
 
 use crate::{failure, project};
 
+mod shared;
+
 /// A worktree this session process created, until `end`.
 pub struct Isolation {
     created: worktree::Created,
