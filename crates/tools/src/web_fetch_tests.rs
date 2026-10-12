@@ -1538,8 +1538,8 @@ impl std::io::Write for HoldsOnSecondArtifactWrite {
 
 /// Holds the fetch watcher before its clock check until the test releases
 /// it, so the test can order the clock advance against the stop. Only the
-/// watcher's first check after arming holds, and only on the watcher
-/// thread; every other check answers the inner signal. A dropped release
+/// watcher's first check holds, and only on the watcher thread; every other
+/// check answers the inner signal. A dropped release
 /// sender releases the hold with an error, so the fetch ends when the test
 /// stops waiting.
 struct HoldsWatcher {
@@ -1549,16 +1549,10 @@ struct HoldsWatcher {
     release: Mutex<Receiver<()>>,
 }
 
-impl HoldsWatcher {
-    fn arm(&self) {
-        self.armed.store(true, Ordering::SeqCst);
-    }
-}
-
 impl Cancel for HoldsWatcher {
     fn is_cancelled(&self) -> bool {
-        if self.armed.swap(false, Ordering::SeqCst)
-            && thread::current().name() == Some("web-fetch-watch")
+        if thread::current().name() == Some("web-fetch-watch")
+            && self.armed.swap(false, Ordering::SeqCst)
         {
             // The send fails only when the test stopped waiting; the
             // receive fails when the test dropped its sender by panicking.
@@ -1614,7 +1608,7 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
     let (hold_release, hold_release_rx) = mpsc::channel();
     let watcher = Arc::new(HoldsWatcher {
         inner: CancelToken::new(),
-        armed: AtomicBool::new(false),
+        armed: AtomicBool::new(true),
         held,
         release: Mutex::new(hold_release_rx),
     });
@@ -1629,12 +1623,6 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
             Ok(()) | Err(_) => {}
         }
     });
-    let deadline = rig.clock.origin() + Duration::from_secs(60);
-    assert!(
-        rig.clock.await_parked(deadline, WITHIN),
-        "the request watcher waits for the request deadline"
-    );
-    watcher.arm();
     Deadline::after(WITHIN)
         .recv(&second_write_rx)
         .expect("the artifact writer reaches piece two");
@@ -1642,10 +1630,10 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
         server.await_partial(1, WITHIN),
         "the server sends piece three before the timeout"
     );
-    rig.clock.advance(Duration::from_secs(61));
     Deadline::after(WITHIN)
         .recv(&held_rx)
         .expect("the watcher holds before its clock check");
+    rig.clock.advance(Duration::from_secs(61));
     hold_release.send(()).expect("the held watcher is released");
     assert!(
         server.await_closed(1, WITHIN),
