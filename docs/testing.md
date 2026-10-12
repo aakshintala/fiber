@@ -326,6 +326,13 @@ program or waiting on a test.
   examples, so a jig test starts `target/<profile>/examples/<jig>` (found
   from `std::env::current_exe`) directly. It never runs `cargo run`, which
   would wait on the build directory's lock inside the test's deadline.
+- **Its own logic is tested from shared support.** Code in a jig that a
+  test checks without running the binary, such as its argument parsing,
+  lives in a support file under the crate's `tests/support/`. The jig
+  includes that file with `#[path]` (`docs/code-quality.md`, "Size"), and
+  the test calls it directly. A jig is never marked `test = true`, because
+  `cargo test` then builds it as a test harness instead of the binary jig
+  tests run.
 - **It never ships.** No release binary contains a jig, and the shipped
   `fiber` gains no switch for one. A jig that people need becomes a `fiber`
   subcommand through its area's ticket, with the tests a feature carries.
