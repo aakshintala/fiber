@@ -1191,6 +1191,14 @@ fn a_command_moved_at_once_never_spills() {
     let dir = fakes::TempDir::new("fiber-shell-background-no-spill");
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir(&artifacts).unwrap();
+    let release = dir.path().join("release");
+    // The command holds until the test observes the move, so the move
+    // always wins the race with the command's end. The loop is bounded,
+    // so a failure before the release still ends the child.
+    let held = format!(
+        "i=0\nwhile test \"$i\" -lt 600; do\ntest -e '{}' && exit 0\ni=$((i + 1))\nsleep 0.1\ndone\n",
+        release.display()
+    );
     let clock = FakeClock::new();
     let cancel = CancelToken::new();
     let work = dir.path().to_path_buf();
@@ -1203,7 +1211,7 @@ fn a_command_moved_at_once_never_spills() {
         move || {
             let ran = super::execute(
                 std::path::Path::new("/bin/sh"),
-                "exit 0",
+                &held,
                 &work,
                 Duration::from_secs(60),
                 clock.as_ref(),
@@ -1220,6 +1228,8 @@ fn a_command_moved_at_once_never_spills() {
             moved
         }
     });
+    // The move is observed: releasing the command lets it end.
+    std::fs::write(&release, b"go\n").unwrap();
     {
         let inner = super::super::output::lock(&moved.progress.shared.inner);
         assert!(inner.spill_config.is_none());
