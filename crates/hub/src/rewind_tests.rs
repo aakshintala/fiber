@@ -480,6 +480,21 @@ fn a_start_message_that_names_the_new_session_is_not_forwarded() {
 }
 
 #[test]
+fn a_start_that_exits_io_failed_is_refused_with_the_fixed_sentence() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let from = id(1);
+    let next = id(2);
+    write_log(&temp.dir, &from, &workspace, None, &[exited_line(&from)]);
+    let _held = hold_old_lock(&temp, &from);
+    let starter = FakeStarter::exit_with(&temp.dir, failure(ErrorCode::IoFailed, "detail text"));
+    let hub = temp.hub(starter.clone());
+    let refused = reach(&hub, &SessionId(from.clone()), &SessionId(next.clone())).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::IoFailed);
+    assert_eq!(refused.message, "The new session could not start.");
+}
+
+#[test]
 fn a_start_that_never_binds_is_refused_io_failed() {
     let temp = Temp::new();
     let workspace = temp.workspace();
