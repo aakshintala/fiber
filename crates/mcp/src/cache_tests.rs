@@ -15,6 +15,13 @@ fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .collect()
 }
 
+fn secrets(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(key, name)| ((*key).to_owned(), (*name).to_owned()))
+        .collect()
+}
+
 fn tools() -> Vec<ListedTool> {
     vec![
         serde_json::from_value(json!({
@@ -48,8 +55,8 @@ fn cached() -> super::Cached {
 
 #[test]
 fn equal_declarations_share_a_key() {
-    let left = key("fx", &["a".to_owned()], &env(&[("K", "1")]));
-    let right = key("fx", &["a".to_owned()], &env(&[("K", "1")]));
+    let left = key("fx", &["a".to_owned()], &env(&[("K", "1")]), &secrets(&[]));
+    let right = key("fx", &["a".to_owned()], &env(&[("K", "1")]), &secrets(&[]));
     assert_eq!(left, right);
     assert_eq!(left.len(), 64);
     assert!(left.chars().all(|char| char.is_ascii_hexdigit()));
@@ -58,13 +65,49 @@ fn equal_declarations_share_a_key() {
 
 #[test]
 fn the_key_moves_with_command_args_and_env() {
-    let base = key("fx", &["a".to_owned()], &env(&[("K", "1")]));
-    assert_ne!(base, key("other", &["a".to_owned()], &env(&[("K", "1")])));
-    assert_ne!(base, key("fx", &["b".to_owned()], &env(&[("K", "1")])));
-    assert_ne!(base, key("fx", &["a".to_owned()], &env(&[("K", "2")])));
+    let base = key("fx", &["a".to_owned()], &env(&[("K", "1")]), &secrets(&[]));
+    assert_ne!(base, key("other", &["a".to_owned()], &env(&[("K", "1")]), &secrets(&[])));
+    assert_ne!(base, key("fx", &["b".to_owned()], &env(&[("K", "1")]), &secrets(&[])));
+    assert_ne!(base, key("fx", &["a".to_owned()], &env(&[("K", "2")]), &secrets(&[])));
     assert_ne!(
         base,
-        key("fx", &["a".to_owned()], &env(&[("K", "1"), ("J", "0")])),
+        key("fx", &["a".to_owned()], &env(&[("K", "1"), ("J", "0")]), &secrets(&[])),
+    );
+}
+
+#[test]
+fn the_key_moves_with_secret_references_never_values() {
+    // The references are hashed, never the resolved values: a rotation
+    // keeps the cache, while a changed reference misses it.
+    let base = key("fx", &[], &env(&[]), &secrets(&[("K", "mcp.fx.K")]));
+    assert_eq!(
+        base,
+        key("fx", &[], &env(&[]), &secrets(&[("K", "mcp.fx.K")]))
+    );
+    assert_ne!(
+        base,
+        key("fx", &[], &env(&[]), &secrets(&[])),
+        "a dropped reference misses"
+    );
+    assert_ne!(
+        base,
+        key("fx", &[], &env(&[]), &secrets(&[("K", "mcp.fx.OTHER")])),
+        "a changed reference misses"
+    );
+    assert_ne!(
+        base,
+        key("fx", &[], &env(&[]), &secrets(&[("J", "mcp.fx.K")])),
+        "a changed env key misses"
+    );
+    assert_ne!(
+        base,
+        key(
+            "fx",
+            &[],
+            &env(&[("K", "v")]),
+            &secrets(&[("K", "mcp.fx.K")])
+        ),
+        "plain env still matters beside secrets"
     );
 }
 
@@ -72,7 +115,7 @@ fn the_key_moves_with_command_args_and_env() {
 fn a_write_then_a_read_returns_both_lists() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
-    let declaration = key("fx", &[], &env(&[]));
+    let declaration = key("fx", &[], &env(&[]), &secrets(&[]));
     write(&cache, "fx", &declaration, &cached());
     assert_eq!(read(&cache, "fx", &declaration), Some(cached()));
 }
@@ -81,7 +124,7 @@ fn a_write_then_a_read_returns_both_lists() {
 fn a_file_with_no_prompt_list_is_a_miss() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
-    let declaration = key("fx", &[], &env(&[]));
+    let declaration = key("fx", &[], &env(&[]), &secrets(&[]));
     std::fs::create_dir_all(&cache).expect("cache dir");
     std::fs::write(
         cache.join("fx.json"),
@@ -95,7 +138,7 @@ fn a_file_with_no_prompt_list_is_a_miss() {
 fn a_pre_change_file_is_a_miss() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
-    let declaration = key("fx", &[], &env(&[]));
+    let declaration = key("fx", &[], &env(&[]), &secrets(&[]));
     std::fs::create_dir_all(&cache).expect("cache dir");
     std::fs::write(
         cache.join("fx.json"),
@@ -109,7 +152,7 @@ fn a_pre_change_file_is_a_miss() {
 fn another_version_is_a_miss() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
-    let declaration = key("fx", &[], &env(&[]));
+    let declaration = key("fx", &[], &env(&[]), &secrets(&[]));
     std::fs::create_dir_all(&cache).expect("cache dir");
     std::fs::write(
         cache.join("fx.json"),
@@ -123,9 +166,9 @@ fn another_version_is_a_miss() {
 fn a_different_key_is_a_miss() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
-    write(&cache, "fx", &key("fx", &[], &env(&[])), &cached());
+    write(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[])), &cached());
     assert_eq!(
-        read(&cache, "fx", &key("fx", &["changed".to_owned()], &env(&[]))),
+        read(&cache, "fx", &key("fx", &["changed".to_owned()], &env(&[]), &secrets(&[]))),
         None
     );
 }
@@ -134,7 +177,7 @@ fn a_different_key_is_a_miss() {
 fn a_missing_file_is_a_miss() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
-    assert_eq!(read(&cache, "fx", &key("fx", &[], &env(&[]))), None);
+    assert_eq!(read(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[]))), None);
 }
 
 #[test]
@@ -143,7 +186,7 @@ fn a_corrupt_file_is_a_miss() {
     let cache = dir.path().join("mcp");
     std::fs::create_dir_all(&cache).expect("cache dir");
     std::fs::write(cache.join("fx.json"), "not json").expect("corrupt cache");
-    assert_eq!(read(&cache, "fx", &key("fx", &[], &env(&[]))), None);
+    assert_eq!(read(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[]))), None);
 }
 
 #[test]
@@ -153,17 +196,17 @@ fn a_key_mismatch_shape_is_a_miss() {
     std::fs::create_dir_all(&cache).expect("cache dir");
     std::fs::write(
         cache.join("fx.json"),
-        json!({"version": 1, "key": key("fx", &[], &env(&[])), "tools": {}}).to_string(),
+        json!({"version": 1, "key": key("fx", &[], &env(&[]), &secrets(&[])), "tools": {}}).to_string(),
     )
     .expect("shapeless cache");
-    assert_eq!(read(&cache, "fx", &key("fx", &[], &env(&[]))), None);
+    assert_eq!(read(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[]))), None);
 }
 
 #[test]
 fn unsafe_names_have_no_file_and_always_miss() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
-    let declaration = key("fx", &[], &env(&[]));
+    let declaration = key("fx", &[], &env(&[]), &secrets(&[]));
     for name in ["", ".hidden", "a/b", "a\\b", "a\0b", ".."] {
         assert_eq!(path(&cache, name), None, "name: {name:?}");
         assert_eq!(read(&cache, name, &declaration), None, "name: {name:?}");
@@ -191,7 +234,7 @@ fn a_write_leaves_no_tmp_behind_and_creates_the_directory() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("missing").join("mcp");
     assert!(!cache.exists());
-    let declaration = key("fx", &[], &env(&[]));
+    let declaration = key("fx", &[], &env(&[]), &secrets(&[]));
     write(&cache, "fx", &declaration, &cached());
     assert_eq!(read(&cache, "fx", &declaration), Some(cached()));
     let left: Vec<_> = std::fs::read_dir(&cache)
@@ -211,7 +254,7 @@ fn a_write_leaves_no_tmp_behind_and_creates_the_directory() {
 fn unknown_fields_survive_a_write_and_read() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
-    let declaration = key("fx", &[], &env(&[]));
+    let declaration = key("fx", &[], &env(&[]), &secrets(&[]));
     let bare: ListedTool = serde_json::from_value(json!({
         "name": "bare",
         "idempotentHint": true,
@@ -252,7 +295,12 @@ fn url_key_is_stable_and_shares_nothing_with_the_stdio_key() {
     );
     assert_ne!(
         super::url_key(url),
-        super::key(url, &[], &std::collections::BTreeMap::new()),
+        super::key(
+            url,
+            &[],
+            &std::collections::BTreeMap::new(),
+            &std::collections::BTreeMap::new()
+        ),
         "never the stdio key of the same text"
     );
 }
@@ -262,7 +310,7 @@ fn the_resources_flag_round_trips() {
     for resources in [true, false] {
         let dir = TempDir::new("fiber-mcp-cache-resources");
         let cache = dir.path().join("mcp");
-        let declaration = key("fx", &[], &env(&[]));
+        let declaration = key("fx", &[], &env(&[]), &secrets(&[]));
         let lists = super::Cached {
             tools: tools(),
             prompts: prompts(),
@@ -289,7 +337,7 @@ fn the_resources_flag_round_trips() {
 fn a_file_without_the_resources_flag_offers_none() {
     let dir = TempDir::new("fiber-mcp-cache-resources-missing");
     let cache = dir.path().join("mcp");
-    let declaration = key("fx", &[], &env(&[]));
+    let declaration = key("fx", &[], &env(&[]), &secrets(&[]));
     std::fs::create_dir_all(&cache).expect("cache dir");
     // A v1 file from before the flag: no `resources`, but with both
     // lists, so it reads as a hit.

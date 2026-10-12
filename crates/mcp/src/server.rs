@@ -50,6 +50,20 @@ pub(crate) enum StartError {
     Login(String),
     /// Nothing answered before the startup deadline.
     Deadline,
+    /// A `{ "secret" }` env value names no stored credential: the name
+    /// of `credentials/<name>`, never the value.
+    SecretMissing {
+        /// The secret's name, as the env value names it.
+        name: String,
+    },
+    /// A `{ "secret" }` env value names a credential that cannot be
+    /// read: the name and the reason, never the value.
+    SecretUnreadable {
+        /// The secret's name, as the env value names it.
+        name: String,
+        /// Why it cannot be read, never the value.
+        why: String,
+    },
 }
 
 /// A start refused because Fiber is shutting down.

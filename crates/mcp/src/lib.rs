@@ -31,7 +31,7 @@ pub use prompt::Prompts;
 pub use registry::stop_every_start;
 pub use resources::{RESOURCES_TOOL, resources_definition};
 pub use start::{
-    DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, Program, ServerSpec, Servers, Started,
-    StdioSpec, Transport, start,
+    DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, Program, SecretError, SecretReader, ServerSpec,
+    Servers, Started, StdioSpec, Transport, start,
 };
 pub use token::{Token, TokenError, store_token, url_has_userinfo};

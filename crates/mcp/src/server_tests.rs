@@ -363,6 +363,9 @@ fn a_non_object_initialize_reply_fails_the_start() {
         ),
         StartError::Deadline => panic!("a fast non-object reply is not a deadline"),
         StartError::Login(_) => panic!("a child reply cannot require an HTTP login"),
+        StartError::SecretMissing { .. } | StartError::SecretUnreadable { .. } => {
+            panic!("a child reply names no secret")
+        }
     }
 }
 
@@ -1176,6 +1179,9 @@ fn assert_shutdown_failed(outcome: Result<super::OpenServer, StartError>) {
         ),
         Err(StartError::Deadline) => panic!("a stopped start is not a deadline"),
         Err(StartError::Login(_)) => panic!("a stopped child cannot require an HTTP login"),
+        Err(StartError::SecretMissing { .. } | StartError::SecretUnreadable { .. }) => {
+            panic!("a stopped start names no secret")
+        }
         Ok(_) => panic!("a stopped start does not open"),
     }
 }
@@ -1378,4 +1384,24 @@ fn a_server_that_stops_reading_stdin_ends_every_call_gone() {
         .count();
     assert_eq!(died, 1, "exactly one death is recorded");
     setup.stop(started.servers);
+}
+
+#[test]
+fn a_secret_start_error_names_the_secret_never_its_value() {
+    let missing = format!(
+        "{:?}",
+        StartError::SecretMissing {
+            name: "mcp.fx.S".to_owned(),
+        }
+    );
+    assert!(missing.contains("mcp.fx.S"), "{missing}");
+    let unreadable = format!(
+        "{:?}",
+        StartError::SecretUnreadable {
+            name: "mcp.fx.S".to_owned(),
+            why: "denied".to_owned(),
+        }
+    );
+    assert!(unreadable.contains("mcp.fx.S"), "{unreadable}");
+    assert!(unreadable.contains("denied"), "{unreadable}");
 }

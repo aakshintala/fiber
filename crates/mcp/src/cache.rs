@@ -21,14 +21,23 @@ use crate::server_json::{ListedPrompt, ListedTool};
 const CACHE_VERSION: u32 = 1;
 
 /// The key of a server's declaration: the lowercase hex SHA-256 of the
-/// JSON serialisation of its command, arguments and environment. Timeouts,
+/// JSON serialisation of its command, arguments, environment and secret
+/// references. Timeouts,
 /// `required`, `enabled`, `disabled` and hint overrides are not part of
-/// the declaration, so changing them needs no cache miss.
-pub(crate) fn key(command: &str, args: &[String], env: &BTreeMap<String, String>) -> String {
+/// the declaration, so changing them needs no cache miss. Secret values
+/// are not part of it either: the references are, so rotating a secret
+/// keeps the cache and changing a reference misses it.
+pub(crate) fn key(
+    command: &str,
+    args: &[String],
+    env: &BTreeMap<String, String>,
+    secrets: &BTreeMap<String, String>,
+) -> String {
     let declaration = serde_json::json!({
         "command": command,
         "args": args,
         "env": env,
+        "secrets": secrets,
     });
     let bytes = serde_json::to_vec(&declaration).unwrap_or_default();
     let digest = ring::digest::digest(&ring::digest::SHA256, &bytes);

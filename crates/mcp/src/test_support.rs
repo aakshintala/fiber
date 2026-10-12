@@ -176,6 +176,8 @@ impl Setup {
                 command: fakes::mcp_fixture().display().to_string(),
                 args: vec![self.dir.path().display().to_string()],
                 env: BTreeMap::new(),
+                secrets: BTreeMap::new(),
+                reader: std::sync::Arc::new(|_| Err(crate::SecretError::Missing)),
                 run: None,
             }),
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
