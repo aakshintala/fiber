@@ -2977,8 +2977,8 @@ fn dropping_a_delegate_lifeline_exits_129_within_the_bound() {
     setup.slow_idle();
     let id = doors::mint("s_");
     let (mut running, stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
-    // The turn's first step started: the provider is stalled mid-turn.
-    running.wait_for("step_started");
+    // The model call started: the provider is stalled mid-turn.
+    running.wait_for("assistant_message_started");
     // The parent is gone: EOF on the lifeline is a hangup.
     drop(stdin);
     let (status, out, stderr) = running.wait();
@@ -3670,7 +3670,7 @@ fn dropping_a_resumed_delegate_lifeline_exits_129_within_the_bound() {
     assert_eq!(status.code(), Some(0), "stderr: {stderr}");
     // Run 2 stalls mid-turn, holding its lifeline.
     let (mut second, stdin) = setup.start_resume(&id, PARENT, DELEGATE, "again");
-    second.wait_for("step_started");
+    second.wait_for("assistant_message_started");
     // The parent is gone: EOF on the resumed lifeline is a hangup.
     drop(stdin);
     let (status, out, stderr) = second.wait();
