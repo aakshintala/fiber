@@ -24,6 +24,7 @@ use serde_json::{Map, Value};
 use super::before_tool::Prepared;
 use super::completion::{completed, denied, resolved};
 use crate::asking::Release;
+use crate::inner_calls::{InnerRunning, InnerSlot};
 use crate::interactions::Suspend;
 use crate::progress::{SharedWake, Stream};
 use crate::{Error, Loop, schema};
@@ -259,7 +260,7 @@ impl Loop {
                         // wake: nobody can answer (`docs/tools.md`, "Asking
                         // the person").
                         let answerable = self.answerable && self.inbox_wake.is_some();
-                        let slot = Arc::new(crate::inner_calls::InnerSlot::new(
+                        let slot = Arc::new(InnerSlot::new(
                             Arc::clone(&wake),
                             id.clone(),
                             name.clone(),
@@ -320,9 +321,11 @@ impl Loop {
                         }
                         State::Ready(_) | State::Done => None,
                     })
-                    .chain(inner.iter().map(|call: &crate::inner_calls::InnerRunning| {
-                        (call.id.clone(), Arc::clone(&call.stream))
-                    }))
+                    .chain(
+                        inner
+                            .iter()
+                            .map(|call: &InnerRunning| (call.id.clone(), Arc::clone(&call.stream))),
+                    )
                     .collect();
                 let streams: Vec<_> = streams
                     .iter()
@@ -726,7 +729,7 @@ impl Loop {
     fn complete_next(
         &mut self,
         running: &mut [Running],
-        inner: &[crate::inner_calls::InnerRunning],
+        inner: &[InnerRunning],
         turn: &TurnId,
     ) -> Result<bool, Error> {
         // The first call whose completion is not written: everything
