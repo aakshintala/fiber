@@ -236,15 +236,23 @@ fn a_taken_closure_after_an_answer_or_runner_removal_sets_no_window() {
         let runner = runner(&hub, 1);
         let result = start(&runner);
         let request = received_request(&rx);
+        let (entered, paused) = mpsc::channel();
+        let (release, held) = mpsc::channel();
         if removed {
             hub.lock().runners.remove(&1);
         } else {
+            // Hold the runner after its wait returns and before it clears
+            // `serving`, so the clear cannot race the `taken` call below.
+            *runner.pause.lock().unwrap() = Some((entered, held));
             (request.answer)(completion());
+            Deadline::after(WAIT).recv_or_fail(&paused, "runner paused after its answer");
         }
         (request.taken)();
         assert_eq!(hub.lock().serving, None);
         if removed {
             runner.ended.end();
+        } else {
+            release.send(()).unwrap();
         }
         assert_eq!(
             Deadline::after(WAIT)
