@@ -25,7 +25,7 @@ use crate::host::Reply;
 use crate::host::script::HostScript;
 
 use super::asks::PendingAsk;
-use super::{ENTRY, GRACE, Target, expired};
+use super::{ENTRY, GRACE, LOAD_TIMEOUT, Target, expired, timeout_ms};
 
 pub(super) use super::declared::CallbackTimeouts;
 pub(crate) use super::declared::{DeclaredHooks, HookPhase};
@@ -235,6 +235,9 @@ impl Hub {
 #[derive(Default)]
 pub(crate) struct Shared {
     pub(super) phase: Phase,
+    pub(super) loads: HashMap<String, ProviderLoad>,
+    pub(super) pending_loads: VecDeque<String>,
+    pub(super) misplaced: bool,
     /// Calls the thread has not started, in the order Fiber asked.
     pub(super) queue: VecDeque<Job>,
     /// Each waiting call's progress, by id.
@@ -262,6 +265,14 @@ pub(crate) struct Shared {
     /// Raised into running Lua by the deadline hook while a cancelled call
     /// runs; set and cleared only under this lock.
     pub(super) interrupt: Arc<std::sync::atomic::AtomicBool>,
+}
+
+pub(super) enum ProviderLoad {
+    Absent,
+    Queued { asked: Instant },
+    Running { abandon_at: Option<Instant> },
+    Loaded,
+    Failed(StopReason),
 }
 
 #[derive(Default)]
@@ -317,6 +328,60 @@ pub(super) enum Next {
 }
 
 impl Shared {
+    pub(super) fn judge_load(
+        &mut self,
+        name: &str,
+        provider: &str,
+        asked: Instant,
+        now: Instant,
+    ) -> (Next, Vec<Delivery>) {
+        if let Phase::Stopped(reason) = &self.phase {
+            return (Next::Return(Err(reason.error(name))), Vec::new());
+        }
+        let callback = format!("providers/{provider}.lua");
+        let until = match self.loads.get(provider) {
+            Some(ProviderLoad::Absent) => {
+                return (Next::Return(Ok(Value::Bool(false))), Vec::new());
+            }
+            Some(ProviderLoad::Loaded) => return (Next::Return(Ok(Value::Bool(true))), Vec::new()),
+            Some(ProviderLoad::Failed(reason)) => {
+                return (Next::Return(Err(reason.error(name))), Vec::new());
+            }
+            Some(ProviderLoad::Queued { asked }) => asked.checked_add(LOAD_TIMEOUT),
+            Some(ProviderLoad::Running { abandon_at }) => {
+                if expired(*abandon_at, now) {
+                    let reason = StopReason::Abandoned {
+                        extension: name.to_owned(),
+                        callback,
+                    };
+                    let error = reason.error(name);
+                    let unsent = self.stop(reason);
+                    return (Next::Return(Err(error)), unsent);
+                }
+                return (Next::Sleep(*abandon_at), Vec::new());
+            }
+            None => asked.checked_add(LOAD_TIMEOUT),
+        };
+        if expired(until, now) {
+            self.pending_loads.retain(|queued| queued != provider);
+            self.loads.remove(provider);
+            return (
+                Next::Return(Err(Error::Timeout {
+                    extension: name.to_owned(),
+                    callback,
+                    timeout_ms: timeout_ms(LOAD_TIMEOUT),
+                })),
+                Vec::new(),
+            );
+        }
+        let (gate, unsent) = self.gate(name, now);
+        match gate {
+            Gate::Stopped(e) => (Next::Return(Err(e)), unsent),
+            Gate::Wait(at) => (Next::Sleep(at.into_iter().chain(until).min()), unsent),
+            Gate::Ready(_) => (Next::Sleep(until), unsent),
+        }
+    }
+
     /// Queues a call and returns its id.
     pub(super) fn push(&mut self, target: Target, arg: Value, asked: Instant) -> u64 {
         self.push_at(target, arg, asked, false)

@@ -33,6 +33,10 @@ pub(super) struct Vm {
     host_script: Option<Arc<crate::host::script::HostScript>>,
     /// The extension's memory cap in bytes, bounding each `exec` stream.
     memory_cap: usize,
+    dir: PathBuf,
+    loading: Rc<RefCell<Option<String>>>,
+    entry: Rc<Cell<bool>>,
+    violations: Table,
     /// What the host calls yield, so a callback's own yield is not a request.
     http_tag: mlua::Value,
     /// What `fiber.command` registered: each name's `timeout` and `run`.
@@ -126,10 +130,11 @@ impl Vm {
             .map(|session| session.config.extensions().workspace().to_path_buf())
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let entry = Rc::new(Cell::new(true));
+        let init = Rc::new(Cell::new(true));
         let tools =
-            super::tool::install(&lua, problems.clone(), Rc::clone(&entry)).map_err(lua_error)?;
+            super::tool::install(&lua, problems.clone(), Rc::clone(&init)).map_err(lua_error)?;
         let search =
-            super::search::install(&lua, problems.clone(), Rc::clone(&entry)).map_err(lua_error)?;
+            super::search::install(&lua, problems.clone(), Rc::clone(&init)).map_err(lua_error)?;
         let (http_tag, timer_funcs) = host::install(
             &lua,
             host::HostContext {
@@ -155,6 +160,10 @@ impl Vm {
             workspace,
             host_script: hub.host_script(),
             memory_cap: *memory_cap,
+            dir: dir.clone(),
+            loading: Rc::clone(&loading),
+            entry: Rc::clone(&entry),
+            violations: violations.clone(),
             http_tag,
             commands,
             providers,
@@ -166,6 +175,12 @@ impl Vm {
             timer_funcs,
         };
 
+        if !dir.join(ENTRY).is_file() {
+            entry.set(false);
+            init.set(false);
+            *loading.borrow_mut() = None;
+            return Ok(vm);
+        }
         let entry_fn = match setup::load_file(&vm.lua, &dir, ENTRY, *memory_cap) {
             Ok(Ok(entry_fn)) => entry_fn,
             Ok(Err(message)) => return Err(fail(message)),
@@ -173,12 +188,62 @@ impl Vm {
         };
         let ran = vm.resume(entry_fn, ENTRY, LOAD_TIMEOUT, mlua::Value::Nil);
         entry.set(false);
+        init.set(false);
         *loading.borrow_mut() = None;
         ran?;
         if let Some(message) = violations.sequence_values::<String>().next() {
             return Err(fail(message.map_err(lua_error)?));
         }
         Ok(vm)
+    }
+
+    pub(super) fn load_provider(
+        &self,
+        name: &str,
+        deadline: Option<Instant>,
+    ) -> Result<BTreeMap<String, Duration>, Error> {
+        let file = format!("providers/{name}.lua");
+        self.deadline.restore(deadline);
+        *self.loading.borrow_mut() = Some(file.clone());
+        self.entry.set(true);
+        let result = (|| {
+            let f = setup::load_file(&self.lua, &self.dir, &file, self.memory_cap)
+                .map_err(|e| self.error(&e))?
+                .map_err(|message| Error::Lua {
+                    extension: self.name.clone(),
+                    message,
+                })?;
+            self.resume(f, &file, LOAD_TIMEOUT, mlua::Value::Nil)?;
+            if let Some(message) = self.violations.sequence_values::<String>().next() {
+                return Err(Error::Lua {
+                    extension: self.name.clone(),
+                    message: message.map_err(|e| self.error(&e))?,
+                });
+            }
+            if self
+                .providers
+                .get::<Option<Table>>(name)
+                .map_err(|e| self.error(&e))?
+                .is_none()
+            {
+                return Err(Error::Lua {
+                    extension: self.name.clone(),
+                    message: format!("{file}: registers no provider `{name}`"),
+                });
+            }
+            Ok(self.declared().providers.remove(name).unwrap_or_default())
+        })();
+        self.entry.set(false);
+        *self.loading.borrow_mut() = None;
+        match self.violations.clear() {
+            Ok(()) | Err(_) => {}
+        }
+        if result.is_err() {
+            match self.providers.raw_remove(name) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        result
     }
 
     /// Starts `target` and runs it until it returns or suspends on

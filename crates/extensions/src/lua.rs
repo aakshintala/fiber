@@ -367,6 +367,9 @@ impl LuaExtension {
     /// The functions `fiber.provider` registered for `provider`, by name;
     /// empty when the extension registered no such provider.
     pub fn provider_functions(&self, provider: &str) -> Result<Vec<String>, Error> {
+        if !self.ensure_provider(provider)? {
+            return Ok(Vec::new());
+        }
         self.registered(|timeouts| {
             timeouts
                 .providers
@@ -374,6 +377,48 @@ impl LuaExtension {
                 .map(|fns| fns.keys().cloned().collect())
                 .unwrap_or_default()
         })
+    }
+
+    pub(crate) fn ensure_provider(&self, provider: &str) -> Result<bool, Error> {
+        let asked = self.hub.clock().now();
+        let mut shared = self.hub.lock();
+        if !shared.loads.contains_key(provider) {
+            if !self
+                .dir
+                .join("providers")
+                .join(format!("{provider}.lua"))
+                .is_file()
+            {
+                shared
+                    .loads
+                    .insert(provider.to_owned(), hub::ProviderLoad::Absent);
+                return Ok(false);
+            }
+            self.start(&mut shared)?;
+            shared
+                .loads
+                .insert(provider.to_owned(), hub::ProviderLoad::Queued { asked });
+            shared.pending_loads.push_back(provider.to_owned());
+            self.hub.notify();
+        }
+        loop {
+            match shared.judge_load(&self.name, provider, asked, self.hub.clock().now()) {
+                (Next::Return(result), unsent) => {
+                    self.hub.notify();
+                    drop(shared);
+                    drop(unsent);
+                    return result.map(|value| value == Value::Bool(true));
+                }
+                (Next::Sleep(until), unsent) => {
+                    drop(unsent);
+                    shared = self.hub.wait(shared, until);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn misplaced_provider(&self) -> bool {
+        self.hub.lock().misplaced
     }
 
     /// Every provider `fiber.provider` registered, sorted.
@@ -544,6 +589,7 @@ impl LuaExtension {
         function: &'static str,
         arg: Value,
     ) -> Result<Value, Error> {
+        self.ensure_provider(provider)?;
         self.call(
             Target::Provider {
                 name: provider.to_owned(),
@@ -564,6 +610,7 @@ impl LuaExtension {
         provider: &str,
         pair: &CredentialPair,
     ) -> Result<Value, Error> {
+        self.ensure_provider(provider)?;
         self.call(
             Target::Provider {
                 name: provider.to_owned(),
@@ -589,6 +636,7 @@ impl LuaExtension {
         method: LoginMethod,
         slot: LoginSlot,
     ) -> Result<Value, Error> {
+        self.ensure_provider(provider)?;
         let login = match method {
             LoginMethod::Browser => "browser",
             LoginMethod::Device => "device",

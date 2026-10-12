@@ -42,6 +42,78 @@ fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     }
 }
 
+fn provider_file(lua: &str) -> (fakes::TempDir, Arc<LuaExtension>) {
+    let dir = fakes::TempDir::new("lazy-provider");
+    std::fs::create_dir_all(dir.path().join("providers")).unwrap();
+    std::fs::write(dir.path().join("providers/p.lua"), lua).unwrap();
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        dir.path(),
+        dir.path(),
+        FakeClock::new(),
+    ));
+    (dir, ext)
+}
+
+#[test]
+fn provider_only_file_lists_functions_on_first_use() {
+    let (_dir, ext) =
+        provider_file("fiber.provider('p', {models={timeout=100, run=function() return {} end}})");
+    assert!(!ext.is_running());
+    let functions = within(move || ext.provider_functions("p")).unwrap();
+    assert_eq!(functions, ["models"]);
+}
+
+#[test]
+fn provider_file_refuses_wrong_duplicate_missing_and_tool_registrations() {
+    for (lua, reason) in [
+        ("fiber.provider('q', {})", "not `q`"),
+        (
+            "fiber.provider('p', {}) pcall(function() fiber.provider('p', {}) end)",
+            "exactly once",
+        ),
+        ("local x = 1", "registers no provider `p`"),
+        ("fiber.tool('t', {})", "init.lua"),
+    ] {
+        let (_dir, ext) = provider_file(lua);
+        let err = within(move || ext.provider_functions("p")).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+        let Error::Lua { message, .. } = err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("providers/p.lua"), "{message}");
+        assert!(message.contains(reason), "{message}");
+    }
+}
+
+#[test]
+fn absent_provider_file_starts_no_vm() {
+    let dir = fakes::TempDir::new("absent-provider");
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        dir.path(),
+        dir.path(),
+        FakeClock::new(),
+    ));
+    let copy = Arc::clone(&ext);
+    assert_eq!(
+        within(move || copy.provider_functions("none")).unwrap(),
+        Vec::<String>::new()
+    );
+    assert!(!ext.is_running());
+}
+
+#[test]
+fn oversized_provider_file_names_the_file() {
+    let (_dir, ext) = provider_file(&" ".repeat(extensions::MEMORY_CAP + 1));
+    let err = within(move || ext.provider_functions("p")).unwrap_err();
+    let Error::Lua { message, .. } = err else {
+        panic!("{err:?}")
+    };
+    assert!(message.contains("providers/p.lua"), "{message}");
+    assert!(message.contains("memory cap"), "{message}");
+}
+
 /// The fixture's provider, with its server's address and key stored as
 /// secrets in a fresh Fiber home.
 fn fixture(setup: &Setup, server: &ProviderServer) -> Arc<LuaProvider> {
