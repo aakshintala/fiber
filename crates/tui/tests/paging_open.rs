@@ -9,6 +9,12 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+// The jig's argument parsing, shared with the runnable binary (see
+// `support/paging_args.rs`): the example stays runnable (`test =
+// false`), so both include the same file.
+#[path = "support/paging_args.rs"]
+mod paging_args;
+
 use fakes::Deadline;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -262,17 +268,22 @@ fn positional_args_generate_the_session_at_the_given_size() {
     assert!(!first.contains("160x48"), "{first}");
 }
 
+/// Words for the parsing tests: the jig reads its arguments with
+/// `std::env::args`, so the tests pass owned strings as it would.
+fn words(words: &[&str]) -> Vec<String> {
+    words.iter().map(|word| (*word).to_owned()).collect()
+}
+
 #[test]
-fn no_word_runs_the_session_as_it_always_ran() {
+fn no_word_parses_as_the_session_as_it_always_ran() {
     // No word is scale 1 at 160 by 48, as the jig ran before the open
     // mode existed.
-    let jig = Jig::new();
-    let out = run(&jig.exe(), &[]);
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(out.status.success(), "{stderr}");
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    let first = stdout.lines().next().unwrap_or_default();
-    assert!(first.contains("scale 1"), "{first}");
-    assert!(first.contains("160x48"), "{first}");
-    assert!(!first.contains("scale 0"), "{first}");
+    assert_eq!(
+        paging_args::parse_args(&words(&[])),
+        Ok(paging_args::Mode::Paging {
+            scale: 1,
+            width: 160,
+            height: 48,
+        })
+    );
 }
