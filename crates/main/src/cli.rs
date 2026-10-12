@@ -483,8 +483,8 @@ pub(crate) struct SessionArgs {
     pub(crate) prompt: Option<String>,
 
     /// Resume the session `--id` names instead of starting it; the
-    /// workspace is the one its log recorded (`docs/invocation.md`, "The
-    /// hub").
+    /// workspace is the launch directory the hub selected from the
+    /// session's log (`docs/invocation.md`, "The hub").
     #[arg(long)]
     pub(crate) resume: bool,
 

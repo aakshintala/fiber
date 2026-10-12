@@ -1,8 +1,9 @@
 //! Resuming a session a relayed command names (`docs/invocation.md`,
 //! "Lifecycle"): a session whose socket accepts no connection is a log to
 //! resume. The hub finds the log by the session's id, starts the internal
-//! session command with `--resume` in the workspace the log recorded, and
-//! waits for the socket as `start` does. A session that is running is
+//! session command with `--resume` in the launch directory the log selects,
+//! the recorded repository when the workspace is gone and the workspace
+//! otherwise, and waits for the socket as `start` does. A session that is running is
 //! attached to instead: one resume at a time per hub, and the socket is
 //! tried again first, so two commands for one exited session start one
 //! process.
@@ -168,7 +169,7 @@ fn attempt(hub: &Hub, session: &SessionId, socket: &Path, trusted: bool) -> Step
     if recorded.delegate {
         return Step::Done(Err(delegate_refused()));
     }
-    let started = match hub.starter.resume(session, &recorded.workspace) {
+    let started = match hub.starter.resume(session, recorded.launch()) {
         Ok(started) => started,
         Err(error) => return Step::Done(Err(io_failed(hub, session, &format!("{error}.")))),
     };
@@ -259,9 +260,32 @@ pub(crate) fn find_log(home: &Path, session: &SessionId) -> Option<PathBuf> {
 pub(crate) struct Recorded {
     /// The session's workspace.
     pub(crate) workspace: PathBuf,
+    /// The repository the recorded worktree came from, when its
+    /// `session_started` recorded one.
+    repository: Option<PathBuf>,
     /// Whether it names a `parent` that is not `null`: a delegate's. A
     /// parent of any shape counts, so a malformed one is never resumed.
     delegate: bool,
+}
+
+impl Recorded {
+    /// Where the resumed process starts: the recorded repository when the
+    /// workspace is gone and a repository is recorded, else the workspace.
+    /// Anything but a missing workspace keeps the workspace: a dangling
+    /// symlink at the path exists, and any other lookup error resumes
+    /// where the worktree is.
+    pub(crate) fn launch(&self) -> &Path {
+        match self.repository.as_ref() {
+            Some(repository) if missing(&self.workspace) => repository,
+            Some(_) | None => &self.workspace,
+        }
+    }
+}
+
+/// Whether `path` is missing: only `NotFound` counts, so any other
+/// lookup error keeps the workspace.
+fn missing(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_err_and(|source| source.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// What the log's first line holds: a complete `session_started` with a
@@ -307,9 +331,17 @@ fn first_line(log: &Path) -> FirstLine {
     let workspace = payload
         .and_then(|payload| payload.get("workspace"))
         .and_then(Value::as_str);
+    // The recorded repository, when `worktree` is an object naming one
+    // as a string: any other shape records none, and never corrupts.
+    let repository = payload
+        .and_then(|payload| payload.get("worktree"))
+        .and_then(|worktree| worktree.get("repository"))
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
     match workspace {
         Some(workspace) => FirstLine::Recorded(Recorded {
             workspace: PathBuf::from(workspace),
+            repository,
             delegate: payload
                 .and_then(|payload| payload.get("parent"))
                 .is_some_and(|parent| !parent.is_null()),

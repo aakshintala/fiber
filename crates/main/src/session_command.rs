@@ -25,8 +25,8 @@ use crate::{
 /// shared path reads it as the current directory exactly as `ask` does.
 /// With `--worktree` it moves once more, into the new worktree, after
 /// that: the signals' bound thread reads no relative path. With `--resume`
-/// the workspace is the one the log recorded, and the session is resumed
-/// instead of started. Stdin is never read.
+/// the workspace is the launch directory the hub selected, and the session
+/// enters the recorded worktree itself instead of starting one. Stdin is never read.
 pub(crate) fn run(
     args: cli::SessionArgs,
     clock: Arc<dyn contract::clock::Clock>,
