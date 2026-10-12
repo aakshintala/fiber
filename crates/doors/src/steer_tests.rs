@@ -13,14 +13,14 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 
 use contract::{SCHEMA_VERSION, SessionId};
 use fakes::Deadline;
 
-use super::{AckWait, Steered, hold_ack_wait_for_test, steer};
+use super::{AckWait, Steered, hold_ack_read_for_test, hold_ack_wait_for_test, steer};
 use crate::mint;
 
 #[allow(
@@ -75,17 +75,27 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
         assert_eq!(steered["command"], "steer");
     });
     let calls = Arc::new(AtomicUsize::new(0));
+    let read_before_commit = Arc::new(AtomicBool::new(true));
     let (entered_tx, entered_rx) = mpsc::channel::<()>();
     let (release_pause_tx, release_pause_rx) = mpsc::channel::<()>();
+    let (read_tx, read_rx) = mpsc::channel::<()>();
     hold_ack_wait_for_test(AckWait {
         entered: entered_tx,
         release: release_pause_rx,
     });
+    hold_ack_read_for_test(read_tx);
     let (done_tx, done_rx) = mpsc::channel();
     let home_client = home.clone();
     let counted = Arc::clone(&calls);
+    let read_first = Arc::clone(&read_before_commit);
     let held_back = thread::spawn(move || {
         let mut commit = || {
+            // The read-completion signal fires after the acknowledgement
+            // read returns and before this runs: a commit before the
+            // answer finds the channel empty, on every run.
+            if read_rx.try_recv().is_err() {
+                read_first.store(false, Ordering::SeqCst);
+            }
             counted.fetch_add(1, Ordering::SeqCst);
             true
         };
@@ -121,6 +131,10 @@ fn commit_runs_only_after_the_subscribe_is_answered() {
         Steered::Gone
     );
     held_back.join().expect("the steer thread ended");
+    assert!(
+        read_before_commit.load(Ordering::SeqCst),
+        "commit runs only after the acknowledgement is read"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1, "commit ran once");
     served.join().expect("the server read the steer line");
 }

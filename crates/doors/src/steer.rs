@@ -50,6 +50,36 @@ fn pause_at_ack_wait() {
     let _released = hold.release.recv();
 }
 
+/// A test-only read-completion signal: fired after the acknowledgement
+/// read has returned and before `commit` runs, so the commit-order test
+/// can assert inside `commit` that the answer was read. `None` outside
+/// that test, so the shipped path sends nothing extra. A hook, not an
+/// outside seam: nothing the test can observe separates the answer's
+/// arrival from `commit` (`docs/testing.md`, "Waits and timeouts"; the
+/// plan in #540).
+#[cfg(test)]
+static ACK_READ: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>> =
+    std::sync::Mutex::new(None);
+
+/// Arms the read-completion signal for the next `steer` call. One shot:
+/// the next answered subscribe takes it, so later calls signal nothing.
+#[cfg(test)]
+pub(crate) fn hold_ack_read_for_test(read: std::sync::mpsc::Sender<()>) {
+    if let Ok(mut armed) = ACK_READ.lock() {
+        *armed = Some(read);
+    }
+}
+
+/// Fires the armed read-completion signal, if any: the acknowledgement
+/// read above has returned, and `commit` runs next.
+#[cfg(test)]
+fn note_ack_read() {
+    let read = ACK_READ.lock().ok().and_then(|mut armed| armed.take());
+    if let Some(read) = read {
+        let _sent = read.send(());
+    }
+}
+
 /// What one `steer` attempt ended in. An outcome, like [`Watched`], not an
 /// error type.
 #[derive(Debug, Clone, PartialEq)]
@@ -129,6 +159,10 @@ pub fn steer(
             break;
         }
     }
+    // Test-only: the commit-order test asserts inside `commit` that this
+    // fired, so a commit before the answer fails deterministically.
+    #[cfg(test)]
+    note_ack_read();
     if !commit() {
         return Steered::Withheld;
     }
