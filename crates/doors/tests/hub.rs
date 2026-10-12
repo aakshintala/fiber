@@ -315,6 +315,52 @@ fn a_hub_that_never_speaks_fails_eof_at_the_race_bound() {
 }
 
 #[test]
+fn connect_within_max_with_a_dropping_peer_ends_timed_out() {
+    let temp = Temp::new();
+    let home = run_home(&temp);
+    let listener = UnixListener::bind(home.join("run").join("hub")).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let stop = Arc::new(AtomicBool::new(false));
+    let _guard = StopGuard(Arc::clone(&stop));
+    let count = Arc::new(AtomicUsize::new(0));
+    let (done_tx, done_rx) = mpsc::channel();
+    let thread_stop = Arc::clone(&stop);
+    let thread_count = Arc::clone(&count);
+    thread::spawn(move || {
+        dropping_hub(
+            listener,
+            thread_count,
+            done_tx,
+            &thread_stop,
+            Deadline::after(DEADLINE),
+        )
+    });
+    let clock = FakeClock::new();
+    let origin = clock.origin();
+    let error = run(
+        Entry::Within(Duration::MAX),
+        home,
+        || Ok(()),
+        Arc::clone(&clock),
+    )
+    .expect_err("a peer that drops every handshake with MAX hello wait ends timed out");
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    // The overflow falls back to one connect deadline of races, one poll
+    // apart, with no poll after the final failure.
+    assert_eq!(
+        clock.now(),
+        (origin + hub::CONNECT_DEADLINE)
+            .checked_sub(Duration::from_millis(10))
+            .unwrap()
+    );
+    stop.store(true, Ordering::SeqCst);
+    let dropped = Deadline::after(DEADLINE)
+        .recv(&done_rx)
+        .expect("the dropping hub reports its count");
+    assert_eq!(dropped, (hub::CONNECT_DEADLINE.as_millis() / 10) as usize);
+}
+
+#[test]
 fn a_probe_that_meets_an_exiting_hub_fails_with_its_starter_error() {
     for entry in [Entry::Until(DEADLINE), Entry::Within(DEADLINE)] {
         let temp = Temp::new();

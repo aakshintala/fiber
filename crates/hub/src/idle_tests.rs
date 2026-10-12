@@ -1014,19 +1014,31 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
     // The first connection after the claim is dropped unanswered.
     let first = UnixStream::connect(temp.socket()).expect("the first connection connects");
     first.set_read_timeout(Some(DEADLINE)).unwrap();
-    let mut got = Vec::new();
-    let mut first = first;
+    let (first_tx, first_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut first = first;
+        let mut got = Vec::new();
+        let read = first.read_to_end(&mut got);
+        first_tx.send((read, got)).unwrap_or(());
+    });
+    let (read, got) = Deadline::after(DEADLINE)
+        .recv(&first_rx)
+        .expect("the first connection ends");
     assert_eq!(
-        first.read_to_end(&mut got).expect("EOF, not a hello"),
+        read.expect("EOF, not a hello"),
         0,
         "the first connection reads EOF"
     );
     assert!(got.is_empty(), "the first connection carries no bytes");
-    // The second connection queues unanswered while the hold lasts.
+    // The second connection queues unanswered while the hold lasts: the
+    // reader reports it reached its read, and the hold proves the hub
+    // cannot answer, so an immediate check proves the absence.
     let second = UnixStream::connect(temp.socket()).expect("the second connection connects");
+    let (reading_tx, reading_rx) = mpsc::channel::<()>();
     let (result_tx, result_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut second = second;
+        reading_tx.send(()).unwrap_or(());
         let mut bytes = Vec::new();
         let read = second.read_to_end(&mut bytes);
         let size = read
@@ -1035,10 +1047,11 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
             .map_err(|error| error.kind());
         result_tx.send((size, bytes)).unwrap_or(());
     });
+    Deadline::after(DEADLINE)
+        .recv(&reading_rx)
+        .expect("the reader reached its read");
     assert!(
-        Deadline::after(Duration::from_millis(200))
-            .recv(&result_rx)
-            .is_err(),
+        result_rx.try_recv().is_err(),
         "the second connection stays unanswered while the hold lasts"
     );
     assert!(

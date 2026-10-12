@@ -68,7 +68,8 @@ pub fn connect_until(
 /// [`connect`], with `hub_hello` due within `hello_within` of the socket
 /// accepting, on `clock`. Between races the client pauses one poll, and
 /// `start` may run again once the socket is gone. Past the race bound the
-/// connect fails `UnexpectedEof`.
+/// connect fails `UnexpectedEof`, or `TimedOut` when `hello_within`
+/// overflowed the bound and fell back to [`CONNECT_DEADLINE`]
 pub fn connect_within(
     home: &Path,
     start: &mut dyn FnMut() -> io::Result<()>,
@@ -104,11 +105,13 @@ impl Due {
     }
 
     /// The handshake read's deadline: the shared one for `At`, the accept
-    /// plus the hello wait for `Within`, or none when that overflows.
-    fn hello_deadline(&self, accepted_at: Instant) -> Option<Instant> {
+    /// plus the hello wait for `Within`, or the attempt's bind deadline
+    /// when that overflows, so no `Duration` panics and no wait is
+    /// unbounded.
+    fn hello_deadline(&self, accepted_at: Instant, bind: Instant) -> Option<Instant> {
         match self {
             Due::At { deadline, .. } => Some(*deadline),
-            Due::Within(within) => accepted_at.checked_add(*within),
+            Due::Within(within) => accepted_at.checked_add(*within).or(Some(bind)),
         }
     }
 
@@ -117,10 +120,26 @@ impl Due {
     /// bind wait and handshake read ends by it; the first attempt's
     /// start plus [`CONNECT_DEADLINE`] for `Within`, so the retries end
     /// together while each attempt still waits its own bind deadline.
+    /// `Within`'s hello wait does not move it: a 10 s hello wait still
+    /// stops racing after one connect deadline, as
+    /// `a_hub_that_never_speaks_fails_eof_at_the_race_bound` pins.
     fn race_bound(&self, first_start: Instant) -> Instant {
         match self {
             Due::At { deadline, .. } => *deadline,
-            Due::Within(_) => first_start + CONNECT_DEADLINE,
+            Due::Within(_) => first_start
+                .checked_add(CONNECT_DEADLINE)
+                .unwrap_or(first_start),
+        }
+    }
+
+    /// Whether `Within`'s hello wait overflowed the race bound, so
+    /// exhaustion past it is a hello timeout, not a closed connection:
+    /// the peer kept dropping a handshake with no hello deadline of its
+    /// own, bounded only by the fallback.
+    fn overflowed(&self, first_start: Instant) -> bool {
+        match self {
+            Due::At { .. } => false,
+            Due::Within(within) => first_start.checked_add(*within).is_none(),
         }
     }
 
@@ -148,6 +167,8 @@ fn connect_with(
 ) -> io::Result<Hub> {
     let first_start = clock.now();
     let bound = due.race_bound(first_start);
+    let overflowed = due.overflowed(first_start);
+    let socket = home.join("run").join("hub");
     let mut started = false;
     loop {
         match attempt(home, &mut started, start, clock, &due, before_read) {
@@ -159,11 +180,21 @@ fn connect_with(
         // hub exited before the handshake, so the connect retries past
         // each race until the bound, then may start a new hub once the
         // socket is gone.
-        if clock.now() + CONNECT_POLL >= bound {
+        if clock.now().checked_add(CONNECT_POLL).unwrap_or(bound) >= bound {
             break;
         }
         started = false;
         clock.sleep(CONNECT_POLL);
+    }
+    if overflowed {
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!(
+                "the hub at {} accepted but did not say hub_hello in {} s",
+                socket.display(),
+                CONNECT_DEADLINE.as_secs_f64()
+            ),
+        ));
     }
     Err(io::Error::new(
         io::ErrorKind::UnexpectedEof,
@@ -278,7 +309,7 @@ fn attempt(
     loop {
         match UnixStream::connect(&socket) {
             Ok(stream) => {
-                let hello = due.hello_deadline(clock.now());
+                let hello = due.hello_deadline(clock.now(), bind);
                 return read_hello(stream, &socket, hello, due.named(), clock, before_read);
             }
             Err(error) if is_absent(error.kind()) => {
