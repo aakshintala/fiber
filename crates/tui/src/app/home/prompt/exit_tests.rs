@@ -661,6 +661,41 @@ fn the_attached_session_with_a_row_gets_one_line() {
 }
 
 #[test]
+fn the_attached_session_with_an_exited_row_gets_its_line() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    // A resumed session's row still reads exited until the feed update
+    // marks it live: quitting before that update lands still owes the
+    // attached session its line.
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    assert_eq!(
+        app.exit_lines(),
+        ["s_aaaaaaaaaaaaaaaa  fiber resume s_aaaaaaaaaaaaaaaa"]
+    );
+}
+
+#[test]
+fn a_closing_attached_session_with_an_exited_row_gets_no_line() {
+    let mut app = home();
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited"));
+    app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.phase = crate::app::Phase::Attached {
+        session: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
+        busy: true,
+    };
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Exit(_) = app.on_key(Key::Char('c'), clock.now()) else {
+        panic!("`c` closes all");
+    };
+    assert!(app.exit_lines().is_empty());
+}
+
+#[test]
 fn a_closing_attached_session_gets_no_line() {
     let mut app = home();
     linked(&mut app);
