@@ -295,13 +295,15 @@ other: Fiber raises it on the event stream as one of the interactions
 answers it with `reply`.
 
 Fiber advertises form elicitation. The server sends a form of typed fields.
-Fiber asks each field in turn:
+Fiber asks each field in turn, in the order the server lists them:
 
 | Field type | Interaction |
 |---|---|
 | boolean | confirm |
 | enum | select |
 | string, number or integer | text input |
+
+A typed answer that is not a number for a number field, or not a whole number for an integer field, or that is outside the field's limits, is rejected `invalid_arguments`, and the field stays pending. An elicitation Fiber cannot show, such as one with a field of another type or a malformed schema, is answered with a JSON-RPC error, and nothing is logged. A declined optional field is left out of the answers and the rest is still accepted; a declined required field declines the whole elicitation.
 
 When no answer is possible, Fiber declines, which is a response MCP defines.
 That is the same case as an escalation's block (`docs/permissions.md`,
@@ -317,7 +319,7 @@ it: the MCP TypeScript SDK 1.29.0 passes `relatedRequestId` to its transport
 (`server/stdio.js:63`). Each session has its own servers ("Where servers
 run"), so an elicitation always belongs to the session that started the
 server. When that session has more than one call in flight on the server, its
-log records the elicitation with the `action_id` of each.
+log records the elicitation with the `action_id` of each. An elicitation that arrives with no call in flight on its server is declined, and nothing is logged. Fetching an MCP prompt is not a call: an elicitation that arrives during one is declined.
 
 Fiber does not advertise sampling and does not answer a sampling request.
 
