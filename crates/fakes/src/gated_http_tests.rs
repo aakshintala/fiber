@@ -97,10 +97,18 @@ fn trickled_header_bytes_fail_within_the_request_bound() {
     );
 }
 
-/// How long a test's client waits for each read from the fake. The
-/// fake's own bound is longer, so a client read failing names the test's
-/// failure first.
+/// How long a test's client socket waits for each underlying read:
+/// the bound that frees a reader thread, not the test's wait. Each
+/// helper below takes its whole read under one [`READ_WAIT`] deadline
+/// instead (`docs/testing.md`, "Waits and timeouts"). The fake's own
+/// bound is longer, so a client read failing names the test's failure
+/// first.
 const CLIENT_WAIT: Duration = Duration::from_secs(5);
+/// The test's one deadline for a whole client read (`docs/testing.md`,
+/// "Waits and timeouts"): shorter than [`CLIENT_WAIT`], so the
+/// deadline names a hung read and the socket timeout only frees the
+/// reader thread.
+const READ_WAIT: Duration = Duration::from_secs(4);
 /// The most bytes a client reads from a stream it does not trust to end,
 /// so a mutant that streams forever fails the test instead of growing.
 const READ_CAP: u64 = 1 << 16;
@@ -135,8 +143,20 @@ fn connect(url: &str, method: &str, body: &str) -> BufReader<TcpStream> {
 }
 
 /// Reads a response's status line and headers: the status, and the
-/// `content-length` when the response has one.
+/// `content-length` when the response has one. The whole head reads on
+/// a scoped thread under one deadline (`docs/testing.md`, "Waits and
+/// timeouts"), never one timeout per line.
 fn read_head(reader: &mut BufReader<TcpStream>) -> (u16, Option<u64>) {
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| if let Ok(()) = tx.send(read_head_inner(reader)) {});
+        Deadline::after(READ_WAIT).recv_or_fail(&rx, "the response head")
+    })
+}
+
+/// The lines of a response head: the status, and the `content-length`
+/// when the response has one.
+fn read_head_inner(reader: &mut BufReader<TcpStream>) -> (u16, Option<u64>) {
     let mut lines = reader
         .by_ref()
         .lines()
@@ -163,16 +183,25 @@ fn read_head(reader: &mut BufReader<TcpStream>) -> (u16, Option<u64>) {
 }
 
 /// One request and its whole response: the status and the body text.
+/// The whole exchange runs on a scoped thread under one deadline
+/// (`docs/testing.md`, "Waits and timeouts"), never one timeout per
+/// line.
 fn send(url: &str, method: &str, body: &str) -> (u16, String) {
-    let mut reader = connect(url, method, body);
-    let (status, length) = read_head(&mut reader);
-    let mut text = Vec::new();
-    reader
-        .by_ref()
-        .take(length.unwrap_or(READ_CAP))
-        .read_to_end(&mut text)
-        .expect("the response body reads");
-    (status, String::from_utf8_lossy(&text).into_owned())
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut reader = connect(url, method, body);
+            let (status, length) = read_head_inner(&mut reader);
+            let mut text = Vec::new();
+            reader
+                .by_ref()
+                .take(length.unwrap_or(READ_CAP))
+                .read_to_end(&mut text)
+                .expect("the response body reads");
+            if let Ok(()) = tx.send((status, String::from_utf8_lossy(&text).into_owned())) {}
+        });
+        Deadline::after(READ_WAIT).recv_or_fail(&rx, "the response")
+    })
 }
 
 /// One JSON-RPC request and its JSON answer, `Null` when it has none.
@@ -189,8 +218,19 @@ fn events(text: &str) -> Vec<Value> {
         .collect()
 }
 
-/// The next `data:` event on an open stream.
+/// The next `data:` event on an open stream. It reads on a scoped
+/// thread under one deadline (`docs/testing.md`, "Waits and timeouts"),
+/// never one timeout per line.
 fn next_event(reader: &mut BufReader<TcpStream>) -> Value {
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| if let Ok(()) = tx.send(next_event_inner(reader)) {});
+        Deadline::after(READ_WAIT).recv_or_fail(&rx, "the stream's next event")
+    })
+}
+
+/// The next `data:` event on an open stream.
+fn next_event_inner(reader: &mut BufReader<TcpStream>) -> Value {
     reader
         .by_ref()
         .lines()
@@ -203,8 +243,19 @@ fn next_event(reader: &mut BufReader<TcpStream>) -> Value {
         .expect("the stream carries an event")
 }
 
+/// The rest of an open stream, to its end. It reads on a scoped thread
+/// under one deadline (`docs/testing.md`, "Waits and timeouts"), never
+/// one timeout per read.
+fn rest(reader: BufReader<TcpStream>) -> String {
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| if let Ok(()) = tx.send(rest_inner(reader)) {});
+        Deadline::after(READ_WAIT).recv_or_fail(&rx, "the rest of the stream")
+    })
+}
+
 /// The rest of an open stream, to its end.
-fn rest(mut reader: BufReader<TcpStream>) -> String {
+fn rest_inner(mut reader: BufReader<TcpStream>) -> String {
     let mut text = Vec::new();
     reader
         .by_ref()
