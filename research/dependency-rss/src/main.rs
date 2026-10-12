@@ -40,6 +40,19 @@ fn main() {
             return;
         }
     }
+    #[cfg(feature = "qrcode")]
+    {
+        for _ in 0..1_000 {
+            let code = qrcode::QrCode::new(b"wss://mybox.tailnet.ts.net\n0123456789abc").unwrap();
+            black_box(
+                code.render::<qrcode::render::unicode::Dense1x2>()
+                    .dark_color(qrcode::render::unicode::Dense1x2::Light)
+                    .light_color(qrcode::render::unicode::Dense1x2::Dark)
+                    .quiet_zone(true)
+                    .build(),
+            );
+        }
+    }
     #[cfg(feature = "serde_json")]
     {
         #[derive(serde::Serialize, serde::Deserialize)]
