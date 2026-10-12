@@ -1800,10 +1800,7 @@ fn a_present_workspace_resumes_in_the_workspace_whatever_repository_is_recorded(
 fn a_removed_workspace_without_a_repository_resumes_in_the_workspace() {
     let temp = Temp::new();
     let workspace = temp.dir.join(format!("w-{SECRET}"));
-    let (workspace, _) = temp.worktree_log(
-        false,
-        json!({"path": workspace, "branch": "fiber/s"}),
-    );
+    let (workspace, _) = temp.worktree_log(false, json!({"path": workspace, "branch": "fiber/s"}));
     // The workspace is gone, but with no recorded repository there is
     // nowhere else to start: the starter gets the workspace and reports
     // the missing path itself.

@@ -285,7 +285,8 @@ impl Recorded {
 /// Whether `path` is missing: only `NotFound` counts, so any other
 /// lookup error keeps the workspace.
 fn missing(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_err_and(|source| source.kind() == std::io::ErrorKind::NotFound)
+    std::fs::symlink_metadata(path)
+        .is_err_and(|source| source.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// What the log's first line holds: a complete `session_started` with a

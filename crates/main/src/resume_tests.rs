@@ -229,7 +229,10 @@ fn a_hub_present_recreation_whose_path_vanished_fails_io_failed() {
         Err(error) => {
             assert_eq!(error.failure.code, ErrorCode::IoFailed);
             assert!(
-                error.failure.message.contains(worktree.to_string_lossy().as_ref()),
+                error
+                    .failure
+                    .message
+                    .contains(worktree.to_string_lossy().as_ref()),
                 "{}",
                 error.failure.message
             );

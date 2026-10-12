@@ -215,9 +215,7 @@ fn send_prompt(client: &Socket, id: &str, session: &str, text: &str) {
 
 /// Sends a `close` for `session` through the hub.
 fn send_close(client: &Socket, session: &str) {
-    client.send(
-        &json!({"id": "c_close", "session_id": session, "command": "close"}).to_string(),
-    );
+    client.send(&json!({"id": "c_close", "session_id": session, "command": "close"}).to_string());
 }
 
 /// Collects hub lines until the resumed `fiber_started`, skipping the
@@ -230,9 +228,7 @@ fn until_resumed(client: &Socket, what: &str) -> Vec<Value> {
     });
     let resumed = lines
         .iter()
-        .rposition(|line| {
-            line["kind"] == "fiber_started" && line["payload"]["resumed"] == true
-        })
+        .rposition(|line| line["kind"] == "fiber_started" && line["payload"]["resumed"] == true)
         .expect("the resumed fiber_started is collected");
     lines[resumed..].to_vec()
 }
@@ -255,8 +251,7 @@ fn lock_of(path: &Path) -> PathBuf {
 #[test]
 fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
     let setup = Setup::new();
-    let server =
-        ProviderServer::start([hello(), write_call("note.txt", "hi\n"), hello()]).unwrap();
+    let server = ProviderServer::start([hello(), write_call("note.txt", "hi\n"), hello()]).unwrap();
     setup.provider(&server);
     init_repo(setup.deadline, &setup.workspace());
     let workspace = workspace_text(&setup);
@@ -361,7 +356,10 @@ fn a_hub_resume_makes_a_removed_worktree_again_and_keeps_it_when_dirty() {
     assert_eq!(now_first, first_line);
     let log = setup.hub_log();
     assert!(!log.contains(&first.repository), "{log}");
-    assert!(!log.contains(first.path.to_string_lossy().as_ref()), "{log}");
+    assert!(
+        !log.contains(first.path.to_string_lossy().as_ref()),
+        "{log}"
+    );
     drop(client);
     hub.lock()
         .unwrap()
@@ -563,7 +561,11 @@ fn a_hub_resume_with_the_repository_gone_is_io_failed_naming_it_and_changes_noth
     let events = session_dir(&setup, &first.id).join("events.jsonl");
     let before = fs::read(&events).unwrap();
 
-    fs::rename(setup.workspace().join(".git"), setup.workspace().join(".git-moved")).unwrap();
+    fs::rename(
+        setup.workspace().join(".git"),
+        setup.workspace().join(".git-moved"),
+    )
+    .unwrap();
     let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     let repo_guard = SessionGuard::arm(setup.deadline, &first.repository);
@@ -590,7 +592,11 @@ fn a_hub_resume_with_the_repository_gone_is_io_failed_naming_it_and_changes_noth
     assert_eq!(fs::read(&events).unwrap(), before);
     assert!(!lock_of(&first.path).exists());
     repo_guard.wait_gone();
-    fs::rename(setup.workspace().join(".git-moved"), setup.workspace().join(".git")).unwrap();
+    fs::rename(
+        setup.workspace().join(".git-moved"),
+        setup.workspace().join(".git"),
+    )
+    .unwrap();
     assert!(
         git(
             setup.deadline,
@@ -602,7 +608,10 @@ fn a_hub_resume_with_the_repository_gone_is_io_failed_naming_it_and_changes_noth
     );
     let log = setup.hub_log();
     assert!(!log.contains(&first.repository), "{log}");
-    assert!(!log.contains(first.path.to_string_lossy().as_ref()), "{log}");
+    assert!(
+        !log.contains(first.path.to_string_lossy().as_ref()),
+        "{log}"
+    );
     drop(client);
     hub.lock()
         .unwrap()

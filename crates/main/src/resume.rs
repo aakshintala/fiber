@@ -662,9 +662,7 @@ fn enter_worktree(
                     &|command| reads.command(command),
                 ) {
                     Ok(doors::Recreated::Made(isolation)) => Ok(Held::Made(isolation)),
-                    Ok(doors::Recreated::Present(shared)) => {
-                        enter(path, shared, enter_present)
-                    }
+                    Ok(doors::Recreated::Present(shared)) => enter(path, shared, enter_present),
                     Err(error) => Err(error),
                 }
             }
@@ -693,9 +691,7 @@ fn enter(
     shared: doors::Shared,
     enter_present: bool,
 ) -> Result<Held, doors::RecreateError> {
-    if enter_present
-        && let Err(source) = std::env::set_current_dir(path)
-    {
+    if enter_present && let Err(source) = std::env::set_current_dir(path) {
         return Err(doors::RecreateError {
             failure: failed(
                 ErrorCode::IoFailed,
