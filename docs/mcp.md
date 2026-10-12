@@ -29,14 +29,27 @@ carries ([ADR 0008](adr/0008-the-mcp-client-is-built-in.md)). A person logs in
 to a server with `fiber mcp login <server>`, and `fiber mcp logout <server>`
 deletes the stored token. Both look up the server's URL from its
 configuration. The token is stored by that URL, not by the server's name, at
-`credentials/mcp/<hash>`, where the hash is a SHA-256 of the canonical URL, and
-the file records the URL itself (`docs/state.md`, "What each part holds"). A token is
+`credentials/mcp/<hash>`, where the hash is the lowercase hex SHA-256 of the
+canonical URL's bytes. The file records the URL itself (`docs/state.md`,
+"What each part holds"). Fiber canonicalizes the URL by lowercasing the scheme
+and host, dropping the scheme's default port and any fragment, and keeping
+the path (including a trailing slash) and query byte for byte. Two server names
+share a token only when their canonical URLs are equal. A token is
 only ever sent to the URL it was issued for, whatever name a configuration or a
 repository gives the server, and one login serves every project that uses
 that server. Token refresh follows the provider
 rule in `docs/model-routing.md`, "Credentials": lock the credential file,
 re-read it, refresh once. A headless start with no valid token counts as
 the server failing to start (see [Starting servers](#starting-servers)).
+
+Fiber sends the stored token as `Authorization: Bearer` on every request to
+that URL, and none when nothing is stored. HTTP 401 during `initialize`,
+`notifications/initialized`, or a tool or prompt list fails the start
+`mcp_server_failed`. An unusable stored login or a rejected refresh fails it
+with the same code. Every door gives the advice `fiber mcp login <server>`;
+a `required` server instead fails the run `mcp_required_server_failed`.
+A call that meets HTTP 401 mid-session fails with the same login advice.
+A session `DELETE` answered HTTP 401 is ignored.
 
 Fiber is an MCP server in one place: `fiber mcp serve`, which a delegate on
 another harness uses to send session messages (`docs/delegates.md`,
@@ -385,6 +398,10 @@ Each server has:
 - which tools are enabled and which are disabled
 
 The keys are `docs/configuration.md` ("MCP servers").
+
+A `url` that carries a user name or password is a configuration error naming
+the server, `config_invalid`: the server is not started, and a `required` one
+fails the session.
 
 `fiber mcp add` declares a server and `fiber mcp remove` removes one. Each
 writes the global configuration, or the per-project file with `--project`, or

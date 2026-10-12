@@ -1,6 +1,6 @@
 //! The MCP client (`docs/mcp.md`): stdio servers Fiber starts as child
-//! processes, their tools declared through the tool seam, and their calls
-//! run on the server. Reached only through the tool seam
+//! processes and remote HTTP servers with URL-bound OAuth tokens. Their tools
+//! are declared through the tool seam, and their calls run on the server. Reached only through the tool seam
 //! (`docs/architecture.md`, "The call rules"): this crate depends on
 //! `contract` and `support`.
 

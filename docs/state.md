@@ -181,7 +181,8 @@ servers"). A repository can neither write nor read them.
 `credentials/<name>/<label>`, one per credential label, and one file per
 extension secret at `credentials/<name>`, and one file per remote MCP
 server's OAuth token at `credentials/mcp/<url-hash>`, named by a SHA-256 of the
-server's canonical URL and recording that URL (`docs/mcp.md`), each mode 0600,
+server's [canonical URL](mcp.md#what-fiber-does-with-mcp) and recording that URL,
+each mode 0600,
 in 0700 directories. There is no OS keychain. OAuth refresh takes a
 lock on the credential file (`docs/model-routing.md`). Every tool call
 touching `credentials/` is refused
@@ -330,6 +331,10 @@ reader sees the old file or the new one, never half. A file that is read,
 changed and written back — the config default, standing rules — takes a lock
 file first. Appends (`history.jsonl`, `events.jsonl`) are one line per single
 write. Readers never lock.
+
+A write that fails before its rename leaves the old file; one that fails after
+it, while syncing the directory, returns an error with the new file already in
+place, because every reader already sees it.
 
 One writer per session via `session.lock` is `docs/events.md`.
 
