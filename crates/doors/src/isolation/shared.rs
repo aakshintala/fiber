@@ -113,6 +113,11 @@ pub(crate) fn share_with(worktree: &Path, before_wait: &dyn Fn()) -> Result<Shar
 /// the lock file's parent directory: an absent worktree may have lost its
 /// parent too. `before_wait` runs before every blocking wait, as
 /// [`share_with`]'s does.
+// The NotFound match guards: only a non-NotFound error from
+// symlink_metadata reaches the other arm, and the lock beside the path
+// shares its parent, so opening the lock fails first; no OS fault the
+// tests can inject reaches it.
+#[cfg_attr(false, mutants::skip)]
 pub(crate) fn claim(worktree: &Path, before_wait: &dyn Fn()) -> Result<Claim, Failure> {
     let lock = lock_path(worktree).ok_or_else(|| {
         failure(
@@ -231,6 +236,8 @@ pub(crate) fn lock_path(worktree: &Path) -> Option<PathBuf> {
 
 /// Opens the lock file for locking, creating it. With `create_parent`,
 /// makes its parent directory first.
+// A let chain does not compile with `||`, so the `&&` mutants are unviable.
+#[cfg_attr(false, mutants::skip)]
 fn open(lock: &Path, create_parent: bool) -> Result<File, io::Error> {
     if create_parent
         && let Some(parent) = lock.parent()

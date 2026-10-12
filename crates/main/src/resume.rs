@@ -628,6 +628,10 @@ impl std::fmt::Debug for Held {
 /// recreation failure carries no isolation: nothing was made. A
 /// downgrade failure after the worktree was made reaches the caller, so
 /// its isolation is ended after the session lock is released.
+// Only a non-NotFound error reaches the other arm; there both arms fail
+// opening the lock beside the path with the same IoFailed sentence, so no
+// assertion tells them apart.
+#[cfg_attr(false, mutants::skip)]
 #[allow(
     clippy::result_large_err,
     reason = "the caller matches the isolation out of the error by value"

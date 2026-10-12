@@ -19,7 +19,7 @@ use contract::shapes::Worktree;
 use contract::{ErrorCode, clock::Clock};
 use log::Log;
 
-use super::{enter_worktree, finish, recorded_worktree, recreatable};
+use super::{Held, enter_worktree, finish, recorded_worktree, recreatable};
 use crate::failed;
 
 /// A session directory whose first line is `session_started` with
@@ -180,4 +180,39 @@ fn enter_worktree_reports_a_lock_it_cannot_open() {
     .unwrap_err();
     assert_eq!(error.failure.code, ErrorCode::IoFailed);
     assert!(error.isolation.is_none(), "nothing was made");
+}
+
+#[test]
+fn held_debug_names_each_variant() {
+    assert_eq!(format!("{:?}", Held::Nothing), "Nothing");
+
+    let home = fakes::TempDir::new("main-resume-held-debug");
+    let worktree = home.path().join("wt");
+    std::fs::create_dir(&worktree).unwrap();
+    let shared = doors::share(&worktree).unwrap();
+    assert_eq!(
+        format!("{:?}", Held::Shared { _shared: shared }),
+        "Shared(..)"
+    );
+
+    let repo = home.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    fakes::git::git(&repo, &["init", "--quiet"]);
+    std::fs::write(repo.join("file.txt"), "x").unwrap();
+    fakes::git::git(&repo, &["add", "."]);
+    fakes::git::git(&repo, &["commit", "--quiet", "-m", "first"]);
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let isolation = doors::isolate(
+        &repo,
+        home.path(),
+        &SessionId("s_0123456789abcdef".into()),
+        clock,
+        &|command| command.output(),
+    )
+    .unwrap();
+    let held = Held::Made(isolation);
+    assert_eq!(format!("{held:?}"), "Made(..)");
+    if let Held::Made(isolation) = held {
+        isolation.end();
+    }
 }

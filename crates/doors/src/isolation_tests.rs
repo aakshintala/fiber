@@ -18,11 +18,11 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::events::{Event, SessionStarted, Variables, VariablesSource};
-use contract::shapes::Worktree;
+use contract::shapes::{Failure, Worktree};
 use contract::{ErrorCode, SessionId};
 use log::Log;
 
-use super::isolate;
+use super::{RecreateError, isolate};
 use crate::project;
 use fakes::git::git;
 
@@ -1453,6 +1453,42 @@ fn a_downgrade_failure_after_a_successful_add_keeps_nothing() {
             };
             assert!(error.isolation.is_none());
             assert!(!exists(&path), "nothing was made");
+        },
+    );
+}
+
+#[test]
+fn recreate_error_debug_names_the_isolation_state() {
+    let failure = || Failure {
+        code: ErrorCode::IoFailed,
+        message: "the worktree could not be made".to_owned(),
+        retry_after_ms: None,
+        provider: None,
+    };
+    let without = RecreateError {
+        failure: failure(),
+        isolation: None,
+    };
+    let text = format!("{without:?}");
+    assert!(text.contains("RecreateError"), "{text}");
+    assert!(text.contains("isolation: false"), "{text}");
+
+    fakes::within(
+        "recreate_error_debug_names_the_isolation_state",
+        BUDGET,
+        move || {
+            let home = fakes::TempDir::new("doors-debug-home");
+            let repo = repo("doors-debug-repo");
+            let with = RecreateError {
+                failure: failure(),
+                isolation: Some(isolate_now(repo.path(), home.path(), "s_0123456789abcdef")),
+            };
+            let text = format!("{with:?}");
+            assert!(text.contains("RecreateError"), "{text}");
+            assert!(text.contains("isolation: true"), "{text}");
+            if let Some(isolation) = with.isolation {
+                isolation.end();
+            }
         },
     );
 }

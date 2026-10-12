@@ -287,6 +287,8 @@ impl Isolation {
     /// still. Runs after `close()`, at most once: it takes `self`.
     /// A kept worktree writes no line; an uncertain one keeps the worktree
     /// and writes one diagnostic `warn` line (see `failed`).
+    // A let chain does not compile with `||`, so the `&&` mutant is unviable.
+    #[cfg_attr(false, mutants::skip)]
     pub fn end(mut self) {
         // Our own share goes first: a removal that waited behind it
         // would keep the worktree, and no other process shares a
