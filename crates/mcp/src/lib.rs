@@ -9,6 +9,7 @@ mod effects;
 mod elicit;
 mod fail;
 mod http;
+mod login;
 mod name;
 mod pipes;
 mod prompt;
@@ -34,4 +35,5 @@ pub use start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, Program, SecretError, SecretReader, ServerSpec,
     Servers, Started, StdioSpec, Transport, start,
 };
-pub use token::{Token, TokenError, store_token, url_has_userinfo};
+pub use login::{CALLBACK_WAIT, LoginError, login};
+pub use token::{Token, TokenError, store_token, token_key, url_has_userinfo};

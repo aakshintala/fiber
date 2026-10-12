@@ -424,6 +424,12 @@ pub(crate) fn key(canonical: &str) -> String {
         .map(|byte| format!("{byte:02x}"))
         .collect()
 }
+/// The file name of the token for `url`: the lowercase hex SHA-256 of
+/// the canonical URL's bytes (`docs/mcp.md`, "What Fiber does with
+/// MCP").
+pub fn token_key(url: &str) -> Result<String, TokenError> {
+    Ok(key(&canonical_url(url)?)) 
+}
 /// Whether the URL's authority carries a user name or password.
 pub fn url_has_userinfo(url: &str) -> bool {
     split_url(url).is_some_and(|(_, authority, _)| authority.contains('@'))

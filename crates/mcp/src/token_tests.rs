@@ -694,3 +694,17 @@ fn a_key_is_the_sha256_of_the_canonical_url_bytes() {
         key(&canonical_url("https://h/x").unwrap())
     );
 }
+
+#[test]
+fn token_key_hashes_the_canonical_url() {
+    assert_eq!(
+        token_key("https://h/x").unwrap(),
+        "29c7358107b5adaa7556089816b5ca38ac6875c87d0e7bbbb0f487ea09ee736d"
+    );
+    assert_eq!(
+        token_key("HTTPS://H:443/x#f").unwrap(),
+        token_key("https://h/x").unwrap()
+    );
+    assert!(matches!(token_key("https://u@h/x"), Err(TokenError::Url)));
+    assert!(matches!(token_key("ws://h/x"), Err(TokenError::Url)));
+}
