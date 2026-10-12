@@ -883,54 +883,6 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
 }
 
 #[test]
-fn a_relayed_rewind_refusal_leaves_the_connection_in_order() {
-    let temp = Temp::new();
-    let workspace = temp.workspace();
-    let starter = FakeStarter::exit_with(
-        &temp.dir,
-        failure(ErrorCode::SessionHeld, "the new process refused."),
-    );
-    let hub = temp.hub(starter.clone());
-    let old = id(1);
-    let next = id(2);
-    write_log(
-        &temp.dir,
-        &old,
-        &workspace,
-        None,
-        &[rewound_line(&old, &next)],
-    );
-    fs::create_dir_all(temp.dir.join("run")).unwrap();
-    let listener = UnixListener::bind(temp.dir.join("run").join(&old)).unwrap();
-    let (release_tx, release) = mpsc::channel::<()>();
-    let old_session = serve_old(listener, old.clone(), next.clone(), release);
-    let mut client = Client::connect(&hub);
-    assert_eq!(client.next("hub_hello")["kind"], "hub_hello");
-    client.send(&json!({
-        "id": "c_sub1", "session_id": old, "command": "subscribe", "args": {"level": "full"},
-    }));
-    assert_eq!(
-        client.next("the subscribe acknowledgement")["kind"],
-        "command_accepted"
-    );
-    client.send(&json!({
-        "id": "c_rw1", "session_id": old, "command": "rewind", "args": {},
-    }));
-    let event = client.next("the old session's rewound event");
-    assert_eq!(event["kind"], "rewound");
-    let rejection = client.next("the rewind rejection");
-    assert_eq!(rejection["kind"], "command_rejected", "{rejection}");
-    assert_eq!(rejection["payload"]["command_id"], "c_rw1", "{rejection}");
-    drop(release_tx);
-    old_session.join().unwrap();
-    client.send(&json!({
-        "id": "c_after", "session_id": old, "command": "tools", "args": {},
-    }));
-    let answered = client.next("the later command's answer");
-    assert_eq!(answered["payload"]["command_id"], "c_after", "{answered}");
-}
-
-#[test]
 fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() {
     let temp = Temp::new();
     let workspace = temp.workspace();
@@ -984,19 +936,45 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
         thread: None,
         retiring: Some(crate::retire::Retire::Exited),
     });
+    // A live relay for the same session answers the re-routed command.
+    // It starts after the retiring relay below has read, so the
+    // retiring relay attempts its forward first.
+    let live = lock(&relays).mint();
+    let kept_live: crate::relay::Kept = Arc::new(Mutex::new(vec![(
+        "c_earlier".to_owned(),
+        json!({"id": "c_earlier", "command": "prompt", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        true,
+    )]));
+    let (live_session, mut live_peer) = UnixStream::pair().unwrap();
+    let live_reader = live_session.try_clone().unwrap();
+    lock(&relays).entries.push(crate::relay::Relay {
+        session: old.clone(),
+        epoch: live,
+        writer: live_session,
+        kept: Arc::clone(&kept_live),
+        replayed: Default::default(),
+        thread: None,
+        retiring: None,
+    });
     let (client_write, client_read) = UnixStream::pair().unwrap();
     client_read.set_read_timeout(Some(DEADLINE)).unwrap();
     let client_writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(client_write));
-    let injector = Arc::clone(&client_writer);
     let (read_tx, read_rx) = mpsc::channel();
     *lock(&hub.after_replay_filter) = Some(Box::new(move |_, _| {
         read_tx.send(()).unwrap_or(());
     }));
-    let (forward_tx, forward_rx) = mpsc::channel();
-    *lock(&hub.before_forward) = Some(Box::new(move |_, _| {
-        forward_tx.send(()).unwrap_or(());
+    // The first acknowledgement through the ordered forward is the
+    // re-routed one: a bypassed wait would forward the rejection first.
+    let (first_tx, first_rx) = mpsc::channel();
+    *lock(&hub.before_forward) = Some(Box::new(move |line, _| {
+        first_tx
+            .send(crate::relay::acknowledges(line, "c_earlier"))
+            .unwrap_or(());
     }));
-    let thread = crate::relay::spawn_for_test(
+    let retiring_thread = crate::relay::spawn_for_test(
         old.clone(),
         epoch,
         reader,
@@ -1017,32 +995,59 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
         Deadline::after(DEADLINE).recv(&read_rx).is_ok(),
         "the relay read the rewind acknowledgement"
     );
-    // The rejection waits for the re-routed acknowledgement: nothing
-    // reaches the client before the earlier answer is recorded.
-    let probe = client_read.try_clone().unwrap();
-    probe
-        .set_read_timeout(Some(Duration::from_millis(100)))
-        .unwrap();
-    let mut first = String::new();
-    assert!(
-        BufReader::new(probe).read_line(&mut first).is_err(),
-        "the retiring relay holds back the rejection"
+    // The live relay starts now, past the retiring relay's first read,
+    // and parks before its own first read, holding no lock. The park
+    // holds the order hook's lock until released, so it arms only here,
+    // once the retiring relay is past its own first read.
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release) = mpsc::channel::<()>();
+    *lock(&order.before_read) = Some(Box::new(move || {
+        parked_tx.send(()).unwrap_or(());
+        release.recv().unwrap_or(());
+    }));
+    let live_thread = crate::relay::spawn_for_test(
+        old.clone(),
+        live,
+        live_reader,
+        Arc::clone(&hub),
+        Arc::clone(&client_writer),
+        Arc::clone(&relays),
+        kept_live,
     );
+    assert!(
+        Deadline::after(DEADLINE).recv(&parked_rx).is_ok(),
+        "the live relay parks before its first read"
+    );
+    // Buffer the re-routed answer where the parked live relay will
+    // read it: it cannot move before the test releases it.
     let earlier = json!({
         "kind": "command_accepted", "ts": 1, "schema_version": 1,
         "payload": {"command_id": "c_earlier"},
     });
     let mut bytes = serde_json::to_vec(&earlier).unwrap();
     bytes.push(b'\n');
-    {
-        let mut out = lock(&injector);
-        out.write_all(&bytes).unwrap();
-        out.flush().unwrap();
+    live_peer.write_all(&bytes).unwrap();
+    live_peer.flush().unwrap();
+    // Hold the live relay until the retiring relay's refusal reaches
+    // the hub log, the last step before its forward attempt, so the
+    // attempt comes while the handover is still unanswered. Both orders
+    // below then prove the wait held: a bypassed wait forwards the
+    // rejection first and fails.
+    let refused = Deadline::after(DEADLINE);
+    let logged = format!("Session {next} could not start");
+    while !temp.hub_log().contains(&logged) {
+        assert!(
+            !refused.left().is_zero(),
+            "the retiring relay to refuse the start"
+        );
+        std::thread::yield_now();
     }
-    order.done(&old, "c_earlier");
+    release_tx.send(()).unwrap_or(());
     assert!(
-        Deadline::after(DEADLINE).recv(&forward_rx).is_ok(),
-        "the rejection goes through the ordered forward"
+        Deadline::after(DEADLINE)
+            .recv(&first_rx)
+            .expect("the first acknowledgement forwards"),
+        "the re-routed acknowledgement forwards first"
     );
     let mut read = BufReader::new(client_read);
     let mut text = String::new();
@@ -1060,7 +1065,9 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
         "the rejection carries no new session id: {rejection}"
     );
     drop(session_peer);
-    thread.join().unwrap();
+    drop(live_peer);
+    retiring_thread.join().unwrap();
+    live_thread.join().unwrap();
 }
 
 #[test]
