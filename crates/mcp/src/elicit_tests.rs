@@ -1161,3 +1161,65 @@ fn each_answer_maps_to_its_content_value() {
         json!({"action": "decline"}),
     );
 }
+
+#[test]
+fn a_float_bound_at_the_i64_edge_is_exact_and_past_it_saturates() {
+    // `-2^63` as a float is an exact `i64::MIN`: the cast keeps it, and only
+    // a float below it saturates one past the bottom.
+    let at_edge = json!({ "bound": -9223372036854775808.0_f64 });
+    let edge = at_edge.as_object().expect("an object");
+    assert_eq!(
+        super::read_effective("f", edge, "bound", true),
+        Ok(Some(i128::from(i64::MIN))),
+        "a minimum at -2^63 is i64::MIN",
+    );
+    assert_eq!(
+        super::read_effective("f", edge, "bound", false),
+        Ok(Some(i128::from(i64::MIN))),
+        "a maximum at -2^63 is i64::MIN",
+    );
+    // The next float below -2^63 is -2^63 - 2048; it saturates one below.
+    let below = json!({ "bound": -9223372036854777856.0_f64 });
+    let below = below.as_object().expect("an object");
+    assert_eq!(
+        super::read_effective("f", below, "bound", true),
+        Ok(Some(i128::from(i64::MIN) - 1)),
+        "a minimum below -2^63 saturates",
+    );
+    assert_eq!(
+        super::read_effective("f", below, "bound", false),
+        Ok(Some(i128::from(i64::MIN) - 1)),
+        "a maximum below -2^63 saturates",
+    );
+    // A maximum of exactly -2^63 admits i64::MIN and nothing above it.
+    let check = check_of(
+        r#""count":{"type":"integer","maximum":-9223372036854775808.0}"#,
+        r#"["count"]"#,
+        "count",
+    );
+    assert!(check(&Answer::Text {
+        text: "-9223372036854775808".to_owned()
+    }));
+    assert!(!check(&Answer::Text {
+        text: "-9223372036854775807".to_owned()
+    }));
+}
+
+#[test]
+fn a_required_number_declines_what_is_not_finite() {
+    let number = field_of(
+        FieldKind::Number {
+            min: None,
+            max: None,
+        },
+        true,
+    );
+    for text in ["inf", "-inf", "NaN"] {
+        assert_eq!(
+            described(&number, &typed(text)),
+            "decline",
+            "{text} declines"
+        );
+    }
+    assert_eq!(described(&number, &typed("2.5")), "value 2.5");
+}
