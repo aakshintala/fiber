@@ -27,6 +27,18 @@ use fakes::git::{branch_exists, git, repo};
 /// "Waits and timeouts").
 const BUDGET: Duration = Duration::from_secs(40);
 
+/// A re-run child's own bound: it fires before the parent's wait, so the
+/// two no longer contradict.
+const CHILD_BUDGET: Duration = Duration::from_secs(20);
+
+/// A parent's wait for a re-run child: inside half of nextest's per-test
+/// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
+const RERUN_WITHIN: Duration = Duration::from_secs(30);
+
+/// The outer wait around a test that re-runs a child: at least twice the
+/// parent's wait (`docs/testing.md`, "Waits and timeouts").
+const RERUN_OUTER: Duration = Duration::from_secs(60);
+
 /// The plain `add` runner: `Command::output`, as `doors::isolate` passes a
 /// cancellable one.
 fn direct(command: &mut Command) -> io::Result<Output> {
@@ -378,22 +390,23 @@ fn an_add_cancelled_after_it_ran_is_rolled_back() {
 #[test]
 fn no_command_but_add_runs_a_hook() {
     if std::env::var("FIBER_WORKTREE_HOOKS_CHILD").is_ok() {
-        fakes::within("no_command_but_add_runs_a_hook child", BUDGET, || {
+        fakes::within("no_command_but_add_runs_a_hook child", CHILD_BUDGET, || {
             hooks_child();
         });
         return;
     }
-    fakes::within("no_command_but_add_runs_a_hook", BUDGET, || {
+    fakes::within("no_command_but_add_runs_a_hook", RERUN_OUTER, || {
         let home = fakes::TempDir::new("worktree-hooks");
         let log = home.path().join("hooks.log");
         fs::write(&log, "").unwrap();
         let name = module_path!().split_once("::").unwrap().1;
-        let out = fakes::rerun(
+        let out = fakes::rerun_within(
             &format!("{name}::no_command_but_add_runs_a_hook"),
             &[
                 ("FIBER_WORKTREE_HOOKS_CHILD", home.path().to_str().unwrap()),
                 ("FIBER_TEST_HOOK_LOG", log.to_str().unwrap()),
             ],
+            RERUN_WITHIN,
         );
         assert!(
             out.status.success(),
@@ -461,7 +474,7 @@ fn git_environment_cannot_redirect_creation() {
     if let Ok(launch) = std::env::var("FIBER_WORKTREE_CREATE_ENV_CHILD") {
         fakes::within(
             "git_environment_cannot_redirect_creation child",
-            BUDGET,
+            CHILD_BUDGET,
             || {
                 let launch = PathBuf::from(launch);
                 let path = launch.join("wt");
@@ -482,38 +495,43 @@ fn git_environment_cannot_redirect_creation() {
         );
         return;
     }
-    fakes::within("git_environment_cannot_redirect_creation", BUDGET, || {
-        let home = repo("worktree-create-env");
-        let other = repo("worktree-create-env-other");
-        let wrong_index = home.path().join("wrong-index");
-        fs::write(&wrong_index, "not an index").unwrap();
-        let name = module_path!().split_once("::").unwrap().1;
-        let out = fakes::rerun(
-            &format!("{name}::git_environment_cannot_redirect_creation"),
-            &[
-                ("GIT_DIR", other.path().join(".git").to_str().unwrap()),
-                ("GIT_WORK_TREE", other.path().to_str().unwrap()),
-                (
-                    "GIT_COMMON_DIR",
-                    other.path().join(".git").to_str().unwrap(),
-                ),
-                ("GIT_INDEX_FILE", wrong_index.to_str().unwrap()),
-                (
-                    "FIBER_WORKTREE_CREATE_ENV_CHILD",
-                    home.path().to_str().unwrap(),
-                ),
-                (
-                    "FIBER_WORKTREE_CREATE_ENV_OTHER",
-                    other.path().to_str().unwrap(),
-                ),
-            ],
-        );
-        assert!(
-            out.status.success(),
-            "creation must see past the redirect:\n{}",
-            String::from_utf8_lossy(&out.stdout)
-        );
-    });
+    fakes::within(
+        "git_environment_cannot_redirect_creation",
+        RERUN_OUTER,
+        || {
+            let home = repo("worktree-create-env");
+            let other = repo("worktree-create-env-other");
+            let wrong_index = home.path().join("wrong-index");
+            fs::write(&wrong_index, "not an index").unwrap();
+            let name = module_path!().split_once("::").unwrap().1;
+            let out = fakes::rerun_within(
+                &format!("{name}::git_environment_cannot_redirect_creation"),
+                &[
+                    ("GIT_DIR", other.path().join(".git").to_str().unwrap()),
+                    ("GIT_WORK_TREE", other.path().to_str().unwrap()),
+                    (
+                        "GIT_COMMON_DIR",
+                        other.path().join(".git").to_str().unwrap(),
+                    ),
+                    ("GIT_INDEX_FILE", wrong_index.to_str().unwrap()),
+                    (
+                        "FIBER_WORKTREE_CREATE_ENV_CHILD",
+                        home.path().to_str().unwrap(),
+                    ),
+                    (
+                        "FIBER_WORKTREE_CREATE_ENV_OTHER",
+                        other.path().to_str().unwrap(),
+                    ),
+                ],
+                RERUN_WITHIN,
+            );
+            assert!(
+                out.status.success(),
+                "creation must see past the redirect:\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            );
+        },
+    );
 }
 
 #[test]
