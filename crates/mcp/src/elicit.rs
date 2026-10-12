@@ -271,12 +271,6 @@ fn fallback_reason(line: &str) -> String {
         Some("object") => {}
         Some(_) | None => return "`requestedSchema.type` must be `\"object\"`.".to_owned(),
     }
-    match schema.get("properties") {
-        Some(Value::Object(properties)) if !properties.is_empty() => {}
-        Some(_) | None => {
-            return "`requestedSchema.properties` must be a non-empty object.".to_owned();
-        }
-    }
     "`requestedSchema.properties` must be a non-empty object.".to_owned()
 }
 

@@ -902,6 +902,153 @@ fn no_answer_declines_after_one_ask() {
 }
 
 #[test]
+fn a_shape_error_names_the_object_it_wanted() {
+    // The serde message is what the reader sees for a `properties` that
+    // is not a map, so it must say what a map is.
+    let error = serde_json::from_str::<super::OrderedProperties>("[]")
+        .err()
+        .expect("an array is not a property object");
+    assert!(
+        error.to_string().contains("an object of properties"),
+        "the error names the wanted object: {error}",
+    );
+}
+
+#[test]
+fn enum_names_are_read_when_they_match_the_values() {
+    let form = read(&line(
+        r#""env":{"type":"string","enum":["prod","dev"],"enumNames":["Production","Development"]}"#,
+        r#"[]"#,
+    ))
+    .expect("matching names read");
+    match &form.fields[0].kind {
+        FieldKind::Enum { values, names } => {
+            assert_eq!(values, &vec!["prod".to_owned(), "dev".to_owned()]);
+            assert_eq!(
+                names,
+                &Some(vec!["Production".to_owned(), "Development".to_owned()]),
+            );
+        }
+        FieldKind::Boolean
+        | FieldKind::Text { .. }
+        | FieldKind::Number { .. }
+        | FieldKind::Integer { .. } => panic!("the field is an enum"),
+    }
+    // One name too many is refused as well as one too few.
+    let longer = line(
+        r#""env":{"type":"string","enum":["prod","dev"],"enumNames":["A","B","C"]}"#,
+        r#"[]"#,
+    );
+    match read(&longer) {
+        Ok(_) => panic!("three names for two values read"),
+        Err(reason) => assert!(reason.contains("`env`"), "names the property: {reason}"),
+    }
+}
+
+#[test]
+fn an_unbounded_number_refuses_what_is_not_finite() {
+    let check = check_of(r#""n":{"type":"number"}"#, r#"["n"]"#, "n");
+    for text in ["inf", "-inf", "NaN"] {
+        assert!(
+            !check(&Answer::Text {
+                text: text.to_owned()
+            }),
+            "{text} fails",
+        );
+    }
+    assert!(check(&Answer::Text {
+        text: "2.5".to_owned()
+    }));
+}
+
+/// What `value` made of an answer, as one string the rows compare.
+fn described(field: &Field, answer: &Answer) -> String {
+    match super::value(field, answer) {
+        super::Valued::Value(value) => format!("value {value}"),
+        super::Valued::Omitted => "omitted".to_owned(),
+        super::Valued::Decline => "decline".to_owned(),
+    }
+}
+
+/// A field of `kind`, required or not, for the value rows.
+fn field_of(kind: FieldKind, required: bool) -> Field {
+    Field {
+        name: "f".to_owned(),
+        title: None,
+        description: None,
+        required,
+        kind,
+    }
+}
+
+/// A typed text answer.
+fn typed(text: &str) -> Answer {
+    Answer::Text {
+        text: text.to_owned(),
+    }
+}
+
+#[test]
+fn a_select_answer_must_be_one_of_its_values() {
+    let field = field_of(
+        FieldKind::Enum {
+            values: vec!["prod".to_owned(), "dev".to_owned()],
+            names: None,
+        },
+        true,
+    );
+    let labels = |label: &str| Answer::Labels {
+        labels: vec![label.to_owned()],
+    };
+    assert_eq!(described(&field, &labels("dev")), "value \"dev\"");
+    assert_eq!(described(&field, &labels("staging")), "decline");
+}
+
+#[test]
+fn an_empty_answer_is_kept_when_required_and_left_out_when_optional() {
+    let text = |required| {
+        field_of(
+            FieldKind::Text {
+                min: None,
+                max: None,
+            },
+            required,
+        )
+    };
+    let number = |required| {
+        field_of(
+            FieldKind::Number {
+                min: None,
+                max: None,
+            },
+            required,
+        )
+    };
+    let integer = |required| {
+        field_of(
+            FieldKind::Integer {
+                min: None,
+                max: None,
+            },
+            required,
+        )
+    };
+    // A required empty text is its own value; an optional one is omitted.
+    assert_eq!(described(&text(true), &typed("")), "value \"\"");
+    assert_eq!(described(&text(false), &typed("")), "omitted");
+    // A number or integer that is empty is declined when required, and
+    // left out when optional.
+    assert_eq!(described(&number(true), &typed("")), "decline");
+    assert_eq!(described(&number(false), &typed("")), "omitted");
+    assert_eq!(described(&integer(true), &typed("")), "decline");
+    assert_eq!(described(&integer(false), &typed("")), "omitted");
+    // An optional field that has an answer keeps it.
+    assert_eq!(described(&text(false), &typed(" x ")), "value \"x\"");
+    assert_eq!(described(&number(false), &typed("3")), "value 3.0");
+    assert_eq!(described(&integer(false), &typed("3")), "value 3");
+}
+
+#[test]
 fn each_answer_maps_to_its_content_value() {
     let text = |text: &str| {
         Answered::Reply(Answer::Text {
