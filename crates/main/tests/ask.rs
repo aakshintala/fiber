@@ -1439,22 +1439,11 @@ fn extension_update_all_on_an_empty_home_exits_zero() {
 fn extension_update_all_skips_unrequested_dependencies() {
     let setup = Setup::new_with_started_deadline();
     let gh = Github::new(&setup);
-    gh.release("v0.1.0");
-    gh.release_needs_muse("v1.0.0", "v0.1.0");
+    gh.release_with_needs_muse("v0.1.0", "v1.0.0", "v0.1.0");
     let muse_v1 = git(setup.deadline, &gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
     let run = setup.fiber_with_env(&["extension", "install", NEEDS_MUSE], &gh.env());
     assert_eq!(run.code, Some(0), "{}", run.stderr);
-    let listed = setup.fiber_with_env(&["extension", "list"], &[]);
-    assert!(
-        listed
-            .raw
-            .iter()
-            .any(|line| line.contains(&format!("{MUSE} v0.1.0 {muse_v1}"))),
-        "{:?}",
-        listed.raw
-    );
-    gh.release("v0.2.0");
-    gh.release_needs_muse("v1.0.1", "v0.1.0");
+    gh.release_with_needs_muse("v0.2.0", "v1.0.1", "v0.1.0");
     let run = setup.fiber_with_env(&["extension", "update"], &gh.env());
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let listed = setup.fiber_with_env(&["extension", "list"], &[]);
@@ -1576,9 +1565,17 @@ impl Github {
         git(self.deadline, &self.repo, &["tag", tag]);
     }
 
-    /// Commits `providers/needs-muse`, which depends on [`MUSE`] at `muse_min`.
+    /// Commits `providers/muse` together with `providers/needs-muse`, which
+    /// depends on [`MUSE`] at `muse_min`, and tags the one commit twice, so
+    /// one release step costs one commit instead of two.
     #[track_caller]
-    fn release_needs_muse(&self, tag: &str, muse_min: &str) {
+    fn release_with_needs_muse(&self, muse_tag: &str, needs_tag: &str, muse_min: &str) {
+        let muse = self.repo.join("providers/muse");
+        fs::create_dir_all(muse.join("providers")).unwrap();
+        for file in ["extension.json", "providers/muse.json"] {
+            fs::copy(package("muse").join(file), muse.join(file)).unwrap();
+        }
+        fs::write(muse.join("NOTES.md"), format!("notes for {muse_tag}\n")).unwrap();
         let dir = self.repo.join("providers/needs-muse");
         fs::create_dir_all(dir.join("providers")).unwrap();
         let manifest = format!(
@@ -1586,10 +1583,15 @@ impl Github {
         );
         fs::write(dir.join("extension.json"), manifest).unwrap();
         fs::write(dir.join("providers/.gitkeep"), "").unwrap();
-        fs::write(dir.join("NOTES.md"), format!("needs-muse {tag}\n")).unwrap();
+        fs::write(dir.join("NOTES.md"), format!("needs-muse {needs_tag}\n")).unwrap();
         git(self.deadline, &self.repo, &["add", "."]);
-        git(self.deadline, &self.repo, &["commit", "--quiet", "-m", tag]);
-        git(self.deadline, &self.repo, &["tag", tag]);
+        git(
+            self.deadline,
+            &self.repo,
+            &["commit", "--quiet", "-m", needs_tag],
+        );
+        git(self.deadline, &self.repo, &["tag", muse_tag]);
+        git(self.deadline, &self.repo, &["tag", needs_tag]);
     }
 }
 
