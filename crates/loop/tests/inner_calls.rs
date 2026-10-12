@@ -559,7 +559,9 @@ fn before_and_check_refusals_and_hook_failures_never_start_the_inner_tool() {
 
 fn chain(name: &'static str, next: &'static str) -> Arc<FakeTool> {
     Arc::new(FakeTool::new(name, move |_, _, _, ask| {
-        let Some(runner) = ask.inner_calls() else { return text("no runner"); };
+        let Some(runner) = ask.inner_calls() else {
+            return text("no runner");
+        };
         match runner.run("ext", next, json!({})) {
             Err(error) => text(error),
             Ok(done) => text(serde_json::to_string(&done.content).unwrap()),
@@ -569,33 +571,267 @@ fn chain(name: &'static str, next: &'static str) -> Arc<FakeTool> {
 
 #[test]
 fn eight_inner_levels_run_and_the_ninth_is_an_error_without_a_line() {
-    let mut session = Session::with_tools(vec![calls_reply("", &[("a", json!({}))]), fakes::Scripted::text("done")], None,
-        vec![chain("a", "b"), chain("b", "a")]);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("a", json!({}))]),
+            fakes::Scripted::text("done"),
+        ],
+        None,
+        vec![chain("a", "b"), chain("b", "a")],
+    );
     session.inbox.send(support::delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
-    let requested: Vec<_> = lines.iter().filter(|l| l.kind == "tool_call_requested").collect();
+    let requested: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_requested")
+        .collect();
     assert_eq!(requested.len(), 9);
     for pair in requested.windows(2) {
-        assert_eq!(pair[1].payload["ran_by"]["outer_action_id"], serde_json::to_value(&pair[0].action_id).unwrap());
+        assert_eq!(
+            pair[1].payload["ran_by"]["outer_action_id"],
+            serde_json::to_value(&pair[0].action_id).unwrap()
+        );
         assert_eq!(pair[1].payload["ran_by"]["extension"], "ext");
         assert_eq!(pair[1].turn_id, pair[0].turn_id);
-        assert_eq!(action_kinds(&lines, pair[1].action_id.as_ref().unwrap()), ["tool_call_requested", "tool_call_started", "tool_call_completed"]);
+        assert_eq!(
+            action_kinds(&lines, pair[1].action_id.as_ref().unwrap()),
+            [
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed"
+            ]
+        );
     }
-    let completed: Vec<_> = lines.iter().filter(|l| l.kind == "tool_call_completed").collect();
+    let completed: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_completed")
+        .collect();
     assert_eq!(completed.len(), 9);
-    assert_eq!(completed.iter().map(|l| l.action_id.as_ref()).collect::<Vec<_>>(), requested.iter().rev().map(|l| l.action_id.as_ref()).collect::<Vec<_>>());
-    assert!(completed[0].payload["content"][0]["text"].as_str().unwrap().contains("depth exceeds 8"));
+    assert_eq!(
+        completed
+            .iter()
+            .map(|l| l.action_id.as_ref())
+            .collect::<Vec<_>>(),
+        requested
+            .iter()
+            .rev()
+            .map(|l| l.action_id.as_ref())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        completed[0].payload["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("depth exceeds 8")
+    );
 }
 
 #[test]
 fn a_direct_self_call_is_an_error_without_an_inner_line() {
-    let mut session = Session::with_tools(vec![calls_reply("", &[("a", json!({}))]), fakes::Scripted::text("done")], None, vec![chain("a", "a")]);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("a", json!({}))]),
+            fakes::Scripted::text("done"),
+        ],
+        None,
+        vec![chain("a", "a")],
+    );
     session.inbox.send(support::delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
-    assert_eq!(lines.iter().filter(|l| l.kind == "tool_call_requested").count(), 1);
-    let done = lines.iter().find(|l| l.kind == "tool_call_completed").unwrap();
-    assert!(done.payload["content"][0]["text"].as_str().unwrap().contains("cannot run itself"));
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.kind == "tool_call_requested")
+            .count(),
+        1
+    );
+    let done = lines
+        .iter()
+        .find(|l| l.kind == "tool_call_completed")
+        .unwrap();
+    assert!(
+        done.payload["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("cannot run itself")
+    );
 }
 
+struct CancelWake(std::sync::mpsc::Sender<()>);
+impl contract::clock::Wake for CancelWake {
+    fn wake(&self) {
+        let _sent = self.0.send(());
+    }
+}
+
+fn waiting_inner(
+    running: std::sync::mpsc::Sender<()>,
+    cancelled: std::sync::mpsc::Sender<()>,
+    release: Option<std::sync::mpsc::Receiver<()>>,
+) -> Arc<FakeTool> {
+    let release = Mutex::new(release);
+    Arc::new(FakeTool::new("inner", move |_, cancel, _, _| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let wake: Arc<dyn contract::clock::Wake> = Arc::new(CancelWake(tx));
+        cancel.subscribe(Arc::downgrade(&wake));
+        running.send(()).unwrap();
+        if !cancel.is_cancelled() {
+            fakes::Deadline::after(std::time::Duration::from_secs(2))
+                .recv_or_fail(&rx, "inner cancellation");
+        }
+        assert!(cancel.is_cancelled());
+        cancelled.send(()).unwrap();
+        if let Some(release) = release.lock().unwrap().as_ref() {
+            let _released = release.recv();
+        }
+        text("stopped")
+    }))
+}
+
+fn start_turn(
+    session: &mut Session,
+) -> (
+    std::sync::mpsc::Receiver<(r#loop::Loop, Option<TurnOutcome>)>,
+    std::thread::ThreadId,
+) {
+    let mut looped = session.looped.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        let outcome = looped.turn().unwrap();
+        let _sent = tx.send((looped, outcome));
+    });
+    (rx, thread.thread().id())
+}
+
+#[test]
+fn turn_cancellation_and_shutdown_complete_the_inner_before_the_outer() {
+    for shutdown in [false, true] {
+        let deadline = fakes::Deadline::after(std::time::Duration::from_secs(3));
+        let (started, running) = std::sync::mpsc::channel();
+        let (stopped, cancelled) = std::sync::mpsc::channel();
+        let inner = waiting_inner(started, stopped, None);
+        let (outer, outcomes) = outer("inner", json!({}));
+        let mut session = session(vec![outer, inner]);
+        let hooks = Arc::new(FakeHooks::default());
+        session.looped = Some(session.looped.take().unwrap().hooks(hooks.clone()));
+        let (done, _) = start_turn(&mut session);
+        deadline.recv_or_fail(&running, "inner running");
+        if shutdown {
+            session.cancel.shutdown(143);
+        } else {
+            assert!(session.cancel.cancel());
+        }
+        deadline.recv_or_fail(&cancelled, "inner saw cancellation");
+        let (looped, outcome) = deadline.recv_or_fail(&done, "cancelled turn");
+        session.looped = Some(looped);
+        assert_eq!(outcome, Some(TurnOutcome::Interrupted));
+        let lines = session.lines();
+        let id = inner_id(&lines);
+        let completions: Vec<_> = lines
+            .iter()
+            .filter(|l| l.kind == "tool_call_completed")
+            .collect();
+        assert_eq!(completions.len(), 2);
+        assert_eq!(completions[0].action_id.as_ref(), Some(&id));
+        assert_eq!(completions[0].payload["status"], "cancelled");
+        assert_eq!(completions[1].payload["status"], "cancelled");
+        assert_eq!(outcomes.lock().unwrap()[0].status, CallStatus::Cancelled);
+        if shutdown {
+            assert_eq!(
+                *hooks.seen.lock().unwrap(),
+                ["before outer", "check outer", "before inner", "check inner"]
+            );
+        } else {
+            assert!(hooks.seen.lock().unwrap().contains(&"after inner".into()));
+        }
+    }
+}
+
+#[test]
+fn an_outer_return_cancels_its_inner_and_holds_its_completion_without_cancelling_itself() {
+    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(3));
+    let (started, running) = std::sync::mpsc::channel();
+    let (stopped, cancelled) = std::sync::mpsc::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let inner = waiting_inner(started, stopped, Some(held));
+    let running = Mutex::new(running);
+    let (answer, received) = std::sync::mpsc::channel();
+    let outer = Arc::new(FakeTool::new("outer", move |_, _, _, ask| {
+        let Some(runner) = ask.inner_calls() else {
+            return text("no runner");
+        };
+        let answer = answer.clone();
+        std::thread::spawn(move || {
+            let _sent = answer.send(runner.run("ext", "inner", json!({})));
+        });
+        deadline.recv_or_fail(
+            &running.lock().unwrap(),
+            "inner running before outer returns",
+        );
+        text("outer returned")
+    }));
+    let mut session = session(vec![outer, inner]);
+    let (done, id) = start_turn(&mut session);
+    deadline.recv_or_fail(&cancelled, "anchor cancellation");
+    assert!(
+        session
+            .clock
+            .await_thread_parked(id, None, std::time::Duration::from_secs(2)),
+        "loop waits for the cancelled inner result before completing its outer"
+    );
+    let durable = log::read(&session.dir).unwrap();
+    assert!(!durable.iter().any(|l| l.kind == "tool_call_completed"));
+    release.send(()).unwrap();
+    let (looped, outcome) = deadline.recv_or_fail(&done, "outer and inner completion");
+    session.looped = Some(looped);
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        deadline
+            .recv_or_fail(&received, "inner answer")
+            .unwrap()
+            .status,
+        CallStatus::Cancelled
+    );
+    let lines = session.lines();
+    let completed: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_completed")
+        .collect();
+    assert_eq!(completed.len(), 2);
+    assert_eq!(completed[0].action_id.as_ref(), Some(&inner_id(&lines)));
+    assert_eq!(completed[0].payload["status"], "cancelled");
+    assert_eq!(completed[1].payload["status"], "completed");
+    assert_eq!(completed[1].payload["content"][0]["text"], "outer returned");
+}
+
+#[test]
+fn a_request_taken_after_turn_cancellation_completes_without_starting() {
+    let signal = Arc::new(Mutex::new(None::<Arc<r#loop::TurnCancel>>));
+    let worker_signal = signal.clone();
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let worker_results = results.clone();
+    let outer = Arc::new(FakeTool::new("outer", move |_, _, _, ask| {
+        let Some(runner) = ask.inner_calls() else {
+            return text("no runner");
+        };
+        assert!(worker_signal.lock().unwrap().as_ref().unwrap().cancel());
+        worker_results
+            .lock()
+            .unwrap()
+            .push(runner.run("ext", "inner", json!({})).unwrap().status);
+        text("cancelled")
+    }));
+    let inner = Arc::new(FakeTool::new("inner", |_, _, _, _| text("must not run")));
+    let mut session = session(vec![outer, inner.clone()]);
+    *signal.lock().unwrap() = Some(session.cancel.clone());
+    assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
+    let lines = session.lines();
+    assert_eq!(
+        action_kinds(&lines, &inner_id(&lines)),
+        ["tool_call_requested", "tool_call_completed"]
+    );
+    assert_eq!(*results.lock().unwrap(), [CallStatus::Cancelled]);
+    assert!(inner.ran.lock().unwrap().is_empty());
+}

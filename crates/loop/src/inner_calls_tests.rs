@@ -177,12 +177,18 @@ fn inner_depths_seven_and_eight_run_but_nine_is_refused() {
         slot.close();
         let result = slot.run("ext", "other", serde_json::json!({}));
         if allowed {
-            assert_eq!(result.unwrap().status, contract::events::CallStatus::Cancelled);
+            assert_eq!(
+                result.unwrap().status,
+                contract::events::CallStatus::Cancelled
+            );
         } else {
             assert!(result.unwrap_err().contains("depth exceeds 8"));
         }
         assert!(slot.take_raised().is_empty());
-        assert!(matches!(woke.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            woke.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
     }
 }
 
@@ -191,8 +197,14 @@ fn self_call_refusal_precedes_raising_even_when_the_slot_is_closed() {
     use contract::tool::InnerCalls;
     let (slot, woke, _notice) = slot(0);
     slot.close();
-    assert!(slot.run("ext", "outer", serde_json::json!({})).unwrap_err().contains("cannot run itself"));
+    assert!(
+        slot.run("ext", "outer", serde_json::json!({}))
+            .unwrap_err()
+            .contains("cannot run itself")
+    );
     assert!(slot.take_raised().is_empty());
-    assert!(matches!(woke.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+    assert!(matches!(
+        woke.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
 }
-
