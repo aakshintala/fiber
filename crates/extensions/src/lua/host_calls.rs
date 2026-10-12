@@ -270,6 +270,54 @@ pub(super) fn admit<'a>(
                 }
             }
         }
+        Request::Tool(request) => {
+            // Only a running tool call anchors an inner call: every other
+            // target, and a tool call with no runner, answers the error at
+            // once, starting no tool work and writing no line.
+            let runner = match target {
+                Target::Tool(_) => shared.runners.get(&id).cloned(),
+                Target::Command(_)
+                | Target::Provider { .. }
+                | Target::Hook { .. }
+                | Target::Timer { .. }
+                | Target::Search(_)
+                | Target::Effects(_) => None,
+            };
+            match runner {
+                Some(runner) => {
+                    // Suspended before the spawn: the runner answers
+                    // in-process when denied, so its reply can arrive
+                    // before a spawn returns, and a reply for an unparked
+                    // id is dropped. No off-thread wait to cancel: the
+                    // suspended callback's deadline bounds the call, and a
+                    // late answer is dropped.
+                    let tool_deliver = Deliver::clone(deliver);
+                    let extension = name.to_owned();
+                    let tool = request.name;
+                    let arguments = request.arguments;
+                    Admitted::Spawning {
+                        shared,
+                        spawn: Spawn {
+                            builder: thread::Builder::new().name(format!("tool {name}")),
+                            work: Box::new(move || {
+                                let reply = match runner.run(&extension, &tool, arguments) {
+                                    Ok(completed) => Reply::Tool(host::tool::outcome(&completed)),
+                                    Err(message) => Reply::Tool(Err(message)),
+                                };
+                                tool_deliver(reply);
+                            }),
+                            exec: false,
+                        },
+                    }
+                }
+                None => {
+                    drop(shared);
+                    Admitted::Replied(Reply::Tool(Err(
+                        "host.tool: called outside a running tool call".to_owned(),
+                    )))
+                }
+            }
+        }
         Request::Lock => {
             // A command, hook, timer or tool holds no provider credential: calling
             // `refresh` there is an error in the calling code, raised as
@@ -350,23 +398,23 @@ pub(super) fn admit<'a>(
     }
 }
 
-/// What a test pauses `settle` with: called with the suspending target and
-/// the stage it reached.
+/// The checkpoint a test observes: called with the target and stage reached.
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Pause {
     Admission,
     Start,
+    TimerDone,
 }
 
 /// A test's pause inside `settle`: called with the suspending target.
 #[cfg(test)]
 type SettleHook = Arc<dyn Fn(&Target, Pause) + Send + Sync>;
 
-/// A test's pause inside `settle`, at admission and before an OAuth start:
-/// it runs without the hub lock, so the test may abandon the VM or cancel
-/// the call there, without sleeps. The hook sees only calls for the tool it
-/// names; every other call passes through.
+/// A test's pause inside `settle`, at admission and before an OAuth start,
+/// or a signal after a timer callback completes. The hook runs without the
+/// hub lock; tests can coordinate without sleeps. It sees only calls for the
+/// tool it names; every other call passes through.
 #[cfg(test)]
 static SETTLE_HOOK: std::sync::Mutex<Option<SettleHook>> = std::sync::Mutex::new(None);
 

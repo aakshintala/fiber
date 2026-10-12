@@ -28,6 +28,7 @@ mod log;
 pub(crate) mod script;
 mod settings;
 pub(crate) mod timers;
+pub(crate) mod tool;
 mod ui;
 
 #[cfg(test)]
@@ -220,6 +221,7 @@ pub(crate) fn install(
         note_failure,
     )?;
     drive::install(lua, &host, &tag, Rc::clone(&entry), failure)?;
+    tool::install(lua, &host, &tag, Rc::clone(&entry))?;
     ask::install(lua, &host, &tag, entry)?;
     let timer_funcs = timers::install(lua, &host, hub)?;
     log::install(lua, &host, hub, &extension)?;
@@ -291,6 +293,8 @@ pub(crate) enum Request {
     Http(HttpRequest),
     /// `host.ask`: raise one of the closed interactions.
     Ask(contract::events::Interaction),
+    /// `host.tool`: run a tool as an inner call of the running tool call.
+    Tool(tool::ToolRequest),
     /// `host.drive`: send one driver command from inside the session.
     Drive(DriveRequest),
     /// `host.exec`: run a program in its own process group.
@@ -331,6 +335,10 @@ pub(crate) enum Reply {
     Drive(Result<Option<contract::events::CommandResult>, (contract::ErrorCode, String)>),
     /// How a `host.exec` run ended, or the code and message `host.exec` raises.
     Exec(Result<exec::Ran, (contract::ErrorCode, String)>),
+    /// How a `host.tool` call ended: its outcome as the model would see
+    /// it, or the string the Lua half raises for an error in the calling
+    /// code.
+    Tool(Result<Value, String>),
     /// The query parameters of the one request the callback served, or the
     /// code and message `host.oauth.callback` raises.
     Query(Result<Vec<(String, String)>, (contract::ErrorCode, String)>),
@@ -354,6 +362,7 @@ pub(crate) fn request_from(
     Ok(Some(match (kind, arg) {
         ("http", Some(LuaValue::Table(opts))) => Request::Http(http_request(opts, timeout)?),
         ("ask", Some(LuaValue::Table(asked))) => Request::Ask(ask_request(asked)?),
+        ("tool", Some(LuaValue::Table(spec))) => Request::Tool(tool::request(spec)?),
         ("drive", Some(LuaValue::Table(spec))) => Request::Drive(drive_request(spec)?),
         ("exec", Some(LuaValue::Table(spec))) => Request::Exec(exec_request(spec, workspace, cap)?),
         ("callback", Some(LuaValue::Table(opts))) => Request::Callback {
@@ -533,6 +542,13 @@ pub(crate) fn resume_values(
         | Reply::Query(Err(failed_with)) => failed(failed_with),
         Reply::Lock(Err(LockError::Coded(failed_with))) => failed(failed_with),
         Reply::Lock(Err(LockError::Arg(message))) => Ok(MultiValue::from_vec(vec![
+            LuaValue::Nil,
+            LuaValue::String(lua.create_string(message)?),
+        ])),
+        // A `host.tool` outcome is one table; an error in the calling
+        // code is nil with the string the Lua half raises.
+        Reply::Tool(Ok(outcome)) => Ok(MultiValue::from_vec(vec![to_lua(lua, &outcome)?])),
+        Reply::Tool(Err(message)) => Ok(MultiValue::from_vec(vec![
             LuaValue::Nil,
             LuaValue::String(lua.create_string(message)?),
         ])),

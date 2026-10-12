@@ -10,7 +10,7 @@ use contract::emit::Emit;
 use contract::events::Control;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure};
-use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
+use contract::tool::{Ask, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value};
 
 use crate::lua::{DeclaredTool, effects_from};
@@ -104,6 +104,36 @@ impl Tool for LuaTool {
             Value::Object(arguments.clone()),
             cancel,
         );
+        self.output(returned)
+    }
+
+    /// Runs `run` as [`Tool::run`] does, handing the call's inner-call
+    /// runner to the hub, so `host.tool` in the callback runs through the
+    /// same path a model's call takes (`docs/extensions.md`, "Running a
+    /// tool"). A call with no runner gets the same error as one `run`
+    /// makes: it runs nowhere.
+    fn run_asking(
+        &self,
+        arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+        ask: &dyn Ask,
+    ) -> Output {
+        let returned = self.extension.tool_run_asking(
+            &self.declared.name,
+            Value::Object(arguments.clone()),
+            cancel,
+            ask.inner_calls(),
+        );
+        self.output(returned)
+    }
+}
+
+impl LuaTool {
+    /// What the tool call returned, as a result: no return is no content
+    /// and no error, a timeout fails `timeout`, and any other failure
+    /// fails `tool_error`.
+    fn output(&self, returned: Result<Option<Value>, Error>) -> Output {
         let value = match returned {
             Ok(Some(value)) => value,
             Ok(None) => return Output::default(),

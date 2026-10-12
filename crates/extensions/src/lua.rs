@@ -840,6 +840,21 @@ pub(crate) use setup::Deadline;
 #[cfg(test)]
 pub(crate) use setup::install_prelude;
 
+/// Observes a completed timer callback in tests without waiting on the wall clock.
+#[cfg(test)]
+pub(crate) fn on_timer_done(hook: impl Fn() + Send + Sync + 'static) {
+    host_calls::pause_settle(Arc::new(move |_, pause| {
+        if pause == host_calls::Pause::TimerDone {
+            hook();
+        }
+    }));
+}
+
+#[cfg(test)]
+pub(crate) fn clear_timer_done_hook() {
+    host_calls::unpause_settle();
+}
+
 #[cfg(test)]
 #[path = "lua_tests.rs"]
 mod tests;
