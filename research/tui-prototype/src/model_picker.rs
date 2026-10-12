@@ -575,11 +575,28 @@ fn provider_row(p: &Provider, refreshing: bool, s: &State) -> Row {
     row(vec![sp(p.name, dim()), sp(" ", Style::new()), sp(what, st)])
 }
 
-fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool, hits: &[usize]) -> Row {
+/// A model row, with a mark between the gutter and the id in the checklist case.
+fn model_row(
+    f: usize,
+    m: &Model,
+    focused: bool,
+    checklist: Option<bool>,
+    scoped_mark: bool,
+    hits: &[usize],
+) -> Row {
     let mut spans = vec![sp(
         if focused { "› " } else { "  " },
         if focused { bold() } else { Style::new() },
     )];
+    if let Some(marked) = checklist {
+        // The mark reads bold on the focus and plain off it; `[ ]` reads dim.
+        let mut mark = if focused { bold() } else { Style::new() };
+        if !marked {
+            mark = mark.add_modifier(Modifier::DIM);
+        }
+        spans.push(sp(if marked { "[x]" } else { "[ ]" }, mark));
+        spans.push(sp(" ", Style::new()));
+    }
     // The id reads as one word even underlined per matched char: matched
     // chars carry underline plus bold over the row's own colour.
     for (i, ch) in m.id.chars().enumerate() {
@@ -594,6 +611,7 @@ fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool, hits: &[usiz
         spans.push(sp(ch.to_string(), st));
     }
     spans.push(sp(" ", Style::new()));
+    let rest = spans.len();
     for r in &m.roles {
         spans.push(sp(format!("[{r}] "), dim()));
     }
@@ -605,67 +623,22 @@ fn model_row(f: usize, m: &Model, focused: bool, scoped_mark: bool, hits: &[usiz
     }
     spans.extend([sp("\t", Style::new()), sp(m.rebuild, dim())]);
     // The focused model reads bold throughout, like every focused choice.
-    let rest = 2 + m.id.chars().count();
     if focused {
         for s in spans.iter_mut().skip(rest) {
             s.style = s.style.patch(bold());
         }
     }
+    // The mark owns cells 2..5 as a click target; the row itself still
+    // focuses on a click elsewhere.
+    let hot = if checklist.is_some() {
+        vec![(2, 5, Act::Toggle(f))]
+    } else {
+        vec![]
+    };
     Row {
         spans,
         act: Some(Act::Pick(f)),
-        ..Default::default()
-    }
-}
-
-/// A checklist row: the picker's row with a mark between the gutter and
-/// the id, and no `· scoped`. The mark owns cells 2..5 as a click target;
-/// the row itself still focuses on a click elsewhere.
-// debt: repeats model_row's id, roles and cost spans so the picker's row stays untouched; merge into one builder with an optional mark when #1790 builds the real checklist.
-fn check_row(f: usize, m: &Model, focused: bool, marked: bool, hits: &[usize]) -> Row {
-    let mut spans = vec![sp(
-        if focused { "› " } else { "  " },
-        if focused { bold() } else { Style::new() },
-    )];
-    // The mark reads bold on the focus and plain off it; `[ ]` reads dim.
-    let mut mark = if focused { bold() } else { Style::new() };
-    if !marked {
-        mark = mark.add_modifier(Modifier::DIM);
-    }
-    spans.push(sp(if marked { "[x]" } else { "[ ]" }, mark));
-    spans.push(sp(" ", Style::new()));
-    // The id reads as one word even underlined per matched char: matched
-    // chars carry underline plus bold over the row's own colour.
-    for (i, ch) in m.id.chars().enumerate() {
-        let mut st = if focused {
-            bold().patch(fg(BLUE))
-        } else {
-            fg(BLUE)
-        };
-        if hits.contains(&i) {
-            st = st.patch(bold()).add_modifier(Modifier::UNDERLINED);
-        }
-        spans.push(sp(ch.to_string(), st));
-    }
-    spans.push(sp(" ", Style::new()));
-    for r in &m.roles {
-        spans.push(sp(format!("[{r}] "), dim()));
-    }
-    if m.current {
-        spans.push(sp("● current ", bold().patch(fg(BLUE))));
-    }
-    spans.extend([sp("\t", Style::new()), sp(m.rebuild, dim())]);
-    // The focused model reads bold throughout, like every focused choice.
-    let rest = 4 + m.id.chars().count();
-    if focused {
-        for s in spans.iter_mut().skip(rest) {
-            s.style = s.style.patch(bold());
-        }
-    }
-    Row {
-        spans,
-        act: Some(Act::Pick(f)),
-        hot: vec![(2, 5, Act::Toggle(f))],
+        hot,
         ..Default::default()
     }
 }
@@ -815,18 +788,13 @@ fn body(s: &State, inner: usize) -> Vec<Row> {
             let (ppi, mi) = at[f];
             let m = &all[ppi].models[mi];
             let focused = vis[pos] == f;
-            let scoped_mark = s.show_all && s.scoped.contains(&f);
+            let scoped_mark = !s.checklist && s.show_all && s.scoped.contains(&f);
             let hits = id_hits(&s.query, m.id);
             // The checklist marks instead of scoping: its rows carry a mark,
             // its thinking row stays dim with no click targets, and it never
             // takes the session-only note.
-            let mk = || {
-                if s.checklist {
-                    check_row(f, m, focused, s.marked.contains(&f), &hits)
-                } else {
-                    model_row(f, m, focused, scoped_mark, &hits)
-                }
-            };
+            let mark = s.checklist.then(|| s.marked.contains(&f));
+            let mk = || model_row(f, m, focused, mark, scoped_mark, &hits);
             if focused {
                 out.extend(panel::bar(vec![mk()]));
             } else {
