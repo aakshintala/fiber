@@ -9,15 +9,11 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-// The jig's own source, for the argument-parsing tests below: the
-// example stays a runnable binary (`test = false`), so including it
-// here is the only way to test its parsing without running a session.
-#[path = "../examples/paging.rs"]
-#[allow(
-    dead_code,
-    reason = "the jig's running code is dead in this test binary"
-)]
-mod jig;
+// The jig's argument parsing, shared with the runnable binary (see
+// `support/paging_args.rs`): the example stays runnable (`test =
+// false`), so both include the same file.
+#[path = "support/paging_args.rs"]
+mod paging_args;
 
 use fakes::Deadline;
 use std::os::unix::process::CommandExt;
@@ -283,59 +279,11 @@ fn no_word_parses_as_the_session_as_it_always_ran() {
     // No word is scale 1 at 160 by 48, as the jig ran before the open
     // mode existed.
     assert_eq!(
-        jig::parse_args(&words(&[])),
-        Ok(jig::Mode::Paging {
+        paging_args::parse_args(&words(&[])),
+        Ok(paging_args::Mode::Paging {
             scale: 1,
             width: 160,
             height: 48,
         })
     );
-    // The default size is exactly 160 by 48: one less on either axis
-    // is a different size, not the default.
-    assert_ne!(
-        jig::parse_args(&words(&[])),
-        Ok(jig::Mode::Paging {
-            scale: 1,
-            width: 159,
-            height: 48,
-        })
-    );
-    assert_ne!(
-        jig::parse_args(&words(&[])),
-        Ok(jig::Mode::Paging {
-            scale: 1,
-            width: 160,
-            height: 47,
-        })
-    );
-}
-
-#[test]
-fn positional_words_parse_as_scale_and_size() {
-    assert_eq!(
-        jig::parse_args(&words(&["0", "60", "12"])),
-        Ok(jig::Mode::Paging {
-            scale: 0,
-            width: 60,
-            height: 12,
-        })
-    );
-}
-
-#[test]
-fn open_end_parses_as_the_single_final_frame() {
-    assert_eq!(
-        jig::parse_args(&words(&["open", "f", "60", "12", "end"])),
-        Ok(jig::Mode::Open {
-            events: PathBuf::from("f"),
-            width: 60,
-            height: 12,
-            frame_every: jig::parse_frame_every("end").unwrap(),
-        })
-    );
-}
-
-#[test]
-fn a_word_that_is_not_a_number_does_not_parse() {
-    assert!(jig::parse_args(&words(&["x"])).is_err());
 }

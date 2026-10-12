@@ -18,77 +18,16 @@
     reason = "a jig's output is its interface"
 )]
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
 
-const USAGE: &str = "usage: cargo run --release -p tui --example paging -- [scale] [width] [height]\n\
-    usage: cargo run --release -p tui --example paging -- open <events-file> <width> <height> <frame_every|end>";
+#[path = "../tests/support/paging_args.rs"]
+mod paging_args;
 
-/// What the jig runs: its generated session, or one file's log reopened.
-/// The parse tests include this file as a module
-/// (`crates/tui/tests/paging_open.rs`), so the seam is visible in the
-/// crate without changing the runnable binary.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Mode {
-    Paging {
-        scale: usize,
-        width: u16,
-        height: u16,
-    },
-    Open {
-        events: PathBuf,
-        width: u16,
-        height: u16,
-        frame_every: usize,
-    },
-}
-
-/// How many lines each frame folds: a number, or `end` for the single
-/// final frame. The bench prints the single frame's count as its number,
-/// so both spell it.
-pub(crate) fn parse_frame_every(text: &str) -> Result<usize, String> {
-    if text == "end" {
-        return Ok(usize::MAX);
-    }
-    text.parse::<usize>().map_err(|_| USAGE.to_owned())
-}
-
-/// The command line: `open` with its file, size and frame count, or the
-/// positional scale, width and height, each defaulted as the jig ran
-/// before the open mode existed.
-pub(crate) fn parse_args(args: &[String]) -> Result<Mode, String> {
-    if args.first().is_some_and(|first| first == "open") {
-        let rest = args.get(1..).unwrap_or_default();
-        let [file, width, height, frame_every] = rest else {
-            return Err(USAGE.to_owned());
-        };
-        let width = width.parse::<u16>().map_err(|_| USAGE.to_owned())?;
-        let height = height.parse::<u16>().map_err(|_| USAGE.to_owned())?;
-        return Ok(Mode::Open {
-            events: PathBuf::from(file),
-            width,
-            height,
-            frame_every: parse_frame_every(frame_every)?,
-        });
-    }
-    let arg = |at: usize, default: &str| args.get(at).map_or(default, String::as_str).to_owned();
-    let (Ok(scale), Ok(width), Ok(height)) = (
-        arg(0, "1").parse::<usize>(),
-        arg(1, "160").parse::<u16>(),
-        arg(2, "48").parse::<u16>(),
-    ) else {
-        return Err(USAGE.to_owned());
-    };
-    Ok(Mode::Paging {
-        scale,
-        width,
-        height,
-    })
-}
+use paging_args::{Mode, USAGE, parse_args};
 
 /// One JSON line with what reopening the file cost: parsing each line,
 /// folding it, and the frames drawn.
