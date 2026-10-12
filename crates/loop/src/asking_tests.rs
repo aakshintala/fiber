@@ -10,6 +10,7 @@
     reason = "test code"
 )]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -529,5 +530,160 @@ fn a_changed_suspendable_request_restarts_the_idle_deadline() {
     assert!(
         !wait(&mut looped, &mut suspend),
         "the deadline counts from the new request"
+    );
+}
+
+/// A tool whose worker reports that it runs, then waits for its
+/// cancellation, recording whether it saw it before returning.
+struct SeesCancel {
+    started: mpsc::SyncSender<()>,
+    saw: Arc<AtomicBool>,
+}
+
+struct CancelledWake(mpsc::SyncSender<()>);
+
+impl Wake for CancelledWake {
+    fn wake(&self) {
+        let _sent = self.0.send(());
+    }
+}
+
+impl contract::tool::Tool for SeesCancel {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "inner".into(),
+            description: "An inner tool.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        cancel: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        // The watcher subscribes before the test can drop the release:
+        // that drop only happens after the start signal sent below.
+        let (woke_tx, woke) = mpsc::sync_channel::<()>(1);
+        let wake: Arc<dyn Wake> = Arc::new(CancelledWake(woke_tx));
+        cancel.subscribe(Arc::downgrade(&wake));
+        self.started.send(()).unwrap();
+        let saw = Deadline::after(DEADLINE).recv(&woke).is_ok();
+        drop(wake);
+        self.saw.store(saw, Ordering::SeqCst);
+        contract::tool::Output::default()
+    }
+}
+
+#[test]
+fn dropping_the_release_cancels_each_inner_call_it_holds() {
+    use contract::tool::InnerCalls as _;
+
+    let deadline = Deadline::after(DEADLINE);
+    let home = fakes::TempDir::new("fiber-release-cancels-inner");
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let clock = fakes::clock::FakeClock::new();
+    let log = Arc::new(
+        Log::create(
+            home.path(),
+            SessionId("s_test".into()),
+            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        )
+        .unwrap(),
+    );
+    let turn = Arc::new(crate::TurnCancel::default());
+    assert!(turn.arm());
+    let (woke_tx, woke) = signal();
+    let notice: Arc<dyn Wake> = woke_tx;
+    let wake = Arc::new(SharedWake::default());
+    wake.forward(Some(notice));
+    let anchor_id = ActionId("a_outer".into());
+    let slot = Arc::new(crate::inner_calls::InnerSlot::new(
+        Arc::clone(&wake),
+        anchor_id.clone(),
+        "outer".into(),
+        0,
+    ));
+    let anchor = Arc::new(
+        Stream::new(Arc::clone(&wake), anchor_id.clone(), true).with_inner(Arc::clone(&slot)),
+    );
+    let (started_tx, started) = mpsc::sync_channel::<()>(1);
+    let saw = Arc::new(AtomicBool::new(false));
+    let tool = Arc::new(SeesCancel {
+        started: started_tx,
+        saw: Arc::clone(&saw),
+    });
+    let (_inbox, rx) = mpsc::channel();
+    let mut looped = Loop::start(
+        crate::Session {
+            log,
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new()))
+                as Arc<dyn contract::provider::Provider>,
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: vec![("builtin".to_owned(), tool as Arc<dyn contract::tool::Tool>)],
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(Still) as Arc<dyn contract::rules::Rules>,
+            },
+        },
+        None,
+    )
+    .unwrap()
+    .cancelled_by(Arc::clone(&turn));
+    let raised = Arc::clone(&slot);
+    let _answering = thread::spawn(move || raised.run("ext", "inner", serde_json::json!({"x": 1})));
+    deadline.recv_or_fail(&woke, "raised inner call");
+    let streams = [(&anchor_id, anchor.as_ref())];
+    let turn_id = TurnId("t_test".into());
+    thread::scope(|scope| {
+        let mut inner = Vec::new();
+        let mut release = Release::default();
+        looped
+            .take_inner(scope, &streams, &mut inner, &mut release, &wake, &turn_id)
+            .unwrap();
+        // The worker runs now; returning drops the release while it waits.
+        deadline.recv(&started).expect("the inner worker runs");
+    });
+    slot.close();
+    assert!(
+        saw.load(Ordering::SeqCst),
+        "the dropped release cancelled the inner worker"
     );
 }

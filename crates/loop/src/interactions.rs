@@ -19,7 +19,7 @@ use contract::clock::Wake;
 use contract::events::{Answer, Event, InteractionRequested, InteractionResolved, ResolvedBy};
 use contract::inbox::Delivery;
 use contract::shapes::True;
-use contract::tool::Answered;
+use contract::tool::{Answered, Ask};
 use contract::{ActionId, ErrorCode, RequestId, TurnId};
 
 use crate::asking::Fitted;
@@ -129,7 +129,7 @@ impl Loop {
             pause_after_take();
             // Read after the take, per slot: a cancel landing before it
             // declines the ask.
-            let nobody = self.interactions_unanswerable();
+            let nobody = self.interactions_unanswerable() || !stream.answerable();
             // A shutdown leaves a question that suspends pending when no later
             // call of the step is without its result, so resuming raises it
             // again (`docs/invocation.md`, "Shutdown").

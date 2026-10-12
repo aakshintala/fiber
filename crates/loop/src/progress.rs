@@ -14,6 +14,7 @@ use contract::tool::{Answered, Ask, Asking, Output};
 use serde_json::Value;
 
 use crate::asking::AskSlot;
+use crate::inner_calls::InnerSlot;
 
 /// At most one delta every 100 ms (`docs/tools.md`, "Progress").
 const MIN_INTERVAL: Duration = Duration::from_millis(100);
@@ -225,6 +226,8 @@ pub(crate) struct Stream {
     /// Whether a person can answer its interaction, read when the call
     /// was spawned.
     answerable: bool,
+    /// The runner for calls anchored on this stream.
+    inner_calls: Option<Arc<InnerSlot>>,
 }
 
 impl Stream {
@@ -240,7 +243,22 @@ impl Stream {
             action,
             asking: AskSlot::default(),
             answerable,
+            inner_calls: None,
         }
+    }
+
+    pub(crate) fn with_inner(mut self, slot: Arc<InnerSlot>) -> Self {
+        self.inner_calls = Some(slot);
+        self
+    }
+
+    pub(crate) fn inner_slot(&self) -> Option<&Arc<InnerSlot>> {
+        self.inner_calls.as_ref()
+    }
+
+    /// Whether the worker returned, before its output is taken.
+    pub(crate) fn returned(&self) -> bool {
+        lock(&self.inner).done.is_some()
     }
 
     /// The call's interaction slot.
@@ -311,6 +329,12 @@ impl Ask for Stream {
 
     fn ask(&self, asking: Asking) -> Answered {
         self.asking.ask(asking, self.wake.as_ref())
+    }
+
+    fn inner_calls(&self) -> Option<Arc<dyn contract::tool::InnerCalls>> {
+        self.inner_calls
+            .as_ref()
+            .map(|slot| slot.clone() as Arc<dyn contract::tool::InnerCalls>)
     }
 }
 

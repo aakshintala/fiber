@@ -72,6 +72,67 @@ fn dirs() -> (fakes::TempDir, PathBuf, PathBuf, PathBuf) {
 }
 
 #[test]
+fn inner_calls_take_only_the_credential_and_standing_deny_steps() {
+    let (_root, workspace, _home, credentials) = dirs();
+    let secret = credentials.join("token").display().to_string();
+    let credential = call(vec![Effect::Reads], Some(vec![&secret]), Some("x"));
+    assert!(matches!(
+        super::inner_verdict(
+            "inner",
+            &credential,
+            &empty_rules(),
+            &workspace,
+            &credentials,
+            &[]
+        ),
+        Verdict::Deny {
+            by: DecidedBy::CredentialDeny,
+            reason: "credentials",
+            ..
+        }
+    ));
+    let execute = reviewed(call(vec![Effect::Executes], None, Some("x")));
+    assert!(matches!(
+        super::inner_verdict(
+            "inner",
+            &execute,
+            &rules(vec![rule(RuleDecision::Deny, "inner", "x")], Vec::new()),
+            &workspace,
+            &credentials,
+            &[]
+        ),
+        Verdict::Deny {
+            by: DecidedBy::StandingRule,
+            reason: "standing_rule",
+            ..
+        }
+    ));
+    for standing in [
+        empty_rules(),
+        rules(vec![rule(RuleDecision::Ask, "inner", "x")], Vec::new()),
+    ] {
+        assert!(matches!(
+            super::inner_verdict("inner", &execute, &standing, &workspace, &credentials, &[]),
+            Verdict::Allow(None)
+        ));
+    }
+    assert!(matches!(
+        super::inner_verdict(
+            "inner",
+            &execute,
+            &Err(RulesError("unreadable".into())),
+            &workspace,
+            &credentials,
+            &[]
+        ),
+        Verdict::Deny {
+            reason: "rules_unreadable",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn a_prefix_ending_in_slash_matches_every_subject_that_starts_with_it() {
     assert!(matches("src/", Some("src/main.rs")));
     assert!(matches("src/", Some("src/")));

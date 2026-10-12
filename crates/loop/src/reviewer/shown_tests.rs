@@ -331,3 +331,22 @@ fn lines_after_reviewer_kept_append_after_the_kept_items() {
     assert!(matches!(reviewed[0].shown, Shown::Person(_)));
     assert!(matches!(reviewed[1].shown, Shown::Person(_)));
 }
+
+#[test]
+fn the_reviewer_keeps_an_inner_call() {
+    let mut inner = call("fake");
+    inner.ran_by = Some(contract::events::RanBy {
+        extension: "ext".into(),
+        anchor: contract::events::Anchor::OuterCall(ActionId("a_outer".into())),
+    });
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(inner),
+        Some(&ActionId("a_inner".into())),
+        Some(Seq(41)),
+    );
+    assert_eq!(reviewed.len(), 1);
+    assert_eq!(reviewed[0].shown, Shown::Call(ActionId("a_inner".into())));
+    assert!(matches!(&reviewed[0].input, Input::User { text, .. } if text.contains("fake")));
+}
