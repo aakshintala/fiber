@@ -274,41 +274,29 @@ pub(crate) fn launcher(fiber: &Path) -> jobs::Launch {
 
 fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
     let mut command = Command::new(fiber);
+    let workspace = launched.workspace.to_string_lossy();
+    command.args([
+        "session",
+        "--id",
+        &launched.session_id.0,
+        "--workspace",
+        &workspace,
+    ]);
     if launched.resume {
         // A resume continues the delegate's own session with one
         // unattended turn: no `--model` (fixed when the delegate
         // started), and the message as one `--prompt=<text>` argument, so
         // a message starting with `-` reaches the child whole.
-        command.args([
-            "session",
-            "--id",
-            &launched.session_id.0,
-            "--workspace",
-            &launched.workspace.to_string_lossy(),
-            "--resume",
-            &format!("--prompt={}", launched.prompt),
-            "--parent",
-            &launched.parent.0,
-            "--delegate-id",
-            &launched.job_id.0,
-        ]);
+        command.args(["--resume", &format!("--prompt={}", launched.prompt)]);
     } else {
-        command.args([
-            "session",
-            "--id",
-            &launched.session_id.0,
-            "--workspace",
-            &launched.workspace.to_string_lossy(),
-            "--model",
-            &launched.model,
-            "--prompt",
-            &launched.prompt,
-            "--parent",
-            &launched.parent.0,
-            "--delegate-id",
-            &launched.job_id.0,
-        ]);
+        command.args(["--model", &launched.model, "--prompt", &launched.prompt]);
     }
+    command.args([
+        "--parent",
+        &launched.parent.0,
+        "--delegate-id",
+        &launched.job_id.0,
+    ]);
     // A delegate carries its parent's environment, so it carries the
     // parent's source too (`docs/invocation.md`, "A session's
     // environment").
