@@ -17,8 +17,10 @@ use contract::events::{
 };
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects};
+use contract::jobs::Taken;
 use contract::tool::{Bound, Cancel, Output, Tool};
 use contract::{ActionId, RequestId, SessionId, TurnId};
+use log::Log;
 use serde_json::{Map, Value};
 
 use super::before_tool::Prepared;
@@ -142,6 +144,20 @@ pub(crate) fn register(
     (registered, replaced)
 }
 
+/// One `JobRecord` as its event, the delegate's finish bounded as it is
+/// written: the one mapping `finish`, `write_end` and `write_job_end`
+/// share.
+pub(crate) fn job_event(log: &Log, record: contract::jobs::JobRecord) -> Event {
+    match record {
+        contract::jobs::JobRecord::Started(started) => Event::JobStarted(started),
+        contract::jobs::JobRecord::DelegateStarted(started) => Event::DelegateStarted(started),
+        contract::jobs::JobRecord::DelegateFinished(finished) => {
+            Event::DelegateFinished(crate::delegated::bounded(log, finished))
+        }
+        contract::jobs::JobRecord::Completed(completed) => Event::JobCompleted(completed),
+    }
+}
+
 impl Loop {
     /// `call` with the repair its tool's schema allows, if any
     /// (`docs/tools.md`, "Before a call runs").
@@ -150,6 +166,35 @@ impl Loop {
             call.repair = schema::repair(&definition.input_schema, &call.arguments);
         }
         call
+    }
+
+    /// Writes one record taken from a job's queue. A record carrying the
+    /// queuing call's action is written under that action and that
+    /// action's turn, whichever taker writes it; one without is written
+    /// under the writer's own. A queued action the loop never started
+    /// falls back to the writer's turn.
+    pub(crate) fn write_taken(
+        &mut self,
+        taken: Taken,
+        turn: Option<&TurnId>,
+        action: Option<&ActionId>,
+    ) -> Result<(), Error> {
+        let event = job_event(&self.log, taken.record);
+        match taken.action {
+            Some(action) => {
+                // Cloned before the write: the map is the loop thread's,
+                // and the write borrows the loop mutably.
+                let turn = match self.call_turns.get(&action) {
+                    Some(turn) => Some(turn.clone()),
+                    None => turn.cloned(),
+                };
+                self.write(&event, turn.as_ref(), Some(&action))?;
+            }
+            None => {
+                self.write(&event, turn, action)?;
+            }
+        }
+        Ok(())
     }
 
     /// Decides every call in order, then runs the approved ones concurrently and
@@ -269,6 +314,9 @@ impl Loop {
                         let stream = Arc::new(
                             Stream::new(Arc::clone(&wake), id.clone(), answerable).with_inner(slot),
                         );
+                        // The call's turn, read back when a record the call
+                        // queued is written, whichever taker writes it.
+                        self.call_turns.insert(id.clone(), turn.clone());
                         if let Some(request) = again
                             && answerable
                         {
@@ -621,9 +669,13 @@ impl Loop {
             changes,
             control,
             jobs,
+            settle,
             servers,
             spilled,
         } = output;
+        // The call's output reached `finish`: its turn entry leaves the
+        // map, so the map holds only calls whose output has not.
+        self.call_turns.remove(id);
         // What the call saw of its server's deaths and restarts, written
         // under the call's action, in order, before its job lines and
         // `tool_call_completed`.
@@ -634,17 +686,15 @@ impl Loop {
             };
             self.append(&event, turn, Some(id))?;
         }
+        // The call's prefix of its jobs' queues, written under the
+        // queuing call's action and turn, before its own job lines.
+        if let Some(settle) = settle {
+            for taken in (settle.0)() {
+                self.write_taken(taken, Some(turn), Some(id))?;
+            }
+        }
         for record in jobs {
-            let event = match record {
-                contract::jobs::JobRecord::Started(started) => Event::JobStarted(started),
-                contract::jobs::JobRecord::DelegateStarted(started) => {
-                    Event::DelegateStarted(started)
-                }
-                contract::jobs::JobRecord::DelegateFinished(finished) => {
-                    Event::DelegateFinished(crate::delegated::bounded(&self.log, finished))
-                }
-                contract::jobs::JobRecord::Completed(completed) => Event::JobCompleted(completed),
-            };
+            let event = job_event(&self.log, record);
             self.append(&event, turn, Some(id))?;
         }
         let (mut text, mut images): (Vec<ContentPart>, Vec<ContentPart>) = content

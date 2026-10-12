@@ -1434,7 +1434,7 @@ fn a_turn_a_job_started_goes_on_after_a_handoff() {
             process: None,
             output_tail: None,
         },
-        claim: contract::inbox::Claim(Box::new(|| true)),
+        claim: contract::inbox::Claim(Box::new(|| Some(Vec::new()))),
         delegate: None,
     });
     let mut session = injected(

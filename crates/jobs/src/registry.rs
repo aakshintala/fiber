@@ -512,9 +512,12 @@ impl Registry {
                     let registry = Weak::clone(&self.me);
                     let id = completed.job_id.0.clone();
                     let claim = Claim(Box::new(move || {
+                        // P2.1 replaces the queue with per-run records and
+                        // returns what the claim took ahead; until then the
+                        // claim takes nothing ahead.
                         registry
                             .upgrade()
-                            .is_some_and(|registry| registry.claim(&id))
+                            .and_then(|registry| registry.claim(&id).then(Vec::new))
                     }));
                     // A loop that is gone takes no news; the end stays
                     // recorded for `list`.

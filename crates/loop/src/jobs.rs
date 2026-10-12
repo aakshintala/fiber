@@ -15,7 +15,7 @@ use contract::events::{
     Outcome, PendingReason,
 };
 use contract::inbox::{JobNotice, Message};
-use contract::jobs::Jobs;
+use contract::jobs::{JobRecord, Jobs, Taken};
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{CommandId, ErrorCode, JobId, TurnId};
@@ -46,9 +46,10 @@ pub(crate) enum Queued {
     /// `delegate_finished` (bounded) then `job_completed` only when
     /// the claim holds.
     Notice(JobNotice),
-    /// Written as `delegate_finished` (bounded) then `job_completed`
+    /// Written as the queued records the claim took ahead, then
+    /// `delegate_finished` (bounded) then `job_completed`
     /// with no action; named in a `jobs` item when it starts a turn.
-    Job(JobCompleted, Option<DelegateFinished>),
+    Job(Vec<Taken>, JobCompleted, Option<DelegateFinished>),
     /// A monitor's batch: written as `job_line`; named in a `jobs` item when
     /// it starts a turn. No claim applies to it.
     Line(JobLine),
@@ -87,10 +88,13 @@ pub(crate) struct Ending {
 }
 
 /// The notice's completion and its delegate's finish, when its claim
-/// holds: no `jobs wait` or `stop` already returned the job's final state
-/// to the model.
-pub(crate) fn claimed(notice: JobNotice) -> Option<(JobCompleted, Option<DelegateFinished>)> {
-    (notice.claim.0)().then_some((notice.completed, notice.delegate))
+/// holds, with the queued records the claim took ahead of them: no
+/// `jobs wait` or `stop` already returned the job's final state to the
+/// model.
+pub(crate) fn claimed(
+    notice: JobNotice,
+) -> Option<(Vec<Taken>, JobCompleted, Option<DelegateFinished>)> {
+    (notice.claim.0)().map(|ahead| (ahead, notice.completed, notice.delegate))
 }
 
 impl Loop {
@@ -248,9 +252,9 @@ impl Loop {
                     self.queued
                         .push_back(Queued::Handoff(command_id, instructions));
                 }
-                Queued::Job(completed, delegate) => {
+                Queued::Job(ahead, completed, delegate) => {
                     name_job(&mut input, &completed.job_id);
-                    self.queued.push_back(Queued::Job(completed, delegate));
+                    self.queued.push_back(Queued::Job(ahead, completed, delegate));
                 }
                 // Notices are claimed at admission while idle and at the
                 // move into a turn's input while running: none reaches a
@@ -311,13 +315,13 @@ impl Loop {
                 // The claim is asked here, at the step boundary that
                 // writes the notice.
                 Queued::Notice(notice) => {
-                    if let Some((completed, delegate)) = claimed(notice) {
-                        self.write_end(turn, completed, delegate)?;
+                    if let Some((ahead, completed, delegate)) = claimed(notice) {
+                        self.write_end(turn, ahead, completed, delegate)?;
                     }
                     continue;
                 }
-                Queued::Job(completed, delegate) => {
-                    self.write_end(turn, completed, delegate)?;
+                Queued::Job(ahead, completed, delegate) => {
+                    self.write_end(turn, ahead, completed, delegate)?;
                     continue;
                 }
                 Queued::Line(line) => Event::JobLine(line),
@@ -335,16 +339,21 @@ impl Loop {
         Ok(steered)
     }
 
-    /// A claimed job's end: its delegate's final message first, bounded
-    /// as it is written, then `job_completed`.
+    /// A claimed job's end: the queued records taken ahead first, then
+    /// its delegate's final message, bounded as it is written, then
+    /// `job_completed`.
     fn write_end(
         &mut self,
         turn: &TurnId,
+        ahead: Vec<Taken>,
         completed: JobCompleted,
         delegate: Option<DelegateFinished>,
     ) -> Result<(), Error> {
+        for taken in ahead {
+            self.write_taken(taken, Some(turn), None)?;
+        }
         if let Some(finished) = delegate {
-            let event = Event::DelegateFinished(crate::delegated::bounded(&self.log, finished));
+            let event = super::calls::job_event(&self.log, JobRecord::DelegateFinished(finished));
             self.append(&event, turn, None)?;
         }
         self.append(&Event::JobCompleted(completed), turn, None)?;
@@ -360,7 +369,9 @@ impl Loop {
             .drain(..)
             .filter_map(|piece| match piece {
                 Queued::Notice(notice) => {
-                    claimed(notice).map(|(completed, delegate)| Queued::Job(completed, delegate))
+                    claimed(notice).map(|(ahead, completed, delegate)| {
+                        Queued::Job(ahead, completed, delegate)
+                    })
                 }
                 piece @ (Queued::Steer(..)
                 | Queued::Job(..)

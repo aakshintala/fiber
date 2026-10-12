@@ -303,7 +303,7 @@ impl Jobs for FakeJobs {
                     if let Some(inbox) = &inner.inbox {
                         match inbox.send(Delivery::Job(JobNotice {
                             completed: completed.clone(),
-                            claim: Claim(Box::new(|| true)),
+                            claim: Claim(Box::new(|| Some(Vec::new()))),
                             delegate: None,
                         })) {
                             Ok(()) | Err(_) => {}

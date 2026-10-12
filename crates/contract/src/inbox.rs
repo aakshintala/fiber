@@ -136,7 +136,10 @@ pub struct JobNotice {
     /// How the job ended: the `job_completed` the loop writes with the
     /// notice.
     pub completed: crate::events::JobCompleted,
-    /// Whether this notice is still the model's news to receive.
+    /// Whether this notice is still the model's news to receive: `None`
+    /// once a `wait` or `stop` already returned the job's final state, and
+    /// `Some` of the queued records taken ahead of the notice's own two
+    /// otherwise.
     pub claim: Claim,
     /// A Fiber delegate's finish, written as `delegate_finished` before
     /// `job_completed` when the loop writes the notice. The text is
@@ -145,9 +148,13 @@ pub struct JobNotice {
 }
 
 /// True for exactly one caller across this notice and the job's `wait` and
-/// `stop`: false once a `jobs wait` or `stop` already returned the job's
-/// final state to the model.
-pub struct Claim(pub Box<dyn FnOnce() -> bool + Send>);
+/// `stop`: `None` once a `jobs wait` or `stop` already returned the job's
+/// final state to the model, so the refused claim takes nothing.
+/// `Some(ahead)` means the claim holds, and `ahead` lists the records the
+/// claim took from the job's queue ahead of the notice's own
+/// `delegate_finished` and `job_completed`, in queue order, for the loop
+/// to write first.
+pub struct Claim(pub Box<dyn FnOnce() -> Option<Vec<crate::jobs::Taken>> + Send>);
 
 impl fmt::Debug for Claim {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

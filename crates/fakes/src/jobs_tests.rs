@@ -407,7 +407,7 @@ fn deliver_to_sends_each_later_end_whose_claim_holds() {
     assert_eq!(notice.completed.status, Outcome::Failed);
     assert!(rx.try_recv().is_err(), "one end sends one notice");
     assert!(seam.running().is_empty(), "the notice is sent as it ends");
-    assert!((notice.claim.0)(), "the claim holds");
+    assert_eq!((notice.claim.0)(), Some(Vec::new()), "the claim holds");
 }
 
 #[test]

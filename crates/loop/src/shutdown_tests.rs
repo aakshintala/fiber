@@ -110,7 +110,7 @@ impl Listed {
                     process: None,
                     output_tail: None,
                 },
-                claim: Claim(Box::new(|| true)),
+                claim: Claim(Box::new(|| Some(Vec::new()))),
                 delegate,
             }))
             .unwrap();
@@ -158,7 +158,7 @@ fn notice(id: &str) -> Delivery {
             process: None,
             output_tail: None,
         },
-        claim: Claim(Box::new(|| true)),
+        claim: Claim(Box::new(|| Some(Vec::new()))),
         delegate: None,
     })
 }
@@ -323,6 +323,7 @@ fn settle_writes_a_queued_delegate_finish_before_its_end() {
     let (jobs, _stops) = Listed::new(&[]);
     let mut world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
     world.looped.queued.push_back(crate::jobs::Queued::Job(
+        Vec::new(),
         JobCompleted {
             job_id: JobId("j_1".into()),
             status: Outcome::Cancelled,
@@ -920,7 +921,7 @@ fn queued_notice(holds: bool, asked: &Arc<AtomicUsize>) -> crate::jobs::Queued {
             let asked = Arc::clone(asked);
             move || {
                 asked.fetch_add(1, Ordering::SeqCst);
-                holds
+                holds.then(Vec::new)
             }
         })),
         delegate: Some(DelegateFinished {

@@ -113,7 +113,7 @@ fn notice(id: &str, holds: bool, asked: &Asked) -> Delivery {
         completed: failed(id),
         claim: Claim(Box::new(move || {
             asked.fetch_add(1, Ordering::SeqCst);
-            holds
+            holds.then(Vec::new)
         })),
         delegate: None,
     })
@@ -148,7 +148,7 @@ fn delegate_finished(id: &str, text: String) -> DelegateFinished {
 fn delegate_held(id: &str, text: String) -> Delivery {
     Delivery::Job(JobNotice {
         completed: failed(id),
-        claim: Claim(Box::new(|| true)),
+        claim: Claim(Box::new(|| Some(Vec::new()))),
         delegate: Some(delegate_finished(id, text)),
     })
 }
@@ -2415,7 +2415,7 @@ fn after_close_a_kept_notice_starts_a_turn_and_a_kept_steer_does_not() {
         ));
         looped
             .queued
-            .push_back(crate::jobs::Queued::Job(failed(JOB), None));
+            .push_back(crate::jobs::Queued::Job(Vec::new(), failed(JOB), None));
     }
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     let lines = world.turn_lines();
@@ -2780,7 +2780,7 @@ fn counted_delegate(id: &str, text: &str, holds: bool, asked: &Asked) -> Deliver
         completed: failed(id),
         claim: Claim(Box::new(move || {
             asked.fetch_add(1, Ordering::SeqCst);
-            holds
+            holds.then(Vec::new)
         })),
         delegate: Some(delegate_finished(id, text.into())),
     })
@@ -2806,7 +2806,7 @@ fn counted_job(id: &str, holds: bool, asked: &Asked) -> JobNotice {
         completed: failed(id),
         claim: Claim(Box::new(move || {
             asked.fetch_add(1, Ordering::SeqCst);
-            holds
+            holds.then(Vec::new)
         })),
         delegate: None,
     }

@@ -313,7 +313,7 @@ fn an_unclaimed_end_sends_one_notice_whose_claim_holds_once() {
     let sent = notice(&rx);
     assert!(rx.try_recv().is_err(), "one end sends one notice");
     assert_eq!(sent.completed, ended_ok(&id));
-    assert!((sent.claim.0)(), "the notice claims the unclaimed end");
+    assert_eq!((sent.claim.0)(), Some(Vec::new()), "the notice claims the unclaimed end");
     let cancel = CancelToken::new();
     let answer = registry.wait(&id, 0, &cancel).unwrap();
     assert!(answer.records.is_empty(), "the notice already claimed it");
@@ -382,7 +382,7 @@ fn a_notice_after_a_wait_claimed_the_end_does_not_hold() {
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
     assert!(matches!(&answer.records[..], [JobRecord::Completed(_)]));
     let sent = notice(&rx);
-    assert!(!(sent.claim.0)(), "the wait claimed the end first");
+    assert_eq!((sent.claim.0)(), None, "the wait claimed the end first");
 }
 
 #[test]
@@ -410,7 +410,7 @@ fn a_claim_after_the_registry_is_gone_does_not_hold() {
     (opened.end.0)(ended_ok(&id));
     drop(registry);
     let sent = notice(&rx);
-    assert!(!(sent.claim.0)());
+    assert_eq!((sent.claim.0)(), None);
 }
 
 #[test]
@@ -1335,7 +1335,7 @@ fn a_notice_claimed_by_wait_claims_nothing_and_vice_versa() {
     );
     finish.report(ended_ok(&id.0), Some(delegate_finished(&id.0, "Done.")));
     let first = notice(&rx);
-    assert!((first.claim.0)(), "the first claim holds");
+    assert_eq!((first.claim.0)(), Some(Vec::new()), "the first claim holds");
     let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
     assert!(answer.records.is_empty(), "the notice claimed first");
 
@@ -1354,7 +1354,7 @@ fn a_notice_claimed_by_wait_claims_nothing_and_vice_versa() {
     let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
     assert_eq!(answer.records.len(), 2, "the wait claimed first");
     let second = notice(&rx);
-    assert!(!(second.claim.0)(), "the wait already claimed the end");
+    assert_eq!((second.claim.0)(), None, "the wait already claimed the end");
 }
 
 #[test]
