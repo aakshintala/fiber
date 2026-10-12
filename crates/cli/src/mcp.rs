@@ -19,7 +19,7 @@ use contract::events::OfferedKind;
 use contract::mcp_remote::McpRemote;
 use contract::shapes::Failure;
 use doors::failure;
-use extensions::{Index, Store};
+use extensions::{Decision, Index, Store};
 use serde_json::{Map, Value};
 
 use crate::approve::say;
@@ -502,6 +502,138 @@ pub fn mcp_remove(layer: Layer, name: &str) -> i32 {
 }
 
 /// `fiber mcp add [--project | --repo] <name> <url>` or `... -- <command>
+/// Whether a declared entry holds at least one value: anything that is
+/// not an object, at any depth. An entry of only emptied objects is not a
+/// declaration and is not listed.
+fn has_value(entry: &Value) -> bool {
+    match entry {
+        Value::Object(map) => map.values().any(has_value),
+        _ => true,
+    }
+}
+
+/// A layer's place in the listing: global, then project, then repository.
+fn layer_order(layer: Layer) -> u8 {
+    match layer {
+        Layer::Global => 0,
+        Layer::Project => 1,
+        Layer::Repository => 2,
+    }
+}
+
+/// Whether the repository declaration `name` is approved: the recorded
+/// decision for the hash of the declaration as startup hashes it. A
+/// `never` and no record both read as unapproved, as does a declaration
+/// there is nothing to hash.
+fn is_approved(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    name: &str,
+    clock: &Arc<dyn Clock>,
+) -> Result<bool, Failure> {
+    let items =
+        extensions::declared_items(workspace, clock.as_ref()).map_err(|e| failed(e.code(), e))?;
+    let Some(item) = items
+        .iter()
+        .find(|item| item.kind == OfferedKind::McpServer && item.name == name)
+    else {
+        return Ok(false);
+    };
+    let mut index = Index::load(home);
+    let hash = extensions::hash(&mut index, item).map_err(|e| failed(e.code(), e))?;
+    // The index only saves a re-hash; failing to write it costs nothing else.
+    index.save().unwrap_or(());
+    Ok(
+        Store::new(home, project, Arc::clone(clock))
+            .decision(OfferedKind::McpServer, &hash)
+            .is_some_and(|decision| decision == Decision::Approve),
+    )
+}
+
+/// `fiber mcp list`: one row per declaration, sorted by name then layer:
+/// the name, the layer, and for a repository's server whether it is
+/// approved. Nothing else about a declaration prints: a declaration can
+/// hold tokens.
+pub(crate) fn run_list(
+    home: &Path,
+    workspace: &Path,
+    streams: Streams<'_>,
+    clock: &Arc<dyn Clock>,
+) -> Result<(), Failure> {
+    let Streams { out, err: _ } = streams;
+    let (_, project) = project_of(home, workspace)?;
+    let config = Config::load(Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project: project.clone(),
+        overrides: Vec::new(),
+    })
+    .map_err(config_failure)?;
+    let mut rows: Vec<(String, Layer)> = Vec::new();
+    for layer in [Layer::Global, Layer::Project, Layer::Repository] {
+        if let Some(Value::Object(servers)) = config.in_layer("mcp.servers", layer) {
+            for (name, entry) in &servers {
+                if has_value(entry) {
+                    rows.push((name.clone(), layer));
+                }
+            }
+        }
+    }
+    rows.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(layer_order(left.1).cmp(&layer_order(right.1)))
+    });
+    let mut table: Vec<Vec<String>> = Vec::new();
+    for (name, layer) in &rows {
+        let approval = if *layer == Layer::Repository {
+            if is_approved(home, workspace, &project, name, clock)? {
+                "approved"
+            } else {
+                "not approved"
+            }
+        } else {
+            ""
+        };
+        table.push(vec![
+            name.clone(),
+            layer_word(*layer).to_owned(),
+            approval.to_owned(),
+        ]);
+    }
+    for line in crate::table::pad(&table) {
+        say(out, &format!("{line}\n"));
+    }
+    Ok(())
+}
+
+/// `fiber mcp list` in the current directory.
+pub fn mcp_list(clock: Arc<dyn Clock>) -> i32 {
+    let ran = config::fiber_home_from_env()
+        .map_err(|e| failed(e.code(), e))
+        .and_then(|home| {
+            let workspace = std::env::current_dir().map_err(|e| {
+                failed(ErrorCode::IoFailed, format!("the current directory: {e}"))
+            })?;
+            let mut out = io::stdout();
+            let mut err = io::stderr();
+            run_list(
+                &home,
+                &workspace,
+                Streams {
+                    out: &mut out,
+                    err: &mut err,
+                },
+                &clock,
+            )
+        });
+    match ran {
+        Ok(()) => 0,
+        Err(e) => fail(e),
+    }
+}
+
 /// [args]...` in the current directory.
 pub fn mcp_add(
     layer: Layer,
@@ -563,3 +695,7 @@ mod add_tests;
 #[cfg(test)]
 #[path = "mcp_remove_tests.rs"]
 mod remove_tests;
+
+#[cfg(test)]
+#[path = "mcp_list_tests.rs"]
+mod list_tests;
