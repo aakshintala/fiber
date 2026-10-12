@@ -10,7 +10,7 @@ use crate::markdown::{Role, style};
 
 /// Draws the banner on the row above `bottom`, cut at `area`'s width, and
 /// moves `bottom` up to it; nothing while the link is up or refused.
-pub(super) fn draw(app: &App, area: Rect, buf: &mut Buffer, bottom: &mut u16) {
+pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, bottom: &mut u16) {
     if let Some(text) = app.banner() {
         super::put(buf, area, bottom, &text, style(Role::Warning));
     }

@@ -958,8 +958,8 @@ websocket for everything it does.
 
 Each is answered with one `command_accepted` or `command_rejected`, as a
 session's commands are. A client offers the workspaces of recent sessions
-first when it asks where to start one; a way to browse directories is left to
-clients.
+first when it asks where to start one, and lists directories with
+`directories`.
 
 ### Remote clients
 

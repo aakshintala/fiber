@@ -11,7 +11,7 @@ use super::{FOCUS_STYLE, HOVER_TINT, completions};
 use crate::app::App;
 use crate::completion_rows::Rows;
 use crate::format::{cut, width, wrap};
-use crate::home::{HomeScreen, Spot};
+use crate::home::{HomeScreen, Spot, TypedScreen};
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
@@ -332,6 +332,11 @@ pub(super) fn render(
     // it shows; each row is a target opening its session. The focused
     // row is the last drawn one once it is past the first screenful,
     // and the list draws from the top otherwise.
+    // While the link is down the reconnect banner takes the row above
+    // the foot, and the list above yields it one row (`docs/tui.md`,
+    // "A dropped connection"). With the link up nothing draws and no
+    // row moves, so the snapshots stay byte-identical.
+    let banner = usize::from(app.banner().is_some());
     let list_top = placed.edge.saturating_add(1);
     let capacity = question_capacity(&placed);
     let mut row_y = list_top;
@@ -343,7 +348,10 @@ pub(super) fn render(
         let wrapped = wrap(question, usize::from(placed.width));
         let max = wrapped.len().saturating_sub(capacity);
         let scroll = screen.question_scroll.min(max);
-        asked = wrapped.len().saturating_sub(scroll).min(capacity);
+        asked = wrapped
+            .len()
+            .saturating_sub(scroll)
+            .min(capacity.saturating_sub(banner));
         for (at, row) in wrapped.iter().skip(scroll).take(asked).enumerate() {
             put(
                 buf,
@@ -376,9 +384,12 @@ pub(super) fn render(
         });
         row_y = row_y.saturating_add(1);
     }
-    let rows_capacity = capacity.saturating_sub(asked).saturating_sub(usize::from(
-        screen.toggle.is_some() && screen.question.is_none(),
-    ));
+    let rows_capacity = capacity
+        .saturating_sub(asked)
+        .saturating_sub(banner)
+        .saturating_sub(usize::from(
+            screen.toggle.is_some() && screen.question.is_none(),
+        ));
     let start = match app.focused() {
         Some(TargetId::Home(Spot::Entry(key) | Spot::Stop(key))) => screen
             .rows
@@ -443,22 +454,40 @@ pub(super) fn render(
     // one row per recent workspace with the selection barred, and what
     // the mouse does (`docs/tui.md`, "Home", "Look", "Overlays"). It
     // keeps the window it had above the box, scrolled around the
-    // selection so the selected entry always draws.
-    if let Some((items, selected)) = &screen.picker {
-        let visible = usize::from(placed.box_top.saturating_sub(area.y)).min(items.len());
-        let start = selected
-            .saturating_sub(visible.saturating_sub(1))
-            .min(items.len().saturating_sub(visible));
-        let end = start.saturating_add(visible).min(items.len());
-        // Fit the window to the body rows, keeping the selection
-        // visible: the chrome is two edges, two pad rows, the title
-        // and its gap, and the footer's gap and row.
-        let room = usize::from(area.height.saturating_sub(8));
-        let len = end.saturating_sub(start);
-        let (off, take) = completions::window(selected.saturating_sub(start), len, room);
-        let at = start.saturating_add(off);
-        if let Some(window) = items.get(at..at.saturating_add(take)) {
-            draw_picker(window, at, *selected, area, buf, &mut targets);
+    // selection so the selected entry always draws. With a typed path
+    // the typed row, the completions, the header and the dim recents
+    // draw instead.
+    if let Some(picker) = &screen.picker {
+        match &picker.typed {
+            Some(typed) => {
+                draw_typed_picker(
+                    typed,
+                    &picker.recents,
+                    picker.focus,
+                    area,
+                    buf,
+                    &mut targets,
+                );
+            }
+            None => {
+                let items = &picker.recents;
+                let selected = picker.focus.unwrap_or(0);
+                let visible = usize::from(placed.box_top.saturating_sub(area.y)).min(items.len());
+                let start = selected
+                    .saturating_sub(visible.saturating_sub(1))
+                    .min(items.len().saturating_sub(visible));
+                let end = start.saturating_add(visible).min(items.len());
+                // Fit the window to the body rows, keeping the selection
+                // visible: the chrome is two edges, two pad rows, the title
+                // and its gap, and the footer's gap and row.
+                let room = usize::from(area.height.saturating_sub(8));
+                let len = end.saturating_sub(start);
+                let (off, take) = completions::window(selected.saturating_sub(start), len, room);
+                let at = start.saturating_add(off);
+                if let Some(window) = items.get(at..at.saturating_add(take)) {
+                    draw_picker(window, at, selected, area, buf, &mut targets);
+                }
+            }
         }
     }
     // The completion panel above the box, in the shared frame centred
@@ -478,6 +507,8 @@ pub(super) fn render(
         completions::draw(&panel, rect, placed.box_top, buf, &mut targets);
     }
     token_targets(app, area, &placed, &mut targets);
+    let mut bottom = placed.foot;
+    crate::view::banner::draw(app, area, buf, &mut bottom);
     // The foot hint sits on the last row, centred, cut to the width.
     let foot = &screen.foot;
     if placed.foot >= area.y {
@@ -532,6 +563,224 @@ pub(super) fn render(
     targets
 }
 
+/// One body row of the typed workspace picker, top to bottom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TypedRow {
+    /// The typed path's row, with its cursor.
+    Typed,
+    /// The completion at its index into the draw list.
+    Completion(usize),
+    /// The dim "no such directory" row, in place of the completions.
+    Missing,
+    /// The blank row standing the header off the completions.
+    Blank,
+    /// The dim "── recents ──" header.
+    Header,
+    /// The recent at its index into the recents fixed at open.
+    Recent(usize),
+}
+
+/// The typed picker's body rows within `room` rows: the typed row
+/// always draws, and the focused row draws whenever the room holds
+/// more than it. The blank row and the header draw exactly when a
+/// recent row draws, and the separators yield first: with a recent
+/// focused and no room for them, the recent stands without them.
+/// `focus` indexes the completions then the recents, as the screen
+/// carries it; `missing` swaps the completions for the one dim row.
+fn typed_body(
+    completions: usize,
+    recents: usize,
+    focus: Option<usize>,
+    missing: bool,
+    room: usize,
+) -> Vec<TypedRow> {
+    let mut rows = vec![TypedRow::Typed];
+    let mut budget = room.saturating_sub(1);
+    let focused_recent = match focus {
+        Some(at) if at >= completions && recents > 0 => Some(
+            at.saturating_sub(completions)
+                .min(recents.saturating_sub(1)),
+        ),
+        Some(_) | None => None,
+    };
+    if let Some(recent) = focused_recent {
+        if budget >= 3 {
+            let (off, take) = completions::window(recent, recents, budget.saturating_sub(2));
+            let shown = budget.saturating_sub(2).saturating_sub(take);
+            // The nearest completions fill what the recents leave, above
+            // the header; the missing row takes their place.
+            if missing && shown > 0 {
+                rows.push(TypedRow::Missing);
+            } else if shown > 0 {
+                let (coff, ctake) =
+                    completions::window(completions.saturating_sub(1), completions, shown);
+                rows.extend((coff..coff.saturating_add(ctake)).map(TypedRow::Completion));
+            }
+            rows.push(TypedRow::Blank);
+            rows.push(TypedRow::Header);
+            rows.extend((off..off.saturating_add(take)).map(TypedRow::Recent));
+        } else if budget == 2 {
+            // One context row beside the focused recent: the next
+            // recent, else the nearest completion, else the missing row.
+            if recent.saturating_add(1) < recents {
+                rows.push(TypedRow::Recent(recent));
+                rows.push(TypedRow::Recent(recent.saturating_add(1)));
+            } else if missing {
+                rows.push(TypedRow::Missing);
+                rows.push(TypedRow::Recent(recent));
+            } else if completions > 0 {
+                rows.push(TypedRow::Completion(completions.saturating_sub(1)));
+                rows.push(TypedRow::Recent(recent));
+            } else {
+                rows.push(TypedRow::Recent(recent));
+            }
+        } else if budget >= 1 {
+            rows.push(TypedRow::Recent(recent));
+        }
+        return rows;
+    }
+    let anchor = match focus {
+        Some(at) if at < completions => at,
+        Some(_) | None => 0,
+    };
+    if missing {
+        if budget >= 1 {
+            rows.push(TypedRow::Missing);
+            budget = budget.saturating_sub(1);
+        }
+    } else if budget > 0 {
+        let (off, take) = completions::window(anchor, completions, budget);
+        rows.extend((off..off.saturating_add(take)).map(TypedRow::Completion));
+        budget = budget.saturating_sub(take);
+    }
+    if recents > 0 && budget >= 3 {
+        let (off, take) = completions::window(0, recents, budget.saturating_sub(2));
+        rows.push(TypedRow::Blank);
+        rows.push(TypedRow::Header);
+        rows.extend((off..off.saturating_add(take)).map(TypedRow::Recent));
+    }
+    rows
+}
+
+/// The workspace picker's footer: what the mouse does.
+fn picker_footer() -> super::overlay::Row {
+    super::overlay::legend(&[("↑↓", "move"), ("Enter", "open"), ("Esc", "closes")])
+}
+
+/// Draws the typed workspace picker over `area`: the typed row with
+/// its cursor, the completions with the focused one on the bar, the
+/// blank row, the dim header and the dim recents, with a focused
+/// recent barred. Only the recent rows take clicks, by their index
+/// into the recents fixed at open.
+fn draw_typed_picker(
+    typed: &TypedScreen,
+    recents: &[String],
+    focus: Option<usize>,
+    area: Rect,
+    buf: &mut Buffer,
+    targets: &mut Vec<Target>,
+) {
+    // The content wraps at the preferred width first: rows are built
+    // once at what fits, and the frame shrinks to what they need.
+    let room = usize::from(55u16.saturating_sub(4)).min(usize::from(area.width.saturating_sub(4)));
+    // The typed row holds `› `, the text and the drawn cursor.
+    let text = room.saturating_sub(3);
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let info = Style::new().fg(Role::Info.color());
+    let body_rows = typed_body(
+        typed.completions.len(),
+        recents.len(),
+        focus,
+        typed.missing,
+        usize::from(area.height.saturating_sub(8)),
+    );
+    let overall = |row: &TypedRow| match row {
+        TypedRow::Completion(at) => Some(*at),
+        TypedRow::Recent(at) => Some(typed.completions.len().saturating_add(*at)),
+        TypedRow::Typed | TypedRow::Missing | TypedRow::Blank | TypedRow::Header => None,
+    };
+    let mut body = Vec::with_capacity(body_rows.len());
+    for row in &body_rows {
+        let focused = overall(row).is_some_and(|at| Some(at) == focus);
+        match row {
+            TypedRow::Typed => body.push(super::overlay::Row {
+                spans: vec![
+                    Span::styled("› ".to_owned(), info),
+                    Span::raw(cut(&typed.text, text)),
+                    Span::styled("█".to_owned(), dim),
+                ],
+                right: Vec::new(),
+                targets: Vec::new(),
+                barred: false,
+            }),
+            TypedRow::Completion(at) => {
+                let Some(name) = typed.completions.get(*at) else {
+                    continue;
+                };
+                body.push(super::overlay::Row {
+                    spans: vec![
+                        Span::styled(
+                            if focused { "› " } else { "  " }.to_owned(),
+                            if focused { bold } else { dim },
+                        ),
+                        Span::styled(cut(name, text), if focused { bold } else { Style::new() }),
+                    ],
+                    right: Vec::new(),
+                    targets: Vec::new(),
+                    barred: focused,
+                });
+            }
+            TypedRow::Missing => body.push(super::overlay::Row {
+                spans: vec![
+                    Span::styled("  ".to_owned(), dim),
+                    Span::styled("no such directory".to_owned(), dim),
+                ],
+                right: Vec::new(),
+                targets: Vec::new(),
+                barred: false,
+            }),
+            TypedRow::Blank => body.push(super::overlay::Row {
+                spans: Vec::new(),
+                right: Vec::new(),
+                targets: Vec::new(),
+                barred: false,
+            }),
+            TypedRow::Header => body.push(super::overlay::Row {
+                spans: vec![Span::styled("── recents ──".to_owned(), dim)],
+                right: Vec::new(),
+                targets: Vec::new(),
+                barred: false,
+            }),
+            TypedRow::Recent(at) => {
+                let Some(name) = recents.get(*at) else {
+                    continue;
+                };
+                body.push(super::overlay::Row {
+                    spans: vec![
+                        Span::styled(
+                            if focused { "› " } else { "  " }.to_owned(),
+                            if focused { bold } else { dim },
+                        ),
+                        Span::styled(cut(name, text), if focused { bold } else { dim }),
+                    ],
+                    right: Vec::new(),
+                    targets: vec![(0, u16::MAX, TargetId::Home(Spot::Pick(*at)))],
+                    barred: focused,
+                });
+            }
+        }
+    }
+    let framed = super::overlay::Overlay {
+        title: Some(("Workspaces".to_owned(), None)),
+        close: None,
+        body,
+        footer: Some(picker_footer()),
+        prefer: 55,
+    };
+    super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
+}
+
 /// Draws the workspace picker over `area`: `window` with the selection
 /// barred, in the overlay frame centred across and down home. A long
 /// path is cut on the right; rows keep their pick targets.
@@ -573,11 +822,7 @@ fn draw_picker(
         title: Some(("Workspaces".to_owned(), None)),
         close: None,
         body,
-        footer: Some(super::overlay::legend(&[
-            ("↑↓", "move"),
-            ("Enter", "open"),
-            ("Esc", "closes"),
-        ])),
+        footer: Some(picker_footer()),
         prefer: 55,
     };
     super::overlay::draw(buf, area, &framed, super::overlay::Place::Centre, targets);
@@ -608,10 +853,18 @@ fn token_targets(app: &App, area: Rect, placed: &Placed, targets: &mut Vec<Targe
 }
 
 /// Where the terminal cursor shows on home: at the draft's cursor in the
-/// box, `None` while navigating. A focused chip keeps it there: the chip
+/// box, `None` while navigating or typing a workspace path, whose row
+/// draws its own cursor. A focused chip keeps it there: the chip
 /// is the input box's keyboard.
 pub(super) fn cursor(app: &App, screen: &HomeScreen, area: Rect) -> Option<Position> {
     if area.is_empty() {
+        return None;
+    }
+    if screen
+        .picker
+        .as_ref()
+        .is_some_and(|picker| picker.typed.is_some())
+    {
         return None;
     }
     if let Some(focus) = app.focused()

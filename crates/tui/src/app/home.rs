@@ -22,6 +22,7 @@ mod open;
 mod open_at;
 mod prompt;
 mod reset;
+mod typed;
 mod workspace;
 
 use open::Subscriptions;
@@ -228,7 +229,7 @@ impl App {
                     )
                 })
                 .collect(),
-            picker: home.chooser.picker().cloned(),
+            picker: home.picker_screen(),
             blockers: home.blockers.clone(),
             // The toggle shows inside git whenever a row hides, or
             // while everything shows.
@@ -258,11 +259,14 @@ impl App {
         if self.link != Link::Up {
             return Vec::new();
         }
+        let mut asks = self.picker_asks();
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };
         if home.fed {
-            return home.subs.take_outbox();
+            let mut out = home.subs.take_outbox();
+            out.append(&mut asks);
+            return out;
         }
         home.fed = true;
         let feed = mint();
@@ -274,6 +278,7 @@ impl App {
         let recent = recent_line(&recent, None, scoped.then_some(project.as_str()));
         let mut out = vec![json!({"id": feed, "command": "feed"}).to_string(), recent];
         out.extend(self.launch_lines());
+        out.append(&mut asks);
         out
     }
 
@@ -314,6 +319,12 @@ impl App {
                 "command_accepted" | "command_rejected" => {
                     let id = hub.payload.get("command_id").and_then(Value::as_str)?;
                     let accepted = hub.kind.as_str() == "command_accepted";
+                    // The picker's `directories` answers fold in first,
+                    // while home exists: an id the open picker sent is
+                    // consumed here, any other id falls through untouched.
+                    if let Some(lines) = self.picker_answer(id, accepted, &hub.payload) {
+                        return Some(lines);
+                    }
                     if let Some(lines) = self.subscribe_answer(id, accepted, &hub.payload) {
                         return Some(lines);
                     }
@@ -496,9 +507,10 @@ impl App {
         {
             return self.question_key(key);
         }
-        // The picker takes every key first: moving, choosing and closing
-        // it, while Ctrl+C passes through and anything else is swallowed
-        // so the draft keeps nothing typed into the picker.
+        // The picker takes every key first: typing, completing,
+        // moving, choosing and closing it, while Ctrl+C passes through
+        // and anything else is swallowed so the draft keeps nothing
+        // typed into the picker.
         if self
             .home
             .as_ref()
