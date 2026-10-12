@@ -390,6 +390,26 @@ fn an_extensions_replacement_of_an_mcp_tool_survives_the_offer() {
     let resolved = recv_kind(setup.deadline, &client, "repository_code_resolved");
     assert_eq!(resolved["payload"]["decisions"], json!(["approve"]));
     recv_kind(setup.deadline, &client, "turn_completed");
+    // The `tools` answer names the extension as the source of the
+    // tool it replaced, and keeps the other rows' sources.
+    client
+        .send(r#"{"id":"c_tools","command":"tools"}"#)
+        .unwrap();
+    let answered = answer(setup.deadline, &client, "c_tools");
+    assert_eq!(answered["kind"], "command_accepted", "{answered}");
+    let rows = answered["payload"]["result"]["tools"].as_array().unwrap();
+    let shadow = rows
+        .iter()
+        .find(|tool| tool["name"] == "mcp__db__echo")
+        .unwrap();
+    assert_eq!(shadow["source"], "extension", "{shadow}");
+    assert_eq!(shadow["extension"], "fiber.test/shadow", "{shadow}");
+    let early = rows
+        .iter()
+        .find(|tool| tool["name"] == "mcp__early__echo")
+        .unwrap();
+    assert_eq!(early["source"], "mcp", "{early}");
+    assert_eq!(early["server"], "early", "{early}");
     close(&client, "c_close");
     recv_kind(setup.deadline, &client, "fiber_exited");
     drop(client);

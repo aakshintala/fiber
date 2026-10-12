@@ -77,6 +77,9 @@ pub struct OfferOutcome {
     /// `skipped`, plus this process's decisions and notices, where the
     /// notices include the `never` items the round filtered.
     pub reported: Vec<OfferKey>,
+    /// The tool names registered before the post-offer load: what was
+    /// registered stands, and the load declares none of them again.
+    pub held: Vec<String>,
 }
 
 /// What the offer step knows: the seam, the session's skips, and whether
@@ -484,7 +487,11 @@ impl Loop {
                 reported.push(key);
             }
         }
-        OfferOutcome { skipped, reported }
+        OfferOutcome {
+            skipped,
+            reported,
+            held: Vec::new(),
+        }
     }
 
     /// Runs the post-offer load once per process, immediately before that
@@ -504,22 +511,21 @@ impl Loop {
         }
         // Set before calling, so an `Err` is not retried.
         self.repository.loaded = true;
-        let outcome = self.outcome();
+        let mut outcome = self.outcome();
+        // The names held before the load: what was registered stands,
+        // with no replacement recorded. Taken before calling, so a
+        // collision inside the load still replaces and records, and the
+        // load drops the declared rows those names held.
+        outcome.held = self.tools.keys().cloned().collect();
         match load(&outcome) {
             Ok(approved) => {
                 for event in &approved.events {
                     self.write(event, None, None)?;
                 }
-                // The names held before the load stand: an extension's
-                // replacement of an approved tool, and every tool loaded
-                // before the offer, keep answering, with no replacement
-                // recorded. Taken before any insert, so a collision
-                // inside the load still replaces and records.
-                let held: Vec<String> = self.tools.keys().cloned().collect();
                 for (by, tool) in approved.tools {
                     let definition = tool.definition();
                     let name = definition.name.clone();
-                    if held.contains(&name) {
+                    if outcome.held.contains(&name) {
                         continue;
                     }
                     if let Some((from, _, _)) = self
