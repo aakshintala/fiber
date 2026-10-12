@@ -14,7 +14,8 @@ use contract::events::{LoadedExtension, Notice};
 use contract::files::PathLock;
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
-    BeforeToolAnswer, BeforeToolCall, CheckAnswer, Hooks,
+    BeforeModelCall, BeforeToolAnswer, BeforeToolCall, CheckAnswer, ContextAnswer, Hooks,
+    SessionStart, TurnEnd, TurnStart,
 };
 use contract::inbox::Delivery;
 use serde_json::{Map, Value};
@@ -29,6 +30,7 @@ use crate::{API, Error, LuaProvider, LuaTool};
 mod before;
 mod chain;
 mod door;
+mod lifecycle;
 mod settle;
 mod start;
 
@@ -74,6 +76,9 @@ pub struct SessionExtensions {
     before_message: Vec<chain::Entry>,
     /// The `after_tool` chain, in run order.
     after_tool: Vec<chain::Entry>,
+    /// The `session_start`, `turn_start`, `before_model_call` and `turn_end`
+    /// chains, in run order.
+    lifecycle: chain::Lifecycle,
     /// Whether any hook registered at any point.
     any: bool,
     /// The session's extension commands, built once from the same final names.
@@ -596,6 +601,22 @@ impl Hooks for SessionExtensions {
 
     fn before_message(&self, message: &BeforeMessage<'_>) -> BeforeMessageAnswer {
         before::before_message(self, message)
+    }
+
+    fn session_start(&self, start: &SessionStart<'_>) -> ContextAnswer {
+        lifecycle::session_start(self, start)
+    }
+
+    fn turn_start(&self, turn: &TurnStart<'_>) -> ContextAnswer {
+        lifecycle::turn_start(self, turn)
+    }
+
+    fn before_model_call(&self, call: &BeforeModelCall<'_>) -> CheckAnswer {
+        lifecycle::before_model_call(self, call)
+    }
+
+    fn turn_end(&self, end: &TurnEnd<'_>) -> ContextAnswer {
+        lifecycle::turn_end(self, end)
     }
 
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<Delivery>) {

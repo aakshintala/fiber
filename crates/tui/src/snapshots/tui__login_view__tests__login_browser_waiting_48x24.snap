@@ -1,0 +1,24 @@
+---
+source: crates/tui/src/login_view_tests.rs
+assertion_line: 1516
+expression: "text_of(&buf, 48, 24).join(\"\\n\")"
+---
+
+
+
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+   codex                                    ✕
+
+   Open this URL to log in to codex:
+   …sssssssssssssssssssssssssssssssssssssssss
+   Waiting for the browser…
+
+
+
+
+   y copy URL · Esc back
+
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -34,7 +34,9 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{Scripted, ScriptedProvider, call_usage};
 
-use support::{DEADLINE, ENDED, OPENING, REPLY, STEP, Session, Tap, assert_kinds, delivery};
+use support::{
+    CountingHooks, DEADLINE, ENDED, OPENING, REPLY, STEP, Session, Tap, assert_kinds, delivery,
+};
 
 const MINUTE: Duration = Duration::from_secs(60);
 
@@ -1061,4 +1063,35 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
             &["usage_recorded", "usage_recorded"],
         ],
     );
+}
+
+#[test]
+fn a_cache_refresh_sends_no_before_model_call_hook() {
+    let mut session = session(
+        vec![Scripted::text("ok."), refresh_reply(), refresh_reply()],
+        CacheLifetime::FiveMinutes,
+    );
+    let counting = CountingHooks::new();
+    session.looped = session
+        .looped
+        .take()
+        .map(|looped| looped.hooks(Arc::clone(&counting) as Arc<dyn contract::hook::Hooks>));
+    arm(&mut session, MINUTE, Some(2));
+    let start = session.clock.now();
+    session.inbox.send(delivery("hi")).unwrap();
+    let finished = spawn_run(&mut session);
+    // The turn's step ran the hook once; each refresh resends the step's
+    // request without it.
+    for at in [270, 540] {
+        let due = start + Duration::from_secs(at);
+        parked(&session.clock, due, "a refresh is due");
+        advance_to(&session, due);
+    }
+    let exit = start + Duration::from_secs(600) + MINUTE;
+    parked(&session.clock, exit, "idle counts from 600 s");
+    advance_to(&session, exit);
+    let wait = Deadline::after(DEADLINE);
+    ended(&finished, &wait);
+    assert_eq!(counting.calls(), 1);
+    assert_refreshes(&session, 2);
 }

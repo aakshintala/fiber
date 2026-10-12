@@ -1,29 +1,24 @@
 ---
 source: crates/tui/src/login_view_tests.rs
-assertion_line: 878
-expression: "drawn(&login, 80, 24)"
+assertion_line: 1506
+expression: "text_of(&buf, 80, 24).join(\"\\n\")"
 ---
-Log in                                                                         ✕
-Providers
-  acme  key
-  codex  browser
-Secrets
-  acme.api_key
 
 
 
 
 
+                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+                   codex                                    ✕
+
+                   Open this URL to log in to codex:
+                   …sssssssssssssssssssssssssssssssssssssssss
+                   Waiting for the browser…
 
 
 
 
+                   y copy URL · Esc back
 
-
-
-
-
-Open this URL to log in to codex:
-https://auth.example/authorize?state=sssssssssssssssssssssssssssssssssssssssssss
-sssssssssssssssssssssssssssssssssssssssssssssssssssssssss
-y copy URL · Esc cancel
+                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -96,7 +96,6 @@ pub(crate) fn inner(width: u16) -> u16 {
 /// The overlay's full height in rows: two edges, two pad rows, the title
 /// and its gap, the body, and the footer's gap and row. Later surfaces
 /// budget their rows against it.
-#[allow(dead_code, reason = "later surfaces budget their rows against it")]
 pub(crate) fn height(overlay: &Overlay) -> u16 {
     let mut rows: u16 = 4;
     if overlay.title.is_some() {

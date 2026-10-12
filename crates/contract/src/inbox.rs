@@ -129,15 +129,17 @@ pub enum Delivery {
 }
 
 /// News that a background job ended, sent by the session's jobs registry.
+/// The loop asks the claim at admission while idle, or at the step
+/// boundary that writes the notice while a turn runs.
 #[derive(Debug)]
 pub struct JobNotice {
-    /// How the job ended: the `job_completed` the loop writes when it
-    /// admits the notice.
+    /// How the job ended: the `job_completed` the loop writes with the
+    /// notice.
     pub completed: crate::events::JobCompleted,
     /// Whether this notice is still the model's news to receive.
     pub claim: Claim,
     /// A Fiber delegate's finish, written as `delegate_finished` before
-    /// `job_completed` when the loop admits the notice. The text is
+    /// `job_completed` when the loop writes the notice. The text is
     /// unbounded; the loop cuts it once, at the write.
     pub delegate: Option<crate::events::DelegateFinished>,
 }

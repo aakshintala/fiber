@@ -63,6 +63,13 @@ pub(super) struct Home {
     /// The foot's question, the stops and deletes waiting for their
     /// answers, and the quit question's closes.
     questions: Questions,
+    /// The attached session left after it was attached: a `session_left`
+    /// for it arrived while attached, and no live status or fresh attach
+    /// has superseded it. While it names the attached session, quitting
+    /// prints no resume line for it: the session is dead. An exited row
+    /// from before the attach sets no marker: the session is live and
+    /// resuming, and still gets its line.
+    pub(super) left_after_attach: Option<SessionId>,
 }
 
 impl App {
@@ -88,6 +95,7 @@ impl App {
             blockers: Vec::new(),
             chooser: Chooser::default(),
             questions: Questions::default(),
+            left_after_attach: None,
         });
     }
 
@@ -297,8 +305,17 @@ impl App {
                         Some("crashed") => Left::Crashed,
                         _ => return Some(Vec::new()),
                     };
+                    let exited = SessionId(id.to_owned());
+                    // An exit for the attached session arrived after the
+                    // attach: the session is dead, so quitting owes it no
+                    // resume line. An exited row from before the attach
+                    // sets no marker: the session is live and resuming.
+                    let after_attach = self.session() == Some(&exited);
                     if let Some(home) = self.home.as_mut() {
-                        home.sessions.left(&SessionId(id.to_owned()), how);
+                        home.sessions.left(&exited, how);
+                        if after_attach {
+                            home.left_after_attach = Some(exited);
+                        }
                     }
                     Some(Vec::new())
                 }
@@ -398,6 +415,16 @@ impl App {
                     let row = from_status(envelope);
                     if let Some(home) = self.home.as_mut() {
                         home.sessions.status(row);
+                        // A live status for the session supersedes an exit
+                        // that arrived after attach: it is live again.
+                        if home
+                            .sessions
+                            .row(&session)
+                            .is_some_and(|row| row.left.is_none())
+                            && home.left_after_attach.as_ref() == Some(&session)
+                        {
+                            home.left_after_attach = None;
+                        }
                     }
                     self.note_feed(&session);
                     if was_left {

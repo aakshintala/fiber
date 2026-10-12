@@ -56,9 +56,21 @@ const STORED: [(&str, &str); 5] = [
 fn a_recorded_label_beats_the_configured_one() {
     let root = fakes::TempDir::new("fiber-credential");
     let config = config(&root, &STORED, SETTINGS);
-    let (label, key) = session_credential(&config, &provider("acme"), Some("rec")).unwrap();
+    let (label, key) = session_credential(
+        &config,
+        &provider("acme"),
+        Some("rec"),
+        &fakes::children::grouped_output,
+    )
+    .unwrap();
     assert_eq!((label.as_str(), key.expose()), ("rec", "acme-rec"));
-    let (label, key) = session_credential(&config, &provider("acme"), None).unwrap();
+    let (label, key) = session_credential(
+        &config,
+        &provider("acme"),
+        None,
+        &fakes::children::grouped_output,
+    )
+    .unwrap();
     assert_eq!((label.as_str(), key.expose()), ("cfg", "acme-cfg"));
 }
 
@@ -66,7 +78,13 @@ fn a_recorded_label_beats_the_configured_one() {
 fn a_recorded_label_that_names_nothing_is_credential_missing() {
     let root = fakes::TempDir::new("fiber-credential");
     let config = config(&root, &STORED, SETTINGS);
-    let failure = session_credential(&config, &provider("acme"), Some("gone")).unwrap_err();
+    let failure = session_credential(
+        &config,
+        &provider("acme"),
+        Some("gone"),
+        &fakes::children::grouped_output,
+    )
+    .unwrap_err();
     assert_eq!(failure.code, contract::ErrorCode::CredentialMissing);
 }
 
@@ -74,7 +92,13 @@ fn a_recorded_label_that_names_nothing_is_credential_missing() {
 fn the_reviewer_of_another_provider_uses_its_own_label() {
     let root = fakes::TempDir::new("fiber-credential");
     let config = config(&root, &STORED, SETTINGS);
-    let (label, key) = session_credential(&config, &provider("other"), None).unwrap();
+    let (label, key) = session_credential(
+        &config,
+        &provider("other"),
+        None,
+        &fakes::children::grouped_output,
+    )
+    .unwrap();
     assert_eq!((label.as_str(), key.expose()), ("own", "other-own"));
 }
 
@@ -82,18 +106,26 @@ fn the_reviewer_of_another_provider_uses_its_own_label() {
 fn a_switch_read_maps_a_config_error_to_its_code() {
     let root = fakes::TempDir::new("fiber-switch-credential");
     let config = config(&root, &[("acme", "cfg")], SETTINGS);
-    let read = switch_credential(&config, &provider("acme"), "cfg", &|command| {
-        command.output()
-    })
+    let read = switch_credential(
+        &config,
+        &provider("acme"),
+        "cfg",
+        &fakes::children::grouped_output,
+    )
     .unwrap();
     assert_eq!(read.secret.expose(), "acme-cfg");
     assert_eq!(read.file, None);
     let mut command = provider("acme");
     command.credential =
         Some(serde_json::from_value(serde_json::json!({"command": ["false"]})).unwrap());
-    let failure = switch_credential(&config, &command, "default", &|command| command.output())
-        .err()
-        .unwrap();
+    let failure = switch_credential(
+        &config,
+        &command,
+        "default",
+        &fakes::children::grouped_output,
+    )
+    .err()
+    .unwrap();
     assert_eq!(failure.code, contract::ErrorCode::CredentialMissing);
     assert!(failure.message.contains("`false`"), "{}", failure.message);
 }

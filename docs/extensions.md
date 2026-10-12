@@ -841,9 +841,13 @@ keys below; values use the shapes of `docs/events.md` ("Content parts",
 
 | Hook point | What `run` is given | What it may return |
 |---|---|---|
+| `session_start` | `reason`, why the session started: start, resume, rewind or handoff; `session_id`; `workspace`, the workspace root | `context`, a non-empty string to add |
 | `before_message` | `content`, the message's content parts as logged | `content`, a non-empty list of parts that replaces the message: text parts, and image or pdf parts the message holds; `context`, a non-empty string to add; or `refuse`, a non-empty string, alone |
+| `turn_start` | `input`, the turn's input as the turn_started event logs it | `context`, a non-empty string to add |
 | `before_tool` | `tool`; `arguments`; `effects`, a list of effect names; `paths`, absent when the call declares none; `reversible` | `arguments`, a table that replaces the arguments, or `refuse`, a non-empty string, alone |
+| `before_model_call` | `model`, the model reference; `usage`, the session's usage so far, its delegates included, with cost absent when unknown | `refuse`, a non-empty string, alone |
 | `after_tool` | `tool`; `arguments`; `status`; `content`, the output's text parts joined; `details` and `process`, each absent when the call has none; what a job delivery is given is in the after_tool paragraph above | `content`, a string; `details`, any value; `artifact`, a string |
+| `turn_end` | `reply`, the model's final reply | `message`, a non-empty string to continue the turn with |
 
 Returning `nil` or an empty table changes nothing. A key a hook returns is a
 change, even when its value is the one it was given, so a `check` hook that
@@ -874,7 +878,9 @@ Within a phase, configuration can set the order of extensions at each hook
 point (`hooks.order`, `docs/configuration.md`). Extensions it does not name
 run after those it does, ordered by name, and one extension's hooks at the
 same point and phase run in the order it registered them. Each hook sees what
-the one before it returned. A refusal ends the chain. The order is fixed so
+the one before it returned. A refusal ends the chain. At `session_start`,
+`turn_start` and `turn_end` every hook is shown the same input and every
+return is kept, in run order. The order is fixed so
 that the same inputs give the same result on every run.
 
 The order is precedence, not protection. Every hook runs with the account's

@@ -353,6 +353,14 @@ impl App {
     /// file is one session's stream.
     pub(crate) fn attach(&mut self, session: SessionId) {
         self.switch_session(&session);
+        // A fresh attachment supersedes an exit that arrived after the
+        // last one: opening resumes the session, and its live update has
+        // yet to land.
+        if let Some(home) = self.home.as_mut()
+            && home.left_after_attach.as_ref() == Some(&session)
+        {
+            home.left_after_attach = None;
+        }
         self.phase = Phase::Attached {
             session,
             busy: false,

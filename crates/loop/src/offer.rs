@@ -491,7 +491,10 @@ impl Loop {
     /// process's first build, and never once a preamble existed without a
     /// build in that process. Each event is written through the one
     /// `Transcript` path, and each tool registers as `calls::register`
-    /// registers it: a same-name tool is replaced and recorded.
+    /// registers it, except one whose name the load found already held:
+    /// what was registered before the load stands, with no replacement
+    /// recorded. A later approved tool of a name an earlier approved tool
+    /// took still replaces it and is recorded.
     pub(crate) fn load_approved(&mut self) -> Result<(), Error> {
         let Some(load) = self.repository.load.clone() else {
             return Ok(());
@@ -507,9 +510,18 @@ impl Loop {
                 for event in &approved.events {
                     self.write(event, None, None)?;
                 }
+                // The names held before the load stand: an extension's
+                // replacement of an approved tool, and every tool loaded
+                // before the offer, keep answering, with no replacement
+                // recorded. Taken before any insert, so a collision
+                // inside the load still replaces and records.
+                let held: Vec<String> = self.tools.keys().cloned().collect();
                 for (by, tool) in approved.tools {
                     let definition = tool.definition();
                     let name = definition.name.clone();
+                    if held.contains(&name) {
+                        continue;
+                    }
                     if let Some((from, _, _)) = self
                         .tools
                         .insert(name.clone(), (by.clone(), tool, definition))

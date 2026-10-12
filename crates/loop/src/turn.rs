@@ -85,6 +85,13 @@ impl Loop {
         for ack in started.prompts {
             inbox::accept(ack);
         }
+        // `turn_start` runs after the acknowledgements, before the first
+        // model request. A failure ends the turn with no `step_started`.
+        if let Event::TurnStarted(started) = &event
+            && let Some(completed) = self.turn_start(&turn, &started.input)?
+        {
+            return self.end_turn(&turn, completed);
+        }
         self.run_steps(&turn)
     }
 

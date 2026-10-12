@@ -1130,6 +1130,23 @@ fn a_rewind_keeps_the_worktree_for_the_next_session() {
         worktree,
         "the new session runs in the worktree"
     );
+    // The continuing process shares the worktree's lock for its life:
+    // the lock file exists, and an exclusive take waits behind it.
+    let lock = Path::new(&worktree).with_file_name(format!(
+        "{}.lock",
+        Path::new(&worktree).file_name().unwrap().to_string_lossy()
+    ));
+    assert!(lock.is_file(), "the continuation holds the lock file");
+    let probe = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock)
+        .unwrap();
+    assert!(
+        matches!(probe.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "the continuation holds its share"
+    );
+    drop(probe);
 
     // Closing the new session never removes the worktree either.
     hubbed.close("c7_close", &next);

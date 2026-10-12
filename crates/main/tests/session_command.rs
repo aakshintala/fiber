@@ -3528,3 +3528,182 @@ fn a_skill_added_mid_session_reaches_the_model_and_loads() {
         ]
     );
 }
+
+/// An `openai-responses` stream answering `Again.` in two fragments: the
+/// resumed delegate's reply.
+fn again() -> Response {
+    stream(&[
+        json!({"type": "response.output_text.delta", "delta": "Aga"}),
+        json!({"type": "response.output_text.delta", "delta": "in."}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message", "content": [{"type": "output_text", "text": "Again."}]
+        }}),
+    ])
+}
+
+impl Setup {
+    /// Starts `fiber session --resume` as a delegate's later run: the same
+    /// id, workspace, parent and job, the message as its prompt, stdin
+    /// piped as its lifeline. The caller holds the returned stdin open
+    /// for the run, or drops it to take the lifeline path.
+    #[track_caller]
+    fn start_resume(
+        &self,
+        id: &str,
+        parent: &str,
+        delegate: &str,
+        message: &str,
+    ) -> (Running, std::process::ChildStdin) {
+        let workspace = self.workspace();
+        let args = vec![
+            "session",
+            "--id",
+            id,
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--resume",
+            "--prompt",
+            message,
+            "--parent",
+            parent,
+            "--delegate-id",
+            delegate,
+        ];
+        let (running, stdin) = self.spawn_session(&args, Stdio::piped());
+        (running, stdin.unwrap())
+    }
+}
+
+#[test]
+fn a_resumed_delegate_runs_its_prompt_as_one_turn_and_exits() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello(), again()]).unwrap();
+    setup.provider(&server);
+    setup.slow_idle();
+    let id = doors::mint("s_");
+    // Run 1, as ever.
+    let (first, _stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
+    let (status, _, stderr) = first.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    // Run 2 through the delegate resume line. The idle exit is an hour
+    // out: the exit below proves the run ended on its own, with no idle
+    // wait.
+    let (second, _lifeline) = setup.start_resume(&id, PARENT, DELEGATE, "again");
+    let (status, out, stderr) = second.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert_eq!(exited["payload"]["text"], "Again.");
+    let lines = delegate_events(&setup, &id);
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    // One session for both runs.
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "session_started")
+            .count(),
+        1
+    );
+    // The resumed run's `fiber_started` says so.
+    let started: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "fiber_started")
+        .collect();
+    assert_eq!(started.len(), 2);
+    assert_eq!(started[0]["payload"]["resumed"], false);
+    assert_eq!(started[1]["payload"]["resumed"], true);
+    // The resumed `turn_started` carries the resume's prompt.
+    let turns: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .collect();
+    assert_eq!(turns.len(), 2);
+    assert!(!turns[0].to_string().contains("again"));
+    assert!(turns[1].to_string().contains("again"));
+}
+
+#[test]
+fn dropping_a_resumed_delegate_lifeline_exits_129_within_the_bound() {
+    let setup = Setup::new_with_fm_root();
+    let prefix = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Working\"}\n\n";
+    let server = ProviderServer::start([
+        hello(),
+        Response::stall(200, prefix, prefix.len() + 100000)
+            .header("content-type", "text/event-stream"),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    setup.slow_idle();
+    let id = doors::mint("s_");
+    // Run 1 completes.
+    let (first, _stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
+    let (status, _, stderr) = first.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    // Run 2 stalls mid-turn, holding its lifeline.
+    let (mut second, stdin) = setup.start_resume(&id, PARENT, DELEGATE, "again");
+    second.wait_for("step_started");
+    // The parent is gone: EOF on the resumed lifeline is a hangup.
+    drop(stdin);
+    let (status, out, stderr) = second.wait();
+    assert_eq!(status.code(), Some(129), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 129);
+    let lines = delegate_events(&setup, &id);
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+}

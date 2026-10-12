@@ -46,9 +46,11 @@ mod history;
 mod hooks;
 mod hosted;
 mod inbox;
+mod inner_calls;
 mod interactions;
 mod jobs;
 mod late_cost;
+mod lifecycle;
 mod naming;
 mod offer;
 mod opening;
@@ -233,6 +235,7 @@ pub struct Loop {
     ledger: usage::Ledger,
     /// Costs looked up after their calls ended, to write as they settle.
     late_cost: late_cost::LateCost,
+    pub(crate) lifecycle: lifecycle::State,
     /// `budget.usd` for this session. `None` is no limit.
     budget: Option<f64>,
     /// How a failed model call is retried (`docs/model-routing.md`, "When
@@ -525,6 +528,7 @@ impl Loop {
             cut_off: false,
             ledger,
             late_cost: late_cost::LateCost::default(),
+            lifecycle: lifecycle::State::default(),
             budget: None,
             retry: Retry::default(),
             idle_exit: None,

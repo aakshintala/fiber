@@ -50,6 +50,21 @@ pub trait Cancel: Send + Sync {
     fn subscribe(&self, waker: Weak<dyn Wake>);
 }
 
+/// Runs the inner calls of the call it belongs to (`docs/extensions.md`,
+/// "Running a tool").
+pub trait InnerCalls: Send + Sync {
+    /// Runs `name` with `arguments` as an inner call `extension` makes,
+    /// blocking until its completion is written. A self-call or depth cut
+    /// returns an error in the calling code and writes no line. A request
+    /// the loop never takes returns a cancelled completion when closed.
+    fn run(
+        &self,
+        extension: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Box<crate::events::ToolCallCompleted>, String>;
+}
+
 /// What a running call may ask whoever drives the session
 /// (`docs/events.md`, "Interactions"). The loop writes the
 /// `interaction_requested` and `interaction_resolved` lines; the call only
@@ -68,6 +83,11 @@ pub trait Ask: Send + Sync {
     /// `reply`, or by Fiber. Returns [`Answered::NoAnswer`] at once when
     /// nobody can answer (`docs/permissions.md`, "Headless").
     fn ask(&self, asking: Asking) -> Answered;
+
+    /// The runner for this call's inner calls; `None` where none can be made.
+    fn inner_calls(&self) -> Option<Arc<dyn InnerCalls>> {
+        None
+    }
 }
 
 /// A further check on an answer that fits the interaction's kind. A reply

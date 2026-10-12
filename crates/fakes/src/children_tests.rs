@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use super::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
+use super::{Ready, escapes_group, grouped_output, ignores_sigterm, leaves_descendants};
 use contract::clock::Clock;
 
 use crate::clock::FakeClock;
@@ -240,5 +240,52 @@ fn ready_at_zero_fails_naming_the_fifo_without_opening_it() {
         opened.map(drop).map_err(|err| err.raw_os_error()),
         Err(Some(rustix::io::Errno::NXIO.raw_os_error())),
         "Ready::at opened the fifo with no time left"
+    );
+}
+
+#[test]
+fn grouped_output_runs_the_command_in_its_own_group_and_returns_its_output() {
+    let mut printf = Command::new("printf");
+    printf.arg("key").stdout(Stdio::piped());
+    let output = grouped_output(&mut printf, Duration::from_secs(30)).unwrap();
+    assert!(
+        output.status.success(),
+        "printf failed: {:?}",
+        output.status
+    );
+    assert_eq!(output.stdout, b"key");
+
+    let mut group_of = Command::new("sh");
+    group_of
+        .args(["-c", "echo $$; ps -o pgid= -p $$"])
+        .stdout(Stdio::piped());
+    let output = grouped_output(&mut group_of, Duration::from_secs(30)).unwrap();
+    assert!(output.status.success(), "sh failed: {:?}", output.status);
+    let printed = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(lines.len(), 2, "expected pid and pgid lines: {lines:?}");
+    assert!(!lines[0].trim().is_empty(), "the pid line was empty");
+    assert_eq!(
+        lines[0].trim(),
+        lines[1].trim(),
+        "the command did not lead its own process group"
+    );
+}
+
+#[test]
+fn grouped_output_reaps_a_descendant_left_in_the_group() {
+    let mut lingering = Command::new("sh");
+    lingering
+        .args(["-c", "sleep 600 >/dev/null 2>&1 & echo $$"])
+        .stdout(Stdio::piped());
+    let output = grouped_output(&mut lingering, Duration::from_secs(30)).unwrap();
+    assert!(output.status.success(), "sh failed: {:?}", output.status);
+    let pgid: u32 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        !kill_group(pgid, "0").unwrap(),
+        "the descendant outlived the run in group {pgid}"
     );
 }

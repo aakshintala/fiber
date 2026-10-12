@@ -3202,3 +3202,182 @@ mod from_log {
         assert_eq!(error.code(), contract::ErrorCode::LogCorrupt);
     }
 }
+
+fn inner_requested(inner: bool) -> Event {
+    Event::ToolCallRequested(ToolCallRequested {
+        name: "fake".into(),
+        arguments: json!({}),
+        provider_id: None,
+        repair: None,
+        provider_item: None,
+        ran_by: inner.then(|| contract::events::RanBy {
+            extension: "ext".into(),
+            anchor: contract::events::Anchor::OuterCall(ActionId("a_outer".into())),
+        }),
+    })
+}
+
+fn inner_lines(crash: bool) -> Vec<Envelope> {
+    let requested = inner_requested(false);
+    let inner = inner_requested(true);
+    let started = Event::ToolCallStarted(contract::events::ToolCallStarted {
+        declared: contract::shapes::DeclaredEffects {
+            effects: vec![],
+            reversible: true,
+            paths: None,
+        },
+        arguments: None,
+        changed_by: None,
+    });
+    let done = Event::ToolCallCompleted(crate::completion::completed("outer result".into(), None));
+    let inner_done = Event::ToolCallCompleted(crate::completion::completed(
+        "secret inner result".into(),
+        None,
+    ));
+    let mut lines = vec![
+        line("tool_call_requested", &requested, Some("a_outer")),
+        line("tool_call_requested", &inner, Some("a_inner")),
+        line("tool_call_started", &started, Some("a_inner")),
+    ];
+    if !crash {
+        lines.push(line("tool_call_completed", &inner_done, Some("a_inner")));
+        lines.push(line("tool_call_completed", &done, Some("a_outer")));
+    }
+    lines
+}
+
+#[test]
+fn live_and_rebuilt_conversations_exclude_inner_calls_and_their_results() {
+    let lines = inner_lines(false);
+    let mut live = Vec::new();
+    let mut carry = crate::handoff::Carry::default();
+    for line in &lines {
+        render(
+            &mut live,
+            &Event::from_envelope(line).unwrap().unwrap(),
+            line.action_id.as_ref(),
+            "fake",
+            &mut BTreeMap::new(),
+            &mut carry,
+        );
+    }
+    assert_eq!(live, super::rebuild(&lines, "fake").unwrap());
+    assert_eq!(live.len(), 2);
+    assert!(matches!(&live[0], Input::ToolCall { action_id, .. } if action_id.0 == "a_outer"));
+    assert!(
+        matches!(&live[1], Input::ToolResult { action_id, text, .. } if action_id.0 == "a_outer" && text == "outer result")
+    );
+    assert_eq!(carry.step.len(), 1);
+    assert!(carry.inner.contains(&ActionId("a_inner".into())));
+}
+
+#[test]
+fn a_crash_left_inner_call_gets_no_fixed_result() {
+    let rebuilt = super::rebuild(&inner_lines(true), "fake").unwrap();
+    assert_eq!(rebuilt.len(), 2);
+    assert!(
+        matches!(&rebuilt[1], Input::ToolResult { action_id, text, .. } if action_id.0 == "a_outer" && text == "It never ran.")
+    );
+}
+
+#[test]
+fn a_completion_not_requested_in_this_window_still_renders() {
+    let done = Event::ToolCallCompleted(crate::completion::completed("standalone".into(), None));
+    let rebuilt =
+        super::rebuild(&[line("tool_call_completed", &done, Some("a_old"))], "fake").unwrap();
+    assert_eq!(rebuilt.len(), 1);
+    assert!(matches!(&rebuilt[0], Input::ToolResult { text, .. } if text == "standalone"));
+}
+
+#[test]
+fn the_suspended_batch_excludes_inner_requests() {
+    let mut lines = inner_lines(true);
+    let permission = Event::PermissionRequested(contract::events::PermissionRequested {
+        request_id: contract::RequestId("r_1".into()),
+        declared: contract::shapes::DeclaredEffects {
+            effects: vec![],
+            reversible: true,
+            paths: None,
+        },
+        step: contract::events::AskStep::StandingAsk {
+            standing_rule: contract::events::StandingRule {
+                scope: contract::events::RuleScope::Project,
+                prefix: "".into(),
+            },
+        },
+    });
+    lines.push(line("permission_requested", &permission, Some("a_outer")));
+    for line in &mut lines {
+        line.turn_id = Some(contract::TurnId("t_1".into()));
+    }
+    let exited = Event::FiberExited(contract::events::FiberExited {
+        exit_code: 0,
+        usage: Default::default(),
+        final_message: None,
+        error: None,
+        suspended_on: Some(contract::RequestId("r_1".into())),
+        questions: None,
+    });
+    lines.push(line("fiber_exited", &exited, None));
+    let suspended = crate::resume::suspended(&lines).unwrap().unwrap();
+    assert_eq!(suspended.batch.len(), 1);
+    assert_eq!(suspended.batch[0].0.0, "a_outer");
+}
+
+#[test]
+fn inner_control_never_changes_the_skills_or_handoff_step() {
+    let mut lines = inner_lines(false);
+    let mut done = crate::completion::completed("inner control".into(), None);
+    done.control = Some(contract::events::Control {
+        skill: Some(contract::events::SkillLoad {
+            name: "inner".into(),
+            path: "inner/SKILL.md".into(),
+        }),
+        handoff: Some("inner note".into()),
+        ..Default::default()
+    });
+    lines[3] = line(
+        "tool_call_completed",
+        &Event::ToolCallCompleted(done),
+        Some("a_inner"),
+    );
+    let mut conversation = Vec::new();
+    let mut carry = crate::handoff::Carry::default();
+    let kept = contract::events::SkillLoad {
+        name: "kept".into(),
+        path: "kept/SKILL.md".into(),
+    };
+    carry.skills.push(kept.clone());
+    let mut had = BTreeMap::new();
+    for line in &lines {
+        render(
+            &mut conversation,
+            &Event::from_envelope(line).unwrap().unwrap(),
+            line.action_id.as_ref(),
+            "fake",
+            &mut had,
+            &mut carry,
+        );
+    }
+    assert_eq!(carry.skills, [kept]);
+    assert!(carry.noted().is_empty());
+    assert_eq!(carry.step.len(), 1);
+    assert_eq!(carry.step[0].action.0, "a_outer");
+}
+
+#[test]
+fn an_unfinished_inner_call_holds_no_job_notice_and_gets_no_fixed_result() {
+    let mut lines = inner_lines(true);
+    lines.push(line(
+        "tool_call_completed",
+        &Event::ToolCallCompleted(crate::completion::completed("outer done".into(), None)),
+        Some("a_outer"),
+    ));
+    lines.push(line("job_completed", &completed("j_done"), None));
+    let rebuilt = super::rebuild(&lines, "fake").unwrap();
+    assert_eq!(rebuilt.len(), 3);
+    assert!(
+        matches!(&rebuilt[1], Input::ToolResult { action_id, text, .. } if action_id.0 == "a_outer" && text == "outer done")
+    );
+    assert!(matches!(&rebuilt[2], Input::User { text, .. } if text.contains("j_done")));
+}

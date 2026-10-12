@@ -15,6 +15,7 @@
     reason = "test code"
 )]
 
+mod extension_harness;
 mod support;
 
 use std::cell::Cell;
@@ -30,8 +31,9 @@ use fakes::Client;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Deadline, HubProc, SessionGuard, Setup, Socket, close_session, connect_hub, hello, run_to_exit,
-    session_dir, start_session, subscribe, until, write_json,
+    Deadline, HubProc, SessionGuard, Setup, Socket, close_session, connect_hub, function_call,
+    hello, outputs_sent, run_to_exit, session_dir, start_session, stream, subscribe, until,
+    write_json,
 };
 
 /// Declares the MCP server `db` in the workspace's repository file: a
@@ -47,7 +49,8 @@ fn declare_db(setup: &Setup, extra: &Value) {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("tools.json"),
-        json!([{"name": "echo"}]).to_string(),
+        json!([{"name": "echo", "annotations": {"readOnlyHint": true, "openWorldHint": false}}])
+            .to_string(),
     )
     .unwrap();
     let mut entry = json!({
@@ -60,6 +63,30 @@ fn declare_db(setup: &Setup, extra: &Value) {
     write_json(
         &setup.workspace().join(".fiber/config.json"),
         &json!({"mcp": {"servers": {"db": entry}}}),
+    );
+}
+
+/// A person-layer MCP server `early`, started with the session and never
+/// offered: its fixture lives under the root, and it joins the home
+/// configuration keeping the fake model.
+fn declare_early(setup: &Setup) {
+    let script = std::fs::read(fakes::mcp_fixture()).unwrap();
+    let srv = setup.root.path().join("early-srv");
+    std::fs::create_dir_all(&srv).unwrap();
+    std::fs::write(srv.join("server.sh"), script).unwrap();
+    let dir = setup.root.path().join("early-fx");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("tools.json"),
+        json!([{"name": "echo"}]).to_string(),
+    )
+    .unwrap();
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {"early": {
+            "command": "/bin/bash",
+            "args": [srv.join("server.sh").display().to_string(), dir.display().to_string()],
+        }}}}),
     );
 }
 
@@ -318,6 +345,111 @@ fn a_full_client_answers_the_offer_and_the_turn_runs() {
             "preamble_built",
             "opening_message",
             "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+}
+
+#[test]
+fn an_extensions_replacement_of_an_mcp_tool_survives_the_offer() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        stream(&[function_call("call_echo", "mcp__db__echo", &json!({}))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    declare_early(&setup);
+    setup.lua(
+        "shadow",
+        "fiber.tool(\"mcp__db__echo\", { description = \"The shadow tool.\", input_schema = { type = \"object\" }, timeout = 2000, effects = { effects = { \"reads\" }, reversible = true }, run = function() return \"from the extension\" end })\n",
+    );
+    declare_db(&setup, &json!({}));
+    let id = doors::mint("s_");
+    let (session, stdout) = spawn_session(&setup, &id, &[]);
+    started(setup.deadline, stdout);
+    let client = attach(&setup, &id, "c_sub");
+    prompt(&client, "c_prompt");
+
+    let offered = recv_kind(setup.deadline, &client, "repository_code_offered");
+    let request = offered["payload"]["request_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let items = offered["payload"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["kind"], "mcp_server");
+    assert_eq!(items[0]["name"], "db");
+    reply(&client, "c_r1", &request, &["approve"]);
+    let resolved = recv_kind(setup.deadline, &client, "repository_code_resolved");
+    assert_eq!(resolved["payload"]["decisions"], json!(["approve"]));
+    recv_kind(setup.deadline, &client, "turn_completed");
+    close(&client, "c_close");
+    recv_kind(setup.deadline, &client, "fiber_exited");
+    drop(client);
+    assert!(session.wait().success());
+    // The extension's replacement answers the model's call: the
+    // post-offer load left the registered name alone.
+    assert_eq!(outputs_sent(&server), ["from the extension"]);
+    let text = fs::read_to_string(session_dir(&setup, &id).join("events.jsonl")).unwrap();
+    let built = text
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert!(built["payload"].get("replaced").is_none());
+    let tools = built["payload"]["tools"].as_array().unwrap();
+    let shadow = tools
+        .iter()
+        .find(|tool| tool["name"] == "mcp__db__echo")
+        .unwrap();
+    assert_eq!(shadow["registered_by"], "fiber.test/shadow");
+    let early = tools
+        .iter()
+        .find(|tool| tool["name"] == "mcp__early__echo")
+        .unwrap();
+    assert_eq!(early["registered_by"], "early");
+    // The first request declares both: the replacement and the tool
+    // the server loaded before the offer.
+    let first: Value = serde_json::from_slice(&server.requests()[0].body).unwrap();
+    let names: Vec<&str> = first["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"mcp__db__echo"), "{names:?}");
+    assert!(names.contains(&"mcp__early__echo"), "{names:?}");
+    // The complete, ordered durable kinds: the offer is raised and
+    // resolved before the preamble, then the tool step runs the
+    // replacement and the text step answers.
+    assert_eq!(
+        durable_kinds(&setup, &id)
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "repository_code_offered",
+            "repository_code_resolved",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
             "step_started",
             "assistant_message_started",
             "text_completed",

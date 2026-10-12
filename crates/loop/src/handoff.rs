@@ -19,9 +19,10 @@ use crate::{Error, Loop, Step};
 mod carry;
 mod note;
 
+use note::cancelled;
 #[cfg(test)]
 pub(crate) use note::note_request_text;
-use note::{cancelled, failure};
+pub(crate) use note::{failure, reply_note};
 
 pub(crate) use carry::Carry;
 
@@ -364,6 +365,9 @@ impl Loop {
         let window = self.prompt.context_window;
         if self.handoff.settings.enabled && self.context_estimate() > window {
             return self.overflowed(turn, None);
+        }
+        if let Some(completed) = self.model_call_allowed(turn)? {
+            return Ok(Step::Ended(completed));
         }
         // A refused request leaves the previous request's end in place, so a
         // later request still marks the cache where that request ended.

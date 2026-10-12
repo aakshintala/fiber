@@ -200,3 +200,99 @@ fn a_refused_connection_is_an_error() {
     });
     assert!(watched.is_err(), "a refused connect returns Err");
 }
+
+/// A log with two runs in it: steps, an earlier `fiber_exited` at some
+/// `seq`, more steps, and a later `fiber_exited`. Returns that earlier
+/// `fiber_exited`'s `seq`.
+fn two_runs(opened: &Opened) -> u64 {
+    step(&opened.log);
+    opened
+        .log
+        .append(&Event::FiberExited(exited()), None, None)
+        .unwrap();
+    step(&opened.log);
+    opened
+        .log
+        .append(&Event::FiberExited(exited()), None, None)
+        .unwrap();
+    let text =
+        std::fs::read_to_string(opened.dir.join("events.jsonl")).expect("the log reads back");
+    text.lines()
+        .map(|line| serde_json::from_str::<Envelope>(line).expect("a log line parses"))
+        .find_map(|line| {
+            (line.kind == "fiber_exited").then(|| line.seq.expect("a durable line carries seq").0)
+        })
+        .expect("the earlier fiber_exited")
+}
+
+#[test]
+fn watch_after_skips_every_line_at_or_before_its_boundary() {
+    let opened = Opened::open(Vec::new());
+    let home = opened.home.clone();
+    let id = opened.id.clone();
+    let boundary = two_runs(&opened);
+    let mut seen = Vec::new();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_inbox| {
+            // The earlier `fiber_exited` is at the boundary: neither
+            // delivered nor ending the watch. Only lines past it arrive,
+            // and the later `fiber_exited` ends it.
+            let watched = doors::watch_after(&home, &id, Some(boundary), &mut |line: &Envelope| {
+                seen.push(line.clone());
+            })
+            .expect("the watch held to the later fiber_exited");
+            assert_eq!(watched, Watched::Exited);
+            Ok(())
+        })
+        .unwrap();
+    let durable: Vec<u64> = seen
+        .iter()
+        .filter_map(|line| line.seq.map(|seq| seq.0))
+        .collect();
+    assert!(
+        !durable.is_empty() && durable.iter().all(|seq| *seq > boundary),
+        "only lines past the boundary arrive: {durable:?}"
+    );
+    assert_eq!(
+        seen.last()
+            .map(|line| (line.kind.as_str(), line.seq.map(|seq| seq.0))),
+        Some(("fiber_exited", Some(*durable.last().unwrap()))),
+        "the later fiber_exited ends the watch"
+    );
+    opened.close();
+}
+
+#[test]
+fn watch_after_one_before_the_boundary_returns_at_the_old_fiber_exited() {
+    let opened = Opened::open(Vec::new());
+    let home = opened.home.clone();
+    let id = opened.id.clone();
+    let boundary = two_runs(&opened);
+    let mut seen = Vec::new();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_inbox| {
+            // One before the boundary, the old `fiber_exited` still ends
+            // the watch: the `<=` is exact.
+            let watched =
+                doors::watch_after(&home, &id, Some(boundary - 1), &mut |line: &Envelope| {
+                    seen.push(line.clone());
+                })
+                .expect("the watch held to fiber_exited");
+            assert_eq!(watched, Watched::Exited);
+            Ok(())
+        })
+        .unwrap();
+    let at: Vec<u64> = seen
+        .iter()
+        .filter_map(|line| line.seq.map(|seq| seq.0))
+        .collect();
+    assert_eq!(
+        seen.last()
+            .map(|line| (line.kind.as_str(), line.seq.map(|seq| seq.0))),
+        Some(("fiber_exited", Some(boundary))),
+        "the old fiber_exited ends the watch: {at:?}"
+    );
+    opened.close();
+}
