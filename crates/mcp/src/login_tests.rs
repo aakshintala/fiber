@@ -8,7 +8,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use super::callback::{MAX_HEAD, decode};
+use super::callback::{MAX_HEAD, decode, wait_callback};
 use super::*;
 use crate::test_support::{FakeTokens, WITHIN};
 use contract::mcp_tokens::TokenFiles;
@@ -640,6 +640,17 @@ fn the_header_document_is_fetched_and_the_first_server_is_used() {
     let url = server_url(&server);
     run_with_callback(&url, &files, &clock, succeed).unwrap();
     assert_eq!(second.requests().len(), 0, "the second server was reached");
+    // The header's document is fetched: a mutant that ignores the header
+    // never requests it.
+    let paths: Vec<String> = server
+        .requests()
+        .into_iter()
+        .map(|request| request.path)
+        .collect();
+    assert!(
+        paths.contains(&"/prm".to_owned()),
+        "the header's document was not fetched: {paths:?}"
+    );
     let stored = files
         .read(&crate::token::token_key(&url).unwrap())
         .unwrap()
@@ -669,6 +680,14 @@ fn without_protected_resource_metadata_the_origin_is_its_own_server() {
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
     run_with_callback(&url, &files, &clock, succeed).unwrap();
+    // A pathless URL fetches the root document once: a mutant that widens
+    // the path-inserted guard fetches it twice.
+    let roots = server
+        .requests()
+        .into_iter()
+        .filter(|request| request.path == "/.well-known/oauth-protected-resource")
+        .count();
+    assert_eq!(roots, 1, "the root document was fetched {roots} times");
     assert!(
         files
             .read(&crate::token::token_key(&url).unwrap())
@@ -1582,4 +1601,424 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
             .unwrap()
             .is_none()
     );
+}
+
+#[test]
+fn the_body_cap_is_one_mib() {
+    assert_eq!(super::MAX_BODY, 1024 * 1024);
+}
+
+#[test]
+fn encode_percent_encodes_everything_outside_the_unreserved_set() {
+    assert_eq!(super::encode("abcXYZ019-_.~"), "abcXYZ019-_.~");
+    assert_eq!(super::encode(""), "");
+    assert_eq!(super::encode("a b+c/d?e=f&g"), "a%20b%2Bc%2Fd%3Fe%3Df%26g");
+    assert_eq!(super::encode("é"), "%C3%A9");
+}
+
+#[test]
+fn authorization_url_is_the_exact_joined_query() {
+    assert_eq!(
+        super::authorization_url(
+            "https://auth.test/authorize",
+            "c1",
+            "http://127.0.0.1:9/callback",
+            "challenge",
+            "state",
+            "https://rs.test/mcp",
+        ),
+        "https://auth.test/authorize?response_type=code&client_id=c1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9%2Fcallback&code_challenge=challenge&code_challenge_method=S256&state=state&resource=https%3A%2F%2Frs.test%2Fmcp"
+    );
+}
+
+#[test]
+fn debug_prints_each_variant_name_only() {
+    use crate::token::TokenError;
+    for (error, name) in [
+        (LoginError::Url, "Url"),
+        (LoginError::Userinfo, "Userinfo"),
+        (LoginError::Unreachable("step".to_owned()), "Unreachable"),
+        (LoginError::Random, "Random"),
+        (LoginError::Discovery("step".to_owned()), "Discovery"),
+        (LoginError::Registration("step".to_owned()), "Registration"),
+        (LoginError::Exchange("step".to_owned()), "Exchange"),
+        (LoginError::Callback("step".to_owned()), "Callback"),
+        (LoginError::Denied("access_denied".to_owned()), "Denied"),
+        (LoginError::PkceUnsupported, "PkceUnsupported"),
+        (LoginError::Timeout, "Timeout"),
+    ] {
+        assert_eq!(format!("{error:?}"), name);
+    }
+    assert_eq!(
+        format!("{:?}", LoginError::Store(TokenError::Url)),
+        "Store(Url)"
+    );
+}
+
+#[test]
+fn post_helpers_read_one_mib_plus_one_whole() {
+    // The `+ 1` reads one byte past the cap, so a body of exactly
+    // `MAX_BODY + 1` still arrives whole and the callers see its length.
+    let big = "b".repeat(super::MAX_BODY + 1);
+    let server =
+        ProviderServer::start_responding(move |_: &Request| Response::status(200, big.clone()))
+            .unwrap();
+    let url = format!("{}/reply", server.url());
+    let (status, bytes) = super::post_json(&url, "{}").unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(bytes.len(), super::MAX_BODY + 1);
+    assert_eq!(bytes[0], b'b');
+    assert_eq!(bytes[super::MAX_BODY], b'b');
+    let (status, bytes) = super::post_form(&url, &[("a", "b")]).unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(bytes.len(), super::MAX_BODY + 1);
+}
+
+/// `value`'s JSON padded with spaces to exactly `size` bytes: still JSON,
+/// still carrying its fields.
+fn padded(value: &Value, size: usize) -> String {
+    let mut body = value.to_string();
+    body.extend(std::iter::repeat_n(' ', size.saturating_sub(body.len())));
+    body
+}
+
+/// A fake whose registration answers `register` at `/register` while the
+/// rest of the flow is `start_full`'s.
+fn start_registering(register: String) -> ProviderServer {
+    ProviderServer::start_responding(move |request: &Request| {
+        let base = base_of(request);
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/mcp") => Response::status(401, "{}"),
+            ("GET", "/.well-known/oauth-protected-resource/mcp") => {
+                json_response(&json!({"authorization_servers": [base.clone()]}))
+            }
+            ("GET", "/.well-known/oauth-authorization-server") => {
+                json_response(&authorization_document(&base))
+            }
+            ("POST", "/register") => Response::status(200, register.clone()),
+            ("POST", "/token") => json_response(&token_reply("at-1")),
+            _ => Response::status(404, "{}"),
+        }
+    })
+    .unwrap()
+}
+
+/// A fake whose token endpoint answers `token` at `/token` while the rest
+/// of the flow is `start_full`'s.
+fn start_exchanging(token: String, status: u16) -> ProviderServer {
+    ProviderServer::start_responding(move |request: &Request| {
+        let base = base_of(request);
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/mcp") => Response::status(401, "{}"),
+            ("GET", "/.well-known/oauth-protected-resource/mcp") => {
+                json_response(&json!({"authorization_servers": [base.clone()]}))
+            }
+            ("GET", "/.well-known/oauth-authorization-server") => {
+                json_response(&authorization_document(&base))
+            }
+            ("POST", "/register") => json_response(&json!({"client_id": "c1"})),
+            ("POST", "/token") => Response::status(status, token.clone()),
+            _ => Response::status(404, "{}"),
+        }
+    })
+    .unwrap()
+}
+
+#[test]
+fn register_rejects_a_non_2xx_with_a_valid_body() {
+    // A 500 whose body would otherwise register `c1`: the status alone
+    // fails registration, before any callback.
+    let server = ProviderServer::start_responding(|request: &Request| {
+        let base = base_of(request);
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/mcp") => Response::status(401, "{}"),
+            ("GET", "/.well-known/oauth-protected-resource/mcp") => {
+                json_response(&json!({"authorization_servers": [base.clone()]}))
+            }
+            ("GET", "/.well-known/oauth-authorization-server") => {
+                json_response(&authorization_document(&base))
+            }
+            ("POST", "/register") => Response::status(500, json!({"client_id": "c1"}).to_string()),
+            _ => Response::status(404, "{}"),
+        }
+    })
+    .unwrap();
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let error = login(
+        &files,
+        &server_url(&server),
+        &|_| panic!("no authorization URL is shown"),
+        &*clock,
+    )
+    .unwrap_err();
+    assert!(matches!(error, LoginError::Registration(_)), "{error:?}");
+}
+
+#[test]
+fn register_reads_a_body_of_exactly_one_mib() {
+    let server = start_registering(padded(&json!({"client_id": "c1"}), super::MAX_BODY));
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let url = server_url(&server);
+    run_with_callback(&url, &files, &clock, succeed).unwrap();
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn register_rejects_a_body_past_one_mib() {
+    let server = start_registering(padded(&json!({"client_id": "c1"}), super::MAX_BODY + 1));
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let error = login(
+        &files,
+        &server_url(&server),
+        &|_| panic!("no authorization URL is shown"),
+        &*clock,
+    )
+    .unwrap_err();
+    assert!(matches!(error, LoginError::Registration(_)), "{error:?}");
+}
+
+#[test]
+fn exchange_rejects_a_non_2xx_with_a_valid_body() {
+    // A 500 whose body would otherwise store `at-1`: the status alone
+    // fails the exchange and stores nothing.
+    let server = start_exchanging(token_reply("at-1").to_string(), 500);
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let url = server_url(&server);
+    let error = run_with_callback(&url, &files, &clock, succeed).unwrap_err();
+    assert!(matches!(error, LoginError::Exchange(_)), "{error:?}");
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn exchange_reads_a_body_of_exactly_one_mib() {
+    let server = start_exchanging(padded(&token_reply("at-1"), super::MAX_BODY), 200);
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let url = server_url(&server);
+    run_with_callback(&url, &files, &clock, succeed).unwrap();
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn exchange_rejects_a_body_past_one_mib() {
+    let server = start_exchanging(padded(&token_reply("at-1"), super::MAX_BODY + 1), 200);
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let url = server_url(&server);
+    let error = run_with_callback(&url, &files, &clock, succeed).unwrap_err();
+    assert!(matches!(error, LoginError::Exchange(_)), "{error:?}");
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn the_header_document_is_used_when_the_well_known_ones_are_absent() {
+    // The probe's header names `/prm`, whose document lists the
+    // path-bearing `{base}/tenant` issuer; the well-known
+    // protected-resource documents are absent or name a dead server, so a
+    // login that ignores the header fails discovery.
+    let server = ProviderServer::start_responding(|request: &Request| {
+        let base = base_of(request);
+        let issuer = format!("{base}/tenant");
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/mcp") => Response::status(401, "{}").header(
+                "www-authenticate",
+                &format!("Bearer resource_metadata=\"{base}/prm\""),
+            ),
+            ("GET", "/prm") => json_response(&json!({"authorization_servers": [issuer]})),
+            ("GET", "/.well-known/oauth-protected-resource/mcp") => Response::status(404, "{}"),
+            ("GET", "/.well-known/oauth-protected-resource") => {
+                json_response(&json!({"authorization_servers": ["http://127.0.0.1:1/dead"]}))
+            }
+            ("GET", "/.well-known/oauth-authorization-server/tenant") => {
+                json_response(&authorization_document(&issuer))
+            }
+            ("POST", "/tenant/register") => json_response(&json!({"client_id": "c1"})),
+            ("POST", "/tenant/token") => json_response(&token_reply("at-1")),
+            _ => Response::status(404, "{}"),
+        }
+    })
+    .unwrap();
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let url = server_url(&server);
+    run_with_callback(&url, &files, &clock, succeed).unwrap();
+    let paths: Vec<String> = server
+        .requests()
+        .into_iter()
+        .map(|request| request.path)
+        .collect();
+    assert!(
+        paths.contains(&"/prm".to_owned()),
+        "the header's document was not fetched: {paths:?}"
+    );
+    let stored = files
+        .read(&crate::token::token_key(&url).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored["token_endpoint"],
+        json!(format!("{}/tenant/token", server.url()))
+    );
+}
+
+/// Sends raw `head` bytes to `addr` and reads the reply to the close,
+/// never failing: a refused connection or a reset read is an empty reply,
+/// so no assertion inside the driving scope can hang the wait.
+fn send_raw(addr: std::net::SocketAddr, head: &[u8]) -> String {
+    let mut stream = match TcpStream::connect(addr) {
+        Ok(stream) => stream,
+        Err(_) => return String::new(),
+    };
+    let _timeout = stream.set_read_timeout(Some(WITHIN));
+    let _written = stream.write_all(head);
+    let mut reply = String::new();
+    let _read = stream.read_to_string(&mut reply);
+    reply
+}
+
+/// Drives one [`wait_callback`] wait to its end: the wait runs on a scoped
+/// thread while `interact` works the listener's address, then the result
+/// is received with a bound, advancing the clock past the deadline first
+/// when the bound expires, so a mutant that never answers still ends the
+/// wait and the scope still joins. `interact` reports through its echo,
+/// asserted after the join.
+fn driven_wait(
+    clock: &Arc<fakes::clock::FakeClock>,
+    deadline: std::time::Instant,
+    state: &str,
+    interact: impl FnOnce(std::net::SocketAddr) -> String,
+) -> (Result<String, LoginError>, String) {
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    // Nonblocking, as the login's own listener is: the wait parks on the
+    // clock between accepts, so advancing the clock always ends it.
+    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (sent, received) = mpsc::channel();
+    std::thread::scope(|scope| {
+        let waiter = scope.spawn(|| {
+            sent.send(wait_callback(&listener, &**clock, deadline, state))
+                .unwrap();
+        });
+        let echo = interact(addr);
+        let result = match fakes::Deadline::after(WITHIN).recv(&received) {
+            Ok(result) => result,
+            Err(_) => {
+                clock.advance(
+                    deadline.saturating_duration_since(clock.now()) + Duration::from_secs(1),
+                );
+                fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the released callback wait")
+            }
+        };
+        waiter.join().unwrap();
+        (result, echo)
+    })
+}
+
+#[test]
+fn the_callback_wait_answers_one_valid_request() {
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.origin() + Duration::from_secs(60);
+    let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
+        send_raw(
+            addr,
+            b"GET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        )
+    });
+    assert!(echo.starts_with("HTTP/1.1 200"), "{echo}");
+    assert_eq!(result.unwrap(), "abc");
+}
+
+#[test]
+fn the_callback_head_cap_is_8kib() {
+    assert_eq!(super::callback::MAX_HEAD, 8 * 1024);
+}
+
+#[test]
+fn a_mid_size_callback_head_reads() {
+    // A head of about 2 KiB is far under the 8 KiB cap, and far past a
+    // narrowed one: it reads whole.
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.origin() + Duration::from_secs(60);
+    let padding = "p".repeat(1900);
+    let head = format!(
+        "GET /callback?code=abc&state=s1&pad={padding} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+    );
+    let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
+        send_raw(addr, head.as_bytes())
+    });
+    assert!(echo.starts_with("HTTP/1.1 200"), "{echo}");
+    assert_eq!(result.unwrap(), "abc");
+}
+
+#[test]
+fn the_callback_wait_drops_an_idle_connection_and_serves_the_next() {
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.origin() + Duration::from_secs(60);
+    let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
+        // An idle connection, opened with no bytes, then the real
+        // callback on a second connection.
+        let _idle = TcpStream::connect(addr).ok();
+        send_raw(
+            addr,
+            b"GET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        )
+    });
+    assert!(echo.starts_with("HTTP/1.1 200"), "{echo}");
+    assert_eq!(result.unwrap(), "abc");
+}
+
+#[test]
+fn the_callback_wait_serves_a_connection_that_pauses_before_its_head() {
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.origin() + Duration::from_secs(60);
+    let (result, echo) = driven_wait(&clock, deadline, "s1", |addr| {
+        let mut client = match TcpStream::connect(addr) {
+            Ok(client) => client,
+            Err(_) => return String::new(),
+        };
+        let _timeout = client.set_read_timeout(Some(WITHIN));
+        let _written = client.write_all(b"G");
+        // About five silent polls pass here with no bytes, far below the
+        // hundred the listener tolerates: a bounded receive, not a sleep.
+        let (keep, quiet) = mpsc::channel::<()>();
+        let _keep = keep;
+        assert!(
+            fakes::Deadline::after(Duration::from_millis(100))
+                .recv(&quiet)
+                .is_err(),
+            "a held channel answered"
+        );
+        let _written = client.write_all(
+            b"ET /callback?code=abc&state=s1 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        let mut echo = String::new();
+        let _read = client.read_to_string(&mut echo);
+        echo
+    });
+    assert!(echo.starts_with("HTTP/1.1 200"), "{echo}");
+    assert_eq!(result.unwrap(), "abc");
 }

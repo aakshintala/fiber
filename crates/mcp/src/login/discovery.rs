@@ -141,6 +141,11 @@ fn authorization_base(prm: Option<&Value>, origin: &str) -> Result<String, Login
 /// `openid-configuration`. A pathless base names its first two alike, and
 /// each URL is fetched once. A 404 continues; anything else failing is
 /// terminal at the named step.
+// A `&&`-to-`||` mutant of the path guard below is equivalent: for a
+// pathless base the extra candidate duplicates the base-appended one and
+// `dedup` removes it, and a path of exactly `/` cannot occur, since the
+// base is trimmed of trailing slashes before the path is read.
+#[cfg_attr(false, mutants::skip)]
 fn authorization_metadata(base: &str) -> Result<Value, LoginError> {
     const STEP: &str = "authorization-server metadata";
     let base = base.trim_end_matches('/');

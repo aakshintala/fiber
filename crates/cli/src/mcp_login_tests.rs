@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use config::{Layer, insert_entry};
 use contract::ErrorCode;
@@ -19,7 +20,7 @@ use contract::shapes::Failure;
 use extensions::{Browser, Index, Store};
 use serde_json::json;
 
-use super::{run_login, run_logout};
+use super::{mcp_login, mcp_logout, run_login, run_logout};
 use crate::mcp::Streams;
 use crate::project_of;
 
@@ -237,6 +238,18 @@ fn an_unknown_name_is_a_usage_failure_naming_it() {
     let failure = ran.result.unwrap_err();
     assert_eq!(failure.code, ErrorCode::Usage);
     assert!(failure.message.contains("zzz"), "{}", failure.message);
+    // An unknown name is not a stdio server: a mutant that always reports
+    // declared names the command instead.
+    assert!(
+        failure.message.contains("no server named"),
+        "{}",
+        failure.message
+    );
+    assert!(
+        !failure.message.contains("declares a command"),
+        "{}",
+        failure.message
+    );
     assert!(remote.calls.lock().unwrap().is_empty());
 }
 
@@ -468,6 +481,16 @@ fn a_logout_of_an_unknown_name_names_it() {
     let ran = logout(&setup, "zzz", &remote);
     let failure = ran.result.unwrap_err();
     assert!(failure.message.contains("zzz"), "{}", failure.message);
+    assert!(
+        failure.message.contains("no server named"),
+        "{}",
+        failure.message
+    );
+    assert!(
+        !failure.message.contains("declares a command"),
+        "{}",
+        failure.message
+    );
 }
 
 #[test]
@@ -504,5 +527,128 @@ fn a_url_in_another_case_reaches_the_same_key() {
         remote.calls.lock().unwrap().len(),
         0,
         "a logout never logs in"
+    );
+}
+
+/// The child's marker: set, the test runs one exit-code wrapper and exits
+/// with its code.
+const CHILD: &str = "FIBER_CLI_MCP_LOGIN_CHILD";
+
+/// Which wrapper the child runs.
+const CASE: &str = "FIBER_CLI_MCP_LOGIN_CASE";
+
+/// The workspace the child declares its servers in.
+const WORKSPACE: &str = "FIBER_CLI_MCP_LOGIN_WORKSPACE";
+
+/// How long the child may run before the test kills it and fails.
+const CHILD_DEADLINE: Duration = Duration::from_secs(10);
+
+/// The child's global declaration of `docs`, as [`Setup::declare_remote`]
+/// writes it.
+fn child_declare(home: &std::path::Path, workspace: &std::path::Path) {
+    let (_, project) = project_of(home, workspace).unwrap();
+    insert_entry(
+        home,
+        workspace,
+        &project,
+        Layer::Global,
+        "mcp.servers",
+        "docs",
+        json!({"url": URL}),
+    )
+    .unwrap();
+}
+
+/// Runs the child case `case` with `home` as its `FIBER_HOME` and `ws` as
+/// its workspace, and returns its exit code.
+#[track_caller]
+fn child_exit(
+    test: &str,
+    case: &str,
+    home: &std::path::Path,
+    ws: &std::path::Path,
+    path: Option<&str>,
+) -> i32 {
+    let output = fakes::rerun_prepared(
+        &format!("{test}::mcp_login_wrappers_exit_with_the_command_code"),
+        &[(CHILD, "1"), (CASE, case)],
+        CHILD_DEADLINE,
+        |command| {
+            command
+                .env("FIBER_HOME", home)
+                .env(WORKSPACE, ws)
+                .current_dir(ws);
+            if let Some(path) = path {
+                command.env("PATH", path);
+            }
+        },
+    );
+    output.status.code().expect("the child exits with a code")
+}
+
+#[test]
+fn mcp_login_wrappers_exit_with_the_command_code() {
+    if std::env::var_os(CHILD).is_some() {
+        let home = std::path::PathBuf::from(std::env::var("FIBER_HOME").unwrap());
+        let workspace = std::path::PathBuf::from(std::env::var(WORKSPACE).unwrap());
+        let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        let remote = FakeRemote::ok();
+        let code = match std::env::var(CASE).unwrap().as_str() {
+            "login-unknown" => mcp_login("zzz", &remote, clock),
+            "login-ok" => {
+                child_declare(&home, &workspace);
+                mcp_login("docs", &remote, clock)
+            }
+            "logout-unknown" => mcp_logout("zzz", &remote),
+            "logout-ok" => {
+                child_declare(&home, &workspace);
+                let file = config::CredentialFile::new(&home, "mcp", KEY).unwrap();
+                let held = file.try_lock().unwrap().unwrap();
+                held.write(&json!({"url": URL})).unwrap();
+                drop(held);
+                mcp_logout("docs", &remote)
+            }
+            case => panic!("unknown mcp login child case: {case}"),
+        };
+        std::process::exit(code);
+    }
+    let name = module_path!().split_once("::").unwrap().1;
+    let setup = Setup::new();
+    // An unknown name exits 2, the usage code: never 0, 1 or -1.
+    assert_eq!(
+        child_exit(
+            name,
+            "login-unknown",
+            &setup.home(),
+            &setup.workspace(),
+            None
+        ),
+        2
+    );
+    assert_eq!(
+        child_exit(
+            name,
+            "logout-unknown",
+            &setup.home(),
+            &setup.workspace(),
+            None
+        ),
+        2
+    );
+    // A login and a logout that run exit 0. The login's browser finds no
+    // program on `PATH`, so no browser opens.
+    assert_eq!(
+        child_exit(
+            name,
+            "login-ok",
+            &setup.home(),
+            &setup.workspace(),
+            Some("/nonexistent")
+        ),
+        0
+    );
+    assert_eq!(
+        child_exit(name, "logout-ok", &setup.home(), &setup.workspace(), None),
+        0
     );
 }
