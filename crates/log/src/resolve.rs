@@ -14,7 +14,9 @@ use crate::{EVENTS, Error};
 /// last line is newest, live or exited alike. A directory counts only
 /// when [`resolve`] would accept it, and never when its first line names
 /// a parent: a delegate resumes only through its parent
-/// (`docs/delegates.md`), which the hub refuses to resume. Activity is
+/// (`docs/delegates.md`), which the hub refuses to resume. `in_project`
+/// receives the worktree's recorded repository when `session_started`
+/// records one, else the workspace. Activity is
 /// the `ts` of the log's last complete line; when that line does not
 /// parse, or holds no numeric `ts`, the first line's `ts` stands in, so
 /// a session is never skipped for a corrupt tail. Ties go to the greater
@@ -42,8 +44,8 @@ pub fn most_recent(sessions: &Path, in_project: &dyn Fn(&str) -> bool) -> Option
 /// Resolves `selector` to the session it names in `sessions`: a name that
 /// equals it, or the one name it prefixes. A directory is a session only
 /// when its first complete line is `session_started` (`docs/events.md`,
-/// "A directory is a session ...") and `in_project` accepts that line's
-/// workspace, so a crash between `Log::create` and the first write leaves
+/// "A directory is a session ...") and `in_project` accepts the worktree's
+/// recorded repository when one is recorded, else that line's workspace, so a crash between `Log::create` and the first write leaves
 /// nothing to resolve, and a slug shared by two workspaces (`docs/state.md`,
 /// "Projects") never reaches another project's sessions. A missing, torn,
 /// empty or unparseable first line is not a session, without failing the
@@ -109,11 +111,20 @@ fn opening(dir: &Path, in_project: &dyn Fn(&str) -> bool) -> Option<Opening> {
     let first = lines.next()?;
     let line = first.ok()?;
     match Event::from_envelope(&line) {
-        Ok(Some(Event::SessionStarted(started))) if in_project(&started.workspace) => {
-            Some(Opening {
-                ts: line.ts,
-                delegate: started.parent.is_some(),
-            })
+        Ok(Some(Event::SessionStarted(started))) => {
+            let recorded = started
+                .worktree
+                .as_ref()
+                .and_then(|worktree| worktree.repository.as_deref())
+                .unwrap_or(&started.workspace);
+            if in_project(recorded) {
+                Some(Opening {
+                    ts: line.ts,
+                    delegate: started.parent.is_some(),
+                })
+            } else {
+                None
+            }
         }
         _ => None,
     }

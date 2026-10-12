@@ -563,6 +563,7 @@ impl Loop {
             control,
             jobs,
             servers,
+            spilled,
         } = output;
         // What the call saw of its server's deaths and restarts, written
         // under the call's action, in order, before its job lines and
@@ -630,6 +631,7 @@ impl Loop {
             details,
             process: process.as_ref(),
             rewritten,
+            spilled,
         };
         let shaped = self.shape(ran, bound, id, turn)?;
         if let Some(named) = write {

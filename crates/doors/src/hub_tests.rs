@@ -125,9 +125,12 @@ fn a_handshake_read_is_classified() {
         classify_hello_read(Err(error(io::ErrorKind::TimedOut))),
         HelloRead::TimedOut
     ));
+    assert!(matches!(
+        classify_hello_read(Err(error(io::ErrorKind::ConnectionReset))),
+        HelloRead::Race
+    ));
     for kind in [
         io::ErrorKind::NotFound,
-        io::ErrorKind::ConnectionReset,
         io::ErrorKind::InvalidInput,
         io::ErrorKind::UnexpectedEof,
     ] {

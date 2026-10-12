@@ -671,7 +671,8 @@ fn a_rewind_keeps_the_person_name_and_its_pin() {
     });
 
     // The person names the closed session, as `tests/name_session.rs`
-    // does: the `name` driver command is not built in this Fiber yet.
+    // does: the session is closed and no process holds it, so the test
+    // appends to its log directly.
     {
         let dir = session_log_path(&setup, &old);
         let sessions = dir.parent().unwrap().parent().unwrap();

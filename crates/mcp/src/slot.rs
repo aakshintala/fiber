@@ -19,9 +19,9 @@ use contract::events::{McpServerFailed, McpServerReady, ServerFailure};
 use contract::shapes::Failure;
 use contract::tool::Cancel;
 use contract::tool::ServerRecord;
+use serde::Serialize;
 
 use crate::cache::{self, Cached};
-use crate::rpc::Named;
 use crate::server::{CallError, Server};
 use crate::server_json::ListedTool;
 use crate::start::{ServerSpec, not_started};
@@ -35,6 +35,10 @@ pub(crate) struct Slot {
     cache: PathBuf,
     clock: Arc<dyn Clock>,
     version: String,
+    /// Whether the server offers resources to read, fixed from the lists
+    /// the slot was declared from: the session keeps its declared tools,
+    /// so a server that stops advertising resources is still asked.
+    resources: bool,
     state: Mutex<State>,
     /// Test-only pause after `serve` returns and before `run` checks the live server.
     #[cfg(test)]
@@ -112,7 +116,8 @@ pub(crate) enum Served {
 }
 
 impl Slot {
-    /// One slot from its parts, in `state`.
+    /// One slot from its parts, in `state`: `resources` is fixed here
+    /// from the lists the slot was declared from and never changes after.
     fn new(
         spec: ServerSpec,
         workspace: &Path,
@@ -121,12 +126,18 @@ impl Slot {
         version: &str,
         state: State,
     ) -> Arc<Self> {
+        let resources = match &state {
+            State::NotStarted { cached } => cached.resources,
+            State::Running { listed, .. } | State::Down { listed } => listed.resources,
+            State::Dead { .. } => false,
+        };
         Arc::new(Self {
             spec,
             workspace: workspace.to_path_buf(),
             cache: cache.to_path_buf(),
             clock: Arc::clone(clock),
             version: version.to_owned(),
+            resources,
             state: Mutex::new(state),
             #[cfg(test)]
             run_after_serve: Mutex::new(None),
@@ -177,6 +188,16 @@ impl Slot {
                 restarted: false,
             },
         )
+    }
+
+    /// Whether the server offers resources to read.
+    pub(crate) fn offers_resources(&self) -> bool {
+        self.resources
+    }
+
+    /// The server's spec: its name, timeouts and transport.
+    pub(crate) fn spec(&self) -> &ServerSpec {
+        &self.spec
     }
 
     /// The running server, starting it first when the slot is not
@@ -328,11 +349,11 @@ impl Slot {
         clippy::result_large_err,
         reason = "the death record travels with the call that observed it"
     )]
-    pub(crate) fn call(
+    pub(crate) fn call<P: Serialize + ?Sized>(
         &self,
         server: &Arc<Server>,
         method: &str,
-        params: &Named<'_>,
+        params: &P,
         timeout: Duration,
         cancel: &dyn Cancel,
     ) -> Result<Value, Fault> {

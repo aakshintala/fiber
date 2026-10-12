@@ -18,6 +18,7 @@ use super::drive::{LoopEnd, Phase, Run, pump};
 use super::moved::{CancelBridge, Moved};
 use super::output::{Errors, OUTPUT_CAP, Shared, bump, lock, read_errors, read_output};
 use super::spawn::scrub_env;
+use super::spill::{Config as SpillConfig, Spill};
 use super::tty;
 
 /// A foreground command moves after this long
@@ -35,8 +36,8 @@ pub(crate) enum StopKind {
 
 /// What the wait observed.
 pub(crate) struct Finished {
-    /// Bytes read before the call returned.
-    pub output: Vec<u8>,
+    /// Bytes read before the call returned, or the spill they went to.
+    pub output: Kept,
     /// The shell's status, once it was reaped.
     pub status: Option<ExitStatus>,
     /// Set when Fiber stopped the command.
@@ -51,6 +52,15 @@ pub(crate) struct Finished {
     pub capped: bool,
     /// A monitor's flood stopped it.
     pub flooded: bool,
+}
+
+/// What a finished command kept: the whole output, or the spill it went to.
+/// The spill rides boxed: it holds two file handles and three paths.
+pub(crate) enum Kept {
+    /// Bytes read before the call returned.
+    Whole(Vec<u8>),
+    /// The spill the output went to, past 1 MiB.
+    Spilled(Box<Spill>),
 }
 
 /// Whether the drive loop may hand the command to a job.
@@ -85,12 +95,13 @@ pub(crate) enum MoveReason {
     },
 }
 
-/// A finished command, or one handed to a job.
+/// A finished command, or one handed to a job. The move rides boxed:
+/// it carries the drive state.
 pub(crate) enum Ran {
     /// The command ended in this call.
     Finished(Finished),
     /// The command is still running and should become a job.
-    Moved(Moved),
+    Moved(Box<Moved>),
 }
 
 /// Runs `command` as `program -c` in `workdir` until the group is empty, the
@@ -101,7 +112,7 @@ pub(crate) enum Ran {
 /// holds the emitter, so nothing emits after this returns.
 #[allow(
     clippy::too_many_arguments,
-    reason = "spawn, the deadline, and the move policy are one call"
+    reason = "spawn, the deadline, the move policy and the spill are one call"
 )]
 pub(crate) fn execute(
     program: &Path,
@@ -113,6 +124,7 @@ pub(crate) fn execute(
     emit: &dyn Emit,
     policy: MovePolicy,
     jobs: Option<&dyn Jobs>,
+    spill: Option<SpillConfig>,
 ) -> Result<Ran, std::io::Error> {
     let tty = policy == MovePolicy::Terminal;
     let mut cmd = Command::new(program);
@@ -163,6 +175,12 @@ pub(crate) fn execute(
             inner.lines = Some(Vec::new());
             inner.errors = Some(Errors::default());
         }
+        // Only a foreground call, a shell without jobs, or a resumed one
+        // spills: a move on the first pass keeps today's buffer
+        // (`docs/tools.md`, "Result and output").
+        if matches!(policy, MovePolicy::Foreground | MovePolicy::Stay) {
+            inner.spill_config = spill.clone();
+        }
     }
     let reader = Arc::clone(&shared);
     thread::spawn(move || read_output(read, &reader));
@@ -196,7 +214,7 @@ pub(crate) fn execute(
         stop: None,
         sent_signal: false,
         seen_empty: false,
-        streamed: 0,
+        stream_carry: Vec::new(),
         timeout_at: start.checked_add(timeout),
         move_at: match policy {
             MovePolicy::Foreground => start.checked_add(MOVE_AFTER),
@@ -222,12 +240,13 @@ pub(crate) fn execute(
             drop(bridge);
             Ok(Ran::Finished(finished))
         }
-        LoopEnd::Move(reason) => Ok(Ran::Moved(Moved {
+        LoopEnd::Move(reason) => Ok(Ran::Moved(Box::new(Moved {
             reason,
             bridge: Some(bridge),
             progress,
             cap: OUTPUT_CAP,
-        })),
+            spill,
+        }))),
     }
 }
 

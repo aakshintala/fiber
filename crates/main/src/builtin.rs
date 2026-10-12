@@ -68,9 +68,12 @@ pub(crate) fn builtin(
     ));
     let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
     // Only `fiber ask` reaches here, new or resumed: a non-interactive run.
+    // The model's shell spills its output past 1 MiB into the session's
+    // `artifacts/`; the driver shell keeps today's buffer: it has no hook.
     let shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
         .with_search(fiber.clone())
         .with_jobs(moves)
+        .with_artifacts(artifacts.to_path_buf())
         .non_interactive();
     let driver =
         Arc::new(tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber));

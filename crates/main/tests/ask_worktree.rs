@@ -20,7 +20,7 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, Setup, group_alive, run_to_exit};
+use support::{Deadline, Setup, group_alive, kinds, run_to_exit};
 
 /// Runs the system `git` in `dir`, in its own process group, to its exit
 /// under the test's [`Deadline`].
@@ -164,6 +164,11 @@ fn ask_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
     let worktree = &first["payload"]["worktree"];
     let branch = worktree["branch"].as_str().unwrap();
     assert_eq!(worktree["path"].as_str().unwrap(), workspace);
+    let repository = fs::canonicalize(setup.workspace().join(".git")).unwrap();
+    assert_eq!(
+        worktree["repository"].as_str().unwrap(),
+        repository.to_str().unwrap()
+    );
     let home = fs::canonicalize(setup.home()).unwrap();
     let expected = home
         .join("projects")
@@ -172,6 +177,26 @@ fn ask_worktree_runs_in_a_new_worktree_and_removes_it_clean() {
         .join(id);
     assert_eq!(workspace, expected.to_str().unwrap());
     assert_eq!(branch, format!("fiber/{id}"));
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     // The session directory is under the same project key.
     assert!(
         home.join("projects")
@@ -453,4 +478,181 @@ fn a_startup_failure_after_creating_the_worktree_removes_it() {
         .is_empty(),
         "no fiber/ branch remains"
     );
+}
+
+#[test]
+fn ask_resume_of_a_removed_worktree_is_session_not_found() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    init_repo(setup.deadline, &setup.workspace());
+
+    let first = run_to_exit(
+        setup.deadline,
+        "`fiber ask --worktree` to exit",
+        ask_command(
+            &setup,
+            &setup.workspace(),
+            &[],
+            &["ask", "--worktree", "hi"],
+        ),
+    );
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_lines = lines(&first);
+    let id = started(&first_lines)["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let workspace = started(&first_lines)["payload"]["workspace"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Clean, so the worktree and its branch are gone after exit.
+    assert!(!Path::new(&workspace).exists());
+    let branch = started(&first_lines)["payload"]["worktree"]["branch"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(!branch_exists(setup.deadline, &setup.workspace(), &branch));
+
+    let home = fs::canonicalize(setup.home()).unwrap();
+    let events = home
+        .join("projects")
+        .join(key_of(setup.deadline, &setup.workspace()))
+        .join("sessions")
+        .join(&id)
+        .join("events.jsonl");
+    let before = fs::read(&events).unwrap();
+
+    let refused = run_to_exit(
+        setup.deadline,
+        "`fiber ask --resume` of a removed worktree to exit",
+        ask_command(
+            &setup,
+            &setup.workspace(),
+            &[],
+            &["ask", "--resume", &id, "x"],
+        ),
+    );
+    assert_eq!(refused.status.code(), Some(1));
+    let refused_lines = lines(&refused);
+    assert_eq!(kinds(&refused_lines), ["fiber_exited"]);
+    let last = refused_lines.last().unwrap();
+    assert_eq!(last.get("session_id"), None);
+    assert_eq!(last["payload"]["exit_code"], 1);
+    assert_eq!(last["payload"]["error"]["code"], "session_not_found");
+
+    // Byte for byte the refusal of an unknown id from the same directory.
+    let unknown = run_to_exit(
+        setup.deadline,
+        "`fiber ask --resume` of an unknown id to exit",
+        ask_command(
+            &setup,
+            &setup.workspace(),
+            &[],
+            &["ask", "--resume", "s_ffffffffffffffff", "x"],
+        ),
+    );
+    assert_eq!(unknown.status.code(), Some(1));
+    assert_eq!(refused.stdout, unknown.stdout);
+    assert_eq!(refused.stderr, unknown.stderr);
+
+    // The refused resume wrote nothing, took no lock and attached to nothing.
+    assert_eq!(fs::read(&events).unwrap(), before);
+    assert!(!Path::new(&workspace).exists());
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn ask_resume_of_a_kept_worktree_runs_in_it() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    init_repo(setup.deadline, &setup.workspace());
+    // A checked-in hook that leaves an untracked file behind, so the
+    // worktree is kept.
+    let hooks = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/keeping-hook");
+    git(
+        setup.deadline,
+        &setup.workspace(),
+        &["config", "core.hooksPath", hooks.to_str().unwrap()],
+    );
+
+    let first = run_to_exit(
+        setup.deadline,
+        "`fiber ask --worktree` to exit",
+        ask_command(
+            &setup,
+            &setup.workspace(),
+            &[],
+            &["ask", "--worktree", "hi"],
+        ),
+    );
+    assert_eq!(
+        first.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_lines = lines(&first);
+    let id = started(&first_lines)["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let workspace = started(&first_lines)["payload"]["workspace"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let branch = started(&first_lines)["payload"]["worktree"]["branch"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Kept: the untracked file holds the worktree and its branch.
+    assert!(Path::new(&workspace).join("keep.txt").is_file());
+
+    let second = run_to_exit(
+        setup.deadline,
+        "`fiber ask --resume` of a kept worktree to exit",
+        ask_command(
+            &setup,
+            &setup.workspace(),
+            &[],
+            &["ask", "--resume", &id, "x"],
+        ),
+    );
+    assert_eq!(
+        second.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let second_lines = lines(&second);
+    assert_eq!(second_lines[0]["kind"], "fiber_started");
+    assert_eq!(second_lines[0]["payload"]["resumed"], true);
+    assert_eq!(
+        kinds(&second_lines),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert!(Path::new(&workspace).exists());
+    assert!(branch_exists(setup.deadline, &setup.workspace(), &branch));
+    assert_eq!(server.requests().len(), 2);
 }

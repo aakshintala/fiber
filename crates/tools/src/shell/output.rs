@@ -13,6 +13,8 @@ use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{Event, JobDelta, Progress};
 
+use super::spill::{Config as SpillConfig, SPILL_AT, Spill};
+
 /// A job's output file stops growing past this: 5 GB, decimal
 /// (`docs/tools.md`, "Background jobs").
 pub(super) const OUTPUT_CAP: u64 = 5_000_000_000;
@@ -68,8 +70,20 @@ pub(super) struct Inner {
     pub(super) reaped: bool,
     pub(super) status: Option<ExitStatus>,
     pub(super) eof: bool,
-    /// Foreground bytes. Cleared when a move hands the command to its file.
+    /// Foreground bytes. Cleared when a move hands the command to its file,
+    /// or when past 1 MiB hands them to the spill. Never holds more than
+    /// 1 MiB while a spill is armed.
     pub(super) output: Vec<u8>,
+    /// The spill past 1 MiB goes to, once it starts. `None` for a shell
+    /// with no artifacts directory, or a move on the first pass.
+    pub(super) spill: Option<Spill>,
+    /// Where a spill would go, armed for a foreground call. `Moved::resume`
+    /// arms it after a failed job open.
+    pub(super) spill_config: Option<SpillConfig>,
+    /// Foreground bytes no `tool_call_delta` has carried yet. Past
+    /// `HELD_MAX` the oldest bytes are dropped and the newest kept, as the
+    /// job's queue is (`docs/events.md`, `tool_call_delta`).
+    pub(super) stream: Pending,
     /// The job's output file, after a move.
     pub(super) file: Option<File>,
     pub(super) discard: bool,
@@ -148,6 +162,9 @@ impl Default for Inner {
             status: None,
             eof: false,
             output: Vec::new(),
+            spill: None,
+            spill_config: None,
+            stream: Pending::default(),
             file: None,
             discard: false,
             seq: 0,
@@ -163,9 +180,24 @@ impl Default for Inner {
 }
 
 impl Inner {
-    /// Copies the foreground bytes into `file` whole and makes it the sink.
-    /// A copy past the cap is kept whole and fires the cap at once.
-    pub(super) fn attach(&mut self, mut file: File, cap: u64) {
+    /// Hands the command to `file`: a spill in progress goes to the job's
+    /// output file at `path`, and the foreground bytes are copied whole.
+    /// A copy past the cap is kept whole and fires the cap at once. The
+    /// string names any raw file left behind, for the receipt.
+    pub(super) fn attach(
+        &mut self,
+        mut file: File,
+        path: &std::path::Path,
+        cap: u64,
+    ) -> Option<String> {
+        if let Some(spill) = self.spill.take() {
+            let (sink, line) = spill.into_job(path, file);
+            self.cap = cap;
+            self.written = sink.metadata().map(|file| file.len()).unwrap_or(0);
+            self.cap_fired = self.written > cap;
+            self.file = Some(sink);
+            return line;
+        }
         let bytes = std::mem::take(&mut self.output);
         write_or_drop(&mut file, &bytes);
         if let Some(lines) = self.lines.as_mut() {
@@ -175,6 +207,7 @@ impl Inner {
         self.written = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         self.cap_fired = self.written > cap;
         self.file = Some(file);
+        None
     }
 
     /// Writes what fits under the cap to the file and queues it for the
@@ -227,10 +260,35 @@ pub(super) fn read_output(read: impl Read, shared: &Shared) {
         if inner.file.is_some() {
             inner.sink(bytes);
         } else {
-            inner.output.extend_from_slice(bytes);
+            check_start(inner, bytes.len());
+            if let Some(spill) = inner.spill.as_mut() {
+                spill.push(bytes);
+            } else {
+                inner.output.extend_from_slice(bytes);
+            }
+            // Every chunk is queued under the same lock it is written
+            // under, so every byte a delta carries was offered first.
+            inner.stream.push(bytes);
         }
     });
     note_eof(shared);
+}
+
+/// Starts the armed spill once the buffer with `extra` more bytes would
+/// cross past 1 MiB: the check runs before the chunk is appended, and the
+/// spill takes the buffer with `mem::take`, freeing it. At most 1 MiB
+/// never spills.
+pub(super) fn check_start(inner: &mut Inner, extra: usize) {
+    if inner.spill.is_some() || inner.spill_config.is_none() {
+        return;
+    }
+    if inner.output.len().saturating_add(extra) <= SPILL_AT {
+        return;
+    }
+    if let Some(config) = inner.spill_config.clone() {
+        let buffer = std::mem::take(&mut inner.output);
+        inner.spill = Some(Spill::start(config, buffer));
+    }
 }
 
 /// Reads a monitor's standard error into [`Errors`], then marks it closed.
@@ -318,29 +376,34 @@ fn emit_delta(emit: &dyn Emit, text: String) {
     }
 }
 
-/// Emits the output past `streamed`, holding back an incomplete UTF-8 tail
-/// for the next chunk, and returns the new streamed offset. Output only
-/// grows, so bytes read between the copy and the return stay past it.
-pub(super) fn stream_output(shared: &Shared, emit: &dyn Emit, streamed: usize) -> usize {
-    let chunk = {
-        lock(&shared.inner)
-            .output
-            .get(streamed..)
-            .unwrap_or_default()
-            .to_vec()
-    };
-    let complete = complete_prefix(&chunk);
-    if let Some(prefix) = chunk.get(..complete) {
+/// Emits the queued output, holding back an incomplete UTF-8 tail for the
+/// next pass in `carry`. When the queue dropped bytes, the carried tail is
+/// discarded first, since its start is gone. Below the cap the delta texts
+/// concatenate to the lossy whole output.
+pub(super) fn stream_output(shared: &Shared, emit: &dyn Emit, carry: &mut Vec<u8>) {
+    let (fresh, dropped) = lock(&shared.inner).stream.take();
+    if dropped {
+        carry.clear();
+    }
+    carry.extend_from_slice(&fresh);
+    let complete = complete_prefix(carry);
+    if let Some(prefix) = carry.get(..complete) {
         emit_delta(emit, String::from_utf8_lossy(prefix).into_owned());
     }
-    streamed.saturating_add(complete)
+    carry.drain(..complete);
 }
 
-/// Emits `output` past `streamed`, lossily: an incomplete tail goes out as
-/// U+FFFD, so the concatenated delta texts equal the lossy whole output.
-pub(super) fn stream_tail(output: &[u8], emit: &dyn Emit, streamed: usize) {
-    let rest = output.get(streamed..).unwrap_or_default();
-    emit_delta(emit, String::from_utf8_lossy(rest).into_owned());
+/// Emits what the queue still holds, lossily: an incomplete tail goes out
+/// as U+FFFD, so the concatenated delta texts equal the lossy whole output
+/// below the cap.
+pub(super) fn stream_rest(shared: &Shared, emit: &dyn Emit, carry: &mut Vec<u8>) {
+    let (fresh, dropped) = lock(&shared.inner).stream.take();
+    if dropped {
+        carry.clear();
+    }
+    carry.extend_from_slice(&fresh);
+    emit_delta(emit, String::from_utf8_lossy(carry).into_owned());
+    carry.clear();
 }
 
 pub(super) fn write_or_drop(file: &mut File, bytes: &[u8]) {
@@ -490,6 +553,16 @@ fn escaped_len(text: &str) -> u64 {
 fn cap_held(text: &mut String) {
     let cut = text.len().saturating_sub(HELD_MAX);
     text.drain(..text.ceil_char_boundary(cut));
+}
+
+/// Drops a partial character at the start of a cut, so a tail does not
+/// begin with U+FFFD from a byte that belonged to the previous character.
+pub(super) fn align_char_boundary(slice: &[u8]) -> &[u8] {
+    let start = slice
+        .iter()
+        .position(|byte| byte & 0b1100_0000 != 0b1000_0000)
+        .unwrap_or(slice.len());
+    slice.get(start..).unwrap_or_default()
 }
 
 pub(super) fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {

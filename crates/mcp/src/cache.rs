@@ -3,7 +3,9 @@
 //! `cache/mcp/<server>.json` (`docs/state.md`, "Cache"), keyed by a hash
 //! of the server's declaration. A missing, unreadable or unparsable file,
 //! one whose key or version differs, or one with no prompt list is a miss;
-//! a failed write is ignored, because the cache is always safe to lose.
+//! a file without the resources record reads as offering none, healing
+//! on the server's next start, because the live lists then rewrite the
+//! cache. A failed write is ignored, because the cache is always safe to lose.
 //! Writes go through a temporary file and a rename, so two sessions
 //! refreshing one list leave one whole file.
 
@@ -82,6 +84,8 @@ pub(crate) struct Cached {
     pub tools: Vec<ListedTool>,
     /// The `prompts/list` entries.
     pub prompts: Vec<ListedPrompt>,
+    /// Whether the server advertises the resources capability.
+    pub resources: bool,
 }
 
 /// The file on disk: compact JSON with a version, the declaration key and
@@ -92,6 +96,8 @@ struct CacheFile {
     key: String,
     tools: Vec<ListedTool>,
     prompts: Vec<ListedPrompt>,
+    #[serde(default)]
+    resources: bool,
 }
 
 /// Reads the cached lists for `server` whose key is `key`: `None` on every
@@ -110,6 +116,7 @@ pub(crate) fn read(cache: &Path, server: &str, key: &str) -> Option<Cached> {
     Some(Cached {
         tools: file.tools,
         prompts: file.prompts,
+        resources: file.resources,
     })
 }
 
@@ -129,6 +136,7 @@ pub(crate) fn write(cache: &Path, server: &str, key: &str, lists: &Cached) {
         key: key.to_owned(),
         tools: lists.tools.clone(),
         prompts: lists.prompts.clone(),
+        resources: lists.resources,
     };
     let bytes = serde_json::to_vec(&file).unwrap_or_default();
     let tmp = path.with_extension(format!("json.{}.tmp", std::process::id(),));

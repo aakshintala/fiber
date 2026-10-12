@@ -394,7 +394,7 @@ impl Later {
                 extension: None,
             }));
         }
-        let started = mcp::start(
+        let mut started = mcp::start(
             prepared.ready,
             &workspace,
             &artifacts,
@@ -413,6 +413,17 @@ impl Later {
             });
         }
         servers.adopt(started.servers);
+        // The session already declares `mcp_resources`: the post-offer
+        // tool reaches the newly adopted servers, and no second
+        // registration is ever offered for replacement.
+        if servers.resources_declared() {
+            started
+                .tools
+                .retain(|(_, tool)| tool.definition().name != mcp::RESOURCES_TOOL);
+            started
+                .infos
+                .retain(|info| info.name != mcp::RESOURCES_TOOL);
+        }
         for info in &started.infos {
             declare(&info.name, Some(info.clone()));
         }

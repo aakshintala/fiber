@@ -219,7 +219,7 @@ pairing code, list devices and revoke one, through the hub commands
 | `hub pair <device>` | Prints a pairing code for a device of that name, and in a terminal draws it as a QR code with the hub's address. The code works once, within 10 minutes. |
 | `hub token list` | Lists paired devices: name, when paired, last connection. |
 | `hub token revoke <device>` | Revokes a device's token and closes its live connections. |
-| `hub refresh` | Rebuilds the hub's environment for the sessions it starts from now on ("A session's environment"). |
+| `hub refresh` | Rebuilds the hub's environment for the sessions it starts from now on ("A session's environment"), then prints whether the login-shell capture succeeded. |
 | `hub add [--default] <name> <address>` | Adds a hub to this client's list, asks for its pairing code, and stores the device token it gets. The address is `ws://`, `wss://` or `unix:` followed by a socket path. `--default` makes it the hub this client uses without `--hub`. |
 | `hub remove <name>` | Removes a hub from this client's list and deletes its device token. |
 
@@ -791,15 +791,14 @@ raises the request again.
 A signal that arrives before `fiber_started` is written exits with the code
 and writes no durable event; an ephemeral `clients` line already sent to a
 client that attached stays sent. Once `fiber_started` is written,
-`fiber_exited` always is, unless the process dies or passes the bound.
+`fiber_exited` always is, unless the process dies or reaches its kill point.
 
 **The bound is 5 seconds** from the signal to exit, per process. The
 command stage is at most 2.8 s (800 ms grace plus 2 s drain), the levels of
 a tree run concurrently, and the rest is margin. It sits under the
 supervisors Fiber runs under: Docker sends SIGKILL 10 s after SIGTERM,
 Kubernetes 30 s, systemd 90 s (each one's documented default, not measured).
-Past the bound, every group still
-alive gets SIGKILL and the process exits at once with the same code, writing
+At 4.9 s, every group still alive gets SIGKILL, one diagnostic line with code `timeout` goes to the process's own diagnostic log (`docs/state.md`, "What each part holds"), with at most 100 ms allowed for it, and the process exits with the same code, writing
 nothing more: the loop may be stuck holding the log, so no other thread
 writes to it. The log ends as a process that died leaves it, with no
 `fiber_exited`, and a resume reads it as it reads any such log: a call left
@@ -948,8 +947,8 @@ websocket for everything it does.
 | `delete` | `session` (string), `cascade` (boolean, optional), `expect` (array of strings, optional) | Deletes an exited session ("Deleting and pruning"). With `cascade`, `expect` is the sessions the person confirmed; the delete is rejected `stale_request` when the sessions it would remove differ. |
 | `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). `project` is the project's key, as for `recent`. |
 | `read_file` | `session` (string), `path` (string, relative to the session directory, as the log names the file, such as `artifacts/i_3f2a.png`) | Answers with one file from the session's `artifacts/` ("A session's files"). |
-| `directories` | `path` (string, absolute, or starting with `~/` for the hub's home) | Answers with the names of the subdirectories `path` holds, sorted, one level only. A path that is not a readable directory answers an empty list; a relative path is rejected `invalid_arguments`. The terminal's workspace picker completes a typed path with it (`docs/tui.md`, "Home"). |
-| `status` | none | Answers with `running`, `fiber_version` and `clients` (`docs/events.md`, "`command_accepted`"). |
+| `directories` | `path` (string, absolute, or starting with `~/` for the hub's home) | Answers with the names of the subdirectories `path` holds, sorted, one level only, and the absolute path it listed, `~/` expanded, so a client can start a session in a path it typed from `~/`. A path that is not a readable directory answers an empty list; a relative path is rejected `invalid_arguments`. The terminal's workspace picker completes a typed path with it (`docs/tui.md`, "Home"). |
+| `status` | none | Answers with `running`, `fiber_version`, `clients` and `variables`, once the hub's first login-shell capture has ended (`docs/events.md`, "`command_accepted`"). |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
 | `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
 | `devices` | none | Answers with the paired devices. |

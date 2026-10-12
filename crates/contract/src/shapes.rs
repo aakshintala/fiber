@@ -407,6 +407,10 @@ pub struct Worktree {
     pub path: String,
     /// Its branch.
     pub branch: String,
+    /// The repository's git common directory, absolute. Set only for a
+    /// session's own worktree; absent on delegate events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
 }
 
 /// A marker key whose only value is `true`, such as `declined` or `skipped`.

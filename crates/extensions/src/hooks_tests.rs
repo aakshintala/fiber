@@ -19,6 +19,7 @@ use contract::ErrorCode;
 use contract::events::CallStatus;
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
 use contract::shapes::Process;
+use contract::tool::SpillFile;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Map, json};
@@ -176,6 +177,7 @@ fn after_tool(session: &Arc<SessionExtensions>, content: &str) -> AfterToolAnswe
             content: &content,
             details: None,
             process: None,
+            spilled: None,
         })
     })
 }
@@ -561,6 +563,7 @@ fn the_hook_is_shown_the_call_and_its_output() {
             content: "out",
             details: Some(&details),
             process: Some(&process),
+            spilled: None,
         })
     });
     assert_eq!(
@@ -1572,4 +1575,52 @@ fn an_undeclared_scripted_provider_fails_as_undeclared() {
         "{}",
         notices[0].message
     );
+}
+
+#[test]
+fn a_hook_given_a_spilled_call_sees_its_path_and_size() {
+    let home = Home::new();
+    home.install(
+        "spill",
+        Some(&hook(
+            "blocking",
+            "return { content = call.path .. \"|\" .. tostring(call.size) }",
+        )),
+    );
+    let session = home.load(&[]);
+    let file = SpillFile {
+        path: "/s/s_1/artifacts/s_x.txt".into(),
+        size: 1_048_591,
+    };
+    let answer = bounded(move || {
+        let arguments = Map::new();
+        session.after_tool(&AfterToolCall {
+            tool: "shell",
+            arguments: &arguments,
+            status: CallStatus::Completed,
+            content: "cut",
+            details: None,
+            process: None,
+            spilled: Some(&file),
+        })
+    });
+    assert_eq!(
+        changed_content(&answer),
+        Some("/s/s_1/artifacts/s_x.txt|1048591")
+    );
+}
+
+#[test]
+fn a_hook_given_a_call_without_a_file_sees_no_path_or_size() {
+    let home = Home::new();
+    home.install(
+        "spill",
+        Some(&hook(
+            "blocking",
+            "return { content = tostring(call.path) .. \"|\" .. tostring(call.size) }",
+        )),
+    );
+    let session = home.load(&[]);
+    let answer = after_tool(&session, "x");
+    assert_eq!(changed_content(&answer), Some("nil|nil"));
 }

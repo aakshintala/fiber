@@ -33,6 +33,8 @@ mod output;
 
 mod prelude;
 
+mod spill;
+
 mod tty;
 
 mod read_only;
@@ -72,6 +74,7 @@ const INDETERMINATE: &str = "The command was stopped, and Fiber cannot tell whet
 const HELD_OPEN: &str = "Output was still held open.";
 
 /// One shell tool. Each call has its own process; concurrent calls share nothing mutable.
+#[derive(Clone)]
 pub struct Shell {
     workspace: PathBuf,
     clock: Arc<dyn Clock>,
@@ -83,6 +86,13 @@ pub struct Shell {
     jobs: Option<Arc<dyn Jobs>>,
     /// The longest `deadline_ms` a monitor may have.
     max_deadline_ms: u64,
+    /// The session's `artifacts/`, when the call spills its output past
+    /// 1 MiB into its artifact file (`docs/tools.md`, "Result and output").
+    artifacts: Option<PathBuf>,
+    /// The held ends of a result: the first `start` and the last `end` bytes.
+    bound: Bound,
+    /// A test's writer around a spill's file, if any.
+    spill_wrap: Option<spill::Wrap>,
 }
 
 impl Shell {
@@ -94,6 +104,12 @@ impl Shell {
             search: None,
             jobs: None,
             max_deadline_ms: MAX_DEADLINE_MS,
+            artifacts: None,
+            bound: Bound {
+                start: 8192,
+                end: 8192,
+            },
+            spill_wrap: None,
         }
     }
 
@@ -120,6 +136,26 @@ impl Shell {
     pub fn with_jobs(self, jobs: Arc<dyn Jobs>) -> Self {
         Self {
             jobs: Some(jobs),
+            ..self
+        }
+    }
+
+    /// Spills a foreground call's output past 1 MiB into its artifact file
+    /// in `dir` (`docs/tools.md`, "Result and output"). The directory is
+    /// stored absolute, as given when that fails.
+    pub fn with_artifacts(self, dir: PathBuf) -> Self {
+        let dir = std::path::absolute(&dir).unwrap_or(dir);
+        Self {
+            artifacts: Some(dir),
+            ..self
+        }
+    }
+
+    /// Wraps a spill's file in a test's own writer.
+    #[cfg(test)]
+    pub(crate) fn with_spill_writer(self, wrap: spill::Wrap) -> Self {
+        Self {
+            spill_wrap: Some(wrap),
             ..self
         }
     }
@@ -219,6 +255,12 @@ impl Tool for Shell {
             ms: parsed.timeout_ms,
             monitor: parsed.mode == Mode::Monitor,
         };
+        let spill = self.artifacts.clone().map(|dir| spill::Config {
+            dir,
+            bound: self.bound,
+            wrap: self.spill_wrap.clone(),
+            name: None,
+        });
         match command::execute(
             program,
             &command,
@@ -229,11 +271,12 @@ impl Tool for Shell {
             emit,
             policy,
             self.jobs.as_deref(),
+            spill,
         ) {
             Ok(command::Ran::Finished(finished)) => from_spawn(Ok(finished), limit),
             Ok(command::Ran::Moved(moved)) => match &self.jobs {
                 Some(jobs) => background::take(
-                    moved,
+                    *moved,
                     Arc::clone(jobs),
                     Arc::clone(&self.clock),
                     &parsed.command,
@@ -252,10 +295,17 @@ impl Tool for Shell {
     }
 
     fn bound(&self) -> Bound {
-        Bound {
-            start: 8192,
-            end: 8192,
-        }
+        self.bound
+    }
+
+    fn with_cap(&self, cap: usize) -> Option<Arc<dyn Tool>> {
+        Some(Arc::new(Self {
+            bound: Bound {
+                start: cap.saturating_sub(cap / 2),
+                end: cap / 2,
+            },
+            ..self.clone()
+        }))
     }
 
     fn guidelines(&self) -> Option<String> {
@@ -464,7 +514,7 @@ fn shell_program() -> &'static Path {
 
 fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit) -> Output {
     match result {
-        Ok(finished) => assemble(limit, finished),
+        Ok(finished) => assemble(limit, finished, None),
         Err(err) => failed(
             ErrorCode::ToolError,
             format!("The command could not be started: {err}."),
@@ -472,29 +522,32 @@ fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit) -> Output 
     }
 }
 
-fn assemble(limit: Limit, finished: Finished) -> Output {
+/// The result of a finished command: `extra`, when the job could not be
+/// opened, goes before the closing line, for a whole and a spilled output
+/// alike. A spilled output carries no text parts: the loop takes its text
+/// from the spill alone.
+pub(crate) fn assemble(limit: Limit, finished: Finished, extra: Option<&str>) -> Output {
+    let timed_out = finished.stop == Some(StopKind::Timeout);
     if finished.indeterminate {
-        let timed_out = finished.stop == Some(StopKind::Timeout);
-        return with_process(
-            text_of(&finished.output, INDETERMINATE),
+        let process = process_of(&finished, timed_out);
+        return end(
+            finished,
+            extra,
+            INDETERMINATE,
             Some(failure(ErrorCode::Indeterminate, INDETERMINATE.to_owned())),
-            process_of(&finished, timed_out),
+            process,
+            false,
         );
     }
     if finished.stop == Some(StopKind::Timeout) {
         let line = limit.line();
-        return with_process(
-            text_of(&finished.output, &line),
-            Some(failure(ErrorCode::Timeout, line)),
-            process_of(&finished, true),
-        );
+        let error = Some(failure(ErrorCode::Timeout, line.clone()));
+        let process = process_of(&finished, true);
+        return end(finished, extra, &line, error, process, false);
     }
     if finished.stop == Some(StopKind::Cancel) {
-        return with_process(
-            text_of(&finished.output, CANCELLED),
-            None,
-            process_of(&finished, false),
-        );
+        let process = process_of(&finished, false);
+        return end(finished, extra, CANCELLED, None, process, false);
     }
     let Some(status) = finished.status else {
         return failed(
@@ -503,27 +556,68 @@ fn assemble(limit: Limit, finished: Finished) -> Output {
         );
     };
     let (exit_code, signal, line) = observed(status);
-    let mut text = text_of(&finished.output, &line);
-    if finished.held_open {
-        text.push_str(HELD_OPEN);
-        text.push('\n');
-    }
-    let error = if signal.is_some() && !finished.sent_signal {
-        Some(failure(ErrorCode::Signal, line))
+    let held_open = finished.held_open;
+    let sent_signal = finished.sent_signal;
+    let error = if signal.is_some() && !sent_signal {
+        Some(failure(ErrorCode::Signal, line.clone()))
     } else if exit_code.is_some_and(|code| code != 0) {
-        Some(failure(ErrorCode::NonzeroExit, line))
+        Some(failure(ErrorCode::NonzeroExit, line.clone()))
     } else {
         None
     };
-    with_process(
-        text,
+    end(
+        finished,
+        extra,
+        &line,
         error,
         Process {
             exit_code,
             signal,
             timed_out: false,
         },
+        held_open,
     )
+}
+
+/// `finished` ended with `line` as its closing line and `error`: its whole
+/// output gets the line as text, its spilled output as the file's end.
+/// `held_open` appends its line to a whole output only: it names bytes the
+/// file does not hold.
+fn end(
+    finished: Finished,
+    extra: Option<&str>,
+    line: &str,
+    error: Option<Failure>,
+    process: Process,
+    held_open: bool,
+) -> Output {
+    match finished.output {
+        command::Kept::Whole(output) => {
+            let mut text = text_of(&output, &closing(extra, line));
+            if held_open {
+                text.push_str(HELD_OPEN);
+                text.push('\n');
+            }
+            with_process(text, error, process)
+        }
+        command::Kept::Spilled(spill) => {
+            let spilled = spill.close(extra, line);
+            Output {
+                error,
+                process: Some(process),
+                spilled: Some(spilled),
+                ..Output::default()
+            }
+        }
+    }
+}
+
+/// The closing lines as text: `extra` before `line`.
+fn closing(extra: Option<&str>, line: &str) -> String {
+    match extra {
+        Some(extra) => format!("{extra}\n{line}"),
+        None => line.to_owned(),
+    }
 }
 
 fn observed(status: ExitStatus) -> (Option<i32>, Option<String>, String) {

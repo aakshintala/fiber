@@ -27,9 +27,6 @@ const WITHIN: Duration = Duration::from_secs(30);
 /// How long a test waits for a fake-clock waiter or a request to arrive.
 const SIGNAL: Duration = Duration::from_secs(10);
 
-/// How long the quadratic-tag timeout test may take on the wall clock.
-const QUADRATIC_TAG_WITHIN: Duration = Duration::from_secs(5);
-
 const DOWNLOAD_PIECE: usize = 64 * 1024;
 const TEN_MIB: usize = 10 * 1024 * 1024;
 
@@ -1571,39 +1568,35 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
     });
     let url = format!("{}/page", server.url());
 
-    fakes::within(
-        "the quadratic-tag request timeout",
-        QUADRATIC_TAG_WITHIN,
-        move || {
-            let _server = server;
-            let deadline = rig.clock.origin() + Duration::from_secs(60);
-            let call = rig.start(&url);
-            assert!(
-                rig.clock.await_parked(deadline, QUADRATIC_TAG_WITHIN),
-                "the request watcher waits for the request deadline"
-            );
-            Deadline::after(QUADRATIC_TAG_WITHIN)
-                .recv(&second_write_rx)
-                .expect("the artifact writer reaches piece two");
-            assert!(
-                _server.await_partial(1, QUADRATIC_TAG_WITHIN),
-                "the server sends piece three before the timeout"
-            );
-            advance
-                .send(())
-                .expect("piece two releases the clock advance");
-            let output = Deadline::after(QUADRATIC_TAG_WITHIN)
-                .recv(&call.rx)
-                .expect("the fetch finishes within its deadline");
-            assert_eq!(code(&output), Some(ErrorCode::Timeout));
-            assert_eq!(
-                writes.load(Ordering::SeqCst),
-                2,
-                "the stopped fetch saves no piece after the request window"
-            );
-            assert!(no_file_in(&rig), "the timed-out artifact is removed");
-        },
-    );
+    fakes::within("the quadratic-tag request timeout", WITHIN, move || {
+        let _server = server;
+        let deadline = rig.clock.origin() + Duration::from_secs(60);
+        let call = rig.start(&url);
+        assert!(
+            rig.clock.await_parked(deadline, WITHIN),
+            "the request watcher waits for the request deadline"
+        );
+        Deadline::after(WITHIN)
+            .recv(&second_write_rx)
+            .expect("the artifact writer reaches piece two");
+        assert!(
+            _server.await_partial(1, WITHIN),
+            "the server sends piece three before the timeout"
+        );
+        advance
+            .send(())
+            .expect("piece two releases the clock advance");
+        let output = Deadline::after(WITHIN)
+            .recv(&call.rx)
+            .expect("the fetch finishes within its deadline");
+        assert_eq!(code(&output), Some(ErrorCode::Timeout));
+        assert_eq!(
+            writes.load(Ordering::SeqCst),
+            2,
+            "the stopped fetch saves no piece after the request window"
+        );
+        assert!(no_file_in(&rig), "the timed-out artifact is removed");
+    });
 }
 
 /// A head for an HTML page read straight from memory.

@@ -331,7 +331,7 @@ the envelope's `ts`.
 | `parent` | object | no | for a delegate: `session_id`, its parent session, and `delegate_id`, the delegate's `job_id` there (`docs/delegates.md`) |
 | `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
 | `rewind` | object | no | for a rewind: `summary` (string, optional), `note` (string) and `jobs` (array of strings, the `job_id`s adopted) |
-| `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind continues: `path` and `branch` (strings); `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
+| `worktree` | object | no | when the session runs in a worktree Fiber created for it, or for the session a rewind continues: `path` and `branch` (strings), and `repository` (string), the absolute path of the repository's git common directory, which a resume recreates a removed worktree from; `path` is also `workspace` (`docs/invocation.md`, "Isolation") |
 
 #### `rewound`
 
@@ -1316,8 +1316,8 @@ Every driver command is answered with exactly one of these, echoing its id
 | `sessions` | `live`, an array with one object per running top-level session: `session_id` (string) and `status`, its latest `session_status` payload; and `exited`, an array of `recent.jsonl` rows, newest first, delegates and running sessions left out (`docs/state.md`, "What each part holds"), over the hub (`docs/invocation.md`, "The hub") |
 | `prompt_history` | `prompts`, an array of prompt history lines, newest first, each a whole line as `history.jsonl` holds it (`docs/state.md`, "What each part holds"), at most 256; and `before` (integer), the byte offset where the oldest returned line starts, present only when older lines remain, sent back to read the next page, over the hub (`docs/invocation.md`, "The hub") |
 | `read_file` | `data` (string), the file's bytes in standard base64, and `mime_type` (string), its media type from the file name's extension, `application/octet-stream` when Fiber does not know it, over the hub (`docs/invocation.md`, "A session's files") |
-| `directories` | `directories`, an array of strings, the names of the subdirectories the path holds, sorted, over the hub (`docs/invocation.md`, "The hub") |
-| `status` | `running` (boolean, always true), `fiber_version` (string) and `clients` (integer, the open connections, the asker included), over the hub (`docs/invocation.md`, "The hub") |
+| `directories` | `directories`, an array of strings, the names of the subdirectories the path holds, sorted, and `path` (string), the absolute path listed, `~/` expanded, over the hub (`docs/invocation.md`, "The hub") |
+| `status` | `running` (boolean, always true), `fiber_version` (string), `clients` (integer, the open connections, the asker included) and `variables` (object, as `session_started` carries it: the environment sessions the hub starts now get), over the hub (`docs/invocation.md`, "The hub") |
 
 #### `command_rejected`
 

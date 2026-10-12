@@ -14,15 +14,17 @@
 
 mod support;
 
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 
 use contract::events::{Control, TurnOutcome};
 use contract::tool::Tool;
 use contract::{Envelope, ErrorCode};
-use fakes::Scripted;
+use fakes::{Deadline, Scripted};
 use serde_json::{Value, json};
 
-use support::{Script, Session, Tap, TestTool, calls_reply, delivery, kinds, paris};
+use support::{
+    DEADLINE, Script, Session, Tap, TestTool, calls_reply, delivery, kinds, name_reported, paris,
+};
 
 /// A tool whose calls return `control.name` holding `name`.
 fn naming(name: &'static str, text: &'static str) -> TestTool {
@@ -316,4 +318,124 @@ fn a_handoff_call_names_nothing() {
             .payload["control"],
         json!({"handoff": "the note"})
     );
+}
+
+/// A session naming `names` whose inbox first takes the person's `name`:
+/// the name is written at the idle drain, before the turn starts.
+fn session_with_person_name(person: Vec<(&str, mpsc::Sender<contract::inbox::Answer>)>) -> Session {
+    let calls: Vec<(&str, Value)> = ["name"].iter().map(|name| (*name, paris())).collect();
+    let session = Session::with_tools(
+        vec![calls_reply("", &calls), Scripted::text("Done.")],
+        None,
+        vec![Arc::new(naming("name", "Named."))],
+    );
+    for (text, tx) in person {
+        session.inbox.send(name_reported(text, tx)).unwrap();
+    }
+    session.inbox.send(delivery("go")).unwrap();
+    session
+}
+
+#[test]
+fn a_person_name_pins_the_session_against_a_naming_call() {
+    let (tx, rx) = mpsc::channel();
+    let mut session = session_with_person_name(vec![("Mine", tx)]);
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let answer = Deadline::after(DEADLINE)
+        .recv(&rx)
+        .expect("the name is answered");
+    assert!(
+        matches!(answer, Ok(None)),
+        "the person's name accepts its ack with no answer"
+    );
+    let lines = session.lines();
+    let mut expected = vec![
+        "session_started",
+        "session_named",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step_of(1));
+    expected.extend(["tool_call_started", "tool_call_completed"]);
+    expected.extend(tail());
+    assert_eq!(kinds(&lines), expected);
+    let named = lines
+        .iter()
+        .find(|line| line.kind == "session_named")
+        .unwrap();
+    assert_eq!(named.payload["name"], "Mine");
+    assert_eq!(named.payload["by"], "person");
+    assert!(
+        named.turn_id.is_none(),
+        "the person's session_named carries no turn"
+    );
+    assert!(
+        named.action_id.is_none(),
+        "the person's session_named carries no action"
+    );
+    let completed = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "name_pinned");
+    assert_eq!(
+        completed.payload["error"]["message"],
+        "the person named this session"
+    );
+}
+
+#[test]
+fn a_cleared_person_name_lets_a_naming_call_name_the_session() {
+    let (mine_tx, mine_rx) = mpsc::channel();
+    let (clear_tx, clear_rx) = mpsc::channel();
+    let mut session = session_with_person_name(vec![("Mine", mine_tx), ("", clear_tx)]);
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let mine = Deadline::after(DEADLINE)
+        .recv(&mine_rx)
+        .expect("the name is answered");
+    assert!(
+        matches!(mine, Ok(None)),
+        "the person's name accepts its ack with no answer"
+    );
+    let cleared = Deadline::after(DEADLINE)
+        .recv(&clear_rx)
+        .expect("the clear is answered");
+    assert!(
+        matches!(cleared, Ok(None)),
+        "the clear accepts its ack with no answer"
+    );
+    let lines = session.lines();
+    let mut expected = vec![
+        "session_started",
+        "session_named",
+        "session_named",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    expected.extend(step_of(1));
+    expected.extend(["tool_call_started", "session_named", "tool_call_completed"]);
+    expected.extend(tail());
+    assert_eq!(kinds(&lines), expected);
+    let named: Vec<&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind == "session_named")
+        .collect();
+    assert_eq!(named.len(), 3);
+    assert_eq!(named[0].payload["name"], "Mine");
+    assert_eq!(named[0].payload["by"], "person");
+    assert!(
+        named[1].payload["name"].is_null(),
+        "a clear writes name null"
+    );
+    assert_eq!(named[1].payload["by"], "person");
+    assert_eq!(named[2].payload["name"], "Fix the parser");
+    assert_eq!(named[2].payload["by"], "model");
+    let completed = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed.payload["status"], "completed");
 }

@@ -12,7 +12,8 @@ use contract::tool::Cancel;
 use super::command::{Finished, MovePolicy, MoveReason};
 use super::drive::{LoopEnd, Run, finish, pump, view};
 use super::monitor::Feed;
-use super::output::{JobStream, Shared, lock};
+use super::output::{JobStream, Shared, check_start, lock};
+use super::spill::Config as SpillConfig;
 
 /// The call's cancel reaches the command through this bridge. The cancel
 /// holds it weakly and [`Moved`] holds the only strong reference, so
@@ -41,6 +42,8 @@ pub(crate) struct Moved {
     pub(super) progress: Run,
     /// The job's output file stops at this many bytes. Tests set a small one.
     pub(super) cap: u64,
+    /// Where a resumed command spills past 1 MiB, when the shell has one.
+    pub(super) spill: Option<SpillConfig>,
 }
 
 impl Moved {
@@ -60,8 +63,10 @@ impl Moved {
 
     /// Copies bytes already read into `file`, then points the reader at it.
     /// Both happen under the reader lock, so a chunk is not kept twice or lost.
-    pub(crate) fn attach_output(&self, file: File) {
-        lock(&self.progress.shared.inner).attach(file, self.cap);
+    /// A spill in progress goes to the job's output file at `path`; the
+    /// string names any raw file left behind, for the receipt.
+    pub(crate) fn attach_output(&self, file: File, path: &std::path::Path) -> Option<String> {
+        lock(&self.progress.shared.inner).attach(file, path, self.cap)
     }
 
     /// Writes a monitor's held standard error to `file` and points its
@@ -99,12 +104,21 @@ impl Moved {
     }
 
     /// Keeps running in the foreground. Used when the job could not be opened.
+    /// Arms the spill, so a resumed command spills past 1 MiB as a
+    /// foreground one does.
     pub(crate) fn resume(
         self,
         clock: &dyn Clock,
         cancel: &dyn Cancel,
         emit: &dyn Emit,
     ) -> Finished {
+        if self.spill.is_some() {
+            let mut inner = lock(&self.progress.shared.inner);
+            if inner.spill.is_none() && inner.file.is_none() {
+                inner.spill_config = self.spill.clone();
+                check_start(&mut inner, 0);
+            }
+        }
         self.run(MovePolicy::Stay, clock, cancel, emit)
     }
 
@@ -141,7 +155,7 @@ impl Moved {
                     progress.seen_empty,
                     view.eof,
                     emit,
-                    progress.streamed,
+                    &mut progress.stream_carry,
                 )
             }
         }

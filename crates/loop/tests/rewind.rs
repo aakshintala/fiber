@@ -383,6 +383,7 @@ fn a_rewound_session_records_the_worktree_it_is_given() {
     let worktree = Worktree {
         path: "/w/tree".into(),
         branch: "fiber/s_test".into(),
+        repository: Some("/r/.git".into()),
     };
     let (_b, _tx, _provider, dir) = start_b(
         &session,
@@ -396,7 +397,7 @@ fn a_rewound_session_records_the_worktree_it_is_given() {
     let first = session_started(&read_b);
     assert_eq!(
         first.payload["worktree"],
-        json!({"path": "/w/tree", "branch": "fiber/s_test"})
+        json!({"path": "/w/tree", "branch": "fiber/s_test", "repository": "/r/.git"})
     );
     let (_b, _tx, _provider, dir) = start_b(
         &session,

@@ -111,6 +111,7 @@ impl Loop {
             | Delivery::Handoff(_, _, ack)
             | Delivery::Rewind(_, ack)
             | Delivery::Model(_, ack)
+            | Delivery::Name(_, ack)
             | Delivery::Credential(_, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);
             }

@@ -1,6 +1,6 @@
 //! One client connection: `hub_hello` first, hub-command dispatch for
 //! `start`, `status`, `prompt_history`, `feed`, `dismiss`, `recent`,
-//! `sessions`, `delete` and `read_file`, and the relay to session sockets. Every connection also hears
+//! `sessions`, `delete`, `directories` and `read_file`, and the relay to session sockets. Every connection also hears
 //! `attention` (`crate::attention`) after its hello.
 //!
 //! A command with a `session_id` is for that session: the relay passes it
@@ -525,6 +525,12 @@ fn on_command(
     match line.command.as_str() {
         "start" => on_start(&line.id, &line.args, hub, writer, relays),
         "status" => on_status(&line.id, &line.args, hub, writer),
+        "refresh" => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::environment::refresh(hub, &line.args),
+        ),
         "prompt_history" => match crate::prompt_history::answer(&hub.home, &line.args) {
             Ok(result) => accept_result(writer, hub, &line.id, result),
             Err((code, message)) => reject(writer, hub, Some(&line.id), &code, message),
@@ -543,6 +549,12 @@ fn on_command(
             hub,
             &line.id,
             crate::delete::delete(hub, &line.args),
+        ),
+        "directories" => answer(
+            writer,
+            hub,
+            &line.id,
+            crate::directories::directories(hub.environments.user_home().as_deref(), &line.args),
         ),
         "read_file" => answer(
             writer,
@@ -702,6 +714,7 @@ fn on_status(
         running: true,
         fiber_version: hub.fiber_version.clone(),
         clients: hub.clients(),
+        variables: hub.environments.get().variables(),
     };
     accept_result(
         writer,

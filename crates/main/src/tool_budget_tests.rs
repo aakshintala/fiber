@@ -16,9 +16,8 @@ use contract::tool::Tool;
 use serde_json::{Map, Value, json};
 
 /// The largest per-protocol total the built-in definitions may take, in
-/// bytes. It started at the largest total at the commit that added the
-/// check, with no headroom.
-const BUDGET: usize = 11_172;
+/// bytes: `builtin()`'s definitions and `mcp_resources`, with no headroom.
+const BUDGET: usize = 11_980;
 
 /// The Anthropic hosted tool type the budget measures
 /// (`config::Protocol::reads_web_search`); `openai-responses` reads
@@ -74,6 +73,10 @@ fn builtin_definitions() -> Vec<ToolDefinition> {
     let definitions: Vec<ToolDefinition> =
         tools.iter().map(|(_, tool)| tool.definition()).collect();
     assert!(!definitions.is_empty(), "builtin registered no tool");
+    let mut definitions = definitions;
+    // `mcp_resources` is declared as a built-in whenever a configured
+    // server offers resources, so its definition counts toward the budget.
+    definitions.push(mcp::resources_definition());
     definitions
 }
 

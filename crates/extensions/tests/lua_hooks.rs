@@ -110,6 +110,7 @@ fn ask(session: &Arc<SessionExtensions>) -> mpsc::Receiver<AfterToolAnswer> {
             content: "x",
             details: None,
             process: None,
+            spilled: None,
         });
         match tx.send(answer) {
             Ok(()) | Err(mpsc::SendError(_)) => {}

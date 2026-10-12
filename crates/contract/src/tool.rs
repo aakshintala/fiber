@@ -193,7 +193,10 @@ impl std::fmt::Display for EffectsError {
 impl std::error::Error for EffectsError {}
 
 /// What a call returned (`docs/tools.md`, "What a result carries"). The loop
-/// adds the status and, when it cuts the result, the artifact.
+/// adds the status and, when it cuts the result, the artifact, unless the
+/// tool already wrote it: when `spilled` is set the loop takes the output's
+/// text from it alone and ignores any text parts in `content` (its other
+/// parts, such as images, are kept).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Output {
     /// Text and image parts for the model, before any cut.
@@ -216,6 +219,42 @@ pub struct Output {
     /// of its server's deaths and restarts. Set only for the call that
     /// observed each one, so each is written once.
     pub servers: Vec<ServerRecord>,
+    /// Output the tool wrote to the call's artifact file as it ran, past
+    /// what it holds in memory (`docs/tools.md`, "Result and output").
+    /// Only the shell sets it.
+    pub spilled: Option<Spilled>,
+}
+
+/// Output a tool wrote to its call's artifact file as it ran, past what it
+/// holds in memory (`docs/tools.md`, "Result and output").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spilled {
+    /// The first bytes, decoded.
+    pub head: String,
+    /// The last bytes, decoded.
+    pub tail: String,
+    /// Raw bytes neither holds.
+    pub removed: u64,
+    /// The kept file, or why it was not kept.
+    pub file: Result<SpillFile, Unsaved>,
+}
+
+/// Why spilled output could not be kept as the call's artifact file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unsaved {
+    /// What went wrong, naming the path.
+    pub message: String,
+    /// A partial file the tool could not remove, for the loop to remove.
+    pub left: Option<std::path::PathBuf>,
+}
+
+/// A spilled call's artifact file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpillFile {
+    /// The file's path, absolute.
+    pub path: std::path::PathBuf,
+    /// The file's length, closing lines included.
+    pub size: u64,
 }
 
 /// One durable server line a call returns (`docs/mcp.md`, "When a server

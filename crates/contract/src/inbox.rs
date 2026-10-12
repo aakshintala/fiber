@@ -84,6 +84,13 @@ pub enum Delivery {
     Model(crate::commands::ModelArgs, Ack),
     /// Switches the credential label at the next turn boundary.
     Credential(crate::commands::CredentialArgs, Ack),
+    /// The person's `name` command: written as `session_named` by
+    /// `person` at the drain that takes it, then acknowledged `Ok(None)`.
+    /// Refused `closing` while a shutdown settles and after `rewound`; a
+    /// drain that takes it before settling, such as an approval wait
+    /// reading a set shutdown signal, writes and accepts it as at any
+    /// drain.
+    Name(crate::commands::Name, Ack),
     /// Starts a new session that continues this one from an earlier point
     /// (`docs/events.md`, "Rewind").
     Rewind(crate::commands::RewindArgs, Ack),

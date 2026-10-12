@@ -7,17 +7,20 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use contract::SessionId;
+use contract::commands::Name;
 use contract::events::{
-    Answer, ExtensionExec, ExtensionLog, Interaction, InteractionRequested, InteractionResolved,
-    ResolvedBy,
+    Answer, CallStatus, Control, ExtensionExec, ExtensionLog, Interaction, InteractionRequested,
+    InteractionResolved, NamedBy, ResolvedBy,
 };
 use contract::inbox::{Ack, Delivery};
 use contract::shapes::Process;
 use contract::shapes::Worktree;
-use contract::{RequestId, TurnId};
+use contract::{ErrorCode, RequestId, TurnId};
 use log::Log;
 
 use super::{TurnInput, Waited};
+use crate::naming::{Named, PINNED};
+use crate::rewind::command::REWOUND_CLOSING;
 use crate::{Loop, Model};
 use fakes::Deadline;
 
@@ -111,12 +114,13 @@ fn start_records_the_worktree_on_session_started() {
     let (_looped, _log, _watched, home) = started_with(Some(Worktree {
         path: "/w".to_owned(),
         branch: "fiber/s_test".to_owned(),
+        repository: Some("/r/.git".to_owned()),
     }));
     let lines = log::read(&home.path().join("s_test")).unwrap();
     assert_eq!(lines[0].kind, "session_started");
     assert_eq!(
         lines[0].payload["worktree"],
-        serde_json::json!({"path": "/w", "branch": "fiber/s_test"}),
+        serde_json::json!({"path": "/w", "branch": "fiber/s_test", "repository": "/r/.git"}),
     );
     let (_looped, _log, _watched, home) = started();
     let lines = log::read(&home.path().join("s_test")).unwrap();
@@ -452,6 +456,24 @@ fn close() -> Delivery {
     Delivery::Close(ignore())
 }
 
+fn name(text: &str) -> Delivery {
+    Delivery::Name(Name { text: text.into() }, ignore())
+}
+
+fn control_with(name: Option<&str>) -> Control {
+    Control {
+        handoff: None,
+        questions: None,
+        skill: None,
+        name: name.map(str::to_owned),
+    }
+}
+
+/// The ack's answer, failing at [`DEADLINE`].
+fn answered(rx: &mpsc::Receiver<contract::inbox::Answer>) -> contract::inbox::Answer {
+    Deadline::after(DEADLINE).recv(rx).expect("the ack runs")
+}
+
 fn held_kinds(looped: &Loop) -> Vec<&str> {
     looped
         .deferred
@@ -468,6 +490,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             }
             Delivery::Close(_) => "close",
             Delivery::SteerDrop(..)
+            | Delivery::Name(..)
             | Delivery::Message(_)
             | Delivery::Model(..)
             | Delivery::Credential(..)
@@ -514,4 +537,260 @@ fn take_held_answer_with_only_stale_replies_returns_none_and_keeps_them() {
     looped.deferred.push_back(reply("r_8"));
     assert!(looped.take_held_answer(&RequestId("r_1".into())).is_none());
     assert_eq!(held_kinds(&looped), ["reply other", "reply other"]);
+}
+
+#[test]
+fn a_person_name_idle_is_written_then_acked_and_pins() {
+    let (mut looped, _log, mut watched, home) = started();
+    let mut input = TurnInput::of(Vec::new());
+    let (tx, rx) = mpsc::channel();
+    let dir = home.path().join("s_test");
+    let ack = Ack(Box::new(move |answer| {
+        let seen = log::read(&dir)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|line| line.kind)
+            .collect::<Vec<_>>();
+        let _sent = tx.send((answer, seen));
+    }));
+    looped
+        .admit_idle(
+            Delivery::Name(
+                Name {
+                    text: "Mine".into(),
+                },
+                ack,
+            ),
+            &mut input,
+        )
+        .unwrap();
+    assert!(input.pieces.is_empty(), "a name starts no turn idle");
+    let (answer, seen) = Deadline::after(DEADLINE).recv(&rx).expect("the ack runs");
+    assert!(
+        matches!(answer, Ok(None)),
+        "a name accepts its ack with no answer"
+    );
+    assert_eq!(
+        seen,
+        ["session_started", "session_named"],
+        "the ack runs only once its line is in the log"
+    );
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("session_named arrives in time")
+        .expect("the log outlives the drain")
+        .expect("the log ended before session_named");
+    assert_eq!(line.kind, "session_named");
+    assert_eq!(line.payload["name"], "Mine");
+    assert_eq!(line.payload["by"], "person");
+    assert!(
+        line.turn_id.is_none(),
+        "the person's session_named carries no turn"
+    );
+    assert!(
+        line.action_id.is_none(),
+        "the person's session_named carries no action"
+    );
+    let Named::Pinned(failure) = looped
+        .naming
+        .judge(CallStatus::Completed, Some(&control_with(Some("x"))))
+    else {
+        panic!("the person's name pins the session");
+    };
+    assert_eq!(failure.code, ErrorCode::NamePinned);
+    assert_eq!(failure.message, PINNED);
+}
+
+#[test]
+fn an_empty_person_name_writes_null_and_unpins() {
+    let (mut looped, _log, _watched, home) = started();
+    let mut input = TurnInput::of(Vec::new());
+    looped.admit_idle(name("Mine"), &mut input).unwrap();
+    looped.admit_idle(name(""), &mut input).unwrap();
+    assert_eq!(
+        saved_kinds(&home),
+        ["session_started", "session_named", "session_named"],
+    );
+    let lines = log::read(&home.path().join("s_test")).unwrap_or_default();
+    let cleared = lines
+        .iter()
+        .filter(|line| line.kind == "session_named")
+        .nth(1)
+        .expect("the clear writes a second session_named");
+    assert!(
+        cleared.payload["name"].is_null(),
+        "a clear writes name null"
+    );
+    assert_eq!(cleared.payload["by"], "person");
+    let Named::Write(wrote) = looped
+        .naming
+        .judge(CallStatus::Completed, Some(&control_with(Some("x"))))
+    else {
+        panic!("the clear unpins the session");
+    };
+    assert_eq!(wrote.by, NamedBy::Model);
+}
+
+#[test]
+fn a_person_name_after_close_is_accepted() {
+    let (mut looped, _log, _watched, home) = started();
+    let mut input = TurnInput::of(Vec::new());
+    looped.take_close(ignore());
+    let (tx, rx) = mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    looped
+        .admit_idle(
+            Delivery::Name(
+                Name {
+                    text: "Mine".into(),
+                },
+                ack,
+            ),
+            &mut input,
+        )
+        .unwrap();
+    assert!(
+        matches!(answered(&rx), Ok(None)),
+        "a name after close is accepted"
+    );
+    assert_eq!(saved_kinds(&home), ["session_started", "session_named"]);
+    assert!(
+        matches!(
+            looped
+                .naming
+                .judge(CallStatus::Completed, Some(&control_with(Some("x")))),
+            Named::Pinned(_)
+        ),
+        "the name after close pins"
+    );
+}
+
+#[test]
+fn a_person_name_mid_turn_is_written_with_no_turn_and_queues_nothing() {
+    let (mut looped, _log, mut watched, home) = started();
+    let turn = TurnId("t_test".into());
+    let (tx, rx) = mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    looped
+        .admit_running(
+            Delivery::Name(
+                Name {
+                    text: "Mine".into(),
+                },
+                ack,
+            ),
+            &turn,
+        )
+        .unwrap();
+    assert!(looped.queued.is_empty(), "a name queues nothing mid-turn");
+    assert!(
+        matches!(answered(&rx), Ok(None)),
+        "a name mid-turn is accepted"
+    );
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("session_named arrives in time")
+        .expect("the log outlives the drain")
+        .expect("the log ended before session_named");
+    assert_eq!(line.kind, "session_named");
+    assert_eq!(line.payload["name"], "Mine");
+    assert_eq!(line.payload["by"], "person");
+    assert!(
+        line.turn_id.is_none(),
+        "the person's session_named carries no turn"
+    );
+    assert_eq!(
+        saved_kinds(&home),
+        ["session_started", "session_named"],
+        "a name writes no steering_queue line"
+    );
+    assert!(
+        matches!(
+            looped
+                .naming
+                .judge(CallStatus::Completed, Some(&control_with(Some("x")))),
+            Named::Pinned(_)
+        ),
+        "the mid-turn name pins"
+    );
+}
+
+#[test]
+fn a_person_name_while_an_approval_waits_is_written_and_the_wait_goes_on() {
+    let (mut looped, _log, mut watched, home) = started();
+    let pending = RequestId("r_approval".into());
+    let turn = TurnId("t_test".into());
+    let (tx, rx) = mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    let waited = looped
+        .take_while_waiting(
+            &pending,
+            Delivery::Name(
+                Name {
+                    text: "Mine".into(),
+                },
+                ack,
+            ),
+            &turn,
+        )
+        .unwrap();
+    assert!(matches!(waited, Waited::Again));
+    assert!(
+        matches!(answered(&rx), Ok(None)),
+        "a name during an approval wait is accepted"
+    );
+    let line = watched
+        .recv_timeout(DEADLINE)
+        .expect("session_named arrives in time")
+        .expect("the log outlives the wait")
+        .expect("the log ended before session_named");
+    assert_eq!(line.kind, "session_named");
+    assert_eq!(line.payload["name"], "Mine");
+    assert_eq!(line.payload["by"], "person");
+    assert_eq!(saved_kinds(&home), ["session_started", "session_named"]);
+}
+
+#[test]
+fn a_person_name_after_rewound_is_refused_and_writes_nothing() {
+    let (mut looped, _log, _watched, home) = started();
+    looped.rewound = true;
+    let mut input = TurnInput::of(Vec::new());
+    let (tx, rx) = mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    looped
+        .admit_idle(
+            Delivery::Name(
+                Name {
+                    text: "Mine".into(),
+                },
+                ack,
+            ),
+            &mut input,
+        )
+        .unwrap();
+    match answered(&rx) {
+        Err(rejection) => {
+            assert_eq!(rejection.code, ErrorCode::Closing);
+            assert_eq!(rejection.message, REWOUND_CLOSING);
+        }
+        Ok(_) => panic!("a name after rewound is refused"),
+    }
+    assert_eq!(saved_kinds(&home), ["session_started"]);
+    assert!(
+        matches!(
+            looped
+                .naming
+                .judge(CallStatus::Completed, Some(&control_with(Some("x")))),
+            Named::Write(_)
+        ),
+        "a refused name leaves the session unpinned"
+    );
 }

@@ -38,7 +38,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   run/hub                         the hub's local socket
   recent.jsonl                    recently exited sessions, a rebuildable index
   cache/models/<provider>.json    discovered model list
-  cache/mcp/<server>.json         an MCP server's last tool and prompt lists
+  cache/mcp/<server>.json         an MCP server's last tool and prompt lists, and whether it offers resources
   cache/images/<session>-<file>    an image the terminal opened in the system viewer (docs/tui.md, "Images")
   crashes/<id>-<ms>.txt           one report per panic (docs/code-quality.md)
   logs/hub.log, logs/hub.log.1    the hub's diagnostic log and its previous file
@@ -86,7 +86,8 @@ becomes `-Users-alice-work`.
 
 A slug can collide (`/a-b` and `/a/b` both become `-a-b`). That is harmless:
 the key is only a name for humans. `session_started` records the exact
-workspace, and lookup checks it. The log stays the truth
+workspace, and the worktree's repository when Fiber made one, and lookup
+checks the repository when recorded and the workspace otherwise. The log stays the truth
 ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
 
 ## Sessions and resume
@@ -189,7 +190,7 @@ touching `credentials/` is refused
 `rm -rf ~/.fiber/cache` is a documented safe reset. Today it holds each
 provider's discovered model list, one file per provider at
 `cache/models/<provider>.json`, fetched and replaced whole, and each MCP
-server's last tool and prompt lists at `cache/mcp/<server>.json`, keyed by a hash
+server's last tool and prompt lists and whether it offers resources at `cache/mcp/<server>.json`, keyed by a hash
 of the server's declaration (`docs/mcp.md`, "Starting servers"). A writer replaces
 a file by rename, so two sessions refreshing one list leave one whole file.
 
@@ -229,7 +230,7 @@ What is recorded:
 
 - **Failures with no session to hold them:** a startup error such as
   `config_invalid`, a signal that arrives before `fiber_started`, a shutdown
-  that passes its bound (`docs/invocation.md`, "Shutdown"), and a background
+  that reaches its kill point (`docs/invocation.md`, "Shutdown"), and a background
   refresh, such as a quota or model list, that fails while no session is
   running.
 - **An extension's `host.log` lines:** each is a line in the session's file

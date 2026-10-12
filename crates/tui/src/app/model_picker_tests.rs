@@ -1669,19 +1669,21 @@ fn type_letter(app: &mut App, c: char) {
 }
 
 #[test]
-fn backspace_shortens_the_query_of_a_choosing_picker_only() {
+fn backspace_shortens_the_query_in_every_mode() {
     let (mut app, _) = choosing_app();
     open(&mut app);
     type_letter(&mut app, 'm');
     type_letter(&mut app, '2');
     assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
     assert_eq!(app.model_picker.query(), "m");
-    // The checklist takes no backspace: the query it holds stays.
+    // Backspace shortens the checklist query too.
     let _ = app.scoped_models_command();
     assert!(app.model_picker.is_scope());
-    app.model_picker.push_query('m');
-    assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+    type_letter(&mut app, 'm');
     assert_eq!(app.model_picker.query(), "m");
+    assert_eq!(app.on_key(Key::Backspace, now()), Effect::None);
+    assert_eq!(app.model_picker.query(), "");
+    assert!(app.model_picker_open());
 }
 
 #[test]
@@ -2415,7 +2417,12 @@ fn scoped_models_opens_marking_over_every_model() {
     assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
     assert_eq!(
         app.model_picker_view().map(|view| view.footer),
-        Some(vec![("Space", "mark"), ("Enter", "save"), ("Esc", "back")])
+        Some(vec![
+            ("↑↓", "move"),
+            ("Enter", "toggle"),
+            ("Ctrl+S", "save"),
+            ("Esc", "close")
+        ])
     );
 }
 
@@ -2431,19 +2438,19 @@ fn rows_start_marked_from_the_list() {
 }
 
 #[test]
-fn space_and_a_click_toggle_a_mark() {
+fn enter_and_a_click_toggle_a_mark() {
     let (mut app, _) = scope_app(&[]);
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    // Layout rows: 0 the buttons, 1 the `acme` heading, 2 `acme/m1`,
-    // 4 the `zeta` heading, 5 `zeta/z1`.
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    // Layout rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // 3 `acme/m1`, 5 the `zeta` heading, 6 `zeta/z1`.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(marks(&app), Some(vec![true, false, false]));
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(marks(&app), Some(vec![false, false, false]));
     // A click on the mark toggles its row.
     assert_eq!(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
-            2, 0
+            3, 0
         ))),
         Effect::None
     );
@@ -2451,7 +2458,7 @@ fn space_and_a_click_toggle_a_mark() {
     // A click on the name selects without toggling.
     assert_eq!(
         app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
-            5, 1
+            6, 1
         ))),
         Effect::None
     );
@@ -2461,14 +2468,14 @@ fn space_and_a_click_toggle_a_mark() {
 }
 
 #[test]
-fn enter_saves_marked_in_order_then_unlisted_old_entries() {
+fn ctrl_s_saves_marked_in_order_then_unlisted_old_entries() {
     let (mut app, seam) = scope_app(&["gone/x", "zeta/z1"]);
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     assert_eq!(marks(&app), Some(vec![false, false, true]));
     // Mark `acme/m1`: the save lists marked references in catalogue
     // order, then the old list's uninstalled entries in their order.
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(
         seam.writes(),
@@ -2490,6 +2497,106 @@ fn enter_saves_marked_in_order_then_unlisted_old_entries() {
 }
 
 #[test]
+fn ctrl_s_saves_marks_the_query_hides() {
+    let (mut app, seam) = scope_app(&[]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    // Mark `acme/m1`, then filter it out: the save still takes every
+    // mark, shown or hidden.
+    assert_eq!(press(&mut app, "enter"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+    assert_eq!(press(&mut app, "z"), Effect::None);
+    assert_eq!(app.model_picker.query(), "z");
+    assert_eq!(press(&mut app, "enter"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![true, false, true]));
+    assert_eq!(ctrl_s(&mut app), Effect::None);
+    assert!(!app.model_picker_open());
+    assert_eq!(
+        seam.writes(),
+        vec![(
+            PathBuf::from("/w"),
+            crate::configure::Layer::Global,
+            "scoped_models".to_owned(),
+            "[\"acme/m1\",\"zeta/z1\"]".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn enter_with_no_match_in_the_checklist_toggles_nothing() {
+    let (mut app, seam) = scope_app(&["acme/m1"]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(press(&mut app, "q"), Effect::None);
+    assert_eq!(press(&mut app, "q"), Effect::None);
+    assert_eq!(press(&mut app, "q"), Effect::None);
+    assert_eq!(app.model_picker.query(), "qqq");
+    assert_eq!(press(&mut app, "enter"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+    assert!(app.model_picker_open());
+    assert!(seam.writes().is_empty());
+}
+
+#[test]
+fn esc_clears_the_checklist_query_then_closes_saving_nothing() {
+    let (mut app, seam) = scope_app(&["acme/m1"]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(press(&mut app, "z"), Effect::None);
+    assert_eq!(press(&mut app, "enter"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![true, false, true]));
+    // The first Esc clears the query, keeping the picker open and the
+    // marks held.
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert_eq!(app.model_picker.query(), "");
+    assert!(app.model_picker_open());
+    assert_eq!(marks(&app), Some(vec![true, false, true]));
+    // The next Esc closes it, saving nothing.
+    assert_eq!(press(&mut app, "esc"), Effect::None);
+    assert!(!app.model_picker_open());
+    assert!(seam.writes().is_empty());
+    assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
+}
+
+#[test]
+fn a_rebound_session_only_saves_the_checklist() {
+    let user: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_value(json!({"session_only": "x"})).unwrap();
+    let (mut app, seam) = scope_app(&[]);
+    app.set_keys(crate::KeysSetup { user });
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(press(&mut app, "enter"), Effect::None);
+    assert_eq!(marks(&app), Some(vec![true, false, false]));
+    // The displaced Ctrl+S does nothing on the checklist now.
+    assert_eq!(ctrl_s(&mut app), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(seam.writes().is_empty());
+    assert!(app.model_picker.scoped.is_empty());
+    // The rebound key saves the marked list and closes.
+    assert_eq!(press(&mut app, "x"), Effect::None);
+    assert!(!app.model_picker_open());
+    assert_eq!(
+        seam.writes(),
+        vec![(
+            PathBuf::from("/w"),
+            crate::configure::Layer::Global,
+            "scoped_models".to_owned(),
+            "[\"acme/m1\"]".to_owned()
+        )]
+    );
+    assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
+}
+
+#[test]
+fn ctrl_r_refreshes_in_the_checklist() {
+    let (mut app, _) = scope_app(&[]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    assert_eq!(press(&mut app, "z"), Effect::None);
+    // The refresh key still asks `Every`, keeping the query.
+    assert_eq!(press(&mut app, "ctrl+r"), Effect::None);
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Every));
+    assert_eq!(app.model_picker.query(), "z");
+    assert!(app.model_picker_open());
+}
+
+#[test]
 fn marking_none_clears_even_with_an_unavailable_old_entry() {
     // The old list holds `gone/x`, which is not installed, and
     // `acme/m1`, which is: with neither marked the save writes `[]`,
@@ -2497,9 +2604,9 @@ fn marking_none_clears_even_with_an_unavailable_old_entry() {
     let (mut app, seam) = scope_app(&["gone/x", "acme/m1"]);
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     assert_eq!(marks(&app), Some(vec![true, false, false]));
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
-    assert_eq!(marks(&app), Some(vec![false, false, false]));
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(
         seam.writes(),
@@ -2517,7 +2624,7 @@ fn marking_none_clears_even_with_an_unavailable_old_entry() {
 fn esc_saves_nothing() {
     let (mut app, seam) = scope_app(&["acme/m1"]);
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(!app.model_picker_open());
     assert!(seam.writes().is_empty());
@@ -2543,8 +2650,8 @@ fn text_after_the_command_is_ignored() {
 fn the_saved_list_scopes_the_next_open() {
     let (mut app, _) = scope_app(&[]);
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
     // Choosing next lists only the saved entry until "show all".
     assert_eq!(app.on_key(Key::CtrlL, now()), Effect::None);
@@ -2565,8 +2672,8 @@ fn saving_on_home_writes_at_once_and_sets_the_saved_list() {
     ));
     app.on_models(Ok(three()));
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
     assert_eq!(
@@ -2591,7 +2698,7 @@ fn space_does_nothing_outside_the_checklist() {
 }
 
 #[test]
-fn tab_chips_and_s_do_nothing_in_the_checklist() {
+fn tab_and_chips_do_nothing_in_the_checklist() {
     let (mut app, seam) = scope_app(&["acme/m1"]);
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
     assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
@@ -2610,9 +2717,8 @@ fn tab_chips_and_s_do_nothing_in_the_checklist() {
             .as_ref()
             .is_some_and(|open| open.touched.iter().all(|touched| !touched))
     );
-    // `s` never chooses from the checklist: it stays open, sending and
-    // writing nothing.
-    assert_eq!(ctrl_s(&mut app), Effect::None);
+    // Tab and the chip keys choose nothing: the checklist stays open,
+    // sending and writing nothing.
     assert!(app.model_picker_open());
     assert!(seam.writes().is_empty());
     assert!(app.model_picker.awaiting.is_empty());
@@ -2623,7 +2729,7 @@ fn a_failed_scope_write_is_a_notice_and_keeps_the_list() {
     let (mut app, seam) = scope_app(&["acme/m1"]);
     *seam.refuse.lock().expect("the refusal") = Some("locked".to_owned());
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert_eq!(app.notice(), Some("Saving scoped_models failed: locked"));
     assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
     assert!(!app.model_picker_open());
@@ -2635,8 +2741,8 @@ fn saving_without_a_seam_says_nothing_changed() {
     app.on_line(hello());
     app.on_models(Ok(three()));
     assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert_eq!(
         app.notice(),
         Some("Saving is not available; nothing changed.")
@@ -2661,12 +2767,12 @@ fn opening_before_the_first_read_marks_toggles_and_saves() {
     // The first read marks the rows from the saved list.
     app.on_models(Ok(three()));
     assert_eq!(marks(&app), Some(vec![true, false, false]));
-    // Space toggles the selected row; Enter saves the marked list,
+    // Enter toggles the selected row; Ctrl+S saves the marked list,
     // keeping the old list's uninstalled entries.
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
-    assert_eq!(marks(&app), Some(vec![false, false, false]));
-    assert_eq!(app.on_key(Key::Char(' '), now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(marks(&app), Some(vec![false, false, false]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(
         seam.writes(),
@@ -2737,37 +2843,30 @@ fn ctrl_r_with_a_query_asks_every_and_keeps_the_query() {
 }
 
 #[test]
-fn typing_in_the_checklist_leaves_the_query_empty_and_space_marks() {
-    let mut app = scoped_home(&["acme/m1"]);
-    app.on_line(hello());
-    app.attach(contract::SessionId(SESSION.to_owned()));
-    app.on_models(Ok(three()));
-    assert_eq!(
-        app.open_model_picker(crate::model_picker::Mode::Scope),
-        Effect::None
-    );
-    // Typing takes no filter in the checklist: the query stays empty.
-    assert_eq!(press(&mut app, "a"), Effect::None);
-    assert_eq!(app.model_picker.query(), "");
-    assert_eq!(press(&mut app, "backspace"), Effect::None);
-    assert_eq!(app.model_picker.query(), "");
-    assert!(app.model_picker_open());
-    // Space toggles the selected row's mark: `acme/m1` starts marked.
-    assert_eq!(
-        app.model_picker
-            .open
-            .as_ref()
-            .map(|open| open.marks.clone()),
-        Some(vec![true, false, false])
-    );
+fn typing_in_the_checklist_filters_with_space_in_the_query() {
+    let (mut app, _) = scope_app(&[]);
+    assert_eq!(run_draft(&mut app, "/scoped-models"), Effect::None);
+    // Typing filters the checklist, Space included in the query.
+    assert_eq!(press(&mut app, "m"), Effect::None);
+    assert_eq!(app.model_picker.query(), "m");
     assert_eq!(press(&mut app, "space"), Effect::None);
-    assert_eq!(
-        app.model_picker
-            .open
-            .as_ref()
-            .map(|open| open.marks.clone()),
-        Some(vec![false, false, false])
-    );
+    assert_eq!(app.model_picker.query(), "m ");
+    assert_eq!(press(&mut app, "1"), Effect::None);
+    assert_eq!(app.model_picker.query(), "m 1");
+    // Only `acme/m1` matches both words: "m" matches the `acme` rows
+    // but not `zeta/z1`, while "a" alone would also match `zeta`.
+    let ids: Vec<String> = app
+        .model_picker_view()
+        .expect("open")
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter().map(|model| model.id.clone()))
+        .collect();
+    assert_eq!(ids, ["m1".to_owned()]);
+    assert!(app.model_picker_open());
+    // Backspace shortens the query, keeping the trailing Space.
+    assert_eq!(press(&mut app, "backspace"), Effect::None);
+    assert_eq!(app.model_picker.query(), "m ");
     assert!(app.model_picker_open());
 }
 

@@ -11,6 +11,9 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use contract::clock::Clock;
 use contract::events::{Variables, VariablesSource};
 use log::diag::{Diag, Severity};
+use serde_json::{Map, Value};
+
+use crate::connection::Hub;
 
 pub(crate) mod capture;
 
@@ -62,6 +65,16 @@ pub struct Environments {
     /// takes the lock to publish.
     #[cfg(test)]
     pub(crate) before_publish: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot signal run after a `refresh` is admitted
+    /// and before it takes the serializing lock, so a test can force the
+    /// admitted-but-queued interleaving with `close`.
+    #[cfg(test)]
+    pub(crate) after_admit: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot signal run when `get` finds nothing
+    /// published and is about to wait, so a test can prove a waiter is
+    /// parked before asserting it has answered nothing yet.
+    #[cfg(test)]
+    pub(crate) before_get_wait: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// What [`Environments`] shares, under one lock.
@@ -95,6 +108,10 @@ impl Environments {
             capture_lock: Mutex::new(()),
             #[cfg(test)]
             before_publish: Mutex::new(None),
+            #[cfg(test)]
+            after_admit: Mutex::new(None),
+            #[cfg(test)]
+            before_get_wait: Mutex::new(None),
         })
     }
 
@@ -114,7 +131,23 @@ impl Environments {
             capture_lock: Mutex::new(()),
             #[cfg(test)]
             before_publish: Mutex::new(None),
+            #[cfg(test)]
+            after_admit: Mutex::new(None),
+            #[cfg(test)]
+            before_get_wait: Mutex::new(None),
         })
+    }
+
+    /// The hub's home for `~/` paths (`docs/invocation.md`, "What the hub
+    /// speaks"): the first `HOME` in the inherited environment, `None`
+    /// when none is there. Reads only the immutable `inherited`, never
+    /// the capture state, so a command before the first capture publishes
+    /// answers at once.
+    pub(crate) fn user_home(&self) -> Option<PathBuf> {
+        self.inherited
+            .iter()
+            .find(|(name, _)| name == "HOME")
+            .map(|(_, value)| PathBuf::from(value))
     }
 
     /// The published environment, waiting for the first publish when none
@@ -124,6 +157,16 @@ impl Environments {
         loop {
             if let Some(environment) = state.published.clone() {
                 return environment;
+            }
+            #[cfg(test)]
+            {
+                let hook = lock(&self.before_get_wait).take();
+                if let Some(hook) = hook {
+                    drop(state);
+                    hook();
+                    state = lock(&self.state);
+                    continue;
+                }
             }
             state = self
                 .changed
@@ -174,6 +217,40 @@ impl Environments {
             }
         };
         self.finish(Err(failed), &cancel, diag);
+    }
+
+    /// Rebuilds the hub's environment for the sessions started
+    /// afterwards: one capture, serialized with every other capture,
+    /// published with the overlay once it ends. A failed refresh
+    /// publishes the fallback. After `close` nothing is spawned and the
+    /// published environment is returned. Running sessions keep theirs:
+    /// a published environment never changes.
+    pub(crate) fn refresh(&self, clock: &dyn Clock, diag: &Diag) -> Arc<Environment> {
+        // Admitted before taking the serializing lock, and checked for
+        // `close` only after holding it: a refresh admitted just before
+        // `close` ends without spawning once the running capture releases
+        // the lock, so no shell spawns after `close` begins.
+        let cancel = capture::Cancel::new();
+        {
+            let mut state = lock(&self.state);
+            state.running = state.running.saturating_add(1);
+            state.cancels.push(Arc::clone(&cancel));
+        }
+        #[cfg(test)]
+        {
+            if let Some(hook) = lock(&self.after_admit).take() {
+                hook();
+            }
+        }
+        let _serial = lock(&self.capture_lock);
+        if self.is_closed() {
+            self.end(&cancel);
+            return self.get();
+        }
+        let outcome = capture::capture(&self.inherited, clock, &cancel);
+        self.run_before_publish();
+        self.finish(outcome, &cancel, diag);
+        self.get()
     }
 
     /// Stops the environment: no capture starts after it, every running
@@ -284,6 +361,22 @@ impl Environments {
         #[cfg(not(test))]
         {}
     }
+}
+
+/// Answers `refresh` (`docs/invocation.md`, "What the hub speaks"):
+/// rebuilds the hub's environment on this connection's thread,
+/// serialized with every other capture. Accepted with no `result` once
+/// the new environment is published, whichever way the capture ended.
+/// Any argument is `invalid_arguments`, as `status`.
+pub(crate) fn refresh(
+    hub: &Hub,
+    args: &Map<String, Value>,
+) -> Result<Option<Value>, crate::feed::Refusal> {
+    if !args.is_empty() {
+        return Err(crate::feed::invalid());
+    }
+    hub.environments.refresh(&*hub.clock, &hub.diag);
+    Ok(None)
 }
 
 /// Locks, never poisoned: no thread holding this lock panics while

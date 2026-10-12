@@ -650,7 +650,8 @@ fn keep_listed(config: &Config, name: &str, tools: Vec<LuaTool>) -> Vec<LuaTool>
 }
 
 /// What an `after_tool` hook is given: the call, with `content` and
-/// `details` as the hook before it left them.
+/// `details` as the hook before it left them, and the spilled file's
+/// `path` and `size` when the tool already wrote it.
 fn shown(call: &AfterToolCall<'_>, content: &str, details: Option<&Value>) -> Value {
     let mut shown = Map::new();
     shown.insert("tool".into(), Value::String(call.tool.to_owned()));
@@ -665,6 +666,16 @@ fn shown(call: &AfterToolCall<'_>, content: &str, details: Option<&Value>) -> Va
     }
     if let Some(process) = call.process.and_then(|p| serde_json::to_value(p).ok()) {
         shown.insert("process".into(), process);
+    }
+    if let Some(spilled) = call.spilled {
+        shown.insert(
+            "path".into(),
+            Value::String(spilled.path.display().to_string()),
+        );
+        shown.insert(
+            "size".into(),
+            Value::Number(serde_json::Number::from(spilled.size)),
+        );
     }
     Value::Object(shown)
 }

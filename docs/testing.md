@@ -397,7 +397,10 @@ signal the wrong process or lose data, such as the `kill(-1)` refusal
 ("Running tests"). Elsewhere a mutant that changes no behaviour a consumer
 sees takes an exemption in the code, with a written reason, instead of a test
 that pins it. The exemption goes on a function, since an exemption on a
-statement or block is not reliably honoured. How many runners share the
+statement or block is not reliably honoured. It is written
+`#[cfg_attr(false, mutants::skip)]`, with the reason in a comment above it:
+cargo-mutants silently ignores the attribute when it carries a `reason`
+argument. How many runners share the
 mutants is CI's to set.
 
 Mutants run on Linux, so code compiled only on macOS, or on any platform other
@@ -483,6 +486,15 @@ orphan that is neither is still invisible on macOS: it is caught by the
 test's own reap above, not the scan.
 
 The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
+
+A test that runs a command, directly or through a scripted tool call, uses
+only the shells above and the standard Unix tools every runner has, such as
+`grep`, `sed` and `awk`. `rg`, `jq` and other tools a developer installs are
+absent on the Linux runners, and a scripted call to one fails there.
+
+A test never depends on the length of a temporary path: macOS's are long and
+Linux's short. A test that needs a line cut makes the line long enough to cut
+on any temporary path.
 
 The tests need a user other than root: root bypasses file modes, so the tests
 that deny a file or socket by mode fail with a message saying so.
