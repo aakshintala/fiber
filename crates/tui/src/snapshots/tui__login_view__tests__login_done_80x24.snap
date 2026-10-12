@@ -1,0 +1,24 @@
+---
+source: crates/tui/src/login_view_tests.rs
+assertion_line: 1065
+expression: "text_of(&buf, 80, 24).join(\"\\n\")"
+---
+
+
+
+
+
+                 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+
+                   codex                                    ✕
+
+                   ✓ Logged in to codex.
+
+
+
+
+
+
+                   Esc back
+
+                 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -181,7 +181,7 @@ pub(crate) fn draw(app: &App, area: Rect, buf: &mut Buffer, targets: &mut Vec<Ta
     let height = usize::from(area.height);
     if let Some(frame) = app.keys_frame(height) {
         render(&frame, area, buf, targets);
-    } else if let Some(login) = app.login_list() {
+    } else if let Some(login) = app.login_view() {
         login.draw(area, buf, targets);
     } else if let Some(frame) = app.config_view_screen() {
         render(&frame, area, buf, targets);

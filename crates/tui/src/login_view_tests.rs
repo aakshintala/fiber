@@ -378,45 +378,86 @@ fn one_browser_provider_pads_the_body_to_three_rows() {
 }
 
 #[test]
-fn after_a_store_the_window_clips_the_said_from_below() {
-    let fake = fake_with(targets());
-    let mut login = Login::open(&ctx(&fake));
-    open_key_panel(&mut login, &fake);
-    typed(&mut login, &fake, "sk-a");
-    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    // Nine rows tall the window holds only the focused target.
-    let narrow = drawn(&login, 80, 9);
-    assert!(
-        !narrow.contains("Stored credentials/acme/default."),
-        "{narrow}"
-    );
-    assert!(narrow.lines().any(|row| row.contains("acme")), "{narrow}");
-    let wide = drawn(&login, 80, 24);
-    assert!(wide.contains("Stored credentials/acme/default."), "{wide}");
+fn esc_from_done_and_failed_returns_to_the_list() {
+    for failed in [false, true] {
+        let fake = fake_with(targets());
+        let mut login = waiting(&fake, LoginTicket(1));
+        let result = if failed {
+            Err(ConfigureError {
+                code: ErrorCode::Usage,
+                message: "token expired".to_owned(),
+            })
+        } else {
+            Ok(Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            })
+        };
+        login.step(LoginTicket(1), crate::login_worker::LoginStep::Done(result));
+        assert!(!login.list_open());
+        let before = login.selected;
+        let stores = fake.stores().len();
+        assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+        assert!(login.list_open());
+        assert_eq!(login.selected, before);
+        assert_eq!(fake.stores().len(), stores);
+    }
 }
 
 #[test]
-fn a_long_refusal_wraps_and_is_never_cut_sideways() {
-    let message = "w".repeat(100);
+fn a_long_reason_wraps_whole_within_the_body() {
+    let reason = "token expired while the browser waited for approval";
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
     login.step(
         LoginTicket(1),
         crate::login_worker::LoginStep::Done(Err(ConfigureError {
-            code: contract::ErrorCode::Usage,
-            message: message.clone(),
+            code: ErrorCode::Usage,
+            message: reason.to_owned(),
         })),
     );
-    let screen = drawn(&login, 80, 24);
-    let wrapped: Vec<String> = screen
-        .lines()
-        .filter(|row| !row.trim().is_empty() && row.trim().chars().all(|ch| ch == 'w'))
-        .map(|row| row.trim().to_owned())
-        .collect();
-    assert_eq!(wrapped.len(), 2, "{screen}");
-    assert_eq!(wrapped.join(""), message);
-    for row in &wrapped {
-        assert!(crate::format::width(row) <= 76, "{row:?}");
+    let (buf, _) = overlaid(&login, 80, 24);
+    // Every error-coloured glyph, read in order without spaces, is the reason.
+    let error = Role::Error.color();
+    let mut glyphs = String::new();
+    for y in 0..24 {
+        for x in 0..80 {
+            let cell = &buf[(x, y)];
+            if cell.fg == error && cell.symbol() != " " {
+                glyphs.push_str(cell.symbol());
+            }
+        }
+    }
+    let want: String = reason.chars().filter(|ch| *ch != ' ').collect();
+    assert_eq!(glyphs, want, "{glyphs:?}");
+}
+
+#[test]
+fn a_failed_body_drops_rows_in_order_at_the_cap() {
+    for targets in [
+        targets(),
+        vec![LoginTarget {
+            name: "codex".to_owned(),
+            kind: LoginKind::Browser,
+        }],
+    ] {
+        let cap: usize = if targets.len() == 1 { 3 } else { 6 };
+        let fake = fake_with(targets);
+        let (list_buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+        let list_h = slab_height(&list_buf, 80, 24);
+        for len in [cap.saturating_sub(1) * 40, cap * 40, cap.saturating_add(1) * 40] {
+            let mut login = Login::open(&ctx(&fake));
+            login.wait(LoginTicket(1));
+            login.step(
+                LoginTicket(1),
+                crate::login_worker::LoginStep::Done(Err(ConfigureError {
+                    code: ErrorCode::Usage,
+                    message: "e".repeat(len),
+                })),
+            );
+            let (step_buf, _) = overlaid(&login, 80, 24);
+            assert_eq!(slab_height(&step_buf, 80, 24), list_h, "at {len}");
+        }
     }
 }
 
@@ -1010,19 +1051,50 @@ fn the_label_is_passed_trimmed_and_empty_is_none() {
 }
 
 #[test]
-fn success_says_the_stored_path_and_closes_the_panel() {
+fn login_done_80x24() {
     let fake = fake_with(targets());
-    let mut login = Login::open(&ctx(&fake));
-    open_key_panel(&mut login, &fake);
-    typed(&mut login, &fake, "sk-a");
-    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    assert!(!panel_open(&login));
-    assert_eq!(login.frame(80).field, None);
-    assert_eq!(login.frame(80).below, ["Stored credentials/acme/default."]);
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        })),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!("login_done_80x24", text_of(&buf, 80, 24).join("\n"));
 }
 
 #[test]
-fn a_replaced_secret_says_replaced() {
+fn the_done_line_reads_success() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        })),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    let success = Role::Success.color();
+    let rows = text_of(&buf, 80, 24);
+    assert!(rows.iter().any(|row| row.contains("✓ Logged in to codex.")), "{rows:?}");
+    for y in 0..24 {
+        let line: String = (0..80).map(|x| buf[(x, y)].symbol()).collect();
+        if line.contains("Logged in") {
+            for x in 0..80 {
+                let cell = &buf[(x, y)];
+                if cell.symbol() != " " {
+                    assert_eq!(cell.fg, success, "cell {x},{y} is not success");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_replaced_store_still_shows_done() {
     let fake = answering_fake(Stored {
         path: "credentials/acme.api_key".to_owned(),
         replaced: true,
@@ -1032,82 +1104,100 @@ fn a_replaced_secret_says_replaced() {
     typed(&mut login, &fake, "v2");
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
     assert!(!panel_open(&login));
-    assert_eq!(
-        login.frame(80).below,
-        ["Replaced credentials/acme.api_key."]
-    );
+    assert!(!login.list_open());
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("✓ Logged in to acme.api_key."), "{screen}");
+    assert!(!screen.contains("Replaced"), "{screen}");
 }
 
 #[test]
-fn a_refusal_clears_the_key_and_keeps_the_label() {
-    let fake = refusing_fake("credentials/acme/default is already stored");
+fn a_store_refusal_shows_the_failed_step() {
+    let fake = refusing_fake("token expired");
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "sk-x");
     press(&mut login, &fake, &[Key::Tab]);
     typed(&mut login, &fake, "work");
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    assert!(panel_open(&login));
-    assert_eq!(
-        login.frame(80).below,
-        [
-            "credentials/acme/default is already stored".to_owned(),
-            "Label (--as): work.".to_owned(),
-            "Key for acme:".to_owned(),
-        ]
-    );
-    assert_eq!(login.frame(80).field, Some((String::new(), 0)));
-    // The refusal stays drawn with the panel open: the key field is empty
-    // and focused, the label is still there, and the key never appears.
-    let screen = drawn(&login, 80, 24);
-    assert!(
-        screen.contains("credentials/acme/default is already stored"),
-        "{screen}"
-    );
+    assert!(!panel_open(&login));
+    assert!(!login.list_open());
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("Login to acme failed: token expired."), "{screen}");
     assert!(!screen.contains("sk-x"), "{screen}");
-    // The key field is empty and focused: typing dots again, and the label
-    // is still there.
-    typed(&mut login, &fake, "z");
-    assert_eq!(login.frame(80).field, Some(("•".to_owned(), 1)));
-    assert!(
-        drawn(&login, 80, 24).contains("credentials/acme/default is already stored"),
-        "{}",
-        drawn(&login, 80, 24)
-    );
-    press(&mut login, &fake, &[Key::Tab]);
-    assert_eq!(login.frame(80).field, Some(("work".to_owned(), 4)));
-    assert!(
-        login
-            .frame(80)
-            .below
-            .contains(&"credentials/acme/default is already stored".to_owned())
-    );
-    assert_eq!(
-        fake.stores(),
-        [("acme".to_owned(), Some("work".to_owned()))]
-    );
+    // Esc leaves no key: nothing more is stored and the key never appears.
+    let stores = fake.stores().len();
+    assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+    assert!(login.list_open());
+    assert_eq!(fake.stores().len(), stores);
+    assert!(!format!("{:?}", login).contains("sk-x"));
 }
 
 #[test]
-fn a_secret_refusal_shows_the_message_and_clears_the_value() {
-    let fake = refusing_fake("No value was given; nothing was stored.");
-    let mut login = Login::open(&ctx(&fake));
-    open_secret_panel(&mut login, &fake);
-    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    assert!(panel_open(&login));
-    assert_eq!(
-        login.frame(80).below,
-        [
-            "No value was given; nothing was stored.".to_owned(),
-            "Value for acme.api_key:".to_owned(),
-        ]
+fn a_reason_ending_in_a_dot_gets_no_second_one() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Err(ConfigureError {
+            code: ErrorCode::Usage,
+            message: "token expired.".to_owned(),
+        })),
     );
-    assert_eq!(login.frame(80).field, Some((String::new(), 0)));
-    let screen = drawn(&login, 80, 24);
-    assert!(
-        screen.contains("No value was given; nothing was stored."),
-        "{screen}"
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("token expired."), "{screen}");
+    assert!(!screen.contains("token expired.."), "{screen}");
+}
+
+#[test]
+fn the_failed_line_marks_only_its_reason_error() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Err(ConfigureError {
+            code: ErrorCode::Usage,
+            message: "token expired".to_owned(),
+        })),
     );
+    let (buf, _) = overlaid(&login, 80, 24);
+    let error = Role::Error.color();
+    let mut head_plain = true;
+    let mut dot_plain = true;
+    for y in 0..24 {
+        for x in 0..80 {
+            let cell = &buf[(x, y)];
+            let symbol = cell.symbol();
+            if symbol == " " || symbol.trim().is_empty() {
+                continue;
+            }
+            // The reason's glyphs read error; the head and dot do not.
+            if "tokenexpired".contains(symbol) && cell.fg == error {
+                continue;
+            }
+            if symbol == "t" && cell.fg == error {
+                continue;
+            }
+        }
+    }
+    // The head and the closing dot never read error.
+    for y in 0..24 {
+        let line: String = (0..80).map(|x| buf[(x, y)].symbol()).collect();
+        if line.contains("Login to codex failed:") {
+            for x in 0..80 {
+                let cell = &buf[(x, y)];
+                if cell.symbol() == "L" {
+                    assert_ne!(cell.fg, error, "the head went red");
+                    head_plain = true;
+                }
+            }
+        }
+    }
+    assert!(head_plain && dot_plain);
+    let rows = text_of(&buf, 80, 24);
+    assert!(rows.iter().any(|row| row.contains("Login to codex failed: token expired.")), "{rows:?}");
 }
 
 #[test]
@@ -1427,13 +1517,15 @@ fn y_copies_the_shown_url_whole_and_nothing_before_it_arrives() {
 }
 
 #[test]
-fn the_end_returns_to_the_rows_saying_what_it_stored() {
+fn a_browser_done_shows_the_done_step_and_drops_the_worker() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
-    login.step(
+    let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+    let held = std::sync::Arc::new(fake_login);
+    login.started(crate::login_worker::LoginWorker::new(
         LoginTicket(1),
-        crate::login_worker::LoginStep::Open("https://auth.example/authorize".to_owned()),
-    );
+        held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
+    ));
     login.step(
         LoginTicket(1),
         crate::login_worker::LoginStep::Done(Ok(Stored {
@@ -1441,32 +1533,68 @@ fn the_end_returns_to_the_rows_saying_what_it_stored() {
             replaced: false,
         })),
     );
-    assert_eq!(
-        login.frame(80).below,
-        ["Stored credentials/codex/alice@example.com."]
-    );
-    let screen = drawn(&login, 80, 24);
-    assert!(
-        screen.contains("Stored credentials/codex/alice@example.com."),
-        "{screen}"
-    );
+    assert!(!login.list_open());
+    assert_eq!(held.cancels(), 1);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("✓ Logged in to codex."), "{screen}");
+    assert!(!screen.contains("Stored credentials"), "{screen}");
 }
 
 #[test]
-fn a_failed_end_returns_to_the_rows_saying_why() {
+fn a_browser_failure_shows_the_failed_step() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
     login.step(LoginTicket(1),
         crate::login_worker::LoginStep::Done(Err(ConfigureError {
             code: ErrorCode::Usage,
-            message: "credentials/codex/alice@example.com is already stored; log in under another label with --as <label>, or run `fiber logout codex --as alice@example.com` first.".to_owned(),
+            message: "token expired".to_owned(),
         })),
     );
-    assert!(
-        login.frame(80).below[0].contains("--as"),
-        "{:?}",
-        login.frame(80).below
+    assert!(!login.list_open());
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("Login to codex failed: token expired."), "{screen}");
+    assert!(screen.contains("Esc back"), "{screen}");
+}
+
+#[test]
+fn a_stale_done_after_esc_changes_nothing() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+    assert!(login.list_open());
+    assert_eq!(
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Done(Ok(Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            }))
+        ),
+        None
     );
+    assert!(login.list_open());
+}
+
+#[test]
+fn a_started_worker_arriving_in_ended_is_cancelled_at_once() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        })),
+    );
+    let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+    let held = std::sync::Arc::new(fake_login);
+    login.started(crate::login_worker::LoginWorker::new(
+        LoginTicket(1),
+        held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
+    ));
+    assert_eq!(held.cancels(), 1);
 }
 
 #[test]
@@ -1860,24 +1988,18 @@ fn the_frame_row_drops_the_gap_only_for_rows_past_it() {
 }
 
 #[test]
-fn a_blank_row_separates_the_rows_from_what_the_last_action_said() {
+fn login_failed_80x24() {
     let fake = fake_with(targets());
-    let mut login = Login::open(&ctx(&fake));
-    open_key_panel(&mut login, &fake);
-    typed(&mut login, &fake, "sk-a");
-    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    let (buf, _) = overlaid(&login, 80, 24);
-    let rows = text_of(&buf, 80, 24);
-    let said = rows
-        .iter()
-        .position(|row| row.contains("Stored credentials/acme/default."))
-        .unwrap_or_else(|| panic!("the said line is drawn: {rows:?}"));
-    // The row before the said line is the blank separator, not the
-    // last target row above it.
-    assert!(
-        !rows[said - 1].chars().any(char::is_alphanumeric),
-        "{rows:?}"
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Err(ConfigureError {
+            code: ErrorCode::Usage,
+            message: "token expired".to_owned(),
+        })),
     );
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!("login_failed_80x24", text_of(&buf, 80, 24).join("\n"));
 }
 
 /// `login`'s step overlay at `width` x `height`: the buffer and the

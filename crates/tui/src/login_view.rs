@@ -289,10 +289,10 @@ impl Login {
     /// Draws the list in the shared overlay frame, centred: dim
     /// headings, one choice row per target with its tag, the gap, then
     /// anything the last action said, at least three body rows before
-    /// the window clips them, and the legend footer. A browser wait and
-    /// key entry draw their step; any other mode draws nothing yet.
+    /// the window clips them, and the legend footer. A step draws its
+    /// own overlay; any other mode draws nothing yet.
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
-        if matches!(self.mode, Mode::Waiting(_) | Mode::Panel(_)) {
+        if matches!(self.mode, Mode::Waiting(_) | Mode::Panel(_) | Mode::Ended(_)) {
             self.draw_step(area, buf, targets);
             return;
         }
@@ -435,6 +435,13 @@ impl Login {
             Act::Stay
         } else if matches!(self.mode, Mode::Waiting(_)) {
             self.waiting_key(key)
+        } else if matches!(self.mode, Mode::Ended(_)) {
+            // Done and failed stay until Esc or the ✕; Esc goes back
+            // to the list with the focus kept.
+            if *key == Key::Esc {
+                self.mode = Mode::Rows;
+            }
+            Act::Stay
         } else {
             self.rows_key(key, ctx)
         }
@@ -592,8 +599,8 @@ impl Login {
 
     /// Folds the waiting ticket's progress into the view: an event for
     /// another ticket changes nothing and opens nothing. `Open` returns
-    /// the URL to open; the end returns to the rows saying what the login
-    /// stored, or why it failed.
+    /// the URL to open; the end stays as the done or failed step until
+    /// Esc or the ✕.
     pub(crate) fn step(&mut self, ticket: LoginTicket, step: LoginStep) -> Option<String> {
         let Mode::Waiting(waiting) = &mut self.mode else {
             return None;
@@ -611,15 +618,12 @@ impl Login {
                 None
             }
             LoginStep::Done(result) => {
-                match result {
-                    Ok(stored) => {
-                        self.said = vec![format!("Stored {}.", stored.path)];
-                    }
-                    Err(error) => {
-                        self.said = vec![error.message];
-                    }
-                }
-                self.mode = Mode::Rows;
+                let name = waiting.name.clone();
+                let outcome = match result {
+                    Ok(_) => Outcome::Done,
+                    Err(error) => Outcome::Failed(error.message),
+                };
+                self.mode = Mode::Ended(Ended { name, outcome });
                 None
             }
         }
@@ -672,8 +676,8 @@ impl Login {
     }
 
     /// Stores the panel's key: the key trimmed, the label trimmed with an
-    /// empty one meaning none. Success closes the panel; a refusal clears
-    /// the key and keeps the label, with the key focused.
+    /// empty one meaning none. Success and refusal both stay as the done
+    /// or failed step; a refusal drops the key and the label.
     fn submit(&mut self, ctx: &Ctx<'_>) {
         let (index, label, secret) = match &mut self.mode {
             Mode::Panel(panel) => (panel.target, panel.label.expand(), panel.key.take()),
@@ -690,21 +694,17 @@ impl Login {
             (!trimmed.is_empty()).then(|| trimmed.to_owned())
         };
         match ctx.seam.store_key(&name, label.as_deref(), secret) {
-            Ok(stored) => {
-                self.mode = Mode::Rows;
-                let done = if stored.replaced {
-                    "Replaced"
-                } else {
-                    "Stored"
-                };
-                self.said = vec![format!("{done} {}.", stored.path)];
+            Ok(_) => {
+                self.mode = Mode::Ended(Ended {
+                    name,
+                    outcome: Outcome::Done,
+                });
             }
             Err(error) => {
-                self.said = vec![error.message];
-                let Mode::Panel(panel) = &mut self.mode else {
-                    return;
-                };
-                panel.focus = Focus::Key;
+                self.mode = Mode::Ended(Ended {
+                    name,
+                    outcome: Outcome::Failed(error.message),
+                });
             }
         }
     }
@@ -747,15 +747,14 @@ impl Login {
     }
 
     /// A click: the ✕ closes, a target row over the rows selects it,
-    /// and a row while the panel is open or a login waits keeps its
-    /// mode. A click on a heading, the gap, the note or past the last
-    /// item does nothing.
+    /// and a row while a step is open keeps its mode. A click on a
+    /// heading, the gap, the note or past the last item does nothing.
     pub(crate) fn click(&mut self, spot: Spot, ctx: &Ctx<'_>) -> Act {
         match spot {
             Spot::Close => Act::Close,
             Spot::Switch { .. } | Spot::Revoke(_) | Spot::Cell(_, _) | Spot::Item(_) => Act::Stay,
             Spot::Row(at) => {
-                if matches!(self.mode, Mode::Panel(_) | Mode::Waiting(_)) {
+                if matches!(self.mode, Mode::Panel(_) | Mode::Waiting(_) | Mode::Ended(_)) {
                     return Act::Stay;
                 }
                 if !matches!(self.items.get(at), Some(Item::Target(_))) {
