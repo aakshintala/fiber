@@ -122,7 +122,7 @@ impl Loop {
     pub(crate) fn prepared(
         &mut self,
         call: &ToolCallRequested,
-        turn: &TurnId,
+        turn: Option<&TurnId>,
     ) -> Result<Decided, Error> {
         let checked = match self.checked(call) {
             Ok(checked) => checked,
@@ -143,7 +143,7 @@ impl Loop {
         tool_name: &str,
         checked: Checked,
         hooks: Arc<dyn contract::hook::Hooks>,
-        turn: &TurnId,
+        turn: Option<&TurnId>,
     ) -> Result<Decided, Error> {
         let (tool, arguments, effects) = checked;
         if self.shutting_down() {
@@ -155,7 +155,7 @@ impl Loop {
             declared: &effects.declared,
         });
         for notice in answer.notices {
-            self.append(&Event::Notice(notice), turn, None)?;
+            self.write(&Event::Notice(notice), turn, None)?;
         }
         let (arguments, effects, rewritten) = match answer.outcome {
             BeforeToolOutcome::Unchanged => (arguments, effects, None),
@@ -215,7 +215,7 @@ impl Loop {
             declared: &effects.declared,
         });
         for notice in check.notices {
-            self.append(&Event::Notice(notice), turn, None)?;
+            self.write(&Event::Notice(notice), turn, None)?;
         }
         match check.outcome {
             CheckOutcome::Passed => Ok(Ok(Prepared {
@@ -314,7 +314,7 @@ impl Loop {
         let Some(hooks) = self.hooks.clone() else {
             return Ok(ready(Prepared::from(checked), recorded));
         };
-        match self.hooked(&call.name, checked, hooks, turn)? {
+        match self.hooked(&call.name, checked, hooks, Some(turn))? {
             Ok(prepared) => Ok(ready(prepared, recorded)),
             Err(settled) => Ok(Again::Settled(settled)),
         }

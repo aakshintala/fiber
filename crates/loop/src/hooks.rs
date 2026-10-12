@@ -70,7 +70,7 @@ impl Loop {
         ran: Ran<'_>,
         bound: Bound,
         id: &ActionId,
-        turn: &TurnId,
+        turn: Option<&TurnId>,
     ) -> Result<Shaped, Error> {
         // Under a shutdown no hook runs, so nothing is left to redact the
         // output: the completion carries none of it (`docs/invocation.md`,
@@ -107,7 +107,7 @@ impl Loop {
             spilled: None,
         });
         for notice in answer.notices {
-            self.append(&Event::Notice(notice), turn, None)?;
+            self.write(&Event::Notice(notice), turn, None)?;
         }
         let changed_by = (!answer.changed_by.is_empty()).then_some(answer.changed_by);
         let mut shaped = match answer.outcome {
@@ -196,7 +196,7 @@ impl Loop {
         ran: Ran<'_>,
         bound: Bound,
         id: &ActionId,
-        turn: &TurnId,
+        turn: Option<&TurnId>,
     ) -> Result<Shaped, Error> {
         let Ran {
             tool,
@@ -268,7 +268,7 @@ impl Loop {
             },
         };
         for notice in answer.notices {
-            self.append(&Event::Notice(notice), turn, None)?;
+            self.write(&Event::Notice(notice), turn, None)?;
         }
         let changed_by = (!answer.changed_by.is_empty()).then_some(answer.changed_by);
         let mut shaped = match answer.outcome {
@@ -354,7 +354,7 @@ impl Loop {
         images: Vec<ContentPart>,
         bound: Bound,
         id: &ActionId,
-        turn: &TurnId,
+        turn: Option<&TurnId>,
         lined: &dyn Fn(&str) -> String,
         head: String,
         tail: String,
@@ -384,7 +384,7 @@ impl Loop {
             },
         };
         for notice in answer.notices {
-            self.append(&Event::Notice(notice), turn, None)?;
+            self.write(&Event::Notice(notice), turn, None)?;
         }
         let changed_by = (!answer.changed_by.is_empty()).then_some(answer.changed_by);
         let mut shaped = match answer.outcome {

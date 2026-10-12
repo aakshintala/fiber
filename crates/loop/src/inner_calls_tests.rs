@@ -434,7 +434,14 @@ fn take(cancel_before: bool, finish_before: bool, window: Window) -> Taken {
     let turn_id = contract::TurnId("t_test".into());
     std::thread::scope(|scope| {
         looped
-            .take_inner(scope, &streams, &mut inner, &mut release, &wake, &turn_id)
+            .take_inner(
+                scope,
+                &streams,
+                &mut inner,
+                &mut release,
+                &wake,
+                Some(&turn_id),
+            )
             .unwrap();
     });
     let counted = Taken {

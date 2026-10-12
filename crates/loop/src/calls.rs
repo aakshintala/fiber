@@ -356,7 +356,7 @@ impl Loop {
             if let Some((_, request)) = &reraise
                 && !reraised
             {
-                self.declined(request.clone(), turn)?;
+                self.declined(request.clone(), Some(turn))?;
             }
             loop {
                 // Own the stream handles while taking requests, so the pass can
@@ -379,7 +379,7 @@ impl Loop {
                     .iter()
                     .map(|(id, stream)| (id, stream.as_ref()))
                     .collect();
-                self.take_inner(scope, &streams, &mut inner, &mut release, &wake, turn)?;
+                self.take_inner(scope, &streams, &mut inner, &mut release, &wake, Some(turn))?;
                 let wrote_inner = self.serve_inner(
                     &mut inner,
                     &|id| {
@@ -391,7 +391,7 @@ impl Loop {
                                 State::Ready(_) | State::Done => true,
                             })
                     },
-                    turn,
+                    Some(turn),
                 )?;
                 let mut calls = unwritten(&running);
                 calls.extend(
@@ -399,7 +399,7 @@ impl Loop {
                         .iter()
                         .map(|call| (&call.id, Some(call.stream.as_ref()))),
                 );
-                self.serve_interactions(&calls, turn)?;
+                self.serve_interactions(&calls, Some(turn))?;
                 let now = clock.now();
                 // Every delta due now, in request order. A held change the
                 // interval still covers stays held for the flush in
@@ -409,7 +409,7 @@ impl Loop {
                         continue;
                     };
                     if let Some(delta) = stream.take_due(now) {
-                        let bytes = self.write_delta(&delta, turn, &call.id);
+                        let bytes = self.write_delta(&delta, Some(turn), &call.id);
                         // Read after the write: the interval starts when the
                         // delta went out, measured after it
                         // (`docs/tools.md`, "Progress").
@@ -424,7 +424,7 @@ impl Loop {
                         continue;
                     };
                     if let Some(delta) = stream.take_flush() {
-                        self.write_delta(&delta, turn, &call.id);
+                        self.write_delta(&delta, Some(turn), &call.id);
                     }
                 }
                 // The next completion in request order, if its prefix is done.
@@ -471,7 +471,7 @@ impl Loop {
         id: &ActionId,
         turn: &TurnId,
     ) -> Result<Decided, Error> {
-        let prepared = match self.prepared(call, turn)? {
+        let prepared = match self.prepared(call, Some(turn))? {
             Ok(prepared) => prepared,
             Err(failed) => return Ok(Err(failed)),
         };
@@ -659,7 +659,7 @@ impl Loop {
         bound: Bound,
         cancelled: bool,
         id: &ActionId,
-        turn: &TurnId,
+        turn: Option<&TurnId>,
     ) -> Result<ToolCallCompleted, Error> {
         let Output {
             content,
@@ -684,18 +684,18 @@ impl Loop {
                 contract::tool::ServerRecord::Failed(failed) => Event::McpServerFailed(failed),
                 contract::tool::ServerRecord::Ready(ready) => Event::McpServerReady(ready),
             };
-            self.append(&event, turn, Some(id))?;
+            self.write(&event, turn, Some(id))?;
         }
         // The call's prefix of its jobs' queues, written under the
         // queuing call's action and turn, before its own job lines.
         if let Some(settle) = settle {
             for taken in (settle.0)() {
-                self.write_taken(taken, Some(turn), Some(id))?;
+                self.write_taken(taken, turn, Some(id))?;
             }
         }
         for record in jobs {
             let event = job_event(&self.log, record);
-            self.append(&event, turn, Some(id))?;
+            self.write(&event, turn, Some(id))?;
         }
         let (mut text, mut images): (Vec<ContentPart>, Vec<ContentPart>) = content
             .into_iter()
@@ -744,7 +744,7 @@ impl Loop {
         };
         let shaped = self.shape(ran, bound, id, turn)?;
         if let Some(named) = write {
-            self.append(&Event::SessionNamed(named), turn, Some(id))?;
+            self.write(&Event::SessionNamed(named), turn, Some(id))?;
         }
         Ok(ToolCallCompleted {
             status,
@@ -765,9 +765,14 @@ impl Loop {
     /// Writes one due or flushed delta under the call's action, and returns
     /// its encoded bytes for pacing. Errors are ignored: the line is
     /// ephemeral (`docs/architecture.md`, "Streaming").
-    pub(crate) fn write_delta(&mut self, delta: &Progress, turn: &TurnId, id: &ActionId) -> u64 {
+    pub(crate) fn write_delta(
+        &mut self,
+        delta: &Progress,
+        turn: Option<&TurnId>,
+        id: &ActionId,
+    ) -> u64 {
         let event = Event::ToolCallDelta(delta.clone());
-        match self.append(&event, turn, Some(id)) {
+        match self.write(&event, turn, Some(id)) {
             Ok(()) | Err(_) => {}
         }
         encoded(delta)
@@ -808,7 +813,7 @@ impl Loop {
             } => match stream.take_finished() {
                 Some((output, flushed)) => {
                     if let Some(delta) = flushed {
-                        self.write_delta(&delta, turn, &call.id);
+                        self.write_delta(&delta, Some(turn), &call.id);
                     }
                     let call_of = (tool.as_str(), arguments.as_ref());
                     let rewritten = rewritten.as_deref();
@@ -822,7 +827,7 @@ impl Loop {
                         *bound,
                         self.turn_cancelled(),
                         &call.id,
-                        turn,
+                        Some(turn),
                     )?)
                 }
                 None => return Ok(false),
@@ -833,7 +838,7 @@ impl Loop {
             State::Ready(_) | State::Done => None,
         };
         call.state = State::Done;
-        self.after_completed(declared.as_ref(), &mut completed, &call.id, turn)?;
+        self.after_completed(declared.as_ref(), &mut completed, &call.id, Some(turn))?;
         Ok(true)
     }
 
@@ -844,7 +849,7 @@ impl Loop {
         declared: Option<&DeclaredEffects>,
         completed: &mut ToolCallCompleted,
         id: &ActionId,
-        turn: &TurnId,
+        turn: Option<&TurnId>,
     ) -> Result<(), Error> {
         // An over-budget section a completed call that declared a write
         // touched ends its result with the prune line, before the line is
@@ -856,14 +861,14 @@ impl Loop {
                 completed.content.push(ContentPart::Text { text: line });
             }
         }
-        self.append(&Event::ToolCallCompleted(completed.clone()), turn, Some(id))?;
+        self.write(&Event::ToolCallCompleted(completed.clone()), turn, Some(id))?;
         // The session's own edits and subdirectory files: a call that ran
         // re-reads each declared path that is a tracked instruction file,
         // and queues each new subdirectory file for the next step start.
         // A call that never ran touches nothing, so it checks nothing.
         if let Some(declared) = declared {
             for file in self.changes.call_completed(&self.workspace, declared) {
-                self.append(&Event::InstructionFile(file), turn, Some(id))?;
+                self.write(&Event::InstructionFile(file), turn, Some(id))?;
             }
         }
         Ok(())

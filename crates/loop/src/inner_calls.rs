@@ -47,12 +47,26 @@ pub(crate) struct Raised {
     pub(crate) extension: String,
     pub(crate) name: String,
     pub(crate) arguments: Value,
-    answer: Arc<Answer>,
+    answer: Box<dyn FnOnce(Box<ToolCallCompleted>) + Send>,
 }
 
 impl Raised {
+    pub(crate) fn new(
+        extension: String,
+        name: String,
+        arguments: Value,
+        answer: Box<dyn FnOnce(Box<ToolCallCompleted>) + Send>,
+    ) -> Self {
+        Self {
+            extension,
+            name,
+            arguments,
+            answer,
+        }
+    }
+
     pub(crate) fn answer(self, completed: Box<ToolCallCompleted>) {
-        self.answer.resolve(completed);
+        (self.answer)(completed);
     }
 }
 
@@ -122,12 +136,13 @@ impl InnerCalls for InnerSlot {
             requests
                 .waiting
                 .insert(Arc::as_ptr(&answer).addr(), Arc::clone(&answer));
-            requests.raised.push(Raised {
-                extension: extension.to_owned(),
-                name: name.to_owned(),
+            let reply = Arc::clone(&answer);
+            requests.raised.push(Raised::new(
+                extension.to_owned(),
+                name.to_owned(),
                 arguments,
-                answer: Arc::clone(&answer),
-            });
+                Box::new(move |completed| reply.resolve(completed)),
+            ));
         }
         self.wake.wake();
         let completed = answer.wait();
@@ -213,7 +228,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// A started inner call, held until its own inner calls have completed.
 pub(crate) struct InnerRunning {
     pub(crate) id: ActionId,
-    anchor: ActionId,
+    anchor: Option<ActionId>,
     request: Raised,
     pub(crate) stream: Arc<Stream>,
     cancel: Arc<InnerCancel>,
@@ -221,6 +236,16 @@ pub(crate) struct InnerRunning {
     declared: contract::shapes::DeclaredEffects,
     arguments: Arc<serde_json::Map<String, Value>>,
     rewritten: Option<Vec<String>>,
+}
+
+/// The anchor and cancellation of a request taken by the loop.
+struct Origin<'a> {
+    ran_by: contract::events::Anchor,
+    parent: Option<ActionId>,
+    depth: u8,
+    // Preparation can wait on a hook while the anchor returns.
+    stopped: &'a dyn Fn() -> bool,
+    cancel: Arc<InnerCancel>,
 }
 
 impl crate::Loop {
@@ -232,123 +257,150 @@ impl crate::Loop {
         inner: &mut Vec<InnerRunning>,
         release: &mut crate::asking::Release,
         wake: &Arc<SharedWake>,
-        turn: &contract::TurnId,
+        turn: Option<&contract::TurnId>,
     ) -> Result<(), crate::Error> {
-        use contract::events::{
-            Anchor, Decision, Event, RanBy, ToolCallRequested, ToolCallStarted,
-        };
         for (_, stream) in streams {
             let Some(slot) = stream.inner_slot() else {
                 continue;
             };
             for request in slot.take_raised() {
-                let id = ActionId(crate::mint("a_"));
-                let call = self.repaired(ToolCallRequested {
-                    name: request.name.clone(),
-                    arguments: request.arguments.clone(),
-                    provider_id: None,
-                    repair: None,
-                    provider_item: None,
-                    ran_by: Some(RanBy {
-                        extension: request.extension.clone(),
-                        anchor: Anchor::OuterCall(slot.action.clone()),
-                    }),
-                });
-                self.append(&Event::ToolCallRequested(call.clone()), turn, Some(&id))?;
-                let decision = if self.turn_cancelled() || stream.returned() {
-                    Err(self.cancelled_before_ran())
-                } else {
-                    self.prepared(&call, turn)?
+                let origin = Origin {
+                    ran_by: contract::events::Anchor::OuterCall(slot.action.clone()),
+                    parent: Some(slot.action.clone()),
+                    depth: slot.depth + 1,
+                    stopped: &|| stream.returned(),
+                    cancel: Arc::new(InnerCancel::new(Arc::clone(&self.cancel))),
                 };
-                let prepared = match decision {
-                    Err(mut done) => {
-                        self.after_completed(None, &mut done, &id, turn)?;
-                        request.answer(done);
-                        continue;
-                    }
-                    Ok(prepared) => prepared,
-                };
-                if let crate::permission::Verdict::Deny { by, reason, why } =
-                    crate::permission::inner_verdict(
-                        &call.name,
-                        &prepared.effects,
-                        &self.rules.read(),
-                        &self.workspace,
-                        &self.credentials,
-                        &self.credential_files,
-                    )
-                {
-                    let message = format!("{why} It did not run.");
-                    self.decided(
-                        &id,
-                        turn,
-                        crate::completion::resolved(None, Decision::Deny, by, Some(why), None),
-                    )?;
-                    let mut done = crate::completion::denied(reason, message);
-                    self.after_completed(None, &mut done, &id, turn)?;
-                    request.answer(done);
-                    continue;
-                }
-                if self.turn_cancelled() || stream.returned() {
-                    let mut done = self.cancelled_before_ran();
-                    self.after_completed(None, &mut done, &id, turn)?;
-                    request.answer(done);
-                    continue;
-                }
-                let (arguments, changed_by) = match &prepared.rewritten {
-                    Some(names) => (Some(prepared.arguments.clone()), Some(names.clone())),
-                    None => (None, None),
-                };
-                self.append(
-                    &Event::ToolCallStarted(ToolCallStarted {
-                        declared: prepared.effects.declared.clone(),
-                        arguments,
-                        changed_by,
-                    }),
-                    turn,
-                    Some(&id),
-                )?;
-                let cancel = Arc::new(InnerCancel::new(Arc::clone(&self.cancel)));
-                let stream = Arc::new(Stream::new(Arc::clone(wake), id.clone(), false).with_inner(
-                    Arc::new(InnerSlot::new(
-                        Arc::clone(wake),
-                        id.clone(),
-                        call.name.clone(),
-                        slot.depth + 1,
-                    )),
-                ));
-                // As `run_batch` records each model call's turn.
-                self.call_turns.insert(id.clone(), turn.clone());
-                release.add_cancel(Arc::clone(&cancel));
-                release.add(Arc::clone(&stream));
-                let arguments = Arc::new(prepared.arguments);
-                let worker_stream = Arc::clone(&stream);
-                let worker_cancel = Arc::clone(&cancel);
-                let worker_arguments = Arc::clone(&arguments);
-                let tool = prepared.tool;
-                let bound = tool.bound();
-                scope.spawn(move || {
-                    let output = tool.run_asking(
-                        &worker_arguments,
-                        worker_cancel.as_ref(),
-                        worker_stream.as_ref(),
-                        worker_stream.as_ref(),
-                    );
-                    worker_stream.finish(output);
-                });
-                inner.push(InnerRunning {
-                    id,
-                    anchor: slot.action.clone(),
-                    request,
-                    stream,
-                    cancel,
-                    bound,
-                    declared: prepared.effects.declared,
-                    arguments,
-                    rewritten: prepared.rewritten,
-                });
+                self.start_inner(scope, request, origin, (inner, release), wake, turn)?;
             }
         }
+        Ok(())
+    }
+
+    /// Prepares and starts one inner call, using only the deny steps.
+    fn start_inner<'scope, 'env>(
+        &mut self,
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        request: Raised,
+        origin: Origin<'_>,
+        (inner, release): (&mut Vec<InnerRunning>, &mut crate::asking::Release),
+        wake: &Arc<SharedWake>,
+        turn: Option<&contract::TurnId>,
+    ) -> Result<(), crate::Error> {
+        use contract::events::{Decision, Event, RanBy, ToolCallRequested, ToolCallStarted};
+        let id = ActionId(crate::mint("a_"));
+        let call = self.repaired(ToolCallRequested {
+            name: request.name.clone(),
+            arguments: request.arguments.clone(),
+            provider_id: None,
+            repair: None,
+            provider_item: None,
+            ran_by: Some(RanBy {
+                extension: request.extension.clone(),
+                anchor: origin.ran_by,
+            }),
+        });
+        self.write(&Event::ToolCallRequested(call.clone()), turn, Some(&id))?;
+        let decision = if self.turn_cancelled() || (origin.stopped)() {
+            Err(self.cancelled_before_ran())
+        } else {
+            self.prepared(&call, turn)?
+        };
+        let prepared = match decision {
+            Err(mut done) => {
+                self.after_completed(None, &mut done, &id, turn)?;
+                request.answer(done);
+                return Ok(());
+            }
+            Ok(prepared) => prepared,
+        };
+        if let crate::permission::Verdict::Deny { by, reason, why } =
+            crate::permission::inner_verdict(
+                &call.name,
+                &prepared.effects,
+                &self.rules.read(),
+                &self.workspace,
+                &self.credentials,
+                &self.credential_files,
+            )
+        {
+            let message = format!("{why} It did not run.");
+            self.write(
+                &Event::PermissionResolved(crate::completion::resolved(
+                    None,
+                    Decision::Deny,
+                    by,
+                    Some(why),
+                    None,
+                )),
+                turn,
+                Some(&id),
+            )?;
+            let mut done = crate::completion::denied(reason, message);
+            self.after_completed(None, &mut done, &id, turn)?;
+            request.answer(done);
+            return Ok(());
+        }
+        if self.turn_cancelled() || (origin.stopped)() {
+            let mut done = self.cancelled_before_ran();
+            self.after_completed(None, &mut done, &id, turn)?;
+            request.answer(done);
+            return Ok(());
+        }
+        let (arguments, changed_by) = match &prepared.rewritten {
+            Some(names) => (Some(prepared.arguments.clone()), Some(names.clone())),
+            None => (None, None),
+        };
+        self.write(
+            &Event::ToolCallStarted(ToolCallStarted {
+                declared: prepared.effects.declared.clone(),
+                arguments,
+                changed_by,
+            }),
+            turn,
+            Some(&id),
+        )?;
+        let cancel = origin.cancel;
+        let stream = Arc::new(Stream::new(Arc::clone(wake), id.clone(), false).with_inner(
+            Arc::new(InnerSlot::new(
+                Arc::clone(wake),
+                id.clone(),
+                call.name.clone(),
+                origin.depth,
+            )),
+        ));
+        // As `run_batch` records each model call's turn.
+        if let Some(turn) = turn {
+            self.call_turns.insert(id.clone(), turn.clone());
+        }
+        release.add_cancel(Arc::clone(&cancel));
+        release.add(Arc::clone(&stream));
+        let arguments = Arc::new(prepared.arguments);
+        let worker_stream = Arc::clone(&stream);
+        let worker_cancel = Arc::clone(&cancel);
+        let worker_arguments = Arc::clone(&arguments);
+        let tool = prepared.tool;
+        let bound = tool.bound();
+        scope.spawn(move || {
+            let output = tool.run_asking(
+                &worker_arguments,
+                worker_cancel.as_ref(),
+                worker_stream.as_ref(),
+                worker_stream.as_ref(),
+            );
+            worker_stream.finish(output);
+        });
+        inner.push(InnerRunning {
+            id,
+            anchor: origin.parent,
+            request,
+            stream,
+            cancel,
+            bound,
+            declared: prepared.effects.declared,
+            arguments,
+            rewritten: prepared.rewritten,
+        });
         Ok(())
     }
 
@@ -358,15 +410,17 @@ impl crate::Loop {
         &mut self,
         inner: &mut Vec<InnerRunning>,
         finished: &dyn Fn(&ActionId) -> bool,
-        turn: &contract::TurnId,
+        turn: Option<&contract::TurnId>,
     ) -> Result<bool, crate::Error> {
         let now = self.log.clock().now();
         let mut wrote = false;
         for call in inner.iter() {
-            let anchor_stopped = match inner.iter().find(|anchor| anchor.id == call.anchor) {
-                Some(anchor) => anchor.stream.returned() || anchor.cancel.is_cancelled(),
-                None => finished(&call.anchor),
-            };
+            let anchor_stopped = call.anchor.as_ref().is_some_and(|id| {
+                match inner.iter().find(|anchor| &anchor.id == id) {
+                    Some(anchor) => anchor.stream.returned() || anchor.cancel.is_cancelled(),
+                    None => finished(id),
+                }
+            });
             if anchor_stopped {
                 call.cancel.cancel();
             }
@@ -413,7 +467,9 @@ impl crate::Loop {
     }
 
     pub(crate) fn inner_anchored(inner: &[InnerRunning], action: &ActionId) -> bool {
-        inner.iter().any(|call| &call.anchor == action)
+        inner
+            .iter()
+            .any(|call| call.anchor.as_ref() == Some(action))
     }
 }
 
