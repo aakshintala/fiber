@@ -12,6 +12,7 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::SessionId;
 use contract::events::Event;
+use contract::shapes::{Failure, Worktree};
 use doors::Session;
 use log::Log;
 use r#loop::Loop;
@@ -477,3 +478,124 @@ fn resumed_session(
     close(session, log, &home, dir, &workspace, &*clock);
     code
 }
+
+/// The first line's `session_started` worktree, when it records one. Any
+/// read or parse failure is none: the lookup already matched this session
+/// into the launch project, so that is unreachable short of a concurrent
+/// delete.
+fn recorded_worktree(dir: &Path) -> Option<Worktree> {
+    let lines = log::lines(dir).ok()?;
+    let mut lines = lines;
+    let line = lines.next()?;
+    let line = line.ok()?;
+    match Event::from_envelope(&line) {
+        Ok(Some(Event::SessionStarted(started))) => started.worktree,
+        Ok(_) | Err(_) => None,
+    }
+}
+
+/// Whether the recorded worktree is recreated: its repository is recorded
+/// and its path is gone. Anything else, a present path, another lookup
+/// error or no recorded repository, resumes where the worktree is, with
+/// no recreation. A dangling symlink at the path exists.
+fn recreatable(recorded: Option<&Worktree>) -> bool {
+    match recorded {
+        Some(worktree) => {
+            worktree.repository.is_some()
+                && std::fs::symlink_metadata(Path::new(&worktree.path))
+                    .is_err_and(|source| source.kind() == std::io::ErrorKind::NotFound)
+        }
+        None => false,
+    }
+}
+
+/// What a resumed process holds its worktree with.
+enum Held {
+    /// No recorded worktree, or one that cannot be recreated: the process
+    /// runs without a hold.
+    Nothing,
+    /// A share of a worktree the process did not make, held for its life.
+    Shared(doors::Shared),
+    /// A worktree the process made again, ended by the same rules.
+    Made(doors::Isolation),
+}
+
+impl std::fmt::Debug for Held {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Nothing => write!(f, "Nothing"),
+            Self::Shared(_) => write!(f, "Shared(..)"),
+            Self::Made(_) => write!(f, "Made(..)"),
+        }
+    }
+}
+
+/// Enters the recorded worktree: a present one is shared for the
+/// process's life, and a missing one with a recorded repository is made
+/// again at the same path and branch before anything else runs. The
+/// recreation arms the shutdown first, so a signal during the
+/// hook-running `git worktree add` kills it and rolls back. A share or
+/// recreation failure carries no isolation: nothing was made. A
+/// downgrade failure after the worktree was made reaches the caller, so
+/// its isolation is ended after the session lock is released.
+fn enter_worktree(
+    recorded: Option<Worktree>,
+    home: &Path,
+    id: &SessionId,
+    clock: &Arc<dyn contract::clock::Clock>,
+    signals: &Arc<doors::Signals>,
+    reads: &Arc<crate::switch::Reads>,
+) -> Result<Held, doors::RecreateError> {
+    let Some(worktree) = recorded else {
+        return Ok(Held::Nothing);
+    };
+    let path = Path::new(&worktree.path);
+    match std::fs::symlink_metadata(path) {
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => match worktree.repository {
+            Some(repository) => {
+                crate::shutdown::arm(signals, reads);
+                match doors::recreate(
+                    Path::new(&repository),
+                    path,
+                    &worktree.branch,
+                    home,
+                    id,
+                    Arc::clone(clock),
+                    &|command| reads.command(command),
+                ) {
+                    Ok(doors::Recreated::Made(isolation)) => Ok(Held::Made(isolation)),
+                    Ok(doors::Recreated::Present(shared)) => Ok(Held::Shared(shared)),
+                    Err(error) => Err(error),
+                }
+            }
+            None => Ok(Held::Nothing),
+        },
+        Ok(_) | Err(_) => match doors::share(path) {
+            Ok(shared) => Ok(Held::Shared(shared)),
+            Err(failure) => Err(doors::RecreateError {
+                failure,
+                isolation: None,
+            }),
+        },
+    }
+}
+
+/// Ends the isolation, then answers the resume's result: a signal
+/// recorded during `end` reaches `report`, which the recorded signal
+/// answers before it prints, so a failure after recreation and before
+/// `fiber_started` exits with the signal's code and silence.
+fn finish(
+    end: impl FnOnce(),
+    result: Result<i32, Failure>,
+    report: impl FnOnce(Failure) -> i32,
+) -> i32 {
+    end();
+    match result {
+        Ok(code) => code,
+        Err(failure) => report(failure),
+    }
+}
+
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod tests;
