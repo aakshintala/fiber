@@ -22,6 +22,10 @@ pub const DRAIN: Duration = Duration::from_secs(2);
 /// remain. Picked, not measured.
 pub const GROUP_POLL: Duration = Duration::from_millis(10);
 
+fn is_reserved_id(id: u32) -> bool {
+    id <= 1
+}
+
 /// Whether `id` is refused before anything runs: an id of 1 or less is never
 /// a run's group. `kill(-1)` reaches every process the user owns, and
 /// `kill(0)` the caller's own group, so every function below that reaches a
@@ -29,7 +33,7 @@ pub const GROUP_POLL: Duration = Duration::from_millis(10);
 /// less reaches `kill`, on any path, whatever the caller checked.
 #[must_use]
 pub fn refused(id: u32) -> bool {
-    id <= 1
+    is_reserved_id(id)
 }
 
 /// What signalling or spawning a process group can refuse or fail with.
