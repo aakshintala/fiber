@@ -32,6 +32,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use contract::SessionId;
 use contract::clock::{Clock, Wake};
 use log::diag::{Diag, Severity};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
@@ -142,15 +143,17 @@ struct State {
     on_bound: Option<Callback>,
     on_signal: Option<OnSignal>,
     on_second: Option<Callback>,
+    /// Writes the bound's diagnostic line: the pid-named writer `install`
+    /// held, or `None` where none is wired in yet.
+    diag: Option<Arc<Diag>>,
+    /// The session-named writer `attach` set, once the session exists.
+    session_diag: Option<Arc<Diag>>,
 }
 
 /// The process's signal handling. One per process.
 pub struct Signals {
     state: Mutex<State>,
     clock: Arc<dyn Clock>,
-    /// Writes the bound's diagnostic line, when one is held: `None` until
-    /// the writer is wired in, so production writes no bound line yet.
-    diag: Option<Arc<Diag>>,
     /// Ends the process: `std::process::exit`, or a test's recorder.
     exit: Box<dyn Fn(i32) + Send + Sync>,
     spawn: Spawn,
@@ -159,13 +162,14 @@ pub struct Signals {
 impl Signals {
     /// Takes over SIGTERM, SIGINT and SIGHUP and starts the thread that
     /// handles them, booting: a signal now exits at once. The bound runs on
-    /// `clock`.
-    pub fn install(clock: Arc<dyn Clock>) -> io::Result<Arc<Self>> {
+    /// `clock`, and its diagnostic line goes through `diag` when one is
+    /// held: without one no bound line is written.
+    pub fn install(clock: Arc<dyn Clock>, diag: Option<Diag>) -> io::Result<Arc<Self>> {
         let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGINT, SIGHUP])?;
         let handling = Arc::new(Self::new(
             clock,
             Box::new(|code| std::process::exit(code)),
-            None,
+            diag.map(Arc::new),
         ));
         let handler = Arc::clone(&handling);
         thread::Builder::new()
@@ -192,11 +196,23 @@ impl Signals {
                 on_bound: None,
                 on_signal: None,
                 on_second: None,
+                diag,
+                session_diag: None,
             }),
             clock,
             exit,
-            diag,
             spawn: Box::new(spawn_bound),
+        }
+    }
+
+    /// Names the session once its log exists: the bound line goes to the
+    /// session-named file from here on. With no writer held it does
+    /// nothing. The writer is set under the state lock, so a bound line
+    /// racing `attach` lands in exactly one file.
+    pub fn attach(&self, session: SessionId) {
+        let mut state = lock(&self.state);
+        if let Some(diag) = state.diag.clone() {
+            state.session_diag = Some(Arc::new(diag.for_session(&session)));
         }
     }
 
@@ -415,13 +431,22 @@ impl Signals {
     /// The kill point reached: whatever is alive is killed, then, with a
     /// writer held, one diagnostic line gets until `exit_by`, and the
     /// process exits with `code`. The calling thread never touches the
-    /// writer: only the `diag` thread does, outside the state lock.
+    /// writer: only the `diag` thread does, outside the state lock. The
+    /// writer is the session one once `attach` has run, else the
+    /// pid-named one, chosen under the state lock so a line racing
+    /// `attach` lands in exactly one file.
     fn end(&self, code: i32, exit_by: Instant) {
-        let on_bound = lock(&self.state).on_bound.clone();
+        let (on_bound, diag) = {
+            let state = lock(&self.state);
+            (
+                state.on_bound.clone(),
+                state.session_diag.clone().or_else(|| state.diag.clone()),
+            )
+        };
         if let Some(on_bound) = on_bound {
             on_bound();
         }
-        let Some(diag) = self.diag.clone() else {
+        let Some(diag) = diag else {
             (self.exit)(code);
             return;
         };

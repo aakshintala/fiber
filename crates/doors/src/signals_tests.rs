@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use contract::SessionId;
 use contract::clock::Clock as _;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -787,11 +788,103 @@ const CHILD: &str = "FIBER_DOORS_SIGNALS_CHILD";
 /// the worst case is twice this.
 const CHILD_WITHIN: Duration = Duration::from_secs(5);
 
+/// After `attach` the bound line lands in the session-named file with
+/// `session_id` and nothing lands in the pid-named one; with no `attach`
+/// it lands in the pid-named file, saying the process's own exit code.
+#[test]
+fn after_attach_the_bound_line_names_the_session_and_the_early_line_the_pid() {
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let clock = FakeClock::new();
+    let diag = writer(&home, &clock);
+    let timed: Arc<dyn contract::clock::Clock> = clock.clone();
+    let (exit_tx, did) = mpsc::channel();
+    let exit = Box::new(move |code| exit_tx.send(code).unwrap());
+    let signals = Arc::new(Signals::new(timed, exit, Some(diag)));
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    signals.attach(SessionId("s_0123456789abcdef".into()));
+    assert_eq!(start_only(&signals, &tx), None);
+    signals.handle(SIGTERM);
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(-1));
+    let until = clock.now() + KILL_AT;
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(KILL_AT);
+    assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), 143);
+    let text =
+        std::fs::read_to_string(home.join("logs").join("ask-s_0123456789abcdef.log")).unwrap();
+    assert_eq!(text.lines().count(), 1, "exactly one line");
+    let line: serde_json::Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(line["level"], "error");
+    assert_eq!(line["process"], "ask");
+    assert_eq!(line["session_id"], "s_0123456789abcdef");
+    assert_eq!(line["code"], "timeout");
+    assert!(
+        line["message"].as_str().unwrap().contains("exits 143"),
+        "{}",
+        line["message"]
+    );
+    assert!(
+        !home
+            .join("logs")
+            .join(format!("ask-{}.log", std::process::id()))
+            .exists(),
+        "nothing lands in the pid-named file"
+    );
+
+    let temp = support::Temp::new();
+    let home = temp.0.join("h");
+    let clock = FakeClock::new();
+    let diag = writer(&home, &clock);
+    let timed: Arc<dyn contract::clock::Clock> = clock.clone();
+    let (exit_tx, did) = mpsc::channel();
+    let exit = Box::new(move |code| exit_tx.send(code).unwrap());
+    let signals = Arc::new(Signals::new(timed, exit, Some(diag)));
+    let (tx, calls) = mpsc::channel();
+    arm(&signals, &tx);
+    assert_eq!(start(&signals, &tx), None);
+    signals.close_now();
+    assert_eq!(calls.try_recv().unwrap(), Did::Signal(0));
+    let until = clock.now() + KILL_AT;
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "the bound waits on the clock"
+    );
+    clock.advance(KILL_AT);
+    assert_eq!(Deadline::after(DEADLINE).recv(&did).unwrap(), 0);
+    let text = std::fs::read_to_string(
+        home.join("logs")
+            .join(format!("ask-{}.log", std::process::id())),
+    )
+    .unwrap();
+    assert_eq!(text.lines().count(), 1, "exactly one line");
+    let line: serde_json::Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(line["level"], "error");
+    assert_eq!(line["process"], "ask");
+    assert!(line.get("session_id").is_none());
+    assert_eq!(line["code"], "timeout");
+    assert!(
+        line["message"].as_str().unwrap().contains("exits 0"),
+        "{}",
+        line["message"]
+    );
+    assert!(
+        !home
+            .join("logs")
+            .join("ask-s_0123456789abcdef.log")
+            .exists(),
+        "no session file without attach"
+    );
+}
+
 #[test]
 fn a_real_sigterm_while_booting_exits_143() {
     if std::env::var_os(CHILD).is_some() {
         let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
-        let _signals = Signals::install(clock).unwrap();
+        let _signals = Signals::install(clock, None).unwrap();
         fakes::kill_pid(std::process::id(), "TERM").unwrap();
         // The signals thread exits the process; this wait only bounds a
         // child whose exit never came.

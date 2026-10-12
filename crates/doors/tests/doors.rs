@@ -417,3 +417,17 @@ fn a_socket_path_at_the_platforms_limit_binds() {
     assert_eq!(socket(&dir).as_os_str().len(), max);
     session.close(log);
 }
+
+#[test]
+fn a_session_names_its_own_id() {
+    let opened = Opened::open(Vec::new());
+    assert_eq!(opened.session.id(), &opened.id);
+    let dir_name = opened
+        .dir
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(opened.session.id().0, dir_name);
+    close_within(opened.session, opened.log);
+}
