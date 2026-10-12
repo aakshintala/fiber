@@ -68,6 +68,7 @@ fn rig() -> Rig {
             model: launched.model.clone(),
             prompt: launched.prompt.clone(),
             workspace: launched.workspace.clone(),
+            resume: false,
         });
         let mut command = Command::new("sh");
         command.args([
@@ -76,7 +77,7 @@ fn rig() -> Rig {
         ]);
         command
     });
-    let watch: Watch = Arc::new(|_, _| Err(std::io::Error::other("refused")));
+    let watch: Watch = Arc::new(|_, _, _| Err(std::io::Error::other("refused")));
     Rig {
         _dir: dir,
         registry,

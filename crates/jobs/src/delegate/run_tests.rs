@@ -53,6 +53,8 @@ struct Script {
     calls: Mutex<Vec<std::time::Instant>>,
     /// Notified on every recorded call.
     called: Condvar,
+    /// The boundary each call passed.
+    afters: Mutex<Vec<Option<u64>>>,
     replies: Mutex<VecDeque<WatchReply>>,
 }
 
@@ -71,6 +73,7 @@ impl Script {
             clock: Arc::clone(clock),
             calls: Mutex::new(Vec::new()),
             called: Condvar::new(),
+            afters: Mutex::new(Vec::new()),
             replies: Mutex::new(replies.into()),
         })
     }
@@ -78,20 +81,30 @@ impl Script {
     fn watch(
         self: &Arc<Self>,
         _id: &SessionId,
+        after: Option<u64>,
         on_line: &mut dyn FnMut(&Envelope),
     ) -> io::Result<Watched> {
         self.calls.lock().unwrap().push(self.clock.now());
+        self.afters.lock().unwrap().push(after);
         self.called.notify_all();
+        // As `doors::watch_after`: lines at or before the boundary belong
+        // to an earlier run, so they are neither delivered nor end the
+        // watch.
+        let deliver = |line: &Envelope| {
+            line.seq
+                .map(|seq| after.is_none_or(|at| seq.0 > at))
+                .unwrap_or(true)
+        };
         match self.replies.lock().unwrap().pop_front() {
             None => Err(io::Error::other("refused")),
             Some(WatchReply::Closed(lines)) => {
-                for line in &lines {
+                for line in lines.iter().filter(|line| deliver(line)) {
                     on_line(line);
                 }
                 Ok(Watched::Closed)
             }
             Some(WatchReply::Exited(lines)) => {
-                for line in &lines {
+                for line in lines.iter().filter(|line| deliver(line)) {
                     on_line(line);
                 }
                 Ok(Watched::Exited)
@@ -105,6 +118,11 @@ impl Script {
 
     fn calls(&self) -> Vec<std::time::Instant> {
         self.calls.lock().unwrap().clone()
+    }
+
+    /// The boundary each call passed, in call order.
+    fn afters(&self) -> Vec<Option<u64>> {
+        self.afters.lock().unwrap().clone()
     }
 
     /// Waits, at most `within` of real time, until the watch ran `n`
@@ -184,11 +202,24 @@ impl Rig {
     /// Returns the runner's stop, so tests stop through the registry as
     /// `jobs stop` does.
     fn start(&self, shell: &str, bound: Duration, cap: u64) -> mpsc::Receiver<()> {
+        self.start_after(shell, bound, cap, None)
+    }
+
+    /// [`Rig::start`], watching past `after`.
+    fn start_after(
+        &self,
+        shell: &str,
+        bound: Duration,
+        cap: u64,
+        after: Option<u64>,
+    ) -> mpsc::Receiver<()> {
         let shell = shell.to_owned();
         let script = Arc::clone(&self.script);
-        let watch = Arc::new(move |id: &SessionId, on_line: &mut dyn FnMut(&Envelope)| {
-            script.watch(id, on_line)
-        });
+        let watch = Arc::new(
+            move |id: &SessionId, after: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
+                script.watch(id, after, on_line)
+            },
+        );
         let events = self.events.clone();
         let launch: Launch = Arc::new(move |_: &Launched| {
             let mut command = Command::new("sh");
@@ -203,6 +234,7 @@ impl Rig {
             bound,
             cap,
             watch,
+            after,
         );
         let launched = Launched {
             session_id: SessionId("s_child".into()),
@@ -211,6 +243,7 @@ impl Rig {
             model: "fake/m".into(),
             prompt: "hi".into(),
             workspace: self.events.parent().unwrap().to_path_buf(),
+            resume: false,
         };
         let (child, listing) = runner.spawn(&launch, &launched).unwrap();
         let (_started, finish) = self.registry.open_started(
@@ -219,6 +252,7 @@ impl Rig {
             "scan".into(),
             events.to_string_lossy().into_owned(),
             stop,
+            crate::support::delegate_started(&self.job.0),
         );
         let (done, waited) = mpsc::channel();
         thread::spawn(move || {
@@ -1228,9 +1262,11 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
     let pgid = member.id();
     let mut listing = Some(listing);
     let watchdog = Watchdog::group(pgid);
-    let watch: Watch = Arc::new(|_: &SessionId, _: &mut dyn FnMut(&Envelope)| {
-        Err(std::io::Error::other("refused"))
-    });
+    let watch: Watch = Arc::new(
+        |_: &SessionId, _: Option<u64>, _: &mut dyn FnMut(&Envelope)| {
+            Err(std::io::Error::other("refused"))
+        },
+    );
     let (runner, stop) = Runner::new(
         crate::registry::mint_job_id(),
         mint_session_id(),
@@ -1239,6 +1275,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         BOUND,
         1024,
         watch,
+        None,
     );
     // The stop sets the bound; the member ignores nothing and no other
     // thread signals this group.
@@ -1497,16 +1534,19 @@ fn run_watch(
     seqs: std::ops::Range<u64>,
 ) {
     let lines: Vec<Envelope> = seqs.map(|seq| fiber_exited_line(seq, "Line.")).collect();
-    let watch: Watch = Arc::new(move |_: &SessionId, on_line: &mut dyn FnMut(&Envelope)| {
-        for line in &lines {
-            on_line(line);
-        }
-        Ok(Watched::Closed)
-    });
+    let watch: Watch = Arc::new(
+        move |_: &SessionId, _: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
+            for line in &lines {
+                on_line(line);
+            }
+            Ok(Watched::Closed)
+        },
+    );
     let waker: Arc<dyn contract::clock::Wake> = Arc::new(Parker::new());
     Watcher {
         watch,
         session_id: SessionId("s_child".into()),
+        after: None,
         fold: Arc::new(Mutex::new(Fold::default())),
         shared: Arc::clone(shared),
         cap,

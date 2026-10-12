@@ -19,7 +19,7 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, TempDir};
 
 use super::Registry;
-use crate::support::{opening, world};
+use crate::support::{delegate_finished, delegate_started, ended_ok, opening, world};
 use support::clock::Parker;
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -278,20 +278,6 @@ fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
     };
     assert_eq!(completed.status, Outcome::Completed);
     assert_eq!(completed.job_id, JobId(waited));
-}
-
-fn ended_ok(id: &str) -> JobCompleted {
-    JobCompleted {
-        job_id: JobId(id.into()),
-        status: Outcome::Completed,
-        error: None,
-        process: Some(Process {
-            exit_code: Some(0),
-            signal: None,
-            timed_out: false,
-        }),
-        output_tail: None,
-    }
 }
 
 fn notice(rx: &mpsc::Receiver<Delivery>) -> contract::inbox::JobNotice {
@@ -1216,26 +1202,6 @@ fn deliver_to_through_the_seam_sends_the_end_before_running_drops_it() {
     assert_eq!(sent.completed, ended_ok(&id.0));
 }
 
-fn delegate_finished(id: &str, text: &str) -> contract::events::DelegateFinished {
-    contract::events::DelegateFinished {
-        job_id: JobId(id.into()),
-        text: text.to_owned(),
-        artifact: None,
-        questions: None,
-        usage: contract::shapes::Usage {
-            tokens: contract::shapes::Tokens {
-                input: 0,
-                cache_read: 0,
-                cache_write: std::collections::BTreeMap::new(),
-                output: 0,
-            },
-            cost: Some(0.0),
-            subscription_cost: 0.0,
-        },
-        worktree: None,
-    }
-}
-
 fn stopped() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
 }
@@ -1259,6 +1225,7 @@ fn open_started_records_the_job_without_a_file() {
         "scan".into(),
         output.clone(),
         stop_of(&flag),
+        delegate_started(&id.0),
     );
     assert_eq!(started.job_id, id);
     assert_eq!(started.tool.as_deref(), Some("delegate_spawn"));
@@ -1287,6 +1254,7 @@ fn a_delegate_wait_answers_the_final_message_and_records_once() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        delegate_started(&id.0),
     );
     finish.report(
         ended_ok(&id.0),
@@ -1332,6 +1300,7 @@ fn a_notice_claimed_by_wait_claims_nothing_and_vice_versa() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        delegate_started(&id.0),
     );
     finish.report(ended_ok(&id.0), Some(delegate_finished(&id.0, "Done.")));
     let first = notice(&rx);
@@ -1349,6 +1318,7 @@ fn a_notice_claimed_by_wait_claims_nothing_and_vice_versa() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        delegate_started(&id.0),
     );
     finish.report(ended_ok(&id.0), Some(delegate_finished(&id.0, "Done.")));
     let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
@@ -1367,6 +1337,7 @@ fn a_dropped_delegate_end_is_indeterminate_with_an_empty_finish() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        delegate_started(&id.0),
     );
     drop(finish);
     let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
@@ -1410,6 +1381,7 @@ fn stop_delegates_stops_only_running_delegates() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         stop_of(&delegate_flag),
+        delegate_started(&delegate_id.0),
     );
     assert_eq!(registry.stop_delegates(), 1);
     assert!(
