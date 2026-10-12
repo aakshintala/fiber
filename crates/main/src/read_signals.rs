@@ -66,7 +66,7 @@ impl CancelOnSignal {
             .name("fiber-cancel-on-signal".to_owned())
             // Chosen small; the watcher calls only cancel, settle and exit,
             // so it does no work that needs the default stack.
-            .stack_size(64 * 1024)
+            .stack_size(65_536)
             .spawn(move || {
                 for signal in registered.forever() {
                     // The cancel wakes a read in flight on the main thread;

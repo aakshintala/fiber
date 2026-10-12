@@ -429,6 +429,11 @@ fn a_quick_command_answers_without_the_clock_moving() {
         .recv_or_fail(&finished, "the quick command")
         .unwrap();
     assert_eq!(output.stdout, b"key");
+    assert_eq!(
+        reads.lock().spawning,
+        0,
+        "the successful spawn dropped the count"
+    );
     guard.stand_down(DEADLINE);
 }
 
@@ -856,7 +861,7 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
     );
     release.send(()).expect("the spawn's release");
     assert!(
-        Deadline::after(DEADLINE)
+        Deadline::after(Duration::from_secs(3))
             .recv(&settled)
             .expect("the settle"),
         "settle waits out the late kill"
@@ -866,6 +871,7 @@ fn a_cancel_mid_spawn_is_settled_before_exit() {
         .expect("the late read")
         .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert_eq!(reads.lock().spawning, 0, "the late kill dropped the count");
     assert!(
         listed(&reads).is_empty(),
         "the late group is never listed: {:?}",
@@ -918,7 +924,7 @@ fn settle_waits_for_the_late_childs_reap() {
     );
     free_reap.send(()).expect("the reap's release");
     assert!(
-        Deadline::after(DEADLINE)
+        Deadline::after(Duration::from_secs(3))
             .recv(&settled)
             .expect("the settle"),
         "settle waits out the reap"
@@ -928,6 +934,7 @@ fn settle_waits_for_the_late_childs_reap() {
         .expect("the late read")
         .expect_err("a command spawned after the cancel");
     assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert_eq!(reads.lock().spawning, 0, "the late kill dropped the count");
     assert!(
         fakes::matching_exits(&marker, DEADLINE),
         "the late group is gone"
@@ -945,15 +952,18 @@ fn a_failed_spawn_does_not_leave_the_count_raised() {
         .stderr(Stdio::null())
         .stdout(Stdio::piped());
     // Within a wall-clock bound: a missed decrement hangs the settle, and
-    // the bound fails the test instead of hanging the binary.
+    // the bound fails the test instead of hanging the binary. The exact
+    // count pins the decrement at once, so a `+=` or `/=` mutant fails
+    // here instead of running out the settle below.
     let error = fakes::within("the failed spawn", DEADLINE, {
         let reads = Arc::clone(&reads);
         move || reads.command(&mut missing)
     })
     .expect_err("a command that cannot start");
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(reads.lock().spawning, 0, "the error arm dropped the count");
     assert!(
-        fakes::within("the settle", DEADLINE, move || reads
+        fakes::within("the settle", Duration::from_secs(3), move || reads
             .settle(&*clock, doors::SHUTDOWN_BOUND)),
         "the error arm dropped the count"
     );
@@ -1077,8 +1087,66 @@ fn settle_returns_true_at_once_with_nothing_in_flight() {
     let clock = FakeClock::new();
     let reads = Reads::default();
     assert!(
-        fakes::within("the settle", DEADLINE, move || reads
+        fakes::within("the settle", Duration::from_secs(3), move || reads
             .settle(&*clock, doors::SHUTDOWN_BOUND)),
         "nothing in flight settles at once"
     );
+}
+
+/// The settle's zero comparison pins both sides at once: `true` at count
+/// zero immediately, and `false` within the bound while one spawn is held.
+/// Each side fails fast on a wall-clock bound of a few seconds, so the
+/// `!=` mutant is caught here instead of running out the suite's
+/// deadlines. The bound stays on the injected clock: the test advances it
+/// only after the parked settle proves it waits on it.
+#[test]
+fn settle_pins_zero_true_and_held_false_at_once() {
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    // Zero side first: true at once with nothing in flight.
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    assert!(
+        Deadline::after(Duration::from_secs(3))
+            .recv_or_fail(&settled, "settle with nothing in flight"),
+        "settle is true at count zero"
+    );
+    // Held side: one spawn held before it spawns keeps the count raised
+    // while the test drives the clock past the bound.
+    // The marker stays in the late shell's command line, so a leaked late
+    // child still matches: the watchdog reaps the group on every path,
+    // including a failed assertion before the cancel below.
+    let marker = "fiber-settle-pins-zero-and-held";
+    let watching = fakes::Watchdog::matching(marker);
+    let (entered, is_entered) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_spawn(entered, freed);
+    let held = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&format!("sleep 30 # {marker}"))))
+    };
+    Deadline::after(DEADLINE)
+        .recv(&is_entered)
+        .expect("the spawn reached its pause");
+    let bound = doors::SHUTDOWN_BOUND;
+    let end = clock.origin() + bound;
+    let held_settle = settle_on_thread(&reads, &clock, bound);
+    assert!(
+        clock.await_parked(end, DEADLINE),
+        "the settle parked at its bound"
+    );
+    clock.advance(bound + Duration::from_secs(1));
+    assert!(
+        !Deadline::after(Duration::from_secs(3)).recv_or_fail(&held_settle, "the held settle"),
+        "settle is false at its bound while a spawn is held"
+    );
+    reads.cancel();
+    release.send(()).expect("the spawn's release");
+    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
+        .expect_err("a command spawned after the cancel");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        fakes::matching_exits(marker, DEADLINE),
+        "the late group is gone"
+    );
+    watching.stand_down(DEADLINE);
 }
