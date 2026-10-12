@@ -269,9 +269,6 @@ impl Login {
             self.draw_step(area, buf, targets);
             return;
         }
-        if !matches!(self.mode, Mode::Rows) {
-            return;
-        }
         let width = overlay::width(u16::MAX, 96, area.width);
         let inner_w = overlay::inner(width);
         // The tags keep one column: the widest tag among the targets
@@ -854,7 +851,12 @@ impl Login {
                     } else {
                         expanded
                     };
-                    let mut rows = wrapped_rows(&format!("Label (--as): {shown}."), inner, dim);
+                    // Cut to one row so a long label never pushes the
+                    // key prompt, the dots and the cursor out of the body.
+                    let mut rows = vec![text_row(
+                        format::cut(&format!("Label (--as): {shown}."), inner),
+                        dim,
+                    )];
                     rows.extend(wrapped_rows(
                         &format!("Key for {name}:"),
                         inner,
@@ -1131,18 +1133,10 @@ fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
         .skip(start)
         .take(caret.saturating_sub(start))
         .collect();
+    // The early return covers the caret at the end, so this always
+    // finds the caret's cell; the fallback never draws.
     let Some(at_ch) = chars.get(caret).copied() else {
-        let shown = tail(&text, room.saturating_sub(1));
-        return overlay::Row {
-            spans: vec![
-                Span::styled(prefix.to_owned(), dim),
-                Span::styled(shown, dim),
-                Span::styled("█".to_owned(), dim),
-            ],
-            right: Vec::new(),
-            targets: Vec::new(),
-            barred: false,
-        };
+        return blank_row();
     };
     let after: String = chars
         .iter()
@@ -1165,56 +1159,81 @@ fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
     }
 }
 
-/// The failed line wrapped at `inner` as one line: the head and the
-/// closing dot plain, the reason in `error`. Rows past the wrap are the
-/// caller’s to drop in order.
+/// The failed line wrapped at `inner` as one line: the actual wrapped
+/// rows, the head and the closing dot plain, the reason in `error`.
+/// Rows past the wrap are the caller’s to drop in order.
 fn failed_rows(head: &str, reason: &str, dot: &str, inner: usize) -> Vec<overlay::Row> {
-    let combined = format!("{head}{reason}{dot}");
-    let rows = format::wrap(&combined, inner.max(1));
-    let combined_chars: Vec<char> = combined.chars().collect();
-    let head_len = head.chars().count();
-    let reason_len = reason.chars().count();
+    use std::collections::VecDeque;
+
+    use crate::rows::Join;
+
     let error = Style::new().fg(Role::Error.color());
-    let mut pos = 0;
+    let plain = Style::new();
+    let combined = format!("{head}{reason}{dot}");
+    // Each source char with whether it is the reason: the wrap drops
+    // spaces and line breaks, so the styles follow the chars, not
+    // offsets into the combined text.
+    let mut source: VecDeque<(char, bool)> = VecDeque::new();
+    source.extend(head.chars().map(|ch| (ch, false)));
+    source.extend(reason.chars().map(|ch| (ch, true)));
+    source.extend(dot.chars().map(|ch| (ch, false)));
     let mut out = Vec::new();
-    for row in rows {
-        let row_chars: Vec<char> = row.chars().collect();
-        let mut start = pos;
-        let kept: String = combined_chars
-            .iter()
-            .skip(start)
-            .take(row_chars.len())
-            .collect();
-        if kept != row {
-            // The wrap dropped the single space or line break the row
-            // broke at; skip it so the kept rows stay a prefix.
-            if matches!(combined_chars.get(start), Some(' ' | '\n')) {
-                start = start.saturating_add(1);
+    let mut first = true;
+    for (row, join) in format::wrap_joined(&combined, inner.max(1)) {
+        if !first {
+            // The wrap dropped one space or line break here; an empty
+            // row's only source char is this separator.
+            match join {
+                Join::WrapSpace => {
+                    if matches!(source.front(), Some((' ', _))) {
+                        source.pop_front();
+                    }
+                }
+                Join::Break => {
+                    if matches!(source.front(), Some(('\n', _))) {
+                        source.pop_front();
+                    }
+                }
+                Join::Wrap => {}
             }
         }
-        let end = start
-            .saturating_add(row_chars.len())
-            .min(combined_chars.len());
+        first = false;
+        let mut styled: Vec<(char, bool)> = Vec::new();
+        for ch in row.chars() {
+            // Skip anything else the wrap dropped, such as the spaces
+            // before a row's first word, keeping each char with its
+            // source's style.
+            while matches!(source.front(), Some((next, _)) if *next != ch) {
+                source.pop_front();
+            }
+            let failed = source.pop_front().is_some_and(|(_, failed)| failed);
+            styled.push((ch, failed));
+        }
         let mut spans = Vec::new();
-        let mut at = start;
-        while at < end {
-            let styled_error = at >= head_len && at < head_len.saturating_add(reason_len);
-            let mut run = String::new();
-            while at < end
-                && (at >= head_len && at < head_len.saturating_add(reason_len)) == styled_error
-            {
-                let Some(ch) = combined_chars.get(at).copied() else {
-                    break;
-                };
-                run.push(ch);
-                at = at.saturating_add(1);
+        let mut run = String::new();
+        let mut run_error: Option<bool> = None;
+        for (ch, failed) in styled {
+            if run_error.is_none() {
+                run_error = Some(failed);
             }
-            spans.push(Span::styled(
-                run,
-                if styled_error { error } else { Style::new() },
-            ));
+            if run_error == Some(failed) {
+                run.push(ch);
+            } else {
+                spans.push(Span::styled(
+                    std::mem::take(&mut run),
+                    if run_error == Some(true) {
+                        error
+                    } else {
+                        plain
+                    },
+                ));
+                run.push(ch);
+                run_error = Some(failed);
+            }
         }
-        pos = end;
+        if let Some(failed) = run_error {
+            spans.push(Span::styled(run, if failed { error } else { plain }));
+        }
         out.push(overlay::Row {
             spans,
             right: Vec::new(),

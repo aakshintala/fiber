@@ -1291,9 +1291,6 @@ fn key_focus_shows_the_dots_with_the_cursor() {
 #[test]
 fn dots_at_the_rooms_cap_stay_dots_only_at_one_width() {
     let fake = fake_with(targets());
-    let probe = Login::open(&ctx(&fake));
-    let (buf, _) = stepped(&probe, 80, 24);
-    let _ = buf;
     // The dots room is the step's inner width less the cursor's column.
     let key_probe = {
         let mut login = Login::open(&ctx(&fake));
@@ -1392,6 +1389,39 @@ fn tab_moves_the_caret_between_the_key_and_the_label() {
         .find(|row| row.contains('•'))
         .cloned()
         .unwrap_or_default();
+    assert!(dots.contains('█'), "{dots:?}");
+}
+
+#[test]
+fn a_long_label_back_on_the_key_keeps_the_key_row() {
+    // One provider, so the step keeps three body rows: a 200-character
+    // label typed and Tab back to the key leaves the label cut to one
+    // row, with the key prompt, the dots and the cursor.
+    let fake = fake_with(vec![targets()[0].clone()]);
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-a");
+    press(&mut login, &fake, &[Key::Tab]);
+    typed(&mut login, &fake, &"l".repeat(200));
+    press(&mut login, &fake, &[Key::Tab]);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.contains("Label (--as):"))
+            .count(),
+        1,
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("Key for acme:")),
+        "{rows:?}"
+    );
+    let dots = rows
+        .iter()
+        .find(|row| row.contains('•'))
+        .cloned()
+        .unwrap_or_else(|| panic!("no dots row in {rows:?}"));
     assert!(dots.contains('█'), "{dots:?}");
 }
 
@@ -1500,14 +1530,7 @@ fn a_code_step_shows_the_code_and_opens_nothing() {
     let (buf, _) = overlaid(&login, 80, 24);
     let screen = text_of(&buf, 80, 24).join("\n");
     assert!(screen.contains("ABCD-1234"), "{screen}");
-    assert!(
-        screen.contains(
-            "Open this URL to log in to codex:"
-                .replace("Open this URL", "Enter the code")
-                .as_str()
-        ) || screen.contains("Enter the code ABCD-1234"),
-        "{screen}"
-    );
+    assert!(screen.contains("Enter the code ABCD-1234"), "{screen}");
     assert!(screen.contains(url), "{screen}");
     assert!(screen.contains("Waiting for the browser…"), "{screen}");
     assert!(screen.contains("y copy code · Esc back"), "{screen}");
@@ -1552,6 +1575,23 @@ fn a_browser_done_shows_the_done_step_and_drops_the_worker() {
     let screen = text_of(&buf, 80, 24).join("\n");
     assert!(screen.contains("✓ Logged in to codex."), "{screen}");
     assert!(!screen.contains("Stored credentials"), "{screen}");
+}
+
+#[test]
+fn an_indented_failure_reason_draws_whole() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Err(ConfigureError {
+            code: ErrorCode::Usage,
+            message: "\n  token expired".to_owned(),
+        })),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("Login to codex failed:"), "{screen}");
+    assert!(screen.contains("token expired."), "{screen}");
 }
 
 #[test]
