@@ -338,8 +338,25 @@ fn the_group_line_and_the_ledger_match_the_doc() {
         assert_eq!(grid.cell(x, shell).fg, ATTENTION, "running ({x}, {shell})");
     }
 
+    // Removing the marker lets the shell finish; the click target below
+    // is located on a screen taken after the turn completes, so the row
+    // cannot be stale.
+    let from = run.output().len();
+    fs::remove_file(&hold).unwrap();
+    run.wait_screen("the done reply", |grid| grid.contents.contains("Done."));
+    run.turn_finished(from);
+
     // A click on the a.txt read row shows its output indented eight
-    // columns: 20 lines, then "… 5 more lines" dim.
+    // columns: 20 lines, then "… 5 more lines" dim. The grid is fresh
+    // from after the completion, and the card edges move with it.
+    let grid = run.wait_screen("the open ledger", |grid| {
+        grid.rows
+            .iter()
+            .any(|row| row.contains("+ Thought: Reading"))
+    });
+    let y = find_row(&grid.rows, "thought 4 times").expect("the group row");
+    let (left, _right) = card_edges(&grid, y, 2);
+    let gutter = left + 1;
     let read = ledger_row(&grid, gutter, "read", "a.txt");
     run.write(
         format!(
@@ -375,12 +392,6 @@ fn the_group_line_and_the_ledger_match_the_doc() {
     );
     let more = find_row(&grid.rows, "… 5 more lines").expect("the more row");
     assert_dim(&grid, more, gutter + 8, right - 1, "the more row");
-
-    // Removing the marker lets the shell finish; the turn says done.
-    let from = run.output().len();
-    fs::remove_file(&hold).unwrap();
-    run.wait_screen("the done reply", |grid| grid.contents.contains("Done."));
-    run.turn_finished(from);
 
     // Ctrl+O closes the ledger: the finished row reads as the running
     // one did, with its duration and ▸ at the same columns, every
