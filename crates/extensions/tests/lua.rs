@@ -266,6 +266,41 @@ fn a_stuck_provider_load_abandons_its_mixed_extension_after_grace() {
 }
 
 #[test]
+fn a_looping_provider_load_stops_at_entry_deadline_and_keeps_commands() {
+    let clock = FakeClock::new();
+    let (dir, ext) = lazy_fixture(
+        "fiber.command('echo', {timeout=1000, run=function() return 'alive' end})",
+        "require('go_spin')\n while true do end",
+        Arc::clone(&clock),
+    );
+    let entered = go_module(dir.path(), "spin");
+    assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
+    let asked = clock.now();
+    let provider = start_provider(&ext);
+    Deadline::after(WAIT).recv_or_fail(&entered, "provider entered its looping file");
+    let parked_at_entry_deadline = parked_at(&clock, asked + LOAD, 1);
+    assert!(parked_at(&clock, asked + LOAD + GRACE, 1));
+    let observed_parks: Vec<_> = clock
+        .parked()
+        .into_iter()
+        .map(|at| at.map(|at| at.saturating_duration_since(asked)))
+        .collect();
+    clock.advance(LOAD);
+    let err = Deadline::after(WAIT)
+        .recv_or_fail(&provider, "looping provider stopped")
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Timeout { callback, timeout_ms: 2000, .. } if callback == "providers/p.lua")
+    );
+    assert!(ext.is_running());
+    assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
+    assert!(
+        parked_at_entry_deadline,
+        "no waiter parked at the 2 s entry deadline; observed {observed_parks:?}"
+    );
+}
+
+#[test]
 fn no_vm_exists_until_the_extension_is_first_called() {
     let ext = fixture();
     assert!(!ext.is_running());
