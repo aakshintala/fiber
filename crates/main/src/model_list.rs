@@ -16,16 +16,20 @@ use contract::clock::Clock;
 use contract::files::PathLock;
 use extensions::{Providers, SessionExtensions};
 
+use crate::switch::Reads;
+
 /// How the terminal reads the installed models: [`read`] on a thread off
-/// the loop, with Fiber home, the workspace, the clock and the locks.
+/// the loop, with Fiber home, the workspace, the clock, the locks and the
+/// process's shared reads. Every picker read runs through the same
+/// [`Reads`], so the terminal's cancel at exit reaches one in flight.
 pub(crate) fn reader(
     home: PathBuf,
     workspace: PathBuf,
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
+    reads: Arc<Reads>,
 ) -> tui::ReadModels {
     Arc::new(move |refresh| {
-        let reads = crate::switch::Reads::default();
         let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
             reads.credential(command, timeout, &*clock)
         };

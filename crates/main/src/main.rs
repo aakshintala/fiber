@@ -585,7 +585,7 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
     // The entry point's guards before the picker reader: a refused
     // registration returns before any credential command starts, and a
     // normal quit cancels once `tui::run` returns.
-    let (_reads, _cancel, _watcher) = match terminal_guards(&clock, read_signals::register) {
+    let (reads, _cancel, _watcher) = match terminal_guards(&clock, read_signals::register) {
         Ok(guards) => guards,
         Err(error) => return fail(error),
     };
@@ -598,6 +598,7 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
         workspace.clone(),
         Arc::clone(&clock),
         Arc::new(tools::PathLocks::new()),
+        Arc::clone(&reads),
     );
     // The viewer's copies live under Fiber home: cloned before the
     // connect closure moves it.
