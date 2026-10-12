@@ -443,13 +443,18 @@ fn background_refresh_stops_when_a_new_login_is_outside_the_window() {
 
 #[test]
 fn competing_refreshers_reread_the_generation_including_wrap_and_short_expiry() {
-    for (generation, access, lifetime) in [
-        (1, "at-2", 3600),
-        (1, "at-1", 3600),
-        (1, "at-2", 60),
-        (u64::MAX, "at-1", 3600),
+    for (generation, access, lifetime, waited_token, requests, final_lifetime) in [
+        (1, "at-2", 3600, "at-2", 1, 3600),
+        (1, "at-1", 3600, "at-1", 1, 3600),
+        (1, "at-2", 60, "at-2", 1, 60),
+        (u64::MAX, "at-1", 3600, "at-1", 1, 3600),
+        (1, "at-2", 0, "at-3", 2, 3600),
+        (1, "at-2", 1, "at-2", 1, 1),
     ] {
-        let server = OauthServer::start(vec![OauthReply::token(access, "rt-2", lifetime)]);
+        let server = OauthServer::start(vec![
+            OauthReply::token(access, "rt-2", lifetime),
+            OauthReply::token("at-3", "rt-3", 3600),
+        ]);
         server.hold();
         let (setup, files, first) = fixture(&server.url(), Some(0));
         files
@@ -484,16 +489,36 @@ fn competing_refreshers_reread_the_generation_including_wrap_and_short_expiry() 
             deadline
                 .recv_or_fail(&receive_b, "second refresher ends")
                 .unwrap(),
-            Authorization::Send(format!("Bearer {access}"))
+            Authorization::Send(format!("Bearer {waited_token}"))
         );
         a.join().unwrap();
         b.join().unwrap();
-        assert_eq!(server.request_count(), 1);
-        assert_eq!(files.state.lock().unwrap().writes, 1);
-        assert_eq!(record(&files)["generation"], generation.wrapping_add(1));
+        assert_eq!(server.request_count(), requests);
+        assert_eq!(files.state.lock().unwrap().writes, requests);
+        assert_eq!(
+            record(&files)["generation"],
+            generation.wrapping_add(u64::try_from(requests).unwrap())
+        );
         let now = contract::clock::wall_ms(setup.clock().wall()) / 1000;
-        assert_eq!(record(&files)["expires_at"], now + lifetime);
+        assert_eq!(record(&files)["expires_at"], now + final_lifetime);
     }
+}
+
+#[test]
+fn a_new_login_starts_at_generation_one_when_the_old_record_cannot_parse() {
+    let (_setup, files, _bearer) = fixture("https://auth/token", None);
+    files.state.lock().unwrap().unreadable = true;
+    let token = Token {
+        access_token: contract::Secret::new("new-login".into()),
+        refresh_token: None,
+        expires_at: None,
+        token_endpoint: "https://auth/token".into(),
+        client_id: "fiber".into(),
+    };
+    store_token(files.as_ref(), "https://h/x", &token).unwrap();
+    files.state.lock().unwrap().unreadable = false;
+    assert_eq!(record(&files)["generation"], 1);
+    assert_eq!(record(&files)["access_token"], "new-login");
 }
 
 #[test]

@@ -67,8 +67,14 @@ pub fn store_token(files: &dyn TokenFiles, url: &str, token: &Token) -> Result<(
     let url = canonical_url(url)?;
     canonical_url(&token.token_endpoint)?;
     let held = files.try_lock(&key(&url))?.ok_or(TokenError::Busy)?;
-    let generation = held
-        .read()?
+    // A new login replaces an unreadable record; only a parsed record carries
+    // a generation forward. Unsafe paths still refuse the store.
+    let previous = match held.read() {
+        Ok(value) => value,
+        Err(TokenFileError::Unreadable(_)) => None,
+        Err(error) => return Err(TokenError::Files(error)),
+    };
+    let generation = previous
         .and_then(|value| parse_record(value).ok())
         .map_or(1, |record| record.generation.wrapping_add(1));
     let mut value = serde_json::Map::from_iter([

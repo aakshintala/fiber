@@ -85,6 +85,12 @@ fn the_store_entry_point_uses_the_specs_injected_private_url_file() {
         Err(mcp::TokenError::Busy)
     ));
     drop(held);
+    std::fs::write(&file, b"not json").unwrap();
+    mcp::store_token(tokens.as_ref(), url, &token).unwrap();
+    let repaired: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(repaired["url"], "https://docs.example.com/mcp");
+    assert_eq!(repaired["generation"], 1);
 }
 #[test]
 fn userinfo_is_a_named_config_error_without_exposing_credentials() {
