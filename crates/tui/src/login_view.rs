@@ -525,7 +525,7 @@ impl Login {
         {
             match &waiting.progress {
                 Progress::Url(url) => return Act::Copy(url.clone()),
-                Progress::DeviceCode { code, .. } => return Act::Copy(code.clone()),
+                Progress::DeviceCode { url, .. } => return Act::Copy(url.clone()),
                 Progress::Starting => {}
             }
         }
@@ -807,10 +807,7 @@ impl Login {
                         Style::new().fg(Role::Accent.color()),
                     ));
                     rows.extend(wrapped_rows("Waiting for the browser…", inner, dim));
-                    (
-                        rows,
-                        overlay::legend(&[("y", "copy code"), ("Esc", "back")]),
-                    )
+                    (rows, overlay::legend(&[("y", "copy URL"), ("Esc", "back")]))
                 }
             },
             Mode::Panel(panel) => {
@@ -1031,7 +1028,6 @@ fn step_content_width(name: &str, targets: &[LoginTarget]) -> usize {
     for footer in [
         "Esc back",
         "y copy URL · Esc back",
-        "y copy code · Esc back",
         "Tab key or label · Enter submit · Esc back",
         "Enter submit · Esc back",
     ] {

@@ -1457,6 +1457,10 @@ widening it. Esc goes back to the provider list.
   copy, for SSH: "Open this URL to log in to anthropic:", the URL cut from
   the left to keep its tail, and "Waiting for the browser…" dim. Footer:
   "y copy URL · Esc back".
+- **Device code.** "Enter the code {code} at this URL to log in to {name}:",
+  the code shown whole across wrapped rows, the URL cut from the left, and
+  "Waiting for the browser…" dim. Footer: "y copy URL · Esc back"; `y` copies
+  the whole URL.
 - **Key entry.** "Label (--as): default." and "Key for google:", the key
   masked as dots with a block cursor. Tab moves between the key and the
   label. Footer: "Tab key or label · Enter submit · Esc back".
