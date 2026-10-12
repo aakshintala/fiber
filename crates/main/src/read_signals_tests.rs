@@ -114,17 +114,22 @@ fn a_registered_signal_cancels_settles_and_then_finishes_with_its_number() {
     let finished = credential_on_thread(&reads, sh(&script), Duration::from_secs(30), &clock);
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = fakes::Watchdog::group(pgid);
-    let (is_fired, _guard) = arm_recording(&reads, &clock, &[SIGTERM]);
+    let (is_fired, guard) = arm_recording(&reads, &clock, &[SIGTERM]);
     signal_hook::low_level::raise(SIGTERM).expect("the test's raise");
     // The watcher cancels, settles, then finishes: only the finish is
     // injected, so its number proves the production calls ran before it.
-    assert_eq!(
-        Deadline::after(DEADLINE)
-            .recv(&is_fired)
-            .expect("the watcher's finish"),
-        SIGTERM
-    );
-    let error = Deadline::after(DEADLINE)
+    // The finish arrives through `Deadline` in seconds: under the `==`/`!=`
+    // mutant the watcher's settle at zero parks on the `FakeClock`, so no
+    // finish arrives and this fails instead of hanging the suite.
+    let fired = Deadline::after(Duration::from_secs(3)).recv(&is_fired);
+    // The guard's drop joins the watcher: bounded on its own thread, so a
+    // hung settle fails here instead of hanging the binary. `within` never
+    // joins its thread.
+    fakes::within("the guard's drop", Duration::from_secs(3), move || {
+        drop(guard);
+    });
+    assert_eq!(fired.expect("the watcher's finish"), SIGTERM);
+    let error = Deadline::after(Duration::from_secs(3))
         .recv(&finished)
         .expect("the cancelled read")
         .expect_err("a cancelled read");

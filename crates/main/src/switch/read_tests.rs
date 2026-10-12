@@ -962,9 +962,12 @@ fn a_failed_spawn_does_not_leave_the_count_raised() {
     .expect_err("a command that cannot start");
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
     assert_eq!(reads.lock().spawning, 0, "the error arm dropped the count");
+    // The settle runs on its own thread and its answer arrives through
+    // `Deadline` in seconds: under the `==`/`!=` mutant the settle at zero
+    // parks on the `FakeClock`, so this fails instead of hanging the suite.
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
-        fakes::within("the settle", Duration::from_secs(3), move || reads
-            .settle(&*clock, doors::SHUTDOWN_BOUND)),
+        Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the settle"),
         "the error arm dropped the count"
     );
 }
@@ -1085,10 +1088,13 @@ fn settle_wakes_on_a_clock_advance_with_no_earlier_subscription() {
 #[test]
 fn settle_returns_true_at_once_with_nothing_in_flight() {
     let clock = FakeClock::new();
-    let reads = Reads::default();
+    let reads = Arc::new(Reads::default());
+    // The settle runs on its own thread and its answer arrives through
+    // `Deadline` in seconds: under the `==`/`!=` mutant the settle at zero
+    // parks on the `FakeClock`, so this fails instead of hanging the suite.
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
     assert!(
-        fakes::within("the settle", Duration::from_secs(3), move || reads
-            .settle(&*clock, doors::SHUTDOWN_BOUND)),
+        Deadline::after(Duration::from_secs(3)).recv_or_fail(&settled, "the settle"),
         "nothing in flight settles at once"
     );
 }
