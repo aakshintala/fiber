@@ -40,6 +40,10 @@ pub(crate) struct Reads {
     /// Absent outside the unit tests.
     #[cfg(test)]
     checkpoint: Mutex<Option<Checkpoint>>,
+    /// The next spawn's pause before it spawns, armed by a test. Absent
+    /// outside the unit tests.
+    #[cfg(test)]
+    spawn_pause: Mutex<Option<SpawnPause>>,
 }
 
 /// One pause of a `credential` wait at its checks, for the interleaving
@@ -56,6 +60,18 @@ struct Checkpoint {
     /// test receives it, which is the acknowledgement.
     checked: mpsc::Sender<()>,
     /// The test releases the wait through this.
+    release: mpsc::Receiver<()>,
+}
+
+/// One pause before a spawn, for the interleaving tests: the spawn reports
+/// it reached the spawn and blocks until the test releases it, so the test
+/// lands a cancel between the checks and the spawn on every run.
+#[cfg(test)]
+struct SpawnPause {
+    /// Sent once the spawn reached its pause; the send blocks until the
+    /// test receives it, which is the acknowledgement.
+    entered: mpsc::Sender<()>,
+    /// The test releases the spawn through this.
     release: mpsc::Receiver<()>,
 }
 
@@ -317,6 +333,8 @@ impl Reads {
             return Err(interrupted());
         }
         state.groups.retain(|group| alive(*group));
+        #[cfg(test)]
+        self.pause_before_spawn();
         let child = command.process_group(0).spawn()?;
         state.groups.push(child.id());
         Ok(child)
@@ -372,6 +390,34 @@ impl Reads {
             .take();
         if let Some(point) = point {
             match point.checked.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause before the next spawn: the spawn sends on `entered`
+    /// once it reaches the spawn and blocks until `release` arrives. The
+    /// pause is one-shot.
+    pub(crate) fn pause_at_spawn(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self
+            .spawn_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the spawn reached its pause and blocks until the test
+    /// releases it. Runs free unless a test armed a pause meanwhile.
+    fn pause_before_spawn(&self) {
+        let point = self
+            .spawn_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
                 Ok(()) | Err(_) => {}
             }
             match point.release.recv() {

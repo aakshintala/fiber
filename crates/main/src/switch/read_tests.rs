@@ -714,3 +714,105 @@ fn dropping_cancel_on_drop_kills_what_a_finished_command_left() {
     watchdog.stand_down(DEADLINE);
     pre.stand_down(DEADLINE);
 }
+
+/// A cancel lands while a spawn is blocked before it spawns: the cancel
+/// returns at once and kills every listed group, and the late spawn kills
+/// its own group and is `Interrupted` without ever listing it. Before the
+/// fix the spawn holds the state lock across the spawn, so the cancel
+/// blocks behind it and the deadline below fails the test.
+#[test]
+fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
+    let root = fakes::TempDir::new("fiber-read-blocked-spawn");
+    let ready_a = root.path().join("ready-a");
+    let marker = format!("fiber-read-late-{}", root.path().display());
+    let reads = Arc::new(Reads::default());
+    let script_a = format!("echo $$ > '{}'; exec sleep 30", ready_a.display());
+    let pre_a = fakes::Watchdog::matching(&ready_a.display().to_string());
+    let running_a = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&script_a)))
+    };
+    let pid_a: u32 = ready_line(&ready_a).parse().unwrap();
+    let watchdog_a = fakes::Watchdog::group(pid_a);
+    assert_eq!(listed(&reads), vec![pid_a], "group A listed while it runs");
+    // The next spawn blocks before it spawns; the marker stays in the
+    // late shell's command line, so a leaked late child still matches.
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    reads.pause_at_spawn(entered_tx, release_rx);
+    let late = fakes::Watchdog::matching(&marker);
+    let script_b = format!("sleep 30 # {marker}");
+    let running_b = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh(&script_b)))
+    };
+    Deadline::after(DEADLINE)
+        .recv(&entered_rx)
+        .expect("the spawn reached its pause");
+    let (cancel_done_tx, cancel_done_rx) = mpsc::channel::<()>();
+    {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || {
+            reads.cancel();
+            match cancel_done_tx.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+    }
+    Deadline::after(DEADLINE)
+        .recv(&cancel_done_rx)
+        .expect("the cancel returns while the spawn is blocked");
+    assert!(
+        fakes::group_empties(pid_a, DEADLINE),
+        "the cancel killed group A"
+    );
+    match release_tx.send(()) {
+        Ok(()) | Err(_) => {}
+    }
+    let error = fakes::within("the late command", DEADLINE, move || {
+        running_b.join().unwrap()
+    })
+    .expect_err("a command spawned after the cancel");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert_eq!(
+        listed(&reads),
+        vec![pid_a],
+        "the late group is never listed"
+    );
+    assert!(
+        no_process_matches(&marker, DEADLINE),
+        "the late group is gone"
+    );
+    let late_a = fakes::within("the killed command", DEADLINE, move || {
+        running_a.join().unwrap()
+    })
+    .expect_err("a killed command");
+    assert_eq!(late_a.kind(), std::io::ErrorKind::Interrupted);
+    watchdog_a.stand_down(DEADLINE);
+    pre_a.stand_down(DEADLINE);
+    late.stand_down(DEADLINE);
+}
+
+/// Whether no process command line still contains `text`: a leaked late
+/// child would. The first character is bracketed so the listing `pgrep`
+/// never matches itself.
+#[track_caller]
+fn no_process_matches(text: &str, deadline: Duration) -> bool {
+    let mut pattern = String::with_capacity(text.len() + 2);
+    let mut chars = text.chars();
+    if let Some(first) = chars.next() {
+        pattern.push('[');
+        pattern.push(first);
+        pattern.push(']');
+        pattern.extend(chars);
+    }
+    fakes::within("pgrep for a leaked late child", deadline, move || {
+        match std::process::Command::new("pgrep")
+            .args(["-f", "--", &pattern])
+            .output()
+        {
+            Ok(output) => output.stdout.is_empty(),
+            Err(_) => false,
+        }
+    })
+}

@@ -782,6 +782,8 @@ mod groups {
 
     use std::io;
     use std::process::{Child, Command};
+    #[cfg(test)]
+    use std::sync::mpsc;
     use std::sync::{Mutex, MutexGuard, PoisonError};
 
     use rustix::process::Signal;
@@ -789,6 +791,29 @@ mod groups {
     use super::{group_alive, signal_group};
 
     static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    #[cfg(test)]
+    static SPAWN_PAUSE: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = Mutex::new(None);
+
+    #[cfg(test)]
+    pub(super) fn pause_at_spawn(entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *SPAWN_PAUSE.lock().unwrap_or_else(PoisonError::into_inner) = Some((entered, release));
+    }
+
+    #[cfg(test)]
+    fn pause_before_spawn() {
+        let gate = SPAWN_PAUSE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((entered, release)) = gate {
+            match entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
 
     fn live() -> MutexGuard<'static, Vec<u32>> {
         LIVE.lock().unwrap_or_else(PoisonError::into_inner)
@@ -796,6 +821,8 @@ mod groups {
 
     pub(super) fn spawn(cmd: &mut Command) -> io::Result<Child> {
         let mut live = live();
+        #[cfg(test)]
+        pause_before_spawn();
         let child = cmd.spawn()?;
         live.push(child.id());
         Ok(child)
