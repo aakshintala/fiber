@@ -802,3 +802,263 @@ fn cancel_passes_a_blocked_spawn_and_the_late_child_is_killed() {
     pre_a.stand_down(DEADLINE);
     late.stand_down(DEADLINE);
 }
+
+/// Runs `reads.settle` for `bound` on `clock` on a thread of its own,
+/// returning the channel its answer arrives on. The test receives through
+/// [`Deadline`], never a raw `recv_timeout`.
+fn settle_on_thread(
+    reads: &Arc<Reads>,
+    clock: &Arc<FakeClock>,
+    bound: Duration,
+) -> mpsc::Receiver<bool> {
+    let (done, finished) = mpsc::channel();
+    let (reads, clock) = (Arc::clone(reads), Arc::clone(clock));
+    std::thread::spawn(move || {
+        done.send(reads.settle(&*clock, bound)).unwrap_or(());
+    });
+    finished
+}
+
+/// The bound each negative settle receive waits: a settle that may answer
+/// does so in milliseconds, so silence for this long proves it is held.
+const SHORT: Duration = Duration::from_secs(2);
+
+/// A cancel mid-spawn is settled before exit: the spawn blocks before it
+/// spawns, the cancel lands, and the settle holds until the late spawn
+/// lists or kills its group. Without the count the settle answers at once,
+/// and the negative receive below turns red.
+#[test]
+fn a_cancel_mid_spawn_is_settled_before_exit() {
+    let root = fakes::TempDir::new("fiber-read-settle-spawn");
+    let marker = format!("fiber-read-settle-{}", root.path().display());
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    // The marker stays in the late shell's command line, so a leaked late
+    // child still matches.
+    let watching = fakes::Watchdog::matching(&marker);
+    let (entered, is_entered) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_spawn(entered, freed);
+    let finished = credential_on_thread(
+        &reads,
+        sh(&format!("sleep 30 # {marker}")),
+        Duration::from_secs(30),
+        &clock,
+    );
+    Deadline::after(DEADLINE)
+        .recv(&is_entered)
+        .expect("the spawn reached its pause");
+    reads.cancel();
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    assert!(
+        Deadline::after(SHORT).recv(&settled).is_err(),
+        "settle returned with a spawn in flight"
+    );
+    release.send(()).expect("the spawn's release");
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv(&settled)
+            .expect("the settle"),
+        "settle waits out the late kill"
+    );
+    let error = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the late read")
+        .expect_err("a command spawned after the cancel");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        listed(&reads).is_empty(),
+        "the late group is never listed: {:?}",
+        listed(&reads)
+    );
+    assert!(
+        fakes::matching_exits(&marker, DEADLINE),
+        "the late group is gone"
+    );
+    watching.stand_down(DEADLINE);
+}
+
+/// The settle waits for the late child's reap, not just its kill: the
+/// spawn stops between the kill and the wait, and the settle holds until
+/// the reap releases it. A decrement at the relock answers early and turns
+/// the negative receive red.
+#[test]
+fn settle_waits_for_the_late_childs_reap() {
+    let root = fakes::TempDir::new("fiber-read-settle-reap");
+    let marker = format!("fiber-read-reap-{}", root.path().display());
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let watching = fakes::Watchdog::matching(&marker);
+    let (entered, is_entered) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_spawn(entered, freed);
+    let finished = credential_on_thread(
+        &reads,
+        sh(&format!("sleep 30 # {marker}")),
+        Duration::from_secs(30),
+        &clock,
+    );
+    Deadline::after(DEADLINE)
+        .recv(&is_entered)
+        .expect("the spawn reached its pause");
+    // Armed before the release, so the late kill stops at the reap.
+    let (reaping, is_reaping) = mpsc::channel::<()>();
+    let (free_reap, reap_freed) = mpsc::channel::<()>();
+    reads.pause_at_reap(reaping, reap_freed);
+    reads.cancel();
+    release.send(()).expect("the spawn's release");
+    Deadline::after(DEADLINE)
+        .recv(&is_reaping)
+        .expect("the spawn reached its reap");
+    let settled = settle_on_thread(&reads, &clock, doors::SHUTDOWN_BOUND);
+    // The leader is killed but not yet reaped: the count is still raised.
+    assert!(
+        Deadline::after(SHORT).recv(&settled).is_err(),
+        "settle returned before the late child's reap"
+    );
+    free_reap.send(()).expect("the reap's release");
+    assert!(
+        Deadline::after(DEADLINE)
+            .recv(&settled)
+            .expect("the settle"),
+        "settle waits out the reap"
+    );
+    let error = Deadline::after(DEADLINE)
+        .recv(&finished)
+        .expect("the late read")
+        .expect_err("a command spawned after the cancel");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert!(
+        fakes::matching_exits(&marker, DEADLINE),
+        "the late group is gone"
+    );
+    watching.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_failed_spawn_does_not_leave_the_count_raised() {
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let mut missing = Command::new("fiber-test-binary-that-cannot-exist");
+    missing
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .stdout(Stdio::piped());
+    // Within a wall-clock bound: a missed decrement hangs the settle, and
+    // the bound fails the test instead of hanging the binary.
+    let error = fakes::within("the failed spawn", DEADLINE, {
+        let reads = Arc::clone(&reads);
+        move || reads.command(&mut missing)
+    })
+    .expect_err("a command that cannot start");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        fakes::within("the settle", DEADLINE, move || reads
+            .settle(&*clock, doors::SHUTDOWN_BOUND)),
+        "the error arm dropped the count"
+    );
+}
+
+/// The settle gives up at the bound: one nanosecond short it is still
+/// parked with no answer, at the bound it answers `false`. Pins the
+/// boundary both sides.
+#[test]
+fn settle_gives_up_at_the_bound() {
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let bound = doors::SHUTDOWN_BOUND;
+    let end = clock.origin() + bound;
+    // A spawn held before it spawns: the count stays raised while the test
+    // drives the clock.
+    let (entered, is_entered) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_spawn(entered, freed);
+    let held = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh("sleep 30")))
+    };
+    Deadline::after(DEADLINE)
+        .recv(&is_entered)
+        .expect("the spawn reached its pause");
+    let settled = settle_on_thread(&reads, &clock, bound);
+    assert!(
+        clock.await_parked(end, DEADLINE),
+        "the settle parked at its bound"
+    );
+    let mark = clock.advance_marked(
+        bound
+            .checked_sub(Duration::from_nanos(1))
+            .expect("the bound holds a nanosecond"),
+    );
+    assert!(
+        clock.await_parked_since(&mark, Some(end), DEADLINE),
+        "the settle parked again short of its bound"
+    );
+    assert!(
+        Deadline::after(SHORT).recv(&settled).is_err(),
+        "settle answered short of its bound"
+    );
+    clock.advance(Duration::from_nanos(1));
+    assert!(
+        !Deadline::after(DEADLINE)
+            .recv(&settled)
+            .expect("the settle"),
+        "settle gives up at its bound"
+    );
+    reads.cancel();
+    release.send(()).expect("the spawn's release");
+    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
+        .expect_err("a command spawned after the cancel");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+}
+
+/// The settle subscribes before it reads the count: on a clock nothing
+/// else subscribed, the advance still wakes it. Without the subscription
+/// the advance wakes nobody and the receive below fails at the deadline.
+#[test]
+fn settle_wakes_on_a_clock_advance_with_no_earlier_subscription() {
+    let clock = FakeClock::new();
+    let reads = Arc::new(Reads::default());
+    let bound = doors::SHUTDOWN_BOUND;
+    let end = clock.origin() + bound;
+    // A spawn held before it spawns, on a clock nothing else subscribed:
+    // the settle below is the first subscriber.
+    let (entered, is_entered) = mpsc::channel::<()>();
+    let (release, freed) = mpsc::channel::<()>();
+    reads.pause_at_spawn(entered, freed);
+    let held = {
+        let reads = Arc::clone(&reads);
+        std::thread::spawn(move || reads.command(&mut sh("sleep 30")))
+    };
+    Deadline::after(DEADLINE)
+        .recv(&is_entered)
+        .expect("the spawn reached its pause");
+    let settled = settle_on_thread(&reads, &clock, bound);
+    assert!(
+        clock.await_parked(end, DEADLINE),
+        "the settle parked at its bound"
+    );
+    clock.advance(bound + Duration::from_secs(1));
+    assert!(
+        !Deadline::after(DEADLINE)
+            .recv(&settled)
+            .expect("the settle"),
+        "the advance woke the settle past its bound"
+    );
+    reads.cancel();
+    release.send(()).expect("the spawn's release");
+    let error = fakes::within("the late command", DEADLINE, move || held.join().unwrap())
+        .expect_err("a command spawned after the cancel");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+}
+
+#[test]
+fn settle_returns_true_at_once_with_nothing_in_flight() {
+    let clock = FakeClock::new();
+    let reads = Reads::default();
+    assert!(
+        fakes::within("the settle", DEADLINE, move || reads
+            .settle(&*clock, doors::SHUTDOWN_BOUND)),
+        "nothing in flight settles at once"
+    );
+}

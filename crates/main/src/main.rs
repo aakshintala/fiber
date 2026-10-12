@@ -29,6 +29,7 @@ mod model_list;
 mod open;
 mod parts;
 mod prompt_files;
+mod read_signals;
 mod resume;
 mod rewind;
 mod scripted;
@@ -46,6 +47,9 @@ mod live_tests;
 #[cfg(test)]
 #[path = "lua_warm_tests.rs"]
 mod lua_warm_tests;
+#[cfg(test)]
+#[path = "read_signals_entry_tests.rs"]
+mod read_signals_entry_tests;
 #[cfg(test)]
 #[path = "reviewer_tests.rs"]
 mod reviewer_tests;
@@ -168,31 +172,10 @@ fn run() -> i32 {
             ),
         },
         cli::Invocation::Run(Some(cli::Commands::Models(args))) => {
-            let reads = crate::switch::Reads::default();
-            let runner = |command: &mut std::process::Command, timeout: std::time::Duration| {
-                reads.credential(command, timeout, &*clock)
-            };
-            ::cli::models(
-                args.search.as_deref(),
-                args.json,
-                Arc::clone(&clock),
-                Arc::new(tools::PathLocks::new()),
-                fiber,
-                &runner,
-            )
+            models_entry(args, clock, fiber, read_signals::register)
         }
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers })) => {
-            let reads = crate::switch::Reads::default();
-            let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
-                reads.credential(command, timeout, &*clock)
-            };
-            ::cli::refresh_model_lists(
-                &providers,
-                Arc::clone(&clock),
-                Arc::new(tools::PathLocks::new()),
-                &run,
-            );
-            0
+            refresh_entry(&providers, clock, read_signals::register)
         }
         cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, base_url })) => {
             ::cli::release_install(
@@ -282,6 +265,69 @@ fn print_help(words: &[String]) -> i32 {
 fn fail(e: Failure) -> i32 {
     eprintln!("fiber: {}", e.message);
     doors::exit_code(&e)
+}
+
+/// The signal registration an entry point runs: its [`read_signals::Register`].
+type Register = read_signals::Register;
+
+/// `fiber models`: lists the installed models, killing what its credential
+/// commands left on a normal return and on a foreground signal. The guard
+/// is built before the runner, so a refused registration returns before
+/// any credential command starts.
+fn models_entry(
+    args: cli::ModelsArgs,
+    clock: Arc<dyn contract::clock::Clock>,
+    fiber: Result<PathBuf, String>,
+    register: Register,
+) -> i32 {
+    let reads = Arc::new(crate::switch::Reads::default());
+    let guards = match read_signals::guarded(&reads, &clock, &read_signals::FOREGROUND, register) {
+        Ok(guards) => guards,
+        Err(error) => return fail(error),
+    };
+    // Bound in watcher-then-cancel order, so the watcher drops first: a
+    // taken signal's exit lands before the plain cancel runs.
+    let (_cancel, _watcher) = guards;
+    let runner = |command: &mut std::process::Command, timeout: std::time::Duration| {
+        reads.credential(command, timeout, &*clock)
+    };
+    ::cli::models(
+        args.search.as_deref(),
+        args.json,
+        Arc::clone(&clock),
+        Arc::new(tools::PathLocks::new()),
+        fiber,
+        &runner,
+    )
+}
+
+/// `fiber refresh-model-lists`: refreshes the named providers' cached
+/// lists, killing what its credential commands left on a normal return
+/// and on a foreground signal. Always exits 0, as the background refresh
+/// does. The guard is built before the runner, so a refused registration
+/// returns before any credential command starts.
+fn refresh_entry(
+    providers: &[String],
+    clock: Arc<dyn contract::clock::Clock>,
+    register: Register,
+) -> i32 {
+    let reads = Arc::new(crate::switch::Reads::default());
+    let guards = match read_signals::guarded(&reads, &clock, &read_signals::FOREGROUND, register) {
+        Ok(guards) => guards,
+        Err(error) => return fail(error),
+    };
+    // Bound in watcher-then-cancel order, so the watcher drops first.
+    let (_cancel, _watcher) = guards;
+    let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
+        reads.credential(command, timeout, &*clock)
+    };
+    ::cli::refresh_model_lists(
+        providers,
+        Arc::clone(&clock),
+        Arc::new(tools::PathLocks::new()),
+        &run,
+    );
+    0
 }
 
 /// `fiber ask`: one session, one turn, its events on stdout.
@@ -473,6 +519,27 @@ fn stop_and_fail(servers: mcp_servers::SessionServers, e: Failure) -> i32 {
     ask_failed(e)
 }
 
+/// The terminal's shared reads with its guards: a plain cancel for a
+/// normal quit with a signal watcher for SIGTERM and SIGHUP. Built before
+/// the model-list reader, so a signal cancels a picker read in flight.
+/// The guards drop after `tui::run` returns: the watcher first, then the
+/// plain cancel.
+fn terminal_guards(
+    clock: &Arc<dyn contract::clock::Clock>,
+    register: Register,
+) -> Result<
+    (
+        Arc<crate::switch::Reads>,
+        read_signals::CancelAndSettle,
+        read_signals::CancelOnSignal,
+    ),
+    Failure,
+> {
+    let reads = Arc::new(crate::switch::Reads::default());
+    read_signals::guarded(&reads, clock, &read_signals::TERMINAL, register)
+        .map(|(cancel, watcher)| (reads, cancel, watcher))
+}
+
 /// `fiber` with no arguments: the terminal on this tty, a client of the hub
 /// (`docs/invocation.md`, "Two doors"). Without a tty it is a usage error
 /// naming `fiber ask`. The hub it starts listens on its local socket only
@@ -515,6 +582,13 @@ fn terminal(fiber: Result<PathBuf, String>, open_at: tui::OpenAt) -> i32 {
     let theme = theme_setting::setting(&home, &config, &|path| std::fs::read_to_string(path));
     let seam: Arc<dyn tui::Configure> = Arc::new(configure::Seam::new(home.clone()));
     let hub_clock = Arc::clone(&clock);
+    // The entry point's guards before the picker reader: a refused
+    // registration returns before any credential command starts, and a
+    // normal quit cancels once `tui::run` returns.
+    let (_reads, _cancel, _watcher) = match terminal_guards(&clock, read_signals::register) {
+        Ok(guards) => guards,
+        Err(error) => return fail(error),
+    };
     // The picker's model lists: the cached copy at once, refreshed in the
     // background (`docs/model-routing.md`, "Model discovery"). The lock
     // is the one `fiber models` uses: a refresh beside another process

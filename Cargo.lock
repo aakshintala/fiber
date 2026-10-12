@@ -1649,6 +1649,7 @@ dependencies = [
  "provider",
  "rustix",
  "serde_json",
+ "signal-hook",
  "support",
  "tools",
  "tui",

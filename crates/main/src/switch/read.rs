@@ -44,6 +44,10 @@ pub(crate) struct Reads {
     /// outside the unit tests.
     #[cfg(test)]
     spawn_pause: Mutex<Option<SpawnPause>>,
+    /// The next spawn's pause before it reaps a late child, armed by a
+    /// test. Absent outside the unit tests.
+    #[cfg(test)]
+    reap_pause: Mutex<Option<SpawnPause>>,
     /// The next spawn's pause after it lists its group, armed by a test.
     /// Absent outside the unit tests.
     #[cfg(test)]
@@ -87,6 +91,11 @@ struct SpawnPause {
 #[derive(Default)]
 struct State {
     cancelled: bool,
+    /// Each spawn still in flight: counted under the first lock of
+    /// `spawn` and dropped once it listed or killed its group and reaped
+    /// its leader, so [`Reads::settle`] waits out a spawn that raced a
+    /// cancel instead of exiting past it.
+    spawning: usize,
     /// Each waiting `run`, by a number of its own: what answers it with
     /// `closing`.
     waiting: BTreeMap<u64, Box<dyn FnOnce() + Send>>,
@@ -332,34 +341,93 @@ impl Reads {
         }
     }
 
-    /// Refuses when cancelled, spawns `command` as a group leader with the
-    /// lock released, then lists its group under the lock. A cancel that
-    /// landed mid-spawn kills the late group here with SIGKILL, reaps the
-    /// leader, and is `Interrupted` without ever listing the group, so no
-    /// command escapes a cancel.
+    /// Refuses when cancelled, counts the spawn, spawns `command` as a
+    /// group leader with the lock released, then lists its group under the
+    /// lock. A cancel that landed mid-spawn kills the late group here with
+    /// SIGKILL, reaps the leader, and is `Interrupted` without ever listing
+    /// the group, so no command escapes a cancel. [`Reads::settle`] waits
+    /// for the count to reach zero, so an exit after a cancel never leaves
+    /// a spawn in flight behind.
     fn spawn(&self, command: &mut Command) -> io::Result<Child> {
-        if self.lock().cancelled {
-            return Err(interrupted());
+        {
+            let mut state = self.lock();
+            if state.cancelled {
+                return Err(interrupted());
+            }
+            state.spawning += 1;
         }
         #[cfg(test)]
         self.pause_before_spawn();
-        let mut child = command.process_group(0).spawn()?;
+        // The error arm drops the count it just raised: a `?` here would
+        // skip it and hang the next settle.
+        let mut child = match command.process_group(0).spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                self.spawned_out();
+                return Err(error);
+            }
+        };
         let group = child.id();
         let mut state = self.lock();
         if state.cancelled {
             kill_group(group);
             // Reaped with the lock released: a leader in uninterruptible
             // sleep (a hung filesystem) must not stall a cancel behind it.
+            // The count drops only after the reap, under a fresh lock, so
+            // a settle that returns has seen the leader reaped, never just
+            // the kill sent.
             drop(state);
+            #[cfg(test)]
+            self.pause_before_reap();
             let _reaped = child.wait();
+            self.spawned_out();
             return Err(interrupted());
         }
         state.groups.retain(|group| alive(*group));
         state.groups.push(group);
+        state.spawning -= 1;
+        self.wake.bump();
         drop(state);
         #[cfg(test)]
         self.pause_after_listed();
         Ok(child)
+    }
+
+    /// Marks one spawn out of flight and wakes every [`Reads::settle`]
+    /// wait: the count drops under the lock and the bump follows, so a
+    /// settle that wakes on the bump reads the lower count.
+    fn spawned_out(&self) {
+        self.lock().spawning -= 1;
+        self.wake.bump();
+    }
+
+    /// Waits until no spawn is still in flight, or `bound` on `clock`
+    /// passes: `true` once every counted spawn listed or killed its group
+    /// and reaped its leader, `false` at the bound. A `true` after a
+    /// cancel leaves no group behind: a spawn that raced the cancel has
+    /// relocked, seen it, killed its group and reaped the leader. The
+    /// clock subscription comes before the first count read, so a clock
+    /// advance wakes even a settle that started with nothing spawned.
+    /// `false` is the same SIGKILL-or-hung-filesystem case the bound
+    /// covers elsewhere: the caller exits anyway.
+    pub(crate) fn settle(&self, clock: &dyn Clock, bound: Duration) -> bool {
+        let wake = Arc::clone(&self.wake);
+        let subscribing: Arc<dyn Wake> = wake.clone();
+        clock.subscribe(Arc::downgrade(&subscribing));
+        let end = clock.now().checked_add(bound);
+        loop {
+            // The generation is captured before the checks, as in
+            // `credential`: a finish past this point ends the park below
+            // at once, so no decrement lands unheard.
+            let seen = self.wake.generation();
+            if self.lock().spawning == 0 {
+                return true;
+            }
+            if end.is_some_and(|end| clock.now() >= end) {
+                return false;
+            }
+            self.wake.park(clock, end, seen);
+        }
     }
 
     /// Cancels every read: answers each waiting `run` with `closing`, makes
@@ -463,6 +531,35 @@ impl Reads {
     fn pause_after_listed(&self) {
         let point = self
             .listed_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause before the next spawn reaps a late child: the spawn
+    /// sends on `entered` once it dropped the lock past the kill and
+    /// blocks until `release` arrives. The pause is one-shot.
+    pub(crate) fn pause_at_reap(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self
+            .reap_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the spawn reached the late child's reap and blocks until
+    /// the test releases it. Runs free unless a test armed a pause
+    /// meanwhile.
+    fn pause_before_reap(&self) {
+        let point = self
+            .reap_pause
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
