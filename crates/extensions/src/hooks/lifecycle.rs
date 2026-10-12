@@ -285,7 +285,11 @@ fn decode_additive(
                     "`{key}` as an empty string, not a non-empty string"
                 )));
             }
-            other @ (Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_)) => {
+            other @ (Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::Array(_)
+            | Value::Object(_)) => {
                 return Err(bad(format!(
                     "`{key}` as {}, not a non-empty string",
                     kind(&other)
