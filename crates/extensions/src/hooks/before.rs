@@ -30,7 +30,7 @@ pub(super) fn own_command_failure(
 ) -> Option<HookFailure> {
     extension.runs_own_command_call().then(|| HookFailure {
         extension: extension.name().to_owned(),
-        message: format!("The `{point}` hook would wait behind its extension's command."),
+        message: format!("The `{point}` hook would wait behind its extension's command"),
     })
 }
 
