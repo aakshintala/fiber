@@ -22,9 +22,13 @@ use proptest::prelude::*;
 enum Kind {
     StepStarted,
     Delta,
+    AssistantMessageStarted,
     ToolCallStarted,
     ToolCallCompleted,
     MessageCompleted,
+    ShellCommand,
+    ExtensionExec,
+    UsageRecorded,
 }
 
 fn kind() -> impl Strategy<Value = Kind> {
@@ -32,9 +36,13 @@ fn kind() -> impl Strategy<Value = Kind> {
     prop_oneof![
         Just(StepStarted),
         Just(Delta),
+        Just(AssistantMessageStarted),
         Just(ToolCallStarted),
         Just(ToolCallCompleted),
         Just(MessageCompleted),
+        Just(ShellCommand),
+        Just(ExtensionExec),
+        Just(UsageRecorded),
     ]
 }
 
@@ -43,7 +51,15 @@ fn kind() -> impl Strategy<Value = Kind> {
 fn syncs(kind: &Kind) -> bool {
     use Kind::*;
     match kind {
-        ToolCallStarted | ToolCallCompleted | MessageCompleted => true,
+        // `UsageRecorded` syncs here because the test appends it outside
+        // an action, where no other line records the call.
+        AssistantMessageStarted
+        | ToolCallStarted
+        | ToolCallCompleted
+        | MessageCompleted
+        | ShellCommand
+        | ExtensionExec
+        | UsageRecorded => true,
         StepStarted | Delta => false,
     }
 }
@@ -53,16 +69,46 @@ fn event_of(kind: &Kind) -> contract::events::Event {
     match kind {
         StepStarted => empty("step_started"),
         Delta => delta("x"),
+        AssistantMessageStarted => empty("assistant_message_started"),
         ToolCallStarted => tool_call_started(),
         ToolCallCompleted => tool_call_completed(),
         MessageCompleted => message_completed(),
+        ShellCommand => event(
+            "shell_command",
+            serde_json::json!({
+                "command": "ls",
+                "output": "",
+                "process": {"exit_code": 0, "timed_out": false},
+            }),
+        ),
+        ExtensionExec => event(
+            "extension_exec",
+            serde_json::json!({
+                "extension": "e",
+                "program": "git",
+                "args": [],
+                "cwd": "/w",
+                "process": {"exit_code": 0, "timed_out": false},
+            }),
+        ),
+        // Outside an action, so the append ends with an fsync.
+        UsageRecorded => event(
+            "usage_recorded",
+            serde_json::json!({
+                "generation_id": "g",
+                "model": "p/m",
+                "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 1},
+                "input_bytes": 1,
+                "cost": null,
+            }),
+        ),
     }
 }
 
 proptest! {
-    // Few cases, since each makes a session; enough to cut each kind of line
-    // at each kind of byte.
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    // Sixteen cases: each makes a session, and the fsync test cuts each
+    // case at every syncing kind.
+    #![proptest_config(ProptestConfig::with_cases(16))]
 
     /// A session cut off at any byte, as a power cut can leave it, reopens
     /// with every complete line intact and carries on from the next `seq`.
@@ -103,11 +149,22 @@ proptest! {
     /// durable line written so far, and `seq` carries on from there.
     #[test]
     fn a_session_killed_at_each_fsync_boundary_reopens_intact(
-        kinds in prop::collection::vec(kind(), 1..30)
-            .prop_filter("a syncing kind", |kinds| {
-                kinds.iter().any(syncs)
-            }),
+        prefix in prop::collection::vec(kind(), 0..12),
     ) {
+        use Kind::*;
+        // Every syncing kind in a fixed order, so each case cuts at each
+        // kind of fsync boundary. Reopen and a non-syncing append make no
+        // fsync, so the scratch directory is reused across cuts.
+        let mut kinds = prefix;
+        kinds.extend([
+            AssistantMessageStarted,
+            ToolCallStarted,
+            ToolCallCompleted,
+            MessageCompleted,
+            ShellCommand,
+            ExtensionExec,
+            UsageRecorded,
+        ]);
         let tmp = TestDir::new("prop-fsync-cut");
         let log =
             Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
