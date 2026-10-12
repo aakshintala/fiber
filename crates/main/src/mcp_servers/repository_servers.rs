@@ -424,6 +424,14 @@ impl Later {
                 .infos
                 .retain(|info| info.name != mcp::RESOURCES_TOOL);
         }
+        // The names the session held before the load stand: an
+        // extension's replacement keeps its `tools` row, so the started
+        // rows those names held are dropped and never declared. The
+        // tools themselves still load, and the loop leaves the
+        // registered names alone.
+        started
+            .infos
+            .retain(|info| !outcome.held.contains(&info.name));
         for info in &started.infos {
             declare(&info.name, Some(info.clone()));
         }

@@ -892,6 +892,7 @@ fn loaded(session: super::SessionServers, key: r#loop::OfferKey) -> Vec<(String,
         load(&r#loop::OfferOutcome {
             skipped: vec![],
             reported: vec![key],
+            held: vec![],
         })
         .expect("the load runs")
     });

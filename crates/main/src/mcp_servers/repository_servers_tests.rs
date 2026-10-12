@@ -144,7 +144,11 @@ fn outcome(
     skipped: Vec<r#loop::OfferKey>,
     reported: Vec<r#loop::OfferKey>,
 ) -> r#loop::OfferOutcome {
-    r#loop::OfferOutcome { skipped, reported }
+    r#loop::OfferOutcome {
+        skipped,
+        reported,
+        held: Vec::new(),
+    }
 }
 
 #[test]

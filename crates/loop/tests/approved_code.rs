@@ -660,6 +660,60 @@ fn a_loaded_tool_never_replaces_a_registered_one() {
 }
 
 #[test]
+fn the_post_offer_load_receives_the_held_names() {
+    let registered = Arc::new(TestTool::reads("same", "Old."));
+    let mut session = Session::open(
+        vec![Scripted::text("Hello.")],
+        Vec::new(),
+        vec![Arc::clone(&registered) as Arc<dyn contract::tool::Tool>],
+        r#loop::Model {
+            reference: MODEL.into(),
+            cost: None,
+            subscription: false,
+        },
+    );
+    let code = Fake::new(Vec::new());
+    let code: Arc<dyn RepositoryCode> = code as Arc<dyn RepositoryCode>;
+    session.looped = Some(session.looped.take().unwrap().repository_code(code));
+    let (calls, seen) = counter();
+    with_load(
+        &mut session,
+        loader(&calls, &seen, Vec::new(), Vec::new(), None),
+    );
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(
+        session.turn(),
+        Some(contract::events::TurnOutcome::Completed)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // The loader sees the names registered before the load, so a later
+    // load can leave their declared rows alone.
+    let seen = seen.lock().unwrap();
+    let outcome = seen.as_ref().unwrap();
+    assert_eq!(outcome.held, ["same".to_owned()]);
+    // The complete ordered list: a text-only turn after the load, so a
+    // dropped, added or reordered event fails (`docs/testing.md`,
+    // "Event streams").
+    assert_eq!(
+        ordered(session.lines().iter().map(|line| line.kind.as_str())),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
 fn two_loaded_tools_of_one_name_replace_in_order() {
     let mut session = Session::open(
         vec![Scripted::text("Hello.")],
