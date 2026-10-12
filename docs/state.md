@@ -19,6 +19,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
     config.json                   this project's configuration
     config/<extension>.json       an extension's settings for this project
     worktrees/<id>/               one git worktree per session that asked for one
+    worktrees/<id>.lock           its lock file, held while a process runs in it
     approvals/<content-hash>      one file per extension or hook approval or never
     data/<extension>/             an extension's data for this project
   extensions/<name>/              installed extensions, one directory each
@@ -272,7 +273,7 @@ started with `isolation: worktree`, of `fiber ask --worktree` or of the
 terminal's new-worktree switch (`docs/invocation.md`, "Isolation"). When one
 is removed or kept is `docs/delegates.md` ("Worktrees"). A kept worktree is
 removed only by `fiber sessions prune` (`docs/invocation.md`, "Deleting and
-pruning").
+pruning"). A worktree's lock file coordinates a resume's recreation, and an end-of-run removal, against the processes running in the worktree. Every process that runs in a worktree it did not just create holds the file shared; a recreation holds it exclusively while it checks and makes the worktree again, and a removal takes it exclusively without waiting, keeping the worktree when another process holds it. The file stays whenever its worktree stays, and goes only after a whole removal, not when only the directory is removed and the branch is kept.
 
 **Sockets.** `run/<session_id>` is the local socket of a running session
 (`docs/invocation.md`, "Processes"), mode 0600 in a 0700 directory. The hub, a
@@ -334,7 +335,7 @@ One writer per session via `session.lock` is `docs/events.md`.
 
 ## Upgrades and versioning
 
-There is no layout version marker. The first change to this layout adds a
+There is no layout version marker. Coordination files that are created on demand and carry no data, such as a worktree's `.lock` file, do not change the layout, and binaries that do not know one skip it. The first change to this layout adds a
 file `layout` at the top of Fiber home containing `2`; a missing file means
 layout 1. `fiber update` changes only the Fiber binary, `extensions/` and `docs/`;
 it never touches sessions, config, rules, approvals, pinned copies, credentials

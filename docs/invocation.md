@@ -1110,7 +1110,7 @@ delegate's `isolation: worktree` (`docs/delegates.md`), by the terminal's
 All three use the same rules (`docs/delegates.md`, "Worktrees"): a new branch
 from the workspace's HEAD in a worktree under
 `~/.fiber/projects/<key>/worktrees/<id>`, removed at the end when it holds
-nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. Outside a
+nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. A resume whose worktree was removed makes it again at the same path and branch from the repository's current HEAD, before `fiber_started`, and ends it by the same rules. A worktree's lock file, `~/.fiber/projects/<key>/worktrees/<id>.lock`, is held shared by every process that runs in a worktree it did not just create, exclusively while a resume checks for the worktree and makes it again, and taken exclusively without waiting by an end-of-run removal, which keeps the worktree when another process holds it; the file stays whenever its worktree stays, and goes only when a whole removal succeeds, so a dirty, never-shared worktree keeps one too, and `fiber sessions prune` leaves lock files alone. Outside a
 git repository a delegate's `isolation: worktree` fails with
 `invalid_arguments`, and `fiber ask --worktree` is a usage error. The session
 records the worktree on `session_started` (`docs/events.md`). The `worktree`
