@@ -1,28 +1,27 @@
 ---
 source: crates/tui/src/view/model_picker_tests.rs
-assertion_line: 386
 expression: "screen(&app, 100, 40)"
 ---
 Models                                                                                             ✕
-                              ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+                        ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
-                                4 models               ⟳ refresh all
-                                acme
-                                › [ ] m1 [deep] [review]
-                                  [ ] m2
+                          Type to search █
+                           0 of 4 marked
+                          acme
+                          › [ ] m1 [deep] [review]
+                                thinking low high
+                            [ ] m2
+                                fixed thinking
 
-                                zeta
-                                  [ ] z1
-                                  [ ] z2 [chat]
+                          zeta
+                            [ ] z1
+                                thinking low
+                            [ ] z2 [chat]
+                                thinking low high
 
-                                Space mark · Enter save · Esc back
+                          ↑↓ move · Enter toggle · Ctrl+S save · Esc close
 
-                              ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-
-
-
-
-
+                        ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 
 
 

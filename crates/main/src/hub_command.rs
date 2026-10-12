@@ -1,5 +1,5 @@
 //! `fiber hub` (`docs/invocation.md`, "Commands and flags"). `install`,
-//! `uninstall` and `status` run in the `cli` crate. The internal
+//! `uninstall`, `status` and `refresh` run in the `cli` crate. The internal
 //! `hub serve` is hidden, free to change, and named nowhere in the docs: it
 //! builds the session starter and runs the hub, which reads configuration
 //! once it holds the `run/` lock; a start failure prints one line on stderr.
@@ -23,6 +23,16 @@ pub(crate) fn run(command: cli::HubCommands, exe: Result<PathBuf, String>) -> i3
         cli::HubCommands::Install { port } => ::cli::hub_install(port, &crate::clock::System),
         cli::HubCommands::Uninstall => ::cli::hub_uninstall(),
         cli::HubCommands::Status { json } => ::cli::hub_status(json, &crate::clock::System),
+        cli::HubCommands::Refresh => {
+            let mut connect = || {
+                crate::connect_hub(
+                    &config::fiber_home_from_env().map_err(std::io::Error::other)?,
+                    &exe,
+                    &crate::clock::System,
+                )
+            };
+            ::cli::hub_refresh(&mut connect)
+        }
         cli::HubCommands::Serve { installed } => serve(exe, mode(installed)),
     }
 }

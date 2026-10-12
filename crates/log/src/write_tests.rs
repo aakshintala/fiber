@@ -865,3 +865,36 @@ fn open_reads_an_escaped_kind() {
     assert_eq!(latest.seq.map(|s| s.0), Some(1));
     assert_eq!(full_parses() - before, 1);
 }
+
+#[test]
+fn cut_notice_names_the_saved_file_or_the_failure() {
+    let path = std::path::Path::new("/s/s_1/artifacts/out.txt");
+    assert_eq!(
+        cut_notice(5, Ok(path)),
+        "[5 bytes cut. The full output is in /s/s_1/artifacts/out.txt; read it with `read`.]"
+    );
+    assert_eq!(
+        cut_notice(5, Err("disk full")),
+        "[5 bytes cut. The full output could not be saved: disk full.]"
+    );
+    assert_eq!(
+        cut_notice(0, Ok(path)),
+        "[0 bytes cut. The full output is in /s/s_1/artifacts/out.txt; read it with `read`.]"
+    );
+}
+
+#[test]
+fn cut_joined_puts_the_notice_between_the_ends() {
+    assert_eq!(
+        cut_joined("head", "[5 bytes cut.]", "tail"),
+        "head\n[5 bytes cut.]\ntail"
+    );
+}
+
+#[test]
+fn cut_joined_with_no_tail_adds_no_trailing_newline() {
+    assert_eq!(
+        cut_joined("head", "[5 bytes cut.]", ""),
+        "head\n[5 bytes cut.]"
+    );
+}

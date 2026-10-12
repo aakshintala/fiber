@@ -149,6 +149,8 @@ actions:
 `mcp_resources` is declared only when at least one configured server offers
 resources. Its effect is `reads`, plus `network` for a remote server.
 
+A server offers resources when its `initialize` reply advertises the resources capability. `list` with no server names the servers that offer resources and starts none. With a server, it lists one page of that server's resources, and an answer with a `nextCursor` is continued by passing it as `cursor`. `read` reads one resource by its URI, whether or not `list` showed it, and its content is mapped as a tool result's is ("Calls"). `mcp_resources` is listed as built in, and its definition counts toward the built-in budget (`docs/tools.md`, "Size budget in CI"). An extension replaces it as it replaces an MCP tool ("Tools and their names").
+
 ## Calls
 
 Each call has a timeout, 10 minutes by default, the same as the shell's
@@ -188,15 +190,14 @@ A result goes through the tool contract in `docs/tools.md`:
 
 Settled by [MCP servers start on first call](https://github.com/aakshintala/fiber/issues/257).
 
-**A server starts on the first call to one of its tools, or the first time a
-person runs one of its prompts.** The model sees its tools from the session's
+**A server starts on the first call to one of its tools, the first `mcp_resources` call that names it, or the first time a person runs one of its prompts.** The model sees its tools from the session's
 first request all the same: they are declared from the server's last tool
 list, cached in Fiber home at `cache/mcp/<server>.json`, with its last prompt
 list (`docs/state.md`). The cache is keyed by a hash of
 the server's declaration: its command, arguments, environment, or URL. The
 first call waits for the server to start and list its tools, up to its startup
 deadline. The handshake lists tools only when the server advertises the
-tools capability, and prompts only when it advertises prompts: a server
+tools capability, and prompts only when it advertises prompts. It records whether the server advertises resources, and the cache keeps that with the lists; a cached file without that record counts as offering none. A server
 advertising only prompts starts with no tools. The deadline is 5 seconds by default, and configuration can change
 it per server.
 

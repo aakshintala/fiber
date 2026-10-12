@@ -16,6 +16,22 @@ const SHARD_TIMEOUT_BASE_MINUTES: u64 = 20;
 /// job after 6 hours, so a larger bound buys nothing.
 const SHARD_TIMEOUT_MAX_MINUTES: u64 = 360;
 
+/// `docs/ci.md`, "Selection": prefixes of release-code paths. Slash-bounded,
+/// so `crates/benchmark/…` does not match; `xtask/src/bench` is the doc's
+/// literal `bench*` prefix (`bench.rs`, `bench_tests.rs`, `bench/…`).
+const RELEASE_CODE_PREFIXES: [&str; 2] = ["crates/bench/", "xtask/src/bench"];
+/// `docs/ci.md`, "Selection": exact release-code files.
+const RELEASE_CODE_FILES: [&str; 2] = ["scripts/release-size", "scripts/stored-results"];
+
+/// Whether `path` is code the release job runs (`docs/ci.md`, "Selection"):
+/// under a release-code prefix or exactly a release-code file, and never a
+/// docs file, so a Markdown file under release-code paths is not release code.
+fn is_release_code(path: &str) -> bool {
+    !super::is_docs_file(path)
+        && (RELEASE_CODE_PREFIXES.iter().any(|p| path.starts_with(p))
+            || RELEASE_CODE_FILES.contains(&path))
+}
+
 /// Which CI jobs run, by the job ids in `.github/workflows/ci.yml`, and how
 /// many mutant shards.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +57,12 @@ pub(crate) fn shard_timeout_minutes(count: u64) -> u64 {
         .clamp(SHARD_TIMEOUT_BASE_MINUTES, SHARD_TIMEOUT_MAX_MINUTES)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one per input the Plan step reads"
+)]
+/// `release_paths` is the diff's paths for the release rule, both ends of a
+/// rename, unquoted; read only by `release`.
 pub(crate) fn plan(
     mode: &str,
     packages: &[String],
@@ -49,6 +71,7 @@ pub(crate) fn plan(
     bug: bool,
     mutants: bool,
     mutant_count: u64,
+    release_paths: &[String],
 ) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
@@ -70,8 +93,13 @@ pub(crate) fn plan(
         ("test", test && !draft),
         ("mutants", shards > 0),
         ("bug_red", pr && code && bug),
-        // Runs with the binary-level tests, and on every push (`docs/ci.md`, "Selection").
-        ("release", !pr || packages.iter().any(|p| p == BINARY_TESTS)),
+        // Runs with the binary-level tests, on every push, or when the diff
+        // touches release code (`docs/ci.md`, "Selection").
+        (
+            "release",
+            !pr || packages.iter().any(|p| p == BINARY_TESTS)
+                || release_paths.iter().any(|p| is_release_code(p)),
+        ),
     ]);
     Plan { jobs, shards }
 }

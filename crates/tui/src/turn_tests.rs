@@ -223,14 +223,22 @@ fn a_group_counts_its_calls_by_kind_and_its_span() {
             "you 00:00 ",
             "",
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            " • Read 2 files, edited 1 file +3 −1, ran 1 command… · 12s",
+            " ● Read 2 files, edited 1 file +3 −1, ran 1 command… 12s ▸",
             "",
             " Done.",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
     let summary = styled(&app, &texts(&app)[7]);
-    assert!(dim(&summary));
+    // Past the card's padding, every span is dim.
+    assert!(
+        summary
+            .spans
+            .iter()
+            .skip(1)
+            .all(|span| span.style.add_modifier.contains(Modifier::DIM)),
+        "{summary:?} is dim throughout"
+    );
     assert!(!dim(&styled(&app, " Done.")));
 }
 
@@ -261,7 +269,47 @@ fn shell_searches_and_other_tools_have_their_own_kinds() {
     text(&mut app, "a_m", "ok", 0);
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Searched 3 patterns, edited 2 files, ran 2 commands, 1…")
+        Some(" ● Searched 2 patterns, listed 2 directories, edited… 0s ▸")
+    );
+}
+
+#[test]
+fn completed_calls_count_their_result_lines_and_exits() {
+    // A trailing newline adds no line, and a shell names its exit.
+    let mut app = app();
+    start(&mut app, "go", 0);
+    step(&mut app, 0);
+    request(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
+    complete(
+        &mut app,
+        "a_1",
+        0,
+        json!({"content": [{"type": "text", "text": "a\nb\n"}]}),
+    );
+    request(&mut app, "a_2", "shell", json!({"command": "cargo t"}), 0);
+    feed(
+        &mut app,
+        "tool_call_completed",
+        Some("a_2"),
+        0,
+        json!({"status": "completed",
+            "process": {"exit_code": 3, "timed_out": false},
+            "content": [{"type": "text", "text": "x\ny"}]}),
+    );
+    text(&mut app, "a_m", "Done.", 0);
+    app.open(group(&app));
+    let lines = texts(&app);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("a.rs") && line.ends_with("2 lines")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("cargo t") && line.ends_with("exit 3 · 2 lines")),
+        "{lines:?}"
     );
 }
 
@@ -278,7 +326,8 @@ fn edited_files_count_distinct_paths_and_sum_their_lines() {
             json!({"changes": [{"path": path, "added": added, "removed": 1}]}),
         );
     }
-    // A failed edit with no changes adds no file once others changed some.
+    // A failed edit still counts its path: files count distinct `path`
+    // arguments per kind.
     request(&mut app, "a_4", "edit", json!({"path": "c.rs"}), 0);
     feed(
         &mut app,
@@ -290,7 +339,7 @@ fn edited_files_count_distinct_paths_and_sum_their_lines() {
     text(&mut app, "a_m", "ok", 0);
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Edited 2 files +7 −3")
+        Some(" ● Edited 3 files +7 −3                               0s ▸")
     );
 }
 
@@ -324,14 +373,14 @@ fn text_splits_groups_and_steering_does_not() {
             "you 00:00 ",
             "",
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            " • Read 2 files",
+            " ● Read 2 files                                       0s ▸",
             "",
             " steer · 00:00 ───────────────────────────────────────────",
             " also b",
             "",
             " Read them.",
             "",
-            " • Read 2 files",
+            " ● Read 2 files                                       0s ▸",
             "",
             " More.",
             "",
@@ -408,7 +457,16 @@ fn a_thinking_only_group_is_one_line_per_block() {
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
-    assert!(dim(&styled(&app, " + Thought: short")));
+    // The row is dim throughout its spans, past the card's padding.
+    let short = styled(&app, " + Thought: short");
+    assert!(
+        short
+            .spans
+            .iter()
+            .skip(1)
+            .all(|span| span.style.add_modifier.contains(Modifier::DIM)),
+        "{short:?} is dim throughout"
+    );
     // Opening a thought shows its text under it, dim.
     let thought = target(&app, " + Thought: Plan the fix · 22s");
     app.open(thought);
@@ -427,7 +485,7 @@ fn a_thought_with_no_end_or_text_has_no_figures() {
     start(&mut app, "q", 0);
     feed(&mut app, "reasoning_started", Some("a_t"), 0, json!({}));
     text(&mut app, "a_m", "A.", 5_000);
-    assert_eq!(texts(&app).get(7).map(String::as_str), Some(" + Thought"));
+    assert_eq!(texts(&app).get(7).map(String::as_str), Some(" Thinking"));
 }
 
 #[test]
@@ -441,7 +499,7 @@ fn a_running_group_shows_calls_in_flight_and_thinking() {
     feed(&mut app, "reasoning_started", Some("a_t"), 0, json!({}));
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Read 1 file, ran 1 command, thought once · shell cargo…")
+        Some(" ● Read 1 file, ran 1 command, thought once · shell … 0s ▸")
     );
     feed(
         &mut app,
@@ -452,7 +510,7 @@ fn a_running_group_shows_calls_in_flight_and_thinking() {
     );
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Read 1 file, ran 1 command, thought once · shell cargo…")
+        Some(" ● Read 1 file, ran 1 command, thought once · shell … 0s ▸")
     );
     // A block that has finished no longer shows; completed calls leave.
     feed(
@@ -465,7 +523,7 @@ fn a_running_group_shows_calls_in_flight_and_thinking() {
     complete(&mut app, "a_2", 0, json!({}));
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Read 1 file, ran 1 command, thought once")
+        Some(" ● Read 1 file, ran 1 command, thought once           0s ▸")
     );
 }
 
@@ -503,30 +561,32 @@ fn raw_arguments_stream_until_their_call_is_requested() {
     }
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • shell {\"com, read {\"path\"")
+        Some(" ● shell {\"com, read {\"path\"                          0s ▸")
     );
     // The requested call takes the place of the lowest index.
     request(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Read 1 file · read a.rs, shell {\"com")
+        Some(" ● Read 1 file · read a.rs, shell {\"com               0s ▸")
     );
     request(&mut app, "a_2", "shell", json!({"command": "ls"}), 0);
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Read 1 file, ran 1 command · read a.rs, shell ls")
+        Some(" ● Read 1 file, listed 1 directory · read a.rs, shel… 0s ▸")
     );
 }
 
 #[test]
 fn group_summary_lines_are_cut_to_one_row_at_the_width() {
-    // "• Read 1 file · read a.rs" is 25 cells, and the summary clips to
-    // the card's inner width: it fits whole at 27 and above, and is cut
-    // with "…" below (`docs/tui.md`, "Tool groups and the ledger").
+    // "● Read 1 file · read a.rs" is 26 cells, and the summary fills the
+    // card's inner width with the duration and the toggle right-aligned: it
+    // fits whole with filler at 34 and above, and the left part is cut with
+    // "…" below (`docs/tui.md`, "Tool groups and the ledger").
     for (width, expected) in [
-        (26u16, " • Read 1 file · read a…"),
-        (27u16, " • Read 1 file · read a.…"),
-        (25u16, " • Read 1 file · read …"),
+        (35u16, " ● Read 1 file · read a.rs   0s ▸"),
+        (34u16, " ● Read 1 file · read a.rs  0s ▸"),
+        (33u16, " ● Read 1 file · read a.rs 0s ▸"),
+        (32u16, " ● Read 1 file · read a.… 0s ▸"),
     ] {
         let mut app = app();
         app.set_size(width, 24);
@@ -535,7 +595,7 @@ fn group_summary_lines_are_cut_to_one_row_at_the_width() {
         request(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
         let line = texts(&app)
             .into_iter()
-            .find(|line| line.starts_with(" •"))
+            .find(|line| line.starts_with(" ●"))
             .expect("a group summary");
         assert_eq!(line, expected, "at {width}");
     }
@@ -543,15 +603,14 @@ fn group_summary_lines_are_cut_to_one_row_at_the_width() {
 
 #[test]
 fn a_finished_group_summary_keeps_its_duration_when_cut() {
-    // "• Read 1 file · 12s" is 19 cells, and the finished summary clips
-    // to the conversation width, one column inside the window for the
-    // scroll bar: it fits whole at 20 and above, and the descriptive part
-    // is cut with "…" at 19 while the duration stays whole
-    // (`docs/tui.md`, "Tool groups and the ledger").
+    // "● Read 1 file" is 13 cells, and the finished summary fills the
+    // conversation width with "12s ▸" right-aligned: it fits whole at 22
+    // and above, and the left part is cut with "…" below while the right
+    // part keeps its columns (`docs/tui.md`, "Tool groups and the ledger").
     for (width, expected) in [
-        (21u16, " • Read 1 fi… · 12s"),
-        (20u16, " • Read 1 f… · 12s"),
-        (19u16, " • Read 1 … · 12s"),
+        (22u16, " ● Read 1 file 12s ▸"),
+        (21u16, " ● Read 1 fi… 12s ▸"),
+        (19u16, " ● Read 1 … 12s ▸"),
     ] {
         let mut app = app();
         app.set_size(width, 24);
@@ -562,19 +621,21 @@ fn a_finished_group_summary_keeps_its_duration_when_cut() {
         text(&mut app, "a_m", "Done.", 12_000);
         let line = texts(&app)
             .into_iter()
-            .find(|line| line.starts_with(" •"))
+            .find(|line| line.starts_with(" ●"))
             .expect("a group summary");
         assert_eq!(line, expected, "at {width}");
-        assert!(line.ends_with("12s"), "the duration stays whole at {width}");
+        assert!(
+            line.ends_with("12s ▸"),
+            "the right part stays whole at {width}"
+        );
     }
 }
 
 #[test]
 fn a_finished_group_summary_keeps_its_duration_when_it_nearly_fills_the_width() {
-    // The duration alone nearly fills the conversation width: the
-    // descriptive part is cut to its first cell, and the pieces stay
-    // inside the padding (`docs/tui.md`, "Tool groups and the ledger",
-    // "Turns").
+    // The row is wider than the right part plus two: the left part is cut
+    // to nothing, and the row is still one row with the right part whole
+    // (`docs/tui.md`, "Tool groups and the ledger", "Turns").
     let mut app = app();
     app.set_size(9, 24);
     start(&mut app, "go", 0);
@@ -582,8 +643,7 @@ fn a_finished_group_summary_keeps_its_duration_when_it_nearly_fills_the_width() 
     request(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
     complete(&mut app, "a_1", 12_000, json!({}));
     text(&mut app, "a_m", "Done.", 12_000);
-    assert_eq!(texts(&app)[7], " … ·");
-    assert_eq!(texts(&app)[8], " 12s");
+    assert_eq!(texts(&app)[7], " ● Rea…");
 }
 
 #[test]
@@ -597,7 +657,10 @@ fn a_streaming_call_with_no_name_yet_shows_an_ellipsis() {
         0,
         json!({"index": 0, "text": "{"}),
     );
-    assert_eq!(texts(&app).get(7).map(String::as_str), Some(" • … {"));
+    assert_eq!(
+        texts(&app).get(7).map(String::as_str),
+        Some(" ● … {                                                0s ▸")
+    );
     // A failed message stops streaming: nothing is left in flight.
     feed(
         &mut app,
@@ -679,7 +742,7 @@ fn a_call_requested_with_no_deltas_joins_the_open_group() {
     call(&mut app, "a_2", "read", json!({"path": "b.rs"}), 0);
     assert_eq!(
         texts(&app).get(7).map(String::as_str),
-        Some(" • Read 2 files")
+        Some(" ● Read 2 files                                       0s ▸")
     );
 }
 
@@ -720,7 +783,7 @@ fn live_text_streams_ahead_of_the_calls_it_precedes() {
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " First.",
             "",
-            " • Read 1 file",
+            " ● Read 1 file                                        0s ▸",
             "",
             " Second.",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
@@ -935,8 +998,8 @@ fn ledger_app() -> App {
 #[test]
 fn the_ledger_is_one_row_per_call_split_by_step() {
     let mut app = ledger_app();
-    let summary = texts(&app).get(7).cloned().unwrap_or_default();
     app.open(group(&app));
+    let summary = texts(&app).get(7).cloned().unwrap_or_default();
     let top = "▄".repeat(59);
     let bottom = "▀".repeat(59);
     assert_eq!(
@@ -950,29 +1013,45 @@ fn the_ledger_is_one_row_per_call_split_by_step() {
             "".to_owned(),
             top,
             summary,
-            "   1 + Thought: Look first · 4s".to_owned(),
-            "     read a.rs".to_owned(),
-            "   2 edit src/a.rs +3 −1".to_owned(),
-            "     shell cargo t · failed".to_owned(),
-            "     web_fetch u · denied".to_owned(),
-            "     custom · cancelled".to_owned(),
-            "     read z.rs · running".to_owned(),
+            "     1 + Thought: Look first · 4s".to_owned(),
+            "       ✓ read     a.rs                              1 line".to_owned(),
+            "     2 ✓ edit     src/a.rs                           +3 −1".to_owned(),
+            "       ✗ shell    cargo t           nonzero_exit: exit 101".to_owned(),
+            "       ✗ other    u                                 denied".to_owned(),
+            "       ⊘ other                                   cancelled".to_owned(),
+            "       ○ read     z.rs                             running".to_owned(),
             "".to_owned(),
             " Done.".to_owned(),
             bottom,
         ]
     );
-    // An edited row stands out; the rest sit back.
-    let edited = styled(&app, "   2 edit src/a.rs +3 −1");
-    assert!(bold(&edited) && !dim(&edited));
-    for row in [
-        "     read a.rs",
-        "     shell cargo t · failed",
-        "   1 + Thought: Look first · 4s",
-    ] {
-        let line = styled(&app, row);
-        assert!(dim(&line) && !bold(&line), "{row}");
-    }
+    // An edited row stands out by its counts, not by weight; no ledger
+    // row is bold, and the thought row sits back dim and italic.
+    let edited = styled(
+        &app,
+        "     2 ✓ edit     src/a.rs                           +3 −1",
+    );
+    assert!(!bold(&edited));
+    let thought = styled(&app, "     1 + Thought: Look first · 4s");
+    assert!(!bold(&thought));
+    assert!(
+        thought
+            .spans
+            .iter()
+            .skip(1)
+            .all(|span| span.style.add_modifier.contains(Modifier::DIM)),
+        "{thought:?} sits back"
+    );
+    let read = styled(
+        &app,
+        "       ✓ read     a.rs                              1 line",
+    );
+    assert!(!bold(&read));
+    let result = read.spans.last().expect("a result");
+    assert!(
+        result.style.add_modifier.contains(Modifier::DIM),
+        "{read:?} result sits back"
+    );
     app.open(group(&app));
     assert_eq!(texts(&app).len(), 11);
 }
@@ -982,7 +1061,10 @@ fn an_edited_file_row_colours_its_counts() {
     use crate::theme::Role;
     let mut app = ledger_app();
     app.open(group(&app));
-    let edited = styled(&app, "   2 edit src/a.rs +3 −1");
+    let edited = styled(
+        &app,
+        "     2 ✓ edit     src/a.rs                           +3 −1",
+    );
     let fg = |text: &str| {
         edited
             .spans
@@ -991,13 +1073,21 @@ fn an_edited_file_row_colours_its_counts() {
             .map(|span| span.style.fg)
             .unwrap_or_else(|| panic!("{text:?} in {edited:?}"))
     };
-    assert_eq!(fg(" +3"), Some(Role::Added.color()));
-    assert_eq!(fg(" −1"), Some(Role::Removed.color()));
-    assert_eq!(fg("  2 edit src/a.rs"), None);
+    assert_eq!(fg("+3"), Some(Role::Added.color()));
+    assert_eq!(fg("−1"), Some(Role::Removed.color()));
+    let target_span = edited
+        .spans
+        .iter()
+        .find(|span| span.content.starts_with("src/a.rs"))
+        .unwrap_or_else(|| panic!("the target in {edited:?}"));
+    assert_eq!(target_span.style.fg, None);
     // Its opened diff: a removed line, then an added one.
-    app.open(target(&app, "   2 edit src/a.rs +3 −1"));
-    let removed = styled(&app, "     -old");
-    let added = styled(&app, "     +new");
+    app.open(target(
+        &app,
+        "     2 ✓ edit     src/a.rs                           +3 −1",
+    ));
+    let removed = styled(&app, "         -old");
+    let added = styled(&app, "         +new");
     assert_eq!(removed.style.fg, Some(Role::Removed.color()));
     assert_eq!(added.style.fg, Some(Role::Added.color()));
     assert!(dim(&removed) && dim(&added));
@@ -1017,8 +1107,11 @@ fn a_call_that_changed_no_file_opens_its_output_uncoloured() {
     );
     text(&mut app, "a_m", "Done.", 0);
     app.open(group(&app));
-    app.open(target(&app, "   1 shell ls"));
-    for row in ["     +one", "     -two"] {
+    app.open(target(
+        &app,
+        "     1 ✓ list     ls                               2 paths",
+    ));
+    for row in ["         +one", "         -two"] {
         let line = styled(&app, row);
         assert!(dim(&line), "{row}: {:?}", texts(&app));
         assert_eq!(line.style.fg, None, "{row}");
@@ -1030,11 +1123,26 @@ fn opening_a_call_shows_its_error_reason_diff_or_output() {
     let mut app = ledger_app();
     app.open(group(&app));
     for (row, shown) in [
-        ("   2 edit src/a.rs +3 −1", vec!["     -old", "     +new"]),
-        ("     shell cargo t · failed", vec!["     exit 101"]),
-        ("     web_fetch u · denied", vec!["     not allowed"]),
-        ("     custom · cancelled", vec!["     x"]),
-        ("     read a.rs", vec!["     ok"]),
+        (
+            "     2 ✓ edit     src/a.rs                           +3 −1",
+            vec!["         -old", "         +new"],
+        ),
+        (
+            "       ✗ shell    cargo t           nonzero_exit: exit 101",
+            vec!["         nonzero_exit: exit 101"],
+        ),
+        (
+            "       ✗ other    u                                 denied",
+            vec!["         not allowed"],
+        ),
+        (
+            "       ⊘ other                                   cancelled",
+            vec!["         x"],
+        ),
+        (
+            "       ✓ read     a.rs                              1 line",
+            vec!["         ok"],
+        ),
     ] {
         let call = target(&app, row);
         app.open(call);
@@ -1056,9 +1164,9 @@ fn opening_a_call_shows_its_error_reason_diff_or_output() {
         )));
         app.open(call);
     }
-    // A thought opened in the ledger shows its text under the gutter.
-    app.open(target(&app, "   1 + Thought: Look first · 4s"));
-    assert!(texts(&app).contains(&"     # Look first".to_owned()));
+    // A thought opened in the ledger shows its text eight columns in.
+    app.open(target(&app, "     1 + Thought: Look first · 4s"));
+    assert!(texts(&app).contains(&"         # Look first".to_owned()));
 }
 
 #[test]
@@ -1097,15 +1205,27 @@ fn ctrl_o_opens_every_ledger_unless_all_are_open() {
     // One open, one closed: Ctrl+O opens both.
     app.open(group(&app));
     ctrl_o(&mut app);
-    assert!(texts(&app).contains(&"   1 read a.rs".to_owned()));
-    assert!(texts(&app).contains(&"   1 read b.rs".to_owned()));
+    assert!(
+        texts(&app)
+            .iter()
+            .any(|line| line.contains("read") && line.contains("a.rs"))
+    );
+    assert!(
+        texts(&app)
+            .iter()
+            .any(|line| line.contains("read") && line.contains("b.rs"))
+    );
     // All open: Ctrl+O closes them all.
     ctrl_o(&mut app);
     assert_eq!(texts(&app).len(), 19);
     // A group made later starts the way the last Ctrl+O left them.
     ctrl_o(&mut app);
     call(&mut app, "a_3", "read", json!({"path": "c.rs"}), 0);
-    assert!(texts(&app).contains(&"   1 read c.rs".to_owned()));
+    assert!(
+        texts(&app)
+            .iter()
+            .any(|line| line.contains("read") && line.contains("c.rs"))
+    );
 }
 
 #[test]
@@ -1115,7 +1235,11 @@ fn ctrl_o_with_no_ledger_yet_sets_how_groups_start() {
     step(&mut app, 0);
     ctrl_o(&mut app);
     call(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
-    assert!(texts(&app).contains(&"   1 read a.rs".to_owned()));
+    assert!(
+        texts(&app)
+            .iter()
+            .any(|line| line.contains("read") && line.contains("a.rs"))
+    );
     let mut app = self::app();
     start(&mut app, "go", 0);
     step(&mut app, 0);
@@ -1132,7 +1256,11 @@ fn an_open_approval_shows_its_group_ledger_until_resolved() {
     step(&mut app, 0);
     request(&mut app, "a_1", "shell", json!({"command": "rm x"}), 0);
     feed(&mut app, "permission_requested", Some("a_1"), 0, json!({}));
-    assert!(texts(&app).contains(&"   1 shell rm x · running".to_owned()));
+    assert!(
+        texts(&app)
+            .iter()
+            .any(|line| line.contains("rm x") && line.contains("running"))
+    );
     feed(&mut app, "permission_resolved", Some("a_1"), 0, json!({}));
     assert_eq!(texts(&app).len(), 9);
     // A group the person opened stays open after the answer.
@@ -1199,7 +1327,7 @@ fn lines_the_fold_cannot_place_are_skipped() {
             "you 00:00 ",
             "",
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            " + Thought",
+            " Thinking",
             "",
             " ▣ completed",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
@@ -1222,7 +1350,11 @@ fn repaired_arguments_are_the_ones_shown() {
             "repairs": [{"path": "/path", "fix": "string_parsed"}]}),
     );
     ctrl_o(&mut app);
-    assert!(texts(&app).contains(&"   1 read fixed.rs · running".to_owned()));
+    assert!(
+        texts(&app)
+            .iter()
+            .any(|line| line.contains("fixed.rs") && line.contains("running"))
+    );
 }
 
 #[test]
@@ -1313,7 +1445,10 @@ fn a_streaming_call_with_no_text_yet_shows_its_name_alone() {
         0,
         json!({"index": 0, "name": "read", "text": ""}),
     );
-    assert_eq!(texts(&app).get(7).map(String::as_str), Some(" • read"));
+    assert_eq!(
+        texts(&app).get(7).map(String::as_str),
+        Some(" ● read                                               0s ▸")
+    );
 }
 
 #[test]
@@ -1335,10 +1470,22 @@ fn ctrl_o_closes_when_every_ledger_is_open_whatever_thinking_groups_say() {
     for group in groups {
         app.open(group);
     }
-    assert!(texts(&app).contains(&"   1 read b.rs".to_owned()));
+    assert!(
+        texts(&app)
+            .iter()
+            .any(|line| line.contains("read") && line.contains("b.rs"))
+    );
     ctrl_o(&mut app);
-    assert!(!texts(&app).contains(&"   1 read a.rs".to_owned()));
-    assert!(!texts(&app).contains(&"   1 read b.rs".to_owned()));
+    assert!(
+        !texts(&app)
+            .iter()
+            .any(|line| line.contains("read") && line.contains("a.rs"))
+    );
+    assert!(
+        !texts(&app)
+            .iter()
+            .any(|line| line.contains("read") && line.contains("b.rs"))
+    );
 }
 
 /// Folds one line while scrolled up; whether it raised the overlay.
@@ -1559,7 +1706,11 @@ fn an_interrupt_shows_only_on_the_closing_line_and_its_call_reads_cancelled() {
         .collect();
     assert_eq!(mentions, [" ▣ interrupted · 3s · 1 call"]);
     assert_eq!(last(&app), " ▣ interrupted · 3s · 1 call");
-    assert!(lines.contains(&"   1 shell sleep 9 · cancelled".to_owned()));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("sleep 9") && line.contains("cancelled"))
+    );
 }
 
 /// An `assistant_message_started` for message `a_m`.
@@ -1844,8 +1995,8 @@ fn a_cancelled_wait_keeps_the_failed_attempts() {
     assert_eq!(
         texts(&app)[8..10],
         [
-            "   1 model call failed · rate_limited · attempt 1",
-            "     model call failed · rate_limited · attempt 2",
+            "     1 model call failed · rate_limited · attempt 1",
+            "       model call failed · rate_limited · attempt 2",
         ]
     );
 }
@@ -1914,14 +2065,17 @@ fn a_failed_model_call_is_counted_on_the_summary_and_in_the_ledger() {
     started(&mut app);
     retry(&mut app, 3, 1_000, 4);
     text(&mut app, "a_m", "Done.", 0);
-    assert_eq!(texts(&app)[7], " • Read 1 file · 2 failed model calls");
+    assert_eq!(
+        texts(&app)[7],
+        " ● Read 1 file · 2 failed model calls                 0s ▸"
+    );
     app.open(group(&app));
     assert_eq!(
         texts(&app)[8..11],
         [
-            "   1 model call failed · rate_limited · attempt 1",
-            "     model call failed · rate_limited · attempt 1",
-            "     read a.rs",
+            "     1 model call failed · rate_limited · attempt 1",
+            "       model call failed · rate_limited · attempt 1",
+            "       ✓ read     a.rs                              1 line",
         ]
     );
 }
@@ -1944,7 +2098,7 @@ fn a_group_with_only_a_failed_call_still_draws_its_summary() {
             "you 00:00 ",
             "",
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            " • 1 failed model call",
+            " ● 1 failed model call                                0s ▸",
             "",
             " Done.",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
@@ -1954,7 +2108,7 @@ fn a_group_with_only_a_failed_call_still_draws_its_summary() {
     ctrl_o(&mut app);
     assert_eq!(
         texts(&app)[8],
-        "   1 model call failed · rate_limited · attempt 1"
+        "     1 model call failed · rate_limited · attempt 1"
     );
 }
 
@@ -2114,7 +2268,7 @@ fn a_running_group_line_is_marked_at_column_1() {
     let texts = texts(&app);
     let at = texts
         .iter()
-        .position(|line| line == " • Read 1 file · read a.rs")
+        .position(|line| line.starts_with(" ● Read 1 file · read a.rs"))
         .expect("a group line");
     assert_eq!(app.shown(0, usize::MAX).spins, vec![(at, 1)]);
 }
@@ -2135,7 +2289,7 @@ fn a_keyless_streaming_group_line_is_marked() {
     let texts = texts(&app);
     let at = texts
         .iter()
-        .position(|line| line == " • … {\"pa")
+        .position(|line| line.starts_with(" ● … {\"pa"))
         .expect("a group line");
     assert_eq!(app.shown(0, usize::MAX).spins, vec![(at, 1)]);
     assert!(
@@ -2153,6 +2307,6 @@ fn a_finished_group_line_is_not_marked() {
     step(&mut app, 0);
     call(&mut app, "a_1", "read", json!({"path": "a.rs"}), 0);
     end(&mut app, "completed", 0);
-    assert!(texts(&app).iter().any(|line| line.starts_with(" • ")));
+    assert!(texts(&app).iter().any(|line| line.starts_with(" ● ")));
     assert_eq!(app.shown(0, usize::MAX).spins, Vec::new());
 }

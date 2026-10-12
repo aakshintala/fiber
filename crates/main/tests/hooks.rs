@@ -1241,3 +1241,102 @@ fn a_redacted_socket_prompt_joins_the_history_redacted() {
     );
     assert!(!text.contains("sk-123"), "the history holds no secret");
 }
+
+#[test]
+fn an_over_mebibyte_shell_call_hands_the_hook_its_path_and_size() {
+    let setup = Setup::new();
+    setup.lua(
+        "spill",
+        "fiber.hook(\"after_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) return { content = \"path=\" .. tostring(call.path) .. \" size=\" .. tostring(call.size), artifact = \"replaced\" } end })\n",
+    );
+    // The script prints 1,048,577 bytes.
+    let script = setup.workspace().join("flood.sh");
+    fs::write(&script, "head -c 1048577 /dev/zero | tr '\\0' a\n").unwrap();
+    let command = format!("sh {}", script.display());
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_flood",
+            "shell",
+            &json!({"command": command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_extra(&server, &json!({}));
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": command})
+        ),
+    )
+    .unwrap();
+    let run = setup.run(&["ask", "flood the output"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // `tool_call_delta` is ephemeral, and how many the flood fills depends
+    // on when it writes, so the comparison leaves them out; every other
+    // kind is pinned in order.
+    let kinds: Vec<&str> = run
+        .kinds()
+        .into_iter()
+        .filter(|kind| *kind != "tool_call_delta")
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let completed = run.completed();
+    let dir = run.session_dir(&setup);
+    let artifact = completed["artifact"].as_str().unwrap();
+    assert!(artifact.starts_with("artifacts/s_"), "{artifact}");
+    assert!(artifact.ends_with(".txt"), "{artifact}");
+    let path = dir.join(artifact);
+    // The call's 1,048,577 bytes plus the 14 closing bytes.
+    let expected = format!("path={} size=1048591", path.display());
+    assert_eq!(
+        completed["content"],
+        json!([{"type": "text", "text": expected}])
+    );
+    assert_eq!(output_sent(&server), expected);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "replaced");
+    // No file under the session holds the raw output.
+    let mut pending = vec![dir.clone()];
+    while let Some(next) = pending.pop() {
+        for entry in fs::read_dir(&next).unwrap() {
+            let entry = entry.unwrap().path();
+            if entry.is_dir() {
+                pending.push(entry);
+            } else {
+                assert!(
+                    fs::metadata(&entry).unwrap().len() < 1_048_577,
+                    "{} holds the raw output",
+                    entry.display()
+                );
+            }
+        }
+    }
+}

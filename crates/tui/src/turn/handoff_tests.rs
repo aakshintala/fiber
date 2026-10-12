@@ -321,7 +321,7 @@ fn the_band_ends_the_open_group() {
     );
     let lines = texts(&app);
     assert_eq!(lines.len(), 13, "{lines:?}");
-    assert!(lines[7].starts_with(" •") && lines[11].starts_with(" •"));
+    assert!(lines[7].starts_with(" ●") && lines[11].starts_with(" ●"));
     assert!(lines[9].starts_with('⇄'));
 }
 

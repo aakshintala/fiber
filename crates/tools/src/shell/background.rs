@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{JobCompleted, JobStarted, Outcome};
-use contract::jobs::{Foreground, JobRecord, Jobs, OpenError, Opened, Opening, Stop};
+use contract::jobs::{Foreground, JobRecord, Jobs, Opened, Opening, Stop};
 use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
 use contract::{ErrorCode, JobId};
@@ -21,7 +21,7 @@ use contract::{ErrorCode, JobId};
 use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::monitor::Feed;
 use super::moved::Moved;
-use super::output::JobStream;
+use super::output::{JobStream, align_char_boundary};
 use super::tty;
 use super::{Limit, assemble};
 
@@ -221,8 +221,9 @@ pub(crate) fn take(
     }) {
         Ok(opened) => hand_off(moved, opened, job_cancel, clock, limit, terminal, cancel),
         Err(error) => {
+            let line = format!("It could not move to the background: {error}.");
             let finished = moved.resume(clock.as_ref(), cancel, emit);
-            note_open_failure(assemble(limit, finished), &error)
+            assemble(limit, finished, Some(&line))
         }
     }
 }
@@ -239,7 +240,9 @@ fn hand_off(
     let pgid = moved.pgid();
     let shared = moved.shared();
     let reason = moved.reason.clone();
-    moved.attach_output(opened.file);
+    // A spill in progress goes to the job's output file; the line names
+    // any raw file left behind, for the receipt.
+    let spill_line = moved.attach_output(opened.file, &opened.path);
     // Armed before the call's cancel is detached, so a stop that arrives
     // as soon as the job is recorded still wakes the drive loop.
     moved.arm(job_cancel.as_ref());
@@ -272,7 +275,10 @@ fn hand_off(
         (end.0)(to_completed(job_id, &path, finished, limit));
     });
     if let Some(sink) = sink {
-        return monitor_receipt(&opened.started, &opened.path, &errors, &sink, limit.ms);
+        return with_spill_line(
+            monitor_receipt(&opened.started, &opened.path, &errors, &sink, limit.ms),
+            spill_line,
+        );
     }
     // The receipt carries what the terminal printed in its first 250 ms.
     let first = terminal.then(|| {
@@ -286,15 +292,31 @@ fn hand_off(
         | MoveReason::BackgroundCommand => None,
     };
     match first {
-        Some(first) => terminal_receipt(
-            &opened.started,
-            &opened.path,
-            &reason,
-            members.as_deref(),
-            &first,
+        Some(first) => with_spill_line(
+            terminal_receipt(
+                &opened.started,
+                &opened.path,
+                &reason,
+                members.as_deref(),
+                &first,
+            ),
+            spill_line,
         ),
-        None => receipt(&opened.started, &opened.path, &reason, members.as_deref()),
+        None => with_spill_line(
+            receipt(&opened.started, &opened.path, &reason, members.as_deref()),
+            spill_line,
+        ),
     }
+}
+
+/// The receipt with the spill's extra line naming a raw file left behind,
+/// when there is one.
+fn with_spill_line(mut output: Output, line: Option<String>) -> Output {
+    if let (Some(line), Some(ContentPart::Text { text })) = (line, output.content.first_mut()) {
+        text.push_str(&line);
+        text.push('\n');
+    }
+    output
 }
 
 /// A `tty` command's receipt: how to type into it, and `first`, what the
@@ -365,14 +387,6 @@ fn monitor_receipt(
         jobs: vec![JobRecord::Started(started.clone())],
         ..Output::default()
     }
-}
-
-/// `assemble`'s text always ends with a newline, so the line goes after it.
-fn note_open_failure(mut output: Output, error: &OpenError) -> Output {
-    if let Some(ContentPart::Text { text }) = output.content.first_mut() {
-        text.push_str(&format!("It could not move to the background: {error}.\n"));
-    }
-    output
 }
 
 /// `members` names what a shell that exited left running.
@@ -548,7 +562,7 @@ fn to_completed(job_id: JobId, path: &Path, finished: Finished, limit: Limit) ->
     // over every other end but the cap.
     let stopped =
         !capped && !flooded && finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
-    let mut output = assemble(limit, finished);
+    let mut output = assemble(limit, finished, None);
     if capped {
         output.error = Some(crate::tool_util::failure(
             ErrorCode::OutputCap,
@@ -590,16 +604,6 @@ fn output_tail(path: &Path) -> Option<String> {
     file.take(window).read_to_end(&mut bytes).ok()?;
     let text = String::from_utf8_lossy(align_char_boundary(&bytes)).into_owned();
     if text.is_empty() { None } else { Some(text) }
-}
-
-/// Drops a partial character at the start of a cut, so the tail does not
-/// begin with U+FFFD from a byte that belonged to the previous character.
-fn align_char_boundary(slice: &[u8]) -> &[u8] {
-    let start = slice
-        .iter()
-        .position(|byte| byte & 0b1100_0000 != 0b1000_0000)
-        .unwrap_or(slice.len());
-    slice.get(start..).unwrap_or_default()
 }
 
 struct JobInner {

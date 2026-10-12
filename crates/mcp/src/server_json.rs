@@ -157,6 +157,64 @@ where
     Ok(kept)
 }
 
+/// One resource a server lists.
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+pub(crate) struct ListedResource {
+    /// Its URI: an entry without a string `uri` is dropped, so this
+    /// read fails on anything but a string.
+    #[serde(deserialize_with = "uri_string")]
+    pub uri: String,
+    /// Its name; absent when the server gave none or a wrong type.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub name: Option<String>,
+    /// Its title; absent when the server gave none or a wrong type.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub title: Option<String>,
+    /// Its description; absent when the server gave none or a wrong type.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub description: Option<String>,
+    /// Its MIME type; absent when the server gave none or a wrong type.
+    #[serde(
+        rename = "mimeType",
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub mime_type: Option<String>,
+    /// Its size in bytes; absent when the server gave none or a wrong type.
+    #[serde(
+        default,
+        deserialize_with = "lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub size: Option<u64>,
+}
+
+/// Reads a resource URI: a string reads, anything else (missing, `null`
+/// or a wrong type) fails, so [`entries`] drops the entry.
+fn uri_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    value
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| <D::Error as serde::de::Error>::custom("expected a string uri"))
+}
+
 /// A `tools/call` result.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub(crate) struct CallResult {

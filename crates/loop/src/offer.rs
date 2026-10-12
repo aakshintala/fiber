@@ -355,6 +355,7 @@ impl Loop {
                 | Delivery::Job(_)
                 | Delivery::JobLine(_)) => self.deferred.push_back(held),
                 now @ (Delivery::Reply(..)
+                | Delivery::Name(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Interaction(_)

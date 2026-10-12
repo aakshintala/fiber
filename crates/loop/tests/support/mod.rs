@@ -609,6 +609,19 @@ pub(crate) fn credential_reported(
     )
 }
 
+/// The person's `name` command reporting its answer on `answered`.
+pub(crate) fn name_reported(
+    text: &str,
+    answered: std::sync::mpsc::Sender<contract::inbox::Answer>,
+) -> Delivery {
+    Delivery::Name(
+        contract::commands::Name { text: text.into() },
+        Ack(Box::new(move |answer| {
+            answered.send(answer).unwrap();
+        })),
+    )
+}
+
 /// A person's `handoff` on the loop's inbox, with `instructions`.
 pub(crate) fn handoff(id: &str, instructions: Option<&str>) -> Delivery {
     Delivery::Handoff(

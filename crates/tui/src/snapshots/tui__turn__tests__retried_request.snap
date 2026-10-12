@@ -1,5 +1,6 @@
 ---
 source: crates/tui/src/turn_tests.rs
+assertion_line: 1741
 expression: "texts(&app).join(\"\\n\")"
 ---
 
@@ -9,5 +10,5 @@ expression: "texts(&app).join(\"\\n\")"
 you 00:00 
 
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
- • 1 failed model call
+ ● 1 failed model call                                0s ▸
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

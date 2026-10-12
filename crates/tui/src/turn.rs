@@ -421,6 +421,20 @@ impl Turn {
                 call.status = Some(done.status);
                 call.changes = done.changes.clone().unwrap_or_default();
                 call.detail = format::detail(done);
+                call.exit = done.process.as_ref().and_then(|process| process.exit_code);
+                call.lines = done
+                    .content
+                    .iter()
+                    .filter_map(|part| match part {
+                        contract::shapes::ContentPart::Text { text } => Some(text.as_str()),
+                        contract::shapes::ContentPart::Image { .. }
+                        | contract::shapes::ContentPart::Pdf(_)
+                        | contract::shapes::ContentPart::Unknown => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .lines()
+                    .count() as u64;
                 call.images = crate::image::parts(&done.content);
                 true
             }) && group.touched(ts)

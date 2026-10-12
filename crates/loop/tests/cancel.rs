@@ -1267,3 +1267,235 @@ fn a_reply_sent_after_the_shutdown_is_never_applied() {
     let exited = log::read(&session.dir).unwrap().pop().unwrap();
     assert_eq!(exited.payload["suspended_on"], request_id);
 }
+
+#[test]
+fn a_cancel_after_one_result_is_written_keeps_it_and_cancels_the_running_call() {
+    let gate = Arc::new(Gate::default());
+    let fast = Arc::new(TestTool::reads("fast", "Fast done."));
+    let mut held = TestTool::reads("held", "Held done.");
+    held.script = vec![Script::Wait(Arc::clone(&gate))];
+    let held = Arc::new(held);
+    let mut session = Session::with_tools(
+        vec![
+            support::calls_reply("", &[("fast", paris()), ("held", paris())]),
+            fakes::Scripted::text("Done."),
+        ],
+        None,
+        vec![
+            fast.clone() as Arc<dyn contract::tool::Tool>,
+            held.clone() as _,
+        ],
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    let tap = Tap::new(&session.log);
+    let cancel = Arc::clone(&session.cancel);
+    std::thread::scope(|scope| {
+        let turn = scope.spawn(|| session.turn());
+        // Fast runs straight through, so the first completion can only
+        // be its own: the written result the cancel must keep.
+        tap.wait_for("tool_call_completed");
+        assert!(cancel.cancel());
+        gate.open();
+        assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
+    });
+    gate.check("held");
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    // The written result stays completed with its own text; the running
+    // call ends cancelled, carrying its tool's content too.
+    let done = completed(&lines);
+    assert_eq!(done.len(), 2);
+    assert_eq!(done[0].payload["status"], "completed");
+    assert_eq!(text_all(done[0]), "Fast done.");
+    assert_eq!(done[1].payload["status"], "cancelled");
+    assert_eq!(text_all(done[1]), "Held done.");
+    for line in &done {
+        assert!(
+            line.payload
+                .get("error")
+                .is_none_or(serde_json::Value::is_null)
+        );
+    }
+    assert_eq!(session.requests().len(), 1);
+    assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
+}
+
+#[test]
+fn a_result_held_behind_a_running_call_completes_cancelled_with_its_content() {
+    let gate = Arc::new(Gate::default());
+    let quick_gate = Arc::new(Gate::default());
+    let mut held = TestTool::reads("held", "Held done.");
+    held.script = vec![Script::Wait(Arc::clone(&gate))];
+    let held = Arc::new(held);
+    let mut quick = TestTool::reads("quick", "Quick done.");
+    quick.script = vec![
+        Script::Emit(Box::new(Event::ToolCallDelta(Progress {
+            text: Some("quick started".into()),
+            details: None,
+        }))),
+        Script::Wait(Arc::clone(&quick_gate)),
+        Script::Emit(Box::new(Event::ToolCallDelta(Progress {
+            text: Some("quick finished".into()),
+            details: None,
+        }))),
+    ];
+    let quick = Arc::new(quick);
+    let mut session = Session::with_tools(
+        vec![
+            support::calls_reply("", &[("held", paris()), ("quick", paris())]),
+            fakes::Scripted::text("Done."),
+        ],
+        None,
+        vec![
+            held.clone() as Arc<dyn contract::tool::Tool>,
+            quick.clone() as _,
+        ],
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    let tap = Tap::new(&session.log);
+    let cancel = Arc::clone(&session.cancel);
+    std::thread::scope(|scope| {
+        let turn = scope.spawn(|| session.turn());
+        tap.wait_for_delta("quick started");
+        quick_gate.open();
+        // The paced second delta is flushed only once its tool has
+        // returned, so this line proves quick returned while held back.
+        tap.wait_for_delta("quick finished");
+        assert!(cancel.cancel());
+        gate.open();
+        assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
+    });
+    gate.check("held");
+    quick_gate.check("quick");
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_delta",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    // Both calls ran, both were cancelled, and each keeps its tool's
+    // own content: even the call that had already returned.
+    let done = completed(&lines);
+    assert_eq!(done.len(), 2);
+    assert_eq!(done[0].payload["status"], "cancelled");
+    assert_eq!(text_all(done[0]), "Held done.");
+    assert_eq!(done[1].payload["status"], "cancelled");
+    assert_eq!(text_all(done[1]), "Quick done.");
+    // Both deltas are quick's, in emit order, and both precede its
+    // completion: nothing from it follows.
+    let requested: Vec<&contract::Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_requested")
+        .collect();
+    let quick_id = requested[1].action_id.clone();
+    let deltas: Vec<&contract::Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_delta")
+        .collect();
+    assert_eq!(deltas.len(), 2);
+    assert!(deltas.iter().all(|l| l.action_id == quick_id));
+    assert_eq!(deltas[0].payload["text"], "quick started");
+    assert_eq!(deltas[1].payload["text"], "quick finished");
+    let at = lines.iter().position(|l| l == done[1]).unwrap();
+    let first = lines.iter().position(|l| l == deltas[0]).unwrap();
+    let second = lines.iter().position(|l| l == deltas[1]).unwrap();
+    assert!(first < second && second < at);
+    assert!(
+        lines[at..]
+            .iter()
+            .filter(|l| l.kind == "tool_call_delta")
+            .all(|l| l.action_id.as_ref() != quick_id.as_ref())
+    );
+    assert_eq!(session.requests().len(), 1);
+    assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
+}
+
+#[test]
+fn a_cancel_as_the_next_request_is_made_keeps_the_written_result() {
+    let fast = Arc::new(TestTool::reads("fast", "Fast done."));
+    let mut session = Session::cancelling_at_call(
+        vec![
+            support::calls_reply("", &[("fast", paris())]),
+            fakes::Scripted::text("Never sent."),
+        ],
+        2,
+        vec![fast as Arc<dyn contract::tool::Tool>],
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "turn_completed",
+        ]
+    );
+    // The step's only result was written before the cancel, so it stays
+    // completed with its own text: one completion, nothing cancelled.
+    let done = completed(&lines);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["status"], "completed");
+    assert_eq!(text_all(done[0]), "Fast done.");
+    // The next step's request was made, then cancelled: two requests,
+    // and the turn ends interrupted.
+    assert_eq!(session.requests().len(), 2);
+    assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
+}

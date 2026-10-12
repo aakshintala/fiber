@@ -20,6 +20,7 @@ pub struct Isolation {
     session: SessionId,
     home: PathBuf,
     clock: Arc<dyn Clock>,
+    repository: PathBuf,
     /// Runs between the first scan's hold and the revalidating scan, so a
     /// test can force the interleaving a session starting in between.
     /// Test-only: always `None` outside tests.
@@ -39,7 +40,8 @@ pub fn isolate(
     clock: Arc<dyn Clock>,
     add: &dyn Fn(&mut Command) -> io::Result<Output>,
 ) -> Result<Isolation, contract::shapes::Failure> {
-    let key = log::project_key(&project(launch));
+    let repository = project(launch);
+    let key = log::project_key(&repository);
     let path = home
         .join("projects")
         .join(&key)
@@ -52,6 +54,7 @@ pub fn isolate(
             session: session.clone(),
             home: home.to_owned(),
             clock,
+            repository,
             #[cfg(test)]
             pause: None,
         }),
@@ -84,11 +87,13 @@ impl Isolation {
         &self.created.path
     }
 
-    /// The `session_started` worktree: the canonical path and the branch.
+    /// The `session_started` worktree: the canonical path, the branch, and
+    /// the repository's git common directory.
     pub fn worktree(&self) -> Worktree {
         Worktree {
             path: self.created.path.to_string_lossy().into_owned(),
             branch: self.created.branch.clone(),
+            repository: Some(self.repository.to_string_lossy().into_owned()),
         }
     }
 

@@ -477,6 +477,7 @@ fn a_failed_start_is_not_run_with_its_record() {
         crate::cache::Cached {
             tools: vec![],
             prompts: vec![greet_prompt()],
+            resources: false,
         },
     );
     let entry = entry_with(

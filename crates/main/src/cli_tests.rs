@@ -750,6 +750,10 @@ fn parses_argv_into_its_invocation() {
             &["fiber", "hub", "status", "--json"],
             Invocation::Run(Some(Commands::Hub(HubCommands::Status { json: true }))),
         ),
+        (
+            &["fiber", "hub", "refresh"],
+            Invocation::Run(Some(Commands::Hub(HubCommands::Refresh))),
+        ),
     ];
     for (argv, expected) in &cases {
         let parsed = parse_from(argv.iter().copied());

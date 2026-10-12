@@ -457,6 +457,7 @@ impl Loop {
             other @ (Delivery::Prompt(..)
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
+            | Delivery::Name(..)
             | Delivery::Message(_)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
@@ -532,6 +533,9 @@ impl Loop {
             Delivery::Credential(args, ack) => {
                 self.take_switch(crate::switch::Asked::Credential(args), ack, true)?;
             }
+            // The person's name starts no turn, so it is taken after
+            // `close` too: written, pinned and acked at this drain.
+            Delivery::Name(args, ack) => self.take_name(args, ack)?,
             // Starts a new session that continues this one from an
             // earlier point, once, while idle (`docs/events.md`,
             // "Rewind").
@@ -669,6 +673,9 @@ impl Loop {
                     self.take_switch(crate::switch::Asked::Credential(args), ack, false)?;
                 }
             }
+            // The person's name starts no turn, so it is taken after
+            // `close` too: written, pinned and acked at this drain.
+            Delivery::Name(args, ack) => self.take_name(args, ack)?,
             // While a turn runs the session cannot close first: rewind
             // once it ends.
             Delivery::Rewind(_, ack) => {

@@ -159,12 +159,17 @@ jobs:
             } >>"$GITHUB_STEP_SUMMARY"
             # A lane on the command line reads the log: `gh run view` prints no summaries.
             cat "$RUNNER_TEMP/mutants.txt"
+            listed=$(wc -l <"$RUNNER_TEMP/mutants.txt")
             if [ "$MUTANTS" = true ]; then
-              count=$(wc -l <"$RUNNER_TEMP/mutants.txt")
+              count=$listed
             fi
           fi
-          echo "mutants in the diff: $count"
-          cargo xtask plan --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
+          if [ "$MUTANTS" != true ] && [ "${listed:-0}" -gt 0 ]; then
+            echo "mutants in the diff: $listed (not run: a draft without the \`mutants\` label)"
+          else
+            echo "mutants in the diff: $count"
+          fi
+          cargo xtask plan --base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
             --draft "$DRAFT" --bug "$BUG" --mutants "$MUTANTS" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
 
   lint:

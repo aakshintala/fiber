@@ -2,7 +2,7 @@ use contract::ErrorCode;
 use contract::events::{CallStatus, Control, Event, NamedBy, Notice, SessionNamed};
 use contract::shapes::Failure;
 
-use super::{Named, Naming, PINNED};
+use super::{Named, Naming, PINNED, by_person};
 
 fn named(name: Option<&str>, by: NamedBy) -> Event {
     Event::SessionNamed(SessionNamed {
@@ -141,4 +141,16 @@ fn judge_writes_only_a_completed_call_with_a_name() {
             provider: None,
         }
     );
+}
+
+#[test]
+fn by_person_clears_only_on_the_exact_empty_string() {
+    let cleared = by_person(String::new());
+    assert_eq!(cleared.name, None);
+    assert_eq!(cleared.by, NamedBy::Person);
+    for text in ["Mine", "  Mine  ", " ", &"x".repeat(61)] {
+        let kept = by_person(text.to_owned());
+        assert_eq!(kept.name.as_deref(), Some(text));
+        assert_eq!(kept.by, NamedBy::Person);
+    }
 }

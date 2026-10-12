@@ -2,12 +2,14 @@
 //! public [`start`].
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::ServerFailure;
 use contract::events::ToolSource;
+use contract::events::ToolState;
 use contract::shapes::ContentPart;
 use contract::shapes::Effect;
 use fakes::Deadline;
@@ -1161,6 +1163,7 @@ fn a_remote_server_with_a_matching_cache_starts_lazily() {
         &crate::cache::Cached {
             tools: remote_lists(),
             prompts: Vec::new(),
+            resources: false,
         },
     );
     let started = setup.start(vec![setup.remote_spec("fx", &url)]);
@@ -1316,4 +1319,168 @@ fn a_remote_spec_debug_hides_userinfo_query_and_unparsed_urls() {
     assert!(!printed.contains("secret"), "{printed}");
     let broken = setup.remote_spec("fx", "not a url");
     assert!(format!("{broken:?}").contains("<unparsed>"), "{broken:?}");
+}
+
+/// A lazy spec for `name` whose cache offers resources when `resources`.
+fn lazy_spec(setup: &Setup, name: &str, resources: bool) -> super::ServerSpec {
+    let spec = setup.spec(name);
+    crate::cache::write(
+        &setup.cache(),
+        name,
+        &spec.key(),
+        &crate::cache::Cached {
+            tools: Vec::new(),
+            prompts: Vec::new(),
+            resources,
+        },
+    );
+    spec
+}
+
+#[test]
+fn a_lazy_slot_offers_resources_as_its_cache_says() {
+    for resources in [true, false] {
+        let setup = Setup::new();
+        let started = setup.start(vec![lazy_spec(&setup, "fx", resources)]);
+        assert!(started.failed.is_empty());
+        assert!(
+            !setup.spawned(),
+            "declaring from the cache spawns nothing, resources: {resources}",
+        );
+        let slot = Arc::clone(&started.servers.slots.lock().unwrap()[0]);
+        assert_eq!(slot.offers_resources(), resources, "resources: {resources}",);
+        assert_eq!(slot.spec().name, "fx");
+        setup.stop(started.servers);
+    }
+}
+
+#[test]
+fn adopt_copies_the_adopted_slots_and_leaves_them_reachable() {
+    let setup = Setup::new();
+    let a = setup.start(vec![lazy_spec(&setup, "a", false)]);
+    let b = setup.start(vec![lazy_spec(&setup, "b", true)]);
+    let a_slot = Arc::clone(&a.servers.slots.lock().unwrap()[0]);
+    let b_slot = Arc::clone(&b.servers.slots.lock().unwrap()[0]);
+    // Held across the move, so the test still sees the adopted list after.
+    let b_list = Arc::clone(&b.servers.slots);
+    a.servers.adopt(b.servers);
+    let held = a.servers.slots.lock().unwrap();
+    assert_eq!(held.len(), 2);
+    assert!(Arc::ptr_eq(&held[0], &a_slot));
+    assert!(Arc::ptr_eq(&held[1], &b_slot));
+    drop(held);
+    let kept = b_list.lock().unwrap();
+    assert_eq!(kept.len(), 1, "the adopted list is left intact");
+    assert!(Arc::ptr_eq(&kept[0], &b_slot));
+    drop(kept);
+    setup.stop(a.servers);
+}
+
+#[test]
+fn nested_adoption_reaches_every_slot() {
+    let setup = Setup::new();
+    let a = setup.start(vec![lazy_spec(&setup, "a", false)]);
+    let b = setup.start(vec![lazy_spec(&setup, "b", true)]);
+    let c = setup.start(vec![lazy_spec(&setup, "c", false)]);
+    let c_slot = Arc::clone(&c.servers.slots.lock().unwrap()[0]);
+    let a_slot = Arc::clone(&a.servers.slots.lock().unwrap()[0]);
+    let b_slot = Arc::clone(&b.servers.slots.lock().unwrap()[0]);
+    // Held across both moves, so the test still sees each list after.
+    let a_list = Arc::clone(&a.servers.slots);
+    a.servers.adopt(b.servers);
+    c.servers.adopt(a.servers);
+    let reached = c.servers.slots.lock().unwrap();
+    assert_eq!(reached.len(), 3);
+    assert!(Arc::ptr_eq(&reached[0], &c_slot));
+    assert!(Arc::ptr_eq(&reached[1], &a_slot));
+    assert!(Arc::ptr_eq(&reached[2], &b_slot));
+    drop(reached);
+    let kept = a_list.lock().unwrap();
+    assert_eq!(kept.len(), 2);
+    assert!(Arc::ptr_eq(&kept[0], &a_slot));
+    assert!(Arc::ptr_eq(&kept[1], &b_slot));
+    drop(kept);
+    assert!(b_slot.offers_resources());
+    assert!(!a_slot.offers_resources());
+    setup.stop(c.servers);
+}
+
+#[test]
+fn the_declared_flag_starts_false_and_marks_once() {
+    let setup = Setup::new();
+    let plain = setup.start(vec![]);
+    assert!(!plain.servers.resources_declared());
+    plain.servers.mark_resources_declared();
+    assert!(plain.servers.resources_declared());
+    // Adopting a marked list leaves the adopter's own flag alone.
+    let marked = setup.start(vec![]);
+    marked.servers.mark_resources_declared();
+    plain.servers.adopt(marked.servers);
+    assert!(plain.servers.resources_declared());
+    let fresh = setup.start(vec![]);
+    assert!(!fresh.servers.resources_declared());
+    fresh.servers.adopt(plain.servers);
+    assert!(
+        !fresh.servers.resources_declared(),
+        "adopting a marked list never touches the adopter's flag",
+    );
+    setup.stop(fresh.servers);
+}
+
+#[test]
+fn mcp_resources_is_declared_only_when_a_server_offers_resources() {
+    // One server without resources declares no `mcp_resources`.
+    let setup = Setup::new();
+    let without = setup.start(vec![lazy_spec(&setup, "fx", false)]);
+    assert!(without.failed.is_empty());
+    assert_eq!(names(&without), Vec::<String>::new());
+    setup.stop(without.servers);
+    // A second server offering resources declares exactly one, and an
+    // `all` check would miss a second registration, so the count pins it.
+    let setup = Setup::new();
+    let with = setup.start(vec![
+        lazy_spec(&setup, "fx", false),
+        lazy_spec(&setup, "docs", true),
+    ]);
+    assert!(with.failed.is_empty());
+    assert_eq!(names(&with), ["mcp_resources"]);
+    let registered: Vec<&str> = with
+        .tools
+        .iter()
+        .filter(|(_, tool)| tool.definition().name == "mcp_resources")
+        .map(|(registered_by, _)| registered_by.as_str())
+        .collect();
+    assert_eq!(registered, ["builtin"]);
+    setup.stop(with.servers);
+    // No servers declare none.
+    let setup = Setup::new();
+    let empty = setup.start(vec![]);
+    assert_eq!(names(&empty), Vec::<String>::new());
+    setup.stop(empty.servers);
+}
+
+#[test]
+fn the_resources_info_is_a_full_builtin_row() {
+    let setup = Setup::new();
+    let started = setup.start(vec![lazy_spec(&setup, "docs", true)]);
+    assert!(started.failed.is_empty());
+    let definition = crate::resources_definition();
+    let info = started
+        .infos
+        .iter()
+        .find(|info| info.name == "mcp_resources")
+        .expect("the resources info is declared");
+    assert_eq!(
+        *info,
+        contract::events::ToolInfo {
+            name: "mcp_resources".to_owned(),
+            source: ToolSource::Builtin,
+            state: ToolState::Full,
+            bytes: serde_json::to_vec(&definition)
+                .expect("a definition writes")
+                .len() as u64,
+            tokens: None,
+        }
+    );
+    setup.stop(started.servers);
 }

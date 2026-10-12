@@ -3,7 +3,7 @@
 //! `fiber sessions delete`, `fiber sessions prune`, `fiber sessions search`, `fiber models`,
 //! `fiber extension install`, `fiber extension update`,
 //! `fiber extension remove`, `fiber extension list`, `fiber extension test`, `fiber hub install`,
-//! `fiber hub uninstall` and `fiber hub status`, and the hub restart
+//! `fiber hub uninstall`, `fiber hub status`, `fiber hub refresh`, and the hub restart
 //! `fiber update` calls, and the release install step `install.sh` runs
 //! (`docs/architecture.md`, "The modules"). `main` parses argv and
 //! dispatches here; this crate takes plain values.
@@ -20,6 +20,7 @@ mod approve;
 mod config;
 mod extension;
 mod extension_test;
+mod hub_refresh;
 mod hub_service;
 mod hub_status;
 mod hub_unit;
@@ -42,6 +43,7 @@ pub use extension::{
     extension_install, extension_list, extension_reinstall, extension_remove, extension_update,
 };
 pub use extension_test::extension_test;
+pub use hub_refresh::hub_refresh;
 pub use hub_service::{hub_install, hub_restart, hub_uninstall};
 pub use hub_status::hub_status;
 pub use login::{
