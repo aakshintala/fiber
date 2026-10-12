@@ -27,7 +27,8 @@ use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender};
-use contract::tool::{Cancel, Effects, EffectsError, Output, ServerRecord, Tool};
+use contract::jobs::Taken;
+use contract::tool::{Cancel, Effects, EffectsError, Output, ServerRecord, Settle, Tool};
 use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId};
 use fakes::Deadline;
 use serde_json::{Map, Value, json};
@@ -598,6 +599,7 @@ const TURN_DEADLINE: Duration = Duration::from_secs(10);
 struct Lines {
     name: &'static str,
     jobs: Vec<contract::jobs::JobRecord>,
+    settle: Option<Settle>,
 }
 
 impl Tool for Lines {
@@ -621,6 +623,7 @@ impl Tool for Lines {
                 text: "ok\n".into(),
             }],
             jobs: self.jobs.clone(),
+            settle: self.settle.clone(),
             ..Output::default()
         }
     }
@@ -641,6 +644,7 @@ impl Wake for Nudge {
 /// A call that returns `jobs` only after the turn cancels it.
 struct Hold {
     jobs: Vec<contract::jobs::JobRecord>,
+    settle: Option<Settle>,
     /// The error the call returns once cancelled, if any.
     error: Option<Failure>,
     started: Arc<(Mutex<bool>, Condvar)>,
@@ -678,6 +682,7 @@ impl Tool for Hold {
             }],
             error: self.error.clone(),
             jobs: self.jobs.clone(),
+            settle: self.settle.clone(),
             ..Output::default()
         }
     }
@@ -788,6 +793,7 @@ struct Ran {
     requests: Vec<ModelRequest>,
     lines: Vec<Envelope>,
     homes: Vec<String>,
+    turns_left: usize,
 }
 
 #[track_caller]
@@ -856,12 +862,13 @@ fn run_turn(
     .cancelled_by(cancel);
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
-        let _sent = done_tx.send(looped.turn());
+        let outcome = looped.turn();
+        let _sent = done_tx.send((outcome, looped.call_turns.len()));
     });
-    let outcome = Deadline::after(TURN_DEADLINE)
+    let (outcome, turns_left) = Deadline::after(TURN_DEADLINE)
         .recv(&done_rx)
-        .expect("the turn ended")
-        .unwrap();
+        .expect("the turn ended");
+    let outcome = outcome.unwrap();
     drop(inbox);
     let lines = log::read(&home.path().join("s_test")).unwrap();
     Ran {
@@ -869,6 +876,7 @@ fn run_turn(
         requests: provider.requests(),
         lines,
         homes: home_spellings(home.path()),
+        turns_left,
     }
 }
 
