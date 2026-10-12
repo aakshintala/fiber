@@ -711,12 +711,11 @@ fn exchange(
         .get("refresh_token")
         .and_then(Value::as_str)
         .map(|refresh| Secret::new(refresh.to_owned()));
+    let now_secs = contract::clock::wall_ms(clock.wall()) / 1000;
     let expires_at = reply
         .get("expires_in")
         .and_then(Value::as_u64)
-        .map(|lifetime| {
-            contract::clock::wall_ms(clock.wall()).saturating_add(lifetime)
-        });
+        .map(|lifetime| now_secs.saturating_add(lifetime));
     if reply.get("expires_in").is_some() && expires_at.is_none() {
         return Err(LoginError::Exchange(STEP.to_owned()));
     }
