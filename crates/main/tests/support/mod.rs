@@ -1045,6 +1045,17 @@ pub(crate) fn session_dir(setup: &Setup, id: &str) -> PathBuf {
     log::sessions_dir(&setup.home(), &doors::project(&setup.workspace())).join(id)
 }
 
+/// The newline-terminated lines of `text` as JSON: a trailing fragment
+/// without its `\n` is still being written, so it is dropped. A complete
+/// line that fails to parse still panics.
+pub(crate) fn complete_lines(text: &str) -> Vec<Value> {
+    let complete = text.rfind('\n').map_or("", |end| &text[..=end]);
+    complete
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
 /// Runs the system `git` in `dir`, in its own process group, to its exit
 /// under the test's [`Deadline`].
 #[track_caller]

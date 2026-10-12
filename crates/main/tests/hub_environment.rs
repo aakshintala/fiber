@@ -124,10 +124,8 @@ fn session_log(setup: &Setup, id: &str) -> Vec<Value> {
         .find(|log| log.is_file())
         .expect("the session's log exists");
     fs::read_to_string(log)
+        .map(|text| complete_lines(&text))
         .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
 }
 
 /// The `variables` of session `id`'s `session_started` line.
@@ -469,4 +467,23 @@ fn hub_refresh_starts_a_hub_when_none_runs() {
     // The hub it started idles out soon after the refresh's connection
     // closes, so none lingers past the test.
     until_absent(setup.deadline, &setup.hub_socket(), "the hub to idle out");
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::support::complete_lines;
+
+    #[test]
+    fn complete_lines_drops_a_trailing_partial_line() {
+        assert!(complete_lines("").is_empty());
+        assert!(complete_lines("{\"a\":1}").is_empty());
+        assert_eq!(complete_lines("{\"a\":1}\n"), [json!({"a": 1})]);
+        assert_eq!(complete_lines("{\"a\":1}\n{\"b\":"), [json!({"a": 1})]);
+        assert_eq!(
+            complete_lines("{\"a\":1}\n{\"b\":2}\n"),
+            [json!({"a": 1}), json!({"b": 2})]
+        );
+    }
 }

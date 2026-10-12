@@ -141,9 +141,8 @@ fn ctrl_s_chooses_the_filtered_model_for_this_session_only() {
         .collect();
     assert_eq!(dirs.len(), 1, "one session ran: {dirs:?}");
     let log = fs::read_to_string(dirs[0].join("events.jsonl")).unwrap();
-    let changed: Vec<Value> = log
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+    let changed: Vec<Value> = support::complete_lines(&log)
+        .into_iter()
         .filter(|line| line["kind"] == "model_changed")
         .collect();
     assert_eq!(changed.len(), 1, "one switch: {changed:?}");

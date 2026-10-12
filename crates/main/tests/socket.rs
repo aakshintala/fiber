@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use fakes::{Client, ProviderServer, Response};
 use serde_json::{Value, json};
-use support::{Deadline, Setup, answered, first_line, group_alive};
+use support::{Deadline, Setup, answered, complete_lines, first_line, group_alive};
 
 /// `fiber session --id <id> --workspace <workspace>`, drained as `start` drains it.
 #[track_caller]
@@ -612,10 +612,7 @@ fn session_status_carries_the_project_and_counts_full_connections() {
     // The durable lines equal the log so far.
     let sessions = log::sessions_dir(&setup.home(), &doors::project(&setup.workspace()));
     let file = fs::read_to_string(sessions.join(&session_id).join("events.jsonl")).unwrap();
-    let logged: Vec<Value> = file
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect();
+    let logged: Vec<Value> = complete_lines(&file);
     assert_eq!(durable(&full_lines), logged);
     // The lines with no `seq`, in order: the stale status, then the count,
     // then the new status.

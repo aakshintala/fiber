@@ -1829,16 +1829,23 @@ fn a_live_resume_with_an_absent_label_is_rejected() {
     assert!(message.contains("home"), "{message}");
     assert!(message.contains("work"), "{message}");
     assert!(server.requests().is_empty(), "no turn started");
-    let kinds: Vec<String> = fs::read_to_string(setup.sessions().join(&id).join("events.jsonl"))
-        .unwrap()
-        .lines()
-        .map(|line| {
-            serde_json::from_str::<Value>(line).unwrap()["kind"]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        })
-        .collect();
+    // Startup is done once `extensions_loaded` prints on stdout: every
+    // startup line is in the log by then.
+    loop {
+        let line = setup
+            .deadline
+            .recv(&running.stdout)
+            .expect("waited until the deadline for extensions_loaded");
+        if serde_json::from_str::<Value>(&line).unwrap()["kind"] == "extensions_loaded" {
+            break;
+        }
+    }
+    let kinds: Vec<String> = support::complete_lines(
+        &fs::read_to_string(setup.sessions().join(&id).join("events.jsonl")).unwrap(),
+    )
+    .into_iter()
+    .map(|line| line["kind"].as_str().unwrap().to_owned())
+    .collect();
     assert_eq!(
         kinds,
         ["session_started", "fiber_started", "extensions_loaded"]
