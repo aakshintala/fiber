@@ -1,0 +1,321 @@
+//! The `turn_start`, `before_model_call` and `turn_end` call sites
+//! (`docs/extensions.md`, "The hook points"): what each hook is shown,
+//! and how its answer reaches the turn.
+
+use contract::events::{
+    ContextAdded, Event, InputItem, SteeringApplied, TurnCompleted, TurnOutcome,
+};
+use contract::hook::{
+    BeforeModelCall, CheckAnswer, CheckOutcome, ContextAnswer, ContextOutcome, TurnEnd, TurnStart,
+};
+use contract::shapes::{ContentPart, Failure, Origin, Sender};
+use contract::{ErrorCode, TurnId};
+
+use std::sync::Arc;
+
+use crate::{Error, Loop, cancel};
+
+#[cfg(test)]
+thread_local! {
+    /// A shutdown the test runs after the `turn_start` post-hook check,
+    /// before the guarded answer write: the order a shutdown landing
+    /// between the two would force (`docs/testing.md`, "Waits and
+    /// timeouts" allows the hook where no outside seam reaches the race).
+    static AFTER_TURN_START_CHECK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+    /// A shutdown the test runs after `step_started`, before the held
+    /// messages' guarded write: the same forced order on the next step's
+    /// path.
+    static BEFORE_HELD_WRITE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+/// Runs the hook [`AFTER_TURN_START_CHECK`] holds, if any, then clears it.
+#[cfg(test)]
+fn pause_after_turn_start_check() {
+    AFTER_TURN_START_CHECK.with(|hook| {
+        if let Some(paused) = hook.borrow_mut().take() {
+            paused();
+        }
+    });
+}
+
+/// Runs the hook [`BEFORE_HELD_WRITE`] holds, if any, then clears it.
+#[cfg(test)]
+fn pause_before_held_write() {
+    BEFORE_HELD_WRITE.with(|hook| {
+        if let Some(paused) = hook.borrow_mut().take() {
+            paused();
+        }
+    });
+}
+
+/// What `turn_end` hooks returned and the next step writes, and what a
+/// resumed turn's `session_start` contexts wait in (Part 3): held across
+/// calls, never in `queued`, so a cancel never carries them into another
+/// turn.
+#[derive(Default)]
+pub(crate) struct State {
+    /// Messages `turn_end` hooks continued the turn with, oldest first.
+    pub(crate) continued: Vec<contract::hook::Context>,
+}
+
+impl Loop {
+    /// Runs the session's `turn_start` hooks on the turn's input, in order,
+    /// after its acknowledgements and before its first model request
+    /// (`docs/loop.md`, "Starting a turn"). `Some` ends the turn through
+    /// `end_turn`; `None` runs its steps.
+    pub(crate) fn turn_start(
+        &mut self,
+        turn: &TurnId,
+        input: &[InputItem],
+    ) -> Result<Option<TurnCompleted>, Error> {
+        // A cancel or a shutdown runs no hook: the turn ends `interrupted`
+        // instead.
+        if self.turn_cancelled() {
+            return Ok(Some(crate::ended(TurnOutcome::Interrupted, None)));
+        }
+        let Some(hooks) = self.hooks.clone() else {
+            return Ok(None);
+        };
+        // Items this build does not know carry nothing a hook could read.
+        let shown: Vec<InputItem> = input
+            .iter()
+            .filter(|item| !matches!(item, InputItem::Unknown))
+            .cloned()
+            .collect();
+        let answer = hooks.turn_start(&TurnStart {
+            input: &shown,
+            cancel: &*self.cancel,
+        });
+        let contract::hook::ContextAnswer { outcome, notices } = answer;
+        for notice in notices {
+            self.append(&Event::Notice(notice), turn, None)?;
+        }
+        // A cancel that landed while the hooks ran applies none of the
+        // answer: only the notices above are written.
+        if self.turn_cancelled() {
+            return Ok(Some(crate::ended(TurnOutcome::Interrupted, None)));
+        }
+        match outcome {
+            ContextOutcome::Added(contexts) => {
+                // Guarded with `Commit::Step` so a shutdown lands before
+                // the writes or after them: no context is applied on a
+                // shutdown (`docs/extensions.md`, "Hooks").
+                #[cfg(test)]
+                pause_after_turn_start_check();
+                let cancel = Arc::clone(&self.cancel);
+                let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
+                    for added in &contexts {
+                        self.append(
+                            &Event::ContextAdded(ContextAdded {
+                                text: added.text.clone(),
+                                extension: added.extension.clone(),
+                                hook: "turn_start".to_owned(),
+                            }),
+                            turn,
+                            None,
+                        )?;
+                    }
+                    Ok(())
+                });
+                match written {
+                    None => Ok(Some(crate::ended(TurnOutcome::Interrupted, None))),
+                    Some(result) => result.map(|()| None),
+                }
+            }
+            ContextOutcome::Failed(failure) => Ok(Some(crate::ended(
+                TurnOutcome::Failed,
+                Some(Failure {
+                    code: ErrorCode::HookFailed,
+                    message: format!(
+                        "The `turn_start` hook of extension {} failed, \
+                         so the turn did not run: {}",
+                        failure.extension, failure.message
+                    ),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+            ))),
+        }
+    }
+
+    /// Runs the session's `before_model_call` hooks on the step's built
+    /// request, once the budget allows it and before it is sent
+    /// (`docs/loop.md`, "Spending budget"). `Some` ends the step without
+    /// sending; `None` sends the request.
+    pub(crate) fn model_call_allowed(
+        &mut self,
+        turn: &TurnId,
+    ) -> Result<Option<TurnCompleted>, Error> {
+        // A cancel or a shutdown sends no request: the turn ends
+        // `interrupted` instead.
+        if self.turn_cancelled() {
+            return Ok(Some(crate::ended(TurnOutcome::Interrupted, None)));
+        }
+        let Some(hooks) = self.hooks.clone() else {
+            return Ok(None);
+        };
+        // The spend so far, the delegates' calls included: the same fold
+        // the budget check reads.
+        let answer = hooks.before_model_call(&BeforeModelCall {
+            model: &self.model.reference,
+            usage: &self.ledger.usage(),
+            cancel: &*self.cancel,
+        });
+        let CheckAnswer { outcome, notices } = answer;
+        for notice in notices {
+            self.append(&Event::Notice(notice), turn, None)?;
+        }
+        // A cancel that landed while the hooks ran sends nothing, whatever
+        // they answered: only the notices above are written.
+        if self.turn_cancelled() {
+            return Ok(Some(crate::ended(TurnOutcome::Interrupted, None)));
+        }
+        match outcome {
+            CheckOutcome::Passed => Ok(None),
+            // A refusal ends the turn exactly as the budget does, stopping
+            // the session's running delegates with it.
+            CheckOutcome::Refused(refusal) => Ok(Some(self.budget_end(crate::ended(
+                TurnOutcome::Failed,
+                Some(Failure {
+                    code: ErrorCode::BudgetExceeded,
+                    message: format!(
+                        "Extension {} refused the model request: {}",
+                        refusal.extension, refusal.reason
+                    ),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+            )))),
+            // A failure stops no delegate: only a refusal is "exactly as
+            // `budget.usd` does".
+            CheckOutcome::Failed(failure) => Ok(Some(crate::ended(
+                TurnOutcome::Failed,
+                Some(Failure {
+                    code: ErrorCode::HookFailed,
+                    message: format!(
+                        "The `before_model_call` hook of extension {} failed, \
+                         so the request was not sent: {}",
+                        failure.extension, failure.message
+                    ),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+            ))),
+        }
+    }
+
+    /// What a step's reply with no tool call leaves to do: the end-of-turn
+    /// drain, then the `turn_end` hooks when nothing is waiting. `Some`
+    /// ends the turn; `None` takes another step.
+    pub(crate) fn replied(
+        &mut self,
+        turn: &TurnId,
+        reply: &str,
+    ) -> Result<Option<TurnCompleted>, Error> {
+        // A cancel taken before this point runs no hook: the turn ends
+        // `interrupted` here, rather than at the next step's commit.
+        if self.turn_cancelled() {
+            return Ok(Some(crate::ended(TurnOutcome::Interrupted, None)));
+        }
+        // The end-of-turn drain first: a steer waiting there continues the
+        // turn without calling `turn_end` that time.
+        self.drain(turn)?;
+        if !self.queued.is_empty() {
+            return Ok(None);
+        }
+        let Some(hooks) = self.hooks.clone() else {
+            return Ok(Some(crate::ended(TurnOutcome::Completed, None)));
+        };
+        let answer = hooks.turn_end(&TurnEnd {
+            reply,
+            cancel: &*self.cancel,
+        });
+        let ContextAnswer { outcome, notices } = answer;
+        for notice in notices {
+            self.append(&Event::Notice(notice), turn, None)?;
+        }
+        // A cancel that landed while the hooks ran keeps none of the
+        // answer: only the notices above are written.
+        if self.turn_cancelled() {
+            return Ok(Some(crate::ended(TurnOutcome::Interrupted, None)));
+        }
+        match outcome {
+            // Held for the next step, which writes them after its commit:
+            // never queued, so a message never joins a later turn. An empty
+            // answer ends the turn.
+            ContextOutcome::Added(contexts) => {
+                if contexts.is_empty() {
+                    return Ok(Some(crate::ended(TurnOutcome::Completed, None)));
+                }
+                self.lifecycle.continued.extend(contexts);
+                Ok(None)
+            }
+            // A failure drops the chain's earlier messages with it: the
+            // thing the turn guarded does not happen.
+            ContextOutcome::Failed(failure) => {
+                self.lifecycle.continued.clear();
+                Ok(Some(crate::ended(
+                    TurnOutcome::Failed,
+                    Some(Failure {
+                        code: ErrorCode::HookFailed,
+                        message: format!(
+                            "The `turn_end` hook of extension {} failed: {}",
+                            failure.extension, failure.message
+                        ),
+                        retry_after_ms: None,
+                        provider: None,
+                    }),
+                )))
+            }
+        }
+    }
+
+    /// Writes what the hooks held for the next step: `turn_end` messages as
+    /// `steering_applied`, after `step_started` and the jobs notice, before
+    /// the drain. Each is the extension's own message, with no command.
+    /// Guarded with `Commit::Step` so a shutdown landing after
+    /// `step_started` applies none of them: a refused commit drops them
+    /// unwritten (`docs/invocation.md`, "What is written").
+    pub(crate) fn write_held(&mut self, turn: &TurnId) -> Result<(), Error> {
+        if self.lifecycle.continued.is_empty() {
+            return Ok(());
+        }
+        #[cfg(test)]
+        pause_before_held_write();
+        let held = std::mem::take(&mut self.lifecycle.continued);
+        let cancel = Arc::clone(&self.cancel);
+        let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
+            for item in &held {
+                self.append(
+                    &Event::SteeringApplied(SteeringApplied {
+                        content: vec![ContentPart::Text {
+                            text: item.text.clone(),
+                        }],
+                        sender: Sender {
+                            origin: Origin::Extension {
+                                extension: item.extension.clone(),
+                            },
+                            command_id: None,
+                        },
+                        changed_by: None,
+                    }),
+                    turn,
+                    None,
+                )?;
+            }
+            Ok(())
+        });
+        match written {
+            // Refused: `held` was already taken, so the messages are
+            // dropped unwritten and never join a later turn.
+            None => Ok(()),
+            Some(result) => result,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "lifecycle_tests.rs"]
+mod tests;

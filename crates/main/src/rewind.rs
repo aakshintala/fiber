@@ -4,10 +4,11 @@
 //! session its `seq` counts in, the old session or the `from_session_id` an
 //! ancestor point names. The new session runs through `run_new` with the
 //! old session's worktree and no `Isolation`, so its process never removes
-//! the worktree. A failure before `fiber_started` deletes its directory,
+//! the worktree. The continuing process holds the shared lock for its life.
+//! A failure before `fiber_started` deletes its directory,
 //! so the hub can start it again from `rewound`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::shapes::{Failure, Point};
@@ -26,6 +27,10 @@ pub(crate) fn session_rewound(
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
 ) -> i32 {
+    // One reads for the process, cancelled when this returns whatever the
+    // result; there is no worktree isolation to outlive here.
+    let reads = Arc::new(crate::switch::Reads::default());
+    let _cancel = crate::switch::CancelOnDrop(Arc::clone(&reads));
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
         Err(e) => return ask_failed(failed(e.code(), e)),
@@ -61,6 +66,16 @@ pub(crate) fn session_rewound(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let worktree = forked.worktree.clone();
+    // The continuing process runs in the recorded worktree it did not
+    // create: it shares the worktree's lock file for its life, so a
+    // recreation or a removal never takes the worktree under it.
+    let _shared = match forked.worktree.as_ref() {
+        Some(worktree) => match doors::share(Path::new(&worktree.path)) {
+            Ok(shared) => Some(shared),
+            Err(failure) => return crate::session_command::report(signals, failure),
+        },
+        None => None,
+    };
     // The name is the rewound session's, not the point's session's.
     let name = r#loop::latest_name(&old_dir);
     match super::session_command::run_new(
@@ -81,6 +96,7 @@ pub(crate) fn session_rewound(
             worktree,
             name,
         }),
+        reads,
     ) {
         Ok(code) => code,
         Err(failure) => super::session_command::report(signals, failure),

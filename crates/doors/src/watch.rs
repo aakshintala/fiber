@@ -36,6 +36,21 @@ pub fn watch(
     id: &SessionId,
     on_line: &mut dyn FnMut(&Envelope),
 ) -> std::io::Result<Watched> {
+    watch_after(home, id, None, on_line)
+}
+
+/// [`watch`] starting past a boundary: an envelope whose `seq` is at or
+/// before `after` is neither passed to `on_line` nor ends the watch, and
+/// does not move [`Watched::Closed`]'s `last_seq`. One without `seq` is
+/// delivered. A resume watches past the last line its earlier run wrote,
+/// so an earlier run's `fiber_exited` never stands in for the new run's
+/// end.
+pub fn watch_after(
+    home: &Path,
+    id: &SessionId,
+    after: Option<u64>,
+    on_line: &mut dyn FnMut(&Envelope),
+) -> std::io::Result<Watched> {
     let socket = home.join("run").join(&id.0);
     let stream = UnixStream::connect(&socket)?;
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -74,6 +89,11 @@ pub fn watch(
         let Ok(envelope) = serde_json::from_value::<Envelope>(line) else {
             continue;
         };
+        // Past the boundary: an earlier run's lines, its `fiber_exited`
+        // included, are neither delivered nor end the watch.
+        if after.is_some_and(|bound| envelope.seq.is_some_and(|seq| seq.0 <= bound)) {
+            continue;
+        }
         // Ephemeral lines carry no `seq`: the last one seen stands.
         if let Some(seq) = envelope.seq.map(|seq| seq.0) {
             last_seq = Some(seq);

@@ -33,6 +33,22 @@ fn seam() -> Arc<Fake> {
     Arc::new(fake)
 }
 
+/// The loop's 60x12 screen rows as text, as `config_login_tests` reads.
+fn screen(lp: &super::Loop<TestBackend>) -> Vec<String> {
+    let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(&lp.app, area, &mut buf, None);
+    (0..12)
+        .map(|y| {
+            (0..60)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        })
+        .collect()
+}
+
 /// A loop with `seam` and `files_out` set, `open_command` as given, on home.
 fn loop_with(
     seam: &Arc<Fake>,
@@ -156,8 +172,11 @@ fn the_waiting_login_opens_its_url_and_its_end_stores() {
             })),
         }],
     );
-    let frame = lp.app.config_view_screen().expect("the view is open");
-    assert_eq!(frame.below, ["Stored credentials/codex/alice@example.com."]);
+    let rows = screen(&lp);
+    assert!(
+        rows.iter().any(|row| row.contains("✓ Logged in to codex.")),
+        "{rows:?}"
+    );
     watchdog.stand_down(WAIT);
 }
 
@@ -182,11 +201,13 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
             step: crate::login_worker::LoginStep::Open(url.clone()),
         }],
     );
-    let frame = lp.app.config_view_screen().expect("the view waits");
-    assert_eq!(
-        frame.below,
-        ["Open this URL to log in to codex:".to_owned(), url.clone()]
+    let rows = screen(&lp);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Open this URL to log in to codex:")),
+        "{rows:?}"
     );
+    assert!(rows.iter().any(|row| row.contains(&url)), "{rows:?}");
     seam.answer(
         0,
         Ok(crate::configure::Stored {
@@ -209,8 +230,11 @@ fn without_an_opener_the_url_still_shows_and_the_flow_completes() {
             })),
         }],
     );
-    let frame = lp.app.config_view_screen().expect("the view is open");
-    assert_eq!(frame.below, ["Stored credentials/codex/alice@example.com."]);
+    let rows = screen(&lp);
+    assert!(
+        rows.iter().any(|row| row.contains("✓ Logged in to codex.")),
+        "{rows:?}"
+    );
 }
 
 #[test]
@@ -230,6 +254,10 @@ fn without_a_channel_the_worker_never_starts_and_the_start_waits() {
     // No channel, so no worker: the seam recorded nothing and the view
     // still waits.
     assert!(seam.login_names().is_empty());
-    let frame = lp.app.config_view_screen().expect("the view waits");
-    assert_eq!(frame.below, ["Starting the login to codex…"]);
+    let rows = screen(&lp);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Starting the login to codex…")),
+        "{rows:?}"
+    );
 }

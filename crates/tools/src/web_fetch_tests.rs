@@ -5,14 +5,16 @@
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::clock::Wake;
 use contract::shapes::{ContentPart, Effect};
-use contract::tool::{EffectsError, Output, Tool};
+use contract::tool::{Cancel, EffectsError, Output, Tool};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, ConnectProxy, ProviderServer, Recorder, Response, TempDir};
@@ -26,9 +28,6 @@ const WITHIN: Duration = Duration::from_secs(30);
 
 /// How long a test waits for a fake-clock waiter or a request to arrive.
 const SIGNAL: Duration = Duration::from_secs(10);
-
-/// How long the quadratic-tag timeout test may take on the wall clock.
-const QUADRATIC_TAG_WITHIN: Duration = Duration::from_secs(5);
 
 const DOWNLOAD_PIECE: usize = 64 * 1024;
 const TEN_MIB: usize = 10 * 1024 * 1024;
@@ -85,7 +84,8 @@ impl Rig {
     }
 
     fn with(self, change: impl FnOnce(WebFetch) -> WebFetch) -> Self {
-        let tool = WebFetch::new(self.dir.path().join("artifacts"), self.clock.clone());
+        let tool =
+            WebFetch::new(self.dir.path().join("artifacts"), self.clock.clone()).with_proxy(None);
         Self {
             tool: Arc::new(change(tool)),
             ..self
@@ -1505,34 +1505,70 @@ fn a_deadline_while_the_download_is_saved_leaves_no_file() {
     assert!(no_file_in(&held.rig), "the partial artifact is removed");
 }
 
-/// Counts artifact writes and advances the request clock from write two,
-/// after the previous piece has been converted.
-struct AdvanceOnSecondArtifactWrite {
+/// Holds write two until the test releases it, after the stop has landed.
+/// Write one and every write after two never block. A dropped release
+/// sender releases a held write with an error, so the fetch ends when the
+/// test stops waiting.
+struct HoldsOnSecondArtifactWrite {
     file: fs::File,
     writes: Arc<AtomicUsize>,
-    clock: Arc<FakeClock>,
     second_write: mpsc::Sender<()>,
-    advance: Arc<std::sync::Mutex<Receiver<()>>>,
+    release: Arc<Mutex<Receiver<()>>>,
 }
 
-impl std::io::Write for AdvanceOnSecondArtifactWrite {
+impl std::io::Write for HoldsOnSecondArtifactWrite {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let number = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
         self.file.write_all(bytes)?;
         if number == 2 {
             self.second_write.send(()).map_err(std::io::Error::other)?;
-            self.advance
+            self.release
                 .lock()
                 .unwrap()
                 .recv()
                 .map_err(std::io::Error::other)?;
-            self.clock.advance(Duration::from_secs(61));
         }
         Ok(bytes.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         self.file.flush()
+    }
+}
+
+/// Holds the fetch watcher before its clock check until the test releases
+/// it, so the test can order the clock advance against the stop. Only the
+/// watcher's first check holds, and only on the watcher thread; every other
+/// check answers the inner signal. A dropped release
+/// sender releases the hold with an error, so the fetch ends when the test
+/// stops waiting.
+struct HoldsWatcher {
+    inner: CancelToken,
+    armed: AtomicBool,
+    held: mpsc::Sender<()>,
+    release: Mutex<Receiver<()>>,
+}
+
+impl Cancel for HoldsWatcher {
+    fn is_cancelled(&self) -> bool {
+        if thread::current().name() == Some("web-fetch-watch")
+            && self.armed.swap(false, Ordering::SeqCst)
+        {
+            // The send fails only when the test stopped waiting; the
+            // receive fails when the test dropped its sender by panicking.
+            // Either way the hold ends and the watcher moves on.
+            match self.held.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match self.release.lock().unwrap().recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        self.inner.is_cancelled()
+    }
+
+    fn subscribe(&self, waker: Weak<dyn Wake>) {
+        self.inner.subscribe(waker);
     }
 }
 
@@ -1552,58 +1588,70 @@ fn a_quadratic_tag_times_out_after_two_artifact_writes_and_leaves_no_file() {
             .header("content-type", "text/html; charset=utf-8"),
     ]);
     let rig = Rig::new();
-    let clock = Arc::clone(&rig.clock);
     let writes = Arc::new(AtomicUsize::new(0));
     let observed_writes = Arc::clone(&writes);
     let (second_write, second_write_rx) = mpsc::channel();
-    let (advance, advance_rx) = mpsc::channel();
-    let advance_rx = Arc::new(std::sync::Mutex::new(advance_rx));
+    let (release, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
     let rig = rig.with(move |tool| {
         tool.with_artifact_writer(Arc::new(move |file| {
-            Box::new(AdvanceOnSecondArtifactWrite {
+            Box::new(HoldsOnSecondArtifactWrite {
                 file,
                 writes: Arc::clone(&observed_writes),
-                clock: Arc::clone(&clock),
                 second_write: second_write.clone(),
-                advance: Arc::clone(&advance_rx),
-            })
+                release: Arc::clone(&release_rx),
+            }) as Box<dyn std::io::Write + Send>
         }))
     });
     let url = format!("{}/page", server.url());
-
-    fakes::within(
-        "the quadratic-tag request timeout",
-        QUADRATIC_TAG_WITHIN,
-        move || {
-            let _server = server;
-            let deadline = rig.clock.origin() + Duration::from_secs(60);
-            let call = rig.start(&url);
-            assert!(
-                rig.clock.await_parked(deadline, QUADRATIC_TAG_WITHIN),
-                "the request watcher waits for the request deadline"
-            );
-            Deadline::after(QUADRATIC_TAG_WITHIN)
-                .recv(&second_write_rx)
-                .expect("the artifact writer reaches piece two");
-            assert!(
-                _server.await_partial(1, QUADRATIC_TAG_WITHIN),
-                "the server sends piece three before the timeout"
-            );
-            advance
-                .send(())
-                .expect("piece two releases the clock advance");
-            let output = Deadline::after(QUADRATIC_TAG_WITHIN)
-                .recv(&call.rx)
-                .expect("the fetch finishes within its deadline");
-            assert_eq!(code(&output), Some(ErrorCode::Timeout));
-            assert_eq!(
-                writes.load(Ordering::SeqCst),
-                2,
-                "the stopped fetch saves no piece after the request window"
-            );
-            assert!(no_file_in(&rig), "the timed-out artifact is removed");
-        },
+    let (held, held_rx) = mpsc::channel();
+    let (hold_release, hold_release_rx) = mpsc::channel();
+    let watcher = Arc::new(HoldsWatcher {
+        inner: CancelToken::new(),
+        armed: AtomicBool::new(true),
+        held,
+        release: Mutex::new(hold_release_rx),
+    });
+    let tool = Arc::clone(&rig.tool);
+    let args = arguments(&url);
+    let watcher_on_thread = Arc::clone(&watcher);
+    let (done, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let output = tool.run(&args, &*watcher_on_thread, &Recorder::default());
+        // The test may have stopped waiting.
+        match done.send(output) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    Deadline::after(WITHIN)
+        .recv(&second_write_rx)
+        .expect("the artifact writer reaches piece two");
+    assert!(
+        server.await_partial(1, WITHIN),
+        "the server sends piece three before the timeout"
     );
+    Deadline::after(WITHIN)
+        .recv(&held_rx)
+        .expect("the watcher holds before its clock check");
+    rig.clock.advance(Duration::from_secs(61));
+    hold_release.send(()).expect("the held watcher is released");
+    assert!(
+        server.await_closed(1, WITHIN),
+        "the fetch closed the socket after the stop landed"
+    );
+    release
+        .send(())
+        .expect("piece two is released after the stop landed");
+    let output = Deadline::after(WITHIN)
+        .recv(&rx)
+        .expect("the fetch finishes within its deadline");
+    assert_eq!(code(&output), Some(ErrorCode::Timeout));
+    assert_eq!(
+        writes.load(Ordering::SeqCst),
+        2,
+        "the stopped fetch saves no piece after the request window"
+    );
+    assert!(no_file_in(&rig), "the timed-out artifact is removed");
 }
 
 /// A head for an HTML page read straight from memory.

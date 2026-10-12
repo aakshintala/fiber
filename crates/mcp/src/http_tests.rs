@@ -72,6 +72,21 @@ impl Setup {
         }
     }
 
+    /// Starts the remote server at `url`, expecting success, with a
+    /// deadline naming the wait: the shared server the calls run
+    /// through, and the lists it answered.
+    #[track_caller]
+    fn start_at(&self, url: &str, timeout: Duration) -> Arc<crate::server::Server> {
+        let url = url.to_owned();
+        let clock = self.clock();
+        let opened = fakes::within("the remote start", WITHIN, move || {
+            super::start(&url, None, net::LIMITS, &clock, timeout, "0.0.0")
+        })
+        .expect("the remote server starts");
+        let OpenServer { server, listed: _ } = opened;
+        Arc::new(server)
+    }
+
     /// Calls `method` with an empty `echo` call on `server`, with a
     /// deadline naming the wait.
     #[track_caller]
@@ -1980,4 +1995,87 @@ fn a_server_without_the_resources_capability_offers_none() {
     let (_remote, listed) = setup.start(&server, Duration::from_secs(5));
     assert_eq!(listed_names(&listed), ["echo"]);
     assert!(!listed.resources, "no resources capability offers none",);
+}
+
+#[test]
+fn a_streamed_elicitation_gets_exactly_one_answer() {
+    // Over streamable HTTP the elicitation arrives as a stream event,
+    // routed as a stdout line is: the call is held until its ask is
+    // observed, so without asker forwarding no ask ever arrives and
+    // this wait fails instead of the remover's decline passing. The
+    // fake holds the call's answer until the elicitation's answer POST
+    // arrives, so the ask is always observed first: the answer below is
+    // the asker's, never the remover's.
+    let setup = Setup::new();
+    let elicitation = json!({
+        "jsonrpc": "2.0",
+        "id": "el-1",
+        "method": "elicitation/create",
+        "params": {
+            "message": "m",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        },
+    })
+    .to_string();
+    let gated = fakes::GatedHttp::start_call(
+        elicitation,
+        json!({"content": [{"type": "text", "text": "hi"}]}),
+    );
+    let remote = setup.start_at(&gated.url(), Duration::from_secs(5));
+    let (ask, seen, send) = crate::elicit::tests::FakeAsk::held("a_5");
+    let (done, result) = std::sync::mpsc::channel();
+    {
+        let remote = Arc::clone(&remote);
+        thread::spawn(move || {
+            let arguments = Map::new();
+            let params = Named {
+                arguments: &arguments,
+                name: "echo",
+            };
+            let answer = remote.call_asking(
+                "tools/call",
+                &params,
+                Duration::from_secs(60),
+                &fakes::CancelToken::new(),
+                Some(crate::elicit::Asker {
+                    ask: &ask,
+                    server: "remote",
+                }),
+            );
+            done.send(answer).expect("collected");
+        });
+    }
+    Deadline::after(WITHIN).recv_or_fail(&seen, "the elicitation's ask");
+    send.send(contract::tool::Answered::Reply(
+        contract::events::Answer::Text {
+            text: "prod".to_owned(),
+        },
+    ))
+    .expect("the answer sends");
+    let answered = Deadline::after(WITHIN)
+        .recv(&result)
+        .unwrap_or_else(|_| panic!("the streamed call answers within {WITHIN:?}"))
+        .expect("the streamed call succeeds");
+    assert_eq!(
+        answered.get("content").and_then(|content| content.get(0)),
+        Some(&json!({"type": "text", "text": "hi"})),
+    );
+    // The pump POSTs the elicitation's answer before the fake releases
+    // the call's answer, so by the time the call completes the POST is
+    // recorded: no wait is needed.
+    let mut answers = gated.elicitation_answers().into_iter();
+    let answer = answers.next().expect("one answer to the elicitation");
+    assert!(answers.next().is_none(), "exactly one answer");
+    // The ask is recorded before its answer is POSTed, and the call was
+    // held until the ask arrived, so the answer is the asker's `accept`
+    // with the content: no wait is needed and no decline passes.
+    assert_eq!(
+        answer.get("result"),
+        Some(&json!({"action": "accept", "content": {"name": "prod"}})),
+        "asked means accept with the content",
+    );
 }

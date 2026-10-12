@@ -41,7 +41,7 @@ enum Noted {
     Cancelled,
 }
 
-pub(super) fn failure(code: ErrorCode, message: &str) -> Failure {
+pub(crate) fn failure(code: ErrorCode, message: &str) -> Failure {
     Failure {
         code,
         message: message.to_owned(),
@@ -51,7 +51,7 @@ pub(super) fn failure(code: ErrorCode, message: &str) -> Failure {
 }
 
 /// The note a reply holds: its text parts in order, joined with a newline.
-fn reply_note(reply: &Reply) -> String {
+pub(crate) fn reply_note(reply: &Reply) -> String {
     reply
         .actions
         .iter()

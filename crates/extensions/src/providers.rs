@@ -391,7 +391,12 @@ impl Providers {
     /// each Lua provider's models. The one call every path that runs Lua
     /// makes after `load`, so no caller can forget the drop. It gives no
     /// notice of its own: the rejection's notice is the session's.
-    pub fn add_session(&mut self, extensions: &SessionExtensions, config: &Config) -> Vec<Notice> {
+    pub fn add_session(
+        &mut self,
+        extensions: &SessionExtensions,
+        config: &Config,
+        run: config::Runner<'_>,
+    ) -> Vec<Notice> {
         for name in extensions.rejected() {
             let dropped: Vec<String> = self
                 .extension_of
@@ -409,7 +414,7 @@ impl Providers {
         }
         let mut notices = Vec::new();
         for (extension, provider) in extensions.lua_providers() {
-            notices.extend(self.add_lua(extension, provider, config));
+            notices.extend(self.add_lua(extension, provider, config, run));
         }
         notices
     }
@@ -445,6 +450,7 @@ impl Providers {
         extension: &str,
         provider: &Arc<LuaProvider>,
         config: &Config,
+        run: config::Runner<'_>,
     ) -> Vec<Notice> {
         let name = provider.name().to_owned();
         if name == scripted::SCRIPTED {
@@ -473,7 +479,7 @@ impl Providers {
         if matches!(provider.registers("models"), Ok(false)) {
             return Vec::new();
         }
-        if !provider.has_model_cache() && !provider.has_credential(config, &self.data(&name)) {
+        if !provider.has_model_cache() && !provider.has_credential(config, &self.data(&name), run) {
             return Vec::new();
         }
         let mut models = match provider.models() {
@@ -866,10 +872,11 @@ pub fn refresh_lists(
     providers: &Providers,
     config: &Config,
     max_age: Option<Duration>,
+    run: config::Runner<'_>,
 ) -> Vec<StartedRefresh> {
     let mut started = Vec::new();
     for provider in lua {
-        if !provider.has_credential(config, &providers.data(provider.name())) {
+        if !provider.has_credential(config, &providers.data(provider.name()), run) {
             continue;
         }
         if let Some(handle) = provider.refresh(max_age) {

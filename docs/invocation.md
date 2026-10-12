@@ -500,7 +500,9 @@ each `approve`, `skip` or `never`, which `repository_code_resolved` records.
 
 A reply is rejected `stale_request` when its request is no longer pending, and
 `invalid_arguments` when its keys do not fit the request: another kind's
-answer keys, `feedback` with `allow`, `remember` on a request with no `rule`
+answer keys, a typed answer that does not fit its MCP elicitation field
+(`docs/mcp.md`, "Elicitation, sampling and roots"), `feedback` with `allow`,
+`remember` on a request with no `rule`
 or with a prefix the request did not offer, or `decisions` whose length is
 not the number of items offered. A global standing rule is added by
 editing the global rules file, never from an approval.
@@ -791,15 +793,14 @@ raises the request again.
 A signal that arrives before `fiber_started` is written exits with the code
 and writes no durable event; an ephemeral `clients` line already sent to a
 client that attached stays sent. Once `fiber_started` is written,
-`fiber_exited` always is, unless the process dies or passes the bound.
+`fiber_exited` always is, unless the process dies or reaches its kill point.
 
 **The bound is 5 seconds** from the signal to exit, per process. The
 command stage is at most 2.8 s (800 ms grace plus 2 s drain), the levels of
 a tree run concurrently, and the rest is margin. It sits under the
 supervisors Fiber runs under: Docker sends SIGKILL 10 s after SIGTERM,
 Kubernetes 30 s, systemd 90 s (each one's documented default, not measured).
-Past the bound, every group still
-alive gets SIGKILL and the process exits at once with the same code, writing
+At 4.9 s, every group still alive gets SIGKILL, one diagnostic line with code `timeout` goes to the process's own diagnostic log (`docs/state.md`, "What each part holds"), with at most 100 ms allowed for it, and the process exits with the same code, writing
 nothing more: the loop may be stuck holding the log, so no other thread
 writes to it. The log ends as a process that died leaves it, with no
 `fiber_exited`, and a resume reads it as it reads any such log: a call left
@@ -1111,7 +1112,7 @@ delegate's `isolation: worktree` (`docs/delegates.md`), by the terminal's
 All three use the same rules (`docs/delegates.md`, "Worktrees"): a new branch
 from the workspace's HEAD in a worktree under
 `~/.fiber/projects/<key>/worktrees/<id>`, removed at the end when it holds
-nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. Outside a
+nothing uncommitted and no commits beyond its base, kept otherwise. A session that ends `rewound` keeps its worktree whatever it holds: the session that continues it runs there, records the same `worktree`, and never removes it either; `fiber sessions prune` removes it later. A resume whose worktree was removed makes it again at the same path and branch from the repository's current HEAD, before `fiber_started`, and ends it by the same rules. A worktree's lock file, `~/.fiber/projects/<key>/worktrees/<id>.lock`, is held shared by every process that runs in a worktree it did not just create, exclusively while a resume checks for the worktree and makes it again, and taken exclusively without waiting by an end-of-run removal, which keeps the worktree when another process holds it; the file stays whenever its worktree stays, and goes only when a whole removal succeeds, so a dirty, never-shared worktree keeps one too, and `fiber sessions prune` leaves lock files alone. Outside a
 git repository a delegate's `isolation: worktree` fails with
 `invalid_arguments`, and `fiber ask --worktree` is a usage error. The session
 records the worktree on `session_started` (`docs/events.md`). The `worktree`

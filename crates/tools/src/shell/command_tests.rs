@@ -1191,6 +1191,14 @@ fn a_command_moved_at_once_never_spills() {
     let dir = fakes::TempDir::new("fiber-shell-background-no-spill");
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir(&artifacts).unwrap();
+    let release = dir.path().join("release");
+    // The command holds until the test observes the move, so the move
+    // always wins the race with the command's end. The loop is bounded,
+    // so a failure before the release still ends the child.
+    let held = format!(
+        "i=0\nwhile test \"$i\" -lt 600; do\ntest -e '{}' && exit 0\ni=$((i + 1))\nsleep 0.1\ndone\n",
+        release.display()
+    );
     let clock = FakeClock::new();
     let cancel = CancelToken::new();
     let work = dir.path().to_path_buf();
@@ -1203,7 +1211,7 @@ fn a_command_moved_at_once_never_spills() {
         move || {
             let ran = super::execute(
                 std::path::Path::new("/bin/sh"),
-                "exit 0",
+                &held,
                 &work,
                 Duration::from_secs(60),
                 clock.as_ref(),
@@ -1220,6 +1228,8 @@ fn a_command_moved_at_once_never_spills() {
             moved
         }
     });
+    // The move is observed: releasing the command lets it end.
+    std::fs::write(&release, b"go\n").unwrap();
     {
         let inner = super::super::output::lock(&moved.progress.shared.inner);
         assert!(inner.spill_config.is_none());
@@ -1240,6 +1250,14 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
     let dir = fakes::TempDir::new("fiber-shell-resume-filed");
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir(&artifacts).unwrap();
+    let release = dir.path().join("release");
+    // The command holds until the test observes the move, so the move
+    // always wins the race with the command's end. The loop is bounded,
+    // so a failure before the release still ends the child.
+    let held = format!(
+        "i=0\nwhile test \"$i\" -lt 600; do\ntest -e '{}' && exit 0\ni=$((i + 1))\nsleep 0.1\ndone\n",
+        release.display()
+    );
     let clock = FakeClock::new();
     let cancel = CancelToken::new();
     let work = dir.path().to_path_buf();
@@ -1251,7 +1269,7 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
         move || {
             let ran = super::execute(
                 std::path::Path::new("/bin/sh"),
-                "exit 0",
+                &held,
                 &work,
                 Duration::from_secs(60),
                 clock.as_ref(),
@@ -1268,6 +1286,8 @@ fn a_resumed_command_with_a_file_does_not_arm_the_spill() {
             moved
         }
     });
+    // The move is observed: releasing the command lets it end.
+    std::fs::write(&release, b"go\n").unwrap();
     // The job's file arrived first: the resume must not arm the spill
     // over it, so the buffered output stays whole.
     {
@@ -1291,6 +1311,14 @@ fn a_resumed_command_arms_the_spill() {
     let dir = fakes::TempDir::new("fiber-shell-resume-spill");
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir(&artifacts).unwrap();
+    let release = dir.path().join("release");
+    // The command holds until the test observes the move, so the move
+    // always wins the race with the command's end. The loop is bounded,
+    // so a failure before the release still ends the child.
+    let held = format!(
+        "i=0\nwhile test \"$i\" -lt 600; do\ntest -e '{}' && break\ni=$((i + 1))\nsleep 0.1\ndone\nhead -c 2097152 /dev/zero | tr '\\0' a\n",
+        release.display()
+    );
     let clock = FakeClock::new();
     let cancel = CancelToken::new();
     let work = dir.path().to_path_buf();
@@ -1302,7 +1330,7 @@ fn a_resumed_command_arms_the_spill() {
         move || {
             let ran = super::execute(
                 std::path::Path::new("/bin/sh"),
-                "head -c 2097152 /dev/zero | tr '\\0' a",
+                &held,
                 &work,
                 Duration::from_secs(60),
                 clock.as_ref(),
@@ -1319,6 +1347,8 @@ fn a_resumed_command_arms_the_spill() {
             moved
         }
     });
+    // The move is observed: releasing the command lets it run its payload.
+    std::fs::write(&release, b"go\n").unwrap();
     // A move on the first pass never spills; the resume arms it, and the
     // command's output past 1 MiB spills from there.
     let finished = fakes::within("a moved command resumes", JOB_DEADLINE, {

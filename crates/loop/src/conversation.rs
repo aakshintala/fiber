@@ -158,6 +158,11 @@ impl Rendered {
         completed: &HashSet<ActionId>,
         open: &HashSet<ActionId>,
     ) {
+        if inner_action(event, action, &mut self.carry) {
+            self.carry.fold_jobs(event);
+            crate::changes::apply(&mut self.had, event);
+            return;
+        }
         match event {
             // A call the provider ran has no fixed result and no pending
             // state. It renders with its result or not at all: sending the
@@ -395,6 +400,10 @@ pub(crate) fn render(
     carry: &mut Carry,
 ) {
     carry.fold_jobs(event);
+    if inner_action(event, action, carry) {
+        crate::changes::apply(had, event);
+        return;
+    }
     match event {
         Event::TurnStarted(started) => {
             carry.input.clear();
@@ -626,6 +635,20 @@ pub(crate) fn render(
         | Event::CommandAccepted(_)
         | Event::CommandRejected(_) => {}
     }
+}
+
+/// Records inner requests before filtering their later lines. Unknown
+/// completions still render: a resume window can begin after a request.
+fn inner_action(event: &Event, action: Option<&ActionId>, carry: &mut Carry) -> bool {
+    if let Event::ToolCallRequested(call) = event
+        && call.ran_by.is_some()
+    {
+        if let Some(action) = action {
+            carry.inner.insert(action.clone());
+        }
+        return true;
+    }
+    action.is_some_and(|action| carry.inner.contains(action))
 }
 
 /// The tool result `completed` renders for `action`.

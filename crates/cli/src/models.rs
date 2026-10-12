@@ -53,13 +53,14 @@ fn stale_lists(
     config: &Config,
     max_age: Duration,
     now: SystemTime,
+    run: config::Runner<'_>,
 ) -> Vec<String> {
     let mut stale = Vec::new();
     for name in providers.names() {
         let Some(lua) = providers.lua(name) else {
             continue;
         };
-        if !lua.has_credential(config, &providers.data(name)) {
+        if !lua.has_credential(config, &providers.data(name), run) {
             continue;
         }
         if let Ok(Some(age)) = config::model_cache_age(home, name, now)
@@ -173,6 +174,7 @@ fn run(
     load: &dyn Fn(&Config) -> SessionExtensions,
     spawn: &dyn Fn(Vec<String>) -> io::Result<()>,
     clock: &dyn Clock,
+    run: config::Runner<'_>,
 ) -> Result<(), Failure> {
     // Each notice as one line on stderr: this load's, the session
     // extensions', then discovery and placeholders', each once per
@@ -182,7 +184,7 @@ fn run(
     notices.extend(loading);
     let extensions = load(&config);
     notices.extend(extensions.notices());
-    notices.extend(providers.add_session(&extensions, &config));
+    notices.extend(providers.add_session(&extensions, &config, run));
     notices.extend(
         providers
             .fill_placeholders(&config, &|name| std::env::var(name).ok())
@@ -198,6 +200,7 @@ fn run(
         &config,
         config::refresh_after(&config),
         clock.wall(),
+        run,
     );
     if !stale.is_empty() {
         let _ignored = spawn(stale);
@@ -267,13 +270,14 @@ pub fn models(
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
     exe: Result<PathBuf, String>,
+    run: config::Runner<'_>,
 ) -> i32 {
     let ran = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
             let workspace = std::env::current_dir()
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            run(
+            self::run(
                 &home,
                 &workspace,
                 search,
@@ -294,6 +298,7 @@ pub fn models(
                     Err(message) => Err(io::Error::other(message.clone())),
                 },
                 clock.as_ref(),
+                run,
             )
         });
     match ran {
@@ -311,6 +316,7 @@ fn refresh_named(
     providers: &Providers,
     loaded: &SessionExtensions,
     config: &Config,
+    run: config::Runner<'_>,
 ) {
     let wanted: Vec<Arc<extensions::LuaProvider>> = loaded
         .lua_providers()
@@ -323,6 +329,7 @@ fn refresh_named(
         providers,
         config,
         Some(config::refresh_after(config)),
+        run,
     ) {
         let _ignored = handle.join();
     }
@@ -337,6 +344,7 @@ fn refresh_run(
     names: &[String],
     clock: Arc<dyn Clock>,
     locks: Arc<dyn PathLock>,
+    run: config::Runner<'_>,
 ) {
     if let Ok((_, project)) = project_of(home, workspace)
         && let Ok(config) = Config::load(Sources {
@@ -348,7 +356,7 @@ fn refresh_run(
         && let Ok((providers, _)) = Providers::load(home)
     {
         let loaded = SessionExtensions::load(home, &config, clock, locks, None);
-        refresh_named(names, &providers, &loaded, &config);
+        refresh_named(names, &providers, &loaded, &config, run);
     }
 }
 
@@ -357,9 +365,14 @@ fn refresh_run(
 /// child `fiber models` spawns: hidden and free to change, like the other
 /// hidden subcommands. It joins every refresh it starts, and exits 0
 /// whatever the result: a background refresh never fails a command.
-pub fn refresh_model_lists(names: &[String], clock: Arc<dyn Clock>, locks: Arc<dyn PathLock>) {
+pub fn refresh_model_lists(
+    names: &[String],
+    clock: Arc<dyn Clock>,
+    locks: Arc<dyn PathLock>,
+    run: config::Runner<'_>,
+) {
     if let (Ok(home), Ok(workspace)) = (config::fiber_home_from_env(), std::env::current_dir()) {
-        refresh_run(&home, &workspace, names, clock, locks);
+        refresh_run(&home, &workspace, names, clock, locks, run);
     }
 }
 

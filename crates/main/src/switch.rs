@@ -22,7 +22,7 @@ use contract::shapes::Failure;
 use contract::{ErrorCode, ThinkingLevel};
 use extensions::{LuaProvider, Providers, SessionExtensions};
 
-pub(crate) use self::read::Reads;
+pub(crate) use self::read::{CancelOnDrop, Reads};
 use crate::lua_providers::{Access, KeyAndSigner};
 
 /// The credentials read at startup, by provider name: the label, and the
@@ -110,6 +110,7 @@ impl Switching {
         credentials: Credentials,
         loaded: Vec<(String, Arc<LuaProvider>)>,
         loader: Loader,
+        reads: Arc<Reads>,
     ) -> Self {
         registry.forget_lua();
         let mut remembered = Remembered::default();
@@ -125,7 +126,7 @@ impl Switching {
             remembered: Mutex::new(remembered),
             loaded: Mutex::new(loaded.into_iter().collect()),
             loader,
-            reads: Arc::default(),
+            reads,
         }
     }
 
@@ -264,7 +265,10 @@ impl Switching {
                             &labels,
                         ));
                     }
-                    let run = |command: &mut std::process::Command| self.reads.command(command);
+                    let run = |command: &mut std::process::Command,
+                               timeout: std::time::Duration| {
+                        self.reads.credential(command, timeout, &*self.loader.clock)
+                    };
                     let read = crate::credential::switch_credential(
                         &self.config,
                         data,

@@ -41,7 +41,8 @@ fn a_path_that_cannot_be_canonicalised_is_never_read() {
         symlink(&planted, file).unwrap();
         Err(io::Error::from(ErrorKind::NotFound))
     };
-    let run = |_: &mut Command| -> io::Result<Output> { unreachable!("a file source") };
+    let run =
+        |_: &mut Command, _: Duration| -> io::Result<Output> { unreachable!("a file source") };
     let err = config
         .credentials()
         .credential_through(&provider, "default", &run, &canonical)

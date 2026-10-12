@@ -888,18 +888,17 @@ fn write_refuses_what_it_cannot_reach_as_invalid_arguments() {
         &cancel,
     );
     assert!(invalid(&output));
-    assert!(
-        text_of(&output).contains("j_missing"),
-        "{}",
-        text_of(&output)
-    );
+    assert_eq!(text_of(&output), "No job has id `j_missing`.\n");
     let output = run(
         &tool,
         json!({"action": "write", "job_id": ended_id, "input": "x"}),
         &cancel,
     );
     assert!(invalid(&output));
-    assert!(text_of(&output).contains("failed"), "{}", text_of(&output));
+    assert_eq!(
+        text_of(&output),
+        format!("Job `{ended_id}` has ended: failed.\n")
+    );
     let output = run(
         &tool,
         json!({"action": "write", "job_id": tty_id, "input": "x", "timeout_ms": 30_001}),

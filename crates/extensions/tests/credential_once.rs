@@ -66,14 +66,19 @@ fn discovery_and_the_session_share_one_run_of_the_command() {
 
     // Discovery: no model cache, so `add_lua` asks for the credential.
     let (discovered, config) = within(move || {
-        let notices = providers.add_lua("acme-ext", &lua, &config);
+        let notices =
+            providers.add_lua("acme-ext", &lua, &config, &fakes::children::grouped_output);
         assert!(notices.is_empty(), "{notices:?}");
         (providers, config)
     });
     // The session's own read.
     let key = within(move || {
         let data = discovered.data("acme");
-        config.credentials().credential(&data, "default").unwrap()
+        config
+            .credentials()
+            .credential_with(&data, "default", &fakes::children::grouped_output)
+            .map(|read| read.secret)
+            .unwrap()
     });
     assert_eq!(key.expose(), "key");
     assert_eq!(std::fs::read_to_string(&marker).unwrap().lines().count(), 1);

@@ -147,3 +147,123 @@ fn expire_if_awaiting_marks_nothing_once_gone_or_unawaited() {
         "an answered slot expires nothing"
     );
 }
+
+/// One queued elicitation for the queue rows: its form never matters here.
+fn elicitation(id: &str) -> super::Elicitation {
+    let form = crate::elicit::read(
+        r#"{"jsonrpc":"2.0","id":"el-1","method":"elicitation/create","params":{"message":"m","requestedSchema":{"type":"object","properties":{"a":{"type":"boolean"}}}}}"#,
+    )
+    .expect("the form reads");
+    super::Elicitation {
+        id: serde_json::json!(id),
+        form,
+    }
+}
+
+#[test]
+fn queue_elicitation_refuses_without_an_asking_call() {
+    use super::Shared;
+    // Without the refusal the reader would strand it: nobody takes it.
+    let shared = Shared::default();
+    let back = shared
+        .queue_elicitation(elicitation("el-1"))
+        .expect_err("no asking call refuses the queue");
+    assert_eq!(back.id, serde_json::json!("el-1"), "it is given back");
+}
+
+#[test]
+fn take_lists_every_call_in_id_order_with_the_earliest_deadline() {
+    use super::Shared;
+    use contract::ActionId;
+    let clock = fakes::clock::FakeClock::new();
+    let shared = Shared::default();
+    // Registered out of id order: the take still lists id order, and the
+    // earlier deadline wins even though its call registered second.
+    shared.insert(5);
+    shared.register(
+        5,
+        ActionId("a_5".to_owned()),
+        clock.now() + std::time::Duration::from_secs(60),
+    );
+    shared.insert(3);
+    shared.register(
+        3,
+        ActionId("a_3".to_owned()),
+        clock.now() + std::time::Duration::from_secs(30),
+    );
+    shared
+        .queue_elicitation(elicitation("el-1"))
+        .expect("an asking call queues");
+    let taken = shared.take_elicitation().expect("the queued take");
+    assert_eq!(
+        taken.action_ids,
+        vec![ActionId("a_3".to_owned()), ActionId("a_5".to_owned())],
+        "request-id order, not registration order",
+    );
+    assert_eq!(
+        taken.until,
+        clock.now() + std::time::Duration::from_secs(30),
+        "the earliest deadline",
+    );
+    assert!(
+        shared.take_elicitation().is_none(),
+        "a second take finds nothing",
+    );
+}
+
+#[test]
+fn remove_returns_the_queue_only_with_the_last_asking_call() {
+    use super::Shared;
+    use contract::ActionId;
+    let clock = fakes::clock::FakeClock::new();
+    let deadline = clock.now() + std::time::Duration::from_secs(30);
+    let shared = Shared::default();
+    shared.insert(5);
+    shared.register(5, ActionId("a_5".to_owned()), deadline);
+    shared.insert(3);
+    shared.register(3, ActionId("a_3".to_owned()), deadline);
+    shared
+        .queue_elicitation(elicitation("el-1"))
+        .expect("an asking call queues");
+    assert!(
+        shared.remove(5).is_empty(),
+        "a non-last removal returns nothing",
+    );
+    let leftovers = shared.remove(3);
+    assert_eq!(leftovers.len(), 1, "the last removal returns the queue");
+    assert_eq!(leftovers[0].id, serde_json::json!("el-1"));
+    // An id never registered, as an `initialize` is, with one asking
+    // call left returns nothing and leaves the queue queued.
+    let held = Shared::default();
+    held.insert(7);
+    held.register(7, ActionId("a_7".to_owned()), deadline);
+    held.queue_elicitation(elicitation("el-2"))
+        .expect("an asking call queues");
+    assert!(
+        held.remove(99).is_empty(),
+        "an unregistered removal returns nothing",
+    );
+    assert!(held.take_elicitation().is_some(), "the queue stays queued",);
+}
+
+#[test]
+fn queueing_wakes_a_waiter() {
+    use super::Shared;
+    use contract::ActionId;
+    let clock = fakes::clock::FakeClock::new();
+    let shared = Shared::default();
+    let before = crate::registry::lock(&shared.inner).seq;
+    shared.insert(7);
+    shared.register(
+        7,
+        ActionId("a_7".to_owned()),
+        clock.now() + std::time::Duration::from_secs(30),
+    );
+    shared
+        .queue_elicitation(elicitation("el-1"))
+        .expect("an asking call queues");
+    assert!(
+        crate::registry::lock(&shared.inner).seq != before,
+        "the sequence moves so every parked call wakes",
+    );
+}

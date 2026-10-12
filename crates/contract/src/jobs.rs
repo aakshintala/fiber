@@ -6,7 +6,9 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::ErrorCode;
-use crate::events::{DelegateFinished, DelegateStarted, JobCompleted, JobLine, JobStarted};
+use crate::events::{
+    DelegateFinished, DelegateStarted, JobCompleted, JobLine, JobStarted, Outcome,
+};
 
 /// What opening a job asks for. The opener supplies [`Stop`]; the registry
 /// mints the id and the output file.
@@ -156,15 +158,51 @@ pub trait Jobs: Send + Sync {
 /// `write` could not reach the job.
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
-    /// No job has this id, or it already ended.
+    /// No job has this id.
     #[error("that job is not running")]
     NotRunning,
     /// The job was not started with `tty`.
     #[error("that job was not started with `tty`")]
     NotTty,
+    /// The job had already ended, with this status.
+    #[error("that job has ended")]
+    Ended(Outcome),
     /// Writing to the terminal failed.
     #[error("writing to the job's terminal failed: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl WriteError {
+    /// The stable code (`docs/errors.md`): the `job_input` driver command's.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::NotRunning => ErrorCode::StaleRequest,
+            Self::Ended(_) => ErrorCode::StaleRequest,
+            Self::NotTty => ErrorCode::InvalidArguments,
+            Self::Io(_) => ErrorCode::IoFailed,
+        }
+    }
+}
+
+/// `stop` could not ask the job to stop.
+#[derive(Debug, thiserror::Error)]
+pub enum StopError {
+    /// No job has this id.
+    #[error("that job is not running")]
+    NotRunning,
+    /// The job had already ended, with this status.
+    #[error("that job has ended")]
+    Ended(Outcome),
+}
+
+impl StopError {
+    /// The stable code (`docs/errors.md`): the `job_stop` driver command's.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::NotRunning => ErrorCode::StaleRequest,
+            Self::Ended(_) => ErrorCode::StaleRequest,
+        }
+    }
 }
 
 /// A running foreground call, as the `background` command reaches it. The
@@ -220,3 +258,7 @@ pub enum JobRecord {
     /// `job_completed`.
     Completed(JobCompleted),
 }
+
+#[cfg(test)]
+#[path = "jobs_tests.rs"]
+mod tests;

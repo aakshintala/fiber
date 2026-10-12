@@ -167,15 +167,31 @@ fn run() -> i32 {
                 fiber,
             ),
         },
-        cli::Invocation::Run(Some(cli::Commands::Models(args))) => ::cli::models(
-            args.search.as_deref(),
-            args.json,
-            clock,
-            Arc::new(tools::PathLocks::new()),
-            fiber,
-        ),
+        cli::Invocation::Run(Some(cli::Commands::Models(args))) => {
+            let reads = crate::switch::Reads::default();
+            let runner = |command: &mut std::process::Command, timeout: std::time::Duration| {
+                reads.credential(command, timeout, &*clock)
+            };
+            ::cli::models(
+                args.search.as_deref(),
+                args.json,
+                Arc::clone(&clock),
+                Arc::new(tools::PathLocks::new()),
+                fiber,
+                &runner,
+            )
+        }
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers })) => {
-            ::cli::refresh_model_lists(&providers, clock, Arc::new(tools::PathLocks::new()));
+            let reads = crate::switch::Reads::default();
+            let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
+                reads.credential(command, timeout, &*clock)
+            };
+            ::cli::refresh_model_lists(
+                &providers,
+                Arc::clone(&clock),
+                Arc::new(tools::PathLocks::new()),
+                &run,
+            );
             0
         }
         cli::Invocation::Run(Some(cli::Commands::ReleaseInstall { version, base_url })) => {

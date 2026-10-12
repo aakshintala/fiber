@@ -66,6 +66,7 @@ pub fn model_lists(
     workspace: &Path,
     read: ModelLists,
     load: &dyn Fn(&Config) -> SessionExtensions,
+    run: config::Runner<'_>,
 ) -> Result<(Providers, Config, Vec<String>), ModelListsError> {
     let (mut providers, config, load_notices) =
         crate::models::providers_and_config(home, workspace).map_err(ModelListsError::Load)?;
@@ -82,7 +83,7 @@ pub fn model_lists(
         }
         ModelLists::Refresh { check_age } => {
             let max_age = check_age.then(|| config::refresh_after(&config));
-            refreshed(&config, load, &mut providers, &mut notices, max_age);
+            refreshed(&config, load, &mut providers, &mut notices, max_age, run);
         }
     }
     for notice in providers.fill_placeholders(&config, &|name| std::env::var(name).ok())? {
@@ -124,11 +125,12 @@ fn refreshed(
     providers: &mut Providers,
     notices: &mut Vec<String>,
     max_age: Option<std::time::Duration>,
+    run: config::Runner<'_>,
 ) {
     let loaded = load(config);
     notices.extend(
         providers
-            .add_session(&loaded, config)
+            .add_session(&loaded, config, run)
             .into_iter()
             .map(|notice| notice.message),
     );
@@ -137,7 +139,7 @@ fn refreshed(
         .iter()
         .map(|(_, provider)| Arc::clone(provider))
         .collect();
-    for (name, handle) in extensions::refresh_lists(&wanted, providers, config, max_age) {
+    for (name, handle) in extensions::refresh_lists(&wanted, providers, config, max_age, run) {
         match handle.join() {
             Ok(Ok(models)) => {
                 // The caller exposes text, not notice extension metadata.

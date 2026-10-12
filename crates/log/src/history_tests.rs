@@ -546,3 +546,190 @@ fn a_read_from_n_parses_no_line_below_n() {
     };
     assert_eq!(line, 2);
 }
+
+fn seq_of(dir: &std::path::Path) -> u64 {
+    match last_seq(dir) {
+        Ok(Some(seq)) => seq.0,
+        other => panic!("expected Ok(Some), got {other:?}"),
+    }
+}
+
+fn io_error(dir: &std::path::Path) -> String {
+    match last_seq(dir) {
+        Err(error @ Error::Io { .. }) => error.to_string(),
+        other => panic!("expected Io, got {other:?}"),
+    }
+}
+
+fn pointer_error(dir: &std::path::Path) -> String {
+    match last_seq(dir) {
+        Err(error @ Error::Pointer { .. }) => error.to_string(),
+        other => panic!("expected Pointer, got {other:?}"),
+    }
+}
+
+#[test]
+fn last_seq_returns_the_last_complete_lines_seq() {
+    let home = fakes::TempDir::new("log-last-seq-last");
+    let sessions = home.path().join("sessions");
+    let id = "s_aaaaaaaaaaaaaaaa";
+    write_lines(
+        &sessions,
+        id,
+        &[
+            started(id, 0, None),
+            plain(id, 1, "turn_started"),
+            plain(id, 2, "turn_completed"),
+        ],
+    );
+    assert_eq!(seq_of(&sessions.join(id)), 2);
+}
+
+#[test]
+fn last_seq_drops_a_torn_tail() {
+    let home = fakes::TempDir::new("log-last-seq-torn");
+    let sessions = home.path().join("sessions");
+    let id = "s_aaaaaaaaaaaaaaaa";
+    write_lines(
+        &sessions,
+        id,
+        &[started(id, 0, None), plain(id, 1, "turn_started")],
+    );
+    let dir = sessions.join(id);
+    fs::write(
+        dir.join(EVENTS),
+        format!(
+            "{}{}",
+            started(id, 0, None),
+            "{\"kind\": \"turn_started\", torn"
+        ),
+    )
+    .unwrap();
+    // The torn tail is dropped: the boundary is the complete line's seq.
+    assert_eq!(seq_of(&dir), 0);
+}
+
+#[test]
+fn last_seq_reads_a_last_line_past_one_backward_step() {
+    let home = fakes::TempDir::new("log-last-seq-long");
+    let sessions = home.path().join("sessions");
+    let id = "s_aaaaaaaaaaaaaaaa";
+    let big = "x".repeat(70_000);
+    let line = serde_json::json!({
+        "kind": "turn_completed",
+        "session_id": id,
+        "ts": 1_759_150_000_007_u64,
+        "schema_version": 1,
+        "seq": 7,
+        "payload": {"text": big},
+    });
+    write_lines(&sessions, id, &[started(id, 0, None), format!("{line}\n")]);
+    assert_eq!(seq_of(&sessions.join(id)), 7);
+}
+
+#[test]
+fn last_seq_on_an_empty_log_is_none() {
+    let home = fakes::TempDir::new("log-last-seq-empty");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(EVENTS), b"").unwrap();
+    assert_eq!(last_seq(&dir).unwrap(), None);
+}
+
+#[test]
+fn last_seq_on_a_missing_log_or_directory_is_an_io_error_naming_the_log() {
+    let home = fakes::TempDir::new("log-last-seq-missing");
+    let sessions = home.path().join("sessions");
+    // Neither the directory nor the log exists.
+    let missing = io_error(&sessions.join("s_aaaaaaaaaaaaaaaa"));
+    assert!(missing.contains("events.jsonl"), "{missing}");
+    // The directory exists but the log does not.
+    let dir = sessions.join("s_bbbbbbbbbbbbbbbb");
+    fs::create_dir_all(&dir).unwrap();
+    let no_log = io_error(&dir);
+    assert!(no_log.contains("events.jsonl"), "{no_log}");
+}
+
+#[test]
+fn last_seq_without_a_boundary_is_a_pointer_error_naming_the_log() {
+    let home = fakes::TempDir::new("log-last-seq-pointer");
+    let sessions = home.path().join("sessions");
+    // The log is a directory: this stands in for an unreadable log for
+    // any user, root included.
+    let dir = sessions.join("s_aaaaaaaaaaaaaaaa");
+    fs::create_dir_all(dir.join(EVENTS)).unwrap();
+    let said = pointer_error(&dir);
+    assert!(said.contains("events.jsonl"), "{said}");
+    // The log is a symlink to a non-regular file.
+    let linked = sessions.join("s_bbbbbbbbbbbbbbbb");
+    fs::create_dir_all(&linked).unwrap();
+    std::os::unix::fs::symlink("/dev/null", linked.join(EVENTS)).unwrap();
+    let said = pointer_error(&linked);
+    assert!(said.contains("events.jsonl"), "{said}");
+    // The log holds only a torn line.
+    let torn = sessions.join("s_cccccccccccccccc");
+    fs::create_dir_all(&torn).unwrap();
+    fs::write(torn.join(EVENTS), "{\"kind\": \"turn_started\", torn").unwrap();
+    let said = pointer_error(&torn);
+    assert!(said.contains("events.jsonl"), "{said}");
+    // The last line does not parse.
+    let corrupt = sessions.join("s_dddddddddddddddd");
+    write_lines(
+        &sessions,
+        "s_dddddddddddddddd",
+        &[started("s_dddddddddddddddd", 0, None)],
+    );
+    fs::write(
+        corrupt.join(EVENTS),
+        format!(
+            "{}{}",
+            started("s_dddddddddddddddd", 0, None),
+            "{not json}\n"
+        ),
+    )
+    .unwrap();
+    let said = pointer_error(&corrupt);
+    assert!(said.contains("events.jsonl"), "{said}");
+    // The last line carries no seq.
+    let no_seq = sessions.join("s_eeeeeeeeeeeeeeee");
+    let line = serde_json::json!({
+        "kind": "turn_completed",
+        "session_id": "s_eeeeeeeeeeeeeeee",
+        "ts": 1_759_150_000_007_u64,
+        "schema_version": 1,
+        "payload": {},
+    });
+    write_lines(
+        &sessions,
+        "s_eeeeeeeeeeeeeeee",
+        &[started("s_eeeeeeeeeeeeeeee", 0, None), format!("{line}\n")],
+    );
+    let said = pointer_error(&no_seq);
+    assert!(said.contains("events.jsonl"), "{said}");
+}
+
+#[test]
+fn a_boundary_read_fails_closed_on_a_log_it_cannot_read_and_reads_it_once_restored() {
+    let home = fakes::TempDir::new("log-last-seq-restored");
+    let sessions = home.path().join("sessions");
+    let id = "s_aaaaaaaaaaaaaaaa";
+    write_lines(
+        &sessions,
+        id,
+        &[started(id, 0, None), plain(id, 1, "fiber_exited")],
+    );
+    let dir = sessions.join(id);
+    let log = dir.join(EVENTS);
+    let held = fs::read(&log).unwrap();
+    // Access denied: the log's path in its place is a directory, which
+    // reads as no boundary for any user, root included.
+    fs::rename(&log, dir.join("events.jsonl.held")).unwrap();
+    fs::create_dir_all(&log).unwrap();
+    let denied = pointer_error(&dir);
+    assert!(denied.contains("events.jsonl"), "{denied}");
+    // Restored before any spawn: the boundary reads again.
+    fs::remove_dir(&log).unwrap();
+    fs::write(&log, held).unwrap();
+    assert_eq!(seq_of(&dir), 1);
+}

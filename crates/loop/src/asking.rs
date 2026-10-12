@@ -243,19 +243,33 @@ impl AskSlot {
 /// `Err`, and no call's thread is left blocked in an ask while the scope
 /// joins it. Each stream is added before its worker is spawned.
 #[derive(Default)]
-pub(crate) struct Release(Vec<Arc<Stream>>);
+pub(crate) struct Release {
+    streams: Vec<Arc<Stream>>,
+    cancels: Vec<Arc<crate::inner_calls::InnerCancel>>,
+}
 
 impl Release {
     /// Holds `stream` until the drop.
     pub(crate) fn add(&mut self, stream: Arc<Stream>) {
-        self.0.push(stream);
+        self.streams.push(stream);
+    }
+
+    /// Held before a worker starts, so every exit cancels it before joining.
+    pub(crate) fn add_cancel(&mut self, cancel: Arc<crate::inner_calls::InnerCancel>) {
+        self.cancels.push(cancel);
     }
 }
 
 impl Drop for Release {
     fn drop(&mut self) {
-        for stream in &self.0 {
+        for cancel in &self.cancels {
+            cancel.cancel();
+        }
+        for stream in &self.streams {
             stream.asking().close();
+            if let Some(slot) = stream.inner_slot() {
+                slot.close();
+            }
         }
     }
 }
