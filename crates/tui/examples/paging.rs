@@ -29,8 +29,11 @@ const USAGE: &str = "usage: cargo run --release -p tui --example paging -- [scal
     usage: cargo run --release -p tui --example paging -- open <events-file> <width> <height> <frame_every|end>";
 
 /// What the jig runs: its generated session, or one file's log reopened.
+/// The parse tests include this file as a module
+/// (`crates/tui/tests/paging_open.rs`), so the seam is visible in the
+/// crate without changing the runnable binary.
 #[derive(Debug, PartialEq, Eq)]
-enum Mode {
+pub(crate) enum Mode {
     Paging {
         scale: usize,
         width: u16,
@@ -47,7 +50,7 @@ enum Mode {
 /// How many lines each frame folds: a number, or `end` for the single
 /// final frame. The bench prints the single frame's count as its number,
 /// so both spell it.
-fn parse_frame_every(text: &str) -> Result<usize, String> {
+pub(crate) fn parse_frame_every(text: &str) -> Result<usize, String> {
     if text == "end" {
         return Ok(usize::MAX);
     }
@@ -57,7 +60,7 @@ fn parse_frame_every(text: &str) -> Result<usize, String> {
 /// The command line: `open` with its file, size and frame count, or the
 /// positional scale, width and height, each defaulted as the jig ran
 /// before the open mode existed.
-fn parse_args(args: &[String]) -> Result<Mode, String> {
+pub(crate) fn parse_args(args: &[String]) -> Result<Mode, String> {
     if args.first().is_some_and(|first| first == "open") {
         let rest = args.get(1..).unwrap_or_default();
         let [file, width, height, frame_every] = rest else {
