@@ -73,6 +73,11 @@ pub(crate) struct AckOrder {
     /// read loop, before `read_until`, where the thread holds no lock.
     #[cfg(test)]
     pub(crate) before_read: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Tests only: a one-shot signal at `wait_rerouted`'s entry, before
+    /// any lock: the point where a retiring relay waits for what it
+    /// re-routed to be answered.
+    #[cfg(test)]
+    pub(crate) before_wait_rerouted: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 /// What [`AckOrder`] tracks: the unanswered commands per session in read
@@ -139,6 +144,10 @@ impl AckOrder {
     /// reached a session is not recorded, so passing it on after a
     /// forward cannot deadlock either.
     pub(crate) fn wait_rerouted(&self, session: &str, epoch: u64, id: &str) {
+        #[cfg(test)]
+        if let Some(before) = lock(&self.before_wait_rerouted).take() {
+            before();
+        }
         let mut inner = lock(&self.inner);
         while inner
             .rerouted

@@ -925,6 +925,10 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
     order.enqueue(&old, "c_earlier");
     order.enqueue(&old, "c_rw");
     order.mark_rerouted("c_earlier", &old, epoch);
+    let (waited_tx, waited_rx) = mpsc::channel();
+    *lock(&order.before_wait_rerouted) = Some(Box::new(move || {
+        waited_tx.send(()).unwrap_or(());
+    }));
     let (hub_session, mut session_peer) = UnixStream::pair().unwrap();
     let reader = hub_session.try_clone().unwrap();
     lock(&relays).entries.push(crate::relay::Relay {
@@ -1042,6 +1046,13 @@ fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() 
         );
         std::thread::yield_now();
     }
+    // The retiring relay has reached its ordering wait while the
+    // earlier acknowledgement is still parked: only then release it,
+    // so the losing order (the rejection first) cannot slip through.
+    assert!(
+        Deadline::after(DEADLINE).recv(&waited_rx).is_ok(),
+        "the retiring relay reaches its ordering wait"
+    );
     release_tx.send(()).unwrap_or(());
     assert!(
         Deadline::after(DEADLINE)
