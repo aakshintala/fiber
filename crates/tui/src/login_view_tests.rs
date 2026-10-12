@@ -1533,7 +1533,25 @@ fn a_code_step_shows_the_code_and_opens_nothing() {
     assert!(screen.contains("Enter the code ABCD-1234"), "{screen}");
     assert!(screen.contains(url), "{screen}");
     assert!(screen.contains("Waiting for the browser…"), "{screen}");
-    assert!(screen.contains("y copy code · Esc back"), "{screen}");
+    assert!(screen.contains("y copy URL · Esc back"), "{screen}");
+}
+
+#[test]
+fn y_on_a_code_step_copies_the_whole_url_even_when_the_screen_cuts_it() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    let url = format!("https://auth.example/device?state={}", "x".repeat(160));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Code {
+            url: url.clone(),
+            code: "ABCD-1234".to_owned(),
+        },
+    );
+    assert!(matches!(
+        login.key(&Key::Char('y'), &ctx(&fake)),
+        Act::Copy(shown) if shown == url
+    ));
 }
 
 #[test]
