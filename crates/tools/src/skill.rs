@@ -144,7 +144,7 @@ impl Tool for Skill {
             }
             Err(Resolve::Unreadable { file, error }) => {
                 return failed(
-                    ErrorCode::IoFailed,
+                    ErrorCode::ToolError,
                     format!("Could not read skill {}: {error}.", file.display()),
                 );
             }
@@ -166,7 +166,7 @@ impl Tool for Skill {
         }
         let body = match self.skills.body(&name, &target) {
             Ok(body) => body,
-            Err(SkillRead::Io(message)) => return failed(ErrorCode::IoFailed, message),
+            Err(SkillRead::Io(message)) => return failed(ErrorCode::ToolError, message),
             Err(SkillRead::Invalid) => {
                 return failed(
                     ErrorCode::InvalidArguments,
