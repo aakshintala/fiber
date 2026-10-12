@@ -3,7 +3,7 @@
 //! and how its answer reaches the turn.
 
 use contract::events::{ContextAdded, Event, InputItem, TurnCompleted, TurnOutcome};
-use contract::hook::{ContextOutcome, TurnStart};
+use contract::hook::{BeforeModelCall, CheckAnswer, CheckOutcome, ContextOutcome, TurnStart};
 use contract::shapes::Failure;
 use contract::{ErrorCode, TurnId};
 
@@ -93,9 +93,64 @@ impl Loop {
     /// sending; `None` sends the request.
     pub(crate) fn model_call_allowed(
         &mut self,
-        _turn: &TurnId,
+        turn: &TurnId,
     ) -> Result<Option<TurnCompleted>, Error> {
-        Ok(None)
+        // A cancel or a shutdown sends no request: the turn ends
+        // `interrupted` instead.
+        if self.turn_cancelled() {
+            return Ok(Some(crate::ended(TurnOutcome::Interrupted, None)));
+        }
+        let Some(hooks) = self.hooks.clone() else {
+            return Ok(None);
+        };
+        // The spend so far, the delegates' calls included: the same fold
+        // the budget check reads.
+        let answer = hooks.before_model_call(&BeforeModelCall {
+            model: &self.model.reference,
+            usage: &self.ledger.usage(),
+            cancel: &*self.cancel,
+        });
+        let CheckAnswer { outcome, notices } = answer;
+        for notice in notices {
+            self.append(&Event::Notice(notice), turn, None)?;
+        }
+        // A cancel that landed while the hooks ran sends nothing, whatever
+        // they answered: only the notices above are written.
+        if self.turn_cancelled() {
+            return Ok(Some(crate::ended(TurnOutcome::Interrupted, None)));
+        }
+        match outcome {
+            CheckOutcome::Passed => Ok(None),
+            // A refusal ends the turn exactly as the budget does, stopping
+            // the session's running delegates with it.
+            CheckOutcome::Refused(refusal) => Ok(Some(self.budget_end(crate::ended(
+                TurnOutcome::Failed,
+                Some(Failure {
+                    code: ErrorCode::BudgetExceeded,
+                    message: format!(
+                        "Extension {} refused the model request: {}",
+                        refusal.extension, refusal.reason
+                    ),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+            )))),
+            // A failure stops no delegate: only a refusal is "exactly as
+            // `budget.usd` does".
+            CheckOutcome::Failed(failure) => Ok(Some(crate::ended(
+                TurnOutcome::Failed,
+                Some(Failure {
+                    code: ErrorCode::HookFailed,
+                    message: format!(
+                        "The `before_model_call` hook of extension {} failed, \
+                         so the request was not sent: {}",
+                        failure.extension, failure.message
+                    ),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+            ))),
+        }
     }
 
     /// What a step's reply with no tool call leaves to do: the end-of-turn

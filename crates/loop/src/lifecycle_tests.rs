@@ -15,15 +15,18 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::events::{InputItem, TurnOutcome};
+use contract::emit::Emit;
+use contract::events::{InputItem, TextDelta, ToolCallRequested, TurnOutcome};
 use contract::hook::{
     AfterToolAnswer, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
     BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer, CheckOutcome, Context,
     ContextAnswer, ContextOutcome, Hooks,
 };
 use contract::inbox::{Ack, Answer, Delivery, Message};
+use contract::provider::{Delta, ReplyAction};
 use contract::rules::{Rules, RulesError, StandingRules};
-use contract::shapes::{ContentPart, Origin, Sender};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender, Usage};
+use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, ErrorCode, SessionId, TurnId};
 use fakes::Deadline;
 use log::Log;
@@ -45,6 +48,8 @@ struct FakeHooks {
     seen_input: Mutex<Vec<String>>,
     turn_start_calls: AtomicUsize,
     before_model_call_calls: AtomicUsize,
+    seen_calls: Mutex<Vec<(String, Usage)>>,
+    cancel_in_call: Mutex<Option<Arc<crate::TurnCancel>>>,
     turn_end_calls: AtomicUsize,
     #[allow(dead_code, reason = "read from task 2.3 on")]
     seen_replies: Mutex<Vec<String>>,
@@ -62,6 +67,8 @@ impl FakeHooks {
             seen_input: Mutex::new(Vec::new()),
             turn_start_calls: AtomicUsize::new(0),
             before_model_call_calls: AtomicUsize::new(0),
+            seen_calls: Mutex::new(Vec::new()),
+            cancel_in_call: Mutex::new(None),
             turn_end_calls: AtomicUsize::new(0),
             seen_replies: Mutex::new(Vec::new()),
             cancel_in_hook: Mutex::new(None),
@@ -77,7 +84,6 @@ impl FakeHooks {
         self.turn_start.lock().unwrap().push_back(answer);
     }
 
-    #[allow(dead_code, reason = "used from task 2.2 on")]
     fn answer_before_model_call(&self, answer: CheckAnswer) {
         self.before_model_call.lock().unwrap().push_back(answer);
     }
@@ -157,6 +163,26 @@ fn passed_call() -> CheckAnswer {
     }
 }
 
+fn refused_call(by: &str, reason: &str) -> CheckAnswer {
+    CheckAnswer {
+        outcome: CheckOutcome::Refused(contract::hook::Refusal {
+            extension: by.to_owned(),
+            reason: reason.to_owned(),
+        }),
+        notices: Vec::new(),
+    }
+}
+
+fn failed_call(by: &str, message: &str) -> CheckAnswer {
+    CheckAnswer {
+        outcome: CheckOutcome::Failed(contract::hook::HookFailure {
+            extension: by.to_owned(),
+            message: message.to_owned(),
+        }),
+        notices: Vec::new(),
+    }
+}
+
 impl Hooks for FakeHooks {
     fn after_tool(&self, _call: &contract::hook::AfterToolCall<'_>) -> AfterToolAnswer {
         AfterToolAnswer {
@@ -222,8 +248,15 @@ impl Hooks for FakeHooks {
             .unwrap_or_else(|| added(Vec::new()))
     }
 
-    fn before_model_call(&self, _call: &contract::hook::BeforeModelCall<'_>) -> CheckAnswer {
+    fn before_model_call(&self, call: &contract::hook::BeforeModelCall<'_>) -> CheckAnswer {
         self.before_model_call_calls.fetch_add(1, Ordering::SeqCst);
+        self.seen_calls
+            .lock()
+            .unwrap()
+            .push((call.model.to_owned(), call.usage.clone()));
+        if let Some(cancel) = self.cancel_in_call.lock().unwrap().clone() {
+            cancel.cancel();
+        }
         self.before_model_call
             .lock()
             .unwrap()
@@ -270,6 +303,15 @@ struct World {
 /// A `Loop` with its inbox still held by the test, `hooks` set when given,
 /// and `script` as its provider's replies.
 fn started(script: Vec<fakes::Scripted>, hooks: Option<Arc<FakeHooks>>) -> World {
+    started_with_tools(script, hooks, Vec::new())
+}
+
+/// [`started`], with `tools` registered under `builtin`.
+fn started_with_tools(
+    script: Vec<fakes::Scripted>,
+    hooks: Option<Arc<FakeHooks>>,
+    tools: Vec<Arc<dyn Tool>>,
+) -> World {
     let home = fakes::TempDir::new("fiber-lifecycle");
     let workspace = home.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
@@ -301,7 +343,10 @@ fn started(script: Vec<fakes::Scripted>, hooks: Option<Arc<FakeHooks>>) -> World
                 fakes::CONTEXT_WINDOW,
             ),
             inbox: rx,
-            tools: Vec::new(),
+            tools: tools
+                .into_iter()
+                .map(|tool| ("builtin".to_owned(), tool))
+                .collect(),
             permissions: crate::Permissions {
                 workspace: workspace.display().to_string(),
                 credentials: home.path().join("credentials"),
@@ -346,6 +391,97 @@ fn capture() -> (Ack, mpsc::Receiver<Answer>) {
         })),
         rx,
     )
+}
+
+/// A test tool that only reads and returns `text`.
+struct Probe;
+
+impl Tool for Probe {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "probe".into(),
+            description: "Returns a fixed output.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Effects, EffectsError> {
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: false,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn Cancel,
+        _: &dyn Emit,
+    ) -> Output {
+        Output {
+            content: vec![ContentPart::Text {
+                text: "tool output".into(),
+            }],
+            ..Output::default()
+        }
+    }
+
+    fn bound(&self) -> Bound {
+        Bound::DEFAULT
+    }
+}
+
+/// A reply saying `text`, then calling `name` with `arguments`, billed at
+/// `cost`.
+fn tool_call_reply(
+    text: &str,
+    name: &str,
+    arguments: serde_json::Value,
+    cost: f64,
+) -> fakes::Scripted {
+    let mut end = fakes::reply(text);
+    end.actions.push(ReplyAction::ToolCall(ToolCallRequested {
+        name: name.into(),
+        arguments,
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+        provider_item: None,
+    }));
+    end.cost = Some(cost);
+    fakes::Scripted {
+        deltas: vec![Delta::Text(TextDelta { text: text.into() })],
+        end: Ok(end),
+    }
+}
+
+/// A reply of `text` alone, billed at `cost`.
+fn priced(text: &str, cost: f64) -> fakes::Scripted {
+    let mut scripted = fakes::Scripted::text(text);
+    if let Ok(reply) = &mut scripted.end {
+        reply.cost = Some(cost);
+    }
+    scripted
+}
+
+/// `scripted` with its reply's `input` and `output` tokens set.
+fn with_tokens(mut scripted: fakes::Scripted, input: u64, output: u64) -> fakes::Scripted {
+    if let Ok(reply) = &mut scripted.end {
+        reply.tokens.input = input;
+        reply.tokens.output = output;
+    }
+    scripted
 }
 
 type Finished = mpsc::Receiver<(Loop, Result<Option<TurnOutcome>, crate::Error>)>;
@@ -714,4 +850,315 @@ fn turn_start_is_shown_the_input_without_unknown_items() {
         "the Unknown item is filtered out, not an error"
     );
     assert_eq!(hooks.turn_start_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn the_hook_sees_each_request_with_the_model_and_the_spend_so_far() {
+    let hooks = Arc::new(FakeHooks::new());
+    let mut world = started_with_tools(
+        vec![
+            tool_call_reply("Checking.", "probe", serde_json::json!({}), 0.5),
+            priced("Done.", 0.0),
+        ],
+        Some(hooks.clone()),
+        vec![Arc::new(Probe) as Arc<dyn Tool>],
+    );
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    // Once per request: the tool call's, then the reply's.
+    assert_eq!(hooks.before_model_call_calls.load(Ordering::SeqCst), 2);
+    let seen = hooks.seen_calls.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].0, "fake/model");
+    assert_eq!(seen[0].1.cost, Some(0.0));
+    // The second call sees the first step's cost.
+    assert_eq!(seen[1].0, "fake/model");
+    assert_eq!(seen[1].1.cost, Some(0.5));
+    assert_eq!(world.provider.requests().len(), 2);
+}
+
+#[test]
+fn a_refusal_fails_the_turn_budget_exceeded_and_stops_the_delegates() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_before_model_call(refused_call("fiber.test/guard", "team budget spent"));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let jobs_dir = world._home.path().join("jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    let jobs = fakes::jobs::FakeJobs::new(&jobs_dir);
+    world.looped = world
+        .looped
+        .take()
+        .map(|looped| looped.jobs(Arc::clone(&jobs) as Arc<dyn contract::jobs::Jobs>));
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Failed)
+    );
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    let end = line(&all, "turn_completed");
+    assert_eq!(end.payload["outcome"], "failed");
+    assert_eq!(end.payload["error"]["code"], "budget_exceeded");
+    assert_eq!(
+        end.payload["error"]["message"],
+        "Extension fiber.test/guard refused the model request: team budget spent"
+    );
+    assert!(
+        world.provider.requests().is_empty(),
+        "the provider got no request for that step"
+    );
+    assert_eq!(jobs.stop_delegates_calls(), 1);
+}
+
+#[test]
+fn a_blocking_before_model_call_failure_fails_the_turn_without_stopping_delegates() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_before_model_call(failed_call("fiber.test/guard", "boom"));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let jobs_dir = world._home.path().join("jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    let jobs = fakes::jobs::FakeJobs::new(&jobs_dir);
+    world.looped = world
+        .looped
+        .take()
+        .map(|looped| looped.jobs(Arc::clone(&jobs) as Arc<dyn contract::jobs::Jobs>));
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Failed)
+    );
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    let end = line(&all, "turn_completed");
+    assert_eq!(end.payload["outcome"], "failed");
+    assert_eq!(end.payload["error"]["code"], "hook_failed");
+    assert_eq!(
+        end.payload["error"]["message"],
+        "The `before_model_call` hook of extension fiber.test/guard failed, \
+         so the request was not sent: boom"
+    );
+    assert!(world.provider.requests().is_empty());
+    assert_eq!(jobs.stop_delegates_calls(), 0);
+}
+
+#[test]
+fn a_retried_request_runs_the_hook_once() {
+    let hooks = Arc::new(FakeHooks::new());
+    let mut world = started(
+        vec![
+            fakes::Scripted::failed(contract::shapes::Failure {
+                code: ErrorCode::RateLimited,
+                message: "slow down".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            priced("Done.", 0.0),
+        ],
+        Some(hooks.clone()),
+    );
+    // No backoff wait: the retry resends at once on the fake clock.
+    world.looped = world.looped.take().map(|looped| {
+        looped.retry(crate::Retry {
+            attempts: 3,
+            initial: Duration::ZERO,
+            max: Duration::from_secs(60),
+        })
+    });
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    assert_eq!(hooks.before_model_call_calls.load(Ordering::SeqCst), 1);
+    // The retry resent the same request.
+    let requests = world.provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].conversation, requests[1].conversation);
+}
+
+#[test]
+fn a_handoff_for_size_runs_the_hook_again_on_the_rebuilt_request() {
+    let hooks = Arc::new(FakeHooks::new());
+    let mut world = started(
+        vec![
+            fakes::Scripted::failed(contract::shapes::Failure {
+                code: ErrorCode::ContextOverflow,
+                message: "too big".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            priced("the note", 0.0),
+            priced("Done.", 0.0),
+        ],
+        Some(hooks.clone()),
+    );
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    // The request that did not fit, the note request the hook never sees,
+    // and the rebuilt request: the hook ran on the first and the third.
+    assert_eq!(hooks.before_model_call_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(world.provider.requests().len(), 3);
+    let all = lines(&world);
+    assert!(
+        all.iter().any(|line| line.kind == "handoff_completed"),
+        "the overflow handed off: {:?}",
+        kinds(&all)
+    );
+}
+
+#[test]
+fn an_over_budget_session_never_calls_the_hook() {
+    let hooks = Arc::new(FakeHooks::new());
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks.clone()));
+    let jobs_dir = world._home.path().join("jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    let jobs = fakes::jobs::FakeJobs::new(&jobs_dir);
+    world.looped = world.looped.take().map(|looped| {
+        looped
+            .jobs(Arc::clone(&jobs) as Arc<dyn contract::jobs::Jobs>)
+            .budget(Some(0.0))
+    });
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Failed)
+    );
+    drop(world.looped.take());
+
+    assert_eq!(hooks.before_model_call_calls.load(Ordering::SeqCst), 0);
+    let all = lines(&world);
+    assert_eq!(
+        line(&all, "turn_completed").payload["error"]["code"],
+        "budget_exceeded"
+    );
+    assert_eq!(jobs.stop_delegates_calls(), 1);
+}
+
+#[test]
+fn a_handoff_note_request_never_reaches_the_hook() {
+    let hooks = Arc::new(FakeHooks::new());
+    let mut world = started_with_tools(
+        vec![
+            with_tokens(
+                tool_call_reply("Checking.", "probe", serde_json::json!({}), 0.0),
+                5000,
+                5000,
+            ),
+            priced("the note", 0.0),
+            priced("Done.", 0.0),
+        ],
+        Some(hooks.clone()),
+        vec![Arc::new(Probe) as Arc<dyn Tool>],
+    );
+    // Any reply overflows the context, so the next step hands off first.
+    world.looped = world.looped.take().map(|looped| {
+        looped.handoff(crate::HandoffSettings {
+            enabled: true,
+            tokens: 1,
+            window_fraction: 1.0,
+            nudge: false,
+        })
+    });
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    // The step's request and the rebuilt one: the note request between them
+    // never reached the hook.
+    assert_eq!(hooks.before_model_call_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(world.provider.requests().len(), 3);
+    let all = lines(&world);
+    assert!(
+        all.iter().any(|line| line.kind == "handoff_completed"),
+        "an automatic handoff ran: {:?}",
+        kinds(&all)
+    );
+}
+
+#[test]
+fn a_cancel_inside_the_hook_ends_the_turn_interrupted_even_on_a_refusal() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_before_model_call(refused_call("fiber.test/guard", "team budget spent"));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks.clone()));
+    {
+        let looped = world.looped.take().unwrap();
+        hooks
+            .cancel_in_call
+            .lock()
+            .unwrap()
+            .replace(Arc::clone(&looped.cancel));
+        world.looped = Some(looped);
+    }
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Interrupted)
+    );
+    drop(world.looped.take());
+
+    // The refusal was never applied: nothing was sent and the turn did not
+    // fail.
+    assert!(world.provider.requests().is_empty());
+    let all = lines(&world);
+    assert_eq!(
+        line(&all, "turn_completed").payload["outcome"],
+        "interrupted"
+    );
 }
