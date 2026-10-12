@@ -198,7 +198,9 @@ impl Cancel for InnerCancel {
 
     fn subscribe(&self, waker: Weak<dyn Wake>) {
         let mut inner = lock(&self.signal.inner);
-        if !inner.0 {
+        // The turn can be cancelled before its relay reaches this signal.
+        // A subscription after that cancel must not replay it.
+        if !inner.0 && !self.turn.is_cancelled() {
             inner.1.push(waker);
         }
     }

@@ -208,3 +208,45 @@ fn self_call_refusal_precedes_raising_even_when_the_slot_is_closed() {
         Err(std::sync::mpsc::TryRecvError::Empty)
     ));
 }
+
+struct HeldWake {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+impl contract::clock::Wake for HeldWake {
+    fn wake(&self) {
+        self.entered.send(()).unwrap();
+        let _released = self.release.lock().unwrap().recv();
+    }
+}
+
+#[test]
+fn a_subscription_after_turn_cancel_is_not_replayed_while_the_relay_is_delayed() {
+    use contract::tool::Cancel;
+    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(2));
+    let turn = Arc::new(crate::TurnCancel::default());
+    assert!(turn.arm());
+    let (entered, holding) = std::sync::mpsc::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let first: Arc<dyn contract::clock::Wake> = Arc::new(HeldWake {
+        entered,
+        release: std::sync::Mutex::new(held),
+    });
+    turn.subscribe(Arc::downgrade(&first));
+    let cancel = super::InnerCancel::new(turn.clone());
+    let (ended, done) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        ended.send(turn.cancel()).unwrap();
+    });
+    deadline.recv_or_fail(&holding, "turn cancel before the inner relay");
+    assert!(cancel.is_cancelled());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let late: Arc<dyn contract::clock::Wake> = Arc::new(Notice(tx));
+    cancel.subscribe(Arc::downgrade(&late));
+    release.send(()).unwrap();
+    assert!(deadline.recv_or_fail(&done, "turn cancel completes"));
+    assert!(matches!(
+        rx.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+}
