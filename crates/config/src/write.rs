@@ -462,11 +462,11 @@ pub fn remove_entry(
     }
     // Each emptied object on the key's way goes with its last entry.
     for len in (1..=parents).rev() {
-        match path::get(&root, &segments[..len]) {
-            Some(Value::Object(map)) if map.is_empty() => {
-                path::remove(&mut root, &segments[..len]);
-            }
-            _ => {}
+        let Some(prefix) = segments.get(..len) else {
+            continue;
+        };
+        if matches!(path::get(&root, prefix), Some(Value::Object(map)) if map.is_empty()) {
+            path::remove(&mut root, prefix);
         }
     }
     write_root(&file, &root)?;

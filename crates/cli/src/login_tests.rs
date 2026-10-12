@@ -61,6 +61,17 @@ impl KeyReader for Fake {
             Err(e) => Err(io::Error::new(e.kind(), "no terminal")),
         }
     }
+
+    fn read_key_exact(
+        &mut self,
+        prompt: &str,
+        input: &mut dyn BufRead,
+        err: &mut dyn Write,
+    ) -> io::Result<Secret> {
+        err.write_all(prompt.as_bytes())?;
+        self.asked += 1;
+        super::read_exact_line(input)
+    }
 }
 
 struct Setup {
@@ -1002,4 +1013,22 @@ fn the_menu_numbers_a_browser_provider_among_the_providers() {
         "{err}"
     );
     assert_eq!(setup.stored("alpha", "default").as_deref(), Some(KEY));
+}
+
+#[test]
+fn read_key_exact_keeps_spaces_and_drops_only_the_final_newline() {
+    for (input, stored) in [
+        (" token \n", " token "),
+        ("token\r\n", "token"),
+        ("token", "token"),
+        ("  \n", "  "),
+        ("\n", ""),
+    ] {
+        let mut keys = Plain;
+        let mut err = Vec::new();
+        let secret = keys
+            .read_key_exact("", &mut Cursor::new(input.as_bytes().to_vec()), &mut err)
+            .unwrap();
+        assert_eq!(secret.expose(), stored, "input {input:?}");
+    }
 }
