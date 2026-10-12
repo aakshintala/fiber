@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use contract::Secret;
 use serde::Deserialize;
-use serde::de::{self, Visitor};
+use serde::de;
 
 use crate::credential_file::{CredentialFile, CredentialLock, credential_path, is_lock_or_tmp};
 use crate::error::ConfigError;
@@ -56,12 +56,11 @@ struct RawSource {
     /// A program and its arguments that print the key.
     command: Option<Vec<String>>,
     /// How long a run of `command` may last; only beside `command`, a
-    /// string `parse_duration` accepts. The custom deserializer refuses an
-    /// explicit `"timeout": null`: one `Option` alone reads it as
-    /// omission, silently selecting the default. Omission never reaches
-    /// it: `default` maps a missing key to `None`.
-    #[serde(default, deserialize_with = "de_timeout")]
-    timeout: Option<String>,
+    /// string `parse_duration` accepts. A missing key is the outer `None`;
+    /// an explicit `null` is `Some(None)` and is refused in `try_from`. A
+    /// plain `Option` alone would read `null` as omission.
+    #[serde(default, deserialize_with = "some_when_present")]
+    timeout: Option<Option<String>>,
 }
 
 // The refusal names the shape, never the value: arguments may hold a key.
@@ -75,6 +74,14 @@ impl TryFrom<RawSource> for CredentialSource {
             command,
             timeout,
         } = raw;
+        // An explicit null is refused in every shape, before the shape check.
+        let timeout = timeout
+            .map(|text| {
+                text.ok_or_else(|| {
+                    "a command's `timeout` must be a duration such as `\"2m\"`".to_owned()
+                })
+            })
+            .transpose()?;
         if timeout.is_some() && command.is_none() {
             return Err("`timeout` is only allowed beside `command`".to_owned());
         }
@@ -95,41 +102,14 @@ impl TryFrom<RawSource> for CredentialSource {
     }
 }
 
-/// Reads a `timeout` value: a string stays one, while an explicit `null`
-/// (or any other non-string) is refused with the same error as any other
-/// invalid timeout, in every shape. A missing key never reaches here.
-fn de_timeout<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+/// Reads a present `timeout`: `null` becomes `Some(None)` (refused in
+/// `try_from`), a string becomes `Some(Some(text))`. A missing key never
+/// reaches here: `default` makes it the outer `None`.
+fn some_when_present<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
-    struct Timeout;
-
-    impl<'de> Visitor<'de> for Timeout {
-        type Value = Option<String>;
-
-        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("a duration string such as `\"2m\"`")
-        }
-
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-            Err(E::custom(
-                "a command's `timeout` must be a duration such as `\"2m\"`",
-            ))
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-            self.visit_none()
-        }
-
-        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-        where
-            D: de::Deserializer<'de>,
-        {
-            String::deserialize(deserializer).map(Some)
-        }
-    }
-
-    deserializer.deserialize_option(Timeout)
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 impl CredentialSource {
