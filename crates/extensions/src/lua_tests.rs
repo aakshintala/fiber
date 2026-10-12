@@ -83,14 +83,25 @@ fn registration_from_a_deferred_timer_never_makes_a_command_callable() {
             ok, reason = pcall(function()
                 fiber.command('late', {timeout=1000, run=function() return 'late' end})
             end)
+            host.status('timer-ready')
         end, {timeout=1000})
     "#,
     );
     let ext = LuaExtension::new("ext", dir.path(), dir.path(), FakeClock::new());
+    struct TimerSignal(mpsc::Sender<()>);
+    impl contract::emit::Emit for TimerSignal {
+        fn emit(&self, _: &contract::events::Event) {
+            match self.0.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+        }
+    }
+    let (ready_tx, ready_rx) = mpsc::channel();
+    ext.set_emit(Arc::new(TimerSignal(ready_tx)));
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         ext.commands().unwrap();
-        assert!(until(&ext.hub, |s| s.timers.listed().is_empty()));
+        Deadline::after(WAIT).recv_or_fail(&ready_rx, "timer completed its registration attempt");
         let probe = ext.command("probe", "");
         let late = ext.command("late", "");
         tx.send((probe, late)).unwrap();

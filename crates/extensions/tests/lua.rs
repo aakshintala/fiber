@@ -223,6 +223,41 @@ fn a_provider_load_goes_ahead_of_queued_commands() {
 }
 
 #[test]
+fn a_stuck_provider_load_abandons_its_mixed_extension_after_grace() {
+    let clock = FakeClock::new();
+    let (dir, ext) = lazy_fixture(
+        "fiber.command('echo', {timeout=1000, run=function() return 'alive' end})",
+        "require('hold')\n fiber.provider('p', {})",
+        Arc::clone(&clock),
+    );
+    let (held, release) = hold_open(dir.path());
+    assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
+    let asked = clock.now();
+    let provider = start_provider(&ext);
+    Deadline::after(WAIT).recv_or_fail(&held, "provider blocked in C read");
+    assert!(parked_at(&clock, asked + LOAD + GRACE, 1));
+    let mark = clock.advance_marked(LOAD + GRACE - Duration::from_millis(1));
+    assert!(clock.await_parked_since(&mark, Some(asked + LOAD + GRACE), WAIT));
+    assert!(matches!(
+        provider.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    clock.advance(Duration::from_millis(1));
+    let err = Deadline::after(WAIT)
+        .recv_or_fail(&provider, "abandoned provider")
+        .unwrap_err();
+    assert!(matches!(err, Error::Abandoned { callback, .. } if callback == "providers/p.lua"));
+    assert!(!ext.is_running());
+    let err = call(&ext, "echo", "").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    assert!(matches!(
+        err,
+        Error::Abandoned { .. } | Error::Stopped { .. }
+    ));
+    release.send(()).unwrap();
+}
+
+#[test]
 fn no_vm_exists_until_the_extension_is_first_called() {
     let ext = fixture();
     assert!(!ext.is_running());
