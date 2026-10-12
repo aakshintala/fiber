@@ -1070,6 +1070,125 @@ fn a_pump_401_without_waiters_is_not_sticky() {
 }
 
 #[test]
+fn startup_deadlines_end_both_token_lock_waits_and_stalled_token_posts() {
+    use contract::mcp_tokens::TokenFiles;
+    for held_lock in [true, false] {
+        let auth = fakes::OauthServer::start(vec![fakes::OauthReply::token("at-2", "rt-2", 3600)]);
+        auth.hold();
+        let fake = ProviderServer::start_responding(standard()).unwrap();
+        let setup = Setup::new();
+        let url = format!("{}/mcp", fake.url());
+        let files = token_files(&url, &auth.url(), Some(0));
+        let key = crate::token::key(&url);
+        let before = files.read(&key).unwrap();
+        let held = held_lock.then(|| files.try_lock(&key).unwrap().unwrap());
+        let (busy, received_busy) = std::sync::mpsc::channel();
+        files.state.lock().unwrap().busy = Some(busy);
+        let ended = super::wait_exchange_done(1);
+        let clock = setup.clock();
+        let deadline = clock.now() + Duration::from_secs(5);
+        let tokens = files.clone();
+        let (done, received) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            done.send(super::start(
+                &url,
+                tokens,
+                None,
+                net::LIMITS,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+            ))
+            .unwrap();
+        });
+        if held_lock {
+            Deadline::after(WITHIN)
+                .recv_or_fail(&received_busy, "startup refresh polls the held lock");
+        } else {
+            assert!(auth.await_requests(1, WITHIN));
+        }
+        assert!(setup.fake.await_parked(deadline, WITHIN));
+        setup.fake.advance(Duration::from_secs(5));
+        assert!(matches!(
+            Deadline::after(WITHIN).recv_or_fail(&received, "startup deadline interrupts OAuth"),
+            Err(StartError::Deadline)
+        ));
+        assert_eq!(
+            Deadline::after(WITHIN).recv_or_fail(&ended, "the interrupted token exchange ends"),
+            1
+        );
+        worker.join().unwrap();
+        auth.release();
+        assert_eq!(files.read(&key).unwrap(), before);
+        assert_eq!(auth.request_count(), usize::from(!held_lock));
+        assert_eq!(fake.requests().len(), 0);
+        drop(held);
+    }
+}
+#[test]
+fn cancellation_ends_a_token_lock_wait_on_a_running_server() {
+    use contract::mcp_tokens::TokenFiles;
+    let auth = fakes::OauthServer::start(vec![]);
+    let fake = ProviderServer::start_responding(standard()).unwrap();
+    let setup = Setup::new();
+    let url = format!("{}/mcp", fake.url());
+    let files = token_files(&url, &auth.url(), None);
+    let server = Arc::new(
+        token_start(&setup, url.clone(), files.clone())
+            .unwrap()
+            .server,
+    );
+    let key = crate::token::key(&url);
+    files.state.lock().unwrap().records.get_mut(&key).unwrap()["expires_at"] = json!(0);
+    let held = files.try_lock(&key).unwrap().unwrap();
+    let (busy, received_busy) = std::sync::mpsc::channel();
+    files.state.lock().unwrap().busy = Some(busy);
+    let ended = super::wait_exchange_done(3);
+    let cancel = fakes::CancelToken::new();
+    let firing = cancel.clone();
+    let calling = server.clone();
+    let deadline = setup.clock().now() + Duration::from_secs(60);
+    let (done, received) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        done.send(calling.call("tools/call", &json!({}), Duration::from_secs(60), &firing))
+            .unwrap();
+    });
+    Deadline::after(WITHIN).recv_or_fail(&received_busy, "the call polls the held token lock");
+    assert!(setup.fake.await_parked(deadline, WITHIN));
+    cancel.cancel();
+    assert_eq!(
+        Deadline::after(WITHIN).recv_or_fail(&received, "the call is cancelled"),
+        Err(CallError::Cancelled)
+    );
+    assert_eq!(
+        Deadline::after(WITHIN).recv_or_fail(&ended, "the cancelled exchange ends"),
+        3
+    );
+    worker.join().unwrap();
+    assert_eq!(auth.request_count(), 0);
+    drop(held);
+    fakes::within("remote stop", WITHIN, move || server.stop());
+}
+#[test]
+fn a_rejected_refresh_fails_the_start_without_changing_the_record() {
+    use contract::mcp_tokens::TokenFiles;
+    let auth = fakes::OauthServer::start(vec![fakes::OauthReply::raw(400, "secret")]);
+    let fake = ProviderServer::start_responding(standard()).unwrap();
+    let setup = Setup::new();
+    let url = format!("{}/mcp", fake.url());
+    let files = token_files(&url, &auth.url(), Some(0));
+    let key = crate::token::key(&url);
+    let before = files.read(&key).unwrap();
+    assert!(matches!(
+        token_start(&setup, url, files.clone()),
+        Err(StartError::Login(_))
+    ));
+    assert_eq!(files.read(&key).unwrap(), before);
+    assert_eq!(auth.request_count(), 1);
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
 fn a_bad_url_never_sends() {
     for url in ["ws://127.0.0.1:9/mcp", "not a url", "http://"] {
         let setup = Setup::new();
