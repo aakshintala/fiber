@@ -3,8 +3,6 @@
 //! The jig stays a runnable binary (`test = false`), so the test cannot
 //! call into it as a library: both include this file with `#[path]`.
 
-#![allow(dead_code, reason = "each user of this module needs only part of it")]
-
 use std::path::PathBuf;
 
 pub(crate) const USAGE: &str = "usage: cargo run --release -p tui --example paging -- [scale] [width] [height]\n\
