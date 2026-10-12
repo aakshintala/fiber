@@ -4,7 +4,7 @@
 
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 
 use config::{Config, Manifest};
@@ -57,6 +57,48 @@ pub(super) fn start_vm(
     Ok((extension, ignored))
 }
 
+pub(super) fn provider_handles(
+    session: &mut SessionExtensions,
+    entry: &super::Started,
+    config: &Config,
+    clock: Arc<dyn Clock>,
+    locks: Arc<dyn PathLock>,
+) -> Result<(), Error> {
+    if entry.providers.is_empty() {
+        return Ok(());
+    }
+    let lua = match &entry.extension {
+        Some(lua) => Arc::clone(lua),
+        None => {
+            let (lua, mut notices) = start_vm(
+                &entry.name,
+                &entry.dir,
+                &session.home,
+                config,
+                &entry.manifest,
+                clock,
+                locks,
+            )?;
+            session.notices.append(&mut notices);
+            Arc::new(match &session.host_script {
+                Some(script) => lua.with_host_script(Arc::clone(script)),
+                None => lua,
+            })
+        }
+    };
+    session
+        .provider_vms
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(entry.name.clone(), Arc::downgrade(&lua));
+    for name in &entry.providers {
+        session
+            .lua_providers
+            .push((entry.name.clone(), LuaProvider::new(Arc::clone(&lua), name)));
+    }
+    Ok(())
+}
+
 impl SessionExtensions {
     /// The Lua provider `provider` of the loaded extension `extension`. An
     /// extension the session keeps for its hooks or commands lends its
@@ -72,43 +114,46 @@ impl SessionExtensions {
         extension: &str,
         provider: &str,
     ) -> Result<Arc<LuaProvider>, Error> {
-        let lua = match self.lua.iter().find(|lua| lua.name() == extension) {
-            Some(lua) => Arc::clone(lua),
-            None => {
-                let Some((_, dir)) = self.dirs.iter().find(|(name, _)| name == extension) else {
-                    return Err(Error::Lua {
-                        extension: extension.to_owned(),
-                        message: "the extension is not loaded in this session".into(),
-                    });
-                };
-                let manifest = config::read_manifest(dir)?;
-                let (lua, _) =
-                    start_vm(extension, dir, &self.home, config, &manifest, clock, locks)?;
-                let lua = match &self.host_script {
-                    Some(script) => lua.with_host_script(Arc::clone(script)),
-                    None => lua,
-                };
-                let lua = Arc::new(lua);
-                // A freshly started VM's registrations are checked as at
-                // load: a lent VM was checked when the session loaded.
-                if let Some(unclaimed) = crate::providers::first_undeclared(
-                    &manifest.providers,
-                    lua.provider_names()?.iter().map(String::as_str),
-                ) {
-                    return Err(Error::UndeclaredProvider {
-                        extension: extension.to_owned(),
-                        provider: unclaimed.to_owned(),
-                    });
-                }
-                lua
-            }
+        let Some((_, dir)) = self.dirs.iter().find(|(name, _)| name == extension) else {
+            return Err(Error::Lua {
+                extension: extension.to_owned(),
+                message: "the extension is not loaded in this session".into(),
+            });
         };
-        if !lua.provider_names()?.iter().any(|name| name == provider) {
+        let manifest = config::read_manifest(dir)?;
+        let scripts = crate::providers::provider_scripts(dir)?;
+        if let Some(unclaimed) = crate::providers::first_undeclared(
+            &manifest.providers,
+            scripts.iter().map(String::as_str),
+        ) {
+            return Err(Error::UndeclaredProvider {
+                extension: extension.to_owned(),
+                provider: unclaimed.to_owned(),
+            });
+        }
+        if !scripts.iter().any(|name| name == provider) {
             return Err(Error::Lua {
                 extension: extension.to_owned(),
                 message: format!("registers no provider `{provider}`"),
             });
         }
+        let mut vms = self
+            .provider_vms
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let lua = match vms.get(extension).and_then(std::sync::Weak::upgrade) {
+            Some(lua) => lua,
+            None => {
+                let (lua, _) =
+                    start_vm(extension, dir, &self.home, config, &manifest, clock, locks)?;
+                let lua = Arc::new(match &self.host_script {
+                    Some(script) => lua.with_host_script(Arc::clone(script)),
+                    None => lua,
+                });
+                vms.insert(extension.to_owned(), Arc::downgrade(&lua));
+                lua
+            }
+        };
         Ok(LuaProvider::new(lua, provider))
     }
 }

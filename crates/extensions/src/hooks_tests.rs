@@ -47,29 +47,22 @@ impl Home {
 
     /// Installs `fiber.test/<short>`, whose entry script is `init`, or a
     /// data-only extension when `init` is `None`. The manifest declares
-    /// every `fiber.provider` the script registers, with no URLs, so the
-    /// helper builds a well-formed package; a test of an undeclared
-    /// package rewrites the declaration with `edit_manifest`.
-    fn install(&self, short: &str, init: Option<&str>) {
+    /// every provider file, with no URLs. A test of an undeclared package
+    /// rewrites the declaration with `edit_manifest`.
+    fn install(&self, short: &str, init: Option<&str>, providers: &[(&str, &str)]) {
         let src = self.root.path().join("src").join(short);
         fs::create_dir_all(&src).unwrap();
         let mut manifest = json!({"name": format!("fiber.test/{short}"), "version": "v1.2.3", "fiber": "0.1.0", "api": 1});
-        if let Some(init) = init {
-            let mut seen: Vec<&str> = Vec::new();
-            for part in init.split("fiber.provider(\"").skip(1) {
-                if let Some(registered) = part.split('"').next()
-                    && !seen.contains(&registered)
-                {
-                    seen.push(registered);
-                }
-            }
-            if !seen.is_empty() {
-                let declared: serde_json::Map<String, serde_json::Value> = seen
-                    .iter()
-                    .map(|registered| ((*registered).to_owned(), json!([])))
-                    .collect();
-                manifest["providers"] = serde_json::Value::Object(declared);
-            }
+        if !providers.is_empty() {
+            fs::create_dir_all(src.join("providers")).unwrap();
+            let declared: serde_json::Map<String, serde_json::Value> = providers
+                .iter()
+                .map(|(name, lua)| {
+                    fs::write(src.join("providers").join(format!("{name}.lua")), lua).unwrap();
+                    ((*name).to_owned(), json!([]))
+                })
+                .collect();
+            manifest["providers"] = serde_json::Value::Object(declared);
         }
         fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
         if let Some(init) = init {
@@ -208,7 +201,7 @@ fn installed_file(home: &Home, short: &str, file: &str, text: &str) {
 #[test]
 fn a_prompt_file_is_loaded_with_its_text() {
     let home = Home::new();
-    home.install("noted", None);
+    home.install("noted", None, &[]);
     home.edit_manifest("noted", |m| m["prompt"] = json!("prompt.md"));
     installed_file(&home, "noted", "prompt.md", "Prefer read first.\n");
     let session = home.load(&[]);
@@ -230,7 +223,7 @@ fn a_prompt_file_is_loaded_with_its_text() {
 #[test]
 fn an_extension_without_a_prompt_has_no_prompt_text() {
     let home = Home::new();
-    home.install("plain", None);
+    home.install("plain", None, &[]);
     let session = home.load(&[]);
     assert!(session.prompts().is_empty());
     assert!(
@@ -244,8 +237,8 @@ fn an_extension_without_a_prompt_has_no_prompt_text() {
 #[test]
 fn a_missing_prompt_file_fails_the_load_before_its_vm_starts() {
     let home = Home::new();
-    home.install("broken", Some(&tagging("broken", "transform")));
-    home.install("fine", Some(&tagging("fine", "transform")));
+    home.install("broken", Some(&tagging("broken", "transform")), &[]);
+    home.install("fine", Some(&tagging("fine", "transform")), &[]);
     home.edit_manifest("broken", |m| m["prompt"] = json!("gone.md"));
     let session = home.load(&[]);
     let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
@@ -290,8 +283,8 @@ fn opening(machine: &[&str], project: &[&str], budget_bytes: Option<u64>) -> ser
 #[test]
 fn sections_list_machine_then_project_paths_in_extension_name_order() {
     let home = Home::new();
-    home.install("zeta", None);
-    home.install("alpha", None);
+    home.install("zeta", None, &[]);
+    home.install("alpha", None, &[]);
     home.edit_manifest("zeta", |m| {
         m["opening"] = opening(&["z.md"], &["p.md"], Some(10));
     });
@@ -328,9 +321,9 @@ fn sections_list_machine_then_project_paths_in_extension_name_order() {
 #[test]
 fn sections_omit_a_disabled_extension_and_one_without_opening() {
     let home = Home::new();
-    home.install("off", None);
-    home.install("plain", None);
-    home.install("empty", None);
+    home.install("off", None, &[]);
+    home.install("plain", None, &[]);
+    home.install("empty", None, &[]);
     home.edit_manifest("off", |m| {
         m["opening"] = opening(&["o.md"], &[], None);
     });
@@ -356,7 +349,7 @@ fn sections_omit_a_disabled_extension_and_one_without_opening() {
 #[test]
 fn an_extension_whose_entry_script_fails_has_no_section() {
     let home = Home::new();
-    home.install("broken", Some("error(\"bad start\")\n"));
+    home.install("broken", Some("error(\"bad start\")\n"), &[]);
     home.edit_manifest("broken", |m| {
         m["opening"] = opening(&["index.md"], &[], None);
     });
@@ -382,9 +375,9 @@ fn an_empty_home_loads_nothing_and_starts_no_vm() {
 #[test]
 fn every_enabled_extension_is_loaded_with_its_version_and_a_disabled_one_is_not() {
     let home = Home::new();
-    home.install("data", None);
-    home.install("quiet", Some("-- registers nothing\n"));
-    home.install("off", Some(&tagging("off", "transform")));
+    home.install("data", None, &[]);
+    home.install("quiet", Some("-- registers nothing\n"), &[]);
+    home.install("off", Some(&tagging("off", "transform")), &[]);
     let session = home.load(&["extensions.\"fiber.test/off\".enabled=false"]);
     let loaded: Vec<(String, String)> = session
         .loaded()
@@ -413,8 +406,8 @@ fn every_enabled_extension_is_loaded_with_its_version_and_a_disabled_one_is_not(
 #[test]
 fn a_loaded_extensions_directory_is_listed_and_a_disabled_ones_is_not() {
     let home = Home::new();
-    home.install("data", None);
-    home.install("off", Some(&tagging("off", "transform")));
+    home.install("data", None, &[]);
+    home.install("off", Some(&tagging("off", "transform")), &[]);
     let session = home.load(&["extensions.\"fiber.test/off\".enabled=false"]);
     assert_eq!(
         session.dirs(),
@@ -428,8 +421,8 @@ fn a_loaded_extensions_directory_is_listed_and_a_disabled_ones_is_not() {
 #[test]
 fn a_damaged_extension_is_skipped_without_a_notice_and_the_rest_load() {
     let home = Home::new();
-    home.install("fine", Some(&tagging("fine", "transform")));
-    home.install("broken", Some(&tagging("broken", "transform")));
+    home.install("fine", Some(&tagging("fine", "transform")), &[]);
+    home.install("broken", Some(&tagging("broken", "transform")), &[]);
     fs::remove_file(home.home().join("extensions/fiber.test-broken/.fiber.json")).unwrap();
     let session = home.load(&[]);
     let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
@@ -442,8 +435,8 @@ fn a_damaged_extension_is_skipped_without_a_notice_and_the_rest_load() {
 #[test]
 fn an_entry_script_that_fails_leaves_a_notice_and_is_not_loaded() {
     let home = Home::new();
-    home.install("broken", Some("error(\"bad start\")\n"));
-    home.install("fine", Some(&tagging("fine", "transform")));
+    home.install("broken", Some("error(\"bad start\")\n"), &[]);
+    home.install("fine", Some(&tagging("fine", "transform")), &[]);
     let session = home.load(&[]);
     let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
     assert_eq!(loaded, names(&["fine"]));
@@ -482,6 +475,7 @@ fiber.hook(7, { timeout = 100, on_failure = "blocking", run = run })
 fiber.hook("before_tool", { phase = "check", timeout = 1, on_failure = "blocking", run = run })
 "#,
         ),
+        &[],
     );
     let session = home.load(&[]);
     let notices = session.notices();
@@ -526,8 +520,7 @@ fn a_timeout_of_one_and_a_named_phase_register() {
         Some(
             "fiber.hook(\"after_tool\", { phase = \"sanitize\", timeout = 1, on_failure = \"non-blocking\",\n\
                run = function(call) return { content = \"ok\" } end })\n",
-        ),
-    );
+        ), &[]);
     let session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     assert_eq!(session.after_tool.len(), 1);
@@ -545,6 +538,7 @@ fn the_hook_is_shown_the_call_and_its_output() {
              call.content, tostring(call.details.n), tostring(call.process.exit_code), \
              tostring(call.process.timed_out) }, \" \") }",
         )),
+        &[],
     );
     let session = home.load(&[]);
     let answer = bounded(move || {
@@ -578,12 +572,14 @@ fn hooks_run_by_phase_then_by_name_and_each_sees_the_one_before() {
     home.install(
         "a",
         Some(&(tagging("a1", "transform") + &tagging("a2", "transform"))),
+        &[],
     );
     home.install(
         "b",
         Some(&(tagging("b-t", "transform") + &tagging("b-s", "sanitize"))),
+        &[],
     );
-    home.install("c", Some(&tagging("c", "transform")));
+    home.install("c", Some(&tagging("c", "transform")), &[]);
     let answer = after_tool(&home.load(&[]), "x");
     assert_eq!(changed_content(&answer), Some("x|b-s|a1|a2|b-t|c"));
     assert_eq!(answer.changed_by, names(&["b", "a", "c"]));
@@ -598,8 +594,9 @@ fn a_hook_that_names_no_phase_is_a_transform_hook() {
             "blocking",
             "return { content = call.content .. \"|a\" }",
         )),
+        &[],
     );
-    home.install("b", Some(&tagging("b-s", "sanitize")));
+    home.install("b", Some(&tagging("b-s", "sanitize")), &[]);
     let answer = after_tool(&home.load(&[]), "x");
     assert_eq!(changed_content(&answer), Some("x|b-s|a"));
 }
@@ -607,12 +604,13 @@ fn a_hook_that_names_no_phase_is_a_transform_hook() {
 #[test]
 fn hooks_order_puts_the_named_extensions_first_in_its_order() {
     let home = Home::new();
-    home.install("a", Some(&tagging("a", "transform")));
+    home.install("a", Some(&tagging("a", "transform")), &[]);
     home.install(
         "b",
         Some(&(tagging("b-t", "transform") + &tagging("b-s", "sanitize"))),
+        &[],
     );
-    home.install("c", Some(&tagging("c", "transform")));
+    home.install("c", Some(&tagging("c", "transform")), &[]);
     let answer = after_tool(
         &home.load(&[r#"hooks.order.after_tool=["fiber.test/c","fiber.test/b"]"#]),
         "x",
@@ -636,8 +634,8 @@ fn hooks_order_puts_the_named_extensions_first_in_its_order() {
 #[test]
 fn a_non_blocking_failure_drops_its_change_with_a_notice_and_the_chain_goes_on() {
     let home = Home::new();
-    home.install("a", Some(&hook("non-blocking", "error(\"kaput\")")));
-    home.install("b", Some(&tagging("b", "transform")));
+    home.install("a", Some(&hook("non-blocking", "error(\"kaput\")")), &[]);
+    home.install("b", Some(&tagging("b", "transform")), &[]);
     let answer = after_tool(&home.load(&[]), "x");
     assert_eq!(changed_content(&answer), Some("x|b"));
     assert_eq!(answer.changed_by, names(&["b"]));
@@ -656,10 +654,10 @@ fn a_non_blocking_failure_drops_its_change_with_a_notice_and_the_chain_goes_on()
 #[test]
 fn a_blocking_failure_withholds_the_output_and_ends_the_chain() {
     let home = Home::new();
-    home.install("a", Some(&hook("blocking", "error(\"kaput\")")));
-    home.install("b", Some(&tagging("b", "sanitize")));
+    home.install("a", Some(&hook("blocking", "error(\"kaput\")")), &[]);
+    home.install("b", Some(&tagging("b", "sanitize")), &[]);
     // A later hook that would leave a notice: the chain ends before it.
-    home.install("c", Some(&hook("non-blocking", "error(\"never\")")));
+    home.install("c", Some(&hook("non-blocking", "error(\"never\")")), &[]);
     let answer = after_tool(&home.load(&[]), "x");
     assert_eq!(
         answer.outcome,
@@ -683,7 +681,7 @@ fn a_return_that_is_not_a_change_is_the_hooks_failure() {
         ("return { \"a\", \"b\" }", "a list, not a table"),
     ] {
         let home = Home::new();
-        home.install("odd", Some(&hook("non-blocking", body)));
+        home.install("odd", Some(&hook("non-blocking", body)), &[]);
         let answer = after_tool(&home.load(&[]), "x");
         assert_eq!(answer.outcome, AfterToolOutcome::Unchanged, "{body}");
         assert!(answer.changed_by.is_empty(), "{body}");
@@ -700,7 +698,7 @@ fn a_return_that_is_not_a_change_is_the_hooks_failure() {
 fn nil_or_an_empty_table_changes_nothing_and_names_nobody() {
     for body in ["return nil", "return {}", ""] {
         let home = Home::new();
-        home.install("idle", Some(&hook("blocking", body)));
+        home.install("idle", Some(&hook("blocking", body)), &[]);
         let answer = after_tool(&home.load(&[]), "x");
         assert_eq!(answer.outcome, AfterToolOutcome::Unchanged, "{body}");
         assert!(answer.changed_by.is_empty(), "{body}");
@@ -717,6 +715,7 @@ fn details_and_the_last_artifact_carry_through_the_chain() {
             "blocking",
             "return { details = { n = 1 }, artifact = \"from a\" }",
         )),
+        &[],
     );
     home.install(
         "b",
@@ -724,6 +723,7 @@ fn details_and_the_last_artifact_carry_through_the_chain() {
             "blocking",
             "return { artifact = \"from b \" .. call.details.n }",
         )),
+        &[],
     );
     let answer = after_tool(&home.load(&[]), "x");
     assert_eq!(
@@ -744,7 +744,7 @@ fn declared_timeout(session: &SessionExtensions) -> Duration {
 #[test]
 fn hook_timeout_ms_overrides_the_declared_timeout() {
     let home = Home::new();
-    home.install("a", Some(&tagging("a", "transform")));
+    home.install("a", Some(&tagging("a", "transform")), &[]);
     assert_eq!(
         declared_timeout(&home.load(&[])),
         Duration::from_millis(1000)
@@ -762,9 +762,9 @@ fn hook_timeout_ms_overrides_the_declared_timeout() {
 #[test]
 fn an_extension_for_another_api_or_a_process_extension_starts_no_vm() {
     let home = Home::new();
-    home.install("old", Some(&tagging("old", "transform")));
-    home.install("proc", Some(&tagging("proc", "transform")));
-    home.install("lua", Some(&tagging("lua", "transform")));
+    home.install("old", Some(&tagging("old", "transform")), &[]);
+    home.install("proc", Some(&tagging("proc", "transform")), &[]);
+    home.install("lua", Some(&tagging("lua", "transform")), &[]);
     home.edit_manifest("old", |m| m["api"] = json!(2));
     home.edit_manifest("proc", |m| m["process"] = json!({"program": "true"}));
     let session = home.load(&[]);
@@ -781,8 +781,8 @@ fn memory_mib_raises_the_cap_a_hook_runs_under() {
         "local s = string.rep(\"x\", 3 * 1024 * 1024) return { content = tostring(#s) }",
     );
     let home = Home::new();
-    home.install("small", Some(&grow));
-    home.install("big", Some(&grow));
+    home.install("small", Some(&grow), &[]);
+    home.install("big", Some(&grow), &[]);
     home.edit_manifest("big", |m| m["memory_mib"] = json!(8));
     let session = home.load(&[r#"hooks.order.after_tool=["fiber.test/big"]"#]);
     let answer = after_tool(&session, "x");
@@ -800,7 +800,7 @@ fn memory_mib_raises_the_cap_a_hook_runs_under() {
 #[test]
 fn a_hook_timeout_ms_of_zero_overrides_nothing() {
     let home = Home::new();
-    home.install("a", Some(&tagging("a", "transform")));
+    home.install("a", Some(&tagging("a", "transform")), &[]);
     assert_eq!(
         declared_timeout(&home.load(&["extensions.\"fiber.test/a\".hook_timeout_ms=0"])),
         Duration::from_millis(1000)
@@ -821,8 +821,7 @@ fn each_hooks_phase_is_read_as_registered() {
              fiber.hook(\"before_tool\", { phase = \"check\", timeout = 1, on_failure = \"blocking\", run = run })\n\
              fiber.hook(\"before_tool\", { phase = \"sanitize\", timeout = 1, on_failure = \"blocking\", run = run })\n\
              fiber.hook(\"before_tool\", { timeout = 1, on_failure = \"non-blocking\", run = run })\n",
-        ),
-    );
+        ), &[]);
     let session = home.load(&[]);
     let declared = session.lua[0].hooks().unwrap();
     let read: Vec<(HookPhase, bool)> = declared.by_point["before_tool"]
@@ -847,8 +846,7 @@ fn a_hook_reads_the_extension_s_project_settings_through_host_config() {
         Some(
             "fiber.hook(\"after_tool\", { timeout = 1000, on_failure = \"blocking\",\n\
                run = function(call) return { content = \"greeting:\" .. tostring(host.config.get(\"greeting\")) } end })\n",
-        ),
-    );
+        ), &[]);
     // The per-project settings file, as `host.config.set` would write it.
     let file = home.home().join("projects/p/config/fiber.test-notes.json");
     fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -864,7 +862,7 @@ fn a_hook_reads_the_extension_s_project_settings_through_host_config() {
 #[test]
 fn a_repository_key_the_manifest_does_not_list_is_one_notice() {
     let home = Home::new();
-    home.install("notes", Some(&tagging("notes", "transform")));
+    home.install("notes", Some(&tagging("notes", "transform")), &[]);
     home.edit_manifest("notes", |m| m["repo_settings"] = json!(["listed"]));
     let file = home
         .root
@@ -902,11 +900,13 @@ fn lua_providers_lists_each_registered_provider_in_provider_name_order() {
     let home = Home::new();
     home.install(
         "two",
-        Some(&format!("{}{}", registering("b"), registering("a"))),
+        None,
+        &[("b", &registering("b")), ("a", &registering("a"))],
     );
     home.install(
         "none",
         Some("fiber.command(\"x\", { timeout = 1000, run = function(text) return text end })\n"),
+        &[],
     );
     let session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
@@ -944,8 +944,8 @@ fn a_command_conflict_is_one_notice() {
         )
     }
     let home = Home::new();
-    home.install("a", Some(&registers("A")));
-    home.install("b", Some(&registers("B")));
+    home.install("a", Some(&registers("A")), &[]);
+    home.install("b", Some(&registers("B")), &[]);
     let session = home.load(&[]);
     assert!(session.commands().is_empty(), "neither gets the name");
     let conflicts: Vec<_> = session
@@ -965,15 +965,12 @@ fn a_command_conflict_is_one_notice() {
 #[test]
 fn a_refreshed_provider_the_session_does_not_use_is_unloaded() {
     let home = Home::new();
-    home.install("used", Some(&registering("used")));
-    home.install("other", Some(&registering("other")));
+    home.install("used", None, &[("used", &registering("used"))]);
+    home.install("other", None, &[("other", &registering("other"))]);
     home.install(
         "hooked",
-        Some(&format!(
-            "{}{}",
-            tagging("h", "transform"),
-            registering("hp")
-        )),
+        Some(&tagging("h", "transform")),
+        &[("hp", &registering("hp"))],
     );
     let session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
@@ -1038,7 +1035,7 @@ fn session_seal_drops_late_status_log_and_emit_from_a_parked_command() {
     server.hold();
     let url = server.url();
     let home = Home::new();
-    home.install("a", Some(&hold_init(&url)));
+    home.install("a", Some(&hold_init(&url)), &[]);
     let session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     let recorder = Arc::new(SealRecorder::default());
@@ -1109,6 +1106,7 @@ fn drive_to_hands_the_driver_to_each_extension() {
              if ok then return \"drove\" else return err.code end\n\
              end })\n",
         ),
+        &[],
     );
     let session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
@@ -1190,12 +1188,12 @@ fn a_later_provider_start_keeps_the_case_host_script_from_load() {
              if seen ~= \"\" then\n\
              local reply = host.http({{url = {:?}}})\n\
              assert(reply.status == 200 and reply.body == \"started later\")\n\
-             end\n{}",
+             end\n",
             marker.display().to_string(),
             marker.display().to_string(),
             url,
-            crediting("p")
         )),
+        &[("p", &crediting("p"))],
     );
     let host = crate::host::script::HostScript::new(
         vec![crate::host::script::HttpEntry {
@@ -1222,10 +1220,7 @@ fn a_later_provider_start_keeps_the_case_host_script_from_load() {
 fn start_provider_starts_a_fresh_vm_for_a_provider_only_extension() {
     let home = Home::new();
     let counter = home.root.path().join("runs");
-    home.install(
-        "prov",
-        Some(&format!("{}{}", counting(&counter), crediting("p"))),
-    );
+    home.install("prov", Some(&counting(&counter)), &[("p", &crediting("p"))]);
     let mut session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
     assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
@@ -1247,11 +1242,11 @@ fn start_provider_lends_the_vm_an_extension_keeps_for_its_hooks() {
     home.install(
         "hooked",
         Some(&format!(
-            "{}{}{}",
+            "{}{}",
             counting(&counter),
             tagging("h", "transform"),
-            crediting("hp")
         )),
+        &[("hp", &crediting("hp"))],
     );
     let mut session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
@@ -1265,10 +1260,11 @@ fn start_provider_lends_the_vm_an_extension_keeps_for_its_hooks() {
 #[test]
 fn start_provider_for_a_provider_the_vm_does_not_register_is_extension_failed() {
     let home = Home::new();
-    home.install("prov", Some(&crediting("p")));
+    home.install("prov", None, &[("p", &crediting("p"))]);
     home.install(
         "hooked",
-        Some(&format!("{}{}", tagging("h", "transform"), crediting("hp"))),
+        Some(&tagging("h", "transform")),
+        &[("hp", &crediting("hp"))],
     );
     let session = home.load(&[]);
     for extension in ["fiber.test/prov", "fiber.test/hooked"] {
@@ -1289,10 +1285,10 @@ fn start_provider_reports_an_entry_script_that_fails() {
     home.install(
         "prov",
         Some(&format!(
-            "local ok = pcall(host.fs.read, \"{}\")\nif ok then error(\"broken\") end\n{}",
+            "local ok = pcall(host.fs.read, \"{}\")\nif ok then error(\"broken\") end\n",
             flag.display(),
-            crediting("p")
         )),
+        &[("p", &crediting("p"))],
     );
     let session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
@@ -1319,7 +1315,7 @@ fn backend_init(short: &str, backend: &str, tag: &str) -> (String, Option<String
 fn install_backend(home: &Home, short: &str, backend: &str, tag: &str) {
     let (name, init) = backend_init(short, backend, tag);
     let _ = name;
-    home.install(short, init.as_deref());
+    home.install(short, init.as_deref(), &[]);
 }
 
 /// Runs the session's chosen backend once and returns its result's title.
@@ -1437,16 +1433,13 @@ fn a_lua_provider_its_manifest_does_not_declare_fails_the_extension() {
     let home = Home::new();
     home.install(
         "rogue",
-        Some(&format!(
-            "{}{}",
-            tagging("h", "transform"),
-            crediting("rogue")
-        )),
+        Some(&tagging("h", "transform")),
+        &[("rogue", &crediting("rogue"))],
     );
     home.edit_manifest("rogue", |m| {
         m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
     });
-    home.install("good", Some(&crediting("acme")));
+    home.install("good", None, &[("acme", &crediting("acme"))]);
     home.edit_manifest("good", |m| {
         m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
     });
@@ -1479,7 +1472,7 @@ fn a_lua_provider_its_manifest_does_not_declare_fails_the_extension() {
 #[test]
 fn a_declared_lua_provider_loads() {
     let home = Home::new();
-    home.install("good", Some(&crediting("acme")));
+    home.install("good", None, &[("acme", &crediting("acme"))]);
     home.edit_manifest("good", |m| {
         m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
     });
@@ -1496,12 +1489,16 @@ fn start_provider_fails_when_a_fresh_vm_registers_an_undeclared_provider() {
     let flag_str = flag.display().to_string();
     home.install(
         "prov",
-        Some(&format!(
-            "local ok = pcall(host.fs.read, \"{flag_str}\")\n\
+        None,
+        &[(
+            "acme",
+            &format!(
+                "local ok = pcall(host.fs.read, \"{flag_str}\")\n\
              if ok then {rogue} end\n{acme}",
-            rogue = crediting("rogue"),
-            acme = crediting("acme"),
-        )),
+                rogue = crediting("rogue"),
+                acme = crediting("acme"),
+            ),
+        )],
     );
     home.edit_manifest("prov", |m| {
         m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
@@ -1526,6 +1523,7 @@ fn a_data_provider_its_manifest_does_not_declare_keeps_the_extension_out_without
             "host.fs.write({:?}, \"x\")\n",
             marker.display().to_string()
         )),
+        &[],
     );
     home.edit_manifest("rogue", |m| {
         m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
@@ -1554,7 +1552,7 @@ fn a_data_provider_its_manifest_does_not_declare_keeps_the_extension_out_without
 #[test]
 fn an_undeclared_scripted_provider_fails_as_undeclared() {
     let home = Home::new();
-    home.install("evil", Some(&crediting("scripted")));
+    home.install("evil", None, &[("scripted", &crediting("scripted"))]);
     home.edit_manifest("evil", |m| {
         m["providers"] = json!({"acme": ["http://127.0.0.1:1/v1"]});
     });
@@ -1586,6 +1584,7 @@ fn a_hook_given_a_spilled_call_sees_its_path_and_size() {
             "blocking",
             "return { content = call.path .. \"|\" .. tostring(call.size) }",
         )),
+        &[],
     );
     let session = home.load(&[]);
     let file = SpillFile {
@@ -1619,6 +1618,7 @@ fn a_hook_given_a_call_without_a_file_sees_no_path_or_size() {
             "blocking",
             "return { content = tostring(call.path) .. \"|\" .. tostring(call.size) }",
         )),
+        &[],
     );
     let session = home.load(&[]);
     let answer = after_tool(&session, "x");

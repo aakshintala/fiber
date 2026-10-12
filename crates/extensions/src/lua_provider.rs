@@ -621,6 +621,7 @@ impl LuaProvider {
     /// empty table, and an empty table encoded as `[]`, mean no headers, as
     /// for `sign()`.
     fn fetch_token(&self, pair: &CredentialPair) -> Result<Token, Error> {
+        self.extension.ensure_provider(&self.name)?;
         let inner: Result<Token, Error> = (|| {
             let returned = self.extension.provider_credential(&self.name, pair)?;
             self.check_token(&returned)

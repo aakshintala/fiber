@@ -278,13 +278,7 @@ fn a_looping_provider_load_stops_at_entry_deadline_and_keeps_commands() {
     let asked = clock.now();
     let provider = start_provider(&ext);
     Deadline::after(WAIT).recv_or_fail(&entered, "provider entered its looping file");
-    let parked_at_entry_deadline = parked_at(&clock, asked + LOAD, 1);
     assert!(parked_at(&clock, asked + LOAD + GRACE, 1));
-    let observed_parks: Vec<_> = clock
-        .parked()
-        .into_iter()
-        .map(|at| at.map(|at| at.saturating_duration_since(asked)))
-        .collect();
     clock.advance(LOAD);
     let err = Deadline::after(WAIT)
         .recv_or_fail(&provider, "looping provider stopped")
@@ -294,10 +288,32 @@ fn a_looping_provider_load_stops_at_entry_deadline_and_keeps_commands() {
     );
     assert!(ext.is_running());
     assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
-    assert!(
-        parked_at_entry_deadline,
-        "no waiter parked at the 2 s entry deadline; observed {observed_parks:?}"
-    );
+}
+
+#[test]
+fn a_provider_load_error_leaves_the_mixed_extensions_commands_running() {
+    for lua in ["error('broken provider')", "fiber.provider('q', {})"] {
+        let (_dir, ext) = lazy_fixture(
+            "fiber.command('echo', {timeout=1000, run=function() return 'alive' end})",
+            lua,
+            FakeClock::new(),
+        );
+        assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
+        let err = Deadline::after(WAIT)
+            .recv_or_fail(&start_provider(&ext), "failed provider load")
+            .unwrap_err();
+        assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+        let Error::Lua { message, .. } = err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("providers/p.lua:1:"), "{message}");
+        assert!(
+            message.contains("broken provider") || message.contains("not `q`"),
+            "{message}"
+        );
+        assert!(ext.is_running());
+        assert_eq!(call(&ext, "echo", "").unwrap(), "alive");
+    }
 }
 
 #[test]

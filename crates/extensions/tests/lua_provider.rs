@@ -114,6 +114,29 @@ fn oversized_provider_file_names_the_file() {
     assert!(message.contains("memory cap"), "{message}");
 }
 
+#[test]
+fn first_use_load_failure_is_extension_failed_not_credential_failed() {
+    let (_dir, ext) = provider_file("error('broken at load')");
+    let provider = LuaProvider::new(ext, "p");
+    let err = within(move || provider.credential_value(&pair("p", "p"))).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    assert!(
+        matches!(err, Error::Lua { message, .. } if message.contains("providers/p.lua:1:") && message.contains("broken at load"))
+    );
+}
+
+#[test]
+fn credential_callback_failure_keeps_credential_failed() {
+    let (_dir, ext) = provider_file(
+        "fiber.provider('p', {credential={timeout=100, run=function() error('broken credential') end}})",
+    );
+    let provider = LuaProvider::new(ext, "p");
+    let err = within(move || provider.credential_value(&pair("p", "p"))).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::CredentialFailed);
+    assert!(matches!(err, Error::Credential(_)));
+    assert!(err.to_string().contains("providers/p.lua:1:"));
+}
+
 /// The fixture's provider, with its server's address and key stored as
 /// secrets in a fresh Fiber home.
 fn fixture(setup: &Setup, server: &ProviderServer) -> Arc<LuaProvider> {

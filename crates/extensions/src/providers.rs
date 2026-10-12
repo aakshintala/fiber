@@ -21,7 +21,7 @@ mod declared;
 mod placeholders;
 mod scripted;
 
-pub(crate) use declared::first_undeclared;
+pub(crate) use declared::{first_undeclared, provider_scripts};
 
 /// Every provider the installed extensions register, by name.
 #[derive(Clone, Default)]
