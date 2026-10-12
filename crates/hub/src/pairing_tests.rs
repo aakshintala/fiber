@@ -175,6 +175,20 @@ fn revoke_of_an_unpaired_device_is_not_found() {
 }
 
 #[test]
+fn revoke_is_io_failed_when_the_device_directory_cannot_be_read() {
+    let setup = Setup::new();
+    fs::create_dir_all(setup.hub.home.join("hub")).unwrap();
+    fs::write(setup.hub.home.join("hub/devices"), "obstacle").unwrap();
+    let (code, _) = setup
+        .hub
+        .pairing
+        .revoke(&setup.hub, &Who::Local, &args(json!({"device":"phone"})))
+        .err()
+        .unwrap();
+    assert_eq!(code, ErrorCode::IoFailed);
+}
+
+#[test]
 fn revoke_never_reaches_outside_hub_devices() {
     let setup = Setup::new();
     fs::create_dir_all(setup.hub.home.join("hub")).unwrap();
