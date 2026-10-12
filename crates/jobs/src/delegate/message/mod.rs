@@ -670,14 +670,10 @@ fn nothing_delivered(id: &str) -> Output {
 
 /// The delegate's code, named for the message.
 fn code_name(code: &ErrorCode) -> String {
-    if let ErrorCode::Other(name) = code {
-        name.clone()
-    } else {
-        serde_json::to_value(code)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .unwrap_or_else(|| "error".into())
-    }
+    serde_json::to_value(code)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "error".into())
 }
 
 #[cfg(test)]
