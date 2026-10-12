@@ -531,3 +531,18 @@ fn a_changed_suspendable_request_restarts_the_idle_deadline() {
         "the deadline counts from the new request"
     );
 }
+
+#[test]
+fn dropping_the_release_cancels_each_inner_call_it_holds() {
+    use contract::tool::Cancel as _;
+    let turn = Arc::new(crate::TurnCancel::default());
+    let cancel = Arc::new(crate::inner_calls::InnerCancel::new(turn));
+    let (wake, woken) = signal();
+    let wake: Arc<dyn Wake> = wake;
+    cancel.subscribe(Arc::downgrade(&wake));
+    let mut release = Release::default();
+    release.add_cancel(Arc::clone(&cancel));
+    drop(release);
+    assert!(Deadline::after(DEADLINE).recv(&woken).is_ok());
+    assert!(cancel.is_cancelled());
+}
