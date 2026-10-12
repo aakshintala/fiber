@@ -374,7 +374,10 @@ fn spec(config: &Config, name: &str) -> Entry {
                 run: None,
             })
         }
-        (None, Some(url)) => mcp::Transport::Http { url },
+        (None, Some(url)) => mcp::Transport::Http {
+            url,
+            tokens: Arc::new(config.credentials().mcp_token_files()),
+        },
         (None, None) => return Entry::Neither,
     };
     let spec = mcp::ServerSpec {

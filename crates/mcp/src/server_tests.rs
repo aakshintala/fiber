@@ -356,6 +356,7 @@ fn a_non_object_initialize_reply_fails_the_start() {
             "unexpected message: {message}"
         ),
         StartError::Deadline => panic!("a fast non-object reply is not a deadline"),
+        StartError::Login(_) => panic!("a child reply cannot require an HTTP login"),
     }
 }
 
@@ -1168,6 +1169,7 @@ fn assert_shutdown_failed(outcome: Result<super::OpenServer, StartError>) {
             "unexpected message: {message}"
         ),
         Err(StartError::Deadline) => panic!("a stopped start is not a deadline"),
+        Err(StartError::Login(_)) => panic!("a stopped child cannot require an HTTP login"),
         Ok(_) => panic!("a stopped start does not open"),
     }
 }

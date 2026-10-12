@@ -22,6 +22,7 @@ mod sse;
 mod start;
 #[cfg(test)]
 mod test_support;
+mod token;
 mod tool;
 mod wait;
 
@@ -33,3 +34,4 @@ pub use start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, Program, ServerSpec, Servers, Started,
     StdioSpec, Transport, start,
 };
+pub use token::{Token, TokenError, store_token, url_has_userinfo};

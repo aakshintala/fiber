@@ -4,6 +4,35 @@ use contract::clock::Clock;
 use serde_json::json;
 
 #[test]
+fn login_refusal_wins_over_a_later_result_but_is_not_sticky() {
+    use super::{NoCancel, Outcome, Shared};
+    let shared = Shared::default();
+    shared.insert(7);
+    shared.insert(8);
+    shared.deliver(8, Outcome::Result(json!(8)));
+    shared.refuse_login("login");
+    shared.deliver(7, Outcome::Result(json!(7)));
+    assert_eq!(
+        shared.view(7, &NoCancel).response,
+        Some(Outcome::Login("login".into()))
+    );
+    assert_eq!(
+        shared.view(8, &NoCancel).response,
+        Some(Outcome::Result(json!(8)))
+    );
+    shared.remove(7);
+    shared.remove(8);
+    shared.refuse_login("login");
+    shared.insert(9);
+    shared.deliver(9, Outcome::Result(json!(9)));
+    shared.deliver(9, Outcome::Result(json!(10)));
+    assert_eq!(
+        shared.view(9, &NoCancel).response,
+        Some(Outcome::Result(json!(10)))
+    );
+}
+
+#[test]
 fn shared_slots_deliver_remove_and_mark_gone() {
     use super::{Outcome, Shared};
     let shared = Shared::default();

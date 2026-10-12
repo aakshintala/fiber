@@ -38,6 +38,8 @@ pub enum Transport {
     Http {
         /// The server's URL.
         url: String,
+        /// Credential files injected by the host; tokens are keyed by URL.
+        tokens: Arc<dyn contract::mcp_tokens::TokenFiles>,
     },
 }
 
@@ -110,7 +112,7 @@ impl std::fmt::Debug for ServerSpec {
                     )
                     .field("run", &stdio.run);
             }
-            Transport::Http { url } => {
+            Transport::Http { url, .. } => {
                 debug.field("url", &redacted_url(url));
             }
         }
@@ -184,7 +186,7 @@ impl ServerSpec {
     pub(crate) fn key(&self) -> String {
         match &self.transport {
             Transport::Stdio(stdio) => cache::key(&stdio.command, &stdio.args, &stdio.env),
-            Transport::Http { url } => cache::url_key(url),
+            Transport::Http { url, .. } => cache::url_key(url),
         }
     }
 
@@ -239,8 +241,9 @@ pub(crate) fn launch(
                 version,
             )
         }
-        Transport::Http { url } => crate::http::start(
+        Transport::Http { url, tokens } => crate::http::start(
             url,
+            tokens.clone(),
             ureq::Proxy::try_from_env(),
             limits(spec),
             clock,
@@ -666,6 +669,13 @@ fn fail_parts(
         crate::server::StartError::StartFailed(detail) => (
             ServerFailure::StartFailed,
             format!("{subject} failed to start: {detail} {advice}",),
+        ),
+        crate::server::StartError::Login(detail) => (
+            ServerFailure::NotLoggedIn,
+            format!(
+                "{subject} failed to start: {}",
+                crate::slot::login_sentence(server, detail)
+            ),
         ),
         crate::server::StartError::Deadline => (
             ServerFailure::Deadline,

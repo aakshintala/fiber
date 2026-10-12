@@ -325,7 +325,7 @@ fn a_url_server_becomes_a_remote_spec() {
         panic!("one remote spec");
     };
     assert_eq!(spec.name, "remote");
-    let mcp::Transport::Http { url } = &spec.transport else {
+    let mcp::Transport::Http { url, .. } = &spec.transport else {
         panic!("a remote transport");
     };
     assert_eq!(url, "https://example.com/mcp");
@@ -596,7 +596,7 @@ fn a_repositorys_url_server_is_repository_code_with_its_url_in_fields() {
     let [gated] = specs.repository.as_slice() else {
         panic!("the server is the repository's");
     };
-    let mcp::Transport::Http { url } = &gated.spec.transport else {
+    let mcp::Transport::Http { url, .. } = &gated.spec.transport else {
         panic!("a remote transport");
     };
     assert_eq!(url, "https://example.com/mcp");
@@ -616,7 +616,7 @@ fn a_persons_url_server_the_repository_only_retimes_is_repository_code() {
     let [gated] = specs.repository.as_slice() else {
         panic!("the server is the repository's");
     };
-    let mcp::Transport::Http { url } = &gated.spec.transport else {
+    let mcp::Transport::Http { url, .. } = &gated.spec.transport else {
         panic!("a remote transport");
     };
     assert_eq!(url, "https://example.com/mcp");
@@ -629,7 +629,7 @@ fn a_dotted_name_reads_its_own_url() {
     setup.global(&json!({"mcp": {"servers": {"my.server": {"url": "https://example.com/mcp"}}}}));
     let specs = setup.specs();
     assert_eq!(specs.specs.len(), 1);
-    let mcp::Transport::Http { url } = &specs.specs[0].transport else {
+    let mcp::Transport::Http { url, .. } = &specs.specs[0].transport else {
         panic!("a remote transport");
     };
     assert_eq!(url, "https://example.com/mcp");

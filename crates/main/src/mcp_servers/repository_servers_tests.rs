@@ -699,7 +699,7 @@ fn prepare_starts_an_approved_remote_server_as_declared() {
         panic!("one ready spec");
     };
     // No files to pin and no `run`: the declaration runs as declared.
-    let mcp::Transport::Http { url } = &spec.transport else {
+    let mcp::Transport::Http { url, .. } = &spec.transport else {
         panic!("a remote transport");
     };
     assert_eq!(url, "https://example.com/mcp");

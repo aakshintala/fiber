@@ -1081,6 +1081,47 @@ fn echo_call(req: &fakes::Request) -> fakes::Response {
 }
 
 #[test]
+fn a_mid_session_login_failure_is_a_tool_error_and_keeps_the_slot_running() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let setup = Setup::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let fake = remote_server(move |request| {
+        if seen.fetch_add(1, Ordering::SeqCst) == 0 {
+            fakes::Response::status(401, "secret")
+        } else {
+            echo_call(request)
+        }
+    });
+    let started = setup.start(vec![
+        setup.remote_spec("docs", &format!("{}/mcp", fake.url())),
+    ]);
+    assert!(started.failed.is_empty());
+    let tool = setup.tool(&started, "mcp__docs__echo");
+    let first = setup.run(&tool);
+    assert_eq!(first.error.as_ref().unwrap().code, ErrorCode::ToolError);
+    assert!(
+        first
+            .error
+            .as_ref()
+            .unwrap()
+            .message
+            .contains("fiber mcp login docs")
+    );
+    assert!(first.servers.is_empty());
+    assert!(matches!(
+        *super::lock(&started.servers.slots.lock().unwrap()[0].state),
+        State::Running { .. }
+    ));
+    let second = setup.run(&tool);
+    assert!(second.error.is_none());
+    assert!(second.servers.is_empty());
+    assert_eq!(http_count(&fake, "initialize"), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    setup.stop(started.servers);
+}
+
+#[test]
 fn a_remote_death_restarts_once_then_stays_dead() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     let setup = Setup::new();

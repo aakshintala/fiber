@@ -15,7 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufReader, Read};
 use std::net::{Shutdown, TcpStream};
-use std::sync::{Arc, Mutex, Weak, mpsc};
+use std::sync::{Arc, Condvar, Mutex, Weak, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -35,6 +35,7 @@ use crate::wait::Shared;
 /// production caller besides [`crate::server::Server::start`].
 pub(crate) fn start(
     url: &str,
+    tokens: Arc<dyn contract::mcp_tokens::TokenFiles>,
     proxy: Option<ureq::Proxy>,
     limits: net::Limits,
     clock: &Arc<dyn contract::clock::Clock>,
@@ -49,7 +50,13 @@ pub(crate) fn start(
     let shared = Arc::new(Shared::default());
     let (writer, incoming) = mpsc::sync_channel(crate::server::WRITE_QUEUE);
     let writer = Arc::new(writer);
-    let link = Arc::new(Link::new(url.to_owned(), proxy, limits));
+    let link = Arc::new(Link::new(
+        url.to_owned(),
+        tokens,
+        clock.clone(),
+        proxy,
+        limits,
+    ));
     let pumping = Arc::clone(&link);
     let reading = Arc::clone(&shared);
     let answering = Arc::downgrade(&writer);
@@ -74,6 +81,11 @@ pub(crate) fn start(
 /// check: an http URL without a host never parses (`docs/mcp.md`
 /// has no URL scheme of its own, so only these two pass).
 fn check_url(url: &str) -> Result<(), StartError> {
+    if crate::url_has_userinfo(url) {
+        return Err(StartError::StartFailed(
+            "Its `url` has a user name or password, which Fiber does not send.".into(),
+        ));
+    }
     let bad = || StartError::StartFailed("Its `url` is not an http or https URL.".to_owned());
     let uri: ureq::http::Uri = url.parse().map_err(|_| bad())?;
     let scheme = uri.scheme_str().map(str::to_owned).ok_or_else(bad)?;
@@ -104,6 +116,8 @@ pub(crate) struct Link {
     proxy: Option<ureq::Proxy>,
     limits: net::Limits,
     state: Mutex<LinkState>,
+    bearer: Arc<crate::token::Bearer>,
+    poll: Condvar,
 }
 
 // The URL's userinfo and query can carry a token, and the session id
@@ -146,12 +160,21 @@ impl std::fmt::Debug for LinkState {
 }
 
 impl Link {
-    fn new(url: String, proxy: Option<ureq::Proxy>, limits: net::Limits) -> Self {
+    fn new(
+        url: String,
+        tokens: Arc<dyn contract::mcp_tokens::TokenFiles>,
+        clock: Arc<dyn contract::clock::Clock>,
+        proxy: Option<ureq::Proxy>,
+        limits: net::Limits,
+    ) -> Self {
+        let bearer = Arc::new(crate::token::Bearer::new(&url, tokens, clock));
         Self {
             url,
             proxy,
             limits,
             state: Mutex::new(LinkState::default()),
+            bearer,
+            poll: Condvar::new(),
         }
     }
 
@@ -172,6 +195,8 @@ impl Link {
             // closed either way.
             let _closed = socket.shutdown(Shutdown::Both);
         }
+        drop(state);
+        self.poll.notify_all();
     }
 
     /// Shuts every socket and refuses new ones. Idempotent.
@@ -180,6 +205,7 @@ impl Link {
         state.closing = true;
         let sockets = std::mem::take(&mut state.sockets);
         drop(state);
+        self.poll.notify_all();
         for (_, socket) in sockets {
             let _closed = socket.shutdown(Shutdown::Both);
         }
@@ -249,6 +275,34 @@ impl net::Keep for Exchange {
     }
 }
 
+const REFRESH_KEY: u64 = u64::MAX;
+impl crate::token::Refresh for Exchange {
+    fn stopped(&self) -> bool {
+        self.link.stopped(self.id)
+    }
+    fn pause(&self) {
+        let _paused = self
+            .link
+            .poll
+            .wait_timeout(lock(&self.link.state), Duration::from_millis(20));
+    }
+    fn post(&self, url: &str, form: &[(&str, &str)]) -> Result<(u16, Vec<u8>), ()> {
+        let mut response = agent_for(&self.link, self.id)
+            .post(url)
+            .send_form(form.iter().copied())
+            .map_err(|_| ())?;
+        let status = response.status().as_u16();
+        let mut body = Vec::new();
+        response
+            .body_mut()
+            .as_reader()
+            .take(MAX_LINE as u64 + 1)
+            .read_to_end(&mut body)
+            .map_err(|_| ())?;
+        Ok((status, body))
+    }
+}
+
 /// One agent per exchange, so its connector keeps this exchange's socket.
 fn agent_for(link: &Arc<Link>, id: u64) -> ureq::Agent {
     net::agent(
@@ -274,10 +328,14 @@ fn headers<B>(
     request: ureq::RequestBuilder<B>,
     session: Option<&str>,
     version: Option<&str>,
+    authorization: Option<&str>,
 ) -> ureq::RequestBuilder<B> {
     let mut request = request
         .header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream");
+    if let Some(authorization) = authorization {
+        request = request.header("authorization", authorization);
+    }
     if let Some(session) = session {
         request = request.header("mcp-session-id", session);
     }
@@ -291,14 +349,9 @@ fn headers<B>(
 /// body, which may be large or hold a secret (`docs/code-quality.md`,
 /// "Errors").
 fn http_status(status: u16) -> String {
-    if status == 401 {
-        // Without the arm the login reads as any other failure: the
-        // `==` mutant answers every status alike here.
-        "The server answered HTTP 401: it needs a login.".to_owned()
-    } else {
-        format!("The server answered HTTP {status}.")
-    }
+    format!("The server answered HTTP {status}.")
 }
+const LOGIN: &str = "The server answered HTTP 401 and needs a login.";
 
 fn media_sentence(media: &str) -> String {
     format!("The server answered with media type `{media}`, not JSON or an event stream.")
@@ -363,7 +416,25 @@ fn pump(
                     }
                 }
             }
-            None => post_own(&link, &line),
+            None => match post_own(&link, &line) {
+                Err(sentence) => shared.refuse_login(&sentence),
+                Ok(Some(401)) => shared.refuse_login(LOGIN),
+                Ok(_) => {
+                    let initialized = serde_json::from_slice::<Value>(&line)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .get("method")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                        })
+                        .is_some_and(|method| method == "notifications/initialized");
+                    if initialized {
+                        shared
+                            .deliver(crate::server::INITIALIZED_ACK, Outcome::Result(Value::Null));
+                    }
+                }
+            },
         }
     }
     if link.session().is_some() && !lock(&shared.inner).expired {
@@ -386,19 +457,22 @@ fn split(line: &[u8]) -> Option<(u64, String)> {
 /// server request) under exchange key 0 and reads its status. The status
 /// is ignored, `404` included: only request exchanges expire or kill, so a
 /// late or unrelated `404` here changes nothing.
-fn post_own(link: &Arc<Link>, line: &[u8]) {
+fn post_own(link: &Arc<Link>, line: &[u8]) -> Result<Option<u16>, String> {
     let agent = agent_for(link, 0);
     let (session, version) = {
         let state = lock(&link.state);
         (state.session.clone(), state.version.clone())
     };
     let url = link.url.clone();
-    let _answered = headers(
+    let authorization = link.bearer.stored()?;
+    let answered = headers(
         agent.post(url.as_str()),
         session.as_deref(),
         version.as_deref(),
+        authorization.as_deref(),
     )
     .send(line);
+    Ok(answered.ok().map(|response| response.status().as_u16()))
 }
 
 /// Says goodbye: `DELETE` with the session id, ignoring its status (the
@@ -407,10 +481,14 @@ fn delete(link: &Arc<Link>) {
     let agent = agent_for(link, 0);
     if let Some(session) = link.session() {
         let url = link.url.clone();
-        let _answered = agent
+        let authorization = link.bearer.stored().unwrap_or(None);
+        let mut request = agent
             .delete(url.as_str())
-            .header("mcp-session-id", session.as_str())
-            .call();
+            .header("mcp-session-id", session.as_str());
+        if let Some(authorization) = authorization {
+            request = request.header("authorization", authorization);
+        }
+        let _answered = request.call();
     }
 }
 
@@ -438,15 +516,38 @@ fn exchange(
         (state.session.clone(), state.version.clone())
     };
     let carried = session.is_some();
+    let mut refreshing = false;
+    let authorization = match link.bearer.authorization(&Exchange {
+        id,
+        link: link.clone(),
+    }) {
+        Ok(crate::token::Authorization::None) => None,
+        Ok(crate::token::Authorization::Send(header)) => Some(header),
+        Ok(crate::token::Authorization::SendAndRefresh(header)) => {
+            refreshing = true;
+            Some(header)
+        }
+        Err(outcome) => {
+            shared.deliver(id, outcome);
+            return;
+        }
+    };
     let agent = agent_for(&link, id);
     let url = link.url.clone();
-    let response = match headers(
+    let response = headers(
         agent.post(url.as_str()),
         session.as_deref(),
         version.as_deref(),
+        authorization.as_deref(),
     )
-    .send(&line)
-    {
+    .send(&line);
+    if refreshing {
+        link.bearer.refresh_in_background(Box::new(Exchange {
+            id: REFRESH_KEY,
+            link: link.clone(),
+        }));
+    }
+    let response = match response {
         Ok(response) => response,
         Err(_) => {
             shared.gone_if_awaiting(id);
@@ -454,6 +555,10 @@ fn exchange(
         }
     };
     let status = response.status().as_u16();
+    if status == 401 {
+        shared.deliver(id, Outcome::Login(LOGIN.into()));
+        return;
+    }
     if is_init && (400..500).contains(&status) {
         probe_legacy(id, status, &link, &shared);
         return;
@@ -583,11 +688,24 @@ fn stream_answer(
 fn probe_legacy(id: u64, post_status: u16, link: &Arc<Link>, shared: &Arc<Shared>) {
     let agent = agent_for(link, id);
     let url = link.url.clone();
-    let legacy = match agent
+    let authorization = match link.bearer.stored() {
+        Ok(header) => header,
+        Err(sentence) => {
+            shared.deliver(id, Outcome::Login(sentence));
+            return;
+        }
+    };
+    let mut request = agent
         .get(url.as_str())
-        .header("accept", "text/event-stream")
-        .call()
-    {
+        .header("accept", "text/event-stream");
+    if let Some(authorization) = authorization {
+        request = request.header("authorization", authorization);
+    }
+    let legacy = match request.call() {
+        Ok(response) if response.status().as_u16() == 401 => {
+            shared.deliver(id, Outcome::Login(LOGIN.into()));
+            return;
+        }
         Ok(response)
             if (200..300).contains(&response.status().as_u16())
                 && media_type(&response) == "text/event-stream" =>
