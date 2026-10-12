@@ -140,9 +140,20 @@ impl Setup {
     }
 
     /// Installs the Lua extension `extension` registering the provider
+    /// `name` whose `models()` returns the Lua list `models`, with no
+    /// `credential`: the session's key lookup supplies its key.
+    fn install_lua_without_credential(&self, extension: &str, name: &str, models: &str) {
+        self.install_lua_inner(extension, name, models, false);
+    }
+
+    /// Installs the Lua extension `extension` registering the provider
     /// `name` whose `models()` returns the Lua list `models`. The manifest
     /// declares `name` with every `base_url` literal the list holds.
     fn install_lua(&self, extension: &str, name: &str, models: &str) {
+        self.install_lua_inner(extension, name, models, true);
+    }
+
+    fn install_lua_inner(&self, extension: &str, name: &str, models: &str, with_credential: bool) {
         let src = self.root.path().join("src").join(extension);
         fs::create_dir_all(&src).unwrap();
         let mut urls: Vec<&str> = Vec::new();
@@ -163,15 +174,19 @@ impl Setup {
         manifest["providers"] =
             Value::Object([(name.to_owned(), json!(urls))].into_iter().collect());
         fs::write(src.join("extension.json"), manifest.to_string()).unwrap();
+        let credential = if with_credential {
+            "credential = { timeout = 1000, \
+             run = function() return { token = \"t\", expires_at = 1893456000 } end }, "
+        } else {
+            ""
+        };
         fs::write(
             {
                 fs::create_dir_all(src.join("providers")).unwrap();
                 src.join("providers").join(format!("{name}.lua"))
             },
             format!(
-                "fiber.provider(\"{name}\", {{ credential = {{ timeout = 1000, \
-                 run = function() return {{ token = \"t\", expires_at = 1893456000 }} end }}, \
-                 models = {{ timeout = 1000, \
+                "fiber.provider(\"{name}\", {{ {credential}models = {{ timeout = 1000, \
                  run = function() return {models} end }} }})\n"
             ),
         )
@@ -1011,6 +1026,78 @@ fn a_list_exactly_refresh_after_old_spawns_nothing() {
     assert!(
         spawner.calls().is_empty(),
         "a list exactly `refresh_after` old is not stale"
+    );
+}
+
+#[test]
+fn stale_lists_checks_the_age_before_the_credential() {
+    // `stale_lists` checks the cache age first and asks for a credential
+    // only when the cache is over `max_age`: `fresh` has a young cache
+    // and `stale` an old one, and both hold a command credential the
+    // counting runner answers. The runner runs for `stale` only, and the
+    // returned list is unchanged.
+    let setup = Setup::new();
+    setup.install_lua_without_credential("fresh-ext", "fresh", &lua_list("fresh-model"));
+    setup.install_lua_without_credential("stale-ext", "stale", &lua_list("stale-model"));
+    setup.write_config(&json!({"providers": {
+        "fresh": {"credentials": {"default": {"command": ["printf", "fresh-key"]}}},
+        "stale": {"credentials": {"default": {"command": ["printf", "stale-key"]}}},
+    }}));
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.wall();
+    let max_age = Duration::from_secs(24 * 60 * 60);
+    for (name, age) in [
+        ("fresh", Duration::ZERO),
+        ("stale", Duration::from_secs(25 * 60 * 60)),
+    ] {
+        config::write_model_cache(
+            &setup.home(),
+            name,
+            &json!([{"id": "old", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
+        )
+        .unwrap();
+        let file = setup.home().join(format!("cache/models/{name}.json"));
+        std::fs::File::options()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(now - age)
+            .unwrap();
+    }
+    let (mut providers, config, _) =
+        providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+    // Lua-only providers join the registry through the session, as `run`
+    // does: their caches are written, so no `models()` runs here.
+    let loaded = extensions::SessionExtensions::load(
+        &setup.home(),
+        &config,
+        clock.clone(),
+        std::sync::Arc::new(NoLock),
+        None,
+    );
+    providers.add_session(&loaded, &config, &fakes::children::grouped_output);
+    let calls = std::cell::RefCell::new(Vec::new());
+    let run = &|command: &mut std::process::Command, timeout: Duration| {
+        calls.borrow_mut().push(
+            command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        fakes::children::grouped_output(command, timeout)
+    };
+    let stale = super::stale_lists(&setup.home(), &providers, &config, max_age, now, run);
+    assert_eq!(stale, ["stale".to_owned()]);
+    let calls = calls.borrow();
+    assert!(
+        calls.iter().any(|call| call.contains("stale-key")),
+        "the credential runs for the stale cache: {calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.contains("fresh-key")),
+        "the credential never runs for the fresh cache: {calls:?}"
     );
 }
 
