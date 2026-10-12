@@ -1030,15 +1030,25 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
         "the first connection reads EOF"
     );
     assert!(got.is_empty(), "the first connection carries no bytes");
-    // The second connection queues unanswered while the hold lasts: the
-    // reader reports it reached its read, and the hold proves the hub
-    // cannot answer, so an immediate check proves the absence.
+    // The second connection queues unanswered while the hold lasts. The
+    // reader probes its socket non-blocking while the hold lasts: WouldBlock
+    // proves no bytes arrived and the peer is still open (EOF would read
+    // Ok(0)). The probe's signal orders that proof before these asserts,
+    // and the hold proves the hub cannot answer between the probe and the
+    // release, so no timing assertion is needed.
     let second = UnixStream::connect(temp.socket()).expect("the second connection connects");
-    let (reading_tx, reading_rx) = mpsc::channel::<()>();
+    let (reading_tx, reading_rx) = mpsc::channel::<Result<(), String>>();
     let (result_tx, result_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut second = second;
-        reading_tx.send(()).unwrap_or(());
+        second.set_nonblocking(true).unwrap();
+        let mut probe = [0u8; 1];
+        let probed = match second.read(&mut probe) {
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+            other => Err(format!("{other:?}")),
+        };
+        reading_tx.send(probed).unwrap_or(());
+        second.set_nonblocking(false).unwrap();
         let mut bytes = Vec::new();
         let read = second.read_to_end(&mut bytes);
         let size = read
@@ -1049,11 +1059,8 @@ fn an_idle_exiting_hub_answers_one_connection_eof_and_leaves_the_next_unanswered
     });
     Deadline::after(DEADLINE)
         .recv(&reading_rx)
-        .expect("the reader reached its read");
-    assert!(
-        result_rx.try_recv().is_err(),
-        "the second connection stays unanswered while the hold lasts"
-    );
+        .expect("the reader probed its read")
+        .expect("the second connection stays unanswered while the hold lasts");
     assert!(
         temp.socket().exists(),
         "the socket stays bound during cleanup"
