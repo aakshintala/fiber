@@ -95,6 +95,14 @@ picked:
   names a directory; otherwise nothing opens and the list holds one dim row,
   "no such directory". The footer stays as it is.
 
+Until the typed path's directory has answered, the picker shows the typed
+row and the recents with no completions, and Enter does nothing. While the
+connection is down the "Connection lost" banner shows over home and Enter
+stays inert until the connection is back. Enter on `~` alone asks for the
+hub's home listing; a later Enter, once it has answered, opens the home
+directory. A failed listing shows no completions and no error: the recents
+stay, and the directory is not asked again.
+
 **The new worktree switch** sits beside the workspace chip. When it is on,
 the session starts in a new worktree of the workspace, by the same rules a
 delegate's worktree follows (`docs/invocation.md`, "Isolation"). Outside a git
