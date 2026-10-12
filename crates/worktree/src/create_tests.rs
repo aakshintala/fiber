@@ -609,7 +609,9 @@ fn recreate_refuses_a_plain_a_root_and_a_missing_repository() {
             let err = recreate(&plain, &plain.join("wt"), "fiber/y", &direct).unwrap_err();
             match &err {
                 Error::NotARepository { path } => assert_eq!(path, &plain),
-                _ => panic!("expected NotARepository, found {err:?}"),
+                Error::GitMissing | Error::Exists { .. } | Error::Git { .. } | Error::Io { .. } => {
+                    panic!("expected NotARepository, found {err:?}")
+                }
             }
             assert!(!exists(&plain.join("wt")));
             // The work-tree root: its common dir is `<repo>/.git`, not itself.
@@ -617,7 +619,9 @@ fn recreate_refuses_a_plain_a_root_and_a_missing_repository() {
             let err = recreate(&root, &root.join("wt"), "fiber/y", &direct).unwrap_err();
             match &err {
                 Error::NotARepository { path } => assert_eq!(path, &root),
-                _ => panic!("expected NotARepository, found {err:?}"),
+                Error::GitMissing | Error::Exists { .. } | Error::Git { .. } | Error::Io { .. } => {
+                    panic!("expected NotARepository, found {err:?}")
+                }
             }
             assert!(!exists(&root.join("wt")));
             assert!(!branch_exists(home.path(), "fiber/y"));
@@ -626,7 +630,9 @@ fn recreate_refuses_a_plain_a_root_and_a_missing_repository() {
             let err = recreate(&missing, &home.path().join("wt"), "fiber/y", &direct).unwrap_err();
             match &err {
                 Error::NotARepository { path } => assert_eq!(path, &missing),
-                _ => panic!("expected NotARepository, found {err:?}"),
+                Error::GitMissing | Error::Exists { .. } | Error::Git { .. } | Error::Io { .. } => {
+                    panic!("expected NotARepository, found {err:?}")
+                }
             }
             assert!(!exists(&home.path().join("wt")));
             assert!(!branch_exists(home.path(), "fiber/y"));
@@ -649,7 +655,10 @@ fn recreate_with_an_existing_branch_keeps_it_where_it_was() {
                 Error::Exists { path } => {
                     assert_eq!(path, &PathBuf::from("refs/heads/fiber/y"));
                 }
-                _ => panic!("expected Exists, found {err:?}"),
+                Error::GitMissing
+                | Error::NotARepository { .. }
+                | Error::Git { .. }
+                | Error::Io { .. } => panic!("expected Exists, found {err:?}"),
             }
             assert_eq!(git(home.path(), &["rev-parse", "fiber/y"]), sha);
             assert!(!exists(&path), "the path was left alone");

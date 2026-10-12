@@ -1219,7 +1219,7 @@ fn two_concurrent_recreations_share_the_one_worktree() {
                     wait.recv_or_fail(&release_rx, "the test releases the add");
                     command.output()
                 };
-                super::recreate_with(
+                match super::recreate_with(
                     &common_w,
                     &path_w,
                     &branch_w,
@@ -1229,7 +1229,10 @@ fn two_concurrent_recreations_share_the_one_worktree() {
                     &add,
                     &|| {},
                     &super::shared::Creating::downgrade,
-                )
+                ) {
+                    Ok(recreated) => recreated,
+                    Err(error) => panic!("the winner creates: {:?}", error.failure),
+                }
             });
             // The winner is inside its add: start the loser behind it.
             wait.recv_or_fail(&in_add_rx, "the winner adds");
@@ -1246,7 +1249,7 @@ fn two_concurrent_recreations_share_the_one_worktree() {
                     command.output()
                 };
                 let before_wait = || waiting_tx.send(()).unwrap();
-                super::recreate_with(
+                match super::recreate_with(
                     &common_l,
                     &path_l,
                     &branch_l,
@@ -1256,19 +1259,20 @@ fn two_concurrent_recreations_share_the_one_worktree() {
                     &add,
                     &before_wait,
                     &super::shared::Creating::downgrade,
-                )
+                ) {
+                    Ok(recreated) => recreated,
+                    Err(error) => panic!("the loser shares: {:?}", error.failure),
+                }
             });
             wait.recv_or_fail(&waiting_rx, "the loser waits");
             release_tx.send(()).unwrap();
             let isolation = match winner.join().unwrap() {
-                Ok(super::Recreated::Made(isolation)) => isolation,
-                Ok(super::Recreated::Present(_)) => panic!("the winner creates"),
-                Err(error) => panic!("the winner creates: {:?}", error.failure),
+                super::Recreated::Made(isolation) => isolation,
+                super::Recreated::Present(_) => panic!("the winner creates"),
             };
             let loser_shared = match loser.join().unwrap() {
-                Ok(super::Recreated::Present(shared)) => shared,
-                Ok(super::Recreated::Made(_)) => panic!("the loser never adds"),
-                Err(error) => panic!("the loser shares: {:?}", error.failure),
+                super::Recreated::Present(shared) => shared,
+                super::Recreated::Made(_) => panic!("the loser never adds"),
             };
             assert!(!added.load(Ordering::SeqCst), "the loser's add never ran");
             assert!(exists(&path), "the worktree stands");

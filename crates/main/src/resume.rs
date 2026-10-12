@@ -321,7 +321,7 @@ fn resumed_session(
         .as_deref()
         .and_then(|level| level.parse::<contract::ThinkingLevel>().ok());
     crate::shutdown::arm(signals, &reads);
-    let parts = match crate::parts_with(
+    let mut parts = crate::parts_with(
         overrides,
         folded.model.as_deref(),
         crate::credential::Labels::new(credential.as_deref(), folded.credential.as_deref()),
@@ -329,15 +329,11 @@ fn resumed_session(
         Arc::clone(&clock),
         None,
         Arc::clone(&reads),
-    ) {
-        Ok(mut parts) => {
-            // The session directory's log: the opening message's
-            // environment names it.
-            parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
-            parts
-        }
-        Err(e) => return Err(e),
-    };
+    )?;
+    // The session directory's log: the opening message's
+    // environment names it.
+    parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
+    let parts = parts;
     let crate::Parts {
         provider,
         model,
@@ -399,15 +395,10 @@ fn resumed_session(
     crate::shutdown::arm(signals, &reads);
     let skill_set = r#loop::SkillSet::new(prompt_inputs.clone(), Path::new(&folded.workspace));
     let skills: Arc<dyn contract::skills::Skills> = Arc::new(skill_set.reader());
-    let web_search = match crate::builtin::web_search(
-        web_search.as_deref(),
-        extensions.search_backend().as_ref(),
-    ) {
-        Ok(web_search) => web_search,
-        Err(e) => return Err(e),
-    };
+    let web_search =
+        crate::builtin::web_search(web_search.as_deref(), extensions.search_backend().as_ref())?;
     let skipped = folded.skipped();
-    let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
+    let (tools, infos, driver, session_servers) = crate::mcp_servers::session_tools(
         fiber,
         &home,
         Path::new(&folded.workspace),
@@ -423,10 +414,7 @@ fn resumed_session(
         &delegates,
         skills,
         extensions.tools(),
-    ) {
-        Ok(built) => built,
-        Err(e) => return Err(e),
-    };
+    )?;
     let forget = Arc::clone(&session_servers.forget);
     let hosted_stands = crate::switch::hosted_stands(&tools);
     let workspace = std::path::PathBuf::from(&folded.workspace);
@@ -640,6 +628,10 @@ impl std::fmt::Debug for Held {
 /// recreation failure carries no isolation: nothing was made. A
 /// downgrade failure after the worktree was made reaches the caller, so
 /// its isolation is ended after the session lock is released.
+#[allow(
+    clippy::result_large_err,
+    reason = "the caller matches the isolation out of the error by value"
+)]
 fn enter_worktree(
     recorded: Option<Worktree>,
     home: &Path,

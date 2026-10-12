@@ -781,7 +781,7 @@ fn ask_resume_without_a_recorded_repository_is_session_not_found() {
     // back to the removed workspace, which matches no project.
     let (events, before, _) = session_log(&setup, &first.id);
     let mut rewritten: Value =
-        serde_json::from_slice(&before.split(|byte| *byte == b'\n').next().unwrap()).unwrap();
+        serde_json::from_slice(before.split(|byte| *byte == b'\n').next().unwrap()).unwrap();
     rewritten["payload"]["worktree"]
         .as_object_mut()
         .unwrap()

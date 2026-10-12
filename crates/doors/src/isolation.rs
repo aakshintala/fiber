@@ -106,6 +106,10 @@ impl std::fmt::Debug for RecreateError {
     clippy::too_many_arguments,
     reason = "one recreation needs its repository, path, branch, home, session, clock and runners"
 )]
+#[allow(
+    clippy::result_large_err,
+    reason = "the caller matches the isolation out of the error by value"
+)]
 pub fn recreate(
     repository: &Path,
     path: &Path,
@@ -136,6 +140,10 @@ pub fn recreate(
 #[allow(
     clippy::too_many_arguments,
     reason = "one recreation needs its repository, path, branch, home, session, clock, runners and seams"
+)]
+#[allow(
+    clippy::result_large_err,
+    reason = "the caller matches the isolation out of the error by value"
 )]
 fn recreate_with(
     repository: &Path,
@@ -202,7 +210,10 @@ fn recreate_failure(error: &worktree::Error, repository: &Path, path: &Path) -> 
                 path.display()
             ),
         ),
-        _ => failure(error.code(), sentence(error, path)),
+        worktree::Error::Exists { .. }
+        | worktree::Error::GitMissing
+        | worktree::Error::Git { .. }
+        | worktree::Error::Io { .. } => failure(error.code(), sentence(error, path)),
     }
 }
 
@@ -364,10 +375,10 @@ impl Isolation {
                 // exclusive take, so a waiter that locked the old inode
                 // reopens the new file. An unlink failure keeps nothing
                 // to lose, only the one warn line.
-                if let Some(lock) = shared::lock_path(&self.created.path) {
-                    if let Err(source) = std::fs::remove_file(&lock) {
-                        self.failed(&worktree::Error::Io { path: lock, source });
-                    }
+                if let Some(lock) = shared::lock_path(&self.created.path)
+                    && let Err(source) = std::fs::remove_file(&lock)
+                {
+                    self.failed(&worktree::Error::Io { path: lock, source });
                 }
             }
             Ok(worktree::Removed::BranchKept(error)) => self.failed(&error),

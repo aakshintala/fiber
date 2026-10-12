@@ -232,17 +232,17 @@ pub(crate) fn lock_path(worktree: &Path) -> Option<PathBuf> {
 /// Opens the lock file for locking, creating it. With `create_parent`,
 /// makes its parent directory first.
 fn open(lock: &Path, create_parent: bool) -> Result<File, io::Error> {
-    if create_parent {
-        if let Some(parent) = lock.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        }
+    if create_parent
+        && let Some(parent) = lock.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
     }
     OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(lock)
 }
 

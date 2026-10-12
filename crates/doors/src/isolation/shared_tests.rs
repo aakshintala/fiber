@@ -286,7 +286,10 @@ fn exclusive_creates_takes_and_yields() {
         std::fs::create_dir(&other_lock).unwrap();
         match exclusive(&other).unwrap_err() {
             worktree::Error::Io { path, .. } => assert_eq!(path, other_lock),
-            error => panic!("expected an I/O error: {error:?}"),
+            worktree::Error::GitMissing
+            | worktree::Error::NotARepository { .. }
+            | worktree::Error::Exists { .. }
+            | worktree::Error::Git { .. } => panic!("expected an I/O error"),
         }
     });
 }
