@@ -1250,3 +1250,84 @@ fn a_nested_inner_call_is_cancelled_when_its_anchor_is_cancelled() {
         "the cancelled anchor cancels the nested call"
     );
 }
+
+#[test]
+fn an_inner_call_settle_is_written_at_the_inner_finish_under_its_action() {
+    let job = "j_5555555555555555";
+    let runs = Arc::new(Mutex::new(0usize));
+    let settle_runs = Arc::clone(&runs);
+    let inner = Arc::new(FakeTool::new("inner", move |_, _, _, _| {
+        let taken = contract::jobs::Taken {
+            record: contract::jobs::JobRecord::Completed(contract::events::JobCompleted {
+                job_id: contract::JobId(job.into()),
+                status: contract::events::Outcome::Completed,
+                error: None,
+                process: None,
+                output_tail: None,
+            }),
+            action: None,
+        };
+        let runs = Arc::clone(&settle_runs);
+        Output {
+            content: vec![contract::shapes::ContentPart::Text {
+                text: "inner answer".into(),
+            }],
+            settle: Some(contract::tool::Settle(Arc::new(move || {
+                *runs.lock().unwrap() += 1;
+                vec![taken.clone()]
+            }))),
+            ..Default::default()
+        }
+    }));
+    let (outer, _) = outer("inner", json!({}));
+    let mut session = session(vec![outer, inner]);
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(*runs.lock().unwrap(), 1, "the settle ran once");
+    let lines = session.lines();
+    let id = inner_id(&lines);
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "tool_call_arguments_delta",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_requested",
+        "tool_call_started",
+        "job_completed",
+        "tool_call_completed",
+    ];
+    expected.extend_from_slice(&[
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]);
+    assert_eq!(support::kinds(&lines), expected);
+    assert_eq!(
+        action_kinds(&lines, &id),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "job_completed",
+            "tool_call_completed"
+        ]
+    );
+    let completed = lines
+        .iter()
+        .find(|line| line.kind == "job_completed")
+        .expect("a settled job_completed");
+    assert_eq!(completed.payload["job_id"], job);
+    assert_eq!(completed.action_id.as_ref(), Some(&id));
+}

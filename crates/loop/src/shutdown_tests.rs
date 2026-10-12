@@ -73,6 +73,12 @@ impl Listed {
         self.end_with(id, inbox, None);
     }
 
+    /// Drops `id` from the running list without sending its end: the
+    /// settle stops waiting for it.
+    fn forget(&self, id: &str) {
+        self.ids.lock().unwrap().retain(|listed| listed.0 != id);
+    }
+
     /// [`Listed::end`], with a delegate's finish riding the notice.
     fn end_delegate(&self, id: &str, inbox: &Sender<Delivery>, text: &str) {
         self.end_with(
@@ -110,7 +116,7 @@ impl Listed {
                     process: None,
                     output_tail: None,
                 },
-                claim: Claim(Box::new(|| true)),
+                claim: Claim(Box::new(|| Some(Vec::new()))),
                 delegate,
             }))
             .unwrap();
@@ -158,7 +164,7 @@ fn notice(id: &str) -> Delivery {
             process: None,
             output_tail: None,
         },
-        claim: Claim(Box::new(|| true)),
+        claim: Claim(Box::new(|| Some(Vec::new()))),
         delegate: None,
     })
 }
@@ -323,6 +329,7 @@ fn settle_writes_a_queued_delegate_finish_before_its_end() {
     let (jobs, _stops) = Listed::new(&[]);
     let mut world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
     world.looped.queued.push_back(crate::jobs::Queued::Job(
+        Vec::new(),
         JobCompleted {
             job_id: JobId("j_1".into()),
             status: Outcome::Cancelled,
@@ -920,7 +927,7 @@ fn queued_notice(holds: bool, asked: &Arc<AtomicUsize>) -> crate::jobs::Queued {
             let asked = Arc::clone(asked);
             move || {
                 asked.fetch_add(1, Ordering::SeqCst);
-                holds
+                holds.then(Vec::new)
             }
         })),
         delegate: Some(DelegateFinished {
@@ -976,4 +983,187 @@ fn settle_writes_nothing_for_a_refused_queued_notice() {
     ran(&finished);
     assert_eq!(held.kinds(), ["session_started"]);
     assert_eq!(asked.load(Ordering::SeqCst), 1, "the settle claims once");
+}
+
+/// A resumed run's start records for `j_1`, queued under `action`: the
+/// action of a call the loop never started, so shutdown's settle, which
+/// writes with no turn, applies the fallback.
+fn resumed_ahead(action: &contract::ActionId) -> Vec<contract::jobs::Taken> {
+    use contract::events::{DelegateStarted, JobStarted};
+    vec![
+        contract::jobs::Taken {
+            record: contract::jobs::JobRecord::Started(JobStarted {
+                job_id: JobId("j_1".into()),
+                tool: Some("delegate_message".into()),
+                extension: None,
+                description: "resumed".into(),
+                output_path: "artifacts/j_1.log".into(),
+            }),
+            action: Some(action.clone()),
+        },
+        contract::jobs::Taken {
+            record: contract::jobs::JobRecord::DelegateStarted(DelegateStarted {
+                job_id: JobId("j_1".into()),
+                delegate_session_id: SessionId("s_d000000000000001".into()),
+                harness: "fiber".into(),
+                model: "fiber:fake/m".into(),
+                workspace: "/w".into(),
+                worktree: None,
+                forked_from: None,
+            }),
+            action: Some(action.clone()),
+        },
+    ]
+}
+
+/// A queued notice whose claim took `ahead` before the notice's own
+/// finish and completion.
+fn queued_ahead_notice(
+    ahead: Vec<contract::jobs::Taken>,
+    asked: &Arc<AtomicUsize>,
+) -> crate::jobs::Queued {
+    let notice = JobNotice {
+        completed: JobCompleted {
+            job_id: JobId("j_1".into()),
+            status: Outcome::Cancelled,
+            error: None,
+            process: None,
+            output_tail: None,
+        },
+        claim: Claim(Box::new({
+            let asked = Arc::clone(asked);
+            move || {
+                asked.fetch_add(1, Ordering::SeqCst);
+                Some(ahead.clone())
+            }
+        })),
+        delegate: Some(DelegateFinished {
+            job_id: JobId("j_1".into()),
+            text: "Done.".into(),
+            artifact: None,
+            questions: None,
+            usage: Usage {
+                tokens: Tokens {
+                    input: 0,
+                    cache_read: 0,
+                    cache_write: std::collections::BTreeMap::new(),
+                    output: 0,
+                },
+                cost: Some(0.0),
+                subscription_cost: 0.0,
+            },
+            worktree: None,
+        }),
+    };
+    crate::jobs::Queued::Notice(notice)
+}
+
+/// The four lines a settle writes for a notice whose claim took a resumed
+/// run's start: the two starts under `action`, then the finish and the
+/// completion with no action, all with no turn, as shutdown writes them.
+/// `fiber_exited` follows these in production; `run` does not write it.
+fn assert_settled_ahead(lines: &[Envelope], action: &contract::ActionId) {
+    assert_eq!(lines[1].kind, "job_started");
+    assert_eq!(lines[1].action_id.as_ref(), Some(action));
+    assert_eq!(lines[1].turn_id, None);
+    assert_eq!(lines[2].kind, "delegate_started");
+    assert_eq!(lines[2].action_id.as_ref(), Some(action));
+    assert_eq!(lines[2].turn_id, None);
+    assert_eq!(lines[3].kind, "delegate_finished");
+    assert_eq!(lines[3].action_id, None);
+    assert_eq!(lines[3].turn_id, None);
+    assert_eq!(lines[3].payload["job_id"], "j_1");
+    assert_eq!(lines[4].kind, "job_completed");
+    assert_eq!(lines[4].action_id, None);
+    assert_eq!(lines[4].turn_id, None);
+    assert_eq!(lines[4].payload["job_id"], "j_1");
+}
+
+#[test]
+fn settle_writes_ahead_before_a_queued_notice() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    let asked = Arc::new(AtomicUsize::new(0));
+    let action = contract::ActionId("a_aaaaaaaaaaaaaaaa".into());
+    world
+        .looped
+        .queued
+        .push_back(queued_ahead_notice(resumed_ahead(&action), &asked));
+    world.cancel.shutdown(143);
+    let (finished, _inbox, held) = world.spawn_run();
+    ran(&finished);
+    assert_eq!(
+        held.kinds(),
+        [
+            "session_started",
+            "job_started",
+            "delegate_started",
+            "delegate_finished",
+            "job_completed"
+        ]
+    );
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "the settle claims once");
+    assert_settled_ahead(&held.durable(), &action);
+}
+
+#[test]
+fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
+    let (jobs, stops) = Listed::new(&["j_1"]);
+    let world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>);
+    let asked = Arc::new(AtomicUsize::new(0));
+    let action = contract::ActionId("a_aaaaaaaaaaaaaaaa".into());
+    world.cancel.shutdown(143);
+    let (finished, inbox, held) = world.spawn_run();
+    let wait = Deadline::after(DEADLINE);
+    assert_eq!(stopped(&stops, &wait), "j_1");
+    // Ends `j_1` with a notice whose claim took a resumed run's start.
+    let ahead = resumed_ahead(&action);
+    inbox
+        .send(Delivery::Job(JobNotice {
+            completed: JobCompleted {
+                job_id: JobId("j_1".into()),
+                status: Outcome::Cancelled,
+                error: None,
+                process: None,
+                output_tail: None,
+            },
+            claim: Claim(Box::new({
+                let asked = Arc::clone(&asked);
+                move || {
+                    asked.fetch_add(1, Ordering::SeqCst);
+                    Some(ahead.clone())
+                }
+            })),
+            delegate: Some(DelegateFinished {
+                job_id: JobId("j_1".into()),
+                text: "Done.".into(),
+                artifact: None,
+                questions: None,
+                usage: Usage {
+                    tokens: Tokens {
+                        input: 0,
+                        cache_read: 0,
+                        cache_write: std::collections::BTreeMap::new(),
+                        output: 0,
+                    },
+                    cost: Some(0.0),
+                    subscription_cost: 0.0,
+                },
+                worktree: None,
+            }),
+        }))
+        .unwrap();
+    jobs.forget("j_1");
+    ran(&finished);
+    assert_eq!(
+        held.kinds(),
+        [
+            "session_started",
+            "job_started",
+            "delegate_started",
+            "delegate_finished",
+            "job_completed"
+        ]
+    );
+    assert_settled_ahead(&held.durable(), &action);
 }

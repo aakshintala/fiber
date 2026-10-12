@@ -554,9 +554,9 @@ impl Loop {
             // claim starts no turn.
             Delivery::Job(notice) => {
                 if !(self.closing && input.pieces.is_empty() && !self.has_jobs())
-                    && let Some((completed, delegate)) = crate::jobs::claimed(notice)
+                    && let Some((ahead, completed, delegate)) = crate::jobs::claimed(notice)
                 {
-                    input.pieces.push(Queued::Job(completed, delegate));
+                    input.pieces.push(Queued::Job(ahead, completed, delegate));
                 }
             }
             Delivery::JobLine(line) => {

@@ -32,11 +32,12 @@ use support::group::Listing;
 pub type Launch = Arc<dyn Fn(&Launched) -> Command + Send + Sync>;
 
 /// Watches the delegate's socket, calling `on_line` for each envelope
-/// until `fiber_exited` or EOF: the jobs-local mirror of `doors::watch`.
-/// `main` supplies the watch over the child's socket
-/// (`docs/delegates.md`, "Lifetime").
-pub type Watch =
-    Arc<dyn Fn(&SessionId, &mut dyn FnMut(&Envelope)) -> io::Result<Watched> + Send + Sync>;
+/// past the run's boundary until `fiber_exited` or EOF: the jobs-local
+/// mirror of `doors::watch_after`. `main` supplies the watch over the
+/// child's socket (`docs/delegates.md`, "Lifetime").
+pub type Watch = Arc<
+    dyn Fn(&SessionId, Option<u64>, &mut dyn FnMut(&Envelope)) -> io::Result<Watched> + Send + Sync,
+>;
 
 /// What a watch returned: the jobs-local mirror of `doors::Watched`.
 /// `Closed` carries no `last_seq`: the runner dedupes by `seq` itself,
@@ -63,13 +64,16 @@ pub struct Launched {
     pub prompt: String,
     /// The parent's workspace, which the delegate shares.
     pub workspace: PathBuf,
+    /// Whether this launch resumes the delegate: a new run of the same
+    /// job, continuing its own session.
+    pub resume: bool,
 }
 
 /// The first retry waits this long after a refused or dropped watch.
-const START_BACKOFF: Duration = Duration::from_millis(50);
+pub(crate) const START_BACKOFF: Duration = Duration::from_millis(50);
 
 /// No retry waits longer than this, however often the watch fails.
-const MAX_BACKOFF: Duration = Duration::from_secs(1);
+pub(crate) const MAX_BACKOFF: Duration = Duration::from_secs(1);
 
 /// How far ahead the runner parks at most: exit, cap and timer checks all
 /// run on a wake at least this often.
@@ -212,6 +216,11 @@ pub(crate) struct Runner {
     bound: Duration,
     cap: u64,
     watch: Watch,
+    /// The `seq` of the delegate log's last complete line before this
+    /// run spawned: lines at or before it belong to an earlier run, so
+    /// the watch skips them and the fold dedupes from there. `None` on
+    /// the first run, which has no earlier line.
+    after: Option<u64>,
     shared: Arc<Shared>,
     park: Arc<Parker>,
     /// When the watch callback last stat'ed the log for the cap, shared
@@ -223,6 +232,10 @@ pub(crate) struct Runner {
 impl Runner {
     /// The runner and its stop. The stop goes to the record; the spawn
     /// sets the group the stop signals.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the runner carries the delegate's whole launch context"
+    )]
     pub(crate) fn new(
         job_id: JobId,
         session_id: SessionId,
@@ -231,6 +244,7 @@ impl Runner {
         bound: Duration,
         cap: u64,
         watch: Watch,
+        after: Option<u64>,
     ) -> (Self, Stop) {
         let shared = Shared::new(Arc::clone(&clock), bound);
         let stopping = Arc::clone(&shared);
@@ -247,6 +261,7 @@ impl Runner {
                 bound,
                 cap,
                 watch,
+                after,
                 shared,
                 park,
                 last_cap_check: Arc::new(Mutex::new(None)),
@@ -310,8 +325,13 @@ impl Runner {
         let pgid = child.id();
         // The fold is shared with the watcher thread, which owns the
         // blocking socket read: this thread never waits on the socket
-        // and always reaches the reap and the stop timer.
-        let fold = Arc::new(Mutex::new(Fold::default()));
+        // and always reaches the reap and the stop timer. It dedupes
+        // from the run's boundary, so a replayed earlier run's end never
+        // stands in for this run's.
+        let fold = Arc::new(Mutex::new(Fold {
+            last_seq: self.after,
+            ..Fold::default()
+        }));
         let mut backoff = START_BACKOFF;
         let mut next_retry = self.clock.now();
         let mut exited_seen = false;
@@ -373,6 +393,7 @@ impl Runner {
                 let watcher = Watcher {
                     watch: Arc::clone(&self.watch),
                     session_id: self.session_id.clone(),
+                    after: self.after,
                     fold: Arc::clone(&fold),
                     shared: Arc::clone(&self.shared),
                     cap: self.cap,
@@ -456,6 +477,8 @@ type Stat = Arc<dyn Fn() -> u64 + Send + Sync>;
 struct Watcher {
     watch: Watch,
     session_id: SessionId,
+    /// The run's boundary, passed to every watch call.
+    after: Option<u64>,
     fold: Arc<Mutex<Fold>>,
     shared: Arc<Shared>,
     cap: u64,
@@ -472,7 +495,8 @@ struct Watcher {
 
 impl Watcher {
     fn run(self) {
-        let result = (self.watch)(&self.session_id, &mut |envelope: &Envelope| {
+        let after = self.after;
+        let result = (self.watch)(&self.session_id, after, &mut |envelope: &Envelope| {
             let exited = {
                 let mut fold = lock(&self.fold);
                 if !note_seq(&mut fold.last_seq, envelope.seq.map(|seq| seq.0)) {
@@ -540,6 +564,13 @@ pub(crate) fn park_due(
         due = due.min(kill_at);
     }
     due
+}
+
+/// Mints a driver command id: `c_` and 16 lowercase hex digits, drawn
+/// once. A call mints one id and sends that same id on every connection
+/// it opens.
+pub(crate) fn mint_command_id() -> String {
+    format!("c_{:016x}", RandomState::new().hash_one(()))
 }
 
 /// Mints the delegate's session id: `s_` and 16 lowercase hex digits, drawn

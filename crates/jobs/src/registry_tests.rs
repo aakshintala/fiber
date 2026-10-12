@@ -19,7 +19,7 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, TempDir};
 
 use super::Registry;
-use crate::support::{opening, world};
+use crate::support::{delegate_finished, delegate_started, ended_ok, opening, world};
 use support::clock::Parker;
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -81,6 +81,7 @@ fn open_without_the_registry_arc_records_nothing() {
             foreground: Vec::new(),
         }),
         park: Parker::new(),
+        resume_gate: Mutex::new(()),
         me: Weak::new(),
     };
     let Err(error) = registry.open(opening("npm test")) else {
@@ -162,16 +163,23 @@ fn calling_end_records_that_result_and_drop_does_not_record_again() {
     });
     let cancel = CancelToken::new();
     let answer = registry.wait(&id, 0, &cancel).unwrap();
-    let [JobRecord::Completed(completed)] = &answer.records[..] else {
-        panic!("{:?}", answer.records);
+    let records = settled(&answer);
+    let [
+        contract::jobs::Taken {
+            record: JobRecord::Completed(completed),
+            ..
+        },
+    ] = &records[..]
+    else {
+        panic!("{records:?}");
     };
     assert_eq!(completed.job_id, JobId(id.clone()));
     assert_eq!(completed.status, Outcome::Completed);
     assert_eq!(completed.error, None);
     let again = registry.wait(&id, 0, &cancel).unwrap();
-    assert!(again.records.is_empty());
     assert!(again.text.contains("completed"), "{}", again.text);
     assert!(!again.text.contains("without a result"), "{}", again.text);
+    assert!(settled(&again).is_empty());
 }
 
 #[test]
@@ -183,14 +191,17 @@ fn a_dropped_end_records_its_job_failed_indeterminate() {
     let cancel = CancelToken::new();
     let answer = registry.wait(&id, 0, &cancel).unwrap();
     assert_eq!(
-        answer.records,
-        vec![JobRecord::Completed(JobCompleted {
-            job_id: JobId(id.clone()),
-            ..failure()
-        })]
+        settled(&answer),
+        vec![contract::jobs::Taken {
+            record: JobRecord::Completed(JobCompleted {
+                job_id: JobId(id.clone()),
+                ..failure()
+            }),
+            action: None,
+        }]
     );
     let again = registry.wait(&id, 0, &cancel).unwrap();
-    assert!(again.records.is_empty());
+    assert!(settled(&again).is_empty());
 }
 
 #[test]
@@ -240,9 +251,15 @@ fn the_completion_is_claimed_once() {
     let cancel = CancelToken::new();
     let first = registry.wait(&id, 0, &cancel).unwrap();
     let second = registry.wait(&id, 0, &cancel).unwrap();
-    assert!(matches!(&first.records[..], [JobRecord::Completed(_)]));
-    assert!(second.records.is_empty());
+    assert!(matches!(
+        &settled(&first)[..],
+        [contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
     assert!(second.text.contains("cancelled"), "{}", second.text);
+    assert!(settled(&second).is_empty());
 }
 
 #[test]
@@ -273,25 +290,24 @@ fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
     let answer = Deadline::after(Duration::from_secs(5))
         .recv(&rx)
         .expect("the wait returned after a wake that landed before it parked");
-    let [JobRecord::Completed(completed)] = &answer.records[..] else {
-        panic!("the wait did not deliver the completion: {}", answer.text);
+    let records = settled(&answer);
+    let [
+        contract::jobs::Taken {
+            record: JobRecord::Completed(completed),
+            ..
+        },
+    ] = &records[..]
+    else {
+        panic!("the wait did not deliver the completion");
     };
     assert_eq!(completed.status, Outcome::Completed);
     assert_eq!(completed.job_id, JobId(waited));
 }
 
-fn ended_ok(id: &str) -> JobCompleted {
-    JobCompleted {
-        job_id: JobId(id.into()),
-        status: Outcome::Completed,
-        error: None,
-        process: Some(Process {
-            exit_code: Some(0),
-            signal: None,
-            timed_out: false,
-        }),
-        output_tail: None,
-    }
+/// What the answer's `Settle` takes: the run's news through its end
+/// mark, once, in queue order.
+fn settled(answer: &super::runs::Answer) -> Vec<contract::jobs::Taken> {
+    (answer.settle.clone().expect("an ended answer settles").0)()
 }
 
 fn notice(rx: &mpsc::Receiver<Delivery>) -> contract::inbox::JobNotice {
@@ -313,11 +329,15 @@ fn an_unclaimed_end_sends_one_notice_whose_claim_holds_once() {
     let sent = notice(&rx);
     assert!(rx.try_recv().is_err(), "one end sends one notice");
     assert_eq!(sent.completed, ended_ok(&id));
-    assert!((sent.claim.0)(), "the notice claims the unclaimed end");
+    assert_eq!(
+        (sent.claim.0)(),
+        Some(Vec::new()),
+        "the notice claims the unclaimed end"
+    );
     let cancel = CancelToken::new();
     let answer = registry.wait(&id, 0, &cancel).unwrap();
-    assert!(answer.records.is_empty(), "the notice already claimed it");
     assert!(answer.text.contains("completed"), "{}", answer.text);
+    assert!(settled(&answer).is_empty(), "the notice already claimed it");
 }
 
 fn line(id: &str, lines: &str, suppressed: Option<u64>) -> contract::events::JobLine {
@@ -380,9 +400,15 @@ fn a_notice_after_a_wait_claimed_the_end_does_not_hold() {
     let id = opened.started.job_id.0.clone();
     (opened.end.0)(ended_ok(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
-    assert!(matches!(&answer.records[..], [JobRecord::Completed(_)]));
+    assert!(matches!(
+        &settled(&answer)[..],
+        [contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
     let sent = notice(&rx);
-    assert!(!(sent.claim.0)(), "the wait claimed the end first");
+    assert_eq!((sent.claim.0)(), None, "the wait claimed the end first");
 }
 
 #[test]
@@ -392,8 +418,8 @@ fn a_second_end_report_sends_no_second_notice() {
     registry.deliver_to(tx);
     let opened = registry.open(opening("npm test")).unwrap();
     let id = opened.started.job_id.0.clone();
-    registry.finish(ended_ok(&id), None);
-    registry.finish(ended_ok(&id), None);
+    registry.finish_run(1, ended_ok(&id), None);
+    registry.finish_run(1, ended_ok(&id), None);
     let _first = notice(&rx);
     assert!(rx.try_recv().is_err(), "a job ends once");
     drop(opened.end);
@@ -410,7 +436,7 @@ fn a_claim_after_the_registry_is_gone_does_not_hold() {
     (opened.end.0)(ended_ok(&id));
     drop(registry);
     let sent = notice(&rx);
-    assert!(!(sent.claim.0)());
+    assert_eq!((sent.claim.0)(), None);
 }
 
 #[test]
@@ -420,7 +446,13 @@ fn without_an_inbox_an_end_sends_nothing() {
     let id = opened.started.job_id.0.clone();
     (opened.end.0)(ended_ok(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
-    assert!(matches!(&answer.records[..], [JobRecord::Completed(_)]));
+    assert!(matches!(
+        &settled(&answer)[..],
+        [contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
 }
 
 #[test]
@@ -433,7 +465,13 @@ fn an_end_after_the_loop_is_gone_is_still_recorded() {
     let id = opened.started.job_id.0.clone();
     (opened.end.0)(ended_ok(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
-    assert!(matches!(&answer.records[..], [JobRecord::Completed(_)]));
+    assert!(matches!(
+        &settled(&answer)[..],
+        [contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
 }
 
 fn counted_stop(
@@ -642,7 +680,7 @@ fn write_returns_the_output_after_the_write_when_the_wait_passes() {
     assert!(answer.text.starts_with("got:hi\r\n"), "{}", answer.text);
     assert!(!answer.text.contains("earlier"), "{}", answer.text);
     assert!(answer.text.contains("still running"), "{}", answer.text);
-    assert!(answer.records.is_empty());
+    assert!(answer.settle.is_none());
     drop(opened.end);
 }
 
@@ -662,10 +700,16 @@ fn write_returns_at_once_with_the_final_state_when_the_job_ends_in_the_wait() {
     assert!(answer.text.starts_with("got:hi\n"), "{}", answer.text);
     assert!(answer.text.contains("completed"), "{}", answer.text);
     assert!(!answer.text.contains("still running"), "{}", answer.text);
-    assert!(matches!(&answer.records[..], [JobRecord::Completed(_)]));
+    assert!(matches!(
+        &settled(&answer)[..],
+        [contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        }]
+    ));
     // The completion was claimed by the write.
     let again = registry.wait(&id, 0, &CancelToken::new()).unwrap();
-    assert!(again.records.is_empty());
+    assert!(settled(&again).is_empty());
 }
 
 #[test]
@@ -1216,26 +1260,6 @@ fn deliver_to_through_the_seam_sends_the_end_before_running_drops_it() {
     assert_eq!(sent.completed, ended_ok(&id.0));
 }
 
-fn delegate_finished(id: &str, text: &str) -> contract::events::DelegateFinished {
-    contract::events::DelegateFinished {
-        job_id: JobId(id.into()),
-        text: text.to_owned(),
-        artifact: None,
-        questions: None,
-        usage: contract::shapes::Usage {
-            tokens: contract::shapes::Tokens {
-                input: 0,
-                cache_read: 0,
-                cache_write: std::collections::BTreeMap::new(),
-                output: 0,
-            },
-            cost: Some(0.0),
-            subscription_cost: 0.0,
-        },
-        worktree: None,
-    }
-}
-
 fn stopped() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
 }
@@ -1259,6 +1283,7 @@ fn open_started_records_the_job_without_a_file() {
         "scan".into(),
         output.clone(),
         stop_of(&flag),
+        delegate_started(&id.0),
     );
     assert_eq!(started.job_id, id);
     assert_eq!(started.tool.as_deref(), Some("delegate_spawn"));
@@ -1287,6 +1312,7 @@ fn a_delegate_wait_answers_the_final_message_and_records_once() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        delegate_started(&id.0),
     );
     finish.report(
         ended_ok(&id.0),
@@ -1304,20 +1330,28 @@ fn a_delegate_wait_answers_the_final_message_and_records_once() {
         "{}",
         answer.text
     );
+    let text = answer.text.clone();
+    let records = settled(&answer);
     let [
-        JobRecord::DelegateFinished(finished),
-        JobRecord::Completed(_),
-    ] = &answer.records[..]
+        contract::jobs::Taken {
+            record: JobRecord::DelegateFinished(finished),
+            ..
+        },
+        contract::jobs::Taken {
+            record: JobRecord::Completed(_),
+            ..
+        },
+    ] = &records[..]
     else {
-        panic!(
-            "a delegate wait records its finish then its end: {:?}",
-            answer.records
-        );
+        panic!("a delegate wait records its finish then its end: {records:?}");
     };
     assert_eq!(finished.text, "Done scanning.");
     let again = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
-    assert_eq!(again.text, answer.text);
-    assert!(again.records.is_empty(), "the second wait records nothing");
+    assert_eq!(again.text, text);
+    assert!(
+        settled(&again).is_empty(),
+        "the second wait records nothing"
+    );
 }
 
 #[test]
@@ -1332,12 +1366,13 @@ fn a_notice_claimed_by_wait_claims_nothing_and_vice_versa() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        delegate_started(&id.0),
     );
     finish.report(ended_ok(&id.0), Some(delegate_finished(&id.0, "Done.")));
     let first = notice(&rx);
-    assert!((first.claim.0)(), "the first claim holds");
+    assert_eq!((first.claim.0)(), Some(Vec::new()), "the first claim holds");
     let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
-    assert!(answer.records.is_empty(), "the notice claimed first");
+    assert!(settled(&answer).is_empty(), "the notice claimed first");
 
     let (_dir, registry) = world();
     let (tx, rx) = mpsc::channel();
@@ -1349,12 +1384,13 @@ fn a_notice_claimed_by_wait_claims_nothing_and_vice_versa() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        delegate_started(&id.0),
     );
     finish.report(ended_ok(&id.0), Some(delegate_finished(&id.0, "Done.")));
     let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
-    assert_eq!(answer.records.len(), 2, "the wait claimed first");
+    assert_eq!(settled(&answer).len(), 2, "the wait claimed first");
     let second = notice(&rx);
-    assert!(!(second.claim.0)(), "the wait already claimed the end");
+    assert_eq!((second.claim.0)(), None, "the wait already claimed the end");
 }
 
 #[test]
@@ -1367,18 +1403,23 @@ fn a_dropped_delegate_end_is_indeterminate_with_an_empty_finish() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         Stop(Box::new(|| {})),
+        delegate_started(&id.0),
     );
     drop(finish);
     let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
+    let records = settled(&answer);
     let [
-        JobRecord::DelegateFinished(finished),
-        JobRecord::Completed(completed),
-    ] = &answer.records[..]
+        contract::jobs::Taken {
+            record: JobRecord::DelegateFinished(finished),
+            ..
+        },
+        contract::jobs::Taken {
+            record: JobRecord::Completed(completed),
+            ..
+        },
+    ] = &records[..]
     else {
-        panic!(
-            "a dropped delegate end still records both: {:?}",
-            answer.records
-        );
+        panic!("a dropped delegate end still records both: {records:?}");
     };
     assert_eq!(finished.text, "");
     // An empty message still ends its line: without the guard the next
@@ -1410,6 +1451,7 @@ fn stop_delegates_stops_only_running_delegates() {
         "scan".into(),
         "/sessions/s_x/events.jsonl".into(),
         stop_of(&delegate_flag),
+        delegate_started(&delegate_id.0),
     );
     assert_eq!(registry.stop_delegates(), 1);
     assert!(

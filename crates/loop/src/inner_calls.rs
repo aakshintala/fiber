@@ -317,6 +317,8 @@ impl crate::Loop {
                         slot.depth + 1,
                     )),
                 ));
+                // As `run_batch` records each model call's turn.
+                self.call_turns.insert(id.clone(), turn.clone());
                 release.add_cancel(Arc::clone(&cancel));
                 release.add(Arc::clone(&stream));
                 let arguments = Arc::new(prepared.arguments);

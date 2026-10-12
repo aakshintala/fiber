@@ -20,6 +20,9 @@ pub(crate) mod outcome;
 pub(crate) mod run;
 
 pub use models::{DelegateModels, Resolve};
+pub(crate) mod message;
+
+pub use message::{DelegateMessage, LastSeq, Steer, Steered};
 pub use run::{Launch, Launched, Watch, Watched};
 
 use run::Runner;
@@ -68,7 +71,7 @@ fn check_effects_arguments(arguments: &Map<String, Value>) -> Result<(String, St
 
 /// Reads each of the two names from the call's arguments: each is
 /// required, and each is a string.
-fn check_pair(
+pub(crate) fn check_pair(
     arguments: &Map<String, Value>,
     first: &str,
     second: &str,
@@ -239,6 +242,7 @@ impl Tool for DelegateSpawn {
             model: resolved.clone(),
             prompt,
             workspace: self.workspace.clone(),
+            resume: false,
         };
         let (runner, stop) = Runner::new(
             job_id.clone(),
@@ -248,6 +252,7 @@ impl Tool for DelegateSpawn {
             self.bound,
             self.cap,
             Arc::clone(&self.watch),
+            None,
         );
         let (child, listing) = match runner.spawn(&self.launch, &launched) {
             Ok(child) => child,
@@ -256,14 +261,6 @@ impl Tool for DelegateSpawn {
                 return crate::registry::failed(ErrorCode::ToolError, message.clone(), message);
             }
         };
-        let (started, finish) = self.registry.open_started(
-            job_id.clone(),
-            "delegate_spawn".to_owned(),
-            description,
-            output_path.clone(),
-            stop,
-        );
-        std::thread::spawn(move || runner.drive(child, Some(listing), finish));
         let delegate = DelegateStarted {
             job_id: job_id.clone(),
             delegate_session_id: session_id.clone(),
@@ -276,6 +273,15 @@ impl Tool for DelegateSpawn {
             worktree: None,
             forked_from: None,
         };
+        let (started, finish) = self.registry.open_started(
+            job_id.clone(),
+            "delegate_spawn".to_owned(),
+            description,
+            output_path.clone(),
+            stop,
+            delegate.clone(),
+        );
+        std::thread::spawn(move || runner.drive(child, Some(listing), finish));
         Output {
             content: vec![ContentPart::Text {
                 text: format!("Started delegate {}. Its log is {}.", job_id.0, output_path),

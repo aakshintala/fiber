@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::emit::Emit;
-use contract::jobs::{JobRecord, StopError, WriteError};
+use contract::jobs::{StopError, WriteError};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
@@ -139,7 +139,7 @@ impl JobsTool {
             Err(message) => return failed(message),
         };
         match self.registry.wait(&id, timeout_ms, cancel) {
-            Ok(answer) => answered(answer.text, answer.records),
+            Ok(answer) => answered(answer.text, answer.settle),
             Err(()) => failed(unknown_message(&id)),
         }
     }
@@ -159,7 +159,7 @@ impl JobsTool {
             Err(message) => return failed(message),
         };
         match self.registry.write(&id, input, wait_ms, cancel) {
-            Ok(answer) => answered(answer.text, answer.records),
+            Ok(answer) => answered(answer.text, answer.settle),
             Err(WriteError::NotRunning) => failed(unknown_message(&id)),
             Err(WriteError::NotTty) => failed(format!("Job {id} was not started with `tty`.")),
             Err(WriteError::Ended(status)) => failed(format!(
@@ -179,7 +179,7 @@ impl JobsTool {
             Err(message) => return failed(message),
         };
         match self.registry.stop(&id, cancel) {
-            Ok(answer) => answered(answer.text, answer.records),
+            Ok(answer) => answered(answer.text, answer.settle),
             Err(StopError::NotRunning) => failed(unknown_message(&id)),
             Err(StopError::Ended(status)) => failed(format!(
                 "Job `{id}` has ended: {}.",
@@ -246,7 +246,7 @@ fn write_wait(arguments: &Map<String, Value>, empty: bool) -> Result<u64, String
     })
 }
 
-fn unknown_message(id: &str) -> String {
+pub(crate) fn unknown_message(id: &str) -> String {
     format!("No job has id `{id}`.")
 }
 
@@ -257,10 +257,10 @@ fn text_only(text: String) -> Output {
     }
 }
 
-fn answered(text: String, records: Vec<JobRecord>) -> Output {
+fn answered(text: String, settle: Option<contract::tool::Settle>) -> Output {
     Output {
         content: vec![ContentPart::Text { text }],
-        jobs: records,
+        settle,
         ..Output::default()
     }
 }

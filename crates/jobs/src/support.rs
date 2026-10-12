@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use contract::ActionId;
 use contract::clock::Clock;
-use contract::events::{FiberExited, FinalMessage};
+use contract::events::{DelegateStarted, FiberExited, FinalMessage};
 use contract::jobs::{Opening, Stop};
 use contract::shapes::{Tokens, Usage};
 use fakes::clock::FakeClock;
@@ -42,6 +42,46 @@ pub(crate) fn exited(text: &str) -> FiberExited {
         error: None,
         suspended_on: None,
         questions: None,
+    }
+}
+
+/// A clean end for `id`: exited 0 with no output.
+pub(crate) fn ended_ok(id: &str) -> contract::events::JobCompleted {
+    contract::events::JobCompleted {
+        job_id: contract::JobId(id.into()),
+        status: contract::events::Outcome::Completed,
+        error: None,
+        process: Some(contract::shapes::Process {
+            exit_code: Some(0),
+            signal: None,
+            timed_out: false,
+        }),
+        output_tail: None,
+    }
+}
+
+/// A delegate's finish for `id` with `text`.
+pub(crate) fn delegate_finished(id: &str, text: &str) -> contract::events::DelegateFinished {
+    contract::events::DelegateFinished {
+        job_id: contract::JobId(id.into()),
+        text: text.to_owned(),
+        artifact: None,
+        questions: None,
+        usage: usage(),
+        worktree: None,
+    }
+}
+
+/// A delegate's first run, for `job_id`, as `delegate_spawn` records it.
+pub(crate) fn delegate_started(job_id: &str) -> DelegateStarted {
+    DelegateStarted {
+        job_id: contract::JobId(job_id.into()),
+        delegate_session_id: contract::SessionId("s_d000000000000001".into()),
+        harness: "fiber".into(),
+        model: "fiber:fake/m".into(),
+        workspace: "/w".into(),
+        worktree: None,
+        forked_from: None,
     }
 }
 

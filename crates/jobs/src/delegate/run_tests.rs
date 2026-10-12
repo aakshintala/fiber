@@ -53,6 +53,8 @@ struct Script {
     calls: Mutex<Vec<std::time::Instant>>,
     /// Notified on every recorded call.
     called: Condvar,
+    /// The boundary each call passed.
+    afters: Mutex<Vec<Option<u64>>>,
     replies: Mutex<VecDeque<WatchReply>>,
 }
 
@@ -71,6 +73,7 @@ impl Script {
             clock: Arc::clone(clock),
             calls: Mutex::new(Vec::new()),
             called: Condvar::new(),
+            afters: Mutex::new(Vec::new()),
             replies: Mutex::new(replies.into()),
         })
     }
@@ -78,21 +81,37 @@ impl Script {
     fn watch(
         self: &Arc<Self>,
         _id: &SessionId,
+        after: Option<u64>,
         on_line: &mut dyn FnMut(&Envelope),
     ) -> io::Result<Watched> {
         self.calls.lock().unwrap().push(self.clock.now());
+        self.afters.lock().unwrap().push(after);
         self.called.notify_all();
+        // As `doors::watch_after`: lines at or before the boundary belong
+        // to an earlier run, so they are neither delivered nor end the
+        // watch.
+        let deliver = |line: &Envelope| {
+            line.seq
+                .map(|seq| after.is_none_or(|at| seq.0 > at))
+                .unwrap_or(true)
+        };
         match self.replies.lock().unwrap().pop_front() {
             None => Err(io::Error::other("refused")),
             Some(WatchReply::Closed(lines)) => {
-                for line in &lines {
+                for line in lines.iter().filter(|line| deliver(line)) {
                     on_line(line);
                 }
                 Ok(Watched::Closed)
             }
             Some(WatchReply::Exited(lines)) => {
-                for line in &lines {
+                // As the real watch: the first delivered `fiber_exited`
+                // ends the watch, so a replayed earlier run's end never
+                // stands in for this run's.
+                for line in lines.iter().filter(|line| deliver(line)) {
                     on_line(line);
+                    if line.kind == "fiber_exited" {
+                        break;
+                    }
                 }
                 Ok(Watched::Exited)
             }
@@ -105,6 +124,11 @@ impl Script {
 
     fn calls(&self) -> Vec<std::time::Instant> {
         self.calls.lock().unwrap().clone()
+    }
+
+    /// The boundary each call passed, in call order.
+    fn afters(&self) -> Vec<Option<u64>> {
+        self.afters.lock().unwrap().clone()
     }
 
     /// Waits, at most `within` of real time, until the watch ran `n`
@@ -184,11 +208,24 @@ impl Rig {
     /// Returns the runner's stop, so tests stop through the registry as
     /// `jobs stop` does.
     fn start(&self, shell: &str, bound: Duration, cap: u64) -> mpsc::Receiver<()> {
+        self.start_after(shell, bound, cap, None)
+    }
+
+    /// [`Rig::start`], watching past `after`.
+    fn start_after(
+        &self,
+        shell: &str,
+        bound: Duration,
+        cap: u64,
+        after: Option<u64>,
+    ) -> mpsc::Receiver<()> {
         let shell = shell.to_owned();
         let script = Arc::clone(&self.script);
-        let watch = Arc::new(move |id: &SessionId, on_line: &mut dyn FnMut(&Envelope)| {
-            script.watch(id, on_line)
-        });
+        let watch = Arc::new(
+            move |id: &SessionId, after: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
+                script.watch(id, after, on_line)
+            },
+        );
         let events = self.events.clone();
         let launch: Launch = Arc::new(move |_: &Launched| {
             let mut command = Command::new("sh");
@@ -203,6 +240,7 @@ impl Rig {
             bound,
             cap,
             watch,
+            after,
         );
         let launched = Launched {
             session_id: SessionId("s_child".into()),
@@ -211,6 +249,7 @@ impl Rig {
             model: "fake/m".into(),
             prompt: "hi".into(),
             workspace: self.events.parent().unwrap().to_path_buf(),
+            resume: false,
         };
         let (child, listing) = runner.spawn(&launch, &launched).unwrap();
         let (_started, finish) = self.registry.open_started(
@@ -219,6 +258,7 @@ impl Rig {
             "scan".into(),
             events.to_string_lossy().into_owned(),
             stop,
+            crate::support::delegate_started(&self.job.0),
         );
         let (done, waited) = mpsc::channel();
         thread::spawn(move || {
@@ -1228,9 +1268,11 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
     let pgid = member.id();
     let mut listing = Some(listing);
     let watchdog = Watchdog::group(pgid);
-    let watch: Watch = Arc::new(|_: &SessionId, _: &mut dyn FnMut(&Envelope)| {
-        Err(std::io::Error::other("refused"))
-    });
+    let watch: Watch = Arc::new(
+        |_: &SessionId, _: Option<u64>, _: &mut dyn FnMut(&Envelope)| {
+            Err(std::io::Error::other("refused"))
+        },
+    );
     let (runner, stop) = Runner::new(
         crate::registry::mint_job_id(),
         mint_session_id(),
@@ -1239,6 +1281,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         BOUND,
         1024,
         watch,
+        None,
     );
     // The stop sets the bound; the member ignores nothing and no other
     // thread signals this group.
@@ -1497,16 +1540,19 @@ fn run_watch(
     seqs: std::ops::Range<u64>,
 ) {
     let lines: Vec<Envelope> = seqs.map(|seq| fiber_exited_line(seq, "Line.")).collect();
-    let watch: Watch = Arc::new(move |_: &SessionId, on_line: &mut dyn FnMut(&Envelope)| {
-        for line in &lines {
-            on_line(line);
-        }
-        Ok(Watched::Closed)
-    });
+    let watch: Watch = Arc::new(
+        move |_: &SessionId, _: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
+            for line in &lines {
+                on_line(line);
+            }
+            Ok(Watched::Closed)
+        },
+    );
     let waker: Arc<dyn contract::clock::Wake> = Arc::new(Parker::new());
     Watcher {
         watch,
         session_id: SessionId("s_child".into()),
+        after: None,
         fold: Arc::new(Mutex::new(Fold::default())),
         shared: Arc::clone(shared),
         cap,
@@ -1558,4 +1604,166 @@ fn the_watch_stats_the_log_once_per_poll_interval() {
     run_watch(&clock, &shared, &last_check, Arc::clone(&stat), cap, 7..8);
     assert_eq!(*stats.lock().unwrap(), 2, "past the interval it stats");
     assert_eq!(shared.reason(), Some(Termination::OutputCap));
+}
+
+#[test]
+fn the_watch_boundary_skips_an_earlier_run_exit() {
+    // The child prints the same line the watch delivers for this run:
+    // whether the reap or the watch wins the race, the fold sees the
+    // live run's `fiber_exited`, never the replayed earlier one. The
+    // reap may win before any watch runs, so the list may be empty.
+    let line = json_line(9, "New.");
+    let rig = rig(vec![WatchReply::Exited(vec![
+        fiber_exited_line(5, "Old."),
+        fiber_exited_line(9, "New."),
+    ])]);
+    let watchdog = Watchdog::matching("fiber-delegate-boundary");
+    rig.start_after(
+        &format!(": fiber-delegate-boundary; printf '%s\\n' '{line}'; exit 0"),
+        BOUND,
+        1024,
+        Some(5),
+    );
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
+        Some("New.".into())
+    );
+    assert!(
+        rig.script.afters().iter().all(|after| *after == Some(5)),
+        "every watch call passes the boundary (none when the reap wins): {:?}",
+        rig.script.afters()
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn no_boundary_takes_the_first_replayed_exit_as_today() {
+    // The child prints the same line the watch delivers first: whether
+    // the reap or the watch wins the race, the fold sees that exit, as
+    // it did before any boundary. The reap may win before any watch
+    // runs, so the list may be empty.
+    let line = json_line(5, "Old.");
+    let rig = rig(vec![WatchReply::Exited(vec![
+        fiber_exited_line(5, "Old."),
+        fiber_exited_line(9, "New."),
+    ])]);
+    let watchdog = Watchdog::matching("fiber-delegate-no-boundary");
+    rig.start(
+        &format!(": fiber-delegate-no-boundary; printf '%s\\n' '{line}'; exit 0"),
+        BOUND,
+        1024,
+    );
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
+        Some("Old.".into())
+    );
+    assert!(
+        rig.script.afters().iter().all(|after| after.is_none()),
+        "every watch call passes no boundary (none when the reap wins): {:?}",
+        rig.script.afters()
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn the_fold_starts_from_the_run_boundary() {
+    // The fold dedupes from the run's boundary: a replayed earlier run's
+    // `fiber_exited` at the boundary never stands in for this run's, even
+    // when the watch delivers it. The fake script filters at the boundary
+    // as the real watch does, so this test drives the runner with a watch
+    // that replays without filtering: the fold is the backstop. The child
+    // blocks until the watch folded the stale line, so the stale line is always first; the
+    // fresh line on stdout ends the run. Without the boundary the fold
+    // takes the stale line and the run reports it instead.
+    let rig = rig(vec![]);
+    let stale = fiber_exited_line(5, "Old.");
+    let fresh = json_line(9, "New.");
+    let (called_tx, called_rx) = mpsc::channel();
+    let seen: Arc<Mutex<Vec<Option<u64>>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_after = Arc::clone(&seen);
+    let watch: Watch = Arc::new(
+        move |_: &SessionId, after: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
+            seen_after.lock().unwrap().push(after);
+            on_line(&stale);
+            let _sent = called_tx.send(());
+            Ok(Watched::Exited)
+        },
+    );
+    let gate = TempDir::new("fiber-delegate-fold-boundary");
+    let block = fifo(gate.path(), "block");
+    let shell = format!(
+        ": fiber-delegate-fold-boundary; read _ < '{}'; printf '%s\\n' '{fresh}'; exit 0",
+        block.display()
+    );
+    let events = rig.events.clone();
+    let launch: Launch = Arc::new(move |_: &Launched| {
+        let mut command = Command::new("sh");
+        command.args(["-c", shell.as_str()]);
+        command
+    });
+    let (runner, stop) = Runner::new(
+        rig.job.clone(),
+        SessionId("s_child".into()),
+        events.clone(),
+        Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
+        BOUND,
+        1024,
+        watch,
+        Some(5),
+    );
+    let launched = Launched {
+        session_id: SessionId("s_child".into()),
+        job_id: rig.job.clone(),
+        parent: SessionId("s_parent".into()),
+        model: "fake/m".into(),
+        prompt: "hi".into(),
+        workspace: rig.events.parent().unwrap().to_path_buf(),
+        resume: false,
+    };
+    let (child, listing) = runner.spawn(&launch, &launched).unwrap();
+    let (_started, finish) = rig.registry.open_started(
+        rig.job.clone(),
+        "delegate_spawn".into(),
+        "scan".into(),
+        events.to_string_lossy().into_owned(),
+        stop,
+        crate::support::delegate_started(&rig.job.0),
+    );
+    let watchdog = Watchdog::matching("fiber-delegate-fold-boundary");
+    thread::spawn(move || {
+        runner.drive(child, Some(listing), finish);
+    });
+    Deadline::after(DEADLINE)
+        .recv(&called_rx)
+        .expect("the watch ran before the release");
+    release_fifo(&block, b"go\n");
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
+        Some("New.".into())
+    );
+    let afters = seen.lock().unwrap().clone();
+    assert!(
+        !afters.is_empty() && afters.iter().all(|after| *after == Some(5)),
+        "every watch call passes the boundary: {afters:?}"
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn minted_command_ids_carry_their_prefix_and_differ() {
+    let first = super::mint_command_id();
+    let second = super::mint_command_id();
+    for id in [&first, &second] {
+        assert!(
+            id.starts_with("c_"),
+            "a command id carries its prefix: {id}"
+        );
+    }
+    assert_ne!(first, second, "two mints differ");
 }

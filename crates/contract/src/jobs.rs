@@ -259,6 +259,21 @@ pub enum JobRecord {
     Completed(JobCompleted),
 }
 
+/// One record taken from a job's queue of unwritten records, with the
+/// action that queued it when one did: `Some` only on a resumed run's
+/// `Started` and `DelegateStarted`, the action of the call that resumed
+/// it, when that call had an `Ask`. The loop writes it under that action
+/// and that action's turn, whichever taker writes it (`docs/events.md`,
+/// "`job_started`"). It carries no turn: the loop looks the turn up
+/// from the action.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Taken {
+    /// The record to write.
+    pub record: JobRecord,
+    /// The queuing call's action, when one queued it.
+    pub action: Option<crate::ActionId>,
+}
+
 #[cfg(test)]
 #[path = "jobs_tests.rs"]
 mod tests;

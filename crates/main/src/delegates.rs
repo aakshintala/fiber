@@ -274,16 +274,24 @@ pub(crate) fn launcher(fiber: &Path) -> jobs::Launch {
 
 fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
     let mut command = Command::new(fiber);
+    let workspace = launched.workspace.to_string_lossy();
     command.args([
         "session",
         "--id",
         &launched.session_id.0,
         "--workspace",
-        &launched.workspace.to_string_lossy(),
-        "--model",
-        &launched.model,
-        "--prompt",
-        &launched.prompt,
+        &workspace,
+    ]);
+    if launched.resume {
+        // A resume continues the delegate's own session with one
+        // unattended turn: no `--model` (fixed when the delegate
+        // started), and the message as one `--prompt=<text>` argument, so
+        // a message starting with `-` reaches the child whole.
+        command.args(["--resume", &format!("--prompt={}", launched.prompt)]);
+    } else {
+        command.args(["--model", &launched.model, "--prompt", &launched.prompt]);
+    }
+    command.args([
         "--parent",
         &launched.parent.0,
         "--delegate-id",
@@ -299,12 +307,12 @@ fn command(fiber: &Path, launched: &jobs::Launched) -> Command {
 }
 
 /// Watches the child's socket as an ordinary client, folding its log from
-/// the subscribe: the jobs-local outcome over `doors::watch`
-/// (`docs/delegates.md`, "Streams").
+/// the subscribe past the run's boundary: the jobs-local outcome over
+/// `doors::watch_after` (`docs/delegates.md`, "Streams").
 pub(crate) fn watcher(home: &Path) -> jobs::Watch {
     let home = home.to_path_buf();
-    Arc::new(move |id, on_line| {
-        doors::watch(&home, id, on_line).map(|watched| match watched {
+    Arc::new(move |id, after, on_line| {
+        doors::watch_after(&home, id, after, on_line).map(|watched| match watched {
             doors::Watched::Exited => jobs::Watched::Exited,
             doors::Watched::Closed { .. } => jobs::Watched::Closed,
         })

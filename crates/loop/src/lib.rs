@@ -141,6 +141,12 @@ pub struct Loop {
     /// the end-of-turn check, or taken in the drain that is about to apply
     /// them.
     pub(crate) queued: VecDeque<jobs::Queued>,
+    /// The turn of each call this loop started whose output has not
+    /// reached `finish`, so a resumed run's start that the call queued is
+    /// written under that call's turn, whichever taker writes it
+    /// (`docs/events.md`, "`job_started`"). The loop thread alone reads
+    /// and writes it.
+    pub(crate) call_turns: BTreeMap<contract::ActionId, contract::TurnId>,
     /// `close` has been taken. No further turn starts
     /// (`docs/invocation.md`, "Lifecycle").
     closing: bool,
@@ -491,6 +497,7 @@ impl Loop {
             cache_key: root,
             reviewer_key: format!("{session_id}:reviewer"),
             queued: VecDeque::new(),
+            call_turns: BTreeMap::new(),
             closing: false,
             rewound: false,
             suspended,

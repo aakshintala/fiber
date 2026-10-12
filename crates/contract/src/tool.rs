@@ -232,8 +232,14 @@ pub struct Output {
     /// Instructions to the loop.
     pub control: Option<Control>,
     /// Job lines the loop writes, in order, under this call's action, just
-    /// before its `tool_call_completed`.
+    /// before its `tool_call_completed`: the records a call starts outside
+    /// any queue, a shell job's start and a delegate's first. A resumed
+    /// run's start is not among them: it leaves the queue only through
+    /// `settle`, whichever taker writes it.
     pub jobs: Vec<JobRecord>,
+    /// Takes this call's prefix of a job's queue, written before the
+    /// call's completion (see [`Settle`]).
+    pub settle: Option<Settle>,
     /// Server lines the loop writes, in order, under this call's action,
     /// before its job lines and `tool_call_completed`: what this call saw
     /// of its server's deaths and restarts. Set only for the call that
@@ -243,6 +249,27 @@ pub struct Output {
     /// what it holds in memory (`docs/tools.md`, "Result and output").
     /// Only the shell sets it.
     pub spilled: Option<Spilled>,
+}
+
+/// Takes this call's prefix of a job's queue of unwritten records, which
+/// the loop writes before the call's completion, under the queuing call's
+/// action and turn. The loop calls it exactly once, on the loop thread,
+/// in `finish`, after the `servers` lines and before `jobs`, for every
+/// call whose output reaches `finish`, failed and cancelled included.
+/// A tool that sets no `settle` behaves as today.
+#[derive(Clone)]
+pub struct Settle(pub Arc<dyn Fn() -> Vec<crate::jobs::Taken> + Send + Sync>);
+
+impl std::fmt::Debug for Settle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Settle(..)")
+    }
+}
+
+impl PartialEq for Settle {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// Output a tool wrote to its call's artifact file as it ran, past what it
@@ -304,3 +331,7 @@ impl Bound {
         end: 0,
     };
 }
+
+#[cfg(test)]
+#[path = "tool_tests.rs"]
+mod tests;

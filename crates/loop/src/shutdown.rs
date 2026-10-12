@@ -5,6 +5,7 @@
 
 use contract::events::{DelegateFinished, Event, JobCompleted};
 use contract::inbox::Delivery;
+use contract::jobs::Taken;
 use contract::{ErrorCode, JobId};
 
 use crate::inbox::{CLOSING, STALE_REPLY, STALE_STEER, accept, reject};
@@ -35,13 +36,13 @@ impl Loop {
         if !self.rewound {
             for piece in queued {
                 match piece {
-                    Queued::Job(completed, delegate) => {
-                        self.write_job_end(completed, delegate)?;
+                    Queued::Job(ahead, completed, delegate) => {
+                        self.write_job_end(ahead, completed, delegate)?;
                     }
                     // Claimed here, at the settle that writes it.
                     Queued::Notice(notice) => {
-                        if let Some((completed, delegate)) = claimed(notice) {
-                            self.write_job_end(completed, delegate)?;
+                        if let Some((ahead, completed, delegate)) = claimed(notice) {
+                            self.write_job_end(ahead, completed, delegate)?;
                         }
                     }
                     Queued::Steer(..)
@@ -81,19 +82,28 @@ impl Loop {
         }
     }
 
-    /// A job's end: its delegate's final message first, bounded as it is
-    /// written, then `job_completed`.
+    /// A job's end: the queued records taken ahead first, then its
+    /// delegate's final message, bounded as it is written, then
+    /// `job_completed`, all through `Transcript::write` with no turn and
+    /// no action. No model reads the session after the settle, so the
+    /// render has no reader; the lines in the log are unchanged.
     fn write_job_end(
         &mut self,
+        ahead: Vec<Taken>,
         completed: JobCompleted,
         delegate: Option<DelegateFinished>,
     ) -> Result<(), Error> {
-        if let Some(finished) = delegate {
-            let event = Event::DelegateFinished(crate::delegated::bounded(&self.log, finished));
-            self.log.append(&event, None, None)?;
+        for taken in ahead {
+            self.write_taken(taken, None, None)?;
         }
-        self.log
-            .append(&Event::JobCompleted(completed), None, None)?;
+        if let Some(finished) = delegate {
+            let event = super::calls::job_event(
+                &self.log,
+                contract::jobs::JobRecord::DelegateFinished(finished),
+            );
+            self.write(&event, None, None)?;
+        }
+        self.write(&Event::JobCompleted(completed), None, None)?;
         Ok(())
     }
 
@@ -108,8 +118,8 @@ impl Loop {
         }
         match delivery {
             Delivery::Job(notice) => {
-                if let Some((completed, delegate)) = claimed(notice) {
-                    self.write_job_end(completed, delegate)?;
+                if let Some((ahead, completed, delegate)) = claimed(notice) {
+                    self.write_job_end(ahead, completed, delegate)?;
                 }
             }
             // Written like any line still written; unlike a monitor batch,

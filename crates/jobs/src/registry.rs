@@ -1,6 +1,7 @@
 //! The session's jobs: one id, one output file, one lifecycle
 //! (`docs/tools.md`, "Background jobs").
 
+use std::collections::VecDeque;
 use std::collections::hash_map::RandomState;
 use std::fs::File;
 use std::hash::BuildHasher;
@@ -12,10 +13,12 @@ use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
-use contract::events::{DelegateFinished, JobCompleted, JobLine, JobStarted, Outcome};
-use contract::inbox::{Claim, Delivery, JobNotice};
+use contract::events::{
+    DelegateFinished, DelegateStarted, JobCompleted, JobLine, JobStarted, Outcome,
+};
+use contract::inbox::Delivery;
 use contract::jobs::{
-    End, Foreground, JobRecord, Lines, OpenError, Opened, Opening, Stop, StopError, WriteError,
+    End, Foreground, Lines, OpenError, Opened, Opening, Stop, StopError, WriteError,
 };
 use contract::shapes::{ContentPart, Failure};
 use contract::tool::{Cancel, Output};
@@ -24,10 +27,11 @@ use contract::{ErrorCode, JobId};
 #[path = "registry/park.rs"]
 mod park;
 
-use park::{Parked, park_until};
-use support::clock::Parker;
+pub(crate) mod runs;
 
-use crate::delegate::outcome::empty;
+use park::{Parked, park_until};
+use runs::{Answer, Pending, RunEnd};
+use support::clock::Parker;
 
 /// A job's end not yet reported, held by the closure in its [`End`] or,
 /// for a delegate, by the runner until it reports. Reporting consumes
@@ -37,6 +41,8 @@ use crate::delegate::outcome::empty;
 /// handler.
 pub(crate) struct Unreported {
     job_id: JobId,
+    /// The run this report belongs to: it records nothing on a later one.
+    run: u64,
     /// Taken by the one report.
     registry: Option<Arc<Registry>>,
     /// Whether this is a delegate: its drop carries an empty finish.
@@ -50,7 +56,8 @@ impl Unreported {
     /// the runner passes its finish alongside, when the run produced one.
     pub(crate) fn report(mut self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
         if let Some(registry) = self.registry.take() {
-            registry.finish(
+            registry.finish_run(
+                self.run,
                 JobCompleted {
                     job_id: self.job_id.clone(),
                     ..completed
@@ -64,22 +71,7 @@ impl Unreported {
 impl Drop for Unreported {
     fn drop(&mut self) {
         if let Some(registry) = self.registry.take() {
-            let delegate = self.delegate.then(|| empty(&self.job_id));
-            registry.finish(
-                JobCompleted {
-                    job_id: self.job_id.clone(),
-                    status: Outcome::Failed,
-                    error: Some(Failure {
-                        code: ErrorCode::Indeterminate,
-                        message: "The job ended without a result.".to_owned(),
-                        retry_after_ms: None,
-                        provider: None,
-                    }),
-                    process: None,
-                    output_tail: None,
-                },
-                delegate,
-            );
+            registry.fail_job(self.job_id.clone(), self.run, self.delegate);
         }
     }
 }
@@ -95,6 +87,10 @@ pub struct Registry {
     /// What `wait` and `stop` block on: a job's end, a cancel and a clock
     /// move all bump it.
     park: Parker,
+    /// Held from a resume's "ended" check through its commit, so two
+    /// resumes of one job start one run. Taken before the inner lock;
+    /// nothing takes them the other way.
+    resume_gate: Mutex<()>,
     /// Upgrades to the `Arc` `new` returned, so `open` can hand that `Arc`
     /// to the job's [`End`] while taking `&self`.
     me: Weak<Self>,
@@ -117,15 +113,24 @@ struct Job {
     /// Types into the job's terminal; `None` unless it started with `tty`.
     input: Option<Typer>,
     stop_sent: bool,
-    claimed: bool,
-    /// Whether this is a Fiber delegate: only `delegate_spawn` opens one.
-    /// The runner marks it; `stop_delegates` reads it.
-    delegate: bool,
+    /// The delegate's first run, when this is one: only `delegate_spawn`
+    /// opens one. `stop_delegates` reads it.
+    delegate: Option<DelegateStarted>,
     /// A delegate's finish, kept past the end for a later `wait`.
     finished: Option<DelegateFinished>,
+    /// The running run's number, never reused.
+    run: u64,
+    /// The run's unwritten records, in the order they happened.
+    queue: VecDeque<Pending>,
+    /// The final state of every run a resume superseded, never removed.
+    ends: Vec<RunEnd>,
 }
 
 type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
+
+/// A run's stop with its run's number: the closure to send, when this
+/// call sends it, and the run it stops.
+type RunStop = (Option<Arc<dyn Fn() + Send + Sync>>, u64);
 
 impl Job {
     /// A job that has started and not yet ended; `open` and `open_started`
@@ -135,7 +140,7 @@ impl Job {
         path: PathBuf,
         stop: Arc<dyn Fn() + Send + Sync>,
         input: Option<Typer>,
-        delegate: bool,
+        delegate: Option<DelegateStarted>,
     ) -> Self {
         Self {
             started,
@@ -144,9 +149,11 @@ impl Job {
             stop,
             input,
             stop_sent: false,
-            claimed: false,
             delegate,
             finished: None,
+            run: 1,
+            queue: VecDeque::new(),
+            ends: Vec::new(),
         }
     }
 }
@@ -156,15 +163,6 @@ enum Phase {
     /// Boxed: `JobCompleted` is far larger than `Running`, and a registry
     /// holds one phase per job.
     Ended(Box<JobCompleted>),
-}
-
-/// What a `wait` or a `stop` that reached a job returns to the model.
-pub(crate) struct Answer {
-    /// The lines the model sees.
-    pub(crate) text: String,
-    /// The records, the first time they are delivered: a delegate's
-    /// finish, when it has one, then its completion.
-    pub(crate) records: Vec<JobRecord>,
 }
 
 impl Registry {
@@ -182,6 +180,7 @@ impl Registry {
                 foreground: Vec::new(),
             }),
             park: Parker::new(),
+            resume_gate: Mutex::new(()),
             me: Weak::clone(me),
         });
         let wake: Arc<dyn Wake> = registry.clone();
@@ -224,6 +223,7 @@ impl Registry {
         });
         let unreported = Unreported {
             job_id,
+            run: 1,
             registry: Some(registry),
             delegate: false,
         };
@@ -235,7 +235,7 @@ impl Registry {
             path.clone(),
             Arc::from(opening.stop.0),
             opening.input.map(|input| Arc::from(input.0)),
-            false,
+            None,
         ));
         Ok(Opened {
             started,
@@ -258,6 +258,7 @@ impl Registry {
         description: String,
         output_path: String,
         stop: Stop,
+        delegate: DelegateStarted,
     ) -> (JobStarted, Unreported) {
         let started = JobStarted {
             job_id: job_id.clone(),
@@ -268,6 +269,7 @@ impl Registry {
         };
         let finish = Unreported {
             job_id: job_id.clone(),
+            run: 1,
             // The caller holds this `Arc`, so the job it records always
             // has a registry to end in.
             registry: Some(Arc::clone(self)),
@@ -278,7 +280,7 @@ impl Registry {
             PathBuf::from(output_path),
             Arc::from(stop.0),
             None,
-            true,
+            Some(delegate),
         ));
         (started, finish)
     }
@@ -322,19 +324,21 @@ impl Registry {
             .any(|job| job.started.job_id.0 == id)
     }
 
-    /// Blocks until `id` ends, `timeout_ms` passes, or `cancel` fires.
-    /// A job that has already ended returns at once. A timeout or a cancel
-    /// leaves the job running.
+    /// Blocks until `id`'s current run ends, `timeout_ms` passes, or
+    /// `cancel` fires. Each call reads the run once and answers that
+    /// run's final state, whatever run is current by then. A job that has
+    /// already ended returns at once. A timeout or a cancel leaves the
+    /// job running.
     pub(crate) fn wait(
         self: &Arc<Self>,
         id: &str,
         timeout_ms: u64,
         cancel: &dyn Cancel,
     ) -> Result<Answer, ()> {
-        if !self.contains(id) {
+        let Some(run) = self.run_of(id) else {
             return Err(());
-        }
-        if let Some(answer) = self.answer_if_ended(id) {
+        };
+        if let Some(answer) = self.answer_for(id, run) {
             return Ok(answer);
         }
         // `checked_add` is `None` when the timeout does not fit on the
@@ -344,30 +348,32 @@ impl Registry {
             .clock
             .now()
             .checked_add(Duration::from_millis(timeout_ms));
-        match self.park_until(id, until, cancel) {
+        match self.park_until(id, run, until, cancel) {
             Parked::Ended => Ok(self
-                .answer_if_ended(id)
+                .answer_for(id, run)
                 .unwrap_or_else(|| self.still_running(id))),
             Parked::Timeout | Parked::Cancelled => Ok(self.still_running(id)),
         }
     }
 
-    /// Asks `id` to stop, once, then waits until it ends or `cancel` fires.
-    /// A cancel returns at once; the stop already sent stands.
+    /// Asks `id`'s current run to stop, once per run, then waits until it
+    /// ends or `cancel` fires. A cancel returns at once; the stop already
+    /// sent stands.
     pub(crate) fn stop(
         self: &Arc<Self>,
         id: &str,
         cancel: &dyn Cancel,
     ) -> Result<Answer, StopError> {
-        if let Some(stop) = self.send_stop(id)? {
+        let (stop, run) = self.send_stop(id)?;
+        if let Some(stop) = stop {
             stop();
         }
-        if let Some(answer) = self.answer_if_ended(id) {
+        if let Some(answer) = self.answer_for(id, run) {
             return Ok(answer);
         }
-        match self.park_until(id, None, cancel) {
+        match self.park_until(id, run, None, cancel) {
             Parked::Ended => Ok(self
-                .answer_if_ended(id)
+                .answer_for(id, run)
                 .unwrap_or_else(|| self.still_running(id))),
             Parked::Timeout | Parked::Cancelled => Ok(self.still_running(id)),
         }
@@ -391,7 +397,12 @@ impl Registry {
         let written =
             typer(input.as_bytes(), self.clock.as_ref(), cancel).map_err(WriteError::Io)?;
         let until = self.clock.now().checked_add(Duration::from_millis(wait_ms));
-        let parked = self.park_until(id, until, cancel);
+        let run = self.run_of(id);
+        let parked = match run {
+            Some(run) => self.park_until(id, run, until, cancel),
+            // Gone between the typer and the park: nothing to wait for.
+            None => Parked::Timeout,
+        };
         // A cancel stops the typing between chunks.
         let mut text = if written < input.len() {
             format!("Wrote {written} of {} bytes.\n", input.len())
@@ -399,16 +410,16 @@ impl Registry {
             String::new()
         };
         text.push_str(&since_text(&path, from));
-        let state = match parked {
-            Parked::Ended => self
-                .answer_if_ended(id)
+        let state = match (parked, run) {
+            (Parked::Ended, Some(run)) => self
+                .answer_for(id, run)
                 .unwrap_or_else(|| self.still_running(id)),
-            Parked::Timeout | Parked::Cancelled => self.still_running(id),
+            _ => self.still_running(id),
         };
         text.push_str(&state.text);
         Ok(Answer {
             text,
-            records: state.records,
+            settle: state.settle,
         })
     }
 
@@ -427,10 +438,10 @@ impl Registry {
         }
     }
 
-    /// The stop closure, when this call is the one that sends it. `None`
-    /// when a stop was already sent. `Err` when the job is unknown or has
-    /// ended.
-    fn send_stop(&self, id: &str) -> Result<Option<Arc<dyn Fn() + Send + Sync>>, StopError> {
+    /// The stop closure with its run, when the job is running: `None`
+    /// for the closure when a stop was already sent for this run. `Err`
+    /// when the job is unknown or has ended.
+    fn send_stop(&self, id: &str) -> Result<RunStop, StopError> {
         let mut inner = lock(&self.inner);
         let Some(job) = inner.jobs.iter_mut().find(|job| job.started.job_id.0 == id) else {
             return Err(StopError::NotRunning);
@@ -438,11 +449,12 @@ impl Registry {
         if let Phase::Ended(completed) = &job.phase {
             return Err(StopError::Ended(completed.status));
         }
+        let run = job.run;
         if job.stop_sent {
-            return Ok(None);
+            return Ok((None, run));
         }
         job.stop_sent = true;
-        Ok(Some(Arc::clone(&job.stop)))
+        Ok((Some(Arc::clone(&job.stop)), run))
     }
 
     fn still_running(&self, id: &str) -> Answer {
@@ -456,95 +468,16 @@ impl Registry {
             Some(path) => running_text(id, &path),
             None => format!("Job {id} is still running.\n"),
         };
-        Answer {
-            text,
-            records: Vec::new(),
-        }
+        Answer { text, settle: None }
     }
 
-    /// The final state, claiming its records the first time: a delegate's
-    /// finish, when it has one, then its completion. `None` when the job
-    /// is still running.
-    fn answer_if_ended(&self, id: &str) -> Option<Answer> {
-        let mut inner = lock(&self.inner);
-        let job = inner
-            .jobs
-            .iter_mut()
-            .find(|job| job.started.job_id.0 == id)?;
-        let completed = match &job.phase {
-            Phase::Ended(completed) => (**completed).clone(),
-            Phase::Running => return None,
-        };
-        let text = final_text(&job.path, &completed, job.finished.as_ref());
-        let records = if job.claimed {
-            Vec::new()
-        } else {
-            job.claimed = true;
-            let mut records = Vec::with_capacity(2);
-            if let Some(finished) = job.finished.clone() {
-                records.push(JobRecord::DelegateFinished(finished));
-            }
-            records.push(JobRecord::Completed(completed));
-            records
-        };
-        Some(Answer { text, records })
-    }
-
-    fn finish(&self, completed: JobCompleted, delegate: Option<DelegateFinished>) {
-        let mut guard = lock(&self.inner);
-        let inner = &mut *guard;
-        if let Some(job) = inner
-            .jobs
-            .iter_mut()
-            .find(|job| job.started.job_id.0 == completed.job_id.0)
-        {
-            // The borrow from `matches!` ends at this statement, so the
-            // assignment below can replace `phase`.
-            let running = matches!(job.phase, Phase::Running);
-            if running {
-                job.phase = Phase::Ended(Box::new(completed.clone()));
-                // The terminal closes with the job.
-                job.input = None;
-                // A delegate's finish is kept past the end, for a later
-                // `wait` and its text.
-                job.finished = delegate.clone();
-                if let Some(inbox) = &inner.inbox {
-                    let registry = Weak::clone(&self.me);
-                    let id = completed.job_id.0.clone();
-                    let claim = Claim(Box::new(move || {
-                        registry
-                            .upgrade()
-                            .is_some_and(|registry| registry.claim(&id))
-                    }));
-                    // A loop that is gone takes no news; the end stays
-                    // recorded for `list`.
-                    let _sent = inbox.send(Delivery::Job(JobNotice {
-                        completed,
-                        claim,
-                        delegate,
-                    }));
-                }
-            }
-        }
-        self.park.bump();
-    }
-
-    /// Claims `id`'s final state for one caller: true the first time, false
-    /// once a notice, a `wait` or a `stop` claimed it.
-    fn claim(&self, id: &str) -> bool {
-        let mut inner = lock(&self.inner);
-        let Some(job) = inner.jobs.iter_mut().find(|job| job.started.job_id.0 == id) else {
-            return false;
-        };
-        !std::mem::replace(&mut job.claimed, true)
-    }
-
-    /// Parks until `id` ends, `until` passes, or `cancel` fires. `until`
-    /// of `None` waits without a deadline. The `Arc` stays alive for the
-    /// park: a cancel subscribed here upgrades it.
+    /// Parks until run `run` of `id` ends, `until` passes, or `cancel`
+    /// fires. `until` of `None` waits without a deadline. The `Arc` stays
+    /// alive for the park: a cancel subscribed here upgrades it.
     fn park_until(
         self: &Arc<Self>,
         id: &str,
+        run: u64,
         until: Option<Instant>,
         cancel: &dyn Cancel,
     ) -> Parked {
@@ -557,7 +490,7 @@ impl Registry {
             &wake,
             || {
                 let inner = lock(&self.inner);
-                if ended(&inner, id) {
+                if !runs::is_running(&inner, id, run) {
                     return Some(Parked::Ended);
                 }
                 if cancel.is_cancelled() {
@@ -576,13 +509,6 @@ impl Wake for Registry {
     fn wake(&self) {
         self.park.bump();
     }
-}
-
-fn ended(inner: &Inner, id: &str) -> bool {
-    inner
-        .jobs
-        .iter()
-        .any(|job| job.started.job_id.0 == id && matches!(job.phase, Phase::Ended(_)))
 }
 
 fn timed_out(clock: &dyn Clock, until: Option<Instant>) -> bool {
@@ -741,11 +667,11 @@ impl contract::jobs::Jobs for Registry {
 
     fn stop(&self, job_id: &JobId) -> bool {
         match self.send_stop(&job_id.0) {
-            Ok(Some(stop)) => {
+            Ok((Some(stop), _)) => {
                 stop();
                 true
             }
-            Ok(None) => true,
+            Ok((None, _)) => true,
             Err(StopError::NotRunning | StopError::Ended(_)) => false,
         }
     }
@@ -759,7 +685,7 @@ impl contract::jobs::Jobs for Registry {
             inner
                 .jobs
                 .iter_mut()
-                .filter(|job| job.delegate && !job.stop_sent)
+                .filter(|job| job.delegate.is_some() && !job.stop_sent)
                 .filter(|job| matches!(job.phase, Phase::Running))
                 .map(|job| {
                     job.stop_sent = true;
@@ -803,7 +729,7 @@ impl contract::jobs::Jobs for Registry {
     }
 }
 
-fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
+fn lock<T>(inner: &Mutex<T>) -> MutexGuard<'_, T> {
     inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
