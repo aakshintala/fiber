@@ -12,7 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use contract::SessionId;
+use contract::{ErrorCode, SessionId};
 use log::diag::Severity;
 use serde_json::Value;
 
@@ -70,17 +70,21 @@ pub(crate) fn notify_left(
 /// holds the shared gate, and no resume ever holds a start lock. A
 /// failure writes one diagnostic line and starts nothing; the relay
 /// forwards its acknowledgement either way.
-pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Option<UnixStream> {
+pub(crate) fn reach(
+    hub: &Arc<Hub>,
+    from: &SessionId,
+    next: &SessionId,
+) -> Result<UnixStream, crate::resume::Refused> {
     let guard = guard_for(hub, next);
     let held = lock(&guard);
     let socket = hub.home.join("run").join(&next.0);
     if let Ok(stream) = UnixStream::connect(&socket) {
-        return Some(stream);
+        return Ok(stream);
     }
     if crate::resume::find_log(&hub.home, next).is_some() {
         drop(held);
         return match crate::resume::resume(hub, next) {
-            Ok(stream) => Some(stream),
+            Ok(stream) => Ok(stream),
             Err(refused) => {
                 hub.diag.line(
                     Severity::Warn,
@@ -88,7 +92,7 @@ pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Optio
                     &start::code_name(&refused.code),
                     &format!("Session {} could not resume.", next.0),
                 );
-                None
+                Err(refused)
             }
         };
     }
@@ -103,7 +107,10 @@ pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Optio
                 "io_failed",
                 &format!("Session {} could not start.", next.0),
             );
-            return None;
+            return Err(crate::resume::Refused {
+                code: ErrorCode::IoFailed,
+                message: format!("Session {} could not start.", next.0),
+            });
         }
     };
     let started = match hub.starter.rewind(next, &workspace, from) {
@@ -115,7 +122,10 @@ pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Optio
                 "io_failed",
                 &format!("Session {} could not start.", next.0),
             );
-            return None;
+            return Err(crate::resume::Refused {
+                code: ErrorCode::IoFailed,
+                message: format!("Session {} could not start.", next.0),
+            });
         }
     };
     match start::await_bind(hub, &socket, started.as_ref()) {
@@ -126,7 +136,7 @@ pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Optio
                 "session_started",
                 &format!("Session {} started after a rewind.", next.0),
             );
-            Some(stream)
+            Ok(stream)
         }
         Bind::Exited | Bind::TimedOut | Bind::Failed(_) => {
             hub.diag.line(
@@ -135,7 +145,10 @@ pub(crate) fn reach(hub: &Arc<Hub>, from: &SessionId, next: &SessionId) -> Optio
                 "io_failed",
                 &format!("Session {} could not start.", next.0),
             );
-            None
+            Err(crate::resume::Refused {
+                code: ErrorCode::IoFailed,
+                message: format!("Session {} could not start.", next.0),
+            })
         }
     }
 }
@@ -196,7 +209,7 @@ pub(crate) fn follow(
     if lock(relays).transfer(&next.0, &replay) {
         return;
     }
-    let Some(stream) = reach(hub, &from, &next) else {
+    let Some(stream) = reach(hub, &from, &next).ok() else {
         return;
     };
     attach(
