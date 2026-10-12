@@ -883,6 +883,121 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
 }
 
 #[test]
+fn a_refused_rewind_drops_only_the_old_sessions_kept_level() {
+    let temp = Temp::new();
+    let workspace = temp.workspace();
+    let starter = FakeStarter::exit_with(
+        &temp.dir,
+        failure(ErrorCode::SessionHeld, "the new process refused."),
+    );
+    let hub = temp.hub(starter.clone());
+    let old = id(1);
+    let next = id(2);
+    let other = id(3);
+    write_log(
+        &temp.dir,
+        &old,
+        &workspace,
+        None,
+        &[rewound_line(&old, &next)],
+    );
+    let relays: Arc<Mutex<crate::relay::Relays>> =
+        Arc::new(Mutex::new(crate::relay::Relays::default()));
+    let epoch = lock(&relays).mint();
+    // The connection holds a kept level for the rewound session and for
+    // an untouched one: the refusal must drop only the rewound one.
+    let level = json!({"id": "c_sub1", "command": "subscribe", "args": {"level": "full"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    let other_level = json!({"id": "c_sub9", "command": "subscribe", "args": {"level": "summary"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    lock(&relays).subscribed.push((old.clone(), level));
+    lock(&relays)
+        .subscribed
+        .push((other.clone(), other_level.clone()));
+    let kept: crate::relay::Kept = Arc::new(Mutex::new(vec![(
+        "c_rw".to_owned(),
+        json!({"id": "c_rw", "command": "rewind", "args": {}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        true,
+    )]));
+    let (hub_session, mut session_peer) = UnixStream::pair().unwrap();
+    let reader = hub_session.try_clone().unwrap();
+    lock(&relays).entries.push(crate::relay::Relay {
+        session: old.clone(),
+        epoch,
+        writer: hub_session,
+        kept: Arc::clone(&kept),
+        replayed: Default::default(),
+        thread: None,
+        retiring: None,
+    });
+    let (client_write, client_read) = UnixStream::pair().unwrap();
+    client_read.set_read_timeout(Some(DEADLINE)).unwrap();
+    let client_writer: Arc<Mutex<UnixStream>> = Arc::new(Mutex::new(client_write));
+    let thread = crate::relay::spawn_for_test(
+        old.clone(),
+        epoch,
+        reader,
+        Arc::clone(&hub),
+        Arc::clone(&client_writer),
+        Arc::clone(&relays),
+        kept,
+    );
+    // The session accepts the rewind, naming the new session: its start
+    // is refused, so the relay answers the start's code instead.
+    let ack = json!({
+        "kind": "command_accepted", "ts": 1, "schema_version": 1,
+        "payload": {"command_id": "c_rw", "result": {"new_session_id": next}},
+    });
+    let mut bytes = serde_json::to_vec(&ack).unwrap();
+    bytes.push(b'\n');
+    session_peer.write_all(&bytes).unwrap();
+    session_peer.flush().unwrap();
+    let mut read = BufReader::new(client_read);
+    let mut text = String::new();
+    read.read_line(&mut text)
+        .expect("the client reads the refusal");
+    assert!(!text.is_empty(), "the hub closed before the refusal");
+    let rejection: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(rejection["kind"], "command_rejected", "{rejection}");
+    assert_eq!(rejection["payload"]["command_id"], "c_rw", "{rejection}");
+    assert_eq!(rejection["payload"]["code"], "session_held", "{rejection}");
+    // The session socket closes: the relay ends and its redirect runs.
+    // The blocking join runs on a thread of its own, so the wait carries
+    // the deadline.
+    drop(session_peer);
+    let (done_tx, done) = mpsc::channel();
+    thread::spawn(move || {
+        thread.join().unwrap();
+        done_tx.send(()).unwrap_or(());
+    });
+    assert!(
+        Deadline::after(DEADLINE).recv(&done).is_ok(),
+        "the relay ends after its session socket closes"
+    );
+    // The refusal dropped the rewound session's kept level and kept the
+    // untouched one, so the redirect follows nothing and starts nothing
+    // more: both sides of the kept-level check.
+    assert_eq!(starter.rewound().len(), 1, "the start was attempted once");
+    let held = lock(&relays);
+    assert!(
+        held.subscription(&old).is_none(),
+        "the refused rewind keeps no subscription for the old session"
+    );
+    assert_eq!(
+        held.subscription(&other),
+        Some(other_level),
+        "the refusal keeps every other session's level"
+    );
+}
+
+#[test]
 fn a_refusal_from_a_retiring_relay_waits_for_the_acknowledgements_it_rerouted() {
     let temp = Temp::new();
     let workspace = temp.workspace();
