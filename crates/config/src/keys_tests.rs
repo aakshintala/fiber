@@ -84,8 +84,7 @@ fn mcp_server_env_accepts_a_secret_reference() {
 fn mcp_server_env_values_are_strings_or_single_secret_objects() {
     let source = crate::Source::Global("global/config.json".into());
     let check_env = |env: &serde_json::Value| {
-        let text =
-            serde_json::json!({"mcp": {"servers": {"x": {"env": env}}}}).to_string();
+        let text = serde_json::json!({"mcp": {"servers": {"x": {"env": env}}}}).to_string();
         let layer: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(&text).expect("the test layer parses");
         let mut notices = Vec::new();

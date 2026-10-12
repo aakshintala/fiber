@@ -957,7 +957,10 @@ fn a_secret_env_value_is_a_reference_never_a_literal() {
     assert_eq!(specs.specs.len(), 1);
     let stdio = stdio(&specs.specs[0]);
     assert_eq!(stdio.env.get("PLAIN"), Some(&"v".to_owned()));
-    assert!(!stdio.env.contains_key("TOKEN"), "a reference is not a literal");
+    assert!(
+        !stdio.env.contains_key("TOKEN"),
+        "a reference is not a literal"
+    );
     assert_eq!(
         stdio.secrets.get("TOKEN"),
         Some(&"mcp.docs.TOKEN".to_owned())
@@ -1011,7 +1014,10 @@ fn a_secret_name_is_exactly_the_servers_own() {
                 "{server} {secret}"
             );
             for words in [server, secret] {
-                assert!(specs.notices[0].message.contains(words), "{server} {secret}");
+                assert!(
+                    specs.notices[0].message.contains(words),
+                    "{server} {secret}"
+                );
             }
         }
     }

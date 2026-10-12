@@ -89,7 +89,7 @@ asked for the session.
 | `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |
 | `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match (`docs/model-routing.md`, "Naming a model") | 1 |
 | `model_unconfigured` | the session's model names a per-account host whose setting has no value or a value that is not a host; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") | 1 |
-| `credential_missing` | the session model's credential cannot be found, or its credential label names none | 1 |
+| `credential_missing` | the session model's credential cannot be found, its credential label names none, or a stdio MCP server's `{ "secret" }` env value names no stored credential | 1 |
 | `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
 | `authentication_failed` | the startup OAuth refresh of the session model's token was rejected by the token endpoint, or its `credential()` needed a person to log in and nobody was attached (`docs/model-routing.md`, "Keys, tokens and OAuth") | 1 |
 | `connection_failed` | the startup OAuth refresh could not reach the token endpoint | 1 |
@@ -271,7 +271,7 @@ the lines that carry it.
 | `connection_failed` | exit, extension call, model call, tool call, turn, driver command (`rewind`) | the connection to the provider or its token endpoint failed, or `web_fetch` could not reach the host |
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_failed` | exit, extension call, model call, turn, driver command (`rewind`) | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
-| `credential_missing` | exit, driver command | no credential was found for the session's model, or its credential label names none; the message lists the provider's labels |
+| `credential_missing` | exit, driver command, `mcp_server_failed` | no credential was found for the session's model, its credential label names none, or a stdio MCP server's `{ "secret" }` env value names no stored credential; the message lists the provider's labels |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
 | `duplicate_command` | driver command | a command repeats the id of one the session already accepted, so it was not applied again (`docs/invocation.md`, "The command line") |
 | `extension_incompatible` | exit, notice, driver command (`rewind`) | an extension needs a newer `fiber` or a different extension API version; `fiber extension install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |

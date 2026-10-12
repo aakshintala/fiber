@@ -66,12 +66,31 @@ fn equal_declarations_share_a_key() {
 #[test]
 fn the_key_moves_with_command_args_and_env() {
     let base = key("fx", &["a".to_owned()], &env(&[("K", "1")]), &secrets(&[]));
-    assert_ne!(base, key("other", &["a".to_owned()], &env(&[("K", "1")]), &secrets(&[])));
-    assert_ne!(base, key("fx", &["b".to_owned()], &env(&[("K", "1")]), &secrets(&[])));
-    assert_ne!(base, key("fx", &["a".to_owned()], &env(&[("K", "2")]), &secrets(&[])));
     assert_ne!(
         base,
-        key("fx", &["a".to_owned()], &env(&[("K", "1"), ("J", "0")]), &secrets(&[])),
+        key(
+            "other",
+            &["a".to_owned()],
+            &env(&[("K", "1")]),
+            &secrets(&[])
+        )
+    );
+    assert_ne!(
+        base,
+        key("fx", &["b".to_owned()], &env(&[("K", "1")]), &secrets(&[]))
+    );
+    assert_ne!(
+        base,
+        key("fx", &["a".to_owned()], &env(&[("K", "2")]), &secrets(&[]))
+    );
+    assert_ne!(
+        base,
+        key(
+            "fx",
+            &["a".to_owned()],
+            &env(&[("K", "1"), ("J", "0")]),
+            &secrets(&[])
+        ),
     );
 }
 
@@ -166,9 +185,18 @@ fn another_version_is_a_miss() {
 fn a_different_key_is_a_miss() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
-    write(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[])), &cached());
+    write(
+        &cache,
+        "fx",
+        &key("fx", &[], &env(&[]), &secrets(&[])),
+        &cached(),
+    );
     assert_eq!(
-        read(&cache, "fx", &key("fx", &["changed".to_owned()], &env(&[]), &secrets(&[]))),
+        read(
+            &cache,
+            "fx",
+            &key("fx", &["changed".to_owned()], &env(&[]), &secrets(&[]))
+        ),
         None
     );
 }
@@ -177,7 +205,10 @@ fn a_different_key_is_a_miss() {
 fn a_missing_file_is_a_miss() {
     let dir = TempDir::new("fiber-mcp-cache");
     let cache = dir.path().join("mcp");
-    assert_eq!(read(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[]))), None);
+    assert_eq!(
+        read(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[]))),
+        None
+    );
 }
 
 #[test]
@@ -186,7 +217,10 @@ fn a_corrupt_file_is_a_miss() {
     let cache = dir.path().join("mcp");
     std::fs::create_dir_all(&cache).expect("cache dir");
     std::fs::write(cache.join("fx.json"), "not json").expect("corrupt cache");
-    assert_eq!(read(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[]))), None);
+    assert_eq!(
+        read(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[]))),
+        None
+    );
 }
 
 #[test]
@@ -196,10 +230,14 @@ fn a_key_mismatch_shape_is_a_miss() {
     std::fs::create_dir_all(&cache).expect("cache dir");
     std::fs::write(
         cache.join("fx.json"),
-        json!({"version": 1, "key": key("fx", &[], &env(&[]), &secrets(&[])), "tools": {}}).to_string(),
+        json!({"version": 1, "key": key("fx", &[], &env(&[]), &secrets(&[])), "tools": {}})
+            .to_string(),
     )
     .expect("shapeless cache");
-    assert_eq!(read(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[]))), None);
+    assert_eq!(
+        read(&cache, "fx", &key("fx", &[], &env(&[]), &secrets(&[]))),
+        None
+    );
 }
 
 #[test]

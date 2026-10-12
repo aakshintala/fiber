@@ -72,8 +72,7 @@ impl Kind {
                 map.values().all(|item| {
                     item.is_string()
                         || item.as_object().is_some_and(|object| {
-                            object.len() == 1
-                                && object.get("secret").is_some_and(Value::is_string)
+                            object.len() == 1 && object.get("secret").is_some_and(Value::is_string)
                         })
                 })
             }),
@@ -248,9 +247,8 @@ const fn entry_replaced(path: &'static str, kind: Kind) -> Key {
 }
 
 use Kind::{
-    Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, Number, OneOf,
+    Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, EnvMap, Number, OneOf,
     RepositoryExtensions, Role, Str, StrList, StrOrStrList,
-    EnvMap,
 };
 
 const YES: bool = true;

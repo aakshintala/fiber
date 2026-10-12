@@ -81,8 +81,7 @@ fn secret_reads_a_stored_secret_and_none_when_absent() {
             .unwrap()
             .is_none()
     );
-    crate::secret::store_secret(&home, "mcp.docs.TOKEN", &Secret::new("tok-1".into()))
-        .unwrap();
+    crate::secret::store_secret(&home, "mcp.docs.TOKEN", &Secret::new("tok-1".into())).unwrap();
     let read = config
         .credentials()
         .secret("mcp.docs.TOKEN")

@@ -1608,11 +1608,7 @@ fn the_resources_info_is_a_full_builtin_row() {
 /// child's environment held. The wrapper runs as `bash -c`, never as a
 /// file written and executed here (see `a_non_object_initialize_reply_`
 /// `fails_the_start` in `server_tests.rs`).
-fn secret_wrapper(
-    spec: &mut super::ServerSpec,
-    setup: &Setup,
-    var: &str,
-) -> std::path::PathBuf {
+fn secret_wrapper(spec: &mut super::ServerSpec, setup: &Setup, var: &str) -> std::path::PathBuf {
     let marker = setup.dir.path().join("secret-value.txt");
     let fixture = fakes::mcp_fixture()
         .display()
@@ -1717,7 +1713,10 @@ fn an_unreadable_secret_fails_the_start_with_credential_failed() {
     let failure = &started.failed[0];
     assert_eq!(failure.error.code, ErrorCode::CredentialFailed);
     let message = &failure.error.message;
-    assert!(message.contains("credentials/mcp.fx.SECRET_VALUE"), "{message}");
+    assert!(
+        message.contains("credentials/mcp.fx.SECRET_VALUE"),
+        "{message}"
+    );
     assert!(message.contains("denied"), "{message}");
     setup.stop(started.servers);
 }

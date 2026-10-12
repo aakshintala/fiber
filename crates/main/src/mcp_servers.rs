@@ -438,13 +438,12 @@ fn spec(config: &Config, name: &str) -> Entry {
             // Each reference is read when the server starts, through the
             // closure below, so the values never enter the spec.
             let credentials = config.credentials().clone();
-            let reader: mcp::SecretReader = Arc::new(move |secret: &str| {
-                match credentials.secret(secret) {
+            let reader: mcp::SecretReader =
+                Arc::new(move |secret: &str| match credentials.secret(secret) {
                     Ok(Some(value)) => Ok(value.expose().to_owned()),
                     Ok(None) => Err(mcp::SecretError::Missing),
                     Err(error) => Err(mcp::SecretError::Unreadable(error.to_string())),
-                }
-            });
+                });
             mcp::Transport::Stdio(mcp::StdioSpec {
                 command,
                 args,
@@ -569,7 +568,10 @@ pub(crate) fn strings(value: &Value) -> Vec<String> {
 /// or `{ "secret" }` objects, so anything else here is unreachable and
 /// ignored. A name that is not exactly `mcp.<server>.<KEY>` is kept, and
 /// refused by `spec`, so the notice names the server.
-fn server_env(config: &Config, server: &str) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+fn server_env(
+    config: &Config,
+    server: &str,
+) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
     let Some((Value::Object(merged), _)) = server_field(config, server, "env") else {
         return (BTreeMap::new(), BTreeMap::new());
     };
