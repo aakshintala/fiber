@@ -861,17 +861,19 @@ fn closing_while_the_run_lives_fails_closing_at_the_bound() {
         rig.clock.await_parked(at, DEADLINE),
         "the call parks its closing wait"
     );
-    rig.clock.advance(
+    let mark = rig.clock.advance_marked(
         BOUND
             .checked_sub(Duration::from_millis(1))
             .expect("the bound exceeds 1 ms"),
     );
+    // The advance woke the closing wait; it re-parks at the same bound
+    // past its own clock check. Only then is "still parked" decided,
+    // by a state check, never a sleep.
     assert!(
-        fakes::Deadline::after(Duration::from_millis(100))
-            .recv(&rx)
-            .is_err(),
-        "bound minus 1 ms still parked"
+        rig.clock.await_parked_since(&mark, Some(at), DEADLINE),
+        "the call re-parks its closing wait"
     );
+    assert!(rx.try_recv().is_err(), "bound minus 1 ms still parked");
     rig.clock.advance(Duration::from_millis(1));
     let output = answered(&rx);
     handle.join().unwrap();

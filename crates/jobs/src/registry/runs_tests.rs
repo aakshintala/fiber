@@ -654,13 +654,16 @@ fn two_resumes_race_through_the_gate_and_start_one_run() {
     Deadline::after(DEADLINE)
         .recv(&attempting_rx)
         .expect("the second resume started");
-    // The second start must not run while the first holds the gate.
-    let idle = Deadline::after(Duration::from_millis(500))
-        .recv(&called_rx)
-        .is_err();
+    // The first resume holds the gate in `start`: the gate is still
+    // held here, so the second resume cannot have passed it. A state
+    // check, not a wait: it holds however the threads are scheduled.
+    assert!(
+        registry.resume_gate.try_lock().is_err(),
+        "the first resume holds the gate in start"
+    );
+    assert!(called_rx.try_recv().is_err(), "the second start never ran");
     // Always released, so both joins below end whatever the assert says.
     release_tx.send(()).unwrap();
-    assert!(idle, "the second start never ran");
     match handle1.join().unwrap() {
         Ok(resumed) => {
             *moved_held.lock().unwrap() = Some(resumed.unreported);
