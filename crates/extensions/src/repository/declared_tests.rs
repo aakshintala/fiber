@@ -515,9 +515,11 @@ fn stalled_ls_files_child() {
     // The child's own bound fires before the parent's wait, so the two no
     // longer contradict.
     const CHILD_BUDGET: Duration = Duration::from_secs(20);
-    // One deadline for the whole child body, made once at its start: every
-    // wait below takes what remains of it, so the body totals <= CHILD_BUDGET
-    // and the child's bound fires before the parent's 30 s wait.
+    // One deadline for the child body, made once at its start: the waits
+    // below take what remains of it. Two waits sit outside it: the grace
+    // sighting in `stall::await_grace_or_answer` (at most 8 x 200 ms) and
+    // each `pgrep` listing (capped at 5 s). The child ends well before the
+    // parent's 30 s wait.
     let budget = Deadline::after(CHILD_BUDGET);
     /// One sighting round's wait for the run's answer.
     const SIGHT: Duration = Duration::from_millis(200);
