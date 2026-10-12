@@ -926,6 +926,14 @@ fn mcp_add_exits_two_for_a_bad_name() {
 }
 
 #[test]
+fn prompt_on_needs_both_streams_to_be_terminals() {
+    assert!(super::prompt_on(true, true));
+    assert!(!super::prompt_on(true, false));
+    assert!(!super::prompt_on(false, true));
+    assert!(!super::prompt_on(false, false));
+}
+
+#[test]
 fn mcp_add_exits_one_when_the_seam_refuses_the_url() {
     if std::env::var_os(CHILD).is_some() {
         let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();

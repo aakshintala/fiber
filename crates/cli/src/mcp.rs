@@ -630,6 +630,12 @@ pub fn mcp_list(clock: Arc<dyn Clock>) -> i32 {
     }
 }
 
+/// Whether the secret prompt runs with echo off: both stdin and stderr must
+/// be a terminal.
+fn prompt_on(stdin_tty: bool, stderr_tty: bool) -> bool {
+    stdin_tty && stderr_tty
+}
+
 /// [args]...` in the current directory.
 pub fn mcp_add(
     layer: Layer,
@@ -650,7 +656,7 @@ pub fn mcp_add(
             let on_terminal = stdin.is_terminal();
             let mut out = io::stdout();
             let mut err = io::stderr();
-            let terminal = on_terminal && err.is_terminal();
+            let terminal = prompt_on(on_terminal, err.is_terminal());
             let mut keys: Box<dyn KeyReader> = if on_terminal {
                 Box::new(NoEcho)
             } else {
