@@ -2197,6 +2197,47 @@ fn the_typed_body_without_completions() {
     );
 }
 
+/// With no recents, the completions alone draw, and nothing focused
+/// past them finds a recent to stand on.
+#[test]
+fn the_typed_body_without_recents_draws_only_the_completions() {
+    use TypedRow::{Completion as C, Typed as T};
+    assert_eq!(typed_body(2, 0, Some(2), false, 6), vec![T, C(0), C(1)]);
+    assert_eq!(typed_body(5, 0, Some(5), false, 3), vec![T, C(0), C(1)]);
+    assert_eq!(typed_body(5, 0, Some(7), false, 3), vec![T, C(0), C(1)]);
+    assert_eq!(typed_body(0, 0, None, false, 6), vec![TypedRow::Typed]);
+}
+
+/// A focused recent with no completions: the missing row draws beside
+/// it, under the separators.
+#[test]
+fn the_typed_body_draws_the_missing_row_beside_a_focused_recent() {
+    use TypedRow::{Blank, Header, Missing, Recent as R, Typed as T};
+    assert_eq!(
+        typed_body(0, 1, Some(0), true, 6),
+        vec![T, Missing, Blank, Header, R(0)]
+    );
+}
+
+/// A focused recent with completions: the nearest completions draw
+/// above the separators, beside it.
+#[test]
+fn the_typed_body_draws_the_completions_beside_a_focused_recent() {
+    use TypedRow::{Blank, Completion as C, Header, Recent as R, Typed as T};
+    assert_eq!(
+        typed_body(2, 1, Some(2), false, 8),
+        vec![T, C(0), C(1), Blank, Header, R(0)]
+    );
+}
+
+/// A focused recent in the budget-two row with no completions: the
+/// focused recent alone, with no completion row added.
+#[test]
+fn the_typed_body_beside_a_focused_recent_without_completions() {
+    use TypedRow::{Recent as R, Typed as T};
+    assert_eq!(typed_body(0, 2, Some(1), false, 3), vec![T, R(1)]);
+}
+
 /// A short screen keeps the focused completion barred: the last of 30
 /// draws with the typed row, and the first drops out.
 #[test]

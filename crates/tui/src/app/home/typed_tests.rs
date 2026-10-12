@@ -670,3 +670,17 @@ fn missing_clears_on_the_next_keystroke() {
     typed.pop();
     assert!(!typed.missing());
 }
+
+#[test]
+fn the_recent_is_the_focused_recent_index() {
+    let mut typed = Typed::new();
+    let mut ids = mint();
+    type_text(&mut typed, "/a");
+    let sent = ids.run(&mut typed);
+    assert!(answer(&mut typed, &sent[0].0, &[], "/"));
+    assert_eq!(typed.recent(), None);
+    typed.move_focus(true, 2);
+    assert_eq!(typed.recent(), Some(0));
+    typed.move_focus(true, 2);
+    assert_eq!(typed.recent(), Some(1));
+}
