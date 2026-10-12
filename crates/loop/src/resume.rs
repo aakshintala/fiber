@@ -657,6 +657,10 @@ impl Loop {
     }
 
     /// `run_steps`'s tail: the idle check, `disarm_cancel`, `turn_completed`.
+    /// A cancel that landed after a hook's post-hook check but before this
+    /// disarm still wins over that hook's refusal or blocking failure
+    /// (`#553's case`: "Cancellation wins"): a hook outcome never yet
+    /// written as `turn_completed` does not turn into `failed`.
     pub(crate) fn end_turn(
         &mut self,
         turn: &TurnId,
@@ -664,14 +668,43 @@ impl Loop {
     ) -> Result<Option<TurnOutcome>, Error> {
         if self.idle_left {
             self.pending.clear();
-            self.cancel.disarm();
+            // Disarm through the shared helper so it stays the single
+            // place that turns `completed` into `interrupted`.
+            let mut idle = crate::ended(TurnOutcome::Completed, None);
+            self.disarm_cancel(&mut idle);
             return Ok(None);
         }
-        self.disarm_cancel(&mut completed);
+        let cancelled = self.cancel.disarm();
+        if cancelled {
+            crate::cancel::interrupted(&mut completed);
+            if hook_failure(&completed) {
+                completed = crate::ended(TurnOutcome::Interrupted, None);
+            }
+        } else if self.shutting_down() && hook_failure(&completed) {
+            // A shutdown landing between the disarm and the write below
+            // still wins: the disarm already cleared the flag, but the
+            // shutdown code persists.
+            completed = crate::ended(TurnOutcome::Interrupted, None);
+        }
         let outcome = completed.outcome;
         self.append(&Event::TurnCompleted(completed), turn, None)?;
         Ok(Some(outcome))
     }
+}
+
+/// Whether `completed` is a hook refusal or blocking failure not yet
+/// written: `hook_failed` from any of the new hook points, or
+/// `budget_exceeded` from a `before_model_call` refusal (a real budget end
+/// carries the same code and loses to a cancel the same way). Any other
+/// failure, such as a model `tool_error`, stays `failed` under a cancel.
+fn hook_failure(completed: &TurnCompleted) -> bool {
+    if completed.outcome != TurnOutcome::Failed {
+        return false;
+    }
+    matches!(
+        completed.error.as_ref().map(|error| error.code.clone()),
+        Some(contract::ErrorCode::HookFailed) | Some(contract::ErrorCode::BudgetExceeded)
+    )
 }
 
 #[cfg(test)]

@@ -1429,6 +1429,32 @@ fn a_turn_end_hook_continues_the_turn_once() {
     let run = setup.run(&["ask", "hello"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
 
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "step_started",
+            "steering_applied",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let requests = server.requests();
     assert_eq!(requests.len(), 2);
     let second = String::from_utf8_lossy(&requests[1].body);

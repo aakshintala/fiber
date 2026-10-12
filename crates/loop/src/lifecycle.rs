@@ -11,7 +11,9 @@ use contract::hook::{
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{ErrorCode, TurnId};
 
-use crate::{Error, Loop};
+use std::sync::Arc;
+
+use crate::{Error, Loop, cancel};
 
 /// What `turn_end` hooks returned and the next step writes, and what a
 /// resumed turn's `session_start` contexts wait in (Part 3): held across
@@ -62,18 +64,28 @@ impl Loop {
         }
         match outcome {
             ContextOutcome::Added(contexts) => {
-                for added in contexts {
-                    self.append(
-                        &Event::ContextAdded(ContextAdded {
-                            text: added.text,
-                            extension: added.extension,
-                            hook: "turn_start".to_owned(),
-                        }),
-                        turn,
-                        None,
-                    )?;
+                // Guarded with `Commit::Step` so a shutdown lands before
+                // the writes or after them: no context is applied on a
+                // shutdown (`docs/extensions.md`, "Hooks").
+                let cancel = Arc::clone(&self.cancel);
+                let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
+                    for added in &contexts {
+                        self.append(
+                            &Event::ContextAdded(ContextAdded {
+                                text: added.text.clone(),
+                                extension: added.extension.clone(),
+                                hook: "turn_start".to_owned(),
+                            }),
+                            turn,
+                            None,
+                        )?;
+                    }
+                    Ok(())
+                });
+                match written {
+                    None => Ok(Some(crate::ended(TurnOutcome::Interrupted, None))),
+                    Some(result) => result.map(|()| None),
                 }
-                Ok(None)
             }
             ContextOutcome::Failed(failure) => Ok(Some(crate::ended(
                 TurnOutcome::Failed,
@@ -226,24 +238,42 @@ impl Loop {
     /// Writes what the hooks held for the next step: `turn_end` messages as
     /// `steering_applied`, after `step_started` and the jobs notice, before
     /// the drain. Each is the extension's own message, with no command.
+    /// Guarded with `Commit::Step` so a shutdown landing after
+    /// `step_started` applies none of them: a refused commit drops them
+    /// unwritten (`docs/invocation.md`, "What is written").
     pub(crate) fn write_held(&mut self, turn: &TurnId) -> Result<(), Error> {
-        for held in std::mem::take(&mut self.lifecycle.continued) {
-            self.append(
-                &Event::SteeringApplied(SteeringApplied {
-                    content: vec![ContentPart::Text { text: held.text }],
-                    sender: Sender {
-                        origin: Origin::Extension {
-                            extension: held.extension,
-                        },
-                        command_id: None,
-                    },
-                    changed_by: None,
-                }),
-                turn,
-                None,
-            )?;
+        if self.lifecycle.continued.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        let held = std::mem::take(&mut self.lifecycle.continued);
+        let cancel = Arc::clone(&self.cancel);
+        let written = cancel.commit(cancel::Commit::Step, || -> Result<(), Error> {
+            for item in &held {
+                self.append(
+                    &Event::SteeringApplied(SteeringApplied {
+                        content: vec![ContentPart::Text {
+                            text: item.text.clone(),
+                        }],
+                        sender: Sender {
+                            origin: Origin::Extension {
+                                extension: item.extension.clone(),
+                            },
+                            command_id: None,
+                        },
+                        changed_by: None,
+                    }),
+                    turn,
+                    None,
+                )?;
+            }
+            Ok(())
+        });
+        match written {
+            // Refused: `held` was already taken, so the messages are
+            // dropped unwritten and never join a later turn.
+            None => Ok(()),
+            Some(result) => result,
+        }
     }
 }
 

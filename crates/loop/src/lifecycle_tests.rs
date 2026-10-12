@@ -56,6 +56,7 @@ struct FakeHooks {
     steer_in_end: Mutex<Option<mpsc::Sender<Delivery>>>,
     cancel_in_hook: Mutex<Option<Arc<crate::TurnCancel>>>,
     shutdown_in_hook: Mutex<Option<Arc<crate::TurnCancel>>>,
+    pause_in_start: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl FakeHooks {
@@ -76,6 +77,7 @@ impl FakeHooks {
             steer_in_end: Mutex::new(None),
             cancel_in_hook: Mutex::new(None),
             shutdown_in_hook: Mutex::new(None),
+            pause_in_start: Mutex::new(None),
         }
     }
 
@@ -93,6 +95,14 @@ impl FakeHooks {
 
     fn answer_turn_end(&self, answer: ContextAnswer) {
         self.turn_end.lock().unwrap().push_back(answer);
+    }
+
+    /// Pause `turn_start` on a point the test owns: the hook signals
+    /// `started`, waits for `release`, then answers. The test shuts down
+    /// while the hook is parked, forcing the shutdown to land inside the
+    /// hook's call.
+    fn pause_in_start(&self, started: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self.pause_in_start.lock().unwrap() = Some((started, release));
     }
 }
 
@@ -237,6 +247,10 @@ impl Hooks for FakeHooks {
                 })
                 .collect::<Vec<_>>()
         ));
+        if let Some((started, release)) = self.pause_in_start.lock().unwrap().take() {
+            started.send(()).unwrap();
+            release.recv().unwrap();
+        }
         if let Some(cancel) = self.cancel_in_hook.lock().unwrap().clone() {
             cancel.cancel();
         }
@@ -331,8 +345,8 @@ fn started_with_tools(
 }
 
 /// [`started_with_tools`], reaching the scripted provider through `wrap`:
-/// the test reads the scripted provider's requests while the loop runs
-/// through the wrapper.
+/// the test reads the scripted provider's requests on `World.provider`
+/// while the loop runs through the wrapper.
 fn started_wrapped(
     script: Vec<fakes::Scripted>,
     hooks: Option<Arc<FakeHooks>>,
@@ -341,14 +355,11 @@ fn started_wrapped(
         Arc<fakes::ScriptedProvider>,
         mpsc::Sender<Delivery>,
     ) -> Arc<dyn contract::provider::Provider>,
-) -> (World, Arc<fakes::ScriptedProvider>) {
+) -> World {
     let scripted = Arc::new(fakes::ScriptedProvider::new(script));
     let (inbox, rx) = mpsc::channel();
     let provider = wrap(Arc::clone(&scripted), inbox.clone());
-    (
-        assemble_with(scripted.clone(), provider, inbox, rx, hooks, tools),
-        scripted,
-    )
+    assemble_with(scripted, provider, inbox, rx, hooks, tools)
 }
 
 /// A `Loop` on `provider` with its inbox still held by the test.
@@ -809,6 +820,17 @@ fn a_cancel_or_shutdown_inside_turn_start_ends_the_turn_interrupted_with_no_cont
         drop(world.looped.take());
 
         let all = lines(&world);
+        assert_eq!(
+            kinds(&all),
+            [
+                "session_started",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+                "turn_completed",
+            ],
+            "complete ordered kinds"
+        );
         assert!(
             !all.iter().any(|line| line.kind == "context_added"),
             "no context is written: {all:?}"
@@ -841,6 +863,24 @@ fn two_turn_start_contexts_are_written_in_run_order() {
     drop(world.looped.take());
 
     let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "context_added",
+            "context_added",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
     let texts: Vec<&str> = all
         .iter()
         .filter(|line| line.kind == "context_added")
@@ -969,6 +1009,18 @@ fn a_refusal_fails_the_turn_budget_exceeded_and_stops_the_delegates() {
     drop(world.looped.take());
 
     let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
     let end = line(&all, "turn_completed");
     assert_eq!(end.payload["outcome"], "failed");
     assert_eq!(end.payload["error"]["code"], "budget_exceeded");
@@ -1008,6 +1060,18 @@ fn a_blocking_before_model_call_failure_fails_the_turn_without_stopping_delegate
     drop(world.looped.take());
 
     let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
     let end = line(&all, "turn_completed");
     assert_eq!(end.payload["outcome"], "failed");
     assert_eq!(end.payload["error"]["code"], "hook_failed");
@@ -1129,6 +1193,18 @@ fn an_over_budget_session_never_calls_the_hook() {
     assert_eq!(hooks.before_model_call_calls.load(Ordering::SeqCst), 0);
     let all = lines(&world);
     assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
+    assert_eq!(
         line(&all, "turn_completed").payload["error"]["code"],
         "budget_exceeded"
     );
@@ -1214,6 +1290,18 @@ fn a_cancel_inside_the_hook_ends_the_turn_interrupted_even_on_a_refusal() {
     // fail.
     assert!(world.provider.requests().is_empty());
     let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
     assert_eq!(
         line(&all, "turn_completed").payload["outcome"],
         "interrupted"
@@ -1429,7 +1517,7 @@ fn a_turn_end_message_continues_the_turn_and_the_hook_runs_again() {
 #[test]
 fn a_steer_waiting_at_the_end_of_turn_drain_skips_turn_end_that_time() {
     let hooks = Arc::new(FakeHooks::new());
-    let (mut world, scripted) = started_wrapped(
+    let mut world = started_wrapped(
         vec![fakes::Scripted::text("one"), fakes::Scripted::text("two")],
         Some(hooks.clone()),
         Vec::new(),
@@ -1440,7 +1528,6 @@ fn a_steer_waiting_at_the_end_of_turn_drain_skips_turn_end_that_time() {
             }) as Arc<dyn contract::provider::Provider>
         },
     );
-    let _ = scripted;
     let (ack, _) = capture();
     world
         .inbox
@@ -1457,6 +1544,28 @@ fn a_steer_waiting_at_the_end_of_turn_drain_skips_turn_end_that_time() {
     // the second step's end did, and ended the turn.
     assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 1);
     let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "step_started",
+            "steering_applied",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
     let steering: Vec<&Envelope> = all
         .iter()
         .filter(|line| line.kind == "steering_applied")
@@ -1636,6 +1745,22 @@ fn a_blocking_turn_end_failure_writes_nothing_and_fails_the_turn() {
     drop(world.looped.take());
 
     let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
     assert!(
         !all.iter().any(|line| line.kind == "steering_applied"),
         "the failure wrote no message"
@@ -1682,6 +1807,30 @@ fn two_turn_end_messages_are_written_in_run_order_after_a_late_steer() {
     drop(world.looped.take());
 
     let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "step_started",
+            "steering_applied",
+            "steering_applied",
+            "steering_applied",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
     let texts: Vec<&str> = all
         .iter()
         .filter(|line| line.kind == "steering_applied")
@@ -1764,5 +1913,175 @@ fn a_cancel_before_the_next_steps_commit_drops_held_messages() {
         !all.iter().any(|line| line.kind == "steering_applied"),
         "no held message was written: {:?}",
         kinds(&all)
+    );
+}
+
+#[test]
+fn a_shutdown_before_the_held_write_applies_no_held_message() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_end(added(vec![("fiber.test/goal", "keep going")]));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let mut looped = world.looped.take().unwrap();
+    let turn = TurnId("t_test".into());
+    // The reply holds one message for the next step, written by
+    // `write_held`, not yet.
+    assert_eq!(looped.replied(&turn, "Done.").unwrap(), None);
+    assert_eq!(looped.lifecycle.continued.len(), 1);
+    // A shutdown lands after the hold but before the guarded write: the
+    // write is refused and the message is dropped unwritten.
+    assert!(looped.cancel.arm());
+    looped.cancel.shutdown(143);
+    looped.write_held(&turn).unwrap();
+    assert!(looped.lifecycle.continued.is_empty());
+    world.looped = Some(looped);
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert_eq!(kinds(&all), ["session_started"], "complete ordered kinds");
+    assert!(
+        !all.iter().any(|line| line.kind == "steering_applied"),
+        "no held message was written after shutdown: {all:?}"
+    );
+}
+
+#[test]
+fn a_shutdown_during_turn_start_from_another_thread_writes_no_context() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_start(added(vec![("fiber.test/inbox", "late")]));
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    hooks.pause_in_start(started_tx, release_rx);
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks.clone()));
+    let signal = Arc::clone(&world.looped.as_ref().unwrap().cancel);
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    // The hook is parked inside its call: force the shutdown to land
+    // there, then release it.
+    Deadline::after(TURN_DEADLINE)
+        .recv(&started_rx)
+        .expect("the hook parked");
+    signal.shutdown(143);
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Interrupted)
+    );
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "turn_completed",
+        ],
+        "complete ordered kinds"
+    );
+    assert!(
+        !all.iter().any(|line| line.kind == "context_added"),
+        "no context is written: {all:?}"
+    );
+}
+
+#[test]
+fn a_cancel_between_a_turn_start_failure_and_end_turn_ends_interrupted() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_start(failed("fiber.test/guard", "boom"));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let mut looped = world.looped.take().unwrap();
+    let turn = TurnId("t_test".into());
+    assert!(looped.cancel.arm());
+    // The hook fails while the turn is live: its outcome is `failed`.
+    let completed = looped
+        .turn_start(&turn, &[])
+        .unwrap()
+        .expect("the hook failed the turn");
+    assert_eq!(completed.outcome, TurnOutcome::Failed);
+    // A cancel lands after the post-hook check but before finalisation:
+    // cancellation wins.
+    assert!(looped.cancel.cancel());
+    let outcome = looped.end_turn(&turn, completed).unwrap();
+    assert_eq!(outcome, Some(TurnOutcome::Interrupted));
+    world.looped = Some(looped);
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        ["session_started", "turn_completed"],
+        "complete ordered kinds"
+    );
+    assert_eq!(
+        line(&all, "turn_completed").payload["outcome"],
+        "interrupted"
+    );
+}
+
+#[test]
+fn a_cancel_between_a_refusal_and_end_turn_ends_interrupted() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_before_model_call(refused_call("fiber.test/guard", "team budget spent"));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let mut looped = world.looped.take().unwrap();
+    let turn = TurnId("t_test".into());
+    assert!(looped.cancel.arm());
+    let completed = looped
+        .model_call_allowed(&turn)
+        .unwrap()
+        .expect("the hook refused the request");
+    assert_eq!(completed.outcome, TurnOutcome::Failed);
+    assert!(looped.cancel.cancel());
+    let outcome = looped.end_turn(&turn, completed).unwrap();
+    assert_eq!(outcome, Some(TurnOutcome::Interrupted));
+    world.looped = Some(looped);
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        ["session_started", "turn_completed"],
+        "complete ordered kinds"
+    );
+    assert_eq!(
+        line(&all, "turn_completed").payload["outcome"],
+        "interrupted"
+    );
+}
+
+#[test]
+fn a_cancel_between_a_turn_end_failure_and_end_turn_ends_interrupted() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_end(failed("fiber.test/goal", "boom"));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let mut looped = world.looped.take().unwrap();
+    let turn = TurnId("t_test".into());
+    assert!(looped.cancel.arm());
+    let completed = looped
+        .replied(&turn, "Done.")
+        .unwrap()
+        .expect("the hook failed the turn");
+    assert_eq!(completed.outcome, TurnOutcome::Failed);
+    assert!(looped.cancel.cancel());
+    let outcome = looped.end_turn(&turn, completed).unwrap();
+    assert_eq!(outcome, Some(TurnOutcome::Interrupted));
+    world.looped = Some(looped);
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        ["session_started", "turn_completed"],
+        "complete ordered kinds"
+    );
+    assert_eq!(
+        line(&all, "turn_completed").payload["outcome"],
+        "interrupted"
     );
 }
