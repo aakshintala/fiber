@@ -1306,12 +1306,17 @@ fn journey_quit_just_resumed_session_prints_its_resume_line() {
     });
     let output = run.wait();
     assert_eq!(output.status.code(), Some(0));
-    // Resume lists the exited session; Enter opens it, and the quit keys
-    // go out in the same write, before the feed's live update can land:
-    // the hub cannot answer the open's subscribe before it reads it,
-    // while the quit keys are already queued in the terminal. The
-    // attached session's row still reads exited, so only the attached
-    // session itself proves it is live (#2129).
+    // Resume lists the exited session; Enter opens it, with the quit keys
+    // in the same write so they are already queued while the hub has yet
+    // to answer the open's subscribe. One write is best-effort, not a
+    // forced order: the tty reader's single read can split it, and the
+    // loop never blocks for the rest, so the feed's live update may still
+    // land between Enter and the quit keys. Either way the line follows:
+    // from the attached session while its row still reads exited, or from
+    // the live row once the update lands. This journey is wiring coverage;
+    // the stale exited row itself is pinned at crate level, where the
+    // order is forced by construction
+    // (`the_attached_session_with_an_exited_row_gets_its_line`, #2129).
     let mut run = terminal(&setup, 120, 32, &["resume"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
