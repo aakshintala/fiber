@@ -1509,6 +1509,50 @@ fn a_switch_to_an_unloaded_lua_provider_sends_its_token() {
 }
 
 #[test]
+fn a_provider_only_package_waits_until_its_model_is_used() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    install_switch_provider(&setup, &server);
+    let marker = setup.root.path().join("lp-loaded");
+    let data = json!({"name":"lp", "models":[{"id":"lm", "protocol":"openai-responses",
+        "base_url":format!("{}/v1", server.url()), "context_window":100000}]});
+    install_extension(
+        &setup,
+        "lazy",
+        &data,
+        Some(&format!(
+            "local ok, old = pcall(host.fs.read, {marker:?})\n host.fs.write({marker:?}, (ok and old or '') .. 'x\\n')\n fiber.provider('lp', {{credential={{timeout=5000, run=function() return {{token='tok-lp', expires_at=4102444800}} end}}}})",
+            marker = marker.display().to_string()
+        )),
+    );
+    config::write_model_cache(&setup.home(), "lp", &data["models"]).unwrap();
+    let id = doors::mint("s_");
+    let running = start_session(&setup, &id, &[]);
+    let client = running.connect(&setup.session_socket(&id));
+    running.wait_for("extensions_loaded");
+    assert!(!marker.exists(), "session start loaded the unused provider");
+    let _ = subscribe(&client);
+    model(&client, "c_model", "lp/lm", None);
+    until(&client, "model_changed", |line| {
+        line["kind"] == "model_changed"
+    });
+    prompt(&client, "c_prompt", "hi");
+    until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "x\n");
+    assert_eq!(
+        authorized(&server),
+        vec![Some(fakes::fingerprint("Bearer tok-lp"))]
+    );
+    close(&client);
+    until_close(&client);
+    drop(client);
+    let (status, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
 fn a_command_source_runs_once_across_switches() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();

@@ -3737,6 +3737,34 @@ fn inline_extension(setup: &Setup, name: &str, init_lua: &str, base_url: &str) {
 }
 
 #[test]
+fn the_initial_model_loads_only_its_own_provider_file() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    let base_url = format!("{}/v1", server.url());
+    let mut markers = Vec::new();
+    for name in ["lp", "uq"] {
+        let marker = setup.root.path().join(format!("{name}-loaded"));
+        inline_extension(
+            &setup,
+            name,
+            &format!(
+                "local ok, old = pcall(host.fs.read, {marker:?})\n host.fs.write({marker:?}, (ok and old or '') .. 'x\\n')\n fiber.provider('{name}', {{credential={{timeout=5000, run=function() return {{token='tok-{name}', expires_at=4102444800}} end}}}})",
+                marker = marker.display().to_string()
+            ),
+            &base_url,
+        );
+        config::write_model_cache(&setup.home(), name, &json!([{
+            "id":"lm", "protocol":"openai-responses", "base_url":base_url, "context_window":100000
+        }])).unwrap();
+        markers.push(marker);
+    }
+    let run = setup.run_with_stdin(&["ask", "--model", "lp/lm", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(fs::read_to_string(&markers[0]).unwrap(), "x\n");
+    assert!(!markers[1].exists(), "the unused provider file ran");
+}
+
+#[test]
 fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provider() {
     let setup = Setup::new_with_started_deadline();
     let server = ProviderServer::start([]).unwrap();
