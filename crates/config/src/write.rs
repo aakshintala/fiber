@@ -395,6 +395,84 @@ pub fn replace_global(
     Ok(previous)
 }
 
+/// Inserts one named entry under `key` in a layer's file (`fiber mcp add`
+/// writing `mcp.servers`). The value is type-checked as [`set`] checks it,
+/// so on any `Err` the file is unchanged. `true` when it wrote; `false`
+/// when `name` was already there, the file untouched. The presence check
+/// runs under the file's lock, so a lost race is the same refusal.
+pub fn insert_entry(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    layer: Layer,
+    key: &str,
+    name: &str,
+    value: Value,
+) -> Result<bool, ConfigError> {
+    let (file, source) = layer_file(home, workspace, project, layer)?;
+    let mut segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+    segments.push(name.to_owned());
+    // Checked from the segments, never through a displayed key: a name
+    // holding a dot is one segment, not two.
+    let mut candidate = Value::Object(Map::new());
+    path::set(&mut candidate, &segments, value.clone());
+    let mut notices = Vec::new();
+    if let Value::Object(map) = candidate {
+        keys::check(map, &source, &mut notices)?;
+    }
+    if !notices.is_empty() {
+        return Err(ConfigError::Refused {
+            key: path::display(&segments),
+            file,
+            why: refused_why(&segments, &source),
+        });
+    }
+    let _lock = locked(&file)?;
+    let mut root = read(&file)?.unwrap_or_else(|| Value::Object(Map::new()));
+    if path::get(&root, &segments).is_some() {
+        return Ok(false);
+    }
+    path::set(&mut root, &segments, value);
+    write_root(&file, &root)?;
+    Ok(true)
+}
+
+/// Removes one named entry from under `key` in a layer's file (`fiber mcp
+/// remove`). `true` when it removed one. `false` when the name or the file
+/// is absent, creating and changing no file. Removing the last entry
+/// removes each object on the way that it empties.
+pub fn remove_entry(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    layer: Layer,
+    key: &str,
+    name: &str,
+) -> Result<bool, ConfigError> {
+    let (file, _) = layer_file(home, workspace, project, layer)?;
+    let mut segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+    let parents = segments.len();
+    segments.push(name.to_owned());
+    let _lock = locked(&file)?;
+    let Some(mut root) = read(&file)? else {
+        return Ok(false);
+    };
+    if path::remove(&mut root, &segments).is_none() {
+        return Ok(false);
+    }
+    // Each emptied object on the key's way goes with its last entry.
+    for len in (1..=parents).rev() {
+        match path::get(&root, &segments[..len]) {
+            Some(Value::Object(map)) if map.is_empty() => {
+                path::remove(&mut root, &segments[..len]);
+            }
+            _ => {}
+        }
+    }
+    write_root(&file, &root)?;
+    Ok(true)
+}
+
 /// The value at `key` in Fiber home's `config.json` alone: no other layer
 /// and no default is consulted. `None` when the file or the key is absent.
 pub fn get_global(home: &Path, key: &str) -> Result<Option<Value>, ConfigError> {

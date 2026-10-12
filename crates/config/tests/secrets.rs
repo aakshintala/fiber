@@ -10,8 +10,8 @@ use std::time::Duration;
 use common::{Setup, mode};
 use config::{
     CredentialFile, CredentialSource, Secret, credential_labels, delete_credential,
-    delete_credential_held, mcp_secret_name_ok, read_credential, read_secret, store_credential,
-    store_secret, valid_env_key,
+    delete_credential_held, delete_secret, mcp_secret_name_ok, read_credential, read_secret,
+    store_credential, store_secret, valid_env_key,
 };
 use contract::ErrorCode;
 
@@ -419,4 +419,20 @@ fn an_mcp_secret_name_needs_both_the_server_and_the_key() {
     assert!(!mcp_secret_name_ok("a", "mcp.b.K"));
     // Server and prefix match; only the key is bad.
     assert!(!mcp_secret_name_ok("a", "mcp.a.K-1"));
+}
+
+#[test]
+fn a_stored_secret_is_deleted_and_a_missing_one_is_false() {
+    let setup = Setup::new();
+    assert!(!delete_secret(&setup.home(), "mcp.docs.TOKEN").unwrap());
+    assert!(!setup.home().join("credentials").exists());
+    store_secret(
+        &setup.home(),
+        "mcp.docs.TOKEN",
+        &Secret::new(VALUE.into()),
+    )
+    .unwrap();
+    assert!(delete_secret(&setup.home(), "mcp.docs.TOKEN").unwrap());
+    assert!(!setup.home().join("credentials/mcp.docs.TOKEN").exists());
+    assert!(!delete_secret(&setup.home(), "mcp.docs.TOKEN").unwrap());
 }
