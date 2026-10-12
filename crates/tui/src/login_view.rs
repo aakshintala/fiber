@@ -21,6 +21,7 @@ use crate::login_worker::{LoginStep, LoginTicket, LoginWorker};
 use crate::mouse::{Target, TargetId};
 use crate::settings_view::{Act, Ctx};
 use crate::swapped::{Frame, Ink, List, Spot, rows_height};
+use crate::theme::Role;
 use crate::view::overlay;
 
 /// The key or value being typed. It never prints: `Debug` shows only its
@@ -163,6 +164,26 @@ enum Mode {
     /// A browser login running: its ticket, the provider, what it showed
     /// and the worker, owned here so every way out cancels it.
     Waiting(Waiting),
+    /// A login's end, kept until Esc or the ✕.
+    Ended(Ended),
+}
+
+/// How a login ended (`docs/code-quality.md`, "Types").
+#[derive(Debug)]
+enum Outcome {
+    /// The login stored its credentials.
+    Done,
+    /// The login failed with the seam's message.
+    Failed(String),
+}
+
+/// A login's end: the provider and how it ended.
+#[derive(Debug)]
+struct Ended {
+    /// The provider that was logging in.
+    name: String,
+    /// How it ended.
+    outcome: Outcome,
 }
 
 /// What a waiting browser login shows below the rows: starting, the
@@ -557,7 +578,7 @@ impl Login {
             Mode::Waiting(waiting) if waiting.ticket == worker.ticket() => {
                 waiting.worker = Some(worker);
             }
-            Mode::Rows | Mode::Panel(_) | Mode::Waiting(_) => drop(worker),
+            Mode::Rows | Mode::Panel(_) | Mode::Waiting(_) | Mode::Ended(_) => drop(worker),
         }
     }
 
@@ -648,7 +669,7 @@ impl Login {
     fn submit(&mut self, ctx: &Ctx<'_>) {
         let (index, label, secret) = match &mut self.mode {
             Mode::Panel(panel) => (panel.target, panel.label.expand(), panel.key.take()),
-            Mode::Rows | Mode::Waiting(_) => return,
+            Mode::Rows | Mode::Waiting(_) | Mode::Ended(_) => return,
         };
         let Some(target) = self.targets.get(index) else {
             return;
@@ -879,6 +900,165 @@ impl Login {
     }
 }
 
+impl Login {
+    /// The step's provider name, if any mode but the rows is open.
+    fn step_name(&self) -> Option<String> {
+        match &self.mode {
+            Mode::Rows => None,
+            Mode::Waiting(waiting) => Some(waiting.name.clone()),
+            Mode::Panel(panel) => self
+                .targets
+                .get(panel.target)
+                .map(|target| target.name.clone()),
+            Mode::Ended(ended) => Some(ended.name.clone()),
+        }
+    }
+
+    /// The step body's row count: the list's body rows when no read
+    /// error exists, at least three. A step is reachable only with a
+    /// target, so the list's `said` is empty and the items are the body.
+    fn body_count(&self) -> usize {
+        self.items.len().max(3)
+    }
+
+    /// Draws the open step over `area`: one overlay titled with the
+    /// provider's name, the body exactly the list's row count and the
+    /// footer padded to the shared width, so the overlay never jumps
+    /// between steps. The body is built top to bottom and cut at the
+    /// row count in order; over a short area it is clipped to the body
+    /// budget the list shows there.
+    fn draw_step(&self, area: Rect, buf: &mut Buffer, targets_out: &mut Vec<Target>) {
+        let Some(name) = self.step_name() else {
+            return;
+        };
+        let content = step_content_width(&name, &self.targets);
+        let content_u16 = u16::try_from(content).unwrap_or(u16::MAX);
+        let slab_w = overlay::width(content_u16, 96, area.width);
+        let inner = usize::from(overlay::inner(slab_w));
+        let dim = Style::new().add_modifier(Modifier::DIM);
+        let (content_rows, legend): (Vec<overlay::Row>, overlay::Row) = match &self.mode {
+            Mode::Rows => return,
+            Mode::Waiting(waiting) => match &waiting.progress {
+                Progress::Starting => (
+                    wrapped_rows(&format!("Starting the login to {}…", name), inner, Style::new()),
+                    overlay::legend(&[("Esc", "back")]),
+                ),
+                Progress::Url(url) => {
+                    let mut rows = wrapped_rows(
+                        &format!("Open this URL to log in to {name}:"),
+                        inner,
+                        Style::new(),
+                    );
+                    rows.push(text_row(
+                        tail(url, inner),
+                        Style::new().fg(Role::Accent.color()),
+                    ));
+                    rows.extend(wrapped_rows("Waiting for the browser…", inner, dim));
+                    (
+                        rows,
+                        overlay::legend(&[("y", "copy URL"), ("Esc", "back")]),
+                    )
+                }
+                Progress::DeviceCode { url, code } => {
+                    let mut rows = wrapped_rows(
+                        &format!("Enter the code {code} at this URL to log in to {name}:"),
+                        inner,
+                        Style::new(),
+                    );
+                    rows.push(text_row(
+                        tail(url, inner),
+                        Style::new().fg(Role::Accent.color()),
+                    ));
+                    rows.extend(wrapped_rows("Waiting for the browser…", inner, dim));
+                    (
+                        rows,
+                        overlay::legend(&[("y", "copy code"), ("Esc", "back")]),
+                    )
+                }
+            },
+            Mode::Panel(panel) => {
+                let Some(target) = self.targets.get(panel.target) else {
+                    return;
+                };
+                if target.kind == LoginKind::Secret {
+                    let mut rows = wrapped_rows(&format!("Value for {}:", name), inner, Style::new());
+                    rows.push(dots_row(&panel.key.dots(), inner, true));
+                    (rows, overlay::legend(&[("Enter", "submit"), ("Esc", "back")]))
+                } else if panel.focus == Focus::Label {
+                    let mut rows = vec![label_edit_row(&panel.label, inner)];
+                    rows.extend(wrapped_rows(&format!("Key for {name}:"), inner, Style::new()));
+                    rows.push(dots_row(&panel.key.dots(), inner, false));
+                    (
+                        rows,
+                        overlay::legend(&[
+                            ("Tab", "key or label"),
+                            ("Enter", "submit"),
+                            ("Esc", "back"),
+                        ]),
+                    )
+                } else {
+                    let expanded = panel.label.expand();
+                    let shown = if expanded.trim().is_empty() {
+                        "default".to_owned()
+                    } else {
+                        expanded
+                    };
+                    let mut rows = wrapped_rows(&format!("Label (--as): {shown}."), inner, dim);
+                    rows.extend(wrapped_rows(&format!("Key for {name}:"), inner, Style::new()));
+                    rows.push(dots_row(&panel.key.dots(), inner, true));
+                    (
+                        rows,
+                        overlay::legend(&[
+                            ("Tab", "key or label"),
+                            ("Enter", "submit"),
+                            ("Esc", "back"),
+                        ]),
+                    )
+                }
+            }
+            Mode::Ended(ended) => match &ended.outcome {
+                Outcome::Done => (
+                    wrapped_rows(
+                        &format!("✓ Logged in to {name}."),
+                        inner,
+                        Style::new().fg(Role::Success.color()),
+                    ),
+                    overlay::legend(&[("Esc", "back")]),
+                ),
+                Outcome::Failed(reason) => {
+                    let head = format!("Login to {name} failed: ");
+                    let dot = if reason.ends_with('.') { "" } else { "." };
+                    (failed_rows(&head, reason, dot, inner), overlay::legend(&[("Esc", "back")]))
+                }
+            },
+        };
+        let kept = self.body_count();
+        let mut body = content_rows;
+        body.truncate(kept);
+        while body.len() < kept {
+            body.push(blank_row());
+        }
+        body.truncate(shown_body_rows(usize::from(area.height)));
+        let mut footer = legend;
+        let have: usize = footer
+            .spans
+            .iter()
+            .map(|span| format::width(&span.content))
+            .sum();
+        footer
+            .spans
+            .push(Span::raw(" ".repeat(content.saturating_sub(have))));
+        let framed = overlay::Overlay {
+            title: Some((name, Some(Span::raw("✕")))),
+            close: Some(TargetId::View(Spot::Close)),
+            body,
+            footer: Some(footer),
+            prefer: 96,
+        };
+        overlay::draw(buf, area, &framed, overlay::Place::Centre, targets_out);
+    }
+}
+
 /// One overlay body row holding `text` in `style`.
 fn text_row(text: impl Into<String>, style: Style) -> overlay::Row {
     overlay::Row {
@@ -897,6 +1077,261 @@ fn blank_row() -> overlay::Row {
         targets: Vec::new(),
         barred: false,
     }
+}
+
+/// `text` cut from the left to at most `max` columns, keeping its tail:
+/// whole when it fits, else "…" plus the longest tail that fits.
+/// `max` 0 gives "".
+fn tail(text: &str, max: usize) -> String {
+    if max == 0 {
+        return String::new();
+    }
+    if format::width(text) <= max {
+        return text.to_owned();
+    }
+    let budget = max.saturating_sub(1);
+    let mut width = 0;
+    let mut kept: Vec<char> = Vec::new();
+    for ch in text.chars().rev() {
+        let cell = format::width(&ch.to_string());
+        if width + cell > budget {
+            break;
+        }
+        width += cell;
+        kept.push(ch);
+    }
+    kept.reverse();
+    let mut out = String::from("…");
+    for ch in kept {
+        out.push(ch);
+    }
+    out
+}
+
+/// The widest row the provider list shows, measured as drawn: the
+/// headings and the choice rows with uncut names, so the step width
+/// never depends on what the list clips away.
+fn list_widest(targets: &[LoginTarget]) -> usize {
+    let mut wide = 0;
+    if targets.iter().any(|target| target.kind != LoginKind::Secret) {
+        wide = wide.max(format::width("Providers"));
+    }
+    if targets.iter().any(|target| target.kind == LoginKind::Secret) {
+        wide = wide.max(format::width("Secrets"));
+    }
+    let listed: Vec<(&str, &str)> = targets
+        .iter()
+        .map(|target| {
+            (
+                target.name.as_str(),
+                match target.kind {
+                    LoginKind::Browser => "browser",
+                    LoginKind::Key => "key",
+                    LoginKind::Secret => "",
+                },
+            )
+        })
+        .collect();
+    if !listed.is_empty() {
+        for row in overlay::choices(&listed, 0, u16::MAX) {
+            let width: usize = row
+                .spans
+                .iter()
+                .map(|span| format::width(&span.content))
+                .sum();
+            wide = wide.max(width);
+        }
+    }
+    wide
+}
+
+/// The step slab's content width for `name`: the title, the widest list
+/// row, every fixed line and every footer. Lines with a variable part
+/// (the device-code prompt, the failed line, the URL, the dots, the
+/// typed label) never count, so nothing typed or received moves the
+/// overlay.
+fn step_content_width(name: &str, targets: &[LoginTarget]) -> usize {
+    let mut wide = 0;
+    wide = wide.max(format::width(name).saturating_add(2));
+    wide = wide.max(list_widest(targets));
+    for line in [
+        format!("Starting the login to {name}…"),
+        format!("Open this URL to log in to {name}:"),
+        "Waiting for the browser…".to_owned(),
+        "Label (--as): default.".to_owned(),
+        format!("Key for {name}:"),
+        format!("Value for {name}:"),
+        format!("✓ Logged in to {name}."),
+    ] {
+        wide = wide.max(format::width(&line));
+    }
+    for footer in [
+        "Esc back",
+        "y copy URL · Esc back",
+        "y copy code · Esc back",
+        "Tab key or label · Enter submit · Esc back",
+        "Enter submit · Esc back",
+    ] {
+        wide = wide.max(format::width(footer));
+    }
+    wide
+}
+
+/// One plain row per wrapped line of `text`.
+fn wrapped_rows(text: &str, inner: usize, style: Style) -> Vec<overlay::Row> {
+    format::wrap(text, inner.max(1))
+        .into_iter()
+        .map(|row| text_row(row, style))
+        .collect()
+}
+
+/// The dots row: the tail of `dots` that fits, with the block cursor
+/// after it when `cursor` is set.
+fn dots_row(dots: &str, inner: usize, cursor: bool) -> overlay::Row {
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    if cursor {
+        let shown = tail(dots, inner.saturating_sub(1));
+        overlay::Row {
+            spans: vec![
+                Span::styled(shown, Style::new()),
+                Span::styled("█".to_owned(), dim),
+            ],
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        }
+    } else {
+        overlay::Row {
+            spans: vec![Span::styled(tail(dots, inner), Style::new())],
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        }
+    }
+}
+
+/// The label row while the label takes typing: the caret's cell reversed,
+/// or "█" after the text when the caret is at the end. A label longer
+/// than the room is cut so the caret's cell stays in the shown row.
+fn label_edit_row(label: &Draft, inner: usize) -> overlay::Row {
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let prefix = "Label (--as): ";
+    if inner <= format::width(prefix) {
+        return text_row(format::cut(prefix, inner), dim);
+    }
+    let room = inner.saturating_sub(format::width(prefix));
+    let text = label.expand();
+    let chars: Vec<char> = text.chars().collect();
+    let caret = label.position().min(chars.len());
+    if caret >= chars.len() {
+        let shown = tail(&text, room.saturating_sub(1));
+        return overlay::Row {
+            spans: vec![
+                Span::styled(prefix.to_owned(), dim),
+                Span::styled(shown, dim),
+                Span::styled("█".to_owned(), dim),
+            ],
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        };
+    }
+    let cell = |ch: char| format::width(&ch.to_string());
+    let mut start = caret;
+    let mut end = caret.saturating_add(1);
+    while end < chars.len() {
+        let width: usize = chars[start..end.saturating_add(1)]
+            .iter()
+            .map(|ch| cell(*ch))
+            .sum();
+        if width > room {
+            break;
+        }
+        end = end.saturating_add(1);
+    }
+    while start > 0 {
+        let width: usize = chars[start.saturating_sub(1)..end]
+            .iter()
+            .map(|ch| cell(*ch))
+            .sum();
+        if width > room {
+            break;
+        }
+        start = start.saturating_sub(1);
+    }
+    let before: String = chars[start..caret].iter().collect();
+    let at = chars[caret].to_string();
+    let after: String = chars[caret.saturating_add(1)..end].iter().collect();
+    overlay::Row {
+        spans: vec![
+            Span::styled(prefix.to_owned(), dim),
+            Span::styled(before, dim),
+            Span::styled(
+                at,
+                Style::new().add_modifier(Modifier::DIM | Modifier::REVERSED),
+            ),
+            Span::styled(after, dim),
+        ],
+        right: Vec::new(),
+        targets: Vec::new(),
+        barred: false,
+    }
+}
+
+/// The failed line wrapped at `inner` as one line: the head and the
+/// closing dot plain, the reason in `error`. Rows past the wrap are the
+/// caller’s to drop in order.
+fn failed_rows(head: &str, reason: &str, dot: &str, inner: usize) -> Vec<overlay::Row> {
+    let combined = format!("{head}{reason}{dot}");
+    let rows = format::wrap(&combined, inner.max(1));
+    let combined_chars: Vec<char> = combined.chars().collect();
+    let head_len = head.chars().count();
+    let reason_len = reason.chars().count();
+    let error = Style::new().fg(Role::Error.color());
+    let mut pos = 0;
+    let mut out = Vec::new();
+    for row in rows {
+        let row_chars: Vec<char> = row.chars().collect();
+        let mut start = pos;
+        if combined_chars[start..]
+            .iter()
+            .take(row_chars.len())
+            .collect::<String>()
+            != row
+        {
+            // The wrap dropped the single space or line break the row
+            // broke at; skip it so the kept rows stay a prefix.
+            if matches!(combined_chars.get(start), Some(' ' | '\n')) {
+                start = start.saturating_add(1);
+            }
+        }
+        let end = start.saturating_add(row_chars.len()).min(combined_chars.len());
+        let mut spans = Vec::new();
+        let mut at = start;
+        while at < end {
+            let styled_error = at >= head_len && at < head_len.saturating_add(reason_len);
+            let mut run = String::new();
+            while at < end
+                && (at >= head_len && at < head_len.saturating_add(reason_len))
+                    == styled_error
+            {
+                run.push(combined_chars[at]);
+                at = at.saturating_add(1);
+            }
+            spans.push(Span::styled(
+                run,
+                if styled_error { error } else { Style::new() },
+            ));
+        }
+        pos = end;
+        out.push(overlay::Row {
+            spans,
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        });
+    }
+    out
 }
 
 /// The view's rows for `targets`: a heading over each group that has rows.

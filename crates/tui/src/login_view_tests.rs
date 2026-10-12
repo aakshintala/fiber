@@ -1592,3 +1592,200 @@ fn a_blank_row_separates_the_rows_from_what_the_last_action_said() {
         "{rows:?}"
     );
 }
+
+/// `login`'s step overlay at `width` x `height`: the buffer and the
+/// click targets its step pushed.
+fn stepped(login: &Login, width: u16, height: u16) -> (Buffer, Vec<Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    login.draw_step(area, &mut buf, &mut targets);
+    (buf, targets)
+}
+
+/// The step's title row holds `name`.
+fn step_title(buf: &Buffer, width: u16, height: u16, name: &str) -> bool {
+    text_of(buf, width, height)
+        .iter()
+        .any(|row| row.contains(name))
+}
+
+#[test]
+fn tail_keeps_a_fitting_text_whole() {
+    assert_eq!(super::tail("abc", 3), "abc");
+    assert_eq!(super::tail("abc", 4), "abc");
+    assert_eq!(super::tail("", 0), "");
+}
+
+#[test]
+fn tail_cuts_from_the_left_keeping_the_tail() {
+    let cut = super::tail("abcdef", 4);
+    assert!(cut.starts_with('…'), "{cut:?}");
+    assert!(cut.ends_with('f'), "{cut:?}");
+    assert_eq!(crate::format::width(&cut), 4, "{cut:?}");
+    let cut = super::tail("abcdef", 5);
+    assert_eq!(cut, "…cdef", "{cut:?}");
+}
+
+#[test]
+fn tail_never_exceeds_its_max_at_a_wide_edge() {
+    // The two-column character straddles the cut edge: the kept tail
+    // stays within the budget.
+    let cut = super::tail("ab漢cd", 4);
+    assert!(cut.starts_with('…'), "{cut:?}");
+    assert!(crate::format::width(&cut) <= 4, "{cut:?}");
+    assert_eq!(super::tail("abcdef", 0), "");
+    assert_eq!(super::tail("abcdef", 1), "…");
+    assert_eq!(super::tail("a", 1), "a");
+}
+
+#[test]
+fn the_starting_step_keeps_its_width_without_a_url() {
+    let fake = fake_with(targets());
+    for width in [48, 80, 200] {
+        let login = waiting(&fake, LoginTicket(1));
+        let (buf, _) = stepped(&login, width, 24);
+        let run = edge_run(&buf, width, 24);
+        // A short and a long URL step draw at the same width: the
+        // variable text never counts toward it.
+        for url in [
+            "https://x.co/a".to_owned(),
+            format!("https://auth.example/{}", "u".repeat(90)),
+        ] {
+            let mut url_login = waiting(&fake, LoginTicket(1));
+            url_login.step(
+                LoginTicket(1),
+                crate::login_worker::LoginStep::Open(url),
+            );
+            let (url_buf, _) = stepped(&url_login, width, 24);
+            assert_eq!(edge_run(&url_buf, width, 24), run, "at {width}");
+        }
+    }
+}
+
+#[test]
+fn the_starting_step_keeps_the_lists_height() {
+    // Three targets: six body rows.
+    let fake = fake_with(targets());
+    let login = waiting(&fake, LoginTicket(1));
+    let (step_buf, _,) = (stepped(&login, 80, 24).0, 0);
+    let (list_buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    assert_eq!(slab_height(&step_buf, 80, 24), slab_height(&list_buf, 80, 24));
+    assert!(step_title(&step_buf, 80, 24, "codex"));
+    // One browser provider: three body rows.
+    let one = fake_with(vec![LoginTarget {
+        name: "codex".to_owned(),
+        kind: LoginKind::Browser,
+    }]);
+    let context = ctx(&one);
+    let mut login = Login::open(&context);
+    login.selected = 1;
+    login.wait(LoginTicket(1));
+    let (step_buf, _) = stepped(&login, 80, 24);
+    let (list_buf, _) = overlaid(&Login::open(&context), 80, 24);
+    assert_eq!(slab_height(&step_buf, 80, 24), slab_height(&list_buf, 80, 24));
+}
+
+#[test]
+fn a_very_long_name_cuts_within_the_step_and_matches_the_panel() {
+    let long = "a".repeat(200);
+    let fake = fake_with(vec![LoginTarget {
+        name: long.clone(),
+        kind: LoginKind::Key,
+    }]);
+    let context = ctx(&fake);
+    let mut starting = Login::open(&context);
+    starting.wait(LoginTicket(1));
+    let (start_buf, _) = stepped(&starting, 80, 24);
+    let mut panel = Login::open(&context);
+    panel.key(&Key::Enter, &context);
+    let (panel_buf, _) = stepped(&panel, 80, 24);
+    assert_eq!(
+        edge_run(&start_buf, 80, 24),
+        edge_run(&panel_buf, 80, 24)
+    );
+    // No row spills past the 80 columns it draws in, and the whole
+    // name never reads on one row.
+    for buf in [&start_buf, &panel_buf] {
+        for row in text_of(buf, 80, 24) {
+            assert!(crate::format::width(&row) <= 80, "{row:?}");
+        }
+        assert!(
+            !text_of(buf, 80, 24).iter().any(|row| row.contains(&long)),
+            "the long name reads whole"
+        );
+    }
+}
+
+#[test]
+fn tiny_areas_never_panic_a_step() {
+    let fake = fake_with(targets());
+    let mut modes: Vec<Login> = Vec::new();
+    modes.push(Login::open(&ctx(&fake)));
+    let mut panel = Login::open(&ctx(&fake));
+    open_key_panel(&mut panel, &fake);
+    modes.push(panel);
+    let mut secret = Login::open(&ctx(&fake));
+    open_secret_panel(&mut secret, &fake);
+    modes.push(secret);
+    modes.push(waiting(&fake, LoginTicket(1)));
+    let mut url = waiting(&fake, LoginTicket(1));
+    url.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open("https://auth.example/authorize".to_owned()),
+    );
+    modes.push(url);
+    let mut code = waiting(&fake, LoginTicket(1));
+    code.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Code {
+            url: "https://auth.example/device".to_owned(),
+            code: "ABCD-1234".to_owned(),
+        },
+    );
+    modes.push(code);
+    let mut done = waiting(&fake, LoginTicket(1));
+    done.mode = super::Mode::Ended(super::Ended {
+        name: "codex".to_owned(),
+        outcome: super::Outcome::Done,
+    });
+    modes.push(done);
+    let mut failed = waiting(&fake, LoginTicket(1));
+    failed.mode = super::Mode::Ended(super::Ended {
+        name: "codex".to_owned(),
+        outcome: super::Outcome::Failed("token expired".to_owned()),
+    });
+    modes.push(failed);
+    for login in &modes {
+        for width in 0..=5 {
+            for height in 1..=3 {
+                let area = Rect::new(0, 0, width, height);
+                let mut buf = Buffer::empty(area);
+                login.draw_step(area, &mut buf, &mut Vec::new());
+            }
+        }
+    }
+}
+
+#[test]
+fn a_saturated_body_clips_to_the_lists_budget() {
+    for count in [65_534, 65_535] {
+        let many: Vec<LoginTarget> = (0..count)
+            .map(|at| LoginTarget {
+                name: format!("key-{at}"),
+                kind: LoginKind::Key,
+            })
+            .collect();
+        let fake = fake_with(many);
+        let context = ctx(&fake);
+        let mut login = Login::open(&context);
+        login.wait(LoginTicket(1));
+        let (step_buf, _) = stepped(&login, 80, 24);
+        let (list_buf, _) = overlaid(&Login::open(&context), 80, 24);
+        assert_eq!(
+            slab_height(&step_buf, 80, 24),
+            slab_height(&list_buf, 80, 24),
+            "at {count} providers"
+        );
+    }
+}
