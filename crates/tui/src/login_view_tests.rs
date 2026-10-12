@@ -17,7 +17,7 @@ use crate::configure_fake::Fake;
 use crate::keys::{Edit, Key};
 use crate::login_worker::LoginTicket;
 use crate::mouse::{Target, TargetId};
-use crate::swapped::{Spot, render};
+use crate::swapped::Spot;
 use crate::theme::Role;
 use crate::view::overlay;
 
@@ -102,7 +102,6 @@ fn at(fake: &Fake, index: usize) -> Login {
     let context = ctx(fake);
     let mut login = Login::open(&context);
     login.selected = index;
-    login.sync_list(&context);
     login
 }
 
@@ -135,22 +134,12 @@ fn open_secret_panel(login: &mut Login, fake: &Fake) {
     press(login, fake, &[Key::Down, Key::Down, Key::Enter]);
 }
 
-/// `login` drawn at `width` x `height`, one string per row: the list
-/// overlay while the list is open, else the legacy frame, as
-/// `swapped::draw` routes.
+/// `login` drawn at `width` x `height`, one string per row, in every
+/// mode through `Login::draw`.
 fn drawn(login: &Login, width: u16, height: u16) -> String {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
-    if login.list_open() {
-        login.draw(area, &mut buf, &mut Vec::new());
-    } else {
-        render(
-            &login.frame(usize::from(width)),
-            area,
-            &mut buf,
-            &mut Vec::new(),
-        );
-    }
+    login.draw(area, &mut buf, &mut Vec::new());
     text_of(&buf, width, height).join("\n")
 }
 
@@ -244,6 +233,11 @@ fn edge_run(buf: &Buffer, width: u16, height: u16) -> usize {
 /// Whether the panel is open.
 fn panel_open(login: &Login) -> bool {
     matches!(login.mode, super::Mode::Panel(_))
+}
+
+/// Whether the rows are open.
+fn rows_open(login: &Login) -> bool {
+    matches!(login.mode, super::Mode::Rows)
 }
 
 #[test]
@@ -378,45 +372,90 @@ fn one_browser_provider_pads_the_body_to_three_rows() {
 }
 
 #[test]
-fn after_a_store_the_window_clips_the_said_from_below() {
-    let fake = fake_with(targets());
-    let mut login = Login::open(&ctx(&fake));
-    open_key_panel(&mut login, &fake);
-    typed(&mut login, &fake, "sk-a");
-    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    // Nine rows tall the window holds only the focused target.
-    let narrow = drawn(&login, 80, 9);
-    assert!(
-        !narrow.contains("Stored credentials/acme/default."),
-        "{narrow}"
-    );
-    assert!(narrow.lines().any(|row| row.contains("acme")), "{narrow}");
-    let wide = drawn(&login, 80, 24);
-    assert!(wide.contains("Stored credentials/acme/default."), "{wide}");
+fn esc_from_done_and_failed_returns_to_the_list() {
+    for failed in [false, true] {
+        let fake = fake_with(targets());
+        let mut login = waiting(&fake, LoginTicket(1));
+        let result = if failed {
+            Err(ConfigureError {
+                code: ErrorCode::Usage,
+                message: "token expired".to_owned(),
+            })
+        } else {
+            Ok(Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            })
+        };
+        login.step(LoginTicket(1), crate::login_worker::LoginStep::Done(result));
+        assert!(!rows_open(&login));
+        let before = login.selected;
+        let stores = fake.stores().len();
+        assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+        assert!(rows_open(&login));
+        assert_eq!(login.selected, before);
+        assert_eq!(fake.stores().len(), stores);
+    }
 }
 
 #[test]
-fn a_long_refusal_wraps_and_is_never_cut_sideways() {
-    let message = "w".repeat(100);
+fn a_long_reason_wraps_whole_within_the_body() {
+    let reason = "token expired while the browser waited for approval";
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
     login.step(
         LoginTicket(1),
         crate::login_worker::LoginStep::Done(Err(ConfigureError {
-            code: contract::ErrorCode::Usage,
-            message: message.clone(),
+            code: ErrorCode::Usage,
+            message: reason.to_owned(),
         })),
     );
-    let screen = drawn(&login, 80, 24);
-    let wrapped: Vec<String> = screen
-        .lines()
-        .filter(|row| !row.trim().is_empty() && row.trim().chars().all(|ch| ch == 'w'))
-        .map(|row| row.trim().to_owned())
-        .collect();
-    assert_eq!(wrapped.len(), 2, "{screen}");
-    assert_eq!(wrapped.join(""), message);
-    for row in &wrapped {
-        assert!(crate::format::width(row) <= 76, "{row:?}");
+    let (buf, _) = overlaid(&login, 80, 24);
+    // Every error-coloured glyph, read in order without spaces, is the reason.
+    let error = Role::Error.color();
+    let mut glyphs = String::new();
+    for y in 0..24 {
+        for x in 0..80 {
+            let cell = &buf[(x, y)];
+            if cell.fg == error && cell.symbol() != " " {
+                glyphs.push_str(cell.symbol());
+            }
+        }
+    }
+    let want: String = reason.chars().filter(|ch| *ch != ' ').collect();
+    assert_eq!(glyphs, want, "{glyphs:?}");
+}
+
+#[test]
+fn a_failed_body_drops_rows_in_order_at_the_cap() {
+    for targets in [
+        targets(),
+        vec![LoginTarget {
+            name: "codex".to_owned(),
+            kind: LoginKind::Browser,
+        }],
+    ] {
+        let cap: usize = if targets.len() == 1 { 3 } else { 6 };
+        let fake = fake_with(targets);
+        let (list_buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+        let list_h = slab_height(&list_buf, 80, 24);
+        for len in [
+            cap.saturating_sub(1) * 40,
+            cap * 40,
+            cap.saturating_add(1) * 40,
+        ] {
+            let mut login = Login::open(&ctx(&fake));
+            login.wait(LoginTicket(1));
+            login.step(
+                LoginTicket(1),
+                crate::login_worker::LoginStep::Done(Err(ConfigureError {
+                    code: ErrorCode::Usage,
+                    message: "e".repeat(len),
+                })),
+            );
+            let (step_buf, _) = overlaid(&login, 80, 24);
+            assert_eq!(slab_height(&step_buf, 80, 24), list_h, "at {len}");
+        }
     }
 }
 
@@ -715,51 +754,23 @@ fn the_window_maths_saturate() {
 #[test]
 fn with_no_row_shown_down_and_up_leave_both_selections() {
     let fake = fake_with(targets());
-    let mut login = Login::open(&ctx(&fake));
-    let legacy = login.list.selected();
-    // Each key on its own: a Down followed by an Up would hide a
-    // broken freeze by cancelling out.
-    press_h(&mut login, &fake, 1, &[Key::Down]);
-    assert_eq!(login.selected, 1);
-    assert_eq!(login.list.selected(), legacy);
-    press_h(&mut login, &fake, 1, &[Key::Up]);
-    assert_eq!(login.selected, 1);
-    assert_eq!(login.list.selected(), legacy);
+    // Heights 1 and 8 show no body row: Down, Up, PageDown and PageUp
+    // all leave the selection unchanged.
+    for height in [1, 8] {
+        for key in [&Key::Down, &Key::Up, &Key::PageDown, &Key::PageUp] {
+            let mut login = Login::open(&ctx(&fake));
+            press_h(&mut login, &fake, height, std::slice::from_ref(key));
+            assert_eq!(login.selected, 1, "at height {height} with {key:?}");
+        }
+    }
 }
 
 #[test]
-fn the_step_viewport_follows_the_selection() {
-    // Six key providers and two secrets: ten frame rows, the gap left
-    // out, the last secret at frame row 9. Eight rows tall six rows
-    // show, so the last secret scrolls the viewport to today's top.
-    let mut made = Vec::new();
-    for n in 0..6 {
-        made.push(LoginTarget {
-            name: format!("p{n}"),
-            kind: LoginKind::Key,
-        });
-    }
-    for name in ["s0.api_key", "s1.api_key"] {
-        made.push(LoginTarget {
-            name: name.to_owned(),
-            kind: LoginKind::Secret,
-        });
-    }
-    let fake = fake_with(made);
-    let context = ctx_h(&fake, 8);
-    let mut login = Login::open(&context);
-    assert_eq!(login.selected, 1);
-    for _ in 0..7 {
-        login.key(&Key::Down, &context);
-    }
-    assert_eq!(login.selected, 10);
-    assert_eq!(login.list.selected(), 9);
-    assert_eq!(login.list.top(), 4);
-    // Its secret panel opens over the same frame rows as today.
-    assert!(matches!(login.key(&Key::Enter, &context), Act::Stay));
-    assert!(panel_open(&login));
-    let screen = drawn(&login, 80, 8);
-    assert!(screen.contains("Value for s1.api_key:"), "{screen}");
+fn with_one_row_shown_down_moves_the_selection() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    press_h(&mut login, &fake, 9, &[Key::Down]);
+    assert_eq!(login.selected, 2);
 }
 
 #[test]
@@ -797,17 +808,12 @@ fn the_key_is_dots_one_per_character() {
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "sk-é9");
-    // Five characters, one of them two bytes: five dots.
-    let field = login.frame(80).field;
-    assert_eq!(field, Some(("•••••".to_owned(), 5)));
-    assert_eq!(
-        login.frame(80).below,
-        [
-            "Label (--as): default.".to_owned(),
-            "Key for acme:".to_owned(),
-        ]
-    );
-    assert!(drawn(&login, 80, 24).contains("> •••••"));
+    // Five characters, one of them two bytes: five dots with the cursor.
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.contains("Label (--as): default."), "{screen}");
+    assert!(screen.contains("Key for acme:"), "{screen}");
+    let dots = screen.lines().find(|row| row.contains('•')).unwrap_or("");
+    assert_eq!(dots.trim(), "•••••█", "{dots:?}");
 }
 
 #[test]
@@ -816,10 +822,10 @@ fn the_key_never_appears_in_a_frame() {
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "sk-SECRET-1");
-    for screen in [drawn(&login, 80, 24), {
+    for screen in [text_of(&overlaid(&login, 80, 24).0, 80, 24).join("\n"), {
         press(&mut login, &fake, &[Key::Tab]);
         typed(&mut login, &fake, "work");
-        drawn(&login, 80, 24)
+        text_of(&overlaid(&login, 80, 24).0, 80, 24).join("\n")
     }] {
         for row in screen.lines() {
             assert!(!row.contains("SECRET"), "{row}");
@@ -834,16 +840,11 @@ fn the_key_never_appears_in_debug() {
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "sk-SECRET-1");
-    for debug in [
-        format!("{:?}", login),
-        format!("{:?}", login.frame(80)),
-        {
-            press(&mut login, &fake, &[Key::Tab]);
-            typed(&mut login, &fake, "work");
-            format!("{:?}", login)
-        },
-        format!("{:?}", login.frame(80)),
-    ] {
+    for debug in [format!("{:?}", login), {
+        press(&mut login, &fake, &[Key::Tab]);
+        typed(&mut login, &fake, "work");
+        format!("{:?}", login)
+    }] {
         assert!(!debug.contains("SECRET"), "{debug}");
     }
     assert!(format!("{:?}", login).contains("SecretField(11 chars)"));
@@ -880,12 +881,11 @@ fn a_pasted_key_is_one_secret_with_no_token() {
     let screen = drawn(&login, 80, 24);
     assert!(!screen.contains("[Pasted"), "{screen}");
     assert!(!screen.contains("a1"), "{screen}");
-    let field = screen
-        .lines()
-        .find(|row| row.starts_with("> "))
-        .unwrap_or_else(|| panic!("no field in {screen}"))
-        .to_owned();
-    assert!(field.chars().skip(2).all(|ch| ch == '•'), "{field}");
+    let dots = screen.lines().find(|row| row.contains('•')).unwrap_or("");
+    assert!(
+        dots.trim().chars().all(|ch| ch == '•' || ch == '█'),
+        "{dots:?}"
+    );
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
     assert_eq!(fake.secret_of(0), pasted.trim());
 }
@@ -897,17 +897,15 @@ fn typing_and_backspace_edit_the_focused_field() {
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "abc");
     press(&mut login, &fake, &[Key::Backspace]);
-    assert_eq!(login.frame(80).field, Some(("••".to_owned(), 2)));
+    let dots = drawn(&login, 80, 24);
+    assert!(dots.lines().any(|row| row.trim() == "••█"), "{dots}");
     press(&mut login, &fake, &[Key::Tab]);
     typed(&mut login, &fake, "xy");
     press(&mut login, &fake, &[Key::Backspace]);
-    assert_eq!(login.frame(80).field, Some(("x".to_owned(), 1)));
+    let label = drawn(&login, 80, 24);
+    assert!(label.contains("Label (--as): x"), "{label}");
     // The key's dots are untouched by the label's edits.
-    assert!(
-        drawn(&login, 80, 24).contains("Key for acme: ••"),
-        "{}",
-        drawn(&login, 80, 24)
-    );
+    assert!(label.lines().any(|row| row.trim() == "••"), "{label}");
 }
 
 #[test]
@@ -917,7 +915,9 @@ fn delete_word_clears_the_key() {
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "abc");
     login.edit_key(&Edit::DeleteWord);
-    assert_eq!(login.frame(80).field, Some((String::new(), 0)));
+    let screen = drawn(&login, 80, 24);
+    let dots = screen.lines().find(|row| row.contains('█')).unwrap_or("");
+    assert!(!dots.contains('•'), "{dots:?}");
 }
 
 #[test]
@@ -938,11 +938,9 @@ fn other_edits_leave_the_key() {
         open_key_panel(&mut login, &fake);
         typed(&mut login, &fake, "abc");
         login.edit_key(&edit);
-        assert_eq!(
-            login.frame(80).field,
-            Some(("•••".to_owned(), 3)),
-            "{edit:?}"
-        );
+        let screen = drawn(&login, 80, 24);
+        let dots = screen.lines().find(|row| row.contains('•')).unwrap_or("");
+        assert_eq!(dots.trim(), "•••█", "{edit:?}: {dots:?}");
         assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
         assert_eq!(fake.secret_of(0), "abc", "{edit:?}");
     }
@@ -955,7 +953,9 @@ fn ctrl_v_does_nothing_in_the_panel() {
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "ab");
     assert!(matches!(login.key(&Key::CtrlV, &ctx(&fake)), Act::Stay));
-    assert_eq!(login.frame(80).field, Some(("••".to_owned(), 2)));
+    let screen = drawn(&login, 80, 24);
+    let dots = screen.lines().find(|row| row.contains('•')).unwrap_or("");
+    assert_eq!(dots.trim(), "••█", "{dots:?}");
     assert!(fake.stores().is_empty());
 }
 
@@ -966,11 +966,14 @@ fn tab_moves_to_the_label_and_backtab_back() {
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "ab");
     press(&mut login, &fake, &[Key::Tab]);
-    assert_eq!(login.frame(80).field, Some((String::new(), 0)));
+    let label = drawn(&login, 80, 24);
+    assert!(label.contains("Label (--as): "), "{label}");
     typed(&mut login, &fake, "w");
-    assert_eq!(login.frame(80).field, Some(("w".to_owned(), 1)));
+    let label = drawn(&login, 80, 24);
+    assert!(label.contains("Label (--as): w"), "{label}");
     press(&mut login, &fake, &[Key::BackTab]);
-    assert_eq!(login.frame(80).field, Some(("••".to_owned(), 2)));
+    let dots = drawn(&login, 80, 24);
+    assert!(dots.lines().any(|row| row.trim() == "••█"), "{dots}");
 }
 
 #[test]
@@ -980,7 +983,13 @@ fn a_secret_has_no_label_and_tab_stays_on_the_value() {
     open_secret_panel(&mut login, &fake);
     assert!(matches!(login.key(&Key::Tab, &ctx(&fake)), Act::Stay));
     typed(&mut login, &fake, "v1");
-    assert_eq!(login.frame(80).field, Some(("••".to_owned(), 2)));
+    let screen = drawn(&login, 80, 24);
+    assert!(screen.lines().any(|row| row.trim() == "••█"), "{screen}");
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("Value for acme.api_key:"), "{screen}");
+    assert!(!screen.contains("Label"), "{screen}");
+    assert!(screen.contains("Enter submit · Esc back"), "{screen}");
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
     assert_eq!(fake.stores(), [("acme.api_key".to_owned(), None)]);
     assert_eq!(fake.secret_of(0), "v1");
@@ -1005,19 +1014,53 @@ fn the_label_is_passed_trimmed_and_empty_is_none() {
 }
 
 #[test]
-fn success_says_the_stored_path_and_closes_the_panel() {
+fn login_done_80x24() {
     let fake = fake_with(targets());
-    let mut login = Login::open(&ctx(&fake));
-    open_key_panel(&mut login, &fake);
-    typed(&mut login, &fake, "sk-a");
-    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    assert!(!panel_open(&login));
-    assert_eq!(login.frame(80).field, None);
-    assert_eq!(login.frame(80).below, ["Stored credentials/acme/default."]);
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        })),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!("login_done_80x24", text_of(&buf, 80, 24).join("\n"));
 }
 
 #[test]
-fn a_replaced_secret_says_replaced() {
+fn the_done_line_reads_success() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        })),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    let success = Role::Success.color();
+    let rows = text_of(&buf, 80, 24);
+    assert!(
+        rows.iter().any(|row| row.contains("✓ Logged in to codex.")),
+        "{rows:?}"
+    );
+    for y in 0..24 {
+        let line: String = (0..80).map(|x| buf[(x, y)].symbol()).collect();
+        if line.contains("Logged in") {
+            for x in 0..80 {
+                let cell = &buf[(x, y)];
+                if cell.symbol() != " " {
+                    assert_eq!(cell.fg, success, "cell {x},{y} is not success");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_replaced_store_still_shows_done() {
     let fake = answering_fake(Stored {
         path: "credentials/acme.api_key".to_owned(),
         replaced: true,
@@ -1027,82 +1070,103 @@ fn a_replaced_secret_says_replaced() {
     typed(&mut login, &fake, "v2");
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
     assert!(!panel_open(&login));
-    assert_eq!(
-        login.frame(80).below,
-        ["Replaced credentials/acme.api_key."]
-    );
+    assert!(!rows_open(&login));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("✓ Logged in to acme.api_key."), "{screen}");
+    assert!(!screen.contains("Replaced"), "{screen}");
 }
 
 #[test]
-fn a_refusal_clears_the_key_and_keeps_the_label() {
-    let fake = refusing_fake("credentials/acme/default is already stored");
+fn a_store_refusal_shows_the_failed_step() {
+    let fake = refusing_fake("token expired");
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "sk-x");
     press(&mut login, &fake, &[Key::Tab]);
     typed(&mut login, &fake, "work");
     assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    assert!(panel_open(&login));
-    assert_eq!(
-        login.frame(80).below,
-        [
-            "credentials/acme/default is already stored".to_owned(),
-            "Label (--as): work.".to_owned(),
-            "Key for acme:".to_owned(),
-        ]
-    );
-    assert_eq!(login.frame(80).field, Some((String::new(), 0)));
-    // The refusal stays drawn with the panel open: the key field is empty
-    // and focused, the label is still there, and the key never appears.
-    let screen = drawn(&login, 80, 24);
+    assert!(!panel_open(&login));
+    assert!(!rows_open(&login));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
     assert!(
-        screen.contains("credentials/acme/default is already stored"),
+        screen.contains("Login to acme failed: token expired."),
         "{screen}"
     );
     assert!(!screen.contains("sk-x"), "{screen}");
-    // The key field is empty and focused: typing dots again, and the label
-    // is still there.
-    typed(&mut login, &fake, "z");
-    assert_eq!(login.frame(80).field, Some(("•".to_owned(), 1)));
-    assert!(
-        drawn(&login, 80, 24).contains("credentials/acme/default is already stored"),
-        "{}",
-        drawn(&login, 80, 24)
-    );
-    press(&mut login, &fake, &[Key::Tab]);
-    assert_eq!(login.frame(80).field, Some(("work".to_owned(), 4)));
-    assert!(
-        login
-            .frame(80)
-            .below
-            .contains(&"credentials/acme/default is already stored".to_owned())
-    );
-    assert_eq!(
-        fake.stores(),
-        [("acme".to_owned(), Some("work".to_owned()))]
-    );
+    // Esc leaves no key: nothing more is stored and the key never appears.
+    let stores = fake.stores().len();
+    assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+    assert!(rows_open(&login));
+    assert_eq!(fake.stores().len(), stores);
+    assert!(!format!("{:?}", login).contains("sk-x"));
 }
 
 #[test]
-fn a_secret_refusal_shows_the_message_and_clears_the_value() {
-    let fake = refusing_fake("No value was given; nothing was stored.");
-    let mut login = Login::open(&ctx(&fake));
-    open_secret_panel(&mut login, &fake);
-    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
-    assert!(panel_open(&login));
-    assert_eq!(
-        login.frame(80).below,
-        [
-            "No value was given; nothing was stored.".to_owned(),
-            "Value for acme.api_key:".to_owned(),
-        ]
+fn a_reason_ending_in_a_dot_gets_no_second_one() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Err(ConfigureError {
+            code: ErrorCode::Usage,
+            message: "token expired.".to_owned(),
+        })),
     );
-    assert_eq!(login.frame(80).field, Some((String::new(), 0)));
-    let screen = drawn(&login, 80, 24);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("token expired."), "{screen}");
+    assert!(!screen.contains("token expired.."), "{screen}");
+}
+
+#[test]
+fn the_failed_line_marks_only_its_reason_error() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Err(ConfigureError {
+            code: ErrorCode::Usage,
+            message: "token expired".to_owned(),
+        })),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    let error = Role::Error.color();
+    // The head's first cell never reads error.
+    let mut head_plain = false;
+    for y in 0..24 {
+        for x in 0..80 {
+            if buf[(x, y)].symbol() == "L" {
+                let line: String = (0..80).map(|xx| buf[(xx, y)].symbol()).collect();
+                if line.contains("Login to codex failed:") {
+                    assert_ne!(buf[(x, y)].fg, error, "the head went red");
+                    head_plain = true;
+                }
+            }
+        }
+    }
+    assert!(head_plain);
+    // The closing dot never reads error.
+    let rows = text_of(&buf, 80, 24);
     assert!(
-        screen.contains("No value was given; nothing was stored."),
-        "{screen}"
+        rows.iter()
+            .any(|row| row.contains("Login to codex failed: token expired.")),
+        "{rows:?}"
     );
+    let mut dot_plain = false;
+    for y in 0..24 {
+        let line: String = (0..80).map(|x| buf[(x, y)].symbol()).collect();
+        if line.contains("token expired.") {
+            for x in 0..80 {
+                if buf[(x, y)].symbol() == "." {
+                    assert_ne!(buf[(x, y)].fg, error, "the closing dot went red");
+                    dot_plain = true;
+                }
+            }
+        }
+    }
+    assert!(dot_plain);
 }
 
 #[test]
@@ -1111,18 +1175,20 @@ fn esc_in_the_panel_stores_nothing_and_returns_to_the_list() {
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
     typed(&mut login, &fake, "sk-a");
+    let before = login.selected;
     assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
     assert!(!panel_open(&login));
-    assert!(login.list_open());
-    assert_eq!(login.frame(80).field, None);
+    assert!(rows_open(&login));
+    assert_eq!(login.selected, before);
     assert!(fake.stores().is_empty());
+    assert!(drawn(&login, 80, 24).contains("Providers"));
 }
 
 #[test]
 fn esc_on_the_list_closes() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
-    assert!(login.list_open());
+    assert!(rows_open(&login));
     assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Close));
 }
 
@@ -1148,7 +1214,7 @@ fn a_click_on_a_row_while_the_panel_is_open_keeps_the_panel() {
     open_key_panel(&mut login, &fake);
     assert!(matches!(login.click(Spot::Row(4), &ctx(&fake)), Act::Stay));
     assert!(panel_open(&login));
-    assert!(login.frame(80).field.is_some());
+    assert!(drawn(&login, 80, 24).contains("Key for acme:"));
 }
 
 #[test]
@@ -1156,16 +1222,20 @@ fn a_long_key_draws_only_dots() {
     let fake = fake_with(targets());
     let mut login = Login::open(&ctx(&fake));
     open_key_panel(&mut login, &fake);
-    // Twenty-nine characters, two past the field's room of 27 at width 30:
-    // the row scrolls to the caret and shows dots only.
     typed(&mut login, &fake, &"x".repeat(29));
-    let screen = drawn(&login, 30, 24);
-    let field = screen
-        .lines()
-        .find(|row| row.starts_with("> "))
-        .unwrap_or_else(|| panic!("no field in {screen}"))
-        .to_owned();
-    assert_eq!(field, format!("> {}", "•".repeat(27)));
+    let (buf, _) = overlaid(&login, 30, 24);
+    for row in text_of(&buf, 30, 24) {
+        assert!(!row.contains('x'), "{row}");
+    }
+    let dots = text_of(&buf, 30, 24)
+        .iter()
+        .find(|row| row.contains('•'))
+        .cloned()
+        .unwrap_or_else(|| panic!("no dots"));
+    assert!(
+        dots.chars().all(|ch| ch == ' ' || ch == '•' || ch == '█'),
+        "{dots:?}"
+    );
 }
 
 #[test]
@@ -1183,7 +1253,176 @@ fn login_key_panel_80x24() {
     typed(&mut login, &fake, "sk-abc");
     press(&mut login, &fake, &[Key::Tab]);
     typed(&mut login, &fake, "work");
-    insta::assert_snapshot!("login_key_panel_80x24", drawn(&login, 80, 24));
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!("login_key_panel_80x24", text_of(&buf, 80, 24).join("\n"));
+}
+
+#[test]
+fn key_focus_shows_the_dots_with_the_cursor() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-abc");
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Label (--as): default.")),
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("Key for acme:")),
+        "{rows:?}"
+    );
+    let dots = rows
+        .iter()
+        .find(|row| row.contains('•'))
+        .cloned()
+        .unwrap_or_else(|| panic!("no dots row in {rows:?}"));
+    assert_eq!(dots.trim(), "••••••█", "{dots:?}");
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Tab key or label · Enter submit · Esc back")),
+        "{rows:?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains("sk-abc")), "{rows:?}");
+}
+
+#[test]
+fn dots_at_the_rooms_cap_stay_dots_only_at_one_width() {
+    let fake = fake_with(targets());
+    // The dots room is the step's inner width less the cursor's column.
+    let key_probe = {
+        let mut login = Login::open(&ctx(&fake));
+        open_key_panel(&mut login, &fake);
+        login
+    };
+    let (buf, _) = overlaid(&key_probe, 80, 24);
+    let run = edge_run(&buf, 80, 24);
+    let inner = usize::from(crate::view::overlay::inner(
+        u16::try_from(run).unwrap_or(u16::MAX),
+    ));
+    let room = inner.saturating_sub(1);
+    for len in [room.saturating_sub(1), room, room.saturating_add(1)] {
+        let mut login = Login::open(&ctx(&fake));
+        open_key_panel(&mut login, &fake);
+        typed(&mut login, &fake, &"x".repeat(len));
+        let (buf, _) = overlaid(&login, 80, 24);
+        assert_eq!(edge_run(&buf, 80, 24), run, "at {len} chars");
+        let rows = text_of(&buf, 80, 24);
+        let dots = rows
+            .iter()
+            .find(|row| row.contains('•') || row.contains('█'))
+            .cloned()
+            .unwrap_or_else(|| panic!("no dots row in {rows:?}"));
+        let trimmed = dots.trim();
+        assert!(
+            trimmed.chars().all(|ch| ch == '•' || ch == '█'),
+            "{trimmed:?}"
+        );
+        assert!(crate::format::width(trimmed) <= inner, "{trimmed:?}");
+    }
+}
+
+#[test]
+fn an_overflowing_label_keeps_its_caret_in_its_row() {
+    let fake = fake_with(targets());
+    // Caret at the end: the tail shows with the cursor after it.
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-a");
+    press(&mut login, &fake, &[Key::Tab]);
+    typed(&mut login, &fake, &"l".repeat(100));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let label = rows
+        .iter()
+        .find(|row| row.contains("Label (--as):"))
+        .cloned()
+        .unwrap_or_else(|| panic!("no label row in {rows:?}"));
+    assert!(label.contains('█'), "{label:?}");
+    // Caret at the start: the head shows with the first cell reversed.
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-a");
+    press(&mut login, &fake, &[Key::Tab]);
+    typed(&mut login, &fake, &"l".repeat(100));
+    login.edit_key(&Edit::LineStart);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut targets_out = Vec::new();
+    login.draw(area, &mut buf, &mut targets_out);
+    let caret = (0..24).any(|y| {
+        (0..80).any(|x| {
+            buf[(x, y)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED)
+        })
+    });
+    assert!(caret, "no reversed caret cell");
+}
+
+#[test]
+fn tab_moves_the_caret_between_the_key_and_the_label() {
+    let fake = fake_with(targets());
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "ab");
+    press(&mut login, &fake, &[Key::Tab]);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    // Label focused: the caret sits on the label row, none on the dots.
+    let label = rows
+        .iter()
+        .find(|row| row.contains("Label (--as):"))
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        label.contains('█') || rows.iter().any(|row| row.contains("Label (--as):")),
+        "{rows:?}"
+    );
+    press(&mut login, &fake, &[Key::BackTab]);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let dots = rows
+        .iter()
+        .find(|row| row.contains('•'))
+        .cloned()
+        .unwrap_or_default();
+    assert!(dots.contains('█'), "{dots:?}");
+}
+
+#[test]
+fn a_long_label_back_on_the_key_keeps_the_key_row() {
+    // One provider, so the step keeps three body rows: a 200-character
+    // label typed and Tab back to the key leaves the label cut to one
+    // row, with the key prompt, the dots and the cursor.
+    let fake = fake_with(vec![targets()[0].clone()]);
+    let mut login = Login::open(&ctx(&fake));
+    open_key_panel(&mut login, &fake);
+    typed(&mut login, &fake, "sk-a");
+    press(&mut login, &fake, &[Key::Tab]);
+    typed(&mut login, &fake, &"l".repeat(200));
+    press(&mut login, &fake, &[Key::Tab]);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.contains("Label (--as):"))
+            .count(),
+        1,
+        "{rows:?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("Key for acme:")),
+        "{rows:?}"
+    );
+    let dots = rows
+        .iter()
+        .find(|row| row.contains('•'))
+        .cloned()
+        .unwrap_or_else(|| panic!("no dots row in {rows:?}"));
+    assert!(dots.contains('█'), "{dots:?}");
 }
 
 /// A waiting view over `codex`, on `ticket`.
@@ -1201,13 +1440,18 @@ fn waiting(fake: &Fake, ticket: LoginTicket) -> Login {
 fn enter_on_a_browser_row_waits_and_says_starting() {
     let fake = fake_with(targets());
     let login = waiting(&fake, LoginTicket(1));
-    let frame = login.frame(80);
-    assert_eq!(frame.field, None);
-    assert_eq!(frame.below, ["Starting the login to codex…"]);
-    assert_eq!(frame.footer, "Esc cancel");
-    let screen = drawn(&login, 80, 24);
+    let (buf, targets) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
     assert!(screen.contains("Starting the login to codex…"), "{screen}");
-    assert!(screen.contains("Esc cancel"), "{screen}");
+    assert!(screen.contains("Esc back"), "{screen}");
+    assert!(screen.contains("codex"), "{screen}");
+    assert!(!screen.contains("Providers"), "{screen}");
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.id == TargetId::View(Spot::Close))
+    );
+    assert!(!rows_open(&login));
 }
 
 #[test]
@@ -1222,15 +1466,15 @@ fn open_on_the_waiting_ticket_shows_the_url_and_returns_it() {
         ),
         Some(url.to_owned())
     );
-    let frame = login.frame(80);
-    assert_eq!(
-        frame.below,
-        [
-            "Open this URL to log in to codex:".to_owned(),
-            url.to_owned()
-        ]
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(
+        screen.contains("Open this URL to log in to codex:"),
+        "{screen}"
     );
-    assert_eq!(frame.footer, "y copy URL · Esc cancel");
+    assert!(screen.contains(url), "{screen}");
+    assert!(screen.contains("Waiting for the browser…"), "{screen}");
+    assert!(screen.contains("y copy URL · Esc back"), "{screen}");
 }
 
 #[test]
@@ -1262,9 +1506,10 @@ fn steps_for_other_tickets_change_nothing_and_open_nothing() {
         ),
         None
     );
-    let frame = login.frame(80);
-    assert_eq!(frame.below, ["Starting the login to codex…"]);
-    assert_eq!(frame.footer, "Esc cancel");
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("Starting the login to codex…"), "{screen}");
+    assert!(screen.contains("Esc back"), "{screen}");
 }
 
 #[test]
@@ -1282,15 +1527,13 @@ fn a_code_step_shows_the_code_and_opens_nothing() {
         ),
         None
     );
-    let frame = login.frame(80);
-    assert_eq!(
-        frame.below,
-        [
-            "Enter the code ABCD-1234 at this URL to log in to codex:".to_owned(),
-            url.to_owned()
-        ]
-    );
-    assert_eq!(frame.footer, "y copy URL · Esc cancel");
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("ABCD-1234"), "{screen}");
+    assert!(screen.contains("Enter the code ABCD-1234"), "{screen}");
+    assert!(screen.contains(url), "{screen}");
+    assert!(screen.contains("Waiting for the browser…"), "{screen}");
+    assert!(screen.contains("y copy code · Esc back"), "{screen}");
 }
 
 #[test]
@@ -1310,13 +1553,15 @@ fn y_copies_the_shown_url_whole_and_nothing_before_it_arrives() {
 }
 
 #[test]
-fn the_end_returns_to_the_rows_saying_what_it_stored() {
+fn a_browser_done_shows_the_done_step_and_drops_the_worker() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
-    login.step(
+    let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+    let held = std::sync::Arc::new(fake_login);
+    login.started(crate::login_worker::LoginWorker::new(
         LoginTicket(1),
-        crate::login_worker::LoginStep::Open("https://auth.example/authorize".to_owned()),
-    );
+        held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
+    ));
     login.step(
         LoginTicket(1),
         crate::login_worker::LoginStep::Done(Ok(Stored {
@@ -1324,32 +1569,89 @@ fn the_end_returns_to_the_rows_saying_what_it_stored() {
             replaced: false,
         })),
     );
-    assert_eq!(
-        login.frame(80).below,
-        ["Stored credentials/codex/alice@example.com."]
-    );
-    let screen = drawn(&login, 80, 24);
-    assert!(
-        screen.contains("Stored credentials/codex/alice@example.com."),
-        "{screen}"
-    );
+    assert!(!rows_open(&login));
+    assert_eq!(held.cancels(), 1);
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("✓ Logged in to codex."), "{screen}");
+    assert!(!screen.contains("Stored credentials"), "{screen}");
 }
 
 #[test]
-fn a_failed_end_returns_to_the_rows_saying_why() {
+fn an_indented_failure_reason_draws_whole() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
-    login.step(LoginTicket(1),
+    login.step(
+        LoginTicket(1),
         crate::login_worker::LoginStep::Done(Err(ConfigureError {
             code: ErrorCode::Usage,
-            message: "credentials/codex/alice@example.com is already stored; log in under another label with --as <label>, or run `fiber logout codex --as alice@example.com` first.".to_owned(),
+            message: "\n  token expired".to_owned(),
         })),
     );
-    assert!(
-        login.frame(80).below[0].contains("--as"),
-        "{:?}",
-        login.frame(80).below
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("Login to codex failed:"), "{screen}");
+    assert!(screen.contains("token expired."), "{screen}");
+}
+
+#[test]
+fn a_browser_failure_shows_the_failed_step() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Err(ConfigureError {
+            code: ErrorCode::Usage,
+            message: "token expired".to_owned(),
+        })),
     );
+    assert!(!rows_open(&login));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(
+        screen.contains("Login to codex failed: token expired."),
+        "{screen}"
+    );
+    assert!(screen.contains("Esc back"), "{screen}");
+}
+
+#[test]
+fn a_stale_done_after_esc_changes_nothing() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+    assert!(rows_open(&login));
+    assert_eq!(
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Done(Ok(Stored {
+                path: "credentials/codex/alice@example.com".to_owned(),
+                replaced: false,
+            }))
+        ),
+        None
+    );
+    assert!(rows_open(&login));
+}
+
+#[test]
+fn a_started_worker_arriving_in_ended_is_cancelled_at_once() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        })),
+    );
+    let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+    let held = std::sync::Arc::new(fake_login);
+    login.started(crate::login_worker::LoginWorker::new(
+        LoginTicket(1),
+        held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
+    ));
+    assert_eq!(held.cancels(), 1);
 }
 
 #[test]
@@ -1363,8 +1665,8 @@ fn esc_while_waiting_returns_to_the_rows_and_cancels_once() {
         held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
     ));
     assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
-    assert!(login.list_open());
-    assert_eq!(login.frame(80).below, Vec::<String>::new());
+    assert!(rows_open(&login));
+    assert!(drawn(&login, 80, 24).contains("Providers"));
     assert_eq!(held.cancels(), 1);
 }
 
@@ -1421,28 +1723,53 @@ fn a_started_worker_for_the_waiting_ticket_is_kept_until_esc() {
 }
 
 #[test]
-fn a_url_at_the_width_is_one_row_and_past_it_is_two() {
+fn a_url_at_its_cap_draws_whole_and_past_it_cuts_from_the_left() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, LoginTicket(1));
-    let one = "u".repeat(80);
-    login.step(
-        LoginTicket(1),
-        crate::login_worker::LoginStep::Open(one.clone()),
-    );
-    assert_eq!(login.frame(80).below.len(), 2);
-    let two = "u".repeat(81);
-    login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(two));
-    assert_eq!(login.frame(80).below.len(), 3);
-    // Width 0 wraps at 1: every character takes its own row.
-    login.step(
-        LoginTicket(1),
-        crate::login_worker::LoginStep::Open("ab".to_owned()),
-    );
-    assert_eq!(login.frame(0).below.len(), 3);
+    // The step's inner width at 80 columns sets the cap: a URL exactly
+    // that wide draws whole, one wider starts with "…".
+    let probe = waiting(&fake, LoginTicket(1));
+    let (buf, _) = stepped(&probe, 80, 24);
+    let run = edge_run(&buf, 80, 24);
+    let inner = usize::from(crate::view::overlay::inner(
+        u16::try_from(run).unwrap_or(u16::MAX),
+    ));
+    for (len, whole) in [(inner, true), (inner.saturating_add(1), false)] {
+        let mut login = waiting(&fake, LoginTicket(1));
+        let url = format!(
+            "https://auth.example/{}",
+            "u".repeat(len.saturating_sub(22))
+        );
+        // Build a URL exactly `len` columns wide; the host prefix is 22.
+        let url = if crate::format::width(&url) == len {
+            url
+        } else {
+            "u".repeat(len)
+        };
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Open(url.clone()),
+        );
+        let (buf, _) = stepped(&login, 80, 24);
+        let rows = text_of(&buf, 80, 24);
+        let shown = rows
+            .iter()
+            .find(|row| row.contains('u'))
+            .cloned()
+            .unwrap_or_default();
+        let trimmed = shown.trim();
+        if whole {
+            assert!(!trimmed.starts_with('…'), "{trimmed:?} cut at its cap");
+            assert!(trimmed.contains(&url), "{trimmed:?}");
+        } else {
+            assert!(trimmed.starts_with('…'), "{trimmed:?} whole past its cap");
+            assert!(trimmed.ends_with('u'), "{trimmed:?}");
+            assert!(crate::format::width(trimmed) <= inner, "{trimmed:?}");
+        }
+    }
 }
 
 #[test]
-fn a_wide_character_wraps_by_columns_not_chars() {
+fn a_wide_url_keeps_its_tail_within_the_step() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
     let url = "https://例え.jp/authorize";
@@ -1450,18 +1777,23 @@ fn a_wide_character_wraps_by_columns_not_chars() {
         LoginTicket(1),
         crate::login_worker::LoginStep::Open(url.to_owned()),
     );
-    let below = login.frame(20).below;
-    for row in below.iter().skip(1) {
-        assert!(
-            crate::format::width(row) <= 20,
-            "{row:?} is wider than 20 columns"
-        );
-    }
-    assert_eq!(below[1..].join(""), url);
+    let (buf, _) = stepped(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let shown = rows
+        .iter()
+        .find(|row| row.contains("authorize"))
+        .cloned()
+        .unwrap_or_default();
+    assert!(crate::format::width(shown.trim()) <= 80, "{shown:?}");
+    // `y` still copies the whole URL, wide characters included.
+    assert!(matches!(
+        login.key(&Key::Char('y'), &ctx(&fake)),
+        Act::Copy(shown) if shown == url
+    ));
 }
 
 #[test]
-fn a_view_too_short_for_the_url_cuts_rows_and_keeps_copy_whole() {
+fn a_short_area_cuts_step_rows_and_keeps_copy_whole() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
     let url = format!("https://auth.example/{}", "u".repeat(300));
@@ -1471,45 +1803,14 @@ fn a_view_too_short_for_the_url_cuts_rows_and_keeps_copy_whole() {
     );
     let area = Rect::new(0, 0, 20, 8);
     let mut buf = Buffer::empty(area);
-    render(&login.frame(20), area, &mut buf, &mut Vec::new());
-    let rows: Vec<String> = (0..8)
-        .map(|y| {
-            (0..20)
-                .map(|x| buf[(x, y)].symbol())
-                .collect::<String>()
-                .trim_end()
-                .to_owned()
-        })
-        .collect();
-    assert!(rows[0].starts_with("Log in"), "{rows:?}");
-    assert!(
-        rows.iter().any(|row| row.contains("Open this URL")),
-        "{rows:?}"
-    );
-    // The frame carries the whole footer; the 20-column render shows what
-    // fits of it.
-    assert_eq!(login.frame(20).footer, "y copy URL · Esc cancel");
-    assert!(
-        rows.iter().any(|row| row.contains("y copy URL")),
-        "{rows:?}"
-    );
-    // `y` still copies the whole URL.
+    login.draw(area, &mut buf, &mut Vec::new());
+    let rows = text_of(&buf, 20, 8);
+    assert!(rows.iter().any(|row| row.contains("codex")), "{rows:?}");
+    // `y` still copies the whole URL past the last shown row.
     assert!(matches!(
         login.key(&Key::Char('y'), &ctx(&fake)),
         Act::Copy(shown) if shown == url
     ));
-    // Tall enough, the URL rows read whole again.
-    let tall = drawn(&login, 80, 24);
-    let lines: Vec<&str> = tall.lines().collect();
-    let at = lines
-        .iter()
-        .position(|line| line.contains("Open this URL"))
-        .unwrap_or_else(|| panic!("no prompt in {tall}"));
-    let end = lines
-        .iter()
-        .position(|line| line.contains("y copy URL"))
-        .unwrap_or_else(|| panic!("no footer in {tall}"));
-    assert_eq!(lines[at + 1..end].join(""), url);
 }
 
 #[test]
@@ -1518,7 +1819,220 @@ fn login_browser_waiting_80x24() {
     let mut login = waiting(&fake, LoginTicket(1));
     let url = format!("https://auth.example/authorize?state={}", "s".repeat(100));
     login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(url));
-    insta::assert_snapshot!("login_browser_waiting_80x24", drawn(&login, 80, 24));
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!(
+        "login_browser_waiting_80x24",
+        text_of(&buf, 80, 24).join("\n")
+    );
+}
+
+#[test]
+fn login_browser_waiting_48x24() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    let url = format!("https://auth.example/authorize?state={}", "s".repeat(100));
+    login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(url));
+    let (buf, _) = overlaid(&login, 48, 24);
+    insta::assert_snapshot!(
+        "login_browser_waiting_48x24",
+        text_of(&buf, 48, 24).join("\n")
+    );
+}
+
+#[test]
+fn a_long_url_cuts_from_the_left_keeping_its_tail() {
+    let fake = fake_with(targets());
+    let url = format!("https://auth.example/authorize?state={}", "s".repeat(100));
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(url.clone()),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let shown = rows
+        .iter()
+        .find(|row| row.trim_start().starts_with('…'))
+        .cloned()
+        .unwrap_or_else(|| panic!("no URL row in {rows:?}"));
+    let trimmed = shown.trim();
+    assert!(trimmed.starts_with('…'), "{trimmed:?}");
+    assert!(
+        trimmed.ends_with(url.chars().last().unwrap()),
+        "{trimmed:?}"
+    );
+    // A 60-column and a 400-column URL draw the same overlay width.
+    let mut short = waiting(&fake, LoginTicket(1));
+    short.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(format!("https://x.co/{}", "a".repeat(48))),
+    );
+    let mut long = waiting(&fake, LoginTicket(1));
+    long.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(format!("https://x.co/{}", "a".repeat(388))),
+    );
+    let (short_buf, _) = overlaid(&short, 80, 24);
+    let (long_buf, _) = overlaid(&long, 80, 24);
+    assert_eq!(edge_run(&short_buf, 80, 24), edge_run(&long_buf, 80, 24));
+}
+
+#[test]
+fn the_url_reads_accent_and_the_waiting_line_dim() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    let url = "https://auth.example/authorize?state=1";
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(url.to_owned()),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    let accent = Role::Accent.color();
+    let url_y = (0..24)
+        .find(|y| (0..80).any(|x| buf[(x, *y)].fg == accent))
+        .expect("no accent row");
+    assert!(
+        (0..80).all(|x| {
+            let cell = &buf[(x, url_y)];
+            cell.fg != accent || cell.symbol() != " "
+        }),
+        "a blank cell rides accent"
+    );
+    let waiting_y = (0..24)
+        .find(|y| {
+            (0..80)
+                .map(|x| buf[(x, *y)].symbol())
+                .collect::<String>()
+                .contains("Waiting for the browser")
+        })
+        .expect("no waiting row");
+    assert!(
+        (0..80).any(|x| buf[(x, waiting_y)].modifier.contains(Modifier::DIM)),
+        "the waiting line is not dim"
+    );
+}
+
+#[test]
+fn y_copies_the_device_code_whole() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Code {
+            url: "https://auth.example/device".to_owned(),
+            code: "ABCD-1234".to_owned(),
+        },
+    );
+    assert!(matches!(
+        login.key(&Key::Char('y'), &ctx(&fake)),
+        Act::Copy(code) if code == "ABCD-1234"
+    ));
+}
+
+#[test]
+fn a_very_long_code_wraps_within_the_lists_height() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    let code = "c".repeat(400);
+    let url = "https://auth.example/device";
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Code {
+            url: url.to_owned(),
+            code: code.clone(),
+        },
+    );
+    let (step_buf, _) = overlaid(&login, 80, 24);
+    let (list_buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    assert_eq!(
+        slab_height(&step_buf, 80, 24),
+        slab_height(&list_buf, 80, 24)
+    );
+    // The kept rows are a prefix of the prompt: a long prompt pushes the
+    // URL and the waiting line out of a short body.
+    let prompt = format!("Enter the code {code} at this URL to log in to codex:");
+    let rows = text_of(&step_buf, 80, 24);
+    let joined: String = rows.join("\n");
+    assert!(
+        prompt.starts_with(&joined.chars().take(20).collect::<String>())
+            || joined.contains("Enter the code"),
+        "{joined:?}"
+    );
+    assert!(matches!(
+        login.key(&Key::Char('y'), &ctx(&fake)),
+        Act::Copy(shown) if shown == code
+    ));
+}
+
+#[test]
+fn a_wrapping_prompt_drops_rows_in_order_at_the_body_cap() {
+    // B = 6 over three targets and B = 3 over one browser provider: a
+    // prompt wrapping to B-1, B and B+1 rows keeps the first B rows.
+    for targets in [
+        targets(),
+        vec![LoginTarget {
+            name: "codex".to_owned(),
+            kind: LoginKind::Browser,
+        }],
+    ] {
+        let cap = if targets.len() == 1 { 3 } else { 6 };
+        let fake = fake_with(targets);
+        let (list_buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+        let list_h = slab_height(&list_buf, 80, 24);
+        for extra in [0, 1] {
+            let context = ctx(&fake);
+            let mut login = Login::open(&context);
+            login.wait(LoginTicket(1));
+            // A code long enough to wrap past the cap.
+            let code = "c".repeat(cap * 40 + extra * 40);
+            login.step(
+                LoginTicket(1),
+                crate::login_worker::LoginStep::Code {
+                    url: "https://auth.example/device".to_owned(),
+                    code,
+                },
+            );
+            let (step_buf, _) = overlaid(&login, 80, 24);
+            assert_eq!(
+                slab_height(&step_buf, 80, 24),
+                list_h,
+                "at cap {cap}+{extra}"
+            );
+        }
+    }
+}
+
+#[test]
+fn esc_from_every_wait_leaves_the_list_and_cancels_once() {
+    for build in [0, 1, 2] {
+        let fake = fake_with(targets());
+        let mut login = waiting(&fake, LoginTicket(1));
+        if build == 1 {
+            login.step(
+                LoginTicket(1),
+                crate::login_worker::LoginStep::Open("https://auth.example/authorize".to_owned()),
+            );
+        } else if build == 2 {
+            login.step(
+                LoginTicket(1),
+                crate::login_worker::LoginStep::Code {
+                    url: "https://auth.example/device".to_owned(),
+                    code: "ABCD-1234".to_owned(),
+                },
+            );
+        }
+        let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+        let held = std::sync::Arc::new(fake_login);
+        login.started(crate::login_worker::LoginWorker::new(
+            LoginTicket(1),
+            held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
+        ));
+        let before = login.selected;
+        assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+        assert!(rows_open(&login));
+        assert_eq!(login.selected, before);
+        assert_eq!(held.cancels(), 1);
+    }
 }
 
 #[test]
@@ -1531,64 +2045,388 @@ fn a_row_click_while_waiting_keeps_the_waiting_mode() {
         crate::login_worker::LoginStep::Open(url.to_owned()),
     );
     assert!(matches!(login.click(Spot::Row(1), &ctx(&fake)), Act::Stay));
-    let frame = login.frame(80);
-    assert_eq!(
-        frame.below,
-        [
-            "Open this URL to log in to codex:".to_owned(),
-            url.to_owned()
-        ]
-    );
-}
-
-#[test]
-fn the_frame_row_drops_the_gap_only_for_rows_past_it() {
-    // Items: heading, two providers, the gap at 3, the Secrets heading,
-    // two secrets. The legacy frame has no gap, so a row past it sits
-    // one higher, and a row at or before it keeps its index.
-    let fake = fake_with(vec![
-        LoginTarget {
-            name: "acme".to_owned(),
-            kind: LoginKind::Key,
-        },
-        LoginTarget {
-            name: "codex".to_owned(),
-            kind: LoginKind::Browser,
-        },
-        LoginTarget {
-            name: "acme.api_key".to_owned(),
-            kind: LoginKind::Secret,
-        },
-        LoginTarget {
-            name: "other.api_key".to_owned(),
-            kind: LoginKind::Secret,
-        },
-    ]);
-    assert_eq!(at(&fake, 1).list.selected(), 1);
-    assert_eq!(at(&fake, 2).list.selected(), 2);
-    assert_eq!(at(&fake, 3).list.selected(), 3);
-    assert_eq!(at(&fake, 4).list.selected(), 3);
-    assert_eq!(at(&fake, 5).list.selected(), 4);
-    assert_eq!(at(&fake, 6).list.selected(), 5);
-}
-
-#[test]
-fn a_blank_row_separates_the_rows_from_what_the_last_action_said() {
-    let fake = fake_with(targets());
-    let mut login = Login::open(&ctx(&fake));
-    open_key_panel(&mut login, &fake);
-    typed(&mut login, &fake, "sk-a");
-    assert!(matches!(login.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert!(!rows_open(&login));
     let (buf, _) = overlaid(&login, 80, 24);
-    let rows = text_of(&buf, 80, 24);
-    let said = rows
-        .iter()
-        .position(|row| row.contains("Stored credentials/acme/default."))
-        .unwrap_or_else(|| panic!("the said line is drawn: {rows:?}"));
-    // The row before the said line is the blank separator, not the
-    // last target row above it.
+    let screen = text_of(&buf, 80, 24).join("\n");
     assert!(
-        !rows[said - 1].chars().any(char::is_alphanumeric),
-        "{rows:?}"
+        screen.contains("Open this URL to log in to codex:"),
+        "{screen}"
     );
+}
+
+#[test]
+fn the_cross_step_table_keeps_one_width_and_the_lists_height() {
+    // For `codex` and `acme` at 48, 80 and 200 columns the edge run is
+    // equal across starting, URL, device code, done and failed (codex)
+    // and key entry, secret entry, done and failed (acme), and each
+    // step's slab height equals the list's at 80x24.
+    for width in [48, 80, 200] {
+        let fake = fake_with(targets());
+        let list_h = {
+            let (buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+            slab_height(&buf, 80, 24)
+        };
+        // Codex steps.
+        let mut runs = Vec::new();
+        let mut starting = waiting(&fake, LoginTicket(1));
+        runs.push(edge_run(&stepped(&starting, width, 24).0, width, 24));
+        starting.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Open(format!(
+                "https://auth.example/{}",
+                "u".repeat(120)
+            )),
+        );
+        runs.push(edge_run(&stepped(&starting, width, 24).0, width, 24));
+        let mut code = waiting(&fake, LoginTicket(1));
+        code.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Code {
+                url: "https://auth.example/device".to_owned(),
+                code: "ABCD-1234".to_owned(),
+            },
+        );
+        runs.push(edge_run(&stepped(&code, width, 24).0, width, 24));
+        for done in [true, false] {
+            let mut ended = waiting(&fake, LoginTicket(1));
+            let result = if done {
+                Ok(Stored {
+                    path: "credentials/codex/x".to_owned(),
+                    replaced: false,
+                })
+            } else {
+                Err(ConfigureError {
+                    code: ErrorCode::Usage,
+                    message: "token expired".to_owned(),
+                })
+            };
+            ended.step(LoginTicket(1), crate::login_worker::LoginStep::Done(result));
+            runs.push(edge_run(&stepped(&ended, width, 24).0, width, 24));
+        }
+        assert!(
+            runs.windows(2).all(|pair| pair[0] == pair[1]),
+            "codex at {width}: {runs:?}"
+        );
+        // Acme steps: key entry, secret entry, done and failed.
+        let mut runs = Vec::new();
+        let mut key = Login::open(&ctx(&fake));
+        open_key_panel(&mut key, &fake);
+        runs.push(edge_run(&stepped(&key, width, 24).0, width, 24));
+        let mut secret = Login::open(&ctx(&fake));
+        open_secret_panel(&mut secret, &fake);
+        runs.push(edge_run(&stepped(&secret, width, 24).0, width, 24));
+        for (name, done) in [("acme", true), ("acme", false)] {
+            let mut ended = waiting(&fake, LoginTicket(1));
+            ended.mode = super::Mode::Ended(super::Ended {
+                name: name.to_owned(),
+                outcome: if done {
+                    super::Outcome::Done
+                } else {
+                    super::Outcome::Failed("token expired".to_owned())
+                },
+            });
+            runs.push(edge_run(&stepped(&ended, width, 24).0, width, 24));
+        }
+        assert!(
+            runs.windows(2).all(|pair| pair[0] == pair[1]),
+            "acme at {width}: {runs:?}"
+        );
+        // Every step's slab height equals the list's at 80x24.
+        let mut login = waiting(&fake, LoginTicket(1));
+        let (buf, _) = overlaid(&login, 80, 24);
+        assert_eq!(slab_height(&buf, 80, 24), list_h);
+        login.step(
+            LoginTicket(1),
+            crate::login_worker::LoginStep::Open(format!(
+                "https://auth.example/{}",
+                "u".repeat(120)
+            )),
+        );
+        let (buf, _) = overlaid(&login, 80, 24);
+        assert_eq!(slab_height(&buf, 80, 24), list_h);
+    }
+}
+
+#[test]
+fn login_failed_80x24() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Err(ConfigureError {
+            code: ErrorCode::Usage,
+            message: "token expired".to_owned(),
+        })),
+    );
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!("login_failed_80x24", text_of(&buf, 80, 24).join("\n"));
+}
+
+/// `login`'s step overlay at `width` x `height`: the buffer and the
+/// click targets its step pushed.
+fn stepped(login: &Login, width: u16, height: u16) -> (Buffer, Vec<Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    login.draw_step(area, &mut buf, &mut targets);
+    (buf, targets)
+}
+
+/// The step's title row holds `name`.
+fn step_title(buf: &Buffer, width: u16, height: u16, name: &str) -> bool {
+    text_of(buf, width, height)
+        .iter()
+        .any(|row| row.contains(name))
+}
+
+#[test]
+fn tail_keeps_a_fitting_text_whole() {
+    assert_eq!(super::tail("abc", 3), "abc");
+    assert_eq!(super::tail("abc", 4), "abc");
+    assert_eq!(super::tail("", 0), "");
+}
+
+#[test]
+fn tail_cuts_from_the_left_keeping_the_tail() {
+    let cut = super::tail("abcdef", 4);
+    assert!(cut.starts_with('…'), "{cut:?}");
+    assert!(cut.ends_with('f'), "{cut:?}");
+    assert_eq!(crate::format::width(&cut), 4, "{cut:?}");
+    let cut = super::tail("abcdef", 5);
+    assert_eq!(cut, "…cdef", "{cut:?}");
+}
+
+#[test]
+fn tail_never_exceeds_its_max_at_a_wide_edge() {
+    // The two-column character straddles the cut edge: the kept tail
+    // stays within the budget.
+    let cut = super::tail("ab漢cd", 4);
+    assert!(cut.starts_with('…'), "{cut:?}");
+    assert!(crate::format::width(&cut) <= 4, "{cut:?}");
+    assert_eq!(super::tail("abcdef", 0), "");
+    assert_eq!(super::tail("abcdef", 1), "…");
+    assert_eq!(super::tail("a", 1), "a");
+}
+
+#[test]
+fn the_starting_step_keeps_its_width_without_a_url() {
+    let fake = fake_with(targets());
+    for width in [48, 80, 200] {
+        let login = waiting(&fake, LoginTicket(1));
+        let (buf, _) = stepped(&login, width, 24);
+        let run = edge_run(&buf, width, 24);
+        // A short and a long URL step draw at the same width: the
+        // variable text never counts toward it.
+        for url in [
+            "https://x.co/a".to_owned(),
+            format!("https://auth.example/{}", "u".repeat(90)),
+        ] {
+            let mut url_login = waiting(&fake, LoginTicket(1));
+            url_login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(url));
+            let (url_buf, _) = stepped(&url_login, width, 24);
+            assert_eq!(edge_run(&url_buf, width, 24), run, "at {width}");
+        }
+    }
+}
+
+#[test]
+fn the_starting_step_keeps_the_lists_height() {
+    // Three targets: six body rows.
+    let fake = fake_with(targets());
+    let login = waiting(&fake, LoginTicket(1));
+    let (step_buf, _) = (stepped(&login, 80, 24).0, 0);
+    let (list_buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    assert_eq!(
+        slab_height(&step_buf, 80, 24),
+        slab_height(&list_buf, 80, 24)
+    );
+    assert!(step_title(&step_buf, 80, 24, "codex"));
+    // One browser provider: three body rows.
+    let one = fake_with(vec![LoginTarget {
+        name: "codex".to_owned(),
+        kind: LoginKind::Browser,
+    }]);
+    let context = ctx(&one);
+    let mut login = Login::open(&context);
+    login.selected = 1;
+    login.wait(LoginTicket(1));
+    let (step_buf, _) = stepped(&login, 80, 24);
+    let (list_buf, _) = overlaid(&Login::open(&context), 80, 24);
+    assert_eq!(
+        slab_height(&step_buf, 80, 24),
+        slab_height(&list_buf, 80, 24)
+    );
+}
+
+#[test]
+fn a_very_long_name_cuts_within_the_step_and_matches_the_panel() {
+    let long = "a".repeat(200);
+    let fake = fake_with(vec![LoginTarget {
+        name: long.clone(),
+        kind: LoginKind::Key,
+    }]);
+    let context = ctx(&fake);
+    let mut starting = Login::open(&context);
+    starting.wait(LoginTicket(1));
+    let (start_buf, _) = stepped(&starting, 80, 24);
+    let mut panel = Login::open(&context);
+    panel.key(&Key::Enter, &context);
+    let (panel_buf, _) = stepped(&panel, 80, 24);
+    assert_eq!(edge_run(&start_buf, 80, 24), edge_run(&panel_buf, 80, 24));
+    // No row spills past the 80 columns it draws in, and the whole
+    // name never reads on one row.
+    for buf in [&start_buf, &panel_buf] {
+        for row in text_of(buf, 80, 24) {
+            assert!(crate::format::width(&row) <= 80, "{row:?}");
+        }
+        assert!(
+            !text_of(buf, 80, 24).iter().any(|row| row.contains(&long)),
+            "the long name reads whole"
+        );
+    }
+}
+
+#[test]
+fn tiny_areas_never_panic_a_step() {
+    let fake = fake_with(targets());
+    let mut modes: Vec<Login> = Vec::new();
+    modes.push(Login::open(&ctx(&fake)));
+    let mut panel = Login::open(&ctx(&fake));
+    open_key_panel(&mut panel, &fake);
+    modes.push(panel);
+    let mut secret = Login::open(&ctx(&fake));
+    open_secret_panel(&mut secret, &fake);
+    modes.push(secret);
+    modes.push(waiting(&fake, LoginTicket(1)));
+    let mut url = waiting(&fake, LoginTicket(1));
+    url.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open("https://auth.example/authorize".to_owned()),
+    );
+    modes.push(url);
+    let mut code = waiting(&fake, LoginTicket(1));
+    code.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Code {
+            url: "https://auth.example/device".to_owned(),
+            code: "ABCD-1234".to_owned(),
+        },
+    );
+    modes.push(code);
+    let mut done = waiting(&fake, LoginTicket(1));
+    done.mode = super::Mode::Ended(super::Ended {
+        name: "codex".to_owned(),
+        outcome: super::Outcome::Done,
+    });
+    modes.push(done);
+    let mut failed = waiting(&fake, LoginTicket(1));
+    failed.mode = super::Mode::Ended(super::Ended {
+        name: "codex".to_owned(),
+        outcome: super::Outcome::Failed("token expired".to_owned()),
+    });
+    modes.push(failed);
+    for login in &modes {
+        for width in 0..=5 {
+            for height in 1..=3 {
+                let area = Rect::new(0, 0, width, height);
+                let mut buf = Buffer::empty(area);
+                login.draw_step(area, &mut buf, &mut Vec::new());
+            }
+        }
+    }
+}
+
+#[test]
+fn a_saturated_body_clips_to_the_lists_budget() {
+    for count in [65_534, 65_535] {
+        let many: Vec<LoginTarget> = (0..count)
+            .map(|at| LoginTarget {
+                name: format!("key-{at}"),
+                kind: LoginKind::Key,
+            })
+            .collect();
+        let fake = fake_with(many);
+        let context = ctx(&fake);
+        let mut login = Login::open(&context);
+        login.wait(LoginTicket(1));
+        let (step_buf, _) = stepped(&login, 80, 24);
+        let (list_buf, _) = overlaid(&Login::open(&context), 80, 24);
+        assert_eq!(
+            slab_height(&step_buf, 80, 24),
+            slab_height(&list_buf, 80, 24),
+            "at {count} providers"
+        );
+    }
+}
+
+/// The spans of a label row as text, in order.
+fn span_texts(row: &overlay::Row) -> Vec<String> {
+    row.spans
+        .iter()
+        .map(|span| span.content.to_string())
+        .collect()
+}
+
+/// The label row for `text` with the caret at `caret`, at width `inner`.
+fn label_spans(text: &str, caret: usize, inner: usize) -> Vec<String> {
+    let mut label = crate::input::Draft::default();
+    label.set(text);
+    for _ in caret..text.chars().count() {
+        label.edit(Edit::Left);
+    }
+    span_texts(&super::label_edit_row(&label, inner))
+}
+
+#[test]
+fn a_label_caret_fills_the_room_on_both_sides_to_the_cell() {
+    // The prefix is 14 cells, so an inner width of 24 leaves 10 for the
+    // label. The caret sits at index 8: 9 cells run to its right, and a
+    // cell to its left would make 11, so the left side stays empty.
+    let text = "abcdefghijklmnopqrstuvwxyz";
+    assert_eq!(
+        label_spans(text, 8, 24),
+        ["Label (--as): ", "", "i", "jklmnopqr"]
+    );
+}
+
+#[test]
+fn a_label_caret_fills_the_left_room_to_the_cell() {
+    // The caret at index 20 leaves 5 cells to its right and 4 to its
+    // left: 10 cells in all, and a fifth cell on the left would not fit.
+    let text = "abcdefghijklmnopqrstuvwxyz";
+    assert_eq!(
+        label_spans(text, 20, 24),
+        ["Label (--as): ", "qrst", "u", "vwxyz"]
+    );
+}
+
+#[test]
+fn a_secret_only_list_is_as_wide_as_its_heading_or_row() {
+    // The heading "Secrets" is 7 cells and the row 5, so the list is 7.
+    let targets = vec![LoginTarget {
+        name: "k".to_owned(),
+        kind: LoginKind::Secret,
+    }];
+    assert_eq!(super::list_widest(&targets), 7);
+}
+
+#[test]
+fn a_key_only_list_is_as_wide_as_its_heading_or_row() {
+    // The heading "Providers" is 9 cells and the row "  k  key" is 8, so
+    // the list is 9.
+    let targets = vec![LoginTarget {
+        name: "k".to_owned(),
+        kind: LoginKind::Key,
+    }];
+    assert_eq!(super::list_widest(&targets), 9);
+}
+
+#[test]
+fn a_long_row_sets_the_list_width_uncut() {
+    // Gutter 2, the 20-cell name, 2 cells, then "browser": 31 cells.
+    let targets = vec![LoginTarget {
+        name: "a-long-provider-name".to_owned(),
+        kind: LoginKind::Browser,
+    }];
+    assert_eq!(super::list_widest(&targets), 31);
 }

@@ -363,14 +363,20 @@ fn a_stale_done_after_close_changes_nothing_and_opens_nothing() {
 }
 
 #[test]
-fn the_login_list_is_offered_only_on_the_rows() {
+fn the_login_view_is_offered_in_every_mode() {
     let seam = browser_seam();
     let mut app = browser_login_app(&seam);
-    assert!(app.login_list().is_some());
-    // Waiting on a browser login draws the legacy frame, not the list.
+    assert!(app.login_view().is_some());
+    assert!(app.config_view_screen().is_none());
+    // Waiting on a browser login keeps the view offered, drawn as the step.
     let _ = start_login(&mut app);
-    assert!(app.login_list().is_none());
-    // Esc returns to the rows, which the list draws again.
+    assert!(app.login_view().is_some());
+    assert!(app.config_view_screen().is_none());
+    // Esc returns to the rows, which the view draws again.
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
-    assert!(app.login_list().is_some());
+    assert!(app.login_view().is_some());
+    assert!(app.config_view_screen().is_none());
+    // Esc closes the view, which offers nothing.
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(app.login_view().is_none());
 }

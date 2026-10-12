@@ -382,11 +382,11 @@ impl App {
         }
     }
 
-    /// The open login list, if the login view is open on its rows:
-    /// what the swapped view draws in the shared overlay frame.
-    pub(crate) fn login_list(&self) -> Option<&Login> {
+    /// The open login view, in any mode: what the swapped view draws in
+    /// the shared overlay frame.
+    pub(crate) fn login_view(&self) -> Option<&Login> {
         match &self.config_views.open {
-            Some(Open::Login(login)) if login.list_open() => Some(login),
+            Some(Open::Login(login)) => Some(login),
             _ => None,
         }
     }
@@ -404,7 +404,7 @@ impl App {
             Open::Tools(tools) => tools.frame(usage),
             Open::Skills(skills) => skills.frame(self.config_view_height()),
             Open::Rules(rules) => rules.frame(),
-            Open::Login(login) => login.frame(self.config_view_width()),
+            Open::Login(_) => return None,
             Open::Unavailable(title) => Frame {
                 title: (*title).to_owned(),
                 rows: Vec::new(),
