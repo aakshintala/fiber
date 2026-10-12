@@ -70,10 +70,7 @@ fn each_login_error_maps_to_its_stable_code() {
             LoginError::Store(TokenError::Url),
             ErrorCode::InvalidArguments,
         ),
-        (
-            LoginError::Store(TokenError::Busy),
-            ErrorCode::IoFailed,
-        ),
+        (LoginError::Store(TokenError::Busy), ErrorCode::IoFailed),
         (
             LoginError::Store(TokenError::Files(TokenFileError::Unsynced("path".into()))),
             ErrorCode::IoFailed,
@@ -131,9 +128,7 @@ fn start_full() -> ProviderServer {
                 "www-authenticate",
                 &format!("Bearer resource_metadata=\"{base}/prm\""),
             ),
-            ("GET", "/prm") => {
-                json_response(&json!({"authorization_servers": [base.clone()]}))
-            }
+            ("GET", "/prm") => json_response(&json!({"authorization_servers": [base.clone()]})),
             ("GET", "/.well-known/oauth-authorization-server") => {
                 json_response(&authorization_document(&base))
             }
@@ -165,7 +160,10 @@ fn send_callback(redirect_uri: &str, query: &str) -> String {
     let (host, path) = rest.split_once('/').unwrap();
     let mut stream = TcpStream::connect(host).unwrap();
     stream
-        .write_all(format!("GET /{path}?{query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").as_bytes())
+        .write_all(
+            format!("GET /{path}?{query} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n")
+                .as_bytes(),
+        )
         .unwrap();
     let mut reply = String::new();
     stream.read_to_string(&mut reply).unwrap();
@@ -275,9 +273,7 @@ fn a_404_continues_while_other_statuses_fail_discovery() {
             let base = base_of(request);
             match (request.method.as_str(), request.path.as_str()) {
                 ("GET", "/mcp") => Response::status(401, "{}"),
-                ("GET", "/.well-known/oauth-protected-resource/mcp") => {
-                    Response::status(404, "{}")
-                }
+                ("GET", "/.well-known/oauth-protected-resource/mcp") => Response::status(404, "{}"),
                 ("GET", "/.well-known/oauth-protected-resource") => {
                     if status == 404 {
                         json_response(&json!({"authorization_servers": [base.clone()]}))
@@ -299,7 +295,13 @@ fn a_404_continues_while_other_statuses_fail_discovery() {
         let url = server_url(&server);
         if fails {
             // Before any callback: the failure is terminal at discovery.
-            let error = login(&files, &url, &|_| panic!("no authorization URL is shown"), &*clock).unwrap_err();
+            let error = login(
+                &files,
+                &url,
+                &|_| panic!("no authorization URL is shown"),
+                &*clock,
+            )
+            .unwrap_err();
             assert!(
                 matches!(error, LoginError::Discovery(_)),
                 "{status}: {error:?}"
@@ -312,7 +314,12 @@ fn a_404_continues_while_other_statuses_fail_discovery() {
             assert!(!format!("{error:?}").contains("secret-body"));
         } else {
             run_with_callback(&url, &files, &clock, succeed).unwrap();
-            assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_some());
+            assert!(
+                files
+                    .read(&crate::token::token_key(&url).unwrap())
+                    .unwrap()
+                    .is_some()
+            );
         }
     }
 }
@@ -322,9 +329,7 @@ fn a_dropped_metadata_connection_fails_discovery() {
     let server = ProviderServer::start_responding(|request: &Request| {
         match (request.method.as_str(), request.path.as_str()) {
             ("GET", "/mcp") => Response::status(401, "{}"),
-            ("GET", "/.well-known/oauth-protected-resource/mcp") => {
-                Response::drop_connection()
-            }
+            ("GET", "/.well-known/oauth-protected-resource/mcp") => Response::drop_connection(),
             _ => Response::status(404, "{}"),
         }
     })
@@ -429,7 +434,12 @@ fn a_body_past_one_mib_fails_while_exactly_one_mib_reads() {
             )
             .unwrap_err();
             assert!(matches!(error, LoginError::Discovery(_)), "{error:?}");
-            assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_none());
+            assert!(
+                files
+                    .read(&crate::token::token_key(&url).unwrap())
+                    .unwrap()
+                    .is_none()
+            );
         } else {
             run_with_callback(&url, &files, &clock, succeed).unwrap();
         }
@@ -463,15 +473,27 @@ fn registration_failures_are_terminal_with_no_second_request() {
         let files = FakeTokens::default();
         let clock = fakes::clock::FakeClock::new();
         // Before any callback: a failed registration never reaches it.
-        let error = login(&files, &server_url(&server), &|_| panic!("no authorization URL is shown"), &*clock).unwrap_err();
+        let error = login(
+            &files,
+            &server_url(&server),
+            &|_| panic!("no authorization URL is shown"),
+            &*clock,
+        )
+        .unwrap_err();
         assert!(
             matches!(error, LoginError::Registration(_)),
             "{case}: {error:?}"
         );
-        assert!(!error.to_string().contains("secret-body"), "{case}: {error}");
+        assert!(
+            !error.to_string().contains("secret-body"),
+            "{case}: {error}"
+        );
         let requests = server.requests();
         assert_eq!(
-            requests.iter().filter(|request| request.path == "/register").count(),
+            requests
+                .iter()
+                .filter(|request| request.path == "/register")
+                .count(),
             1,
             "{case}: a failed registration retried"
         );
@@ -535,10 +557,20 @@ fn a_token_endpoint_with_userinfo_fails_and_stores_nothing() {
     let files = FakeTokens::default();
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
-    let error = login(&files, &url, &|_| panic!("no authorization URL is shown"), &*clock)
-        .unwrap_err();
+    let error = login(
+        &files,
+        &url,
+        &|_| panic!("no authorization URL is shown"),
+        &*clock,
+    )
+    .unwrap_err();
     assert!(matches!(error, LoginError::Discovery(_)), "{error:?}");
-    assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_none());
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -594,8 +626,14 @@ fn the_header_document_is_fetched_and_the_first_server_is_used() {
     let url = server_url(&server);
     run_with_callback(&url, &files, &clock, succeed).unwrap();
     assert_eq!(second.requests().len(), 0, "the second server was reached");
-    let stored = files.read(&crate::token::token_key(&url).unwrap()).unwrap().unwrap();
-    assert_eq!(stored["token_endpoint"], json!(format!("{}/token", server.url())));
+    let stored = files
+        .read(&crate::token::token_key(&url).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored["token_endpoint"],
+        json!(format!("{}/token", server.url()))
+    );
 }
 
 #[test]
@@ -617,7 +655,12 @@ fn without_protected_resource_metadata_the_origin_is_its_own_server() {
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
     run_with_callback(&url, &files, &clock, succeed).unwrap();
-    assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_some());
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]
@@ -626,15 +669,11 @@ fn the_well_known_paths_are_tried_path_inserted_first() {
         let base = base_of(request);
         match (request.method.as_str(), request.path.as_str()) {
             ("GET", "/mcp") => Response::status(401, "{}"),
-            ("GET", "/.well-known/oauth-protected-resource/mcp") => {
-                Response::status(404, "{}")
-            }
+            ("GET", "/.well-known/oauth-protected-resource/mcp") => Response::status(404, "{}"),
             ("GET", "/.well-known/oauth-protected-resource") => {
                 json_response(&json!({"authorization_servers": [base.clone()]}))
             }
-            ("GET", "/.well-known/oauth-authorization-server") => {
-                Response::status(404, "{}")
-            }
+            ("GET", "/.well-known/oauth-authorization-server") => Response::status(404, "{}"),
             ("GET", "/.well-known/openid-configuration") => {
                 json_response(&authorization_document(&base))
             }
@@ -648,7 +687,11 @@ fn the_well_known_paths_are_tried_path_inserted_first() {
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
     run_with_callback(&url, &files, &clock, succeed).unwrap();
-    let paths: Vec<String> = server.requests().into_iter().map(|request| request.path).collect();
+    let paths: Vec<String> = server
+        .requests()
+        .into_iter()
+        .map(|request| request.path)
+        .collect();
     assert!(paths.contains(&"/.well-known/oauth-protected-resource/mcp".to_owned()));
     assert!(paths.contains(&"/.well-known/openid-configuration".to_owned()));
 }
@@ -675,9 +718,7 @@ fn without_s256_the_login_is_refused_before_any_registration() {
                 ("GET", "/.well-known/oauth-protected-resource/mcp") => {
                     json_response(&json!({"authorization_servers": [base.clone()]}))
                 }
-                ("GET", "/.well-known/oauth-authorization-server") => {
-                    json_response(&document)
-                }
+                ("GET", "/.well-known/oauth-authorization-server") => json_response(&document),
                 _ => Response::status(404, "{}"),
             }
         })
@@ -685,15 +726,28 @@ fn without_s256_the_login_is_refused_before_any_registration() {
         let files = FakeTokens::default();
         let clock = fakes::clock::FakeClock::new();
         let url = server_url(&server);
-        let error = login(&files, &url, &|_| panic!("no authorization URL is shown"), &*clock)
-            .unwrap_err();
+        let error = login(
+            &files,
+            &url,
+            &|_| panic!("no authorization URL is shown"),
+            &*clock,
+        )
+        .unwrap_err();
         assert!(matches!(error, LoginError::PkceUnsupported), "{error:?}");
         assert_eq!(error.code(), ErrorCode::ConfigInvalid);
         assert!(
-            server.requests().iter().all(|request| request.path != "/register"),
+            server
+                .requests()
+                .iter()
+                .all(|request| request.path != "/register"),
             "a registration request was sent"
         );
-        assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_none());
+        assert!(
+            files
+                .read(&crate::token::token_key(&url).unwrap())
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -706,15 +760,31 @@ fn the_authorization_url_and_exchange_carry_the_pkce_shape() {
     let canonical = crate::token::canonical_url(&url).unwrap();
     let (sent, received) = mpsc::channel();
     std::thread::scope(|scope| {
-        let login = scope.spawn(|| login(&files, &url, &|url| sent.send(url.to_owned()).unwrap(), &*clock));
+        let login = scope.spawn(|| {
+            login(
+                &files,
+                &url,
+                &|url| sent.send(url.to_owned()).unwrap(),
+                &*clock,
+            )
+        });
         let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the authorization URL");
         let redirect = query_param(&shown, "redirect_uri").unwrap();
         assert!(redirect.starts_with("http://127.0.0.1:"), "{redirect}");
         assert!(redirect.ends_with("/callback"), "{redirect}");
-        assert_eq!(query_param(&shown, "response_type").as_deref(), Some("code"));
+        assert_eq!(
+            query_param(&shown, "response_type").as_deref(),
+            Some("code")
+        );
         assert_eq!(query_param(&shown, "client_id").as_deref(), Some("c1"));
-        assert_eq!(query_param(&shown, "code_challenge_method").as_deref(), Some("S256"));
-        assert_eq!(query_param(&shown, "resource").as_deref(), Some(canonical.as_str()));
+        assert_eq!(
+            query_param(&shown, "code_challenge_method").as_deref(),
+            Some("S256")
+        );
+        assert_eq!(
+            query_param(&shown, "resource").as_deref(),
+            Some(canonical.as_str())
+        );
         let challenge = query_param(&shown, "code_challenge").unwrap();
         let state = query_param(&shown, "state").unwrap();
         assert_eq!(challenge.len(), 43, "{challenge}");
@@ -744,7 +814,7 @@ fn the_authorization_url_and_exchange_carry_the_pkce_shape() {
     assert_eq!(field("code_verifier").len(), 43);
     let redirect = field("redirect_uri");
     assert!(redirect.starts_with("http://127.0.0.1:"), "{redirect}");
-    assert_eq!(form.iter().count(), 6);
+    assert_eq!(form.len(), 6);
 }
 
 #[test]
@@ -758,7 +828,14 @@ fn the_challenge_is_s256_of_the_verifier() {
     let url = server_url(&server);
     let (sent, received) = mpsc::channel();
     std::thread::scope(|scope| {
-        let login = scope.spawn(|| login(&files, &url, &|url| sent.send(url.to_owned()).unwrap(), &*clock));
+        let login = scope.spawn(|| {
+            login(
+                &files,
+                &url,
+                &|url| sent.send(url.to_owned()).unwrap(),
+                &*clock,
+            )
+        });
         let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the authorization URL");
         let redirect = query_param(&shown, "redirect_uri").unwrap();
         let state = query_param(&shown, "state").unwrap();
@@ -792,11 +869,17 @@ fn the_stored_record_holds_the_token_the_endpoint_and_the_url() {
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
     run_with_callback(&url, &files, &clock, succeed).unwrap();
-    let stored = files.read(&crate::token::token_key(&url).unwrap()).unwrap().unwrap();
+    let stored = files
+        .read(&crate::token::token_key(&url).unwrap())
+        .unwrap()
+        .unwrap();
     let canonical = crate::token::canonical_url(&url).unwrap();
     assert_eq!(stored["access_token"], json!("at-1"));
     assert_eq!(stored["refresh_token"], json!("rt-1"));
-    assert_eq!(stored["token_endpoint"], json!(format!("{}/token", server.url())));
+    assert_eq!(
+        stored["token_endpoint"],
+        json!(format!("{}/token", server.url()))
+    );
     assert_eq!(stored["client_id"], json!("c1"));
     assert_eq!(stored["url"], json!(canonical));
     let wall_secs = contract::clock::wall_ms(clock.wall()) / 1000;
@@ -828,14 +911,20 @@ fn without_expires_in_no_expiry_is_stored() {
     let clock = fakes::clock::FakeClock::new();
     let url = server_url(&server);
     run_with_callback(&url, &files, &clock, succeed).unwrap();
-    let stored = files.read(&crate::token::token_key(&url).unwrap()).unwrap().unwrap();
+    let stored = files
+        .read(&crate::token::token_key(&url).unwrap())
+        .unwrap()
+        .unwrap();
     assert!(stored.get("expires_at").is_none(), "{stored}");
 }
 
 #[test]
 fn bad_token_replies_fail_and_store_nothing() {
     for (reply, what) in [
-        (json!({"token_type": "Bearer"}).to_string(), "no access token"),
+        (
+            json!({"token_type": "Bearer"}).to_string(),
+            "no access token",
+        ),
         (
             json!({"access_token": "at-1", "token_type": "mac"}).to_string(),
             "non-Bearer type",
@@ -862,9 +951,18 @@ fn bad_token_replies_fail_and_store_nothing() {
         let clock = fakes::clock::FakeClock::new();
         let url = server_url(&server);
         let error = run_with_callback(&url, &files, &clock, succeed).unwrap_err();
-        assert!(matches!(error, LoginError::Exchange(_)), "{what}: {error:?}");
+        assert!(
+            matches!(error, LoginError::Exchange(_)),
+            "{what}: {error:?}"
+        );
         assert!(!error.to_string().contains("secret"), "{what}: {error}");
-        assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_none(), "{what}");
+        assert!(
+            files
+                .read(&crate::token::token_key(&url).unwrap())
+                .unwrap()
+                .is_none(),
+            "{what}"
+        );
     }
 }
 
@@ -895,11 +993,27 @@ fn exchange_failures_are_terminal_with_no_second_request() {
         let clock = fakes::clock::FakeClock::new();
         let url = server_url(&server);
         let error = run_with_callback(&url, &files, &clock, succeed).unwrap_err();
-        assert!(matches!(error, LoginError::Exchange(_)), "{case}: {error:?}");
-        assert!(!error.to_string().contains("secret-body"), "{case}: {error}");
-        let exchanges = server.requests().into_iter().filter(|request| request.path == "/token").count();
+        assert!(
+            matches!(error, LoginError::Exchange(_)),
+            "{case}: {error:?}"
+        );
+        assert!(
+            !error.to_string().contains("secret-body"),
+            "{case}: {error}"
+        );
+        let exchanges = server
+            .requests()
+            .into_iter()
+            .filter(|request| request.path == "/token")
+            .count();
         assert_eq!(exchanges, 1, "{case}: the exchange retried");
-        assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_none(), "{case}");
+        assert!(
+            files
+                .read(&crate::token::token_key(&url).unwrap())
+                .unwrap()
+                .is_none(),
+            "{case}"
+        );
     }
 }
 
@@ -915,8 +1029,18 @@ fn a_callback_with_the_wrong_state_fails_and_stores_nothing() {
     })
     .unwrap_err();
     assert!(matches!(error, LoginError::Callback(_)), "{error:?}");
-    assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_none());
-    assert!(server.requests().iter().all(|request| request.path != "/token"));
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        server
+            .requests()
+            .iter()
+            .all(|request| request.path != "/token")
+    );
 }
 
 #[test]
@@ -934,7 +1058,12 @@ fn a_callback_error_fails_denied_printing_only_the_code() {
     assert!(error.to_string().contains("access_denied"), "{error}");
     assert!(!error.to_string().contains("secret"), "{error}");
     assert!(!format!("{error:?}").contains("secret"), "{error:?}");
-    assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_none());
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -951,7 +1080,10 @@ fn an_unknown_callback_error_prints_the_generic_sentence() {
     })
     .unwrap_err();
     assert!(matches!(error, LoginError::Denied(_)), "{error:?}");
-    assert_eq!(error.to_string(), "The authorization server returned an error.");
+    assert_eq!(
+        error.to_string(),
+        "The authorization server returned an error."
+    );
 }
 
 #[test]
@@ -962,14 +1094,24 @@ fn a_request_for_another_path_gets_404_and_the_wait_continues() {
     let url = server_url(&server);
     let (sent, received) = mpsc::channel();
     std::thread::scope(|scope| {
-        let login = scope.spawn(|| login(&files, &url, &|url| sent.send(url.to_owned()).unwrap(), &*clock));
+        let login = scope.spawn(|| {
+            login(
+                &files,
+                &url,
+                &|url| sent.send(url.to_owned()).unwrap(),
+                &*clock,
+            )
+        });
         let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the authorization URL");
         let redirect = query_param(&shown, "redirect_uri").unwrap();
         let (_, rest) = redirect.split_once("://").unwrap();
         let (host, _) = rest.split_once('/').unwrap();
         let mut other = TcpStream::connect(host).unwrap();
         other
-            .write_all(format!("GET /other HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").as_bytes())
+            .write_all(
+                format!("GET /other HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
             .unwrap();
         let mut reply = String::new();
         other.read_to_string(&mut reply).unwrap();
@@ -978,7 +1120,12 @@ fn a_request_for_another_path_gets_404_and_the_wait_continues() {
         send_callback(&redirect, &format!("code=abc&state={state}"));
         login.join().unwrap().unwrap();
     });
-    assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_some());
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]
@@ -989,7 +1136,14 @@ fn a_head_past_8kib_gets_431_and_the_wait_continues() {
     let url = server_url(&server);
     let (sent, received) = mpsc::channel();
     std::thread::scope(|scope| {
-        let login = scope.spawn(|| login(&files, &url, &|url| sent.send(url.to_owned()).unwrap(), &*clock));
+        let login = scope.spawn(|| {
+            login(
+                &files,
+                &url,
+                &|url| sent.send(url.to_owned()).unwrap(),
+                &*clock,
+            )
+        });
         let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the authorization URL");
         let redirect = query_param(&shown, "redirect_uri").unwrap();
         let (_, rest) = redirect.split_once("://").unwrap();
@@ -1001,17 +1155,23 @@ fn a_head_past_8kib_gets_431_and_the_wait_continues() {
         let mut big = TcpStream::connect(host).unwrap();
         big.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         let padding = "x".repeat(MAX_HEAD);
-        let _written = big.write_all(format!("GET /callback?{padding} HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes());
+        let _written = big.write_all(
+            format!("GET /callback?{padding} HTTP/1.1\r\nHost: {host}\r\n\r\n").as_bytes(),
+        );
         let mut reply = String::new();
-        match big.read_to_string(&mut reply) {
-            Ok(_) => assert!(reply.contains("431"), "{reply}"),
-            Err(_) => {}
+        if big.read_to_string(&mut reply).is_ok() {
+            assert!(reply.contains("431"), "{reply}");
         }
         let state = query_param(&shown, "state").unwrap();
         send_callback(&redirect, &format!("code=abc&state={state}"));
         login.join().unwrap().unwrap();
     });
-    assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_some());
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]
@@ -1034,7 +1194,14 @@ fn an_idle_connection_is_dropped_and_a_later_callback_succeeds() {
     let url = server_url(&server);
     let (sent, received) = mpsc::channel();
     std::thread::scope(|scope| {
-        let login = scope.spawn(|| login(&files, &url, &|url| sent.send(url.to_owned()).unwrap(), &*clock));
+        let login = scope.spawn(|| {
+            login(
+                &files,
+                &url,
+                &|url| sent.send(url.to_owned()).unwrap(),
+                &*clock,
+            )
+        });
         let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received, "the authorization URL");
         let redirect = query_param(&shown, "redirect_uri").unwrap();
         let (_, rest) = redirect.split_once("://").unwrap();
@@ -1044,12 +1211,21 @@ fn an_idle_connection_is_dropped_and_a_later_callback_succeeds() {
         let mut idle = TcpStream::connect(host).unwrap();
         idle.set_read_timeout(Some(WITHIN)).unwrap();
         let mut byte = [0_u8; 1];
-        assert_eq!(idle.read(&mut byte).unwrap(), 0, "the idle connection stayed open");
+        assert_eq!(
+            idle.read(&mut byte).unwrap(),
+            0,
+            "the idle connection stayed open"
+        );
         let state = query_param(&shown, "state").unwrap();
         send_callback(&redirect, &format!("code=abc&state={state}"));
         login.join().unwrap().unwrap();
     });
-    assert!(files.read(&crate::token::token_key(&url).unwrap()).unwrap().is_some());
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_some()
+    );
 }
 
 #[test]
@@ -1064,7 +1240,12 @@ fn without_a_callback_the_wait_fails_at_900s_and_stores_nothing() {
         let files = &files;
         let moved = Arc::clone(&clock);
         let login = scope.spawn(move || {
-            let result = login(files, &url, &|url| sent_url.send(url.to_owned()).unwrap(), &*moved);
+            let result = login(
+                files,
+                &url,
+                &|url| sent_url.send(url.to_owned()).unwrap(),
+                &*moved,
+            );
             sent_done.send(result).unwrap();
         });
         // The authorization URL is shown before the wait.
@@ -1080,7 +1261,12 @@ fn without_a_callback_the_wait_fails_at_900s_and_stores_nothing() {
         assert!(matches!(result, Err(LoginError::Timeout)), "{result:?}");
         login.join().unwrap();
     });
-    assert!(files.read(&crate::token::token_key(&server_url(&server)).unwrap()).unwrap().is_none());
+    assert!(
+        files
+            .read(&crate::token::token_key(&server_url(&server)).unwrap())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -1095,7 +1281,12 @@ fn at_899s_the_wait_continues_and_at_900s_it_fails() {
         let files = &files;
         let moved = Arc::clone(&clock);
         let login = scope.spawn(move || {
-            let result = login(files, &url, &|url| sent_url.send(url.to_owned()).unwrap(), &*moved);
+            let result = login(
+                files,
+                &url,
+                &|url| sent_url.send(url.to_owned()).unwrap(),
+                &*moved,
+            );
             sent_done.send(result).unwrap();
         });
         fakes::Deadline::after(WITHIN).recv_or_fail(&received_url, "the authorization URL");
@@ -1107,7 +1298,9 @@ fn at_899s_the_wait_continues_and_at_900s_it_fails() {
         clock.advance(Duration::from_secs(899));
         // Still waiting: a short bounded receive must time out.
         assert!(
-            fakes::Deadline::after(Duration::from_millis(200)).recv(&received_done).is_err(),
+            fakes::Deadline::after(Duration::from_millis(200))
+                .recv(&received_done)
+                .is_err(),
             "the login ended before 900 s"
         );
         clock.advance(Duration::from_secs(1));
@@ -1130,24 +1323,36 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
         let files = &files;
         let moved = Arc::clone(&clock);
         let login = scope.spawn(move || {
-            let result = login(files, &url, &|url| sent_url.send(url.to_owned()).unwrap(), &*moved);
+            let result = login(
+                files,
+                &url,
+                &|url| sent_url.send(url.to_owned()).unwrap(),
+                &*moved,
+            );
             sent_done.send(result).unwrap();
         });
-        let shown = fakes::Deadline::after(WITHIN).recv_or_fail(&received_url, "the authorization URL");
+        let shown =
+            fakes::Deadline::after(WITHIN).recv_or_fail(&received_url, "the authorization URL");
         let deadline = clock.origin() + CALLBACK_WAIT;
         assert!(
             clock.await_parked(deadline, WITHIN),
             "the login never waited on the clock"
         );
-        // A slow drip: one byte per poll, never completing a head.
+        // A slow drip: one byte per poll, never completing a head. The
+        // pacing waits through the test deadline, the sanctioned wait;
+        // the bytes themselves prove an incomplete head cannot stop the
+        // injected 900 s deadline.
         let redirect = query_param(&shown, "redirect_uri").unwrap();
         let (_, rest) = redirect.split_once("://").unwrap();
         let (host, _) = rest.split_once('/').unwrap();
         let mut drip = TcpStream::connect(host).unwrap();
         drip.write_all(b"G").unwrap();
+        let (_paced, pacing) = mpsc::channel::<()>();
         scope.spawn(move || {
-            for _ in 0..200 {
-                std::thread::sleep(Duration::from_millis(30));
+            for _ in 0..60 {
+                match fakes::Deadline::after(Duration::from_millis(30)).recv(&pacing) {
+                    Ok(()) | Err(_) => {}
+                }
                 if drip.write_all(b"G").is_err() {
                     return;
                 }
@@ -1159,5 +1364,10 @@ fn a_slow_drip_does_not_stop_the_900s_deadline() {
         assert!(matches!(result, Err(LoginError::Timeout)), "{result:?}");
         login.join().unwrap();
     });
-    assert!(files.read(&crate::token::token_key(&server_url(&server)).unwrap()).unwrap().is_none());
+    assert!(
+        files
+            .read(&crate::token::token_key(&server_url(&server)).unwrap())
+            .unwrap()
+            .is_none()
+    );
 }

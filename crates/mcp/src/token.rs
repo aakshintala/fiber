@@ -428,7 +428,7 @@ pub(crate) fn key(canonical: &str) -> String {
 /// the canonical URL's bytes (`docs/mcp.md`, "What Fiber does with
 /// MCP").
 pub fn token_key(url: &str) -> Result<String, TokenError> {
-    Ok(key(&canonical_url(url)?)) 
+    Ok(key(&canonical_url(url)?))
 }
 /// Whether the URL's authority carries a user name or password.
 pub fn url_has_userinfo(url: &str) -> bool {

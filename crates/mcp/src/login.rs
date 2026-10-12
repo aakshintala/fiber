@@ -132,15 +132,17 @@ impl std::fmt::Display for LoginError {
                 "Fiber could not register with the authorization server at {step}."
             ),
             Self::Exchange(step) => {
-                write!(f, "Fiber could not exchange the authorization code at {step}.")
+                write!(
+                    f,
+                    "Fiber could not exchange the authorization code at {step}."
+                )
             }
             Self::Callback(step) => {
                 write!(f, "Fiber could not read the browser callback at {step}.")
             }
-            Self::Denied(code) if is_known_error(code) => write!(
-                f,
-                "The authorization server returned an error: {code}."
-            ),
+            Self::Denied(code) if is_known_error(code) => {
+                write!(f, "The authorization server returned an error: {code}.")
+            }
             Self::Denied(_) => f.write_str("The authorization server returned an error."),
             Self::PkceUnsupported => {
                 f.write_str("its authorization server does not offer PKCE with S256")
@@ -269,10 +271,7 @@ fn resource_metadata_url(header: &str) -> Option<String> {
 /// Fetches one JSON document: a 404 means absent, a 2xx is parsed and a
 /// body past 1 MiB or not JSON fails the named step, and any other status
 /// or a transport error fails it too. Nothing fetched is retried.
-fn fetch_json(
-    url: &str,
-    step: &str,
-) -> Result<Option<Value>, LoginError> {
+fn fetch_json(url: &str, step: &str) -> Result<Option<Value>, LoginError> {
     let (status, _, body) = post_get(url).map_err(|_| LoginError::Discovery(step.to_owned()))?;
     if status == 404 {
         return Ok(None);
@@ -283,7 +282,9 @@ fn fetch_json(
     if body.len() > MAX_BODY {
         return Err(LoginError::Discovery(step.to_owned()));
     }
-    serde_json::from_slice(&body).map(Some).map_err(|_| LoginError::Discovery(step.to_owned()))
+    serde_json::from_slice(&body)
+        .map(Some)
+        .map_err(|_| LoginError::Discovery(step.to_owned()))
 }
 
 fn post_get(url: &str) -> Result<(u16, Option<String>, Vec<u8>), ureq::Error> {
@@ -315,7 +316,9 @@ fn protected_resource(
     let path = path.split(['?', '#']).next().unwrap_or_default();
     let mut candidates = Vec::new();
     if !path.is_empty() && path != "/" {
-        candidates.push(format!("{origin}/.well-known/oauth-protected-resource{path}"));
+        candidates.push(format!(
+            "{origin}/.well-known/oauth-protected-resource{path}"
+        ));
     }
     candidates.push(format!("{origin}/.well-known/oauth-protected-resource"));
     for url in &candidates {
@@ -398,9 +401,7 @@ fn discovered(metadata: &Value) -> Result<Discovered, LoginError> {
     let offers = metadata
         .get("code_challenge_methods_supported")
         .and_then(Value::as_array)
-        .is_some_and(|methods| {
-            methods.iter().any(|method| method.as_str() == Some("S256"))
-        });
+        .is_some_and(|methods| methods.iter().any(|method| method.as_str() == Some("S256")));
     if !offers {
         return Err(LoginError::PkceUnsupported);
     }
@@ -423,8 +424,8 @@ fn register(registration_endpoint: &str, redirect_uri: &str) -> Result<String, L
         "client_name": "Fiber",
     })
     .to_string();
-    let (status, bytes) =
-        post_json(registration_endpoint, &body).map_err(|_| LoginError::Registration(STEP.to_owned()))?;
+    let (status, bytes) = post_json(registration_endpoint, &body)
+        .map_err(|_| LoginError::Registration(STEP.to_owned()))?;
     if !(200..300).contains(&status) || bytes.len() > MAX_BODY {
         return Err(LoginError::Registration(STEP.to_owned()));
     }
@@ -439,27 +440,28 @@ fn register(registration_endpoint: &str, redirect_uri: &str) -> Result<String, L
 /// section 4.1): a verifier, and a `state` of the same shape.
 fn random_43() -> String {
     let mut bytes = [0_u8; 32];
-    ring::rand::SystemRandom::new().fill(&mut bytes).unwrap_or_else(|_| {
+    if ring::rand::SystemRandom::new().fill(&mut bytes).is_err() {
+        // Practically unreachable: the platform has no random bytes to
+        // give, so anything needing them is doomed already. The fallback
+        // still differs per call, from the process and the stack.
         use std::hash::{BuildHasher, Hasher};
-        // Randomness is best-effort here only in the sense that a
-        // platform without any cannot run at all; the fallback below
-        // still differs per call.
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-        hasher.write(&std::time::SystemTime::now().elapsed().map_or(0, |d| d.as_nanos()).to_le_bytes());
         hasher.write(&std::process::id().to_le_bytes());
-        hasher.write(&bytes);
-            let seed = hasher.finish();
-            for (at, byte) in bytes.iter_mut().enumerate() {
-                *byte = seed.wrapping_add(at as u64 * 0x9E3779B97F4A7C15).to_le_bytes()[0];
-            }
-        });
+        hasher.write(&(&raw const bytes as usize).to_le_bytes());
+        let seed = hasher.finish().to_le_bytes();
+        for (byte, seed_byte) in bytes.iter_mut().zip(seed.iter().cycle()) {
+            *byte = *seed_byte;
+        }
+    }
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// The S256 challenge of `verifier` (RFC 7636, section 4.2).
 fn challenge_of(verifier: &str) -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(ring::digest::digest(&ring::digest::SHA256, verifier.as_bytes()))
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(ring::digest::digest(
+        &ring::digest::SHA256,
+        verifier.as_bytes(),
+    ))
 }
 
 /// Percent-encodes a query value: the unreserved set stays, everything
@@ -514,9 +516,20 @@ fn decode(text: &str) -> String {
         match byte {
             b'+' => out.push(b' '),
             b'%' => {
+                // Two hex digits make a byte; anything else leaves the
+                // `%` as written and the next bytes to be read as
+                // themselves.
+                let mut ahead = bytes.clone();
                 let hex = |next: Option<u8>| next.and_then(|b| char::from(b).to_digit(16));
-                match (hex(bytes.next()), hex(bytes.next())) {
-                    (Some(high), Some(low)) => out.push((high * 16 + low) as u8),
+                match (hex(ahead.next()), hex(ahead.next())) {
+                    (Some(high), Some(low)) => {
+                        if let Ok(value) = u8::try_from(high * 16 + low) {
+                            out.push(value);
+                            bytes = ahead;
+                        } else {
+                            out.push(b'%');
+                        }
+                    }
                     _ => out.push(b'%'),
                 }
             }
@@ -599,7 +612,9 @@ fn answer(
     }
     let Some(target) = request_target(&head) else {
         respond(&mut stream, "400 Bad Request");
-        return Some(Served::Failed(LoginError::Callback("callback request".to_owned())));
+        return Some(Served::Failed(LoginError::Callback(
+            "callback request".to_owned(),
+        )));
     };
     let path = target.split_once('?').map_or(target, |(path, _)| path);
     if path != "/callback" {
@@ -608,7 +623,12 @@ fn answer(
     }
     let query = target.split_once('?').map_or("", |(_, query)| query);
     let pairs = parse_query(query);
-    let find = |name| pairs.iter().find(|(key, _)| key == name).map(|(_, v)| v.as_str());
+    let find = |name| {
+        pairs
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, v)| v.as_str())
+    };
     respond(&mut stream, "200 OK");
     if let Some(error) = find("error") {
         // Only the seven codes print; any other value, and never the
@@ -619,10 +639,14 @@ fn answer(
         return Some(Served::Failed(LoginError::Denied(String::new())));
     }
     let (Some(code), Some(returned)) = (find("code"), find("state")) else {
-        return Some(Served::Failed(LoginError::Callback("callback parameters".to_owned())));
+        return Some(Served::Failed(LoginError::Callback(
+            "callback parameters".to_owned(),
+        )));
     };
     if code.is_empty() || returned != state {
-        return Some(Served::Failed(LoginError::Callback("callback state".to_owned())));
+        return Some(Served::Failed(LoginError::Callback(
+            "callback state".to_owned(),
+        )));
     }
     Some(Served::Code(code.to_owned()))
 }
@@ -636,6 +660,9 @@ fn wait_callback(
     deadline: Instant,
     state: &str,
 ) -> Result<String, LoginError> {
+    // The poll pause: one condvar wait, so the idle loop never spins
+    // and the fake clock still sees every park below.
+    let poll = (std::sync::Mutex::new(()), std::sync::Condvar::new());
     loop {
         if clock.now() >= deadline {
             return Err(LoginError::Timeout);
@@ -646,16 +673,18 @@ fn wait_callback(
                 Some(Served::Code(code)) => return Ok(code),
                 Some(Served::Failed(error)) => return Err(error),
             },
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                // Parked on the clock, so a test's `await_parked` sees the
-                // wait; the short real pause paces the poll.
-                clock.wait_until(Some(deadline), &mut |_| {
-                    std::thread::sleep(POLL_PAUSE);
-                });
-            }
             Err(_) => {
-                clock.wait_until(Some(deadline), &mut |_| {
-                    std::thread::sleep(POLL_PAUSE);
+                // Parked on the clock, so a test's `await_parked` sees
+                // the wait; the pause is the shorter of the clock's
+                // bound and the poll, so the deadline still ends it.
+                clock.wait_until(Some(deadline), &mut |bound| {
+                    let pause = bound.map_or(POLL_PAUSE, |bound| bound.min(POLL_PAUSE));
+                    let (lock, changed) = &poll;
+                    if let Ok(guard) = lock.lock() {
+                        let _waited = changed
+                            .wait_timeout(guard, pause)
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    }
                 });
             }
         }
@@ -666,6 +695,10 @@ fn wait_callback(
 /// A reply without `access_token`, with a non-Bearer `token_type`, or not
 /// JSON fails and stores nothing; without `expires_in` no expiry is
 /// stored.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one straight-line exchange: endpoints, code, client, verifier, URL and clock"
+)]
 fn exchange(
     files: &dyn TokenFiles,
     token_endpoint: &str,
@@ -749,12 +782,18 @@ pub fn login(
     // listener is closed on every exit path.
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .map_err(|_| LoginError::Unreachable("callback listener".to_owned()))?;
-    listener.set_nonblocking(true).map_err(|_| LoginError::Unreachable("callback listener".to_owned()))?;
-    let port = listener.local_addr().map(|addr| addr.port()).map_err(|_| LoginError::Unreachable("callback listener".to_owned()))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|_| LoginError::Unreachable("callback listener".to_owned()))?;
+    let port = listener
+        .local_addr()
+        .map(|addr| addr.port())
+        .map_err(|_| LoginError::Unreachable("callback listener".to_owned()))?;
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
     // The unauthenticated probe is read for its `WWW-Authenticate` header
     // on any status.
-    let (_, authenticate, _) = get(&canonical).map_err(|_| LoginError::Unreachable(canonical.clone()))?;
+    let (_, authenticate, _) =
+        get(&canonical).map_err(|_| LoginError::Unreachable(canonical.clone()))?;
     let prm = protected_resource((0, authenticate), &canonical, &origin)?;
     let base = authorization_base(prm.as_ref(), &origin)?;
     let metadata = authorization_metadata(&base)?;
@@ -773,7 +812,10 @@ pub fn login(
     // The one exemption that prints `state` on purpose: the authorization
     // URL the browser opens.
     present(&url);
-    let deadline = clock.now().checked_add(CALLBACK_WAIT).unwrap_or(clock.now());
+    let deadline = clock
+        .now()
+        .checked_add(CALLBACK_WAIT)
+        .unwrap_or(clock.now());
     let code = wait_callback(&listener, clock, deadline, &state)?;
     exchange(
         files,
