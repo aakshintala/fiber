@@ -131,10 +131,27 @@ impl Vm {
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let entry = Rc::new(Cell::new(true));
         let init = Rc::new(Cell::new(true));
-        let tools =
-            super::tool::install(&lua, problems.clone(), Rc::clone(&init)).map_err(lua_error)?;
+        // A registration refused during a load fails it even when Lua catches the raise.
+        let registration_violations = violations.clone();
+        let registration_loading = Rc::clone(&loading);
+        let note_violation = lua
+            .create_function(move |_, message: String| {
+                if let Some(file) = registration_loading.borrow().as_ref() {
+                    registration_violations.raw_push(format!("{file}: {message}"))?;
+                }
+                Ok(())
+            })
+            .map_err(lua_error)?;
+        let tools = super::tool::install(
+            &lua,
+            problems.clone(),
+            Rc::clone(&init),
+            note_violation.clone(),
+        )
+        .map_err(lua_error)?;
         let search =
-            super::search::install(&lua, problems.clone(), Rc::clone(&init)).map_err(lua_error)?;
+            super::search::install(&lua, problems.clone(), Rc::clone(&init), note_violation)
+                .map_err(lua_error)?;
         let (http_tag, timer_funcs) = host::install(
             &lua,
             host::HostContext {

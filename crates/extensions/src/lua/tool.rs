@@ -64,10 +64,12 @@ impl Registry {
 /// `fiber.tool` raises at the caller's line once the entry script has
 /// returned, and registers otherwise.
 const GUARD: &str = r#"
-local register, in_entry = ...
+local register, in_entry, note_violation = ...
 fiber.tool = function(name, spec)
   if not in_entry() then
-    error("fiber.tool: a tool registers only while `init.lua` runs", 2)
+    local message = "fiber.tool: a tool registers only while `init.lua` runs"
+    note_violation(message)
+    error(message, 2)
   end
   register(name, spec)
 end
@@ -77,7 +79,12 @@ end
 /// `problems`, for Fiber's notice, and the entry script goes on. A call once
 /// `entry` is false raises in the calling code: the session's tool set is
 /// fixed by then.
-pub(super) fn install(lua: &Lua, problems: Table, entry: Rc<Cell<bool>>) -> mlua::Result<Registry> {
+pub(super) fn install(
+    lua: &Lua,
+    problems: Table,
+    entry: Rc<Cell<bool>>,
+    note_violation: Function,
+) -> mlua::Result<Registry> {
     let functions = lua.create_table()?;
     let declared = Rc::new(RefCell::new(BTreeMap::new()));
     let registry = Registry {
@@ -105,7 +112,7 @@ pub(super) fn install(lua: &Lua, problems: Table, entry: Rc<Cell<bool>>) -> mlua
     let in_entry = crate::host::failure::in_entry(lua, &entry)?;
     lua.load(GUARD)
         .set_name("=fiber.tool")
-        .call::<()>((register, in_entry))?;
+        .call::<()>((register, in_entry, note_violation))?;
     Ok(registry)
 }
 

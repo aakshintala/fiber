@@ -87,6 +87,36 @@ fn provider_file_refuses_wrong_duplicate_missing_and_tool_registrations() {
 }
 
 #[test]
+fn a_provider_file_cannot_hide_a_tool_registration_refusal_with_pcall() {
+    let (_dir, ext) = provider_file(
+        "fiber.provider('p', {})\n local ok = pcall(fiber.tool, 't', {})\n assert(not ok)",
+    );
+    let error = within(move || ext.provider_functions("p")).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ExtensionFailed);
+    let Error::Lua { message, .. } = error else {
+        panic!("{error:?}")
+    };
+    assert!(message.contains("providers/p.lua"), "{message}");
+    assert!(message.contains("fiber.tool"), "{message}");
+    assert!(message.contains("only while `init.lua` runs"), "{message}");
+}
+
+#[test]
+fn a_provider_file_cannot_hide_a_search_backend_registration_refusal_with_pcall() {
+    let (_dir, ext) = provider_file(
+        "fiber.provider('p', {})\n local ok = pcall(fiber.search_backend, 's', {})\n assert(not ok)",
+    );
+    let error = within(move || ext.provider_functions("p")).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ExtensionFailed);
+    let Error::Lua { message, .. } = error else {
+        panic!("{error:?}")
+    };
+    assert!(message.contains("providers/p.lua"), "{message}");
+    assert!(message.contains("fiber.search_backend"), "{message}");
+    assert!(message.contains("only while `init.lua` runs"), "{message}");
+}
+
+#[test]
 fn absent_provider_file_starts_no_vm() {
     let dir = fakes::TempDir::new("absent-provider");
     let ext = Arc::new(LuaExtension::new(

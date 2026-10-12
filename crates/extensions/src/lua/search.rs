@@ -39,10 +39,12 @@ impl Registry {
 /// `fiber.search_backend` raises at the caller's line once the entry script
 /// has returned, and registers otherwise.
 const GUARD: &str = r#"
-local register, in_entry = ...
+local register, in_entry, note_violation = ...
 fiber.search_backend = function(name, spec)
   if not in_entry() then
-    error("fiber.search_backend: a backend registers only while `init.lua` runs", 2)
+    local message = "fiber.search_backend: a backend registers only while `init.lua` runs"
+    note_violation(message)
+    error(message, 2)
   end
   register(name, spec)
 end
@@ -50,7 +52,12 @@ end
 
 /// Sets `fiber.search_backend`. A refused registration leaves its reason in
 /// `problems`, for Fiber's notice, and the entry script goes on.
-pub(super) fn install(lua: &Lua, problems: Table, entry: Rc<Cell<bool>>) -> mlua::Result<Registry> {
+pub(super) fn install(
+    lua: &Lua,
+    problems: Table,
+    entry: Rc<Cell<bool>>,
+    note_violation: Function,
+) -> mlua::Result<Registry> {
     let functions = lua.create_table()?;
     let declared = Rc::new(RefCell::new(BTreeMap::new()));
     let registry = Registry {
@@ -75,7 +82,7 @@ pub(super) fn install(lua: &Lua, problems: Table, entry: Rc<Cell<bool>>) -> mlua
     let in_entry = crate::host::failure::in_entry(lua, &entry)?;
     lua.load(GUARD)
         .set_name("=fiber.search_backend")
-        .call::<()>((register, in_entry))?;
+        .call::<()>((register, in_entry, note_violation))?;
     Ok(registry)
 }
 
