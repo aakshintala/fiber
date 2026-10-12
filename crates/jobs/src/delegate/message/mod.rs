@@ -228,7 +228,12 @@ impl DelegateMessage {
                     }
                     Target::Live(session, run) => (session, run),
                     Target::Ended => {
-                        match self.resume_now(&id, &message, &action, cancel, &gate) {
+                        // The gate decision lives here: a committed send
+                        // elsewhere fails without starting a resume.
+                        if lock(&gate).sent_to.is_some() {
+                            return unanswered(&id);
+                        }
+                        match self.resume_now(&id, &message, &action, cancel) {
                             Attempt::Done(output) => return output,
                             Attempt::Found(session, run) => (session, run),
                             // A resume answers or finds; never waits.
@@ -464,7 +469,9 @@ impl DelegateMessage {
             .checked_add(self.bound)
             .unwrap_or_else(|| self.clock.now());
         match self.registry.await_end(id, run, until, cancel) {
-            Waited::Ended => self.resume_now(id, message, action, cancel, gate),
+            // The gate was just cleared above, so the resume starts with
+            // no committed send; the gate decision stays here.
+            Waited::Ended => self.resume_now(id, message, action, cancel),
             Waited::Timeout => Attempt::Done(fail(
                 ErrorCode::Closing,
                 format!(

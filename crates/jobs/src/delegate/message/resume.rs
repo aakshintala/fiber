@@ -6,14 +6,14 @@
 use std::io;
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 
 use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
 use contract::{ActionId, ErrorCode, JobId, SessionId};
 
-use super::{Attempt, DelegateMessage, SteerGate, fail, lock, nothing_delivered, unanswered};
+use super::{Attempt, DelegateMessage, fail, nothing_delivered};
 use crate::delegate::run::{Launched, Runner};
 use crate::registry::runs::{Resume, Resumed};
 use crate::tool::unknown_message;
@@ -46,23 +46,16 @@ struct Started {
 
 impl DelegateMessage {
     /// Resumes the ended delegate, or fails what the registry answers. A
-    /// committed send elsewhere fails `indeterminate`; a cancel before the
-    /// resume starts nothing.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "a resume carries the call's whole context"
-    )]
+    /// cancel before the resume starts nothing. The caller holds the
+    /// steering-gate decision: it only calls here when no send is
+    /// committed, so this never reads the gate.
     pub(crate) fn resume_now(
         &self,
         id: &str,
         message: &str,
         action: &Option<ActionId>,
         cancel: &dyn Cancel,
-        gate: &Arc<Mutex<SteerGate>>,
     ) -> Attempt {
-        if lock(gate).sent_to.is_some() {
-            return Attempt::Done(unanswered(id));
-        }
         // A cancel after this check can still start the resume: the run
         // exists, and its start must be logged.
         if cancel.is_cancelled() {
