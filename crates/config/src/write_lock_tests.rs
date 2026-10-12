@@ -78,7 +78,14 @@ fn a_failure_after_the_rename_returns_err_with_the_new_content_in_place() {
         }],
     );
     fail_at(None);
-    assert!(matches!(result, Err(ConfigError::Io { .. })), "{result:?}");
+    assert_eq!(
+        result.as_ref().unwrap_err().code(),
+        contract::ErrorCode::IoFailed
+    );
+    assert!(
+        matches!(result, Err(ConfigError::Unsynced { .. })),
+        "{result:?}"
+    );
     let written: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     assert_eq!(written, json!({"skills": {"disabled": ["a", "b"]}}));
     assert_eq!(tmp_files(&home), ["config.json", "config.json.lock"]);

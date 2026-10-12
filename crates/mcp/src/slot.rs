@@ -28,6 +28,10 @@ use crate::server_json::ListedTool;
 use crate::start::{ServerSpec, not_started};
 use serde_json::Value;
 
+pub(crate) fn login_sentence(server: &str, detail: &str) -> String {
+    format!("{detail} Run `fiber mcp login {server}` to log in.")
+}
+
 /// One server's place in the session: what [`Slot::run`] starts, calls,
 /// restarts or refuses, and what [`Slot::stop`] stops.
 pub(crate) struct Slot {
@@ -353,6 +357,7 @@ impl Slot {
             CallError::Cancelled => Fault::Cancelled,
             CallError::JsonRpc { message, .. } => Fault::Refused(message),
             CallError::Http(message) => Fault::Refused(message),
+            CallError::Login(detail) => Fault::Refused(login_sentence(&self.spec.name, &detail)),
             CallError::Expired => Fault::Expired,
             CallError::Gone => match self.died(server) {
                 Some(record) => Fault::Died(record),

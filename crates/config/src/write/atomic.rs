@@ -139,31 +139,34 @@ pub fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), ConfigEr
     let tmp = PathBuf::from(tmp_name);
     let dir = file.parent().unwrap_or(Path::new("."));
     // Syncing the directory makes the rename itself survive a crash.
-    let written = write_synced(&tmp, bytes, mode)
-        .and_then(|()| {
-            #[cfg(test)]
-            BEFORE_RENAME.with(|cell| {
-                if let Some(hook) = cell.borrow().as_ref() {
-                    hook();
-                }
-            });
-            #[cfg(test)]
-            if fail_stage() == Some(Stage::BeforeRename) {
-                return Err(std::io::Error::other("injected"));
+    let written = write_synced(&tmp, bytes, mode).and_then(|()| {
+        #[cfg(test)]
+        BEFORE_RENAME.with(|cell| {
+            if let Some(hook) = cell.borrow().as_ref() {
+                hook();
             }
-            fs::rename(&tmp, file)
-        })
-        .and_then(|()| {
-            #[cfg(test)]
-            if fail_stage() == Some(Stage::AfterRename) {
-                return Err(std::io::Error::other("injected"));
-            }
-            File::open(dir)?.sync_all()
         });
+        #[cfg(test)]
+        if fail_stage() == Some(Stage::BeforeRename) {
+            return Err(std::io::Error::other("injected"));
+        }
+        fs::rename(&tmp, file)
+    });
     if written.is_err() {
         fs::remove_file(&tmp).unwrap_or(());
     }
-    written.map_err(io)
+    written.map_err(io)?;
+    let synced = (|| {
+        #[cfg(test)]
+        if fail_stage() == Some(Stage::AfterRename) {
+            return Err(std::io::Error::other("injected"));
+        }
+        File::open(dir)?.sync_all()
+    })();
+    synced.map_err(|source| ConfigError::Unsynced {
+        file: file.to_path_buf(),
+        source,
+    })
 }
 
 fn write_synced(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {

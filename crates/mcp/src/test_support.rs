@@ -144,10 +144,20 @@ impl Setup {
 
     /// A remote spec for `url` on this directory's cache and clock.
     pub(crate) fn remote_spec(&self, name: &str, url: &str) -> ServerSpec {
+        self.remote_spec_with(name, url, Arc::new(FakeTokens::default()))
+    }
+
+    pub(crate) fn remote_spec_with(
+        &self,
+        name: &str,
+        url: &str,
+        tokens: Arc<dyn contract::mcp_tokens::TokenFiles>,
+    ) -> ServerSpec {
         ServerSpec {
             name: name.to_owned(),
             transport: Transport::Http {
                 url: url.to_owned(),
+                tokens,
             },
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             call_timeout: DEFAULT_CALL_TIMEOUT,
@@ -402,6 +412,85 @@ impl contract::images::Images for FakeImages {
     ) -> Result<contract::provider::ImageRef, contract::images::ImageError> {
         self.calls.lock().expect("fake images").push(bytes.to_vec());
         self.result.clone()
+    }
+}
+
+/// In-memory credential files; channels force lock races without sleeps.
+#[derive(Clone, Default)]
+pub(crate) struct FakeTokens {
+    pub(crate) state: Arc<std::sync::Mutex<FakeTokenState>>,
+}
+#[derive(Default)]
+pub(crate) struct FakeTokenState {
+    pub(crate) records: BTreeMap<String, Value>,
+    pub(crate) held: bool,
+    pub(crate) locks: usize,
+    pub(crate) writes: usize,
+    pub(crate) failure: Option<bool>,
+    pub(crate) unreadable: bool,
+    pub(crate) busy: Option<std::sync::mpsc::Sender<()>>,
+    pub(crate) written: Option<std::sync::mpsc::Sender<()>>,
+}
+struct FakeHeld {
+    files: FakeTokens,
+    key: String,
+}
+impl Drop for FakeHeld {
+    fn drop(&mut self) {
+        self.files.state.lock().unwrap().held = false;
+    }
+}
+impl contract::mcp_tokens::TokenFiles for FakeTokens {
+    fn read(&self, key: &str) -> Result<Option<Value>, contract::mcp_tokens::TokenFileError> {
+        let state = self.state.lock().unwrap();
+        if state.unreadable {
+            return Err(contract::mcp_tokens::TokenFileError::Unreadable(
+                "credential path".into(),
+            ));
+        }
+        Ok(state.records.get(key).cloned())
+    }
+    fn try_lock(
+        &self,
+        key: &str,
+    ) -> Result<
+        Option<Box<dyn contract::mcp_tokens::HeldTokenFile>>,
+        contract::mcp_tokens::TokenFileError,
+    > {
+        let mut state = self.state.lock().unwrap();
+        state.locks += 1;
+        if state.held {
+            if let Some(busy) = state.busy.take() {
+                busy.send(()).unwrap();
+            }
+            return Ok(None);
+        }
+        state.held = true;
+        Ok(Some(Box::new(FakeHeld {
+            files: self.clone(),
+            key: key.into(),
+        })))
+    }
+}
+impl contract::mcp_tokens::HeldTokenFile for FakeHeld {
+    fn read(&self) -> Result<Option<Value>, contract::mcp_tokens::TokenFileError> {
+        contract::mcp_tokens::TokenFiles::read(&self.files, &self.key)
+    }
+    fn write(&self, value: &Value) -> Result<(), contract::mcp_tokens::TokenFileError> {
+        use contract::mcp_tokens::TokenFileError;
+        let mut state = self.files.state.lock().unwrap();
+        if state.failure == Some(false) {
+            return Err(TokenFileError::Unwritable("credential path".into()));
+        }
+        state.records.insert(self.key.clone(), value.clone());
+        state.writes += 1;
+        if let Some(written) = state.written.take() {
+            written.send(()).unwrap();
+        }
+        if state.failure == Some(true) {
+            return Err(TokenFileError::Unsynced("credential path".into()));
+        }
+        Ok(())
     }
 }
 

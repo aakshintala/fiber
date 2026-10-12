@@ -83,6 +83,11 @@ pub struct Credentials {
 }
 
 impl Credentials {
+    /// Remote MCP token storage in this Fiber home.
+    pub fn mcp_token_files(&self) -> crate::McpTokenFiles {
+        crate::McpTokenFiles::new(self.home.clone())
+    }
+
     pub(crate) fn new(home: PathBuf, providers: Value, commands: CommandRuns) -> Self {
         Self {
             home,

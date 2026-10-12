@@ -38,6 +38,14 @@ pub enum ConfigError {
         /// Why.
         source: io::Error,
     },
+    /// Directory sync failed after a write's rename; the new file is in place.
+    #[error("{}: {source}", file.display())]
+    Unsynced {
+        /// The file already replaced.
+        file: PathBuf,
+        /// Why syncing failed.
+        source: io::Error,
+    },
     /// `FIBER_HOME` is empty or relative, or no home directory is known.
     #[error("{0}")]
     FiberHome(&'static str),
@@ -134,7 +142,7 @@ impl ConfigError {
             | Self::DuplicateExtension { .. } => ErrorCode::ConfigInvalid,
             Self::CredentialMissing { .. } => ErrorCode::CredentialMissing,
             Self::CredentialFailed { .. } => ErrorCode::CredentialFailed,
-            Self::Io { .. } => ErrorCode::IoFailed,
+            Self::Io { .. } | Self::Unsynced { .. } => ErrorCode::IoFailed,
             Self::FiberHome(_) | Self::Override { .. } | Self::Refused { .. } => ErrorCode::Usage,
             Self::ProjectKey { .. } | Self::SecretName { .. } => ErrorCode::InvalidArguments,
         }

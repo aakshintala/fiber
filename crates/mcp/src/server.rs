@@ -37,6 +37,8 @@ pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
 /// wedged, so it counts as gone.
 pub(crate) const WRITE_QUEUE: usize = 64;
 
+pub(crate) const INITIALIZED_ACK: u64 = u64::MAX - 1;
+
 /// Why [`Server::start`] failed: the session records it as
 /// `mcp_server_failed` and leaves the server out.
 #[derive(Debug, Clone, PartialEq)]
@@ -44,6 +46,8 @@ pub(crate) enum StartError {
     /// The spawn, `initialize` or `tools/list` failed. The message is
     /// Fiber's own sentence.
     StartFailed(String),
+    /// The remote server needs a usable OAuth login.
+    Login(String),
     /// Nothing answered before the startup deadline.
     Deadline,
 }
@@ -81,6 +85,7 @@ fn list_pages<T: serde::de::DeserializeOwned>(
         let page = match server.request(method, &params, deadline, cancel, None) {
             Ok(value) => value,
             Err(CallError::Timeout) => return Err(StartError::Deadline),
+            Err(CallError::Login(detail)) => return Err(StartError::Login(detail)),
             Err(_) => return fail(),
         };
         let object = match page.as_object() {
@@ -120,6 +125,8 @@ pub(crate) enum CallError {
     },
     /// The request failed over HTTP without ending the server; Fiber's sentence.
     Http(String),
+    /// The request needs a usable OAuth login without ending the server.
+    Login(String),
     /// The remote server ended its session.
     Expired,
 }
@@ -285,6 +292,7 @@ impl Server {
                 Ok(value) if value.is_object() => value,
                 Err(CallError::Timeout) => return Err(StartError::Deadline),
                 Err(CallError::Http(detail)) => return Err(StartError::StartFailed(detail)),
+                Err(CallError::Login(detail)) => return Err(StartError::Login(detail)),
                 Ok(_) | Err(_) => {
                     return Err(StartError::StartFailed(
                         "The server's `initialize` reply was not a result.".to_owned(),
@@ -295,7 +303,14 @@ impl Server {
             // remote server; a child ignores it.
             let version = crate::http::negotiated_version(&initialize);
             server.inner.peer.negotiated(&version);
+            let remote = matches!(server.inner.peer, Peer::Remote(_));
+            if remote {
+                server.inner.shared.insert(INITIALIZED_ACK);
+            }
             server.notify("notifications/initialized", &serde_json::json!({}));
+            if remote {
+                server.await_initialized(deadline, &stopping)?;
+            }
             // `tools/list` runs only when `initialize` advertises the
             // `tools` capability as an object: a server advertising only
             // prompts may reject it, so without the capability the
@@ -365,6 +380,40 @@ impl Server {
                 }
             }
         }
+    }
+
+    fn await_initialized(&self, deadline: Instant, stopping: &Stopping) -> Result<(), StartError> {
+        let inner = &self.inner;
+        let bridge = CancelBridge::arm(&inner.shared);
+        stopping.subscribe(Arc::downgrade(&(bridge.clone() as Arc<dyn Wake>)));
+        let result = loop {
+            let view = inner.shared.view(INITIALIZED_ACK, stopping);
+            if let Some(outcome) = view.response {
+                break match outcome {
+                    Outcome::Login(detail) => Err(StartError::Login(detail)),
+                    Outcome::Result(_) | Outcome::Http(_) | Outcome::Error { .. } => Ok(()),
+                };
+            }
+            if view.gone {
+                break Ok(());
+            }
+            if view.cancelled {
+                break Err(shutting_down());
+            }
+            if inner.clock.now() >= deadline {
+                break Err(StartError::Deadline);
+            }
+            park(
+                inner.clock.as_ref(),
+                &inner.shared,
+                stopping,
+                deadline,
+                view.seq,
+            );
+        };
+        drop(bridge);
+        let _leftovers = inner.shared.remove(INITIALIZED_ACK);
+        result
     }
 
     /// Calls `method` with `params`, waiting until `timeout` passes on the
@@ -546,6 +595,7 @@ impl Server {
             Ok(Outcome::Result(value)) => Ok(value),
             Ok(Outcome::Error { code, message }) => Err(CallError::JsonRpc { code, message }),
             Ok(Outcome::Http(message)) => Err(CallError::Http(message)),
+            Ok(Outcome::Login(message)) => Err(CallError::Login(message)),
             Err(error) => Err(error),
         }
     }

@@ -115,8 +115,9 @@ client in `doors` that `tools` uses for the session tools, `Images`, the
 image child's driver in `tools` that `doors` and `mcp` use for pasted and MCP
 images, `Scan`, the session log search in `log` that `tools` uses for
 `session_search`, `SearchBackend`, the Lua search backend in `extensions`
-that `tools` uses for Fiber's own `web_search`, and `Skills`, skill
-discovery in `loop` that `tools` uses for `skill`.
+that `tools` uses for Fiber's own `web_search`, `Skills`, skill
+discovery in `loop` that `tools` uses for `skill`, and `TokenFiles`, credential
+files in `config` that `mcp` uses for remote servers' OAuth tokens.
 
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.

@@ -19,6 +19,118 @@ use super::{DEFAULT_STARTUP_TIMEOUT, start};
 use crate::effects::Hints;
 use crate::test_support::{FakeImages, Setup, WITHIN};
 
+#[test]
+fn a_login_failure_has_login_advice_for_optional_and_required_servers() {
+    for required in [false, true] {
+        let (reason, message) = super::fail_parts(
+            "docs",
+            &crate::server::StartError::Login("detail".into()),
+            Duration::from_secs(5),
+            required,
+            true,
+        );
+        assert_eq!(reason, ServerFailure::NotLoggedIn);
+        let subject = if required {
+            "The required MCP server"
+        } else {
+            "The MCP server"
+        };
+        assert_eq!(
+            message,
+            format!(
+                "{subject} `docs` failed to start: detail Run `fiber mcp login docs` to log in."
+            )
+        );
+    }
+}
+#[test]
+fn two_names_share_a_url_token_but_a_changed_url_does_not() {
+    let fake = fakes::ProviderServer::start_responding(|request| {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        if body["method"] == "initialize" {
+            fakes::Response::status(200, json!({"jsonrpc":"2.0", "id":body["id"], "result":{"protocolVersion":"2025-06-18", "capabilities":{}}}).to_string()).header("content-type", "application/json")
+        } else { fakes::Response::status(202, "") }
+    }).unwrap();
+    let setup = Setup::new();
+    let files = Arc::new(crate::test_support::FakeTokens::default());
+    let url = format!("{}/mcp", fake.url());
+    crate::store_token(
+        files.as_ref(),
+        &url,
+        &crate::Token {
+            access_token: contract::Secret::new("at-1".into()),
+            refresh_token: None,
+            expires_at: None,
+            token_endpoint: "https://auth/token".into(),
+            client_id: "fiber".into(),
+        },
+    )
+    .unwrap();
+    for (name, url, expected) in [
+        ("a", url.clone(), Some(fakes::fingerprint("Bearer at-1"))),
+        (
+            "b",
+            format!("{}#x", url.replacen("http://", "HTTP://", 1)),
+            Some(fakes::fingerprint("Bearer at-1")),
+        ),
+        ("a", format!("{}/other", fake.url()), None),
+    ] {
+        let offset = fake.requests().len();
+        let started = setup.start(vec![setup.remote_spec_with(name, &url, files.clone())]);
+        assert!(started.failed.is_empty(), "{:?}", started.failed);
+        assert_eq!(
+            fake.requests()[offset].header("authorization"),
+            expected.as_deref()
+        );
+        fakes::within("remote stop", WITHIN, move || started.servers.stop());
+    }
+}
+
+#[test]
+fn an_unusable_token_before_initialized_fails_the_public_start_with_login_advice() {
+    let fake = fakes::ProviderServer::start_responding(|request| {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        fakes::Response::status(200, json!({"jsonrpc":"2.0", "id":body["id"], "result":{"protocolVersion":"2025-06-18", "capabilities":{}}}).to_string()).header("content-type", "application/json")
+    }).unwrap();
+    fake.hold();
+    let setup = Setup::new();
+    let files = Arc::new(crate::test_support::FakeTokens::default());
+    let url = format!("{}/mcp", fake.url());
+    crate::store_token(
+        files.as_ref(),
+        &url,
+        &crate::Token {
+            access_token: contract::Secret::new("at-1".into()),
+            refresh_token: None,
+            expires_at: None,
+            token_endpoint: "https://auth/token".into(),
+            client_id: "fiber".into(),
+        },
+    )
+    .unwrap();
+    let spec = setup.remote_spec_with("docs", &url, files.clone());
+    let key = crate::token::key(&url);
+    let (done, received) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        done.send(setup.start(vec![spec])).unwrap();
+    });
+    assert!(fake.await_requests(1, WITHIN));
+    files.state.lock().unwrap().records.get_mut(&key).unwrap()["access_token"] = json!("bad\r\n");
+    fake.release_one();
+    let started = Deadline::after(WITHIN)
+        .recv_or_fail(&received, "public start refuses unusable initialized token");
+    worker.join().unwrap();
+    assert_eq!(started.failed.len(), 1);
+    assert_eq!(started.failed[0].reason, ServerFailure::NotLoggedIn);
+    assert!(
+        started.failed[0]
+            .error
+            .message
+            .contains("fiber mcp login docs")
+    );
+    assert_eq!(fake.requests().len(), 1);
+}
+
 fn names(started: &super::Started) -> Vec<String> {
     started
         .tools

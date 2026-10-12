@@ -181,11 +181,27 @@ impl Shared {
         }
     }
 
+    /// Refuses only unanswered slots; later requests have no sticky failure.
+    pub(crate) fn refuse_login(&self, sentence: &str) {
+        let mut state = lock(&self.inner);
+        for slot in state.pending.values_mut() {
+            if slot.is_none() {
+                *slot = Some(Outcome::Login(sentence.to_owned()));
+            }
+        }
+        state.seq = state.seq.wrapping_add(1);
+        drop(state);
+        self.cv.notify_all();
+    }
+
     /// Delivers `response` to its id's slot, or discards it when the slot
     /// is gone: a late response to a timed-out id never misroutes.
     pub(crate) fn deliver(&self, id: u64, outcome: Outcome) {
         let mut state = lock(&self.inner);
         if let Some(slot) = state.pending.get_mut(&id) {
+            if matches!(slot, Some(Outcome::Login(_))) {
+                return;
+            }
             *slot = Some(outcome);
             state.seq = state.seq.wrapping_add(1);
             drop(state);

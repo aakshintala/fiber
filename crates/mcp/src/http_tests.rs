@@ -50,7 +50,15 @@ impl Setup {
         let url = format!("{}/mcp", server.url());
         let clock = self.clock();
         let opened = fakes::within("the remote start", WITHIN, move || {
-            super::start(&url, None, net::LIMITS, &clock, timeout, "0.0.0")
+            super::start(
+                &url,
+                Arc::new(crate::test_support::FakeTokens::default()),
+                None,
+                net::LIMITS,
+                &clock,
+                timeout,
+                "0.0.0",
+            )
         })
         .expect("the remote server starts");
         let OpenServer { server, listed } = opened;
@@ -64,7 +72,15 @@ impl Setup {
         let url = url.to_owned();
         let clock = self.clock();
         let started = fakes::within("the remote start", WITHIN, move || {
-            super::start(&url, None, net::LIMITS, &clock, timeout, "0.0.0")
+            super::start(
+                &url,
+                Arc::new(crate::test_support::FakeTokens::default()),
+                None,
+                net::LIMITS,
+                &clock,
+                timeout,
+                "0.0.0",
+            )
         });
         match started {
             Ok(_) => panic!("the remote start fails"),
@@ -80,7 +96,15 @@ impl Setup {
         let url = url.to_owned();
         let clock = self.clock();
         let opened = fakes::within("the remote start", WITHIN, move || {
-            super::start(&url, None, net::LIMITS, &clock, timeout, "0.0.0")
+            super::start(
+                &url,
+                Arc::new(crate::test_support::FakeTokens::default()),
+                None,
+                net::LIMITS,
+                &clock,
+                timeout,
+                "0.0.0",
+            )
         })
         .expect("the remote server starts");
         let OpenServer { server, listed: _ } = opened;
@@ -132,6 +156,157 @@ fn body_method(req: &Request) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned()
+}
+
+fn token_start(
+    setup: &Setup,
+    url: String,
+    files: Arc<crate::test_support::FakeTokens>,
+) -> Result<OpenServer, StartError> {
+    let clock = setup.clock();
+    fakes::within("OAuth remote start", WITHIN, move || {
+        super::start(
+            &url,
+            files,
+            None,
+            net::LIMITS,
+            &clock,
+            Duration::from_secs(5),
+            "0.0.0",
+        )
+    })
+}
+fn token_files(
+    url: &str,
+    endpoint: &str,
+    expiry: Option<u64>,
+) -> Arc<crate::test_support::FakeTokens> {
+    let files = Arc::new(crate::test_support::FakeTokens::default());
+    crate::store_token(
+        files.as_ref(),
+        url,
+        &crate::Token {
+            access_token: contract::Secret::new("at-1".into()),
+            refresh_token: Some(contract::Secret::new("rt-1".into())),
+            expires_at: expiry,
+            token_endpoint: endpoint.into(),
+            client_id: "fiber-abc".into(),
+        },
+    )
+    .unwrap();
+    files
+}
+#[test]
+fn every_request_carries_only_its_urls_bearer() {
+    for stored in [false, true] {
+        let fake = ProviderServer::start_responding(standard()).unwrap();
+        let setup = Setup::new();
+        let url = format!("{}/mcp", fake.url());
+        let files = if stored {
+            token_files(&url, "https://auth/token", None)
+        } else {
+            Arc::new(crate::test_support::FakeTokens::default())
+        };
+        let opened = token_start(&setup, url, files).unwrap();
+        let server = Arc::new(opened.server);
+        assert!(
+            setup
+                .call(
+                    &server,
+                    "tools/call",
+                    Duration::from_secs(5),
+                    &fakes::CancelToken::new()
+                )
+                .is_ok()
+        );
+        fakes::within("remote stop", WITHIN, move || server.stop());
+        let requests = fake.requests();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.method.as_str())
+                .collect::<Vec<_>>(),
+            ["POST", "POST", "POST", "POST", "DELETE"]
+        );
+        let expected = stored.then(|| fakes::fingerprint("Bearer at-1"));
+        for request in requests {
+            assert_eq!(request.header("authorization"), expected.as_deref());
+        }
+    }
+}
+#[test]
+fn an_in_window_token_sends_before_its_background_refresh_finishes() {
+    let auth = fakes::OauthServer::start(vec![fakes::OauthReply::token("at-2", "rt-2", 3600)]);
+    auth.hold();
+    let fake = ProviderServer::start_responding(standard()).unwrap();
+    let setup = Setup::new();
+    let url = format!("{}/mcp", fake.url());
+    let now = contract::clock::wall_ms(setup.clock().wall()) / 1000;
+    let files = token_files(&url, &auth.url(), Some(now + 300));
+    let (written, received) = std::sync::mpsc::channel();
+    files.state.lock().unwrap().written = Some(written);
+    let opened = token_start(&setup, url, files.clone()).unwrap();
+    assert!(auth.await_requests(1, WITHIN));
+    assert_eq!(
+        fake.requests()[0].header("authorization"),
+        Some(fakes::fingerprint("Bearer at-1").as_str())
+    );
+    assert_eq!(files.state.lock().unwrap().writes, 1);
+    auth.release();
+    Deadline::after(WITHIN).recv_or_fail(&received, "the background token is saved");
+    assert_eq!(files.state.lock().unwrap().writes, 2);
+    fakes::within("remote stop", WITHIN, move || opened.server.stop());
+}
+
+#[test]
+fn a_refresh_request_carries_no_bearer() {
+    let auth = ProviderServer::start(vec![Response::status(
+        200,
+        json!({"access_token":"at-2", "refresh_token":"rt-2", "expires_in":3600}).to_string(),
+    )])
+    .unwrap();
+    let fake = ProviderServer::start_responding(standard()).unwrap();
+    let setup = Setup::new();
+    let url = format!("{}/mcp", fake.url());
+    let opened = token_start(&setup, url.clone(), token_files(&url, &auth.url(), Some(0))).unwrap();
+    fakes::within("remote stop", WITHIN, move || opened.server.stop());
+    assert_eq!(auth.requests().len(), 1);
+    assert_eq!(auth.requests()[0].header("authorization"), None);
+    for request in fake.requests() {
+        assert_eq!(
+            request.header("authorization"),
+            Some(fakes::fingerprint("Bearer at-2").as_str())
+        );
+    }
+}
+#[test]
+fn the_legacy_probe_carries_the_stored_bearer() {
+    let fake =
+        ProviderServer::start(vec![Response::status(405, ""), Response::status(404, "")]).unwrap();
+    let setup = Setup::new();
+    let url = format!("{}/mcp", fake.url());
+    assert!(matches!(
+        token_start(
+            &setup,
+            url.clone(),
+            token_files(&url, "https://auth/token", None)
+        ),
+        Err(StartError::StartFailed(_))
+    ));
+    let requests = fake.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request.method.as_str())
+            .collect::<Vec<_>>(),
+        ["POST", "GET"]
+    );
+    for request in requests {
+        assert_eq!(
+            request.header("authorization"),
+            Some(fakes::fingerprint("Bearer at-1").as_str())
+        );
+    }
 }
 
 /// The standard fake: `initialize` answered as JSON with a session id,
@@ -684,8 +859,406 @@ fn a_login_failure_names_the_login() {
     let error = setup.start_err(&url, Duration::from_secs(5));
     assert_eq!(
         error,
-        StartError::StartFailed("The server answered HTTP 401: it needs a login.".to_owned())
+        StartError::Login("The server answered HTTP 401 and needs a login.".to_owned())
     );
+}
+
+#[test]
+fn login_failures_cover_the_probe_initialized_and_both_lists() {
+    for failure in [
+        "probe",
+        "initialized-empty",
+        "initialized-tools",
+        "tools/list",
+        "prompts/list",
+    ] {
+        let fake = ProviderServer::start_responding(move |request| {
+            if failure == "probe" { return Response::status(if request.method == "GET" { 401 } else { 405 }, "secret"); }
+            let method = body_method(request);
+            if method == "initialize" {
+                let body: Value = serde_json::from_slice(&request.body).unwrap();
+                return Response::status(200, result(&body["id"], json!({"protocolVersion":"2025-06-18", "capabilities":if failure == "initialized-empty" { json!({}) } else { json!({"tools":{}, "prompts":{}}) }})));
+            }
+            if (failure.starts_with("initialized") && method == "notifications/initialized") || method == failure { return Response::status(401, "secret"); }
+            standard()(request)
+        }).unwrap();
+        let setup = Setup::new();
+        assert!(
+            matches!(
+                setup.start_err(&format!("{}/mcp", fake.url()), Duration::from_secs(5)),
+                StartError::Login(_)
+            ),
+            "{failure}"
+        );
+        if failure.starts_with("initialized") {
+            assert_eq!(fake.requests().len(), 2);
+        }
+        if failure == "probe" {
+            assert_eq!(fake.requests().len(), 2);
+        }
+    }
+}
+#[test]
+fn initialized_only_fails_the_start_on_401() {
+    for dropped in [false, true] {
+        let fake = ProviderServer::start_responding(move |request| {
+            if request.method == "DELETE" {
+                return Response::status(401, "");
+            }
+            if body_method(request) == "notifications/initialized" {
+                if dropped {
+                    return Response::drop_connection();
+                }
+                return Response::status(500, "");
+            }
+            standard()(request)
+        })
+        .unwrap();
+        let setup = Setup::new();
+        let (server, _) = setup.start(&fake, Duration::from_secs(5));
+        fakes::within("remote stop", WITHIN, move || server.stop());
+        assert_eq!(fake.requests()[1].method, "POST");
+    }
+}
+#[test]
+fn userinfo_is_refused_before_sending_even_through_the_transport() {
+    let fake = ProviderServer::start([]).unwrap();
+    let setup = Setup::new();
+    let url = fake.url().replacen("http://", "http://u:pw@", 1);
+    assert_eq!(
+        setup.start_err(&url, Duration::from_secs(5)),
+        StartError::StartFailed(
+            "Its `url` has a user name or password, which Fiber does not send.".into()
+        )
+    );
+    assert!(fake.requests().is_empty());
+}
+
+#[test]
+fn initialized_ack_wait_ends_at_the_startup_deadline() {
+    let setup = Setup::new();
+    let fake = ProviderServer::start_responding(standard()).unwrap();
+    fake.hold_from(2, fakes::deadline::BUDGET);
+    let url = format!("{}/mcp", fake.url());
+    let clock = setup.clock();
+    let startup = Duration::from_secs(5);
+    let deadline = clock.now() + startup;
+    let (done, received) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        done.send(super::start(
+            &url,
+            Arc::new(crate::test_support::FakeTokens::default()),
+            None,
+            net::LIMITS,
+            &clock,
+            startup,
+            "0.0.0",
+        ))
+        .unwrap();
+    });
+    assert!(fake.await_requests(2, WITHIN));
+    assert!(setup.fake.await_parked(deadline, WITHIN));
+    setup.fake.advance(startup);
+    assert!(matches!(
+        Deadline::after(WITHIN).recv_or_fail(&received, "initialized ack startup ends"),
+        Err(StartError::Deadline)
+    ));
+    worker.join().unwrap();
+}
+#[test]
+fn a_pump_login_failure_refuses_waiting_calls() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let fake = ProviderServer::start_responding(move |request| {
+        if request.method == "DELETE" {
+            return Response::status(401, "");
+        }
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        let method = body.get("method").and_then(Value::as_str);
+        if method == Some("tools/call") && seen.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Response::stall(
+                200,
+                event(&json!({"jsonrpc":"2.0", "id":99, "method":"ping"}).to_string()),
+                1_000_000,
+            )
+            .header("content-type", "text/event-stream");
+        }
+        if body.get("id") == Some(&json!(99)) {
+            return Response::status(401, "");
+        }
+        standard()(request)
+    })
+    .unwrap();
+    let setup = Setup::new();
+    let (server, _) = setup.start(&fake, Duration::from_secs(5));
+    assert!(matches!(
+        setup.call(
+            &server,
+            "tools/call",
+            Duration::from_secs(60),
+            &fakes::CancelToken::new()
+        ),
+        Err(CallError::Login(_))
+    ));
+    assert!(!server.is_gone());
+    assert!(
+        setup
+            .call(
+                &server,
+                "tools/call",
+                Duration::from_secs(60),
+                &fakes::CancelToken::new()
+            )
+            .is_ok()
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    fakes::within("remote stop", WITHIN, move || server.stop());
+}
+
+#[test]
+fn a_pump_401_without_waiters_is_not_sticky() {
+    let fake = ProviderServer::start_responding(|request| {
+        if body_method(request) == "test/unauthenticated" {
+            Response::status(401, "")
+        } else {
+            standard()(request)
+        }
+    })
+    .unwrap();
+    let setup = Setup::new();
+    let link = Arc::new(super::Link::new(
+        format!("{}/mcp", fake.url()),
+        Arc::new(crate::test_support::FakeTokens::default()),
+        setup.clock(),
+        None,
+        net::LIMITS,
+    ));
+    let shared = Arc::new(crate::wait::Shared::default());
+    let (sender, incoming) = std::sync::mpsc::sync_channel(crate::server::WRITE_QUEUE);
+    let sender = Arc::new(sender);
+    let weak = Arc::downgrade(&sender);
+    let pumping = shared.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        super::pump(incoming, link, pumping, weak);
+        done.send(()).unwrap();
+    });
+    sender
+        .send(crate::rpc::encode_notification("test/unauthenticated", &json!({})).into_bytes())
+        .unwrap();
+    let observed = shared.clone();
+    crate::test_support::await_until("the pump handled the 401 with no waiter", move || {
+        super::lock(&observed.inner).seq != 0
+    });
+    assert_eq!(fake.requests().len(), 1);
+    shared.insert(1);
+    sender
+        .send(crate::rpc::encode_request(1, "tools/call", &json!({})).into_bytes())
+        .unwrap();
+    let observed = shared.clone();
+    crate::test_support::await_until("the next request receives a result", move || {
+        observed.view(1, &crate::wait::NoCancel).response.is_some()
+    });
+    assert!(matches!(
+        shared.view(1, &crate::wait::NoCancel).response,
+        Some(crate::rpc::Outcome::Result(_))
+    ));
+    drop(sender);
+    Deadline::after(WITHIN).recv_or_fail(&finished, "the pump ends");
+    worker.join().unwrap();
+}
+
+#[test]
+fn startup_deadlines_end_both_token_lock_waits_and_stalled_token_posts() {
+    use contract::mcp_tokens::TokenFiles;
+    for held_lock in [true, false] {
+        let auth = fakes::OauthServer::start(vec![fakes::OauthReply::token("at-2", "rt-2", 3600)]);
+        auth.hold();
+        let fake = ProviderServer::start_responding(standard()).unwrap();
+        let setup = Setup::new();
+        let url = format!("{}/mcp", fake.url());
+        let files = token_files(&url, &auth.url(), Some(0));
+        let key = crate::token::key(&url);
+        let before = files.read(&key).unwrap();
+        let held = held_lock.then(|| files.try_lock(&key).unwrap().unwrap());
+        let (busy, received_busy) = std::sync::mpsc::channel();
+        files.state.lock().unwrap().busy = Some(busy);
+        let ended = super::wait_exchange_done(1);
+        let clock = setup.clock();
+        let deadline = clock.now() + Duration::from_secs(5);
+        let tokens = files.clone();
+        let (done, received) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            done.send(super::start(
+                &url,
+                tokens,
+                None,
+                net::LIMITS,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+            ))
+            .unwrap();
+        });
+        if held_lock {
+            Deadline::after(WITHIN)
+                .recv_or_fail(&received_busy, "startup refresh polls the held lock");
+        } else {
+            assert!(auth.await_requests(1, WITHIN));
+        }
+        assert!(setup.fake.await_parked(deadline, WITHIN));
+        setup.fake.advance(Duration::from_secs(5));
+        assert!(matches!(
+            Deadline::after(WITHIN).recv_or_fail(&received, "startup deadline interrupts OAuth"),
+            Err(StartError::Deadline)
+        ));
+        assert_eq!(
+            Deadline::after(WITHIN).recv_or_fail(&ended, "the interrupted token exchange ends"),
+            1
+        );
+        worker.join().unwrap();
+        auth.release();
+        assert_eq!(files.read(&key).unwrap(), before);
+        assert_eq!(auth.request_count(), usize::from(!held_lock));
+        assert_eq!(fake.requests().len(), 0);
+        drop(held);
+    }
+}
+#[test]
+fn cancellation_ends_a_token_lock_wait_on_a_running_server() {
+    use contract::mcp_tokens::TokenFiles;
+    let auth = fakes::OauthServer::start(vec![]);
+    let fake = ProviderServer::start_responding(standard()).unwrap();
+    let setup = Setup::new();
+    let url = format!("{}/mcp", fake.url());
+    let files = token_files(&url, &auth.url(), None);
+    let server = Arc::new(
+        token_start(&setup, url.clone(), files.clone())
+            .unwrap()
+            .server,
+    );
+    let key = crate::token::key(&url);
+    files.state.lock().unwrap().records.get_mut(&key).unwrap()["expires_at"] = json!(0);
+    let held = files.try_lock(&key).unwrap().unwrap();
+    let (busy, received_busy) = std::sync::mpsc::channel();
+    files.state.lock().unwrap().busy = Some(busy);
+    let ended = super::wait_exchange_done(3);
+    let cancel = fakes::CancelToken::new();
+    let firing = cancel.clone();
+    let calling = server.clone();
+    let deadline = setup.clock().now() + Duration::from_secs(60);
+    let (done, received) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        done.send(calling.call("tools/call", &json!({}), Duration::from_secs(60), &firing))
+            .unwrap();
+    });
+    Deadline::after(WITHIN).recv_or_fail(&received_busy, "the call polls the held token lock");
+    assert!(setup.fake.await_parked(deadline, WITHIN));
+    cancel.cancel();
+    assert_eq!(
+        Deadline::after(WITHIN).recv_or_fail(&received, "the call is cancelled"),
+        Err(CallError::Cancelled)
+    );
+    assert_eq!(
+        Deadline::after(WITHIN).recv_or_fail(&ended, "the cancelled exchange ends"),
+        3
+    );
+    worker.join().unwrap();
+    assert_eq!(auth.request_count(), 0);
+    drop(held);
+    fakes::within("remote stop", WITHIN, move || server.stop());
+}
+#[test]
+fn a_rejected_refresh_fails_the_start_without_changing_the_record() {
+    use contract::mcp_tokens::TokenFiles;
+    let auth = fakes::OauthServer::start(vec![fakes::OauthReply::raw(400, "secret")]);
+    let fake = ProviderServer::start_responding(standard()).unwrap();
+    let setup = Setup::new();
+    let url = format!("{}/mcp", fake.url());
+    let files = token_files(&url, &auth.url(), Some(0));
+    let key = crate::token::key(&url);
+    let before = files.read(&key).unwrap();
+    assert!(matches!(
+        token_start(&setup, url, files.clone()),
+        Err(StartError::Login(_))
+    ));
+    assert_eq!(files.read(&key).unwrap(), before);
+    assert_eq!(auth.request_count(), 1);
+    assert!(fake.requests().is_empty());
+}
+
+/// A refresh reply of exactly `len` bytes. `closing_last` pads inside a
+/// string so the JSON's closing brace is the final byte, and truncating
+/// one byte breaks the JSON; otherwise the pad is trailing whitespace,
+/// which still parses when truncated.
+fn refresh_reply(len: usize, closing_last: bool) -> String {
+    const JSON: &str =
+        r#"{"access_token":"at-2","refresh_token":"rt-2","expires_in":3600,"pad":""}"#;
+    if closing_last {
+        let split = JSON.len() - 2;
+        format!(
+            "{}{}{}",
+            &JSON[..split],
+            " ".repeat(len - JSON.len()),
+            &JSON[split..]
+        )
+    } else {
+        format!("{JSON}{}", " ".repeat(len - JSON.len()))
+    }
+}
+
+#[test]
+fn a_refresh_reply_up_to_the_body_cap_renews_the_login() {
+    for (name, len) in [
+        ("cap_minus_one", crate::pipes::MAX_LINE - 1),
+        ("at_cap", crate::pipes::MAX_LINE),
+    ] {
+        let auth =
+            ProviderServer::start(vec![Response::status(200, refresh_reply(len, true))]).unwrap();
+        let fake = ProviderServer::start_responding(standard()).unwrap();
+        let setup = Setup::new();
+        let url = format!("{}/mcp", fake.url());
+        let opened =
+            token_start(&setup, url.clone(), token_files(&url, &auth.url(), Some(0))).unwrap();
+        fakes::within("remote stop", WITHIN, move || opened.server.stop());
+        assert_eq!(auth.requests().len(), 1, "row {name}: one refresh");
+        let requests = fake.requests();
+        assert!(
+            !requests.is_empty(),
+            "row {name}: the renewed login is sent"
+        );
+        for request in requests {
+            assert_eq!(
+                request.header("authorization"),
+                Some(fakes::fingerprint("Bearer at-2").as_str()),
+                "row {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_refresh_reply_one_past_the_body_cap_is_refused() {
+    use contract::mcp_tokens::TokenFiles;
+    let auth = ProviderServer::start(vec![Response::status(
+        200,
+        refresh_reply(crate::pipes::MAX_LINE + 1, false),
+    )])
+    .unwrap();
+    let fake = ProviderServer::start_responding(standard()).unwrap();
+    let setup = Setup::new();
+    let url = format!("{}/mcp", fake.url());
+    let files = token_files(&url, &auth.url(), Some(0));
+    let key = crate::token::key(&url);
+    let before = files.read(&key).unwrap();
+    assert!(matches!(
+        token_start(&setup, url, files.clone()),
+        Err(StartError::Login(_))
+    ));
+    assert_eq!(files.read(&key).unwrap(), before);
+    assert_eq!(auth.requests().len(), 1);
+    assert!(fake.requests().is_empty());
 }
 
 #[test]
@@ -879,7 +1452,15 @@ fn a_stalled_handshake_misses_its_startup_deadline_and_shuts_its_socket() {
     let clock = setup.clock();
     let (done, result) = std::sync::mpsc::channel();
     thread::spawn(move || {
-        let answer = super::start(&url, None, net::LIMITS, &clock, startup, "0.0.0");
+        let answer = super::start(
+            &url,
+            Arc::new(crate::test_support::FakeTokens::default()),
+            None,
+            net::LIMITS,
+            &clock,
+            startup,
+            "0.0.0",
+        );
         done.send(answer).expect("collected");
     });
     assert!(
@@ -1673,6 +2254,8 @@ fn the_pump_does_not_delete_an_expired_session() {
     let server = ProviderServer::start_responding(|_| Response::status(200, "")).unwrap();
     let link = Arc::new(super::Link::new(
         format!("{}/mcp", server.url()),
+        Arc::new(crate::test_support::FakeTokens::default()),
+        Setup::new().clock(),
         None,
         net::LIMITS,
     ));
@@ -1705,7 +2288,13 @@ fn the_pump_does_not_delete_an_expired_session() {
 
 #[test]
 fn link_keep_refuses_a_socket_for_a_closed_link() {
-    let link = super::Link::new("http://127.0.0.1/mcp".to_owned(), None, net::LIMITS);
+    let link = super::Link::new(
+        "http://127.0.0.1/mcp".to_owned(),
+        Arc::new(crate::test_support::FakeTokens::default()),
+        Setup::new().clock(),
+        None,
+        net::LIMITS,
+    );
     link.close();
     let (socket, _peer) = socket_pair();
     assert!(
@@ -1722,7 +2311,13 @@ fn link_keep_refuses_a_socket_for_a_closed_link() {
 
 #[test]
 fn link_keep_refuses_a_socket_for_an_abandoned_exchange() {
-    let link = super::Link::new("http://127.0.0.1/mcp".to_owned(), None, net::LIMITS);
+    let link = super::Link::new(
+        "http://127.0.0.1/mcp".to_owned(),
+        Arc::new(crate::test_support::FakeTokens::default()),
+        Setup::new().clock(),
+        None,
+        net::LIMITS,
+    );
     link.abandon(7);
     let (socket, _peer) = socket_pair();
     assert!(
@@ -1739,7 +2334,13 @@ fn link_keep_refuses_a_socket_for_an_abandoned_exchange() {
 
 #[test]
 fn link_close_shuts_every_live_socket() {
-    let link = super::Link::new("http://127.0.0.1/mcp".to_owned(), None, net::LIMITS);
+    let link = super::Link::new(
+        "http://127.0.0.1/mcp".to_owned(),
+        Arc::new(crate::test_support::FakeTokens::default()),
+        Setup::new().clock(),
+        None,
+        net::LIMITS,
+    );
     let (first, first_peer) = socket_pair();
     let (second, second_peer) = socket_pair();
     link.keep(1, &first).expect("the first socket is kept");
@@ -1777,6 +2378,7 @@ fn a_stop_during_a_stalled_handshake_shuts_it_down() {
     thread::spawn(move || {
         let answer = super::start(
             &url,
+            Arc::new(crate::test_support::FakeTokens::default()),
             None,
             net::LIMITS,
             &clock,
@@ -1820,6 +2422,7 @@ fn a_start_through_a_proxy_tunnels_to_the_server() {
     let opened = fakes::within("the remote start", WITHIN, move || {
         super::start(
             &url,
+            Arc::new(crate::test_support::FakeTokens::default()),
             Some(through),
             net::LIMITS,
             &clock,
@@ -1852,6 +2455,7 @@ fn the_pump_posts_in_order_before_starting_exchanges() {
     thread::spawn(move || {
         let answer = super::start(
             &url,
+            Arc::new(crate::test_support::FakeTokens::default()),
             None,
             net::LIMITS,
             &clock,
@@ -1891,6 +2495,8 @@ fn the_pump_posts_in_order_before_starting_exchanges() {
 fn link_debug_redacts_url_secrets_and_the_session_id() {
     let link = super::Link::new(
         "https://deploy:s3cr3t-t0k3n@example.com:8443/mcp?access_token=qu3ry-t0k3n".to_owned(),
+        Arc::new(crate::test_support::FakeTokens::default()),
+        Setup::new().clock(),
         None,
         net::LIMITS,
     );

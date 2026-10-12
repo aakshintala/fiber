@@ -27,6 +27,8 @@ pub(crate) enum Outcome {
     },
     /// The HTTP exchange ended without a JSON-RPC answer; Fiber's sentence.
     Http(String),
+    /// The server needs a usable OAuth login; Fiber's sentence, never a secret.
+    Login(String),
 }
 
 /// A request from the server: `ping`, answered with `{}`, or any other

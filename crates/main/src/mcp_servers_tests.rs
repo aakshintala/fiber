@@ -54,6 +54,82 @@ impl Setup {
 }
 
 #[test]
+fn the_store_entry_point_uses_the_specs_injected_private_url_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let setup = Setup::new();
+    setup.global(&json!({"mcp":{"servers":{"docs":{"url":"HTTPS://Docs.Example.com:443/mcp"}}}}));
+    let specs = setup.specs();
+    let mcp::Transport::Http { url, tokens } = &specs.specs[0].transport else {
+        panic!("remote spec");
+    };
+    let token = mcp::Token {
+        access_token: contract::Secret::new("at-1".into()),
+        refresh_token: None,
+        expires_at: None,
+        token_endpoint: "https://auth/token".into(),
+        client_id: "fiber".into(),
+    };
+    mcp::store_token(tokens.as_ref(), url, &token).unwrap();
+    let key = "22f34f33b505018d3431bbcf0ddbdf68550d6a4cf6725da53d2999700e4bd493";
+    let file = setup.rig.home.join("credentials/mcp").join(key);
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let record: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(record["url"], "https://docs.example.com/mcp");
+    assert_eq!(record["generation"], 1);
+    let held = tokens.try_lock(key).unwrap().unwrap();
+    assert!(matches!(
+        mcp::store_token(tokens.as_ref(), url, &token),
+        Err(mcp::TokenError::Busy)
+    ));
+    drop(held);
+    std::fs::write(&file, b"not json").unwrap();
+    mcp::store_token(tokens.as_ref(), url, &token).unwrap();
+    let repaired: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert_eq!(repaired["url"], "https://docs.example.com/mcp");
+    assert_eq!(repaired["generation"], 1);
+}
+#[test]
+fn userinfo_is_a_named_config_error_without_exposing_credentials() {
+    for url in [
+        "https://tokenuser-7f3@h/mcp",
+        "https://tokenuser-7f3:pw-7f3@h/mcp",
+        "https://@h/mcp",
+    ] {
+        for required in [false, true] {
+            let setup = Setup::new();
+            setup.global(&json!({"mcp":{"servers":{"docs":{"url":url, "required":required}}}}));
+            let config = setup.rig.config(Vec::<String>::new());
+            let message = if required {
+                let failure = specs(&config).err().unwrap();
+                assert_eq!(failure.code, contract::ErrorCode::ConfigInvalid);
+                assert!(failure.message.starts_with("The required MCP server"));
+                failure.message
+            } else {
+                let specs = specs(&config).unwrap();
+                assert!(specs.specs.is_empty());
+                assert!(specs.repository.is_empty());
+                assert_eq!(specs.notices.len(), 1);
+                assert_eq!(specs.notices[0].code, contract::ErrorCode::ConfigInvalid);
+                specs.notices[0].message.clone()
+            };
+            for words in ["docs", "user name or password", "`url`"] {
+                assert!(message.contains(words));
+            }
+            for secret in ["tokenuser-7f3", "pw-7f3"] {
+                assert!(!message.contains(secret));
+            }
+        }
+    }
+    let setup = Setup::new();
+    setup.global(&json!({"mcp":{"servers":{"docs":{"url":"https://h/mcp?u@v"}}}}));
+    assert_eq!(setup.specs().specs.len(), 1);
+}
+
+#[test]
 fn no_servers_starts_nothing() {
     let setup = Setup::new();
     let specs = setup.specs();
@@ -325,7 +401,7 @@ fn a_url_server_becomes_a_remote_spec() {
         panic!("one remote spec");
     };
     assert_eq!(spec.name, "remote");
-    let mcp::Transport::Http { url } = &spec.transport else {
+    let mcp::Transport::Http { url, .. } = &spec.transport else {
         panic!("a remote transport");
     };
     assert_eq!(url, "https://example.com/mcp");
@@ -596,7 +672,7 @@ fn a_repositorys_url_server_is_repository_code_with_its_url_in_fields() {
     let [gated] = specs.repository.as_slice() else {
         panic!("the server is the repository's");
     };
-    let mcp::Transport::Http { url } = &gated.spec.transport else {
+    let mcp::Transport::Http { url, .. } = &gated.spec.transport else {
         panic!("a remote transport");
     };
     assert_eq!(url, "https://example.com/mcp");
@@ -616,7 +692,7 @@ fn a_persons_url_server_the_repository_only_retimes_is_repository_code() {
     let [gated] = specs.repository.as_slice() else {
         panic!("the server is the repository's");
     };
-    let mcp::Transport::Http { url } = &gated.spec.transport else {
+    let mcp::Transport::Http { url, .. } = &gated.spec.transport else {
         panic!("a remote transport");
     };
     assert_eq!(url, "https://example.com/mcp");
@@ -629,7 +705,7 @@ fn a_dotted_name_reads_its_own_url() {
     setup.global(&json!({"mcp": {"servers": {"my.server": {"url": "https://example.com/mcp"}}}}));
     let specs = setup.specs();
     assert_eq!(specs.specs.len(), 1);
-    let mcp::Transport::Http { url } = &specs.specs[0].transport else {
+    let mcp::Transport::Http { url, .. } = &specs.specs[0].transport else {
         panic!("a remote transport");
     };
     assert_eq!(url, "https://example.com/mcp");

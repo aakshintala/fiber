@@ -331,6 +331,153 @@ fn request_method(req: &Request) -> String {
 }
 
 #[test]
+fn a_remote_server_answering_401_fails_to_start_naming_the_login() {
+    for required in [false, true] {
+        let setup = Setup::new();
+        let model = ProviderServer::start([hello()]).unwrap();
+        setup.provider(&model);
+        let mcp = ProviderServer::start([Response::status(401, "secret")]).unwrap();
+        setup.configure(
+            &json!({"remote":{"url":format!("{}/mcp", mcp.url()), "required":required}}),
+        );
+        let run = setup.run(&["ask", "hi"]);
+        let message = if required {
+            assert_eq!(run.code, Some(1), "{}", run.stderr);
+            assert_eq!(run.kinds(), ["fiber_exited"]);
+            let error = &run.first("fiber_exited")["payload"]["error"];
+            assert_eq!(error["code"], "mcp_required_server_failed");
+            error["message"].as_str().unwrap()
+        } else {
+            assert_eq!(run.code, Some(0), "{}", run.stderr);
+            assert_eq!(run.kinds(), hello_kinds(&["mcp_server_failed"]));
+            let failed = &run.first("mcp_server_failed")["payload"];
+            assert_eq!(failed["reason"], "not_logged_in");
+            failed["error"]["message"].as_str().unwrap()
+        };
+        assert!(message.contains("fiber mcp login remote"));
+        assert!(!message.contains("`url`"));
+        assert_eq!(mcp.requests().len(), 1);
+    }
+}
+#[test]
+fn a_stored_token_is_sent_to_its_url() {
+    let setup = Setup::new();
+    let model = ProviderServer::start([
+        stream(&[function_call("echo", "mcp__remote__echo", &json!({}))]),
+        allow_text(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider_with_reviewer(&model);
+    let mcp = mcp_server(json!([echo_tool()]), |_request, id| echo_answer(id, "hi"));
+    let url = format!("{}/mcp", mcp.url());
+    let token = mcp::Token {
+        access_token: contract::Secret::new("at-1".into()),
+        refresh_token: None,
+        expires_at: None,
+        token_endpoint: "https://auth/token".into(),
+        client_id: "fiber".into(),
+    };
+    mcp::store_token(&config::McpTokenFiles::new(setup.home()), &url, &token).unwrap();
+    setup.configure(&json!({"remote":{"url":url}}));
+    let run = setup.run(&["ask", "echo"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.kinds(), reviewed_kinds(&[&[]]));
+    assert_eq!(
+        run.first("tool_call_completed")["payload"]["status"],
+        "completed"
+    );
+    assert_eq!(
+        mcp.requests()[0].header("authorization"),
+        Some(fakes::fingerprint("Bearer at-1").as_str())
+    );
+}
+#[test]
+fn a_required_server_url_with_a_password_is_a_config_error() {
+    let setup = Setup::new();
+    let model = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&model);
+    let mcp = ProviderServer::start([]).unwrap();
+    let url = mcp.url().replacen("http://", "http://u:pw-594@", 1);
+    setup.configure(&json!({"remote":{"url":format!("{url}/mcp"), "required":true}}));
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(run.kinds(), ["fiber_exited"]);
+    let error = &run.first("fiber_exited")["payload"]["error"];
+    assert_eq!(error["code"], "config_invalid");
+    assert!(error["message"].as_str().unwrap().contains("remote"));
+    for line in &run.lines {
+        assert!(!line.to_string().contains("pw-594"));
+    }
+    assert!(!run.stderr.contains("pw-594"));
+    assert!(mcp.requests().is_empty());
+}
+#[test]
+fn a_read_of_a_stored_mcp_token_is_refused() {
+    for shell in [false, true] {
+        let setup = Setup::new();
+        mcp::store_token(
+            &config::McpTokenFiles::new(setup.home()),
+            "https://h/mcp",
+            &mcp::Token {
+                access_token: contract::Secret::new("protected-mcp-token-594".into()),
+                refresh_token: None,
+                expires_at: None,
+                token_endpoint: "https://auth/token".into(),
+                client_id: "fiber".into(),
+            },
+        )
+        .unwrap();
+        let path = fs::read_dir(setup.home().join("credentials/mcp"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.extension().is_none())
+            .unwrap();
+        let (name, arguments) = if shell {
+            (
+                "shell",
+                json!({"command":format!("cat '{}'", path.display())}),
+            )
+        } else {
+            ("read", json!({"path":path}))
+        };
+        let model =
+            ProviderServer::start([stream(&[function_call("deny", name, &arguments)]), hello()])
+                .unwrap();
+        setup.provider(&model);
+        let run = setup.run(&["ask", "read the credential"]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        let mut expected = read_kinds();
+        let at = expected
+            .iter()
+            .position(|kind| *kind == "tool_call_started")
+            .unwrap();
+        expected[at] = "permission_resolved";
+        assert_eq!(run.kinds(), expected);
+        assert_eq!(
+            run.first("permission_resolved")["payload"]["decided_by"],
+            "credential_deny"
+        );
+        let completed = &run.first("tool_call_completed")["payload"];
+        assert_eq!(completed["status"], "denied");
+        assert_eq!(completed["reason"], "credentials");
+        for line in &run.lines {
+            assert!(!line.to_string().contains("protected-mcp-token-594"));
+        }
+        assert!(!run.stderr.contains("protected-mcp-token-594"));
+        let workspace = fs::canonicalize(setup.workspace()).unwrap();
+        let project = workspace.to_string_lossy().replace('/', "-");
+        let dir = setup
+            .home()
+            .join("projects")
+            .join(project)
+            .join("sessions")
+            .join(run.session_id());
+        assert!(!support::on_disk(&dir).contains("protected-mcp-token-594"));
+    }
+}
+
+#[test]
 fn a_configured_url_server_declares_and_runs_its_tools() {
     let setup = Setup::new();
     let model = ProviderServer::start([
