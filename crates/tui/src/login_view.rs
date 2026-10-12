@@ -374,11 +374,9 @@ impl Login {
             .iter()
             .map(|span| format::width(&span.content))
             .sum();
-        if wide > have {
-            footer
-                .spans
-                .push(Span::raw(" ".repeat(wide.saturating_sub(have))));
-        }
+        footer
+            .spans
+            .push(Span::raw(" ".repeat(wide.saturating_sub(have))));
         let shown = shown_body_rows(usize::from(area.height));
         let start = window_start(self.selected, shown, body.len());
         let end = start.saturating_add(shown).min(body.len());
