@@ -987,3 +987,165 @@ fn a_failed_spawn_drops_its_parked_callback_and_fails_the_call() {
         }
     }
 }
+
+/// Commands for the settle-hook tests: `arm` sets a timer whose callback
+/// finishes at once, `arm_exec` sets one whose callback suspends on a
+/// `host.exec` run, and `plain` is a command that finishes.
+const TIMER_INIT: &str = r#"fiber.command("arm", { timeout = 5000, run = function()
+  host.after(100, function() return "fired" end, { timeout = 5000 })
+  return "armed" end })
+fiber.command("arm_exec", { timeout = 5000, run = function()
+  host.after(100, function() host.exec("sh", { "-c", "true" }) return "fired" end, { timeout = 5000 })
+  return "armed" end })
+fiber.command("plain", { timeout = 5000, run = function() return "plain" end })
+"#;
+
+/// The settle hook's log: each pause as its target's name and stage.
+type PauseLog = Arc<std::sync::Mutex<Vec<(String, Pause)>>>;
+
+/// Installs a settle hook that logs every pause and signals each
+/// `TimerDone`. The hook is process-wide, and nextest runs each test in its
+/// own process, so no other test shares it.
+fn log_pauses() -> (PauseLog, std::sync::mpsc::Receiver<()>) {
+    let log: PauseLog = Arc::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let sink = Arc::clone(&log);
+    pause_settle(Arc::new(move |target: &Target, pause: Pause| {
+        sink.lock().unwrap().push((target.to_string(), pause));
+        if pause == Pause::TimerDone {
+            let _sent = tx.send(());
+        }
+    }));
+    (log, rx)
+}
+
+/// The `TimerDone` entries of `log`, in order.
+fn timer_done(log: &PauseLog) -> Vec<(String, Pause)> {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, pause)| *pause == Pause::TimerDone)
+        .cloned()
+        .collect()
+}
+
+/// A hub in registration, with `TIMER_INIT` served on a thread; the call
+/// `name` is queued and its id returned.
+fn serve_timer_init(
+    clock: &Arc<fakes::clock::FakeClock>,
+    dir: &std::path::Path,
+    name: &str,
+) -> (Arc<Hub>, u64) {
+    std::fs::write(dir.join("init.lua"), TIMER_INIT).unwrap();
+    let hub = Hub::new(clock.clone());
+    hub.lock().phase = Phase::Registering { abandon_at: None };
+    let id = hub.lock().push(
+        Target::Command(name.to_owned()),
+        serde_json::Value::Null,
+        hub.clock().now(),
+    );
+    let (thread_hub, start) = (Arc::clone(&hub), start_in(dir));
+    std::thread::spawn(move || serve(thread_hub, start));
+    (hub, id)
+}
+
+/// Waits until the call `id` has returned.
+fn wait_returned(hub: &Hub, id: u64) {
+    let shared = hub.lock();
+    assert!(
+        hub.wait_for(shared, fakes::MUST_SUCCEED_WITHIN, |shared| {
+            matches!(
+                shared.calls.get(&id),
+                Some(super::super::hub::Progress::Done(_))
+            )
+        }),
+        "call {id} returns"
+    );
+}
+
+/// A timer that finishes records `TimerDone` for its own target, and only
+/// that. Without the guard the hook never fires, and with a flipped guard
+/// it would also fire for a command, which case 3 asserts against.
+#[test]
+fn a_finished_timer_records_timer_done_for_its_own_target() {
+    let dir = fakes::TempDir::new("fiber-schedule-timer-done");
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let (log, done) = log_pauses();
+    let _guard = SettleGuard;
+    let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm");
+    wait_returned(&hub, armed);
+    let due = clock.origin() + Duration::from_millis(100);
+    assert!(
+        clock.await_parked(due, WAIT_FOR_TIMER),
+        "the timer waits for its due time"
+    );
+    clock.advance(Duration::from_secs(5));
+    Deadline::after(WAIT_FOR_TIMER)
+        .recv(&done)
+        .expect("the timer callback completed");
+    assert_eq!(
+        timer_done(&log),
+        vec![(Target::Timer { id: 0 }.to_string(), Pause::TimerDone)]
+    );
+}
+
+/// A timer whose callback suspends records no `TimerDone` while it waits
+/// on its `host.exec` run, and records exactly one once the callback
+/// finishes. Without the guard's suspend check, the hook would fire at the
+/// suspend.
+#[test]
+fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
+    let dir = fakes::TempDir::new("fiber-schedule-timer-suspend");
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let (log, done) = log_pauses();
+    let _guard = SettleGuard;
+    let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm_exec");
+    wait_returned(&hub, armed);
+    let due = clock.origin() + Duration::from_millis(100);
+    assert!(
+        clock.await_parked(due, WAIT_FOR_TIMER),
+        "the timer waits for its due time"
+    );
+    clock.advance(Duration::from_secs(5));
+    {
+        let shared = hub.lock();
+        assert!(
+            hub.wait_for(shared, fakes::MUST_SUCCEED_WITHIN, |shared| {
+                shared.calls.values().any(|progress| {
+                    matches!(
+                        progress,
+                        super::super::hub::Progress::Started { parked: true, .. }
+                    )
+                })
+            }),
+            "the timer callback suspends on its exec"
+        );
+    }
+    assert!(timer_done(&log).is_empty(), "no TimerDone while suspended");
+    Deadline::after(WAIT_FOR_TIMER)
+        .recv(&done)
+        .expect("the timer callback completed");
+    assert_eq!(
+        timer_done(&log),
+        vec![(Target::Timer { id: 0 }.to_string(), Pause::TimerDone)]
+    );
+}
+
+/// A non-timer call that finishes records no `TimerDone`. Without the
+/// timer check, a flipped `&&` would fire the hook for this command.
+#[test]
+fn a_finished_command_records_no_timer_done() {
+    let dir = fakes::TempDir::new("fiber-schedule-command-done");
+    let clock = Arc::new(fakes::clock::FakeClock::new());
+    let (log, _done) = log_pauses();
+    let _guard = SettleGuard;
+    let (hub, plain) = serve_timer_init(&clock, dir.path(), "plain");
+    wait_returned(&hub, plain);
+    assert!(
+        timer_done(&log).is_empty(),
+        "a finished command is no timer"
+    );
+}
+
+/// How long a test waits for a timer or a parked call under its fake clock.
+const WAIT_FOR_TIMER: Duration = Duration::from_secs(5);
