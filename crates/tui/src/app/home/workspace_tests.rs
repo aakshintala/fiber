@@ -885,3 +885,17 @@ fn a_new_opening_starts_empty_and_asks_again() {
         vec!["/"]
     );
 }
+
+#[test]
+fn backspace_past_the_text_returns_the_selection_to_the_first_recent() {
+    let mut app = home();
+    linked(&mut app);
+    app.on_line(live("s_aaaaaaaaaaaaaaaa", "here", "/w"));
+    app.on_line(live("s_bbbbbbbbbbbbbbbb", "away", "/other"));
+    assert_eq!(app.home_click(Spot::Workspace), Effect::None);
+    assert_eq!(key(&mut app, Key::Down), Effect::None);
+    assert_eq!(focused(&app), Some("/other".to_owned()));
+    key(&mut app, Key::Char('x'));
+    assert_eq!(key(&mut app, Key::Backspace), Effect::None);
+    assert_eq!(focused(&app), Some("/w".to_owned()));
+}
