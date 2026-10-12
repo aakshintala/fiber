@@ -216,7 +216,7 @@ pairing code, list devices and revoke one, through the hub commands
 | `hub install [--port <port>]` | Registers the hub as a login service. Without `--port` it listens on its local socket only. With `--port` it also listens on `127.0.0.1:<port>`, where every connection presents a device token, and writes `hub.port`. |
 | `hub uninstall` | Removes the login service. Running sessions carry on. |
 | `hub status` | Prints whether the hub is running, its version, its port, the connected clients, the paired devices and whether the login service is installed. It takes `--json`. |
-| `hub pair <device>` | Prints a pairing code for a device of that name, and in a terminal draws it as a QR code with the hub's address. The code works once, within 10 minutes. |
+| `hub pair <device> [--address <url>]` | Prints a pairing code for a device of that name, and in a terminal draws a QR code that carries the pairing code, plus the address given with `--address`. The optional address must be a `ws://` or `wss://` URL; without it, the QR code carries the code alone. Pairing needs no `hub.port` setting. The code works once, within 10 minutes. |
 | `hub token list` | Lists paired devices: name, when paired, last connection. |
 | `hub token revoke <device>` | Revokes a device's token and closes its live connections. |
 | `hub refresh` | Rebuilds the hub's environment for the sessions it starts from now on ("A session's environment"), then prints whether the login-shell capture succeeded. |
@@ -964,11 +964,15 @@ clients.
 
 - **Pairing gives each client its own device token.** `fiber hub pair
   <device>`, run on the hub's machine, prints a short code, and in a terminal
-  a QR code with the hub's address; a paired client asks for one with
-  `pairing_code`. A client sends the code with `pair`
-  within 10 minutes and receives a device token named after the device. The
-  code then stops working. A wrong, used or old code is rejected
-  `pairing_failed`.
+  a QR code that carries the pairing code, plus the address given with
+  `--address`; a paired client asks for one with `pairing_code`. A client sends
+  the code with `pair` within 10 minutes and receives a device token named
+  after the device. The code then stops working. A wrong, used or old code is
+  rejected `pairing_failed`.
+  A device name is 1 to 64 ASCII letters, digits, dots, hyphens or underscores,
+  does not start with a dot, and is not `local`.
+  A name already paired is refused until revoked, and a second code for a name
+  replaces the first.
 - **A device token is presented, never placed in a URL.** A remote
   connection's first command is `authenticate` or `pair`. Anything else, or
   a token the hub does not hold, is answered `unauthenticated` and the
@@ -978,6 +982,12 @@ clients.
   (`docs/state.md`), so a copy of Fiber home holds no usable token.
   `fiber hub token revoke <device>` deletes the record and closes every live
   connection that presented that token.
+  Revoking a name not paired is refused `not_found`.
+  Revoking a device voids the codes it minted.
+  A failed directory sync after the unlink or rename, the commit point, is a
+  warning in the log and the change stands.
+  A record whose name the pairing rule would refuse still authenticates;
+  remove it by deleting its file.
 - **A browser is held to an origin list.** A websocket opened by a web page
   carries the page's origin, and the hub accepts it only when the origin is in
   `hub.allowed_origins` (`docs/configuration.md`). Without the list, any page
