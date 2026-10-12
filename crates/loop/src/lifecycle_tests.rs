@@ -2008,6 +2008,7 @@ fn a_cancel_before_the_next_steps_commit_drops_held_messages() {
     drop(world.looped.take());
 
     let all = lines(&world);
+    assert_eq!(kinds(&all), ["session_started"], "complete ordered kinds");
     assert!(
         !all.iter().any(|line| line.kind == "steering_applied"),
         "no held message was written: {:?}",
