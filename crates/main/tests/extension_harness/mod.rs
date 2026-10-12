@@ -73,13 +73,22 @@ impl Setup {
         let stdout = child.stdout.take().unwrap();
         let stderr_pipe = child.stderr.take().unwrap();
         let (tx, lines) = mpsc::channel();
+        let (end_tx, stdout_end) = mpsc::channel();
         thread::spawn(move || {
+            let mut end = StdoutEnd::Eof;
             for line in BufReader::new(stdout).lines() {
-                match tx.send(line.unwrap()) {
-                    Ok(()) => {}
-                    Err(mpsc::SendError(_)) => break,
+                match line {
+                    Ok(text) => match tx.send(text) {
+                        Ok(()) => {}
+                        Err(mpsc::SendError(_)) => return,
+                    },
+                    Err(error) => {
+                        end = StdoutEnd::ReadError(error.to_string());
+                        break;
+                    }
                 }
             }
+            end_tx.send(end).unwrap_or(());
         });
         let (err_tx, stderr_rx) = mpsc::channel();
         thread::spawn(move || {
@@ -97,6 +106,7 @@ impl Setup {
             group,
             guard,
             lines,
+            stdout_end,
             stderr: stderr_rx,
             first: Vec::new(),
             deadline: self.deadline,
@@ -117,12 +127,24 @@ impl Drop for KillGroup {
     }
 }
 
+/// How the session stdout reader ended: an explicit EOF on a clean read
+/// end, or an explicit error on a read failure. The stdout drain succeeds
+/// only on EOF; a disconnect without EOF fails, so a reader panic can
+/// never pass as a clean drain. This rides beside `lines` (left as
+/// `Receiver<String>` for its direct readers) so no reader outside this
+/// file changes.
+enum StdoutEnd {
+    Eof,
+    ReadError(String),
+}
+
 pub(crate) struct Running {
     pub(crate) child: Child,
     pub(crate) watchdog: Watchdog,
     pub(crate) group: u32,
     pub(crate) guard: KillGroup,
     pub(crate) lines: mpsc::Receiver<String>,
+    stdout_end: mpsc::Receiver<StdoutEnd>,
     pub(crate) stderr: mpsc::Receiver<String>,
     pub(crate) first: Vec<String>,
     pub(crate) deadline: Deadline,
@@ -209,9 +231,11 @@ impl Running {
         };
         let mut lines = std::mem::take(&mut self.first);
         // Drain stdout to its end: the reader thread sends every line it
-        // reads, so receiving until its sender disconnects keeps the
-        // lines it had not sent when the session exited. A timeout fails
-        // naming the drain; a partial read never passes.
+        // reads, then an explicit EOF on `stdout_end`, so receiving the
+        // lines until their sender disconnects keeps the lines it had not
+        // sent when the session exited, and the drain succeeds only on
+        // the EOF that follows. A timeout, a read error, or a disconnect
+        // without EOF fails naming the drain; a partial read never passes.
         loop {
             match self.deadline.recv(&self.lines) {
                 Ok(line) => lines.push(line),
@@ -219,6 +243,18 @@ impl Running {
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     panic!("waited until the deadline for the session's remaining stdout")
                 }
+            }
+        }
+        match self.deadline.recv(&self.stdout_end) {
+            Ok(StdoutEnd::Eof) => {}
+            Ok(StdoutEnd::ReadError(error)) => {
+                panic!("reading the session's remaining stdout: {error}")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the session's stdout reader ended without EOF")
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited until the deadline for the session's stdout end")
             }
         }
         let stderr = match self.deadline.recv(&self.stderr) {

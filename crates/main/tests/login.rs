@@ -770,13 +770,25 @@ fn codex_exchange(email: &str) -> String {
     .to_string()
 }
 
+/// Messages from `login_device`'s stderr reader: chunks, an explicit EOF
+/// on a clean read end, and an explicit error on a read failure. The
+/// drain succeeds only on EOF; a disconnect without EOF fails, so a
+/// reader panic can never pass as a clean drain.
+enum StderrMsg {
+    Chunk(Vec<u8>),
+    Eof,
+    ReadError(String),
+}
+
 /// The test's halves of a hold on `login_device`'s stderr reader. The
 /// reader sends `held` before its send of the chunk carrying the final
 /// stored-credentials line, then blocks on `release`; `login_device`
-/// sends `draining` once its post-exit drain is ready to wait for that
-/// chunk, and the test releases the reader only on `draining`, never on
-/// a sleep. This opens #2113's race window on demand: with the old
-/// `try_recv` drain the held chunk arrives after the drain and is dropped.
+/// runs a non-blocking attempt while the reader is still held, then sends
+/// `draining` once that attempt has completed, and the test releases the
+/// reader only on `draining`, never on a sleep. This opens #2113's race
+/// window on demand: the attempt while held misses the chunk on every run
+/// (what the old `try_recv` drain saw), and the blocking drain after
+/// release recovers it.
 struct DeviceHold {
     held_tx: mpsc::Sender<()>,
     held_rx: mpsc::Receiver<()>,
@@ -816,7 +828,10 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceH
         let mut released = holder.is_none();
         loop {
             match err.read(&mut buf) {
-                Ok(0) => break,
+                Ok(0) => {
+                    chunks.send(StderrMsg::Eof).unwrap_or(());
+                    break;
+                }
                 Ok(n) => {
                     let mut chunk = &buf[..n];
                     if !released
@@ -828,14 +843,15 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceH
                         // needle waits for, so it goes out at once;
                         // only the marker onward is held back.
                         let (prefix, rest) = chunk.split_at(at);
-                        if chunks.send(prefix.to_vec()).is_err() {
+                        if chunks.send(StderrMsg::Chunk(prefix.to_vec())).is_err() {
                             break;
                         }
                         let (held_tx, release_rx) =
                             holder.as_ref().expect("a held chunk has its hold");
                         held_tx.send(()).unwrap_or(());
-                        // The test releases this only once the drain
-                        // waits for it. Ending here drops the sender,
+                        // The test releases this only after the
+                        // non-blocking attempt below has completed.
+                        // Ending here drops the sender without EOF,
                         // so the drain fails visibly instead of hanging.
                         if deadline.recv(release_rx).is_err() {
                             break;
@@ -843,22 +859,42 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceH
                         released = true;
                         chunk = rest;
                     }
-                    if chunks.send(chunk.to_vec()).is_err() {
+                    if chunks.send(StderrMsg::Chunk(chunk.to_vec())).is_err() {
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(error) => {
+                    chunks
+                        .send(StderrMsg::ReadError(error.to_string()))
+                        .unwrap_or(());
+                    break;
+                }
             }
         }
     });
     let mut stderr = Vec::new();
     loop {
-        let Ok(chunk) = setup.deadline.recv(&received) else {
-            panic!("`fiber login codex --device` showed no device code within the deadline")
-        };
-        stderr.extend_from_slice(&chunk);
-        if String::from_utf8_lossy(&stderr).contains(needle) {
-            break;
+        match setup.deadline.recv(&received) {
+            Ok(StderrMsg::Chunk(chunk)) => {
+                stderr.extend_from_slice(&chunk);
+                if String::from_utf8_lossy(&stderr).contains(needle) {
+                    break;
+                }
+            }
+            Ok(StderrMsg::Eof) => {
+                panic!("`fiber login codex --device` stderr ended before showing the device code")
+            }
+            Ok(StderrMsg::ReadError(error)) => {
+                panic!("`fiber login codex --device` stderr read failed: {error}")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!(
+                    "`fiber login codex --device` stderr reader ended without EOF before the device code"
+                )
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("`fiber login codex --device` showed no device code within the deadline")
+            }
         }
     }
     let (done, finished) = mpsc::channel();
@@ -873,9 +909,10 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceH
         ),
     };
     // Drain stderr to the pipe's end: the reader sends every chunk it
-    // reads, so receiving until its sender disconnects keeps the chunk
-    // it had not sent when the child exited (#2113). A timeout fails
-    // naming the drain; a partial read never passes.
+    // reads plus an explicit EOF, so receiving until EOF keeps the chunk
+    // it had not sent when the child exited (#2113). A timeout, a read
+    // error, or a disconnect without EOF fails naming the drain; a
+    // partial read never passes.
     if let Some((held_rx, draining_tx)) = &waiter {
         // The window is open only once the reader holds its final
         // chunk; without this wait a reader that never holds would pass
@@ -885,14 +922,41 @@ fn login_device(setup: &Setup, args: &[&str], needle: &str, hold: Option<DeviceH
                 "`fiber login codex --device` reader never held its final chunk within the deadline"
             );
         }
-        // With a hold the test releases the reader only on this send,
-        // so the wait below holds the window open instead of sleeping.
+        // The non-blocking attempt runs while the reader is still held,
+        // so the old `try_recv` drain misses the held chunk on every
+        // run; the blocking drain below recovers it after release.
+        while let Ok(message) = received.try_recv() {
+            match message {
+                StderrMsg::Chunk(chunk) => stderr.extend_from_slice(&chunk),
+                StderrMsg::Eof => {
+                    panic!(
+                        "`fiber login codex --device` stderr ended before its held chunk was released"
+                    )
+                }
+                StderrMsg::ReadError(error) => {
+                    panic!("`fiber login codex --device` stderr read failed: {error}")
+                }
+            }
+        }
+        assert!(
+            !String::from_utf8_lossy(&stderr).contains("stored"),
+            "`fiber login codex --device` drain saw the held chunk before release"
+        );
+        // The test releases the reader only on this send, after the
+        // attempt above has completed, so the window stays open through
+        // the attempt instead of closing on a sleep.
         draining_tx.send(()).unwrap_or(());
     }
     loop {
         match setup.deadline.recv(&received) {
-            Ok(chunk) => stderr.extend_from_slice(&chunk),
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Ok(StderrMsg::Chunk(chunk)) => stderr.extend_from_slice(&chunk),
+            Ok(StderrMsg::Eof) => break,
+            Ok(StderrMsg::ReadError(error)) => {
+                panic!("`fiber login codex --device` stderr read failed: {error}")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("`fiber login codex --device` stderr reader ended without EOF")
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 panic!("`fiber login codex --device` stderr stalled within the deadline")
             }
