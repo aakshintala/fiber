@@ -444,6 +444,54 @@ fn args_nested_past_the_cap_raise_and_reach_no_runner() {
 }
 
 #[test]
+fn a_non_json_value_in_args_raises_the_generic_message() {
+    let clock = FakeClock::new();
+    let (_dir, ext) = extension(
+        &tool(
+            "fetch",
+            "function() local _, e = pcall(host.tool, \"read\", { path = function() end })\n\
+             return tostring(e) end",
+        ),
+        &clock,
+    );
+    let (runner, _entered) = FakeRunner::scripted(vec![]);
+    let runner_calls = runner.clone();
+    assert_eq!(
+        tool_call(&ext, "fetch", runner).unwrap(),
+        Some(Value::String(
+            "host.tool: `args` must be a table of JSON values".to_owned()
+        ))
+    );
+    assert!(runner_calls.calls().is_empty());
+}
+
+#[test]
+fn args_nested_past_the_to_json_cap_raise_the_depth_message() {
+    let clock = FakeClock::new();
+    // 129 nested tables: the innermost, at depth 128, fails inside
+    // `to_json` itself, not at the parse back that 128 tables reach.
+    let (_dir, ext) = extension(
+        &tool(
+            "deep",
+            "function() local top = {} local t = top\n\
+             for _ = 2, 129 do local n = {} t[1] = n t = n end\n\
+             local _, err = pcall(host.tool, \"read\", top)\n\
+             return tostring(err) end",
+        ),
+        &clock,
+    );
+    let (runner, _entered) = FakeRunner::scripted(vec![]);
+    let runner_calls = runner.clone();
+    assert_eq!(
+        tool_call(&ext, "deep", runner).unwrap(),
+        Some(Value::String(
+            "host.tool: `args` nests deeper than 127".to_owned()
+        ))
+    );
+    assert!(runner_calls.calls().is_empty());
+}
+
+#[test]
 fn mutating_the_shared_args_after_the_yield_changes_nothing() {
     let clock = FakeClock::new();
     let (_dir, ext) = extension(
