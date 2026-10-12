@@ -46,8 +46,8 @@ fn provider_on(
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("init.lua"), script).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(dir.join("providers/p.lua"), script).unwrap();
     let extension = Arc::new(LuaExtension::new("ext", dir.clone(), home, clock));
     (LuaProvider::new(extension, "p"), dir)
 }

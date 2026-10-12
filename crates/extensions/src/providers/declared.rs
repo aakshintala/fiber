@@ -21,10 +21,11 @@ pub(crate) fn provider_scripts(dir: &Path) -> Result<Vec<String>, crate::Error> 
                 source,
             })?
             .path();
-        if file.is_file() && file.extension().is_some_and(|ext| ext == "lua") {
-            if let Some(stem) = file.file_stem() {
-                names.push(stem.to_string_lossy().into_owned());
-            }
+        if file.is_file()
+            && file.extension().is_some_and(|ext| ext == "lua")
+            && let Some(stem) = file.file_stem()
+        {
+            names.push(stem.to_string_lossy().into_owned());
         }
     }
     names.sort();

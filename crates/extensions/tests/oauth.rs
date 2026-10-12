@@ -227,10 +227,28 @@ fiber.provider("acme", { credential = { timeout = 60000, run = function()
 end } })
 "#;
 
+fn write_fixture(dir: &Path, script: &str) {
+    if let Some((init, provider)) = script.split_once("fiber.provider(\"acme\"") {
+        if script.contains("fiber.command(") {
+            write(&dir.join("init.lua"), init);
+            write(
+                &dir.join("providers/acme.lua"),
+                &format!(
+                    "local function try_http(opts) return pcall(host.http, opts) end\n fiber.provider(\"acme\"{provider}"
+                ),
+            );
+        } else {
+            write(&dir.join("providers/acme.lua"), script);
+        }
+    } else {
+        write(&dir.join("init.lua"), script);
+    }
+}
+
 /// The `LOGIN` fixture with the default browser, which has nobody attached.
 fn login(env: &Env) -> Arc<LuaExtension> {
     let dir = env.setup.root().join("extensions").join("login");
-    write(&dir.join("init.lua"), LOGIN);
+    write_fixture(&dir, LOGIN);
     Arc::new(
         LuaExtension::new("login", dir, env.home(), env.clock.clone())
             .with_secrets(secrets(LOGIN_SECRETS)),
@@ -240,7 +258,7 @@ fn login(env: &Env) -> Arc<LuaExtension> {
 /// The `LOGIN` fixture opening URLs with `browser`.
 fn login_with(env: &Env, browser: Arc<dyn Browser>) -> Arc<LuaExtension> {
     let dir = env.setup.root().join("extensions").join("login");
-    write(&dir.join("init.lua"), LOGIN);
+    write_fixture(&dir, LOGIN);
     Arc::new(
         LuaExtension::new("login", dir, env.home(), env.clock.clone())
             .with_browser(browser)
@@ -305,7 +323,7 @@ impl Env {
     /// An extension of the fixture's `init.lua` opening URLs with `browser`.
     fn extension_opening(&self, browser: Arc<dyn Browser>) -> Arc<LuaExtension> {
         let dir = self.setup.root().join("extensions").join("fixture");
-        write(&dir.join("init.lua"), INIT);
+        write_fixture(&dir, INIT);
         Arc::new(
             LuaExtension::new("fixture", dir, self.home(), self.clock.clone())
                 .with_browser(browser)
@@ -319,7 +337,7 @@ impl Env {
 
     fn bare(&self, init: &str, name: &str) -> LuaExtension {
         let dir = self.setup.root().join("extensions").join(name);
-        write(&dir.join("init.lua"), init);
+        write_fixture(&dir, init);
         LuaExtension::new(name, dir, self.home(), self.clock.clone())
             .with_browser(Arc::new(Recording::always()))
             .with_secrets(secrets(&["mode", "url", "dead"]))
@@ -1097,7 +1115,7 @@ fn a_lua_error_in_credential_outside_the_refresh_is_credential_failed() {
 fn a_function_the_hook_stops_leaves_the_file_and_frees_the_lock() {
     let env = Env::new();
     let dir = env.setup.root().join("extensions/spin");
-    write(&dir.join("init.lua"), SPIN);
+    write_fixture(&dir, SPIN);
     let went = go_spin(&dir);
     let ext = Arc::new(
         LuaExtension::new("spin", &dir, env.home(), env.clock.clone())
@@ -1357,7 +1375,7 @@ fn an_entry_script_that_opens_with_nobody_attached_is_authentication_failed() {
     let env = Env::new();
     let browser: Arc<Recording> = Arc::new(Recording::never());
     let dir = env.setup.root().join("extensions").join("entry_open");
-    write(&dir.join("init.lua"), ENTRY_OPEN);
+    write_fixture(&dir, ENTRY_OPEN);
     let ext = Arc::new(
         LuaExtension::new("entry_open", dir, env.home(), env.clock.clone())
             .with_browser(browser.clone()),
@@ -1439,7 +1457,7 @@ end } })
 
 fn caught(env: &Env, browser: Arc<dyn Browser>) -> Arc<LuaExtension> {
     let dir = env.setup.root().join("extensions").join("caught");
-    write(&dir.join("init.lua"), CAUGHT);
+    write_fixture(&dir, CAUGHT);
     Arc::new(
         LuaExtension::new("caught", dir, env.home(), env.clock.clone())
             .with_browser(browser)
@@ -1636,7 +1654,7 @@ end } })
 "#;
     let env = Env::new();
     let dir = env.setup.root().join("extensions").join("interleave");
-    write(&dir.join("init.lua"), INIT);
+    write_fixture(&dir, INIT);
     let ext = Arc::new(
         LuaExtension::new("interleave", dir, env.home(), env.clock.clone())
             .with_browser(Arc::new(Recording::never()))

@@ -1377,7 +1377,7 @@ fn install_extension(setup: &Setup, short: &str, data: &Value, init: Option<&str
     write_json(&source.join("extension.json"), &manifest);
     write_json(&source.join(format!("providers/{provider}.json")), data);
     if let Some(init) = init {
-        fs::write(source.join("init.lua"), init).unwrap();
+        fs::write(source.join(format!("providers/{provider}.lua")), init).unwrap();
     }
     extensions::plan(
         &setup.home(),

@@ -1284,11 +1284,15 @@ fn start_provider_reports_an_entry_script_that_fails() {
     let flag = home.root.path().join("fail");
     home.install(
         "prov",
-        Some(&format!(
-            "local ok = pcall(host.fs.read, \"{}\")\nif ok then error(\"broken\") end\n",
-            flag.display(),
-        )),
-        &[("p", &crediting("p"))],
+        None,
+        &[(
+            "p",
+            &format!(
+                "local ok = pcall(host.fs.read, \"{}\")\nif ok then error(\"broken\") end\n{}",
+                flag.display(),
+                crediting("p"),
+            ),
+        )],
     );
     let session = home.load(&[]);
     assert!(session.notices().is_empty(), "{:?}", session.notices());
@@ -1467,6 +1471,101 @@ fn a_lua_provider_its_manifest_does_not_declare_fails_the_extension() {
         after_tool(&session, "c").outcome,
         AfterToolOutcome::Unchanged
     );
+}
+
+#[test]
+fn provider_only_and_mixed_packages_leave_the_provider_file_lazy() {
+    for mixed in [false, true] {
+        let home = Home::new();
+        let marker = home.root.path().join("provider-runs");
+        let init_marker = home.root.path().join("init-runs");
+        let init = format!("{}{}", counting(&init_marker), tagging("h", "transform"));
+        let script = format!("{}{}", counting(&marker), crediting("acme"));
+        home.install("lazy", mixed.then_some(init.as_str()), &[("acme", &script)]);
+        let session = home.load(&[]);
+        assert!(session.notices().is_empty(), "{:?}", session.notices());
+        assert!(!marker.exists());
+        assert_eq!(session.lua_providers().len(), 1);
+        let provider = Arc::clone(&session.lua_providers()[0].1);
+        assert_eq!(
+            bounded(move || provider.functions().unwrap()),
+            ["credential"]
+        );
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "x");
+        if mixed {
+            assert_eq!(fs::read_to_string(init_marker).unwrap(), "x");
+            assert!(session.has_hooks());
+        } else {
+            assert!(!init_marker.exists());
+            assert!(!session.has_hooks());
+        }
+    }
+}
+
+#[test]
+fn a_provider_in_init_refuses_the_whole_extension_and_its_data() {
+    for caught in [false, true] {
+        let home = Home::new();
+        let script = crediting("acme");
+        let init = if caught {
+            format!("pcall(function() {script} end)")
+        } else {
+            script
+        };
+        home.install("bad", Some(&init), &[]);
+        home.edit_manifest("bad", |m| m["providers"] = json!({"acme":[]}));
+        let dir = home.home().join("extensions/fiber.test-bad/providers");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("acme.json"),
+            json!({"name":"acme", "models":[]}).to_string(),
+        )
+        .unwrap();
+        let session = home.load(&[]);
+        assert!(session.loaded().is_empty());
+        assert_eq!(session.rejected(), ["fiber.test/bad"]);
+        let notices = session.notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+        assert!(notices[0].message.contains("providers/acme.lua"));
+        let (mut providers, _) = crate::Providers::load(&home.home()).unwrap();
+        assert!(providers.names().any(|name| name == "acme"));
+        providers.add_session(&session, &home.config(&[]), &|_, _| {
+            unreachable!("no credential command runs")
+        });
+        assert!(!providers.names().any(|name| name == "acme"));
+    }
+}
+
+#[test]
+fn two_providers_share_one_vm_until_every_handle_is_dropped() {
+    let home = Home::new();
+    let counter = home.root.path().join("module-runs");
+    let a = format!("require('counter')\n{}", crediting("a"));
+    let b = format!("require('counter')\n{}", crediting("b"));
+    home.install("pair", None, &[("a", &a), ("b", &b)]);
+    fs::write(
+        home.home().join("extensions/fiber.test-pair/counter.lua"),
+        counting(&counter),
+    )
+    .unwrap();
+    let mut session = home.load(&[]);
+    assert!(session.notices().is_empty());
+    assert!(!counter.exists());
+    Arc::get_mut(&mut session)
+        .unwrap()
+        .retain_lua_providers(&["a"]);
+    let a = start(&home, &session, "fiber.test/pair", "a").unwrap();
+    let b = start(&home, &session, "fiber.test/pair", "b").unwrap();
+    assert_eq!(fs::read_to_string(&counter).unwrap(), "x");
+    drop(a);
+    drop(b);
+    Arc::get_mut(&mut session)
+        .unwrap()
+        .retain_lua_providers(&[]);
+    let fresh = start(&home, &session, "fiber.test/pair", "b").unwrap();
+    assert_eq!(fresh.name(), "b");
+    assert_eq!(fs::read_to_string(counter).unwrap(), "xx");
 }
 
 #[test]

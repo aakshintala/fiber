@@ -411,7 +411,10 @@ fn a_completed_call_with_one_token_and_sixteen_headers_keeps_only_sixteen_histor
     let block_url = blocking.url();
     let dir = setup.home().join("ext");
     write(
-        &dir.join("init.lua"),
+        &{
+            std::fs::create_dir_all((dir.join("providers/p.lua")).parent().unwrap()).unwrap();
+            dir.join("providers/p.lua")
+        },
         &format!(
             "calls_c = 0\n\
              fiber.provider(\"p\", {{\n\
@@ -510,7 +513,10 @@ fn a_running_call_values_are_reported_until_it_finishes() {
     // timeouts").
     let dir = setup.home().join("ext");
     write(
-        &dir.join("init.lua"),
+        &{
+            std::fs::create_dir_all((dir.join("providers/p.lua")).parent().unwrap()).unwrap();
+            dir.join("providers/p.lua")
+        },
         &format!(
             "calls_c = 0\n\
              calls_s = 0\n\
@@ -614,7 +620,10 @@ fn a_sign_error_is_redacted_before_the_call_returns_even_after_history_eviction(
     let (first_url, later_url) = (first_call.url(), later_calls.url());
     let dir = setup.home().join("ext");
     write(
-        &dir.join("init.lua"),
+        &{
+            std::fs::create_dir_all((dir.join("providers/p.lua")).parent().unwrap()).unwrap();
+            dir.join("providers/p.lua")
+        },
         &format!(
             "calls_c = 0\n\
              fiber.provider(\"p\", {{\n\
@@ -744,7 +753,10 @@ fn a_sign_error_is_redacted_after_a_credential_refresh() {
     // token it was handed; later ones return at once.
     let dir = setup.home().join("ext");
     write(
-        &dir.join("init.lua"),
+        &{
+            std::fs::create_dir_all((dir.join("providers/p.lua")).parent().unwrap()).unwrap();
+            dir.join("providers/p.lua")
+        },
         &format!(
             "calls_s = 0\n\
              fiber.provider(\"p\", {{\n\
@@ -871,7 +883,10 @@ fn concurrent_calls_keep_in_flight_values_then_bound_completed_history() {
         // (`docs/testing.md`, "Waits and timeouts").
         let dir = setup.home().join("ext");
         write(
-            &dir.join("init.lua"),
+            &{
+                std::fs::create_dir_all((dir.join("providers/p.lua")).parent().unwrap()).unwrap();
+                dir.join("providers/p.lua")
+            },
             &format!(
                 "calls_c = 0\n\
                  fiber.provider(\"p\", {{\n\

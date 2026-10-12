@@ -62,9 +62,9 @@ fn provider(name: &str, init: &str, prefix: &str) -> (fakes::TempDir, Arc<LuaPro
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
     let init = init.replace("WANT_EMAIL", prefix).replace("MODE", prefix);
-    fs::write(dir.join("init.lua"), init).unwrap();
+    fs::write(dir.join("providers/p.lua"), init).unwrap();
     let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
     (root, LuaProvider::new(extension, "p"))
 }
@@ -129,9 +129,9 @@ fn an_expired_stored_value_is_credential_failed() {
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/p.lua"),
         r#"fiber.provider("p", {
           credential = { timeout = 60000, run = function(arg)
             local fresh = host.oauth.refresh(function(stored)
@@ -161,9 +161,9 @@ fn a_stored_value_expiring_this_instant_is_credential_failed() {
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/p.lua"),
         format!(
             r#"fiber.provider("p", {{
               credential = {{ timeout = 60000, run = function(arg)
@@ -217,9 +217,9 @@ fn a_non_string_email_is_a_bad_return_and_an_empty_one_is_no_email() {
         let home = root.path().join(format!("home-{n}"));
         let dir = root.path().join(format!("ext-{n}"));
         fs::create_dir_all(&home).unwrap();
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(dir.join("providers")).unwrap();
         fs::write(
-            dir.join("init.lua"),
+            dir.join("providers/p.lua"),
             format!(
                 r#"fiber.provider("p", {{
                   credential = {{ timeout = 60000, run = function(arg)
@@ -244,9 +244,9 @@ fn a_non_string_email_is_a_bad_return_and_an_empty_one_is_no_email() {
         let home = root.path().join(format!("home-{n}"));
         let dir = root.path().join(format!("ext-{n}"));
         fs::create_dir_all(&home).unwrap();
-        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(dir.join("providers")).unwrap();
         fs::write(
-            dir.join("init.lua"),
+            dir.join("providers/p.lua"),
             format!(
                 r#"fiber.provider("p", {{
                   credential = {{ timeout = 60000, run = function(arg)
@@ -342,9 +342,9 @@ fn waiting_provider(
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     std::fs::create_dir_all(&home).unwrap();
-    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::create_dir_all(dir.join("providers")).unwrap();
     std::fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/p.lua"),
         format!(
             r#"fiber.provider("p", {{
               credential = {{ timeout = 60000, run = function()

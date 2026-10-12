@@ -1,8 +1,8 @@
 //! A session's extensions and their hooks (`docs/extensions.md`, "Hooks",
 //! "When several hooks share a point", "When a hook fails" and "Loading,
-//! and cost when nothing is loaded"). Every installed, enabled Lua extension
-//! starts at session start, because a hook registers before the session's
-//! tool set is fixed ("Registering"). A session with none starts no VM.
+//! and cost when nothing is loaded"). Enabled extensions with `init.lua`
+//! start before the session's tool set is fixed ("Registering"). Provider
+//! files wait for first use and share their extension's VM.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

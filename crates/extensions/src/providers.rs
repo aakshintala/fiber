@@ -476,11 +476,13 @@ impl Providers {
         self.lua.insert(name.clone(), Arc::clone(provider));
         // A provider that registers no `models`, such as one with only
         // `cost()`, keeps its data file's models.
-        if matches!(provider.registers("models"), Ok(false)) {
-            return Vec::new();
-        }
-        if !provider.has_model_cache() && !provider.has_credential(config, &self.data(&name), run) {
-            return Vec::new();
+        if !provider.has_model_cache() {
+            if matches!(provider.registers("models"), Ok(false)) {
+                return Vec::new();
+            }
+            if !provider.has_credential(config, &self.data(&name), run) {
+                return Vec::new();
+            }
         }
         let mut models = match provider.models() {
             Ok(models) => models,
@@ -876,6 +878,9 @@ pub fn refresh_lists(
 ) -> Vec<StartedRefresh> {
     let mut started = Vec::new();
     for provider in lua {
+        if provider.fresh(max_age) {
+            continue;
+        }
         if !provider.has_credential(config, &providers.data(provider.name()), run) {
             continue;
         }

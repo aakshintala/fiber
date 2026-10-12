@@ -2410,8 +2410,8 @@ fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), EARLY_CLOSE_KINDS);
-    // The package's `init.lua` ran and `fiber.provider` took `cost`: the
-    // package loaded, and no notice says it failed.
+    // The package's provider file ran and `fiber.provider` took `cost`:
+    // the package loaded, and no notice says it failed.
     let loaded = run
         .lines
         .iter()
@@ -3461,7 +3461,7 @@ fn a_lua_provider_without_credential_uses_the_stored_key() {
     }
     write(&source.join("extension.json"), &manifest);
     fs::write(
-        source.join("init.lua"),
+        { std::fs::create_dir_all((source.join("providers/plain.lua")).parent().unwrap()).unwrap(); source.join("providers/plain.lua") },
         format!(
             "fiber.provider(\"plain\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n}})\n",
             server.url()
@@ -3714,7 +3714,12 @@ fn inline_extension(setup: &Setup, name: &str, init_lua: &str, base_url: &str) {
     let manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
         "providers": {name: [base_url]}});
     write(&source.join("extension.json"), &manifest);
-    fs::write(source.join("init.lua"), init_lua).unwrap();
+    fs::create_dir_all(source.join("providers")).unwrap();
+    fs::write(
+        source.join("providers").join(format!("{name}.lua")),
+        init_lua,
+    )
+    .unwrap();
     extensions::plan(
         &setup.home(),
         &extensions::Request::Path(source),

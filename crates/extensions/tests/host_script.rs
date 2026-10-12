@@ -158,9 +158,7 @@ fn fixture_entry_and_callback_calls_use_the_script_and_never_open_a_socket_or_pr
         "host-script": [format!("{}/v1", server.url())],
     });
     fs::write(&manifest_file, copied.to_string()).unwrap();
-    let init_path = source.join("init.lua");
-    let mut init = fs::read_to_string(&init_path).unwrap();
-    init.push_str(&format!(
+    let provider = format!(
         r#"
 local entry_reply = host.http({{
   method = "GET", url = "{base}/entry", headers = {{["X-Case"] = "entry"}}
@@ -183,8 +181,8 @@ fiber.provider("host-script", {{ models = {{
 "#,
         base = server.url(),
         exec_program = exec_program
-    ));
-    write(&init_path, &init);
+    );
+    write(&source.join("providers/host-script.lua"), &provider);
     install(&setup.home(), &source, "0.1.0").unwrap();
 
     let script = HostScript::new(

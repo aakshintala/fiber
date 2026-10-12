@@ -357,8 +357,13 @@ fn a_provider_runs_while_a_driven_command_is_held() {
     let dir = fakes::TempDir::new("fiber-drive");
     std::fs::write(
         dir.path().join("init.lua"),
-        "fiber.command(\"hold\", { timeout = 5000, run = function() return tostring(host.drive(\"steer\", {})) end })\n\
-         fiber.provider(\"p\", { sign = { timeout = 5000, run = function() return {} end } })\n",
+        "fiber.command(\"hold\", { timeout = 5000, run = function() return tostring(host.drive(\"steer\", {})) end })\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("providers")).unwrap();
+    std::fs::write(
+        dir.path().join("providers/p.lua"),
+        "fiber.provider(\"p\", { sign = { timeout = 5000, run = function() return {} end } })\n",
     )
     .unwrap();
     let (called_tx, called_rx) = mpsc::channel();

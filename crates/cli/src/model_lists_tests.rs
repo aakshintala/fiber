@@ -101,7 +101,8 @@ impl Setup {
         });
         manifest["providers"] = providers.clone();
         std::fs::write(source.join("extension.json"), manifest.to_string()).unwrap();
-        std::fs::write(source.join("init.lua"), init).unwrap();
+        std::fs::create_dir_all(source.join("providers")).unwrap();
+        std::fs::write(source.join("providers/acme.lua"), init).unwrap();
         extensions::plan(
             &self.home(),
             &extensions::Request::Path(source),
@@ -236,6 +237,24 @@ fn bounded(
             Err(error) => Err(error.to_string()),
         }
     })
+}
+
+#[test]
+fn an_age_checked_refresh_with_a_fresh_cache_loads_no_provider_file() {
+    let setup = Setup::new("fiber-fresh-lazy-list");
+    let marker = setup.root.path().join("provider-loaded");
+    let script = format!(
+        "host.fs.write({:?}, 'x')\n{}",
+        marker.display().to_string(),
+        server_models("http://127.0.0.1:1")
+    );
+    setup.install_lua("lazy", &script, &json!({"acme":["http://127.0.0.1:1/v1"]}));
+    setup.write_cache("acme", &["cached"]);
+    let clock = fakes::clock::FakeClock::new();
+    let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
+    assert_eq!(references(&catalogue), ["acme/cached"]);
+    assert!(catalogue.notices.is_empty());
+    assert!(!marker.exists());
 }
 
 /// A `models()` listing response with these ids.

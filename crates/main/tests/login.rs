@@ -741,7 +741,11 @@ fn labels_are_stored_and_deleted_through_argv() {
 fn install_codex(setup: &Setup, oauth: &str) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../providers/codex");
     let to = setup.home().join("extensions/codex");
-    for file in ["extension.json", "providers/codex.json", "init.lua"] {
+    for file in [
+        "extension.json",
+        "providers/codex.json",
+        "providers/codex.lua",
+    ] {
         let text = fs::read_to_string(root.join(file)).unwrap();
         let dir = to.join(file).parent().unwrap().to_path_buf();
         fs::create_dir_all(&dir).unwrap();

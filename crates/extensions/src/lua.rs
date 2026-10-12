@@ -421,11 +421,6 @@ impl LuaExtension {
         self.hub.lock().misplaced
     }
 
-    /// Every provider `fiber.provider` registered, sorted.
-    pub fn provider_names(&self) -> Result<Vec<String>, Error> {
-        self.registered(|timeouts| timeouts.providers.keys().cloned().collect())
-    }
-
     /// Every command the entry script registered: its name and description.
     /// Starts the extension.
     pub fn commands(&self) -> Result<Vec<(String, String)>, Error> {

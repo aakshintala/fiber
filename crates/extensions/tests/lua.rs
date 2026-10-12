@@ -691,9 +691,12 @@ fn a_command_queued_behind_a_parked_command_runs_once_it_finishes() {
         &dir.join("init.lua"),
         &format!(
             "fiber.command(\"first\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
-             fiber.command(\"second\", {{ timeout = 5000, run = function() return \"second\" end }})\n\
-             fiber.provider(\"p\", {{ sign = {{ timeout = 1000, run = function() return {{}} end }} }})\n"
+             fiber.command(\"second\", {{ timeout = 5000, run = function() return \"second\" end }})\n"
         ),
+    );
+    write(
+        &dir.join("providers/p.lua"),
+        "fiber.provider('p', {sign={timeout=1000, run=function() return {} end}})",
     );
     let ext = extension("ext", dir, setup.home(), FakeClock::new());
     let first = start(&ext, "first");
@@ -890,9 +893,12 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     write(
         &dir.join("init.lua"),
         &format!(
-            "fiber.command(\"p.sign\", {{ timeout = 30000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
-             fiber.provider(\"p\", {{ sign = {{ timeout = 50, run = function() return {{}} end }} }})\n"
+            "fiber.command(\"p.sign\", {{ timeout = 30000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n"
         ),
+    );
+    write(
+        &dir.join("providers/p.lua"),
+        "fiber.provider('p', {sign={timeout=50, run=function() return {} end}})",
     );
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());

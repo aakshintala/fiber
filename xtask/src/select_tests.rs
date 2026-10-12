@@ -1148,7 +1148,7 @@ fn a_diff_without_binary_tests_selects_no_extension_packages() {
 fn first_party_package_change_selects_every_package_with_cases() {
     let root = extension_case_repo();
     let selection = classify(
-        &strings(&["providers/openrouter/init.lua"]),
+        &strings(&["providers/openrouter/providers/openrouter.lua"]),
         &package_members(),
     );
     assert_eq!(

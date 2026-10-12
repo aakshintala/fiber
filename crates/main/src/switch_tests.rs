@@ -1496,7 +1496,7 @@ fn lua_extension(fixture: &Fixture, counter: &Path, flag: &Path) {
         )],
     );
     std::fs::write(
-        src.join("init.lua"),
+        { std::fs::create_dir_all((src.join("providers/lp.lua")).parent().unwrap()).unwrap(); src.join("providers/lp.lua") },
         format!(
             "local failing = pcall(host.fs.read, \"{flag}\")\n\
              if failing then error(\"broken\") end\n\

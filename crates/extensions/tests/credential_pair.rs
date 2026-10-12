@@ -27,7 +27,7 @@ use serde_json::json;
 /// How long a test waits for one call, or for a background refresh.
 const WAIT: Duration = Duration::from_secs(5);
 
-const INIT: &str = r#"
+const ECHO: &str = r#"
 local echo_calls = 0
 
 fiber.provider("echo", {
@@ -37,7 +37,9 @@ fiber.provider("echo", {
   end },
   sign = { timeout = 60000, run = function() return {} end },
 })
+"#;
 
+const OAUTH: &str = r#"
 fiber.provider("oauth", {
   credential = { timeout = 60000, run = function(who)
     return host.oauth.refresh(function(stored)
@@ -49,7 +51,9 @@ fiber.provider("oauth", {
     return {}
   end },
 })
+"#;
 
+const TIMED: &str = r#"
 local soon_calls = 0
 local late_calls = 0
 
@@ -85,7 +89,9 @@ fn fixture() -> (Setup, Arc<FakeClock>, Arc<LuaExtension>) {
     let setup = Setup::new();
     let clock = FakeClock::new();
     let dir = setup.root().join("extensions").join("pair");
-    write(&dir.join("init.lua"), INIT);
+    write(&dir.join("providers/echo.lua"), ECHO);
+    write(&dir.join("providers/oauth.lua"), OAUTH);
+    write(&dir.join("providers/timed.lua"), TIMED);
     let extension = Arc::new(
         LuaExtension::new("pair", dir, setup.home(), clock.clone())
             .with_secrets(vec!["url".into()]),

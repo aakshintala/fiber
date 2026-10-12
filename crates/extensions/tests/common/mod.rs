@@ -313,7 +313,7 @@ pub(crate) fn lua_named(
 ) -> Arc<LuaProvider> {
     let ext = setup.home().join(dir);
     write(
-        &ext.join("init.lua"),
+        &ext.join("providers").join(format!("{provider}.lua")),
         &format!(
             "fiber.provider(\"{provider}\", {{ \
              credential = {{ timeout = 1000, run = function() \
@@ -351,7 +351,7 @@ pub(crate) fn script_provider(
     }
     let dir = setup.home().join("ext");
     write(
-        &dir.join("init.lua"),
+        &dir.join("providers/p.lua"),
         &format!("fiber.provider(\"p\", {{ {} }})\n", spec.join(", ")),
     );
     let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock));

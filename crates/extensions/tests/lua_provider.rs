@@ -405,18 +405,19 @@ fn a_credential_with_no_token_is_credential_failed() {
 fn sign_returns_a_table_of_headers_or_nothing() {
     let setup = Setup::new();
     let dir = setup.home().join("ext");
-    let mut script = String::new();
     for (name, returns) in [
         ("empty", "{}"),
         ("none", "nil"),
         ("list", "{ \"a\" }"),
         ("number", "1"),
     ] {
-        script.push_str(&format!(
-            "fiber.provider(\"{name}\", {{ sign = {{ timeout = 1000, run = function() return {returns} end }} }})\n"
-        ));
+        write(
+            &dir.join("providers").join(format!("{name}.lua")),
+            &format!(
+                "fiber.provider(\"{name}\", {{ sign = {{ timeout = 1000, run = function() return {returns} end }} }})\n"
+            ),
+        );
     }
-    write(&dir.join("init.lua"), &script);
     let extension = Arc::new(LuaExtension::new(
         "ext",
         dir,
@@ -549,7 +550,10 @@ fn a_function_the_provider_never_registered_is_credential_failed() {
     let setup = Setup::new();
     let dir = setup.home().join("ext");
     write(
-        &dir.join("init.lua"),
+        &{
+            std::fs::create_dir_all((dir.join("providers/p.lua")).parent().unwrap()).unwrap();
+            dir.join("providers/p.lua")
+        },
         "fiber.provider(\"p\", { models = { timeout = 1000, run = function() return {} end } })\n",
     );
     let extension = Arc::new(LuaExtension::new(
@@ -590,7 +594,10 @@ fn a_provider_function_without_a_timeout_or_an_unknown_one_is_an_error_at_its_li
         let setup = Setup::new();
         let dir = setup.home().join("ext");
         write(
-            &dir.join("init.lua"),
+            &{
+                std::fs::create_dir_all((dir.join("providers/p.lua")).parent().unwrap()).unwrap();
+                dir.join("providers/p.lua")
+            },
             &format!("-- one\nfiber.provider(\"p\", {spec})\n"),
         );
         let extension = Arc::new(LuaExtension::new(
@@ -603,7 +610,7 @@ fn a_provider_function_without_a_timeout_or_an_unknown_one_is_an_error_at_its_li
         let Error::Lua { message, .. } = &err else {
             panic!("{err:?}")
         };
-        assert!(message.starts_with("init.lua:2: "), "{message}");
+        assert!(message.starts_with("providers/p.lua:2: "), "{message}");
         assert!(message.contains(says), "{message}");
     }
 }
@@ -907,7 +914,10 @@ fn a_credential_error_at_send_time_is_credential_failed() {
 fn refresh_provider(setup: &Setup, url: &str) -> Arc<LuaProvider> {
     let dir = setup.home().join("ext");
     write(
-        &dir.join("init.lua"),
+        &{
+            std::fs::create_dir_all((dir.join("providers/p.lua")).parent().unwrap()).unwrap();
+            dir.join("providers/p.lua")
+        },
         &format!(
             "fiber.provider(\"p\", {{\n\
              credential = {{ timeout = 60000, run = function()\n\
@@ -996,22 +1006,41 @@ fn an_unattended_login_at_send_time_marks_the_credential() {
 }
 
 #[test]
-fn provider_names_lists_every_registered_provider_sorted() {
+fn declared_provider_files_list_owners_in_order_without_running_lua() {
+    struct NoopLock;
+    impl contract::files::PathLock for NoopLock {
+        fn hold(&self, _: &std::path::Path, run: &mut dyn FnMut()) {
+            run();
+        }
+        fn hold_all(&self, _: &[std::path::PathBuf], run: &mut dyn FnMut()) {
+            run();
+        }
+    }
     let setup = Setup::new();
-    let dir = setup.home().join("ext");
-    write(
-        &dir.join("init.lua"),
-        "fiber.provider(\"b\", { models = { timeout = 1000, run = function() return {} end } })\n\
-         fiber.provider(\"a\", { sign = { timeout = 1000, run = function() return {} end } })\n",
-    );
-    let extension = Arc::new(LuaExtension::new(
-        "ext",
-        dir,
-        setup.home(),
-        FakeClock::new(),
-    ));
-    let names = within(move || extension.provider_names()).unwrap();
-    assert_eq!(names, ["a", "b"]);
+    let mut manifest = common::manifest("fiber.test/lazy");
+    manifest["providers"] = json!({"b":[], "a":[]});
+    let source = setup.source("lazy", &manifest, &[]);
+    write(&source.join("providers/b.lua"), "error('b must stay lazy')");
+    write(&source.join("providers/a.lua"), "error('a must stay lazy')");
+    common::install(&setup.home(), &source, "0.1.0").unwrap();
+    let configuration = common::config(&setup, &[]);
+    let home = setup.home();
+    let session = within(move || {
+        extensions::SessionExtensions::load(
+            &home,
+            &configuration,
+            FakeClock::new(),
+            Arc::new(NoopLock),
+            None,
+        )
+    });
+    assert!(session.notices().is_empty());
+    let names: Vec<_> = session
+        .lua_providers()
+        .iter()
+        .map(|(owner, provider)| (owner.as_str(), provider.name()))
+        .collect();
+    assert_eq!(names, [("fiber.test/lazy", "a"), ("fiber.test/lazy", "b")]);
 }
 
 #[test]
@@ -1082,7 +1111,10 @@ fn cost_registers_and_is_listed_among_the_provider_functions() {
     let setup = Setup::new();
     let dir = setup.home().join("ext");
     write(
-        &dir.join("init.lua"),
+        &{
+            std::fs::create_dir_all((dir.join("providers/p.lua")).parent().unwrap()).unwrap();
+            dir.join("providers/p.lua")
+        },
         "fiber.provider(\"p\", { cost = { timeout = 1000, run = function() return 0 end } })\n",
     );
     let extension = Arc::new(LuaExtension::new(
@@ -1106,7 +1138,10 @@ fn an_unknown_provider_function_is_refused_naming_cost_among_the_known_ones() {
     let setup = Setup::new();
     let dir = setup.home().join("ext");
     write(
-        &dir.join("init.lua"),
+        &{
+            std::fs::create_dir_all((dir.join("providers/p.lua")).parent().unwrap()).unwrap();
+            dir.join("providers/p.lua")
+        },
         "fiber.provider(\"p\", { list = { timeout = 1, run = function() end } })\n",
     );
     let extension = Arc::new(LuaExtension::new(

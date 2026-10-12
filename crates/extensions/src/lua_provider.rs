@@ -335,10 +335,10 @@ impl LuaProvider {
         self: &Arc<Self>,
         max_age: Option<Duration>,
     ) -> Option<JoinHandle<Result<Vec<ModelData>, Error>>> {
-        if !self.registers("models").unwrap_or(false) {
+        if self.fresh(max_age) {
             return None;
         }
-        if self.fresh(max_age) {
+        if !self.registers("models").unwrap_or(false) {
             return None;
         }
         let home = self.extension.home();
@@ -374,7 +374,7 @@ impl LuaProvider {
     /// one and the cached list is no older than it, or no cached copy
     /// exists (`models()` runs when the list is first needed). A list whose
     /// age reads exactly `max_age` is not stale.
-    fn fresh(&self, max_age: Option<Duration>) -> bool {
+    pub(crate) fn fresh(&self, max_age: Option<Duration>) -> bool {
         let Some(max) = max_age else {
             return false;
         };

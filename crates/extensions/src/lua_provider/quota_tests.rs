@@ -33,9 +33,9 @@ fn quota_provider_on(root: &fakes::TempDir, run: &str, clock: Arc<FakeClock>) ->
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/p.lua"),
         format!(
             "fiber.provider(\"p\", {{ quota = {{ timeout = 60000, run = function() return {run} end }} }})"
         ),
@@ -50,8 +50,8 @@ fn verbatim_provider(root: &fakes::TempDir, script: &str) -> Arc<LuaProvider> {
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("init.lua"), script).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
+    fs::write(dir.join("providers/p.lua"), script).unwrap();
     let extension = Arc::new(LuaExtension::new("ext", dir, home, FakeClock::new()));
     LuaProvider::new(extension, "p")
 }
@@ -369,9 +369,9 @@ fn http_quota_provider(
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/p.lua"),
         format!(
             "fiber.provider(\"p\", {{ quota = {{ timeout = 60000, run = function(a)\n\
              local reply = host.http({{ url = \"{server}/\" .. a.label }})\n\
@@ -691,9 +691,9 @@ fn http_quota_sign_provider(root: &fakes::TempDir, server: &str) -> Arc<LuaProvi
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/p.lua"),
         format!(
             "fiber.provider(\"p\", {{\n\
              quota = {{ timeout = 60000, run = function(a)\n\
@@ -998,10 +998,10 @@ fn a_model_call_fetches_with_the_bound_key() {
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
     let url = server.url();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/p.lua"),
         format!(
             "fiber.provider(\"p\", {{ quota = {{ timeout = 60000, run = function(a)\n\
              local reply = host.http({{ url = \"{url}/\" .. a.label .. \"/\" .. tostring(a.key) }})\n\

@@ -298,8 +298,8 @@ pub(crate) fn parts_in(
         loader,
         reads,
     );
-    // The extensions loaded above, started before the model was chosen:
-    // choosing a Lua provider's model waits on them.
+    // The model's provider file loads at its credential read; other
+    // provider files wait for their own first use.
     // The session log's path is set by the caller, which mints the session
     // directory after this returns.
     let mut prompt = r#loop::PromptInputs::new(

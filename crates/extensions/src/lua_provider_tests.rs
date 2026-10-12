@@ -110,9 +110,9 @@ fn credentials_is_empty_for_a_signer_without_credentials_even_with_a_cached_toke
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/p.lua"),
         r#"fiber.provider("p", {
             credential = {
                 timeout = 5000,
@@ -221,9 +221,9 @@ fn models_provider(root: &fakes::TempDir, run: &str) -> (std::path::PathBuf, Arc
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/p.lua"),
         format!(
             "fiber.provider(\"p\", {{ models = {{ timeout = 5000, run = function() return {run} end }} }})"
         ),
@@ -290,9 +290,9 @@ fn http_token_provider(root: &fakes::TempDir, url: &str) -> Arc<LuaProvider> {
     let home = root.path().join("home");
     let dir = root.path().join("ext");
     fs::create_dir_all(&home).unwrap();
-    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(dir.join("providers")).unwrap();
     fs::write(
-        dir.join("init.lua"),
+        dir.join("providers/p.lua"),
         format!(
             "fiber.provider(\"p\", {{ credential = {{ timeout = 60000, run = function()\n\
              local reply = host.http({{ url = \"{url}\", method = \"POST\" }})\n\

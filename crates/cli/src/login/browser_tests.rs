@@ -734,7 +734,7 @@ fn login_with_runs_the_provider_and_prints_its_stored_result() {
     )
     .unwrap();
     fs::write(
-        dir.join("init.lua"),
+        { std::fs::create_dir_all((dir.join("providers/acme.lua")).parent().unwrap()).unwrap(); dir.join("providers/acme.lua") },
         r#"fiber.provider("acme", {
           credential = { timeout = 60000, run = function()
             local stored = host.oauth.refresh(function()

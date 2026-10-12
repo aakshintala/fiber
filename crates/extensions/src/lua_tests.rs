@@ -543,7 +543,7 @@ fn provider_functions_abandoning_registration_wakes_every_waiter() {
     // Its own thread, so a call that never returns fails the test.
     let (done_tx, done_rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
-    thread::spawn(move || done_tx.send(caller.provider_functions("p")));
+    thread::spawn(move || done_tx.send(caller.provider_functions("fixture")));
     let err = Deadline::after(WAIT)
         .recv(&done_rx)
         .expect("provider_functions never returned")
@@ -588,6 +588,19 @@ fn dropping_the_extension_stops_it() {
     ));
 }
 
+/// A mixed fixture's provider registration is the last block of its script.
+fn mixed_extension(tag: &str, script: &str) -> fakes::TempDir {
+    let (init, provider) = script.split_once("fiber.provider").unwrap();
+    let dir = extension(tag, init);
+    std::fs::create_dir_all(dir.path().join("providers")).unwrap();
+    std::fs::write(
+        dir.path().join("providers/p.lua"),
+        format!("fiber.provider{provider}"),
+    )
+    .unwrap();
+    dir
+}
+
 /// An extension directory in a fresh temporary directory, with `init`.
 fn extension(tag: &str, init: &str) -> fakes::TempDir {
     let dir = fakes::TempDir::new(&format!("fiber-lua-{tag}"));
@@ -604,9 +617,16 @@ fn serve_after(
 ) -> (Arc<Hub>, u64, mpsc::Receiver<()>) {
     let hub = Hub::new(clock.clone());
     let asked = clock.now();
+    let provider_file = dir.join("providers/p.lua").is_file();
     let id = {
         let mut shared = hub.lock();
         shared.phase = Phase::Registering { abandon_at: None };
+        if provider_file {
+            shared
+                .loads
+                .insert("p".to_owned(), hub::ProviderLoad::Queued { asked });
+            shared.pending_loads.push_back("p".to_owned());
+        }
         shared.push(command(first), Value::String(String::new()), asked)
     };
     let (thread_hub, dir) = (Arc::clone(&hub), dir.to_owned());
@@ -630,6 +650,12 @@ fn serve_after(
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
     });
+    if provider_file {
+        assert!(until(&hub, |shared| matches!(
+            shared.loads.get("p"),
+            Some(hub::ProviderLoad::Loaded)
+        )));
+    }
     (hub, id, done_rx)
 }
 
@@ -687,7 +713,7 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
     server.hold();
     let url = server.url();
-    let dir = extension(
+    let dir = mixed_extension(
         "parked-second",
         &format!(
             "fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
@@ -723,7 +749,7 @@ fn a_command_queued_behind_a_parked_command_does_not_start() {
     hub.notify();
     assert!(until(&hub, |s| matches!(
         s.calls.get(&sign),
-        Some(Progress::Done(_))
+        Some(Progress::Done(Ok(_)))
     )));
     {
         let shared = hub.lock();
@@ -805,7 +831,7 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     let models = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
     models.hold();
     let (park_url, models_url) = (park.url(), models.url());
-    let dir = extension(
+    let dir = mixed_extension(
         "abandon",
         &format!(
             "fiber.command(\"park\", {{ timeout = 30000, run = function() return host.http({{ url = \"{park_url}\" }}).body end }})\n\
@@ -945,7 +971,7 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
     server.hold();
     let url = server.url();
-    let dir = extension(
+    let dir = mixed_extension(
         "hook-behind-parked-command",
         &format!(
             "fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
@@ -990,7 +1016,7 @@ fn a_hook_queued_behind_a_parked_command_does_not_start() {
     hub.notify();
     assert!(until(&hub, |s| matches!(
         s.calls.get(&sign),
-        Some(Progress::Done(_))
+        Some(Progress::Done(Ok(_)))
     )));
     {
         let shared = hub.lock();
@@ -1012,7 +1038,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "ok")]).unwrap();
     server.hold();
     let url = server.url();
-    let dir = extension(
+    let dir = mixed_extension(
         "command-behind-parked-hook",
         &format!(
             "fiber.command(\"later\", {{ timeout = 5000, run = function() return \"later\" end }})\n\
@@ -1082,7 +1108,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
     hub.notify();
     assert!(until(&hub, |s| matches!(
         s.calls.get(&sign),
-        Some(Progress::Done(_))
+        Some(Progress::Done(Ok(_)))
     )));
     {
         let shared = hub.lock();
@@ -1102,7 +1128,7 @@ fn a_command_queued_behind_a_parked_hook_does_not_start() {
 /// until `release`; after `release` it runs.
 #[test]
 fn a_held_command_blocks_the_stream_until_released() {
-    let dir = extension(
+    let dir = mixed_extension(
         "held-blocks-stream",
         "fiber.command(\"held\", { timeout = 5000, run = function() host.log(\"held ran\") end })\n\
          fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"non-blocking\", run = function(call) return {} end })\n\
@@ -1166,7 +1192,7 @@ fn a_held_command_blocks_the_stream_until_released() {
     // held command and the hook behind it stay queued.
     assert!(until(&hub, |s| matches!(
         s.calls.get(&sign),
-        Some(Progress::Done(_))
+        Some(Progress::Done(Ok(_)))
     )));
     {
         let shared = hub.lock();

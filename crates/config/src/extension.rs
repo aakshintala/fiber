@@ -384,6 +384,13 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, ConfigError> {
             }
         }
     }
+    if manifest.providers.keys().any(|name| !one_file_name(name)) {
+        return Err(ConfigError::WrongType {
+            source_name: file.display().to_string(),
+            key: "providers".into(),
+            expected: "names that are each one file name in providers/".into(),
+        });
+    }
     if manifest.secrets.iter().any(|name| !one_file_name(name)) {
         return Err(ConfigError::WrongType {
             source_name: file.display().to_string(),
