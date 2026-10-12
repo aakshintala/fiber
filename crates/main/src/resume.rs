@@ -248,6 +248,15 @@ fn resume_session(
         }
         held = Held::Made(isolation);
     }
+    // Every resume but a recreation keeps the session lock till the
+    // process dies, as a resumed session always did: the hub sequences a
+    // rewind's next start on the exiting process releasing it, so freeing
+    // it at `close` lets the next start overlap this process dying and the
+    // hub drops the next session. A recreated worktree takes no hold:
+    // `end` must see the session free to remove it.
+    if !matches!(held, Held::Made(_)) {
+        std::mem::forget(Arc::clone(&log));
+    }
     let result = resumed_session(
         log,
         dir,
