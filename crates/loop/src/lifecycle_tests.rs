@@ -16,7 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::emit::Emit;
-use contract::events::{InputItem, TextDelta, ToolCallRequested, TurnOutcome};
+use contract::events::{InputItem, TextDelta, ToolCallRequested, TurnOutcome, TurnStarted};
 use contract::hook::{
     AfterToolAnswer, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
     BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer, CheckOutcome, Context,
@@ -51,8 +51,9 @@ struct FakeHooks {
     seen_calls: Mutex<Vec<(String, Usage)>>,
     cancel_in_call: Mutex<Option<Arc<crate::TurnCancel>>>,
     turn_end_calls: AtomicUsize,
-    #[allow(dead_code, reason = "read from task 2.3 on")]
     seen_replies: Mutex<Vec<String>>,
+    cancel_in_end: Mutex<Option<Arc<crate::TurnCancel>>>,
+    steer_in_end: Mutex<Option<mpsc::Sender<Delivery>>>,
     cancel_in_hook: Mutex<Option<Arc<crate::TurnCancel>>>,
     shutdown_in_hook: Mutex<Option<Arc<crate::TurnCancel>>>,
 }
@@ -71,6 +72,8 @@ impl FakeHooks {
             cancel_in_call: Mutex::new(None),
             turn_end_calls: AtomicUsize::new(0),
             seen_replies: Mutex::new(Vec::new()),
+            cancel_in_end: Mutex::new(None),
+            steer_in_end: Mutex::new(None),
             cancel_in_hook: Mutex::new(None),
             shutdown_in_hook: Mutex::new(None),
         }
@@ -88,7 +91,6 @@ impl FakeHooks {
         self.before_model_call.lock().unwrap().push_back(answer);
     }
 
-    #[allow(dead_code, reason = "used from task 2.3 on")]
     fn answer_turn_end(&self, answer: ContextAnswer) {
         self.turn_end.lock().unwrap().push_back(answer);
     }
@@ -267,6 +269,17 @@ impl Hooks for FakeHooks {
     fn turn_end(&self, end: &contract::hook::TurnEnd<'_>) -> ContextAnswer {
         self.turn_end_calls.fetch_add(1, Ordering::SeqCst);
         self.seen_replies.lock().unwrap().push(end.reply.to_owned());
+        if let Some(cancel) = self.cancel_in_end.lock().unwrap().clone() {
+            cancel.cancel();
+        }
+        // A steer sent here waits in the inbox while the hook runs, so the
+        // next step writes it after the hook's own messages.
+        if let Some(inbox) = self.steer_in_end.lock().unwrap().clone() {
+            let ack = Ack(Box::new(|_| {}));
+            inbox
+                .send(Delivery::Steer(driver("c_steer", "late steer"), ack))
+                .unwrap();
+        }
         self.turn_end
             .lock()
             .unwrap()
@@ -312,21 +325,65 @@ fn started_with_tools(
     hooks: Option<Arc<FakeHooks>>,
     tools: Vec<Arc<dyn Tool>>,
 ) -> World {
+    let scripted = Arc::new(fakes::ScriptedProvider::new(script));
+    let provider = Arc::clone(&scripted) as Arc<dyn contract::provider::Provider>;
+    assemble(scripted, provider, hooks, tools)
+}
+
+/// [`started_with_tools`], reaching the scripted provider through `wrap`:
+/// the test reads the scripted provider's requests while the loop runs
+/// through the wrapper.
+fn started_wrapped(
+    script: Vec<fakes::Scripted>,
+    hooks: Option<Arc<FakeHooks>>,
+    tools: Vec<Arc<dyn Tool>>,
+    wrap: impl FnOnce(
+        Arc<fakes::ScriptedProvider>,
+        mpsc::Sender<Delivery>,
+    ) -> Arc<dyn contract::provider::Provider>,
+) -> (World, Arc<fakes::ScriptedProvider>) {
+    let scripted = Arc::new(fakes::ScriptedProvider::new(script));
+    let (inbox, rx) = mpsc::channel();
+    let provider = wrap(Arc::clone(&scripted), inbox.clone());
+    (
+        assemble_with(scripted.clone(), provider, inbox, rx, hooks, tools),
+        scripted,
+    )
+}
+
+/// A `Loop` on `provider` with its inbox still held by the test.
+fn assemble(
+    scripted: Arc<fakes::ScriptedProvider>,
+    provider: Arc<dyn contract::provider::Provider>,
+    hooks: Option<Arc<FakeHooks>>,
+    tools: Vec<Arc<dyn Tool>>,
+) -> World {
+    let (inbox, rx) = mpsc::channel();
+    assemble_with(scripted, provider, inbox, rx, hooks, tools)
+}
+
+/// [`assemble`], with the test's own inbox channel.
+fn assemble_with(
+    scripted: Arc<fakes::ScriptedProvider>,
+    provider: Arc<dyn contract::provider::Provider>,
+    inbox: mpsc::Sender<Delivery>,
+    rx: mpsc::Receiver<Delivery>,
+    hooks: Option<Arc<FakeHooks>>,
+    tools: Vec<Arc<dyn Tool>>,
+) -> World {
     let home = fakes::TempDir::new("fiber-lifecycle");
     let workspace = home.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let log =
         Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
-    let provider = Arc::new(fakes::ScriptedProvider::new(script));
-    let (inbox, rx) = mpsc::channel();
     // Subscribed before the loop starts: the stream holds every line the
     // turn writes, ephemeral notices included, which the durable read skips.
     let watcher = log.watch();
     let mut looped = Loop::start(
         crate::Session {
             log: Arc::clone(&log),
-            provider: Arc::clone(&provider) as Arc<dyn contract::provider::Provider>,
+            provider,
             model: Model {
                 reference: "fake/model".into(),
                 cost: None,
@@ -364,7 +421,7 @@ fn started_with_tools(
     World {
         looped: Some(looped),
         inbox,
-        provider,
+        provider: scripted,
         dir: home.path().join("s_test"),
         watcher: Some(watcher),
         _home: home,
@@ -1160,5 +1217,552 @@ fn a_cancel_inside_the_hook_ends_the_turn_interrupted_even_on_a_refusal() {
     assert_eq!(
         line(&all, "turn_completed").payload["outcome"],
         "interrupted"
+    );
+}
+
+/// The `turn_started` message items.
+fn started_input(lines: &[Envelope]) -> Vec<InputItem> {
+    let started: TurnStarted = serde_json::from_value(serde_json::Value::Object(
+        line(lines, "turn_started").payload.clone(),
+    ))
+    .unwrap();
+    started.input
+}
+
+/// A provider that sends one steer to the inbox when the first call is
+/// made, so it waits at that step's end-of-turn drain, then answers from
+/// its scripted provider.
+struct SteerDuring {
+    inner: Arc<fakes::ScriptedProvider>,
+    during: Mutex<Option<mpsc::Sender<Delivery>>>,
+}
+
+impl contract::provider::Provider for SteerDuring {
+    fn call(
+        &self,
+        request: &contract::provider::ModelRequest,
+    ) -> Box<dyn contract::provider::ModelCall> {
+        if let Some(inbox) = self.during.lock().unwrap().take() {
+            let ack = Ack(Box::new(|_| {}));
+            inbox
+                .send(Delivery::Steer(driver("c_steer", "aside"), ack))
+                .unwrap();
+        }
+        self.inner.call(request)
+    }
+
+    fn wire_tools(
+        &self,
+        tools: &[contract::provider::ToolDefinition],
+    ) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        self.inner.wire_tools(tools)
+    }
+
+    fn cost_lookup(&self) -> Option<Arc<dyn contract::provider::CostLookup>> {
+        self.inner.cost_lookup()
+    }
+
+    fn warms(&self, request: &contract::provider::ModelRequest) -> bool {
+        self.inner.warms(request)
+    }
+}
+
+/// A test tool whose calls end the turn asking one question.
+struct Asking;
+
+impl Tool for Asking {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "probe".into(),
+            description: "Asks one question.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Effects, EffectsError> {
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+            always_reviewed: false,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn Cancel,
+        _: &dyn Emit,
+    ) -> Output {
+        Output {
+            content: vec![ContentPart::Text {
+                text: "a question".into(),
+            }],
+            control: Some(contract::events::Control {
+                handoff: None,
+                questions: Some(vec![contract::shapes::Question {
+                    header: "Pick".into(),
+                    question: "Which?".into(),
+                    options: Vec::new(),
+                    multi_select: None,
+                }]),
+                skill: None,
+                name: None,
+            }),
+            ..Output::default()
+        }
+    }
+
+    fn bound(&self) -> Bound {
+        Bound::DEFAULT
+    }
+}
+
+/// A reply of `text` cut off by the output limit.
+fn cut_off(text: &str) -> fakes::Scripted {
+    let mut end = fakes::reply(text);
+    end.finish = contract::provider::Finish::OutputLimit;
+    fakes::Scripted {
+        deltas: Vec::new(),
+        end: Ok(end),
+    }
+}
+
+/// A reasoning-only reply thinking `thought`: no text, no call.
+fn reasoning_only(thought: &str) -> fakes::Scripted {
+    let mut end = fakes::reply("");
+    end.actions = vec![contract::provider::ReplyAction::Reasoning(
+        contract::events::ReasoningCompleted {
+            text: thought.into(),
+            provider_item: None,
+        },
+    )];
+    fakes::Scripted {
+        deltas: Vec::new(),
+        end: Ok(end),
+    }
+}
+
+#[test]
+fn a_turn_end_message_continues_the_turn_and_the_hook_runs_again() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_end(added(vec![("fiber.test/goal", "keep going")]));
+    let mut world = started(
+        vec![
+            fakes::Scripted::text("Done."),
+            fakes::Scripted::text("All set."),
+        ],
+        Some(hooks.clone()),
+    );
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    // The hook saw the reply that ended the step, then the next one, which
+    // ended the turn.
+    assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        hooks.seen_replies.lock().unwrap().clone(),
+        vec!["Done.", "All set."]
+    );
+    let all = lines(&world);
+    assert_eq!(
+        kinds(&all),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "step_started",
+            "steering_applied",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    // The message is the extension's own, with no command and no rewrites.
+    let steering = line(&all, "steering_applied");
+    assert_eq!(
+        steering.payload["content"],
+        serde_json::json!([{"type": "text", "text": "keep going"}])
+    );
+    assert_eq!(steering.payload["source"], "extension");
+    assert_eq!(steering.payload["extension"], "fiber.test/goal");
+    assert!(steering.payload.get("command_id").is_none());
+    assert!(steering.payload.get("changed_by").is_none());
+    // The next request carries it as a user message.
+    let requests = world.provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].conversation.last(),
+        Some(&contract::provider::Input::User {
+            text: "keep going".into(),
+            images: Vec::new(),
+        })
+    );
+}
+
+#[test]
+fn a_steer_waiting_at_the_end_of_turn_drain_skips_turn_end_that_time() {
+    let hooks = Arc::new(FakeHooks::new());
+    let (mut world, scripted) = started_wrapped(
+        vec![fakes::Scripted::text("one"), fakes::Scripted::text("two")],
+        Some(hooks.clone()),
+        Vec::new(),
+        |inner, inbox| {
+            Arc::new(SteerDuring {
+                inner,
+                during: Mutex::new(Some(inbox)),
+            }) as Arc<dyn contract::provider::Provider>
+        },
+    );
+    let _ = scripted;
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    // The first step's end found the steer waiting and never ran the hook;
+    // the second step's end did, and ended the turn.
+    assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 1);
+    let all = lines(&world);
+    let steering: Vec<&Envelope> = all
+        .iter()
+        .filter(|line| line.kind == "steering_applied")
+        .collect();
+    assert_eq!(steering.len(), 1);
+    assert_eq!(
+        steering[0].payload["content"][0]["text"], "aside",
+        "the waiting steer continued the turn"
+    );
+}
+
+#[test]
+fn a_cancel_inside_turn_end_drops_its_message_and_starts_no_later_turn_with_it() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_end(added(vec![("fiber.test/goal", "keep going")]));
+    let mut world = started(
+        vec![
+            fakes::Scripted::text("Done."),
+            fakes::Scripted::text("All set."),
+        ],
+        Some(hooks.clone()),
+    );
+    {
+        let looped = world.looped.take().unwrap();
+        hooks
+            .cancel_in_end
+            .lock()
+            .unwrap()
+            .replace(Arc::clone(&looped.cancel));
+        world.looped = Some(looped);
+    }
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Interrupted)
+    );
+    // The next turn holds no extension message: it never joined `queued`.
+    // The fake stops cancelling now, so the next turn runs clean.
+    hooks.cancel_in_end.lock().unwrap().take();
+    let (next_ack, next_answered) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_2", "again"), next_ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    assert!(
+        Deadline::after(TURN_DEADLINE)
+            .recv(&next_answered)
+            .expect("the prompt's answer")
+            .is_ok()
+    );
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert!(
+        !all.iter().any(|line| line.kind == "steering_applied"),
+        "no message was written: {:?}",
+        kinds(&all)
+    );
+    let started: Vec<&Envelope> = all
+        .iter()
+        .filter(|line| line.kind == "turn_started")
+        .collect();
+    assert_eq!(started.len(), 2);
+    let input = started_input(std::slice::from_ref(started[1]));
+    assert_eq!(input.len(), 1);
+    let InputItem::Message { content, .. } = &input[0] else {
+        panic!("a message item: {input:?}");
+    };
+    assert_eq!(crate::conversation::text(content), "again");
+}
+
+#[test]
+fn replied_runs_no_hook_once_a_cancel_landed() {
+    let hooks = Arc::new(FakeHooks::new());
+    let mut world = started(Vec::new(), Some(hooks.clone()));
+    let mut looped = world.looped.take().unwrap();
+    assert!(looped.cancel.arm());
+    looped.cancel.cancel();
+    let ended = looped.replied(&TurnId("t_test".into()), "Done.").unwrap();
+    world.looped = Some(looped);
+    assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 0);
+    let Some(end) = ended else {
+        panic!("a cancelled turn ends");
+    };
+    assert_eq!(end.outcome, TurnOutcome::Interrupted);
+}
+
+#[test]
+fn a_turn_that_fails_or_asks_questions_never_calls_turn_end() {
+    // A failed model call ends the turn with no reply to show the hook.
+    let hooks = Arc::new(FakeHooks::new());
+    let mut world = started(
+        vec![fakes::Scripted::failed(contract::shapes::Failure {
+            code: ErrorCode::QuotaExceeded,
+            message: "no more".into(),
+            retry_after_ms: None,
+            provider: None,
+        })],
+        Some(hooks.clone()),
+    );
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Failed)
+    );
+    drop(world.looped.take());
+    assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 0);
+
+    // A call asking questions ends the turn at the step boundary instead.
+    let hooks = Arc::new(FakeHooks::new());
+    let mut world = started_with_tools(
+        vec![
+            tool_call_reply("Checking.", "probe", serde_json::json!({}), 0.0),
+            fakes::Scripted::text("Done."),
+        ],
+        Some(hooks.clone()),
+        vec![Arc::new(Asking) as Arc<dyn Tool>],
+    );
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+    assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 0);
+    let all = lines(&world);
+    let end = line(&all, "turn_completed");
+    assert!(end.payload.get("questions").is_some());
+}
+
+#[test]
+fn a_blocking_turn_end_failure_writes_nothing_and_fails_the_turn() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_end(failed("fiber.test/goal", "boom"));
+    let mut world = started(vec![fakes::Scripted::text("one")], Some(hooks.clone()));
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Failed)
+    );
+    assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 1);
+    // The failed chain holds nothing for a later turn either.
+    assert!(
+        world
+            .looped
+            .as_ref()
+            .unwrap()
+            .lifecycle
+            .continued
+            .is_empty()
+    );
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert!(
+        !all.iter().any(|line| line.kind == "steering_applied"),
+        "the failure wrote no message"
+    );
+    let end = line(&all, "turn_completed");
+    assert_eq!(end.payload["outcome"], "failed");
+    assert_eq!(end.payload["error"]["code"], "hook_failed");
+    assert_eq!(
+        end.payload["error"]["message"],
+        "The `turn_end` hook of extension fiber.test/goal failed: boom"
+    );
+}
+
+#[test]
+fn two_turn_end_messages_are_written_in_run_order_after_a_late_steer() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_end(added(vec![
+        ("fiber.test/first", "one"),
+        ("fiber.test/second", "two"),
+    ]));
+    let mut world = started(
+        vec![
+            fakes::Scripted::text("Done."),
+            fakes::Scripted::text("All set."),
+        ],
+        Some(hooks.clone()),
+    );
+    // A steer sent while the hook runs waits in the inbox behind it.
+    hooks
+        .steer_in_end
+        .lock()
+        .unwrap()
+        .replace(world.inbox.clone());
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    let texts: Vec<&str> = all
+        .iter()
+        .filter(|line| line.kind == "steering_applied")
+        .map(|line| line.payload["content"][0]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        texts,
+        vec!["one", "two", "late steer"],
+        "the hook's messages precede the steer that arrived meanwhile"
+    );
+}
+
+#[test]
+fn an_output_limit_reply_runs_turn_end_with_its_kept_text() {
+    let hooks = Arc::new(FakeHooks::new());
+    let mut world = started(vec![cut_off("partial")], Some(hooks.clone()));
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(hooks.seen_replies.lock().unwrap().clone(), vec!["partial"]);
+}
+
+#[test]
+fn a_reasoning_only_reply_runs_turn_end_with_no_text() {
+    let hooks = Arc::new(FakeHooks::new());
+    let mut world = started(vec![reasoning_only("hmm")], Some(hooks.clone()));
+    let (ack, _) = capture();
+    world
+        .inbox
+        .send(Delivery::Prompt(driver("c_1", "hello"), ack))
+        .unwrap();
+    let finished = run_turn(&mut world);
+    assert_eq!(
+        finish_turn(&mut world, &finished),
+        Some(TurnOutcome::Completed)
+    );
+    drop(world.looped.take());
+
+    assert_eq!(hooks.turn_end_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(hooks.seen_replies.lock().unwrap().clone(), vec![""]);
+}
+
+#[test]
+fn a_cancel_before_the_next_steps_commit_drops_held_messages() {
+    let hooks = Arc::new(FakeHooks::new());
+    hooks.answer_turn_end(added(vec![("fiber.test/goal", "keep going")]));
+    let mut world = started(vec![fakes::Scripted::text("Done.")], Some(hooks));
+    let mut looped = world.looped.take().unwrap();
+    let turn = TurnId("t_test".into());
+    // The reply ends the step with nothing waiting: its message is held for
+    // the next step, not written yet.
+    assert_eq!(looped.replied(&turn, "Done.").unwrap(), None);
+    assert_eq!(looped.lifecycle.continued.len(), 1);
+    // A cancel lands before the next step's commit: the commit is refused
+    // and the held message is dropped unwritten.
+    assert!(looped.cancel.arm());
+    assert!(looped.cancel.cancel());
+    let step = looped.step(&turn).unwrap();
+    assert!(
+        matches!(step, crate::Step::Ended(_)),
+        "the turn ends without another request"
+    );
+    // A later turn is clean: nothing held over.
+    assert!(looped.lifecycle.continued.is_empty());
+    world.looped = Some(looped);
+    drop(world.looped.take());
+
+    let all = lines(&world);
+    assert!(
+        !all.iter().any(|line| line.kind == "steering_applied"),
+        "no held message was written: {:?}",
+        kinds(&all)
     );
 }
