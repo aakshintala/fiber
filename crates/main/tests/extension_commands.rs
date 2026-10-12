@@ -24,6 +24,281 @@ use support::{Setup, function_call};
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
 
+/// Every line of the command's action, not just the expected endpoints.
+fn command_action<'a>(
+    lines: &'a [Value],
+    command: &str,
+    extension: &str,
+    expected: &[&str],
+) -> Vec<&'a Value> {
+    let requested = lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "tool_call_requested"
+                && line["payload"]["ran_by"]["command_id"] == command
+        })
+        .expect("command's inner request");
+    assert_eq!(
+        requested["payload"]["ran_by"],
+        json!({"extension":extension,"command_id":command})
+    );
+    let action = requested["action_id"].as_str().expect("inner action id");
+    let lines: Vec<_> = lines
+        .iter()
+        .filter(|line| line["action_id"] == action)
+        .collect();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    for line in &lines {
+        assert!(line.get("turn_id").is_none(), "{line}");
+    }
+    for line in lines.iter().skip(1) {
+        assert!(line["payload"].get("ran_by").is_none(), "{line}");
+    }
+    lines
+}
+
+#[test]
+fn an_idle_commands_host_tool_is_turnless_and_never_contacts_the_provider() {
+    let setup = Setup::new_with_fm_root();
+    fs::write(setup.workspace().join("note.txt"), "the file\n").unwrap();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    setup.lua("peek", "fiber.command('peek', {timeout=5000,run=function() local o=host.tool('read',{path='note.txt'}) host.status(o.status .. ':' .. #o.content) end})");
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"c_peek","command":"command","args":{"name":"peek"}}"#,
+    );
+    let seen = until(&client, "command tool status", |line| {
+        line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/peek"
+    });
+    assert_eq!(seen.last().unwrap()["payload"]["status"], "completed:1");
+    let action = command_action(
+        &seen,
+        "c_peek",
+        "fiber.test/peek",
+        &[
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
+    );
+    assert_eq!(action[0]["payload"]["name"], "read");
+    assert_eq!(action[2]["payload"]["status"], "completed");
+    assert!(server.requests().is_empty());
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let all = [seen, tail].concat();
+    command_action(
+        &all,
+        "c_peek",
+        "fiber.test/peek",
+        &[
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
+    );
+    command_action(
+        &out,
+        "c_peek",
+        "fiber.test/peek",
+        &[
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
+    );
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_commands_own_before_hook_fails_but_other_hooks_and_later_model_calls_run() {
+    let setup = Setup::new_with_fm_root();
+    fs::write(setup.workspace().join("note.txt"), "the file\n").unwrap();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_read",
+            "read",
+            &json!({"path":"note.txt"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    setup.lua("audit", "fiber.hook('before_tool', {timeout=5000,on_failure='blocking',run=function(call) host.fs.write('audit',call.tool) end})");
+    setup.lua("guard", "fiber.hook('before_tool', {timeout=5000,on_failure='non-blocking',run=function() host.fs.write('guard-ran','x') end})\nfiber.command('peek', {timeout=5000,run=function() local o=host.tool('read',{path='note.txt'}) host.status(o.status .. ':' .. o.error.code) end})");
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"c_peek","command":"command","args":{"name":"peek"}}"#,
+    );
+    let seen = until(&client, "before hook failure status", |line| {
+        line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/guard"
+    });
+    assert_eq!(
+        seen.last().unwrap()["payload"]["status"],
+        "failed:hook_failed"
+    );
+    let action = command_action(
+        &seen,
+        "c_peek",
+        "fiber.test/guard",
+        &["tool_call_requested", "tool_call_completed"],
+    );
+    assert_eq!(action[1]["payload"]["status"], "failed");
+    assert_eq!(action[1]["payload"]["error"]["code"], "hook_failed");
+    assert!(
+        action[1]["payload"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fiber.test/guard")
+    );
+    assert_eq!(
+        fs::read_to_string(setup.workspace().join("audit")).unwrap(),
+        "read"
+    );
+    assert!(!setup.workspace().join("guard-ran").exists());
+    assert!(server.requests().is_empty());
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"read it"}]}}"#,
+    );
+    let done = until(&client, "later model turn", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert_eq!(
+        fs::read_to_string(setup.workspace().join("guard-ran")).unwrap(),
+        "x"
+    );
+    let model_results: Vec<_> = done
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    assert_eq!(model_results.len(), 1);
+    assert_eq!(model_results[0]["payload"]["status"], "completed");
+    assert!(model_results[0].get("turn_id").is_some());
+    assert_eq!(server.requests().len(), 2);
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    command_action(
+        &[seen, done, tail].concat(),
+        "c_peek",
+        "fiber.test/guard",
+        &["tool_call_requested", "tool_call_completed"],
+    );
+    command_action(
+        &out,
+        "c_peek",
+        "fiber.test/guard",
+        &["tool_call_requested", "tool_call_completed"],
+    );
+}
+
+#[test]
+fn a_commands_own_sanitize_after_hook_fails_without_leaking_the_output() {
+    let setup = Setup::new_with_fm_root();
+    let secret = "do-not-leak-556";
+    fs::write(setup.workspace().join("note.txt"), secret).unwrap();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    setup.lua("guard", "fiber.hook('after_tool', {phase='sanitize',timeout=5000,on_failure='blocking',run=function() host.fs.write('guard-ran','x') end})\nfiber.command('peek', {timeout=5000,run=function() local o=host.tool('read',{path='note.txt'}) host.status(o.status .. ':' .. o.error.code .. ':' .. o.content[1].text) end})");
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"c_peek","command":"command","args":{"name":"peek"}}"#,
+    );
+    let seen = until(&client, "after hook failure status", |line| {
+        line["kind"] == "extension_ui" && line["payload"]["extension"] == "fiber.test/guard"
+    });
+    assert!(
+        seen.last().unwrap()["payload"]["status"]
+            .as_str()
+            .unwrap()
+            .starts_with("failed:hook_failed:")
+    );
+    let action = command_action(
+        &seen,
+        "c_peek",
+        "fiber.test/guard",
+        &[
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
+    );
+    let completed = &action[2]["payload"];
+    assert_eq!(completed["status"], "failed");
+    assert_eq!(completed["error"]["code"], "hook_failed");
+    assert!(
+        completed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fiber.test/guard")
+    );
+    assert_eq!(completed["content"].as_array().unwrap().len(), 1);
+    assert!(completed.get("artifact").is_none());
+    assert!(!setup.workspace().join("guard-ran").exists());
+    let workspace = fs::canonicalize(setup.workspace()).unwrap();
+    let sessions_dir = log::sessions_dir(&setup.home(), &doors::project(&workspace));
+    // Check while live too: closing an idle session need not retain its directory.
+    assert!(!support::on_disk(&sessions_dir).contains(secret));
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let all = [seen, tail].concat();
+    command_action(
+        &all,
+        "c_peek",
+        "fiber.test/guard",
+        &[
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
+    );
+    assert!(!serde_json::to_string(&all).unwrap().contains(secret));
+    assert!(!serde_json::to_string(&out).unwrap().contains(secret));
+    assert!(!stderr.contains(secret));
+    assert!(!support::on_disk(&sessions_dir).contains(secret));
+    assert!(server.requests().is_empty());
+}
+
 #[test]
 fn commands_lists_the_extensions_command_with_tag_and_description() {
     let setup = Setup::new_with_fm_root();
