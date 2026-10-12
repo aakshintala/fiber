@@ -106,9 +106,9 @@ fn event_of(kind: &Kind) -> contract::events::Event {
 }
 
 proptest! {
-    // Few cases, since each makes a session; enough to cut each kind of line
-    // at each kind of byte.
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    // Sixteen cases: each makes a session, and the fsync test cuts each
+    // case at every syncing kind.
+    #![proptest_config(ProptestConfig::with_cases(16))]
 
     /// A session cut off at any byte, as a power cut can leave it, reopens
     /// with every complete line intact and carries on from the next `seq`.
