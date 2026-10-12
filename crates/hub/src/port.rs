@@ -85,7 +85,7 @@ impl Web {
 
     /// Shuts the TCP stream down both ways, without the sink lock: it
     /// unblocks a stalled reader, writer or close attempt.
-    fn shut(&self) {
+    pub(crate) fn shut(&self) {
         self.control.shutdown(Shutdown::Both).unwrap_or(());
     }
 

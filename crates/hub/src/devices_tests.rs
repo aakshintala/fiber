@@ -175,6 +175,66 @@ fn a_record_swapped_for_a_symlink_before_open_is_refused() {
 }
 
 #[test]
+fn write_leaves_only_the_record_mode_0600() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let temp = Temp::new();
+    let record = Record { name: "phone".to_owned(), paired_at: 10, last_connected_at: 10, token_sha256: sha256_hex(b"token") };
+    write(&temp.dir, &record).unwrap();
+    assert_eq!(fs::metadata(temp.devices().join("phone")).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(fs::metadata(temp.devices()).unwrap().permissions().mode() & 0o777, 0o700);
+    assert!(!temp.dir.join("hub/.phone.tmp").exists());
+    assert_eq!(holder(&temp.dir, "token").as_deref(), Some("phone"));
+}
+
+#[test]
+fn touch_changes_only_last_connected_at() {
+    let temp = Temp::new();
+    write_record(&temp.dir, "phone", "token");
+    let path = temp.devices().join("phone");
+    let before: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    touch(&temp.dir, "phone", 123).unwrap();
+    let mut after: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(after.as_object_mut().unwrap().remove("last_connected_at"), Some(Value::from(123)));
+    assert_eq!(after, before);
+}
+
+#[test]
+fn remove_of_absent_or_non_regular_is_false() {
+    let temp = Temp::new();
+    assert!(!remove(&temp.dir, "phone").unwrap());
+    fs::create_dir_all(temp.devices().join("phone")).unwrap();
+    assert!(!remove(&temp.dir, "phone").unwrap());
+    std::os::unix::fs::symlink("phone", temp.devices().join("link")).unwrap();
+    assert!(!remove(&temp.dir, "link").unwrap());
+    write_record(&temp.dir, "tablet", "token");
+    assert!(remove(&temp.dir, "tablet").unwrap());
+    assert!(!exists(&temp.dir, "tablet").unwrap());
+    assert!(exists(&temp.dir, "link").unwrap());
+}
+
+#[test]
+fn list_is_sorted_and_skips_non_regular() {
+    let temp = Temp::new();
+    write_record(&temp.dir, "z", "token");
+    write_record(&temp.dir, "a", "other");
+    fs::create_dir(temp.devices().join("dir")).unwrap();
+    std::os::unix::fs::symlink("a", temp.devices().join("link")).unwrap();
+    let listed = list(&temp.dir).unwrap();
+    assert_eq!(listed.iter().map(|record| record.name.as_str()).collect::<Vec<_>>(), ["a", "z"]);
+    assert!(listed.iter().all(|record| record.paired_at.is_none() && record.last_connected_at.is_none()));
+}
+
+#[test]
+fn sync_dir_failure_is_reported_apart_from_the_write() {
+    let temp = Temp::new();
+    write(&temp.dir, &Record { name: "phone".to_owned(), paired_at: 10, last_connected_at: 10, token_sha256: sha256_hex(b"token") }).unwrap();
+    fault(Fault::Sync);
+    assert!(sync_dir(&temp.dir).is_err());
+    assert_eq!(holder(&temp.dir, "token").as_deref(), Some("phone"));
+    sync_dir(&temp.dir).unwrap();
+}
+
+#[test]
 fn a_hash_only_record_outside_the_name_rule_is_returned_by_name() {
     let temp = Temp::new();
     write_record(&temp.dir, ".phone", "t0k3n");
