@@ -10,8 +10,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use config::{
-    ConfigError, CredentialFile, Layer, ProjectKey, Secret, delete_secret, insert_entry,
-    read_secret, store_secret,
+    Config, ConfigError, CredentialFile, Layer, ProjectKey, Secret, Sources, delete_secret,
+    insert_entry, read_secret, remove_entry, store_secret,
 };
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -415,6 +415,92 @@ pub(crate) fn split_declaration(
     }
 }
 
+/// The layers whose `mcp.servers` declares `name`, lowest first: what a
+/// refused `remove` names, so a mistyped name is caught rather than
+/// stored where nothing reads it.
+fn declaring_layers(
+    home: &Path,
+    workspace: &Path,
+    project: &ProjectKey,
+    name: &str,
+) -> Result<Vec<Layer>, Failure> {
+    let config = Config::load(Sources {
+        home: home.to_path_buf(),
+        workspace: workspace.to_path_buf(),
+        project: project.clone(),
+        overrides: Vec::new(),
+    })
+    .map_err(config_failure)?;
+    let mut layers = Vec::new();
+    for layer in [Layer::Global, Layer::Project, Layer::Repository] {
+        let declares = config
+            .in_layer("mcp.servers", layer)
+            .and_then(|servers| servers.as_object()?.contains_key(name).then_some(()))
+            .is_some();
+        if declares {
+            layers.push(layer);
+        }
+    }
+    Ok(layers)
+}
+
+/// `fiber mcp remove [--project | --repo] <name>`: removes the declaration
+/// alone; stored secrets and approvals stay.
+pub(crate) fn run_remove(
+    home: &Path,
+    workspace: &Path,
+    layer: Layer,
+    name: &str,
+    _streams: Streams<'_>,
+) -> Result<(), Failure> {
+    let (_, project) = project_of(home, workspace)?;
+    if remove_entry(home, workspace, &project, layer, "mcp.servers", name).map_err(config_failure)? {
+        return Ok(());
+    }
+    let layers = declaring_layers(home, workspace, &project, name)?;
+    let hint = if layers.is_empty() {
+        "; no layer declares it".to_owned()
+    } else {
+        let names = layers
+            .iter()
+            .map(|layer| layer_word(*layer))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("; it is declared in the {names} layer(s)")
+    };
+    Err(usage(format!(
+        "`{name}` is not declared in the {} layer{hint}. Run `fiber --help` for usage.",
+        layer_word(layer)
+    )))
+}
+
+/// `fiber mcp remove [--project | --repo] <name>` in the current directory.
+pub fn mcp_remove(layer: Layer, name: &str) -> i32 {
+    let ran = config::fiber_home_from_env()
+        .map_err(|e| failed(e.code(), e))
+        .and_then(|home| {
+            let workspace = std::env::current_dir().map_err(|e| {
+                failed(ErrorCode::IoFailed, format!("the current directory: {e}"))
+            })?;
+            let mut out = io::stdout();
+            let mut err = io::stderr();
+            run_remove(
+                &home,
+                &workspace,
+                layer,
+                name,
+                Streams {
+                    out: &mut out,
+                    err: &mut err,
+                },
+            )
+        });
+    match ran {
+        Ok(()) => 0,
+        Err(e) => fail(e),
+    }
+}
+
 /// `fiber mcp add [--project | --repo] <name> <url>` or `... -- <command>
 /// [args]...` in the current directory.
 pub fn mcp_add(
@@ -472,4 +558,8 @@ pub fn mcp_add(
 
 #[cfg(test)]
 #[path = "mcp_add_tests.rs"]
-mod tests;
+mod add_tests;
+
+#[cfg(test)]
+#[path = "mcp_remove_tests.rs"]
+mod remove_tests;
