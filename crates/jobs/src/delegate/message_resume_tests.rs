@@ -391,10 +391,11 @@ fn reported(rig: &ResumeRig) -> contract::inbox::JobNotice {
     })
 }
 
-/// Stops run `id`'s child, drives its end, and reaps it behind `marker`.
+/// Stops run `id`'s child, drives its end, and reaps it behind the
+/// watchdog the test started before it launched the child, so a panic or
+/// timeout between the launch and this helper still reaps the group.
 /// Returns the run's notice, unclaimed.
-fn stop_and_reap(rig: &ResumeRig, id: &JobId, marker: &str) -> contract::inbox::JobNotice {
-    let watchdog = Watchdog::matching(marker);
+fn stop_and_reap(rig: &ResumeRig, id: &JobId, watchdog: Watchdog) -> contract::inbox::JobNotice {
     assert!(
         contract::jobs::Jobs::stop(rig.registry.as_ref(), id),
         "run {id:?} stops"
@@ -483,6 +484,8 @@ fn run_and_run_asking_differ_only_in_the_starts_action() {
     let output_path = format!("{}/sessions/s_1/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
     end_resume_run(finish, &id, "Done.");
+    // The watchdog starts before the child launches, so every path reaps.
+    let watchdog = Watchdog::matching("fiber-message-definition-1");
     // Without an `Ask` the starts carry no action.
     let output = rig.tool.run(
         &resume_args(&id.0, "go again"),
@@ -495,7 +498,7 @@ fn run_and_run_asking_differ_only_in_the_starts_action() {
     let taken = call(&output.settle.clone().expect("a resume settles"));
     assert_eq!(taken.len(), 4);
     assert!(taken[2].action.is_none() && taken[3].action.is_none());
-    stop_and_reap(&rig, &id, "fiber-message-definition-1");
+    stop_and_reap(&rig, &id, watchdog);
 
     // With an `Ask` the starts carry the call's action; the receipt is
     // the same.
@@ -507,6 +510,7 @@ fn run_and_run_asking_differ_only_in_the_starts_action() {
     let output_path = format!("{}/sessions/s_2/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
     end_resume_run(finish, &id, "Done.");
+    let watchdog = Watchdog::matching("fiber-message-definition-2");
     let ask = FakeAsk {
         asked: AtomicBool::new(false),
     };
@@ -523,7 +527,7 @@ fn run_and_run_asking_differ_only_in_the_starts_action() {
     assert_eq!(taken.len(), 4);
     assert_eq!(taken[2].action, Some(action()));
     assert_eq!(taken[3].action, Some(action()));
-    stop_and_reap(&rig, &id, "fiber-message-definition-2");
+    stop_and_reap(&rig, &id, watchdog);
 }
 
 #[test]
@@ -540,6 +544,7 @@ fn a_resume_reports_its_launch_and_queues_both_runs() {
     let (id, finish) = open_resume_delegate(&rig, &output_path);
     end_resume_run(finish, &id, "Done.");
     let _run1 = take_notice(&rig);
+    let watchdog = Watchdog::matching("fiber-message-resume");
     let ask = FakeAsk {
         asked: AtomicBool::new(false),
     };
@@ -588,7 +593,7 @@ fn a_resume_reports_its_launch_and_queues_both_runs() {
     );
     // The replayed earlier run's end never stands in for the new run's:
     // the run ends on the live exit once the watch delivered it.
-    let run2 = stop_and_reap(&rig, &id, "fiber-message-resume");
+    let run2 = stop_and_reap(&rig, &id, watchdog);
     assert_eq!(
         run2.delegate.map(|finished| finished.text),
         Some("New.".into())
@@ -613,6 +618,7 @@ fn a_resume_after_a_wait_takes_only_the_new_run_start() {
         call(&waited.settle.expect("an ended wait settles")).len(),
         2
     );
+    let watchdog = Watchdog::matching("fiber-message-waited");
     let output = rig.tool.run(
         &resume_args(&id.0, "go again"),
         &CancelToken::new(),
@@ -621,7 +627,7 @@ fn a_resume_after_a_wait_takes_only_the_new_run_start() {
     assert!(output.error.is_none());
     assert!(output.jobs.is_empty());
     assert_eq!(call(&output.settle.expect("a resume settles")).len(), 2);
-    stop_and_reap(&rig, &id, "fiber-message-waited");
+    stop_and_reap(&rig, &id, watchdog);
 }
 
 #[test]
@@ -635,6 +641,7 @@ fn a_dropped_resume_output_loses_no_start() {
     let (id, finish) = open_resume_delegate(&rig, &output_path);
     end_resume_run(finish, &id, "Done.");
     let _run1 = take_notice(&rig);
+    let watchdog = Watchdog::matching("fiber-message-dropped");
     let output = rig.tool.run(
         &resume_args(&id.0, "go again"),
         &CancelToken::new(),
@@ -643,7 +650,7 @@ fn a_dropped_resume_output_loses_no_start() {
     assert!(output.error.is_none());
     // The settle is never called: run 2 ends, and its notice takes
     // everything ahead of its own news.
-    let run2 = stop_and_reap(&rig, &id, "fiber-message-dropped");
+    let run2 = stop_and_reap(&rig, &id, watchdog);
     assert!(run2.delegate.is_some(), "run 2 finished");
     assert_eq!(
         (run2.claim.0)(),
@@ -671,14 +678,16 @@ fn two_calls_resume_in_turn() {
     end_resume_run(finish, &id, "Done 1.");
     let _run1 = take_notice(&rig);
     // Call 1 resumes to run 2; its settle is not yet called.
+    let watchdog = Watchdog::matching("fiber-message-two-1");
     let first = rig.tool.run(
         &resume_args(&id.0, "first"),
         &CancelToken::new(),
         &Recorder::default(),
     );
     assert!(first.error.is_none());
-    let run2 = stop_and_reap(&rig, &id, "fiber-message-two-1");
+    let run2 = stop_and_reap(&rig, &id, watchdog);
     // Call 2 resumes to run 3 with one more launch. No refusal.
+    let watchdog = Watchdog::matching("fiber-message-two-2");
     let second = rig.tool.run(
         &resume_args(&id.0, "second"),
         &CancelToken::new(),
@@ -713,7 +722,7 @@ fn two_calls_resume_in_turn() {
     );
     // Run 2's notice holds nothing new: its news left with the settles.
     assert_eq!((run2.claim.0)(), None);
-    stop_and_reap(&rig, &id, "fiber-message-two-2");
+    stop_and_reap(&rig, &id, watchdog);
 }
 
 #[test]
@@ -749,6 +758,7 @@ fn a_spawn_failure_starts_nothing_and_a_second_call_resumes() {
         2
     );
     // A second call then resumes.
+    let watchdog = Watchdog::matching("fiber-message-respawn");
     let output = rig.tool.run(
         &resume_args(&id.0, "go again"),
         &CancelToken::new(),
@@ -756,7 +766,7 @@ fn a_spawn_failure_starts_nothing_and_a_second_call_resumes() {
     );
     assert!(output.error.is_none());
     assert_eq!(content(&output), resumed_text(&id.0, &output_path));
-    stop_and_reap(&rig, &id, "fiber-message-respawn");
+    stop_and_reap(&rig, &id, watchdog);
 }
 
 #[test]
@@ -833,6 +843,7 @@ fn a_boundary_read_that_failed_starts_nothing_though_the_log_is_back_before_the_
 
     // A second call reads past the restored log and launches on it: the
     // stale replay never stands in for the new run's end.
+    let watchdog = Watchdog::matching("fiber-message-deny");
     let output = rig.tool.run(
         &resume_args(&id.0, "go again"),
         &CancelToken::new(),
@@ -847,7 +858,7 @@ fn a_boundary_read_that_failed_starts_nothing_though_the_log_is_back_before_the_
         rig.watch_calls.lock().unwrap().as_slice(),
         [(delegate_started(&id.0).delegate_session_id, Some(7))],
     );
-    let run2 = stop_and_reap(&rig, &id, "fiber-message-deny");
+    let run2 = stop_and_reap(&rig, &id, watchdog);
     assert_eq!(
         run2.delegate.map(|finished| finished.text),
         Some("New.".into()),
@@ -865,6 +876,7 @@ fn closing_resumes_once_the_run_ends_before_the_bound() {
     );
     let output_path = format!("{}/sessions/s_c/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
+    let watchdog = Watchdog::matching("fiber-message-closing");
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi there", CancelToken::new());
     let at = rig.clock.now() + BOUND;
     assert!(
@@ -878,7 +890,7 @@ fn closing_resumes_once_the_run_ends_before_the_bound() {
     assert!(output.error.is_none());
     assert_eq!(content(&output), resumed_text(&id.0, &output_path));
     assert_eq!(rig.launched.lock().unwrap().len(), 1);
-    stop_and_reap(&rig, &id, "fiber-message-closing");
+    stop_and_reap(&rig, &id, watchdog);
 }
 
 #[test]
@@ -891,6 +903,7 @@ fn gone_resumes_once_the_run_ends_during_the_backoff() {
     );
     let output_path = format!("{}/sessions/s_g/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
+    let watchdog = Watchdog::matching("fiber-message-gone");
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi", CancelToken::new());
     assert!(
         rig.clock
@@ -906,7 +919,7 @@ fn gone_resumes_once_the_run_ends_during_the_backoff() {
     assert_eq!(content(&output), resumed_text(&id.0, &output_path));
     assert_eq!(rig.launched.lock().unwrap().len(), 1);
     assert_eq!(*rig.steer_calls.lock().unwrap(), 1);
-    stop_and_reap(&rig, &id, "fiber-message-gone");
+    stop_and_reap(&rig, &id, watchdog);
 }
 
 #[test]
@@ -919,6 +932,7 @@ fn closing_after_a_committed_gone_resumes_once_the_run_ends() {
     );
     let output_path = format!("{}/sessions/s_cg/events.jsonl", rig._dir.path().display());
     let (id, finish) = open_resume_delegate(&rig, &output_path);
+    let watchdog = Watchdog::matching("fiber-message-closing-gone");
     let (rx, handle) = call_async(&rig.tool, &id.0, "hi", CancelToken::new());
     assert!(
         rig.clock
@@ -940,7 +954,7 @@ fn closing_after_a_committed_gone_resumes_once_the_run_ends() {
     assert!(output.error.is_none());
     assert_eq!(content(&output), resumed_text(&id.0, &output_path));
     assert_eq!(rig.launched.lock().unwrap().len(), 1);
-    stop_and_reap(&rig, &id, "fiber-message-closing-gone");
+    stop_and_reap(&rig, &id, watchdog);
 }
 
 #[test]
@@ -993,6 +1007,7 @@ fn a_cancel_inside_the_start_still_commits_the_resume() {
     let _run1 = take_notice(&rig);
     // The call is inside `resume`, held in its `start` closure, when
     // the cancel fires.
+    let watchdog = Watchdog::matching("fiber-message-cancel-start");
     let cancel = CancelToken::new();
     let (rx, handle) = call_async(&rig.tool, &id.0, "go again", cancel.clone());
     fakes::Deadline::after(DEADLINE)
@@ -1018,5 +1033,5 @@ fn a_cancel_inside_the_start_still_commits_the_resume() {
         ]
     );
     assert_eq!(rig.launched.lock().unwrap().len(), 1);
-    stop_and_reap(&rig, &id, "fiber-message-cancel-start");
+    stop_and_reap(&rig, &id, watchdog);
 }
