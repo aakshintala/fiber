@@ -1,5 +1,6 @@
 //! Inner calls run inside their anchor on the loop's step machinery.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 
 use contract::ActionId;
@@ -23,9 +24,7 @@ struct Answer {
 impl Answer {
     fn resolve(&self, completed: Box<ToolCallCompleted>) {
         let mut answer = lock(&self.completed);
-        if answer.is_none() {
-            *answer = Some(completed);
-        }
+        answer.get_or_insert(completed);
         self.changed.notify_all();
     }
 
@@ -60,7 +59,7 @@ impl Raised {
 #[derive(Default)]
 struct Requests {
     raised: Vec<Raised>,
-    waiting: Vec<Arc<Answer>>,
+    waiting: BTreeMap<usize, Arc<Answer>>,
     closed: bool,
 }
 
@@ -92,7 +91,7 @@ impl InnerSlot {
         let mut requests = lock(&self.requests);
         requests.closed = true;
         requests.raised.clear();
-        for answer in std::mem::take(&mut requests.waiting) {
+        for answer in std::mem::take(&mut requests.waiting).into_values() {
             answer.resolve(cancelled());
         }
     }
@@ -119,7 +118,10 @@ impl InnerCalls for InnerSlot {
             if requests.closed {
                 return Ok(cancelled());
             }
-            requests.waiting.push(Arc::clone(&answer));
+            // An answer's address is unique while this map holds its Arc.
+            requests
+                .waiting
+                .insert(Arc::as_ptr(&answer).addr(), Arc::clone(&answer));
             requests.raised.push(Raised {
                 extension: extension.to_owned(),
                 name: name.to_owned(),
@@ -131,7 +133,7 @@ impl InnerCalls for InnerSlot {
         let completed = answer.wait();
         lock(&self.requests)
             .waiting
-            .retain(|held| !Arc::ptr_eq(held, &answer));
+            .remove(&Arc::as_ptr(&answer).addr());
         Ok(completed)
     }
 }
@@ -377,16 +379,18 @@ impl crate::Loop {
             }
         }
         // Remove only leaves: their parent remains until its completion is written.
-        while let Some(index) = inner.iter().position(|call| {
-            call.stream.returned() && !inner.iter().any(|child| child.anchor == call.id)
-        }) {
+        while let Some((index, (output, flushed))) =
+            inner.iter().enumerate().find_map(|(index, call)| {
+                if Self::inner_anchored(inner, &call.id) {
+                    return None;
+                }
+                call.stream.take_finished().map(|output| (index, output))
+            })
+        {
             let call = inner.remove(index);
             if let Some(slot) = call.stream.inner_slot() {
                 slot.close();
             }
-            let Some((output, flushed)) = call.stream.take_finished() else {
-                continue;
-            };
             if let Some(delta) = flushed {
                 self.write_delta(&delta, turn, &call.id);
             }

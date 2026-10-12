@@ -141,6 +141,36 @@ fn session(tools: Vec<Arc<dyn Tool>>) -> Session {
     session
 }
 
+fn assert_turn_events(lines: &[Envelope], inner: &[&str]) {
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "tool_call_arguments_delta",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+    ];
+    expected.extend_from_slice(inner);
+    expected.extend_from_slice(&[
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]);
+    assert_eq!(support::kinds(lines), expected);
+}
+
 fn inner_id(lines: &[Envelope]) -> contract::ActionId {
     lines
         .iter()
@@ -167,6 +197,14 @@ fn the_inner_result_is_logged_before_the_outer_and_only_the_outer_reaches_the_pr
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     let id = inner_id(&lines);
+    assert_turn_events(
+        &lines,
+        &[
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+        ],
+    );
     assert_eq!(
         action_kinds(&lines, &id),
         [
@@ -834,4 +872,253 @@ fn a_request_taken_after_turn_cancellation_completes_without_starting() {
     );
     assert_eq!(*results.lock().unwrap(), [CallStatus::Cancelled]);
     assert!(inner.ran.lock().unwrap().is_empty());
+}
+
+#[test]
+fn inner_deltas_are_paced_on_the_injected_clock_and_flushed_under_the_inner_action() {
+    use contract::clock::Clock;
+    use contract::events::{Event, Progress};
+    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(3));
+    let (release_first, first) = std::sync::mpsc::channel();
+    let (release_last, last) = std::sync::mpsc::channel();
+    let (held, holding) = std::sync::mpsc::channel();
+    let first = Mutex::new(first);
+    let last = Mutex::new(last);
+    let inner = Arc::new(FakeTool::new("inner", move |_, _, emit, _| {
+        emit.emit(&Event::ToolCallDelta(Progress {
+            text: Some("a".into()),
+            details: None,
+        }));
+        let _released = first.lock().unwrap().recv();
+        emit.emit(&Event::ToolCallDelta(Progress {
+            text: Some("b".into()),
+            details: None,
+        }));
+        held.send(()).unwrap();
+        let _released = last.lock().unwrap().recv();
+        emit.emit(&Event::ToolCallDelta(Progress {
+            text: Some("final".into()),
+            details: None,
+        }));
+        text("answer")
+    }));
+    let (outer, _) = outer("inner", json!({}));
+    let mut session = session(vec![outer, inner]);
+    let tap = support::Tap::new(&session.log);
+    let (done, thread) = start_turn(&mut session);
+    let a = tap.wait_for_delta("a");
+    release_first.send(()).unwrap();
+    deadline.recv_or_fail(&holding, "the inner stream holds b");
+    let interval = std::time::Duration::from_millis(100);
+    assert!(
+        session.clock.await_thread_parked(
+            thread,
+            Some(session.clock.now() + interval),
+            std::time::Duration::from_secs(2)
+        ),
+        "inner delta waits on its clock interval"
+    );
+    session.clock.advance(interval);
+    let b = tap.wait_for_delta("b");
+    assert_eq!(b.action_id, a.action_id);
+    release_last.send(()).unwrap();
+    let (looped, outcome) = deadline.recv_or_fail(&done, "inner delta turn");
+    session.looped = Some(looped);
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let id = inner_id(&lines);
+    assert_eq!(
+        action_kinds(&lines, &id),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_delta",
+            "tool_call_delta",
+            "tool_call_completed"
+        ]
+    );
+    let deltas: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_delta")
+        .map(|l| l.payload["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(deltas, ["a", "b", "final"]);
+}
+
+fn asking(prompt: &str) -> contract::tool::Asking {
+    contract::tool::Asking {
+        interaction: contract::events::Interaction::Confirm {
+            prompt: prompt.into(),
+        },
+        action_ids: vec![],
+        until: None,
+        check: None,
+        suspends: false,
+    }
+}
+
+#[test]
+fn an_inner_ask_is_declined_but_a_model_ask_in_the_same_answerable_session_is_raised() {
+    let deadline = fakes::Deadline::after(std::time::Duration::from_secs(3));
+    let inner = Arc::new(FakeTool::new("inner", |_, _, _, ask| {
+        assert!(!ask.answerable());
+        // Deliberately does not test answerability before raising.
+        assert_eq!(
+            ask.ask(asking("inner?")),
+            contract::tool::Answered::NoAnswer
+        );
+        text("no answer")
+    }));
+    let model_ask = Arc::new(FakeTool::new("question", |_, _, _, ask| {
+        assert!(ask.answerable());
+        assert_eq!(
+            ask.ask(asking("model?")),
+            contract::tool::Answered::Reply(contract::events::Answer::Confirmed {
+                confirmed: true
+            })
+        );
+        text("confirmed")
+    }));
+    let (outer, outcomes) = outer("inner", json!({}));
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("outer", json!({}))]),
+            calls_reply("", &[("question", json!({}))]),
+            fakes::Scripted::text("done"),
+        ],
+        None,
+        vec![outer, inner, model_ask],
+    )
+    .answerable(true)
+    .inbox_woken();
+    session.inbox.send(support::delivery("go")).unwrap();
+    let tap = support::Tap::new(&session.log);
+    let (done, _) = start_turn(&mut session);
+    let asked = tap.wait_for("interaction_requested");
+    assert_eq!(asked.payload["prompt"], "model?");
+    session.reply(contract::commands::Reply {
+        request_id: contract::RequestId(asked.payload["request_id"].as_str().unwrap().into()),
+        answer: contract::commands::ReplyAnswer::Confirmed { confirmed: true },
+    });
+    let (looped, outcome) = deadline.recv_or_fail(&done, "answered model call");
+    session.looped = Some(looped);
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.kind == "interaction_requested")
+            .count(),
+        1
+    );
+    let resolved: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "interaction_resolved")
+        .collect();
+    assert_eq!(resolved.len(), 2);
+    assert_eq!(resolved[0].payload["declined"], true);
+    assert_eq!(resolved[0].payload["by"], "fiber");
+    assert_eq!(resolved[1].payload["confirmed"], true);
+    assert_eq!(resolved[1].payload["by"], "person");
+    assert_eq!(outcomes.lock().unwrap()[0].status, CallStatus::Completed);
+}
+
+#[test]
+fn inner_control_names_the_session_but_never_loads_a_model_skill_or_starts_a_handoff() {
+    let control = contract::events::Control {
+        name: Some("inner name".into()),
+        skill: Some(contract::events::SkillLoad {
+            name: "inner-skill".into(),
+            path: "/skill/SKILL.md".into(),
+        }),
+        handoff: Some("inner handoff".into()),
+        ..Default::default()
+    };
+    let inner = Arc::new(FakeTool::new("inner", move |_, _, _, _| Output {
+        control: Some(control.clone()),
+        ..text("skill text")
+    }));
+    let (outer, outcomes) = outer("inner", json!({}));
+    let mut session = session(vec![outer, inner]);
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        action_kinds(&lines, &inner_id(&lines)),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "session_named",
+            "tool_call_completed"
+        ]
+    );
+    let named = lines.iter().find(|l| l.kind == "session_named").unwrap();
+    assert_eq!(named.payload["name"], "inner name");
+    assert!(!lines.iter().any(|l| l.kind == "handoff_started"));
+    assert_eq!(
+        outcomes.lock().unwrap()[0]
+            .control
+            .as_ref()
+            .unwrap()
+            .skill
+            .as_ref()
+            .unwrap()
+            .name,
+        "inner-skill"
+    );
+    assert!(
+        !serde_json::to_string(&session.requests()[1].conversation)
+            .unwrap()
+            .contains("inner-skill")
+    );
+}
+
+#[test]
+fn an_inner_write_tracks_its_instruction_file_and_appends_the_prune_line_before_completion() {
+    let root = fakes::TempDir::new("fiber-inner-instruction");
+    let path = root.path().join("notes.md");
+    std::fs::write(&path, "1234").unwrap();
+    let written = path.clone();
+    let mut inner = FakeTool::new("inner", move |_, _, _, _| {
+        std::fs::write(&written, "123456").unwrap();
+        text("written")
+    });
+    inner.effects.declared.effects = vec![Effect::Writes];
+    inner.effects.declared.paths = Some(vec![path.display().to_string()]);
+    let (outer, outcomes) = outer("inner", json!({}));
+    let mut session = Session::with_tools_sectioned(
+        vec![
+            calls_reply("", &[("outer", json!({}))]),
+            fakes::Scripted::text("done"),
+        ],
+        vec![outer, Arc::new(inner)],
+        vec![("notes".into(), vec![path], Some(5))],
+    );
+    session.inbox.send(support::delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let id = inner_id(&lines);
+    assert_eq!(
+        action_kinds(&lines, &id),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+            "instruction_file"
+        ]
+    );
+    let instruction = lines
+        .iter()
+        .find(|l| l.kind == "instruction_file" && l.action_id.as_ref() == Some(&id))
+        .unwrap();
+    assert_eq!(instruction.payload["reason"], "own_edit");
+    assert_eq!(instruction.payload["sent"], "none");
+    let results = outcomes.lock().unwrap();
+    assert_eq!(
+        results[0].content.last(),
+        Some(&ContentPart::Text {
+            text: "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them."
+                .into()
+        })
+    );
 }

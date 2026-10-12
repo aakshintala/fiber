@@ -3323,3 +3323,61 @@ fn the_suspended_batch_excludes_inner_requests() {
     assert_eq!(suspended.batch.len(), 1);
     assert_eq!(suspended.batch[0].0.0, "a_outer");
 }
+
+#[test]
+fn inner_control_never_changes_the_skills_or_handoff_step() {
+    let mut lines = inner_lines(false);
+    let mut done = crate::completion::completed("inner control".into(), None);
+    done.control = Some(contract::events::Control {
+        skill: Some(contract::events::SkillLoad {
+            name: "inner".into(),
+            path: "inner/SKILL.md".into(),
+        }),
+        handoff: Some("inner note".into()),
+        ..Default::default()
+    });
+    lines[3] = line(
+        "tool_call_completed",
+        &Event::ToolCallCompleted(done),
+        Some("a_inner"),
+    );
+    let mut conversation = Vec::new();
+    let mut carry = crate::handoff::Carry::default();
+    let kept = contract::events::SkillLoad {
+        name: "kept".into(),
+        path: "kept/SKILL.md".into(),
+    };
+    carry.skills.push(kept.clone());
+    let mut had = BTreeMap::new();
+    for line in &lines {
+        render(
+            &mut conversation,
+            &Event::from_envelope(line).unwrap().unwrap(),
+            line.action_id.as_ref(),
+            "fake",
+            &mut had,
+            &mut carry,
+        );
+    }
+    assert_eq!(carry.skills, [kept]);
+    assert!(carry.noted().is_empty());
+    assert_eq!(carry.step.len(), 1);
+    assert_eq!(carry.step[0].action.0, "a_outer");
+}
+
+#[test]
+fn an_unfinished_inner_call_holds_no_job_notice_and_gets_no_fixed_result() {
+    let mut lines = inner_lines(true);
+    lines.push(line(
+        "tool_call_completed",
+        &Event::ToolCallCompleted(crate::completion::completed("outer done".into(), None)),
+        Some("a_outer"),
+    ));
+    lines.push(line("job_completed", &completed("j_done"), None));
+    let rebuilt = super::rebuild(&lines, "fake").unwrap();
+    assert_eq!(rebuilt.len(), 3);
+    assert!(
+        matches!(&rebuilt[1], Input::ToolResult { action_id, text, .. } if action_id.0 == "a_outer" && text == "outer done")
+    );
+    assert!(matches!(&rebuilt[2], Input::User { text, .. } if text.contains("j_done")));
+}
