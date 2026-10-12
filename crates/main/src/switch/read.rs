@@ -40,6 +40,14 @@ pub(crate) struct Reads {
     /// Absent outside the unit tests.
     #[cfg(test)]
     checkpoint: Mutex<Option<Checkpoint>>,
+    /// The next spawn's pause before it spawns, armed by a test. Absent
+    /// outside the unit tests.
+    #[cfg(test)]
+    spawn_pause: Mutex<Option<SpawnPause>>,
+    /// The next spawn's pause after it lists its group, armed by a test.
+    /// Absent outside the unit tests.
+    #[cfg(test)]
+    listed_pause: Mutex<Option<SpawnPause>>,
 }
 
 /// One pause of a `credential` wait at its checks, for the interleaving
@@ -59,8 +67,23 @@ struct Checkpoint {
     release: mpsc::Receiver<()>,
 }
 
-/// Everything [`Reads`] guards with its one lock, so a cancel and a spawn
-/// never interleave.
+/// One pause before a spawn, for the interleaving tests: the spawn reports
+/// it reached the spawn and blocks until the test releases it, so the test
+/// lands a cancel between the checks and the spawn on every run.
+#[cfg(test)]
+struct SpawnPause {
+    /// Sent once the spawn reached its pause; the send blocks until the
+    /// test receives it, which is the acknowledgement.
+    entered: mpsc::Sender<()>,
+    /// The test releases the spawn through this.
+    release: mpsc::Receiver<()>,
+}
+
+/// Everything [`Reads`] guards with its one lock. The lock is never held
+/// across a spawn: a spawn checks under the lock, spawns with it released,
+/// then lists under the lock. A cancel that landed mid-spawn is seen on
+/// the relock, and the late child is killed there, so no command escapes
+/// a cancel.
 #[derive(Default)]
 struct State {
     cancelled: bool,
@@ -309,16 +332,33 @@ impl Reads {
         }
     }
 
-    /// Checks for a cancel, spawns `command` as a group leader and lists
-    /// its group, all under the state lock, so no command escapes a cancel.
+    /// Refuses when cancelled, spawns `command` as a group leader with the
+    /// lock released, then lists its group under the lock. A cancel that
+    /// landed mid-spawn kills the late group here with SIGKILL, reaps the
+    /// leader, and is `Interrupted` without ever listing the group, so no
+    /// command escapes a cancel.
     fn spawn(&self, command: &mut Command) -> io::Result<Child> {
+        if self.lock().cancelled {
+            return Err(interrupted());
+        }
+        #[cfg(test)]
+        self.pause_before_spawn();
+        let mut child = command.process_group(0).spawn()?;
+        let group = child.id();
         let mut state = self.lock();
         if state.cancelled {
+            kill_group(group);
+            // Reaped with the lock released: a leader in uninterruptible
+            // sleep (a hung filesystem) must not stall a cancel behind it.
+            drop(state);
+            let _reaped = child.wait();
             return Err(interrupted());
         }
         state.groups.retain(|group| alive(*group));
-        let child = command.process_group(0).spawn()?;
-        state.groups.push(child.id());
+        state.groups.push(group);
+        drop(state);
+        #[cfg(test)]
+        self.pause_after_listed();
         Ok(child)
     }
 
@@ -372,6 +412,62 @@ impl Reads {
             .take();
         if let Some(point) = point {
             match point.checked.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause before the next spawn: the spawn sends on `entered`
+    /// once it reaches the spawn and blocks until `release` arrives. The
+    /// pause is one-shot.
+    pub(crate) fn pause_at_spawn(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self
+            .spawn_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the spawn reached its pause and blocks until the test
+    /// releases it. Runs free unless a test armed a pause meanwhile.
+    fn pause_before_spawn(&self) {
+        let point = self
+            .spawn_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match point.release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    /// Arms one pause after the next spawn lists its group: the spawn
+    /// sends on `entered` once the group is listed and blocks until
+    /// `release` arrives. The pause is one-shot.
+    pub(crate) fn pause_at_listed(&self, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *self
+            .listed_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(SpawnPause { entered, release });
+    }
+
+    /// Reports the spawn listed its group and blocks until the test
+    /// releases it. Runs free unless a test armed a pause meanwhile.
+    fn pause_after_listed(&self) {
+        let point = self
+            .listed_pause
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(point) = point {
+            match point.entered.send(()) {
                 Ok(()) | Err(_) => {}
             }
             match point.release.recv() {

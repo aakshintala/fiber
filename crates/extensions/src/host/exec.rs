@@ -782,49 +782,117 @@ mod groups {
 
     use std::io;
     use std::process::{Child, Command};
+    #[cfg(test)]
+    use std::sync::mpsc;
     use std::sync::{Mutex, MutexGuard, PoisonError};
 
     use rustix::process::Signal;
 
     use super::{group_alive, signal_group};
 
-    static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static LIVE: Mutex<Groups> = Mutex::new(Groups {
+        killed: false,
+        pgids: Vec::new(),
+    });
+    #[cfg(test)]
+    static SPAWN_PAUSE: Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = Mutex::new(None);
 
-    fn live() -> MutexGuard<'static, Vec<u32>> {
+    #[cfg(test)]
+    pub(super) fn pause_at_spawn(entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) {
+        *SPAWN_PAUSE.lock().unwrap_or_else(PoisonError::into_inner) = Some((entered, release));
+    }
+
+    #[cfg(test)]
+    fn pause_before_spawn() {
+        let gate = SPAWN_PAUSE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some((entered, release)) = gate {
+            match entered.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+            match release.recv() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    fn live() -> MutexGuard<'static, Groups> {
         LIVE.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Every `host.exec` group that may still hold a process, and whether
+    /// the kill pass already ran. The lock is never held across a spawn:
+    /// a spawn checks under the lock, spawns with it released, then lists
+    /// under the lock. A kill pass that landed mid-spawn is seen on the
+    /// relock, and the late child is killed there, so no group escapes
+    /// the pass.
+    #[derive(Default)]
+    struct Groups {
+        /// Set once by the kill pass; no spawn after it lists.
+        killed: bool,
+        /// Every listed group: one stays listed until seen empty.
+        pgids: Vec<u32>,
+    }
+
+    /// Spawns `cmd` with the lock released, then lists its group under the
+    /// lock. A kill pass that landed mid-spawn kills the late group here
+    /// with SIGKILL, reaps the leader, and is `Interrupted` without ever
+    /// listing the group, so no group escapes the pass.
     pub(super) fn spawn(cmd: &mut Command) -> io::Result<Child> {
+        if live().killed {
+            return Err(interrupted());
+        }
+        #[cfg(test)]
+        pause_before_spawn();
+        let mut child = cmd.spawn()?;
+        let group = child.id();
         let mut live = live();
-        let child = cmd.spawn()?;
-        live.push(child.id());
+        if live.killed {
+            signal_group(group, Signal::KILL);
+            // Reaped with the lock released: a leader in uninterruptible
+            // sleep (a hung filesystem) must not stall a kill pass behind it.
+            drop(live);
+            let _reaped = child.wait();
+            return Err(interrupted());
+        }
+        live.pgids.push(group);
         Ok(child)
+    }
+
+    /// The spawn refused after the kill pass ran.
+    fn interrupted() -> io::Error {
+        io::Error::new(io::ErrorKind::Interrupted, "the process is shutting down")
     }
 
     /// Lists `pgid`, a group spawned outside [`spawn`].
     #[cfg(test)]
     pub(super) fn register(pgid: u32) {
-        live().push(pgid);
+        live().pgids.push(pgid);
     }
 
     /// The groups listed now.
     #[cfg(test)]
     pub(super) fn listed() -> Vec<u32> {
-        live().clone()
+        live().pgids.clone()
     }
 
     pub(crate) fn finished(pgid: u32, seen_empty: bool) {
         if seen_empty {
-            live().retain(|listed| *listed != pgid);
+            live().pgids.retain(|listed| *listed != pgid);
         }
     }
 
-    /// Sends SIGKILL to every listed group still holding a process, all at
-    /// once, and drops the empty ones from the list.
+    /// Sets the killed flag, then sends SIGKILL to every listed group still
+    /// holding a process, all at once, and drops the empty ones from the
+    /// list. A spawn after the flag is set never lists: it kills its own
+    /// group and is `Interrupted`.
     pub(crate) fn kill_every_group() {
         let mut live = live();
-        live.retain(|pgid| group_alive(*pgid));
-        for pgid in live.iter() {
+        live.killed = true;
+        live.pgids.retain(|pgid| group_alive(*pgid));
+        for pgid in live.pgids.iter() {
             signal_group(*pgid, Signal::KILL);
         }
     }

@@ -1253,3 +1253,104 @@ fn a_pid_mode_startup_abort_signals_only_the_pid() {
     );
     watchdog.stand_down(DEADLINE);
 }
+
+/// A kill pass lands while a spawn is blocked before it spawns: the pass
+/// returns at once and kills every listed group, and the late spawn kills
+/// its own group and is `Interrupted` without ever listing it. Before the
+/// fix the spawn holds the group lock across the spawn, so the pass blocks
+/// behind it and the deadline below fails the test. Runs in a child
+/// process: the pass sets a sticky flag in this process.
+#[test]
+fn kill_passes_a_blocked_spawn_and_the_late_child_is_killed() {
+    if std::env::var_os(CHILD).is_none() {
+        in_child("kill_passes_a_blocked_spawn_and_the_late_child_is_killed");
+        return;
+    }
+    use std::os::unix::process::CommandExt as _;
+    let (_dir, cwd) = dir("fiber-exec-blocked-spawn");
+    let marker = format!("fiber-exec-late-{}", cwd.display());
+    let mut first = std::process::Command::new("sleep");
+    first.arg("60").process_group(0);
+    let mut child_a = super::spawn(&mut first).expect("group A spawns");
+    let pgid_a = child_a.id();
+    let watchdog_a = fakes::Watchdog::group(pgid_a);
+    assert_eq!(
+        super::groups::listed(),
+        vec![pgid_a],
+        "group A listed while it runs"
+    );
+    let (entered_tx, entered_rx) = mpsc::channel::<()>();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    super::groups::pause_at_spawn(entered_tx, release_rx);
+    let late = fakes::Watchdog::matching(&marker);
+    let script = format!("sleep 30 # {marker}");
+    let late_cwd = cwd.clone();
+    let late_spawn = std::thread::spawn(move || {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", &script])
+            .current_dir(&late_cwd)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .process_group(0);
+        super::spawn(&mut cmd)
+    });
+    Deadline::after(DEADLINE)
+        .recv(&entered_rx)
+        .expect("the spawn reached its pause");
+    let (killed_tx, killed_rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        kill_every_group();
+        match killed_tx.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    Deadline::after(DEADLINE)
+        .recv(&killed_rx)
+        .expect("the kill pass returns while the spawn is blocked");
+    let (done, waited) = mpsc::channel();
+    std::thread::spawn(move || done.send(child_a.wait()).unwrap());
+    let reaped = Deadline::after(DEADLINE)
+        .recv(&waited)
+        .expect("waited {DEADLINE:?} for the killed child")
+        .unwrap();
+    assert!(
+        fakes::group_empties(pgid_a, DEADLINE),
+        "the pass killed group A"
+    );
+    match release_tx.send(()) {
+        Ok(()) | Err(_) => {}
+    }
+    let error = within("the late spawn", move || late_spawn.join().unwrap())
+        .expect_err("a spawn after the kill pass");
+    assert_eq!(error.kind(), std::io::ErrorKind::Interrupted);
+    assert_eq!(
+        super::groups::listed(),
+        vec![pgid_a],
+        "the late group is never listed"
+    );
+    assert!(
+        fakes::matching_exits(&marker, DEADLINE),
+        "the late group is gone"
+    );
+    // A spawn after the pass maps through the existing non-`NotFound`
+    // failure path.
+    let clock = FakeClock::new();
+    let (_cancel, done) = spawn(sh("true", cwd, CAP), Arc::clone(&clock), None);
+    let err = Deadline::after(DEADLINE)
+        .recv(&done)
+        .expect("waited {DEADLINE:?} for the post-kill run")
+        .expect_err("a run after the kill pass never runs");
+    assert_eq!(err.code, contract::ErrorCode::IoFailed);
+    assert!(err.ran.is_none(), "a spawn failure never ran");
+    assert!(
+        err.source
+            .as_ref()
+            .is_some_and(|source| source.kind() == std::io::ErrorKind::Interrupted),
+        "the spawn failure carries its `Interrupted` error"
+    );
+    use std::os::unix::process::ExitStatusExt as _;
+    assert_eq!(reaped.signal(), Some(9));
+    watchdog_a.stand_down(DEADLINE);
+    late.stand_down(DEADLINE);
+}
