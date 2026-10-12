@@ -821,6 +821,53 @@ fn a_path_bearing_issuer_is_discovered_at_its_rfc_8414_url() {
 }
 
 #[test]
+fn a_query_bearing_issuer_with_a_root_path_skips_the_inserted_candidate() {
+    // An issuer such as `https://auth.test/?q=1` keeps its slash before
+    // the query after trimming, so its path after the query is stripped
+    // is exactly `/`: no path-inserted candidate is fetched. A `||`
+    // mutant of the guard adds the root inserted document, which this
+    // exact request list catches.
+    let server = ProviderServer::start_responding(|request: &Request| {
+        let base = base_of(request);
+        let issuer = format!("{base}/?q=1");
+        if request.method == "GET" && request.path == "/?q=1/.well-known/oauth-authorization-server"
+        {
+            return json_response(&json!({
+                "issuer": issuer,
+                "authorization_endpoint": format!("{base}/authorize"),
+                "token_endpoint": format!("{base}/token"),
+                "registration_endpoint": format!("{base}/register"),
+                "code_challenge_methods_supported": ["S256"],
+            }));
+        }
+        match (request.method.as_str(), request.path.as_str()) {
+            ("GET", "/mcp") => Response::status(401, "{}"),
+            ("GET", "/.well-known/oauth-protected-resource/mcp") => {
+                json_response(&json!({"authorization_servers": [issuer]}))
+            }
+            ("POST", "/register") => json_response(&json!({"client_id": "c1"})),
+            ("POST", "/token") => json_response(&token_reply("at-1")),
+            _ => Response::status(404, "{}"),
+        }
+    })
+    .unwrap();
+    let files = FakeTokens::default();
+    let clock = fakes::clock::FakeClock::new();
+    let url = server_url(&server);
+    run_with_callback(&url, &files, &clock, succeed).unwrap();
+    assert_eq!(
+        metadata_paths(&server),
+        vec!["/?q=1/.well-known/oauth-authorization-server".to_owned()],
+    );
+    assert!(
+        files
+            .read(&crate::token::token_key(&url).unwrap())
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn without_s256_the_login_is_refused_before_any_registration() {
     for document in [
         json!({
