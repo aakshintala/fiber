@@ -864,10 +864,10 @@ fn approve_db(
     // The declaration key of `./srv/run.sh` with `srv/run.sh` and no env
     // (the control key of the post-offer tests, recomputed with:
     // `python3 -c "import hashlib, json; d={'command': './srv/run.sh',
-    // 'args': ['srv/run.sh'], 'env': {}}; b=json.dumps(d, separators=
+    // 'args': ['srv/run.sh'], 'env': {}, 'secrets': {}}; b=json.dumps(d, separators=
     // (',', ':'), sort_keys=True).encode(); print(hashlib.sha256(b).
     // hexdigest())"`).
-    const KEY: &str = "0ba916b9bc9a4a82a34bfed3afb9cfe35680e96196f23e08af5dc68832b1d0dc";
+    const KEY: &str = "c8006cb33c5dd250d5260106e564fdb95eb4836614213fee7585f71cb434553c";
     let dir = rig.home.join("cache").join("mcp");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
@@ -945,4 +945,135 @@ fn the_post_offer_load_adds_mcp_resources_when_the_session_has_none() {
             ("builtin".to_owned(), "mcp_resources".to_owned()),
         ],
     );
+}
+
+#[test]
+fn a_secret_env_value_is_a_reference_never_a_literal() {
+    let setup = Setup::new();
+    setup.global(
+        &json!({"mcp": {"servers": {"docs": {"command": "serve", "env": {"TOKEN": {"secret": "mcp.docs.TOKEN"}, "PLAIN": "v"}}}}}),
+    );
+    let specs = setup.specs();
+    assert_eq!(specs.specs.len(), 1);
+    let stdio = stdio(&specs.specs[0]);
+    assert_eq!(stdio.env.get("PLAIN"), Some(&"v".to_owned()));
+    assert!(
+        !stdio.env.contains_key("TOKEN"),
+        "a reference is not a literal"
+    );
+    assert_eq!(
+        stdio.secrets.get("TOKEN"),
+        Some(&"mcp.docs.TOKEN".to_owned())
+    );
+}
+
+#[test]
+fn a_secret_name_is_exactly_the_servers_own() {
+    // Each row: the server, the secret name, and whether it loads. A
+    // dotted server name stays allowed; anything else is refused.
+    for (server, secret, loads) in [
+        ("a", "mcp.a.K", true),
+        ("a", "mcp.a.b.K", false),
+        ("a.b", "mcp.a.b.K", true),
+        ("a", "other", false),
+        ("a", "mcp.b.K", false),
+        ("a", "mcp.a.1K", false),
+        ("a", "mcp.a.K.X", false),
+        ("a", "mcp.a.", false),
+        ("a", "mcp.", false),
+        ("a", "mcp.a.K-1", false),
+        ("a", "xmc.a.K", false),
+    ] {
+        let setup = Setup::new();
+        let mut servers = serde_json::Map::new();
+        servers.insert(
+            server.to_owned(),
+            json!({"command": "serve", "env": {"K": {"secret": secret}}}),
+        );
+        setup.global(&json!({"mcp": {"servers": servers}}));
+        let specs = setup.specs();
+        if loads {
+            assert!(specs.specs.len() == 1, "{server} {secret} loads");
+            let stdio = stdio(&specs.specs[0]);
+            assert_eq!(stdio.secrets.get("K"), Some(&secret.to_owned()));
+            assert!(
+                specs
+                    .notices
+                    .iter()
+                    .all(|notice| notice.code != contract::ErrorCode::ConfigInvalid),
+                "{server} {secret}: {:?}",
+                specs.notices
+            );
+        } else {
+            assert!(specs.specs.is_empty(), "{server} {secret} is refused");
+            assert!(specs.repository.is_empty());
+            assert_eq!(specs.notices.len(), 1, "{server} {secret}");
+            assert_eq!(
+                specs.notices[0].code,
+                contract::ErrorCode::ConfigInvalid,
+                "{server} {secret}"
+            );
+            for words in [server, secret] {
+                assert!(
+                    specs.notices[0].message.contains(words),
+                    "{server} {secret}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_bad_secret_name_on_a_required_server_fails_the_read() {
+    let setup = Setup::new();
+    setup.global(
+        &json!({"mcp": {"servers": {"docs": {"command": "serve", "required": true, "env": {"K": {"secret": "mcp.other.K"}}}}}}),
+    );
+    let config = setup.rig.config(Vec::<String>::new());
+    let failure = specs(&config).err().expect("a required bad secret fails");
+    assert_eq!(failure.code, contract::ErrorCode::ConfigInvalid);
+    for words in ["docs", "mcp.other.K", "mcp.docs.<KEY>"] {
+        assert!(failure.message.contains(words), "{}", failure.message);
+    }
+}
+
+#[test]
+fn a_missing_secret_file_is_not_a_construction_error() {
+    // The reference is recorded; only the start reads the file.
+    let setup = Setup::new();
+    setup.global(
+        &json!({"mcp": {"servers": {"docs": {"command": "serve", "env": {"TOKEN": {"secret": "mcp.docs.TOKEN"}}}}}}),
+    );
+    assert!(!setup.rig.home.join("credentials").exists());
+    let specs = setup.specs();
+    assert_eq!(specs.specs.len(), 1);
+    assert_eq!(
+        stdio(&specs.specs[0]).secrets.get("TOKEN"),
+        Some(&"mcp.docs.TOKEN".to_owned())
+    );
+}
+
+#[test]
+fn the_reader_reads_a_stored_secret_and_reports_a_missing_one() {
+    let setup = Setup::new();
+    setup.global(
+        &json!({"mcp": {"servers": {"docs": {"command": "serve", "env": {"TOKEN": {"secret": "mcp.docs.TOKEN"}}}}}}),
+    );
+    config::store_secret(
+        &setup.rig.home,
+        "mcp.docs.TOKEN",
+        &contract::Secret::new("tok-1".into()),
+    )
+    .unwrap();
+    let specs = setup.specs();
+    let reader = stdio(&specs.specs[0]).reader.clone();
+    assert_eq!(reader("mcp.docs.TOKEN").unwrap(), "tok-1");
+    assert_eq!(
+        reader("mcp.docs.OTHER").unwrap_err(),
+        mcp::SecretError::Missing
+    );
+    assert!(matches!(
+        reader("mcp/docs.TOKEN").unwrap_err(),
+        mcp::SecretError::Unreadable(_)
+    ));
 }

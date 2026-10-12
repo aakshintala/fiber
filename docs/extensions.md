@@ -1338,6 +1338,14 @@ and it stays until they remove that extension. So `fiber extension update <name>
 dependency keeps the newer version, and the same installed set always gives
 the same result.
 
+Updating everything, with `fiber extension update` and no name or with
+`fiber update`, moves every installed extension, dependencies included, to its
+newest tag within the major version every extension that needs it accepts. A
+dependency moved this way keeps the new version as a floor. Later installs and
+removals never resolve it lower, but a floor does not keep the extension
+installed: when the last extension that needs it is removed, the dependency and
+its floor go too.
+
 Two extensions that need different major versions, such as 1.x and 2.x, stop
 the install with `version_conflict`, naming both. So does a minimum that no
 tag meets.
@@ -1354,7 +1362,7 @@ for 300 seconds, fails with `fetch_failed`.
 | Command | What it does |
 |---|---|
 | `fiber extension install <name>` | Installs an extension and its dependencies. If any part fails, nothing is installed. |
-| `fiber extension update [<name>]` | Moves one extension, or every installed extension when no name is given, to its newest version and re-resolves dependencies. The new version stays a minimum (see [Versions](#versions)). It never touches a repository's extension. |
+| `fiber extension update [<name>]` | Moves one extension, or every installed extension when no name is given, to its newest version and re-resolves dependencies. A version updated by name stays a minimum, and a dependency moved by updating everything keeps a floor (see [Versions](#versions)). It never touches a repository's extension. |
 | `fiber extension remove <name>` | Removes an extension, and any dependency nothing else uses. It fails with `extension_not_installed` when no directory exists under the name, and deletes nothing. |
 | `fiber extension reinstall <name>` | Removes an extension and installs it again. When its install record can be read, it installs the recorded source at the recorded commit. When the extension is damaged, it installs `<name>` as given, a short name or a git address. |
 | `fiber extension list` | Lists installed extensions with their versions and commits, and each repository extension with its project, its path in the repository and the content it loads. |

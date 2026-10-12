@@ -201,7 +201,7 @@ lists:
 
 | Field | Meaning |
 |---|---|
-| `command`, `args`, `env` | the program of a stdio server; an `env` value is a string, or `{ "secret": "<name>" }`, which reads `credentials/<name>` when the server starts. The name must start `mcp.<server>.`, so a server reads only its own secrets |
+| `command`, `args`, `env` | the program of a stdio server; an `env` value is a string, or `{ "secret": "<name>" }`, which reads `credentials/<name>` when the server starts. The name must be `mcp.<server>.<KEY>`, where `<KEY>` is an environment variable name with no `.`, so a server reads only its own secrets |
 | `url` | a remote server |
 | `required` | whether failing to start ends the session, default false |
 | `startup_timeout_ms` | the startup deadline, default 5000 |

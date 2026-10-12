@@ -475,12 +475,12 @@ fn declare_recorder() -> (doors::Declare, Declared) {
 }
 
 /// The cache key of the declaration the control server keeps: its command,
-/// arguments and environment, never the pinned paths. Recompute with:
+/// arguments, environment and secret references, never the pinned paths. Recompute with:
 /// `python3 -c "import hashlib, json; d={'command': './srv/run.sh',
-/// 'args': ['srv/run.sh'], 'env': {}}; b=json.dumps(d, separators=
+/// 'args': ['srv/run.sh'], 'env': {}, 'secrets': {}}; b=json.dumps(d, separators=
 /// (',', ':'), sort_keys=True).encode(); print(hashlib.sha256(b).
 /// hexdigest())"`.
-const CONTROL_KEY: &str = "0ba916b9bc9a4a82a34bfed3afb9cfe35680e96196f23e08af5dc68832b1d0dc";
+const CONTROL_KEY: &str = "c8006cb33c5dd250d5260106e564fdb95eb4836614213fee7585f71cb434553c";
 
 fn write_cache(setup: &Setup, name: &str, key: &str) {
     let dir = setup.home().join("cache").join("mcp");

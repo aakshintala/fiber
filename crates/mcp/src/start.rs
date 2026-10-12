@@ -43,6 +43,20 @@ pub enum Transport {
     },
 }
 
+/// Reads one named secret for a stdio server's environment. `main`
+/// builds it over `config::read_secret`, so this crate never depends on
+/// `config`; the value travels only into the child's environment.
+pub type SecretReader = Arc<dyn Fn(&str) -> Result<String, SecretError> + Send + Sync>;
+
+/// Why a secret read failed. The value never prints.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SecretError {
+    /// No credential is stored under the name.
+    Missing,
+    /// One is stored but cannot be read; the reason, never the value.
+    Unreadable(String),
+}
+
 /// A stdio server's declaration, and with `run` the pinned copy that runs
 /// instead.
 #[derive(Clone)]
@@ -53,6 +67,12 @@ pub struct StdioSpec {
     pub args: Vec<String>,
     /// Environment overrides, over Fiber's own environment.
     pub env: BTreeMap<String, String>,
+    /// Secret references by env key: each names `credentials/<name>`,
+    /// read through `reader` when the server starts, never stored here.
+    pub secrets: BTreeMap<String, String>,
+    /// Reads one named secret. `main` builds it over
+    /// `config::read_secret`; a test reads its own fixture.
+    pub reader: SecretReader,
     /// The program that runs when it is not the declared one: a
     /// repository server's pinned copy. `command`/`args`/`env` stay the
     /// declaration, the only cache-key input.
@@ -106,6 +126,14 @@ impl std::fmt::Debug for ServerSpec {
                         "env",
                         &stdio
                             .env
+                            .keys()
+                            .map(|name| (name, "redacted"))
+                            .collect::<BTreeMap<_, _>>(),
+                    )
+                    .field(
+                        "secrets",
+                        &stdio
+                            .secrets
                             .keys()
                             .map(|name| (name, "redacted"))
                             .collect::<BTreeMap<_, _>>(),
@@ -185,7 +213,9 @@ impl ServerSpec {
     /// servers").
     pub(crate) fn key(&self) -> String {
         match &self.transport {
-            Transport::Stdio(stdio) => cache::key(&stdio.command, &stdio.args, &stdio.env),
+            Transport::Stdio(stdio) => {
+                cache::key(&stdio.command, &stdio.args, &stdio.env, &stdio.secrets)
+            }
             Transport::Http { url, .. } => cache::url_key(url),
         }
     }
@@ -230,11 +260,35 @@ pub(crate) fn launch(
             {
                 return Err(crate::server::StartError::StartFailed(message));
             }
+            // Each reference is read here, immediately before the spawn,
+            // so a secret rotated after the spec was built still reaches
+            // the child with its new bytes. The values travel only into
+            // the child's environment, never into the spec, an error or
+            // the cache key.
+            let mut env = stdio.env.clone();
+            for (key, name) in &stdio.secrets {
+                match (stdio.reader)(name) {
+                    Ok(value) => {
+                        env.insert(key.clone(), value);
+                    }
+                    Err(SecretError::Missing) => {
+                        return Err(crate::server::StartError::SecretMissing {
+                            name: name.clone(),
+                        });
+                    }
+                    Err(SecretError::Unreadable(why)) => {
+                        return Err(crate::server::StartError::SecretUnreadable {
+                            name: name.clone(),
+                            why,
+                        });
+                    }
+                }
+            }
             let (command, args) = stdio.program();
             Server::start(
                 command,
                 args,
-                &stdio.env,
+                &env,
                 workspace,
                 clock,
                 spec.startup_timeout,
@@ -638,12 +692,12 @@ pub(crate) fn not_started(
     required: bool,
     remote: bool,
 ) -> McpServerFailed {
-    let (reason, message) = fail_parts(server, error, startup, required, remote);
+    let (reason, code, message) = fail_parts(server, error, startup, required, remote);
     McpServerFailed {
         server: server.to_owned(),
         reason,
         will_restart: false,
-        error: crate::fail::failure(ErrorCode::McpServerUnavailable, message),
+        error: crate::fail::failure(code, message),
     }
 }
 
@@ -653,7 +707,7 @@ fn fail_parts(
     startup: Duration,
     required: bool,
     remote: bool,
-) -> (ServerFailure, String) {
+) -> (ServerFailure, ErrorCode, String) {
     let subject = if required {
         format!("The required MCP server `{server}`")
     } else {
@@ -668,10 +722,12 @@ fn fail_parts(
     match error {
         crate::server::StartError::StartFailed(detail) => (
             ServerFailure::StartFailed,
+            ErrorCode::McpServerUnavailable,
             format!("{subject} failed to start: {detail} {advice}",),
         ),
         crate::server::StartError::Login(detail) => (
             ServerFailure::NotLoggedIn,
+            ErrorCode::McpServerUnavailable,
             format!(
                 "{subject} failed to start: {}",
                 crate::slot::login_sentence(server, detail)
@@ -679,9 +735,26 @@ fn fail_parts(
         ),
         crate::server::StartError::Deadline => (
             ServerFailure::Deadline,
+            ErrorCode::McpServerUnavailable,
             format!(
                 "{subject} did not answer before its startup deadline of {} ms. Raise `startup_timeout_ms` under `mcp.servers.{server}` if it needs longer.",
                 startup.as_millis(),
+            ),
+        ),
+        crate::server::StartError::SecretMissing { name } => (
+            ServerFailure::StartFailed,
+            ErrorCode::CredentialMissing,
+            format!(
+                "{subject} names the secret `credentials/{name}`, which is not stored. Run `fiber mcp remove {server}`, then `fiber mcp add {server}` with `--secret {key}` to store it.",
+                key = name.rsplit('.').next().unwrap_or(name),
+            ),
+        ),
+        crate::server::StartError::SecretUnreadable { name, why } => (
+            ServerFailure::StartFailed,
+            ErrorCode::CredentialFailed,
+            format!(
+                "{subject} names the secret `credentials/{name}`, which cannot be read: {why}. Run `fiber mcp remove {server}`, then `fiber mcp add {server}` with `--secret {key}` to store it again.",
+                key = name.rsplit('.').next().unwrap_or(name),
             ),
         ),
     }

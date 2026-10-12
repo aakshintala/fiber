@@ -173,7 +173,7 @@ a key is valid.
 | Command | What it does |
 |---|---|
 | `extension install [--project] <name or path>` | Installs an extension and its dependencies. `--project` installs it for the current project only. |
-| `extension update [<name>]` | Updates one extension, or every installed extension, to its newest tag. It never touches a repository's extension. |
+| `extension update [<name>]` | Updates one extension, or every installed extension, to its newest tag (`docs/extensions.md`, "Versions"). It never touches a repository's extension. |
 | `extension remove <name>` | Removes an extension, the dependencies nothing else uses, and their data. Run in a project on a repository's extension, it removes that and records never for its content. |
 | `extension reinstall <name>` | Removes an extension and installs it again, from its recorded source and commit, or from `<name>` as given when it is damaged (`docs/extensions.md`, "Installing"). |
 | `extension list` | Lists installed extensions: name, version and commit; and each repository extension with its project, its path in the repository and the content it loads. |

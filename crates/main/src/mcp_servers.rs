@@ -150,6 +150,30 @@ pub(crate) fn specs(config: &Config) -> Result<Specs, Failure> {
                 });
                 continue;
             }
+            Entry::BadSecret {
+                name,
+                secret,
+                required,
+            } => {
+                if required {
+                    return Err(Failure {
+                        code: ErrorCode::ConfigInvalid,
+                        message: format!(
+                            "The required MCP server `{name}` names the secret `{secret}`, which must be `mcp.{name}.<KEY>`, so Fiber cannot start it. Name the secret after the server."
+                        ),
+                        retry_after_ms: None,
+                        provider: None,
+                    });
+                }
+                notices.push(Notice {
+                    code: ErrorCode::ConfigInvalid,
+                    message: format!(
+                        "The MCP server `{name}` names the secret `{secret}`, which must be `mcp.{name}.<KEY>`, so Fiber does not start it. Name the secret after the server."
+                    ),
+                    extension: None,
+                });
+                continue;
+            }
             Entry::Spec(spec) => spec,
         };
         let declared_entry = declared
@@ -192,6 +216,16 @@ enum Entry {
     Both { name: String, required: bool },
     /// A URL with userinfo must never reach ureq's Basic authentication.
     Userinfo { name: String, required: bool },
+    /// An env `{ "secret" }` name that is not exactly
+    /// `mcp.<server>.<KEY>`: the server reads only its own secrets.
+    BadSecret {
+        /// The server's name.
+        name: String,
+        /// The secret name, never its value.
+        secret: String,
+        /// Whether the entry is `required`.
+        required: bool,
+    },
     /// Neither: nothing to start.
     Neither,
 }
@@ -391,12 +425,31 @@ fn spec(config: &Config, name: &str) -> Entry {
         (Some(command), None) => {
             let args =
                 server_field(config, name, "args").map_or(Vec::new(), |(value, _)| strings(&value));
-            let env = server_field(config, name, "env")
-                .map_or(BTreeMap::new(), |(value, _)| string_map(&value));
+            let (env, secrets) = server_env(config, name);
+            for secret in secrets.values() {
+                if !config::mcp_secret_name_ok(name, secret) {
+                    return Entry::BadSecret {
+                        name: name.to_owned(),
+                        secret: secret.clone(),
+                        required,
+                    };
+                }
+            }
+            // Each reference is read when the server starts, through the
+            // closure below, so the values never enter the spec.
+            let credentials = config.credentials().clone();
+            let reader: mcp::SecretReader =
+                Arc::new(move |secret: &str| match credentials.secret(secret) {
+                    Ok(Some(value)) => Ok(value.expose().to_owned()),
+                    Ok(None) => Err(mcp::SecretError::Missing),
+                    Err(error) => Err(mcp::SecretError::Unreadable(error.to_string())),
+                });
             mcp::Transport::Stdio(mcp::StdioSpec {
                 command,
                 args,
                 env,
+                secrets,
+                reader,
                 run: None,
             })
         }
@@ -510,17 +563,28 @@ pub(crate) fn strings(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn string_map(value: &Value) -> BTreeMap<String, String> {
-    value
-        .as_object()
-        .map(|map| {
-            map.iter()
-                .filter_map(|(key, value)| {
-                    value.as_str().map(|text| (key.clone(), text.to_owned()))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// The merged `env`: literals by key, and `{ "secret" }` references by
+/// key, never their values. The load check holds every layer to strings
+/// or `{ "secret" }` objects, so anything else here is unreachable and
+/// ignored. A name that is not exactly `mcp.<server>.<KEY>` is kept, and
+/// refused by `spec`, so the notice names the server.
+fn server_env(
+    config: &Config,
+    server: &str,
+) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+    let Some((Value::Object(merged), _)) = server_field(config, server, "env") else {
+        return (BTreeMap::new(), BTreeMap::new());
+    };
+    let mut env = BTreeMap::new();
+    let mut secrets = BTreeMap::new();
+    for (key, value) in merged {
+        if let Some(text) = value.as_str() {
+            env.insert(key, text.to_owned());
+        } else if let Some(name) = value.get("secret").and_then(Value::as_str) {
+            secrets.insert(key, name.to_owned());
+        }
+    }
+    (env, secrets)
 }
 
 /// The person's hint overrides, by tool: the merged

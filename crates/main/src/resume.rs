@@ -117,6 +117,7 @@ pub(crate) fn ask_resume(
         resuming.credential,
         Some(prompt),
         true,
+        false,
         clock,
         signals,
         fiber,
@@ -178,7 +179,7 @@ pub(crate) fn session_resume(
     let dir = sessions.join(&id.0);
     let one_turn = prompt.is_some();
     resume_session(
-        log, &dir, id, overrides, None, prompt, one_turn, clock, signals, fiber,
+        log, &dir, id, overrides, None, prompt, one_turn, true, clock, signals, fiber,
     )
 }
 
@@ -200,6 +201,7 @@ fn resume_session(
     credential: Option<String>,
     prompt: Option<String>,
     one_turn: bool,
+    enter_present: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     fiber: Result<PathBuf, String>,
@@ -213,8 +215,15 @@ fn resume_session(
         Ok(home) => home,
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let mut held = match enter_worktree(recorded_worktree(dir), &home, &id, &clock, signals, &reads)
-    {
+    let mut held = match enter_worktree(
+        recorded_worktree(dir),
+        &home,
+        &id,
+        &clock,
+        signals,
+        &reads,
+        enter_present,
+    ) {
         Ok(held) => held,
         Err(error) => {
             drop(log);
@@ -633,6 +642,7 @@ fn enter_worktree(
     clock: &Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     reads: &Arc<crate::switch::Reads>,
+    enter_present: bool,
 ) -> Result<Held, doors::RecreateError> {
     let Some(worktree) = recorded else {
         return Ok(Held::Nothing);
@@ -652,20 +662,47 @@ fn enter_worktree(
                     &|command| reads.command(command),
                 ) {
                     Ok(doors::Recreated::Made(isolation)) => Ok(Held::Made(isolation)),
-                    Ok(doors::Recreated::Present(shared)) => Ok(Held::Shared { _shared: shared }),
+                    Ok(doors::Recreated::Present(shared)) => enter(path, shared, enter_present),
                     Err(error) => Err(error),
                 }
             }
             None => Ok(Held::Nothing),
         },
         Ok(_) | Err(_) => match doors::share(path) {
-            Ok(shared) => Ok(Held::Shared { _shared: shared }),
+            Ok(shared) => enter(path, shared, enter_present),
             Err(failure) => Err(doors::RecreateError {
                 failure,
                 isolation: None,
             }),
         },
     }
+}
+
+/// Enters a present worktree: both arms the hub's launch directory can
+/// meet, the recreation's Present result and a path present at the
+/// metadata check. On the hub path the process runs in the worktree, as a
+/// made one does; `ask --resume` keeps the launch directory. A path that
+/// vanished after the claim fails with
+/// the made arm's sentence and no isolation: the share drops with it.
+#[allow(
+    clippy::result_large_err,
+    reason = "the caller matches the isolation out of the error by value"
+)]
+fn enter(
+    path: &Path,
+    shared: doors::Shared,
+    enter_present: bool,
+) -> Result<Held, doors::RecreateError> {
+    if enter_present && let Err(source) = std::env::set_current_dir(path) {
+        return Err(doors::RecreateError {
+            failure: failed(
+                ErrorCode::IoFailed,
+                format!("{}: {}.", path.display(), source.kind()),
+            ),
+            isolation: None,
+        });
+    }
+    Ok(Held::Shared { _shared: shared })
 }
 
 /// Ends the isolation, then answers the resume's result: a signal
