@@ -264,7 +264,10 @@ pub(crate) struct Shared {
     pub(super) cancelled: HashSet<u64>,
     /// Admitted `host.exec` runs by call id, until each group is empty or killed and drained.
     pub(super) execs: HashMap<u64, super::tool::ExecAdmit>,
-    /// The inner-call runner of each running tool call, by call id, so a
+    /// The admitted command whose inner call is running, from `taken` to
+    /// the synchronous answer or drop. Checked only under the hub lock.
+    pub(super) serving: Option<u64>,
+    /// The inner-call runner of each admitted command or running tool call, by call id, so a
     /// `host.tool` yield admits only while its outer call runs.
     pub(super) runners: HashMap<u64, Arc<dyn InnerCalls>>,
     /// Raised into running Lua by the deadline hook while a cancelled call

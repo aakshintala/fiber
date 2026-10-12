@@ -374,7 +374,7 @@ fn unknown_name_is_unknown_command() {
     fs::create_dir_all(&home).unwrap();
     let all: Vec<CommandSource> = Vec::new();
     let built = SessionCommands::build(&all, &config_with(&home, &[]));
-    let err = match built.admit_with("nope", "") {
+    let err = match built.admit_with("nope", "", None) {
         Ok(_) => panic!("admitted unknown"),
         Err(e) => e,
     };
@@ -463,8 +463,8 @@ fn admission_returns_before_run_starts_and_two_run_in_order() {
     );
     let lua = extension("fiber.test/a", &dir, &home);
     lua.commands().unwrap();
-    let first = lua.queue_command("one", "").unwrap();
-    let second = lua.queue_command("two", "").unwrap();
+    let first = lua.queue_command("one", "", None).unwrap();
+    let second = lua.queue_command("two", "", None).unwrap();
     // Between admission (queueing held) and release, neither `run` has
     // started: no delivery reaches the inbox.
     let (tx, rx) = mpsc::channel();
@@ -575,7 +575,7 @@ fn run_return_values_are_ignored() {
                 .set_emit(Arc::clone(&recorder) as Arc<dyn contract::emit::Emit>);
         }
         let built = SessionCommands::build(&all, &config_with(&home, &[]));
-        let admitted = built.admit_with("cmd", "").expect("admitted");
+        let admitted = built.admit_with("cmd", "", None).expect("admitted");
         admitted.queued().release();
         let queued = std::sync::Arc::clone(admitted.queued());
         let (tx, rx) = mpsc::channel();

@@ -35,14 +35,25 @@ const WAIT: Duration = Duration::from_secs(5);
 
 struct Home {
     root: fakes::TempDir,
+    watchdog: Option<fakes::Watchdog>,
+}
+
+impl Drop for Home {
+    fn drop(&mut self) {
+        self.watchdog.take().unwrap().stand_down(WAIT);
+    }
 }
 
 impl Home {
     fn new() -> Self {
+        let watchdog = fakes::Watchdog::matching("fiber-door-reply");
         let root = fakes::TempDir::new("fiber-door-reply");
         fs::create_dir(root.path().join("home")).unwrap();
         fs::create_dir(root.path().join("workspace")).unwrap();
-        Self { root }
+        Self {
+            root,
+            watchdog: Some(watchdog),
+        }
     }
 
     fn home(&self) -> PathBuf {
@@ -73,6 +84,10 @@ impl Home {
 
     #[track_caller]
     fn load(&self) -> Arc<SessionExtensions> {
+        self.load_clock(FakeClock::new())
+    }
+
+    fn load_clock(&self, clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
         let config = Config::load(Sources {
             home: self.home(),
             workspace: self.root.path().join("workspace"),
@@ -83,7 +98,7 @@ impl Home {
         let home = self.home();
         let locks: Arc<dyn contract::files::PathLock> = Arc::new(FakeLock::new());
         Arc::new(bounded(move || {
-            SessionExtensions::load(&home, &config, FakeClock::new(), locks, None)
+            SessionExtensions::load(&home, &config, clock, locks, None)
         }))
     }
 }
@@ -231,6 +246,112 @@ fn the_extension_holding_the_ask_takes_the_reply_in_load_order() {
             .unwrap(),
         "false"
     );
+}
+
+fn tool_answer() -> Box<contract::events::ToolCallCompleted> {
+    Box::new(contract::events::ToolCallCompleted {
+        status: contract::events::CallStatus::Completed,
+        content: vec![contract::shapes::ContentPart::Text {
+            text: "answer".into(),
+        }],
+        reason: None,
+        error: None,
+        process: None,
+        details: None,
+        artifact: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+        provider_item: None,
+    })
+}
+
+#[test]
+fn an_admitted_command_holds_its_runner_through_success_and_lua_error() {
+    for failing in [false, true] {
+        let home = Home::new();
+        home.install("a", &format!("fiber.command('go', {{ timeout = 5000, run = function() local o = host.tool('read', {{path='x'}}) {} return o.status .. '|' .. o.content[1].text end }})", if failing { "error('boom')" } else { "" }));
+        let session = home.load();
+        let (send, rx) = mpsc::channel();
+        session.lua[0].deliver_to(send);
+        let admitted = session
+            .commands
+            .admit_with("go", "", Some(&contract::CommandId("c_admitted".into())))
+            .unwrap();
+        assert_eq!(session.lua[0].runners_held(), 1);
+        let queued = admitted.queued().clone();
+        queued.release();
+        let (send, result) = mpsc::channel();
+        thread::spawn(move || {
+            let _sent = send.send(queued.wait());
+        });
+        let Delivery::InnerCall(request) =
+            Deadline::after(WAIT).recv_or_fail(&rx, "admitted command inner call")
+        else {
+            panic!("expected inner call");
+        };
+        assert_eq!(request.command.0, "c_admitted");
+        assert_eq!(request.extension, "fiber.test/a");
+        assert_eq!(request.name, "read");
+        assert_eq!(request.arguments, json!({"path":"x"}));
+        assert!(!request.cancel.is_cancelled());
+        (request.taken)();
+        (request.answer)(tool_answer());
+        let returned = Deadline::after(WAIT).recv_or_fail(&result, "admitted command end");
+        if failing {
+            assert!(returned.unwrap_err().to_string().contains("boom"));
+        } else {
+            assert_eq!(returned.unwrap(), json!("completed|answer"));
+        }
+        assert_eq!(session.lua[0].runners_held(), 0);
+        assert!(request.cancel.is_cancelled());
+    }
+}
+
+#[test]
+fn a_command_deadline_ends_its_runner_at_and_above_but_not_below_the_boundary() {
+    for milliseconds in [1099, 1100, 1101] {
+        let home = Home::new();
+        home.install("a", "fiber.command('go', { timeout = 100, run = function() return host.tool('read', {}).status end })");
+        let clock = FakeClock::new();
+        let session = home.load_clock(clock.clone());
+        let (send, rx) = mpsc::channel();
+        session.lua[0].deliver_to(send);
+        let admitted = session
+            .commands
+            .admit_with("go", "", Some(&contract::CommandId("c_timeout".into())))
+            .unwrap();
+        let queued = admitted.queued().clone();
+        queued.release();
+        let (send, result) = mpsc::channel();
+        let caller = thread::spawn(move || {
+            let _sent = send.send(queued.wait());
+        });
+        let Delivery::InnerCall(request) =
+            Deadline::after(WAIT).recv_or_fail(&rx, "parked command inner call")
+        else {
+            panic!("expected inner call");
+        };
+        (request.taken)();
+        let until = clock.origin() + Duration::from_millis(1100);
+        assert!(clock.await_thread_parked(caller.thread().id(), Some(until), WAIT));
+        clock.advance(Duration::from_millis(milliseconds));
+        if milliseconds < 1100 {
+            assert!(!request.cancel.is_cancelled());
+            assert_eq!(session.lua[0].runners_held(), 1);
+            assert!(result.try_recv().is_err());
+            assert!(clock.await_thread_parked(caller.thread().id(), Some(until), WAIT));
+            clock.advance(Duration::from_millis(1));
+        }
+        assert!(matches!(
+            Deadline::after(WAIT).recv_or_fail(&result, "command timeout"),
+            Err(crate::Error::Timeout { .. })
+        ));
+        assert_eq!(session.lua[0].runners_held(), 0);
+        assert!(request.cancel.is_cancelled());
+        (request.answer)(tool_answer());
+        assert_eq!(session.lua[0].runners_held(), 0);
+    }
 }
 
 #[test]
