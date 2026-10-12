@@ -289,9 +289,13 @@ impl Login {
     /// Draws the list in the shared overlay frame, centred: dim
     /// headings, one choice row per target with its tag, the gap, then
     /// anything the last action said, at least three body rows before
-    /// the window clips them, and the legend footer. Any other mode
-    /// draws nothing: the caller routes only while the list is open.
+    /// the window clips them, and the legend footer. A browser wait
+    /// draws its step; any other mode draws nothing yet.
     pub(crate) fn draw(&self, area: Rect, buf: &mut Buffer, targets: &mut Vec<Target>) {
+        if matches!(self.mode, Mode::Waiting(_)) {
+            self.draw_step(area, buf, targets);
+            return;
+        }
         if !self.list_open() {
             return;
         }
@@ -536,7 +540,8 @@ impl Login {
     }
 
     /// A key while a browser login waits: Esc returns to the rows storing
-    /// nothing, `y` copies the shown URL, and anything else waits on.
+    /// nothing, `y` copies the shown URL or the shown code, and anything
+    /// else waits on.
     fn waiting_key(&mut self, key: &Key) -> Act {
         if *key == Key::Esc {
             self.mode = Mode::Rows;
@@ -545,9 +550,12 @@ impl Login {
         }
         if *key == Key::Char('y')
             && let Mode::Waiting(waiting) = &self.mode
-            && let Progress::Url(url) | Progress::DeviceCode { url, .. } = &waiting.progress
         {
-            return Act::Copy(url.clone());
+            match &waiting.progress {
+                Progress::Url(url) => return Act::Copy(url.clone()),
+                Progress::DeviceCode { code, .. } => return Act::Copy(code.clone()),
+                Progress::Starting => {}
+            }
         }
         Act::Stay
     }

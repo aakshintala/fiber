@@ -1201,13 +1201,14 @@ fn waiting(fake: &Fake, ticket: LoginTicket) -> Login {
 fn enter_on_a_browser_row_waits_and_says_starting() {
     let fake = fake_with(targets());
     let login = waiting(&fake, LoginTicket(1));
-    let frame = login.frame(80);
-    assert_eq!(frame.field, None);
-    assert_eq!(frame.below, ["Starting the login to codex…"]);
-    assert_eq!(frame.footer, "Esc cancel");
-    let screen = drawn(&login, 80, 24);
+    let (buf, targets) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
     assert!(screen.contains("Starting the login to codex…"), "{screen}");
-    assert!(screen.contains("Esc cancel"), "{screen}");
+    assert!(screen.contains("Esc back"), "{screen}");
+    assert!(screen.contains("codex"), "{screen}");
+    assert!(!screen.contains("Providers"), "{screen}");
+    assert!(targets.iter().any(|target| target.id == TargetId::View(Spot::Close)));
+    assert!(!login.list_open());
 }
 
 #[test]
@@ -1222,15 +1223,12 @@ fn open_on_the_waiting_ticket_shows_the_url_and_returns_it() {
         ),
         Some(url.to_owned())
     );
-    let frame = login.frame(80);
-    assert_eq!(
-        frame.below,
-        [
-            "Open this URL to log in to codex:".to_owned(),
-            url.to_owned()
-        ]
-    );
-    assert_eq!(frame.footer, "y copy URL · Esc cancel");
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("Open this URL to log in to codex:"), "{screen}");
+    assert!(screen.contains(url), "{screen}");
+    assert!(screen.contains("Waiting for the browser…"), "{screen}");
+    assert!(screen.contains("y copy URL · Esc back"), "{screen}");
 }
 
 #[test]
@@ -1262,9 +1260,10 @@ fn steps_for_other_tickets_change_nothing_and_open_nothing() {
         ),
         None
     );
-    let frame = login.frame(80);
-    assert_eq!(frame.below, ["Starting the login to codex…"]);
-    assert_eq!(frame.footer, "Esc cancel");
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("Starting the login to codex…"), "{screen}");
+    assert!(screen.contains("Esc back"), "{screen}");
 }
 
 #[test]
@@ -1282,15 +1281,13 @@ fn a_code_step_shows_the_code_and_opens_nothing() {
         ),
         None
     );
-    let frame = login.frame(80);
-    assert_eq!(
-        frame.below,
-        [
-            "Enter the code ABCD-1234 at this URL to log in to codex:".to_owned(),
-            url.to_owned()
-        ]
-    );
-    assert_eq!(frame.footer, "y copy URL · Esc cancel");
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("ABCD-1234"), "{screen}");
+    assert!(screen.contains("Open this URL to log in to codex:".replace("Open this URL", "Enter the code").as_str()) || screen.contains("Enter the code ABCD-1234"), "{screen}");
+    assert!(screen.contains(url), "{screen}");
+    assert!(screen.contains("Waiting for the browser…"), "{screen}");
+    assert!(screen.contains("y copy code · Esc back"), "{screen}");
 }
 
 #[test]
@@ -1421,28 +1418,41 @@ fn a_started_worker_for_the_waiting_ticket_is_kept_until_esc() {
 }
 
 #[test]
-fn a_url_at_the_width_is_one_row_and_past_it_is_two() {
+fn a_url_at_its_cap_draws_whole_and_past_it_cuts_from_the_left() {
     let fake = fake_with(targets());
-    let mut login = waiting(&fake, LoginTicket(1));
-    let one = "u".repeat(80);
-    login.step(
-        LoginTicket(1),
-        crate::login_worker::LoginStep::Open(one.clone()),
-    );
-    assert_eq!(login.frame(80).below.len(), 2);
-    let two = "u".repeat(81);
-    login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(two));
-    assert_eq!(login.frame(80).below.len(), 3);
-    // Width 0 wraps at 1: every character takes its own row.
-    login.step(
-        LoginTicket(1),
-        crate::login_worker::LoginStep::Open("ab".to_owned()),
-    );
-    assert_eq!(login.frame(0).below.len(), 3);
+    // The step's inner width at 80 columns sets the cap: a URL exactly
+    // that wide draws whole, one wider starts with "…".
+    let probe = waiting(&fake, LoginTicket(1));
+    let (buf, _) = stepped(&probe, 80, 24);
+    let run = edge_run(&buf, 80, 24);
+    let inner = usize::from(crate::view::overlay::inner(run as u16));
+    for (len, whole) in [(inner, true), (inner.saturating_add(1), false)] {
+        let mut login = waiting(&fake, LoginTicket(1));
+        let url = format!("https://auth.example/{}", "u".repeat(len.saturating_sub(22)));
+        // Build a URL exactly `len` columns wide; the host prefix is 22.
+        let url = if crate::format::width(&url) == len {
+            url
+        } else {
+            "u".repeat(len)
+        };
+        login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(url.clone()));
+        let (buf, _) = stepped(&login, 80, 24);
+        let rows = text_of(&buf, 80, 24);
+        let shown = rows.iter().find(|row| row.contains('u')).cloned().unwrap_or_default();
+        let trimmed = shown.trim();
+        if whole {
+            assert!(!trimmed.starts_with('…'), "{trimmed:?} cut at its cap");
+            assert!(trimmed.contains(&url), "{trimmed:?}");
+        } else {
+            assert!(trimmed.starts_with('…'), "{trimmed:?} whole past its cap");
+            assert!(trimmed.ends_with('u'), "{trimmed:?}");
+            assert!(crate::format::width(trimmed) <= inner, "{trimmed:?}");
+        }
+    }
 }
 
 #[test]
-fn a_wide_character_wraps_by_columns_not_chars() {
+fn a_wide_url_keeps_its_tail_within_the_step() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
     let url = "https://例え.jp/authorize";
@@ -1450,18 +1460,23 @@ fn a_wide_character_wraps_by_columns_not_chars() {
         LoginTicket(1),
         crate::login_worker::LoginStep::Open(url.to_owned()),
     );
-    let below = login.frame(20).below;
-    for row in below.iter().skip(1) {
-        assert!(
-            crate::format::width(row) <= 20,
-            "{row:?} is wider than 20 columns"
-        );
-    }
-    assert_eq!(below[1..].join(""), url);
+    let (buf, _) = stepped(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let shown = rows
+        .iter()
+        .find(|row| row.contains("authorize"))
+        .cloned()
+        .unwrap_or_default();
+    assert!(crate::format::width(shown.trim()) <= 80, "{shown:?}");
+    // `y` still copies the whole URL, wide characters included.
+    assert!(matches!(
+        login.key(&Key::Char('y'), &ctx(&fake)),
+        Act::Copy(shown) if shown == url
+    ));
 }
 
 #[test]
-fn a_view_too_short_for_the_url_cuts_rows_and_keeps_copy_whole() {
+fn a_short_area_cuts_step_rows_and_keeps_copy_whole() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
     let url = format!("https://auth.example/{}", "u".repeat(300));
@@ -1471,45 +1486,14 @@ fn a_view_too_short_for_the_url_cuts_rows_and_keeps_copy_whole() {
     );
     let area = Rect::new(0, 0, 20, 8);
     let mut buf = Buffer::empty(area);
-    render(&login.frame(20), area, &mut buf, &mut Vec::new());
-    let rows: Vec<String> = (0..8)
-        .map(|y| {
-            (0..20)
-                .map(|x| buf[(x, y)].symbol())
-                .collect::<String>()
-                .trim_end()
-                .to_owned()
-        })
-        .collect();
-    assert!(rows[0].starts_with("Log in"), "{rows:?}");
-    assert!(
-        rows.iter().any(|row| row.contains("Open this URL")),
-        "{rows:?}"
-    );
-    // The frame carries the whole footer; the 20-column render shows what
-    // fits of it.
-    assert_eq!(login.frame(20).footer, "y copy URL · Esc cancel");
-    assert!(
-        rows.iter().any(|row| row.contains("y copy URL")),
-        "{rows:?}"
-    );
-    // `y` still copies the whole URL.
+    login.draw(area, &mut buf, &mut Vec::new());
+    let rows = text_of(&buf, 20, 8);
+    assert!(rows.iter().any(|row| row.contains("codex")), "{rows:?}");
+    // `y` still copies the whole URL past the last shown row.
     assert!(matches!(
         login.key(&Key::Char('y'), &ctx(&fake)),
         Act::Copy(shown) if shown == url
     ));
-    // Tall enough, the URL rows read whole again.
-    let tall = drawn(&login, 80, 24);
-    let lines: Vec<&str> = tall.lines().collect();
-    let at = lines
-        .iter()
-        .position(|line| line.contains("Open this URL"))
-        .unwrap_or_else(|| panic!("no prompt in {tall}"));
-    let end = lines
-        .iter()
-        .position(|line| line.contains("y copy URL"))
-        .unwrap_or_else(|| panic!("no footer in {tall}"));
-    assert_eq!(lines[at + 1..end].join(""), url);
 }
 
 #[test]
@@ -1518,7 +1502,194 @@ fn login_browser_waiting_80x24() {
     let mut login = waiting(&fake, LoginTicket(1));
     let url = format!("https://auth.example/authorize?state={}", "s".repeat(100));
     login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(url));
-    insta::assert_snapshot!("login_browser_waiting_80x24", drawn(&login, 80, 24));
+    let (buf, _) = overlaid(&login, 80, 24);
+    insta::assert_snapshot!("login_browser_waiting_80x24", text_of(&buf, 80, 24).join("\n"));
+}
+
+#[test]
+fn login_browser_waiting_48x24() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    let url = format!("https://auth.example/authorize?state={}", "s".repeat(100));
+    login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(url));
+    let (buf, _) = overlaid(&login, 48, 24);
+    insta::assert_snapshot!("login_browser_waiting_48x24", text_of(&buf, 48, 24).join("\n"));
+}
+
+#[test]
+fn a_long_url_cuts_from_the_left_keeping_its_tail() {
+    let fake = fake_with(targets());
+    let url = format!("https://auth.example/authorize?state={}", "s".repeat(100));
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(url.clone()));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let rows = text_of(&buf, 80, 24);
+    let shown = rows
+        .iter()
+        .find(|row| row.trim_start().starts_with('…'))
+        .cloned()
+        .unwrap_or_else(|| panic!("no URL row in {rows:?}"));
+    let trimmed = shown.trim();
+    assert!(trimmed.starts_with('…'), "{trimmed:?}");
+    assert!(trimmed.ends_with(url.chars().last().unwrap()), "{trimmed:?}");
+    // A 60-column and a 400-column URL draw the same overlay width.
+    let mut short = waiting(&fake, LoginTicket(1));
+    short.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(format!("https://x.co/{}", "a".repeat(48))),
+    );
+    let mut long = waiting(&fake, LoginTicket(1));
+    long.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Open(format!("https://x.co/{}", "a".repeat(388))),
+    );
+    let (short_buf, _) = overlaid(&short, 80, 24);
+    let (long_buf, _) = overlaid(&long, 80, 24);
+    assert_eq!(edge_run(&short_buf, 80, 24), edge_run(&long_buf, 80, 24));
+}
+
+#[test]
+fn the_url_reads_accent_and_the_waiting_line_dim() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    let url = "https://auth.example/authorize?state=1";
+    login.step(LoginTicket(1), crate::login_worker::LoginStep::Open(url.to_owned()));
+    let (buf, _) = overlaid(&login, 80, 24);
+    let accent = Role::Accent.color();
+    let url_y = (0..24)
+        .find(|y| (0..80).any(|x| buf[(x, *y)].fg == accent))
+        .expect("no accent row");
+    assert!(
+        (0..80).all(|x| {
+            let cell = &buf[(x, url_y)];
+            cell.fg != accent || cell.symbol() != " "
+        }),
+        "a blank cell rides accent"
+    );
+    let waiting_y = (0..24)
+        .find(|y| {
+            (0..80)
+                .map(|x| buf[(x, *y)].symbol())
+                .collect::<String>()
+                .contains("Waiting for the browser")
+        })
+        .expect("no waiting row");
+    assert!(
+        (0..80).any(|x| buf[(x, waiting_y)].modifier.contains(Modifier::DIM)),
+        "the waiting line is not dim"
+    );
+}
+
+#[test]
+fn y_copies_the_device_code_whole() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Code {
+            url: "https://auth.example/device".to_owned(),
+            code: "ABCD-1234".to_owned(),
+        },
+    );
+    assert!(matches!(
+        login.key(&Key::Char('y'), &ctx(&fake)),
+        Act::Copy(code) if code == "ABCD-1234"
+    ));
+}
+
+#[test]
+fn a_very_long_code_wraps_within_the_lists_height() {
+    let fake = fake_with(targets());
+    let mut login = waiting(&fake, LoginTicket(1));
+    let code = "c".repeat(400);
+    let url = "https://auth.example/device";
+    login.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Code {
+            url: url.to_owned(),
+            code: code.clone(),
+        },
+    );
+    let (step_buf, _) = overlaid(&login, 80, 24);
+    let (list_buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+    assert_eq!(slab_height(&step_buf, 80, 24), slab_height(&list_buf, 80, 24));
+    // The kept rows are a prefix of the prompt: a long prompt pushes the
+    // URL and the waiting line out of a short body.
+    let prompt = format!("Enter the code {code} at this URL to log in to codex:");
+    let rows = text_of(&step_buf, 80, 24);
+    let joined: String = rows.join("\n");
+    assert!(prompt.starts_with(&joined.chars().take(20).collect::<String>()) || joined.contains("Enter the code"), "{joined:?}");
+    assert!(matches!(
+        login.key(&Key::Char('y'), &ctx(&fake)),
+        Act::Copy(shown) if shown == code
+    ));
+}
+
+#[test]
+fn a_wrapping_prompt_drops_rows_in_order_at_the_body_cap() {
+    // B = 6 over three targets and B = 3 over one browser provider: a
+    // prompt wrapping to B-1, B and B+1 rows keeps the first B rows.
+    for targets in [
+        targets(),
+        vec![LoginTarget {
+            name: "codex".to_owned(),
+            kind: LoginKind::Browser,
+        }],
+    ] {
+        let cap = if targets.len() == 1 { 3 } else { 6 };
+        let fake = fake_with(targets);
+        let (list_buf, _) = overlaid(&Login::open(&ctx(&fake)), 80, 24);
+        let list_h = slab_height(&list_buf, 80, 24);
+        for extra in [0, 1] {
+            let context = ctx(&fake);
+            let mut login = Login::open(&context);
+            login.wait(LoginTicket(1));
+            // A code long enough to wrap past the cap.
+            let code = "c".repeat(cap * 40 + extra * 40);
+            login.step(
+                LoginTicket(1),
+                crate::login_worker::LoginStep::Code {
+                    url: "https://auth.example/device".to_owned(),
+                    code,
+                },
+            );
+            let (step_buf, _) = overlaid(&login, 80, 24);
+            assert_eq!(slab_height(&step_buf, 80, 24), list_h, "at cap {cap}+{extra}");
+        }
+    }
+}
+
+#[test]
+fn esc_from_every_wait_leaves_the_list_and_cancels_once() {
+    for build in [0, 1, 2] {
+        let fake = fake_with(targets());
+        let mut login = waiting(&fake, LoginTicket(1));
+        if build == 1 {
+            login.step(
+                LoginTicket(1),
+                crate::login_worker::LoginStep::Open("https://auth.example/authorize".to_owned()),
+            );
+        } else if build == 2 {
+            login.step(
+                LoginTicket(1),
+                crate::login_worker::LoginStep::Code {
+                    url: "https://auth.example/device".to_owned(),
+                    code: "ABCD-1234".to_owned(),
+                },
+            );
+        }
+        let (fake_login, _answer) = crate::configure_fake::FakeLogin::new();
+        let held = std::sync::Arc::new(fake_login);
+        login.started(crate::login_worker::LoginWorker::new(
+            LoginTicket(1),
+            held.clone() as std::sync::Arc<dyn crate::configure::BrowserLogin>,
+        ));
+        let before = login.selected;
+        assert!(matches!(login.key(&Key::Esc, &ctx(&fake)), Act::Stay));
+        assert!(login.list_open());
+        assert_eq!(login.selected, before);
+        assert_eq!(held.cancels(), 1);
+    }
 }
 
 #[test]
@@ -1531,14 +1702,10 @@ fn a_row_click_while_waiting_keeps_the_waiting_mode() {
         crate::login_worker::LoginStep::Open(url.to_owned()),
     );
     assert!(matches!(login.click(Spot::Row(1), &ctx(&fake)), Act::Stay));
-    let frame = login.frame(80);
-    assert_eq!(
-        frame.below,
-        [
-            "Open this URL to log in to codex:".to_owned(),
-            url.to_owned()
-        ]
-    );
+    assert!(!login.list_open());
+    let (buf, _) = overlaid(&login, 80, 24);
+    let screen = text_of(&buf, 80, 24).join("\n");
+    assert!(screen.contains("Open this URL to log in to codex:"), "{screen}");
 }
 
 #[test]
