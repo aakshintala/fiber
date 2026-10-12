@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use contract::RequestId;
 use contract::clock::{Clock, Wake};
 use contract::inbox::Delivery;
+use contract::tool::InnerCalls;
 use serde_json::Value;
 
 use crate::Error;
@@ -263,6 +264,9 @@ pub(crate) struct Shared {
     pub(super) cancelled: HashSet<u64>,
     /// Admitted `host.exec` runs by call id, until each group is empty or killed and drained.
     pub(super) execs: HashMap<u64, super::tool::ExecAdmit>,
+    /// The inner-call runner of each running tool call, by call id, so a
+    /// `host.tool` yield admits only while its outer call runs.
+    pub(super) runners: HashMap<u64, Arc<dyn InnerCalls>>,
     /// Raised into running Lua by the deadline hook while a cancelled call
     /// runs; set and cleared only under this lock.
     pub(super) interrupt: Arc<std::sync::atomic::AtomicBool>,

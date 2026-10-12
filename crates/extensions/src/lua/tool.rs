@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use contract::clock::Wake;
 use contract::inbox::Delivery;
 use contract::shapes::{DeclaredEffects, Effect};
-use contract::tool::Cancel;
+use contract::tool::{Cancel, InnerCalls};
 use mlua::{Function, Lua, Table, Value as LuaValue};
 use serde_json::Value;
 
@@ -293,17 +293,38 @@ impl LuaExtension {
         args: Value,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, Error> {
-        self.run_cancellable(Target::Tool(name.to_owned()), args, cancel)
+        self.run_cancellable(Target::Tool(name.to_owned()), args, cancel, None)
+    }
+
+    /// Runs the `run` function of the tool `name` as [`LuaExtension::tool_run`]
+    /// does, with `runner` for the inner calls its callback makes with
+    /// `host.tool`, when it may make any.
+    pub(crate) fn tool_run_asking(
+        &self,
+        name: &str,
+        args: Value,
+        cancel: &dyn Cancel,
+        runner: Option<Arc<dyn InnerCalls>>,
+    ) -> Result<Option<Value>, Error> {
+        self.run_cancellable(Target::Tool(name.to_owned()), args, cancel, runner)
+    }
+
+    /// How many running tool calls hold an inner-call runner: one while
+    /// each call given a runner runs, none once it returns.
+    #[cfg(test)]
+    pub(crate) fn runners_held(&self) -> usize {
+        self.hub.lock().runners.len()
     }
 
     /// Runs `target`'s `run` function on `args`: a tool's or a search
-    /// backend's, each under its own timeout and `cancel`. `tool_run` and
-    /// `search_run` are the callers.
+    /// backend's, each under its own timeout and `cancel`. `tool_run`,
+    /// `tool_run_asking` and `search_run` are the callers.
     pub(super) fn run_cancellable(
         &self,
         target: Target,
         args: Value,
         cancel: &dyn Cancel,
+        runner: Option<Arc<dyn InnerCalls>>,
     ) -> Result<Option<Value>, Error> {
         // When Fiber asks, before it waits for the hub (`docs/extensions.md`).
         let asked = self.hub.clock().now();
@@ -314,6 +335,12 @@ impl LuaExtension {
         let mut shared = self.hub.lock();
         self.start(&mut shared)?;
         let id = shared.push(target.clone(), args, asked);
+        // Registered before the callback can yield: the admission reads it
+        // under the same lock, so a `host.tool` from this call always finds
+        // it, and no later call reuses the id while this one runs.
+        if let Some(runner) = runner {
+            shared.runners.insert(id, runner);
+        }
         self.hub.notify();
         let mut cancelling = false;
         loop {
@@ -333,6 +360,9 @@ impl LuaExtension {
                 Some(Next::Return(result)) => result.map(Some),
                 None => Ok(None),
             };
+            // Completion, cancel and timeout all converge here, so the
+            // runner goes exactly when the call ends, whichever way.
+            shared.runners.remove(&id);
             self.hub.notify();
             drop(shared);
             drop(unsent);

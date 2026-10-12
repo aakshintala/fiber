@@ -926,6 +926,7 @@ fn a_failed_oauth_start_delivers_its_failure_after_releasing_the_lock() {
                 | Reply::Query(_)
                 | Reply::Lock(_)
                 | Reply::Ask(_)
+                | Reply::Tool(_)
                 | Reply::Slept => panic!("no failure was delivered for {request_kind}"),
             }
         }

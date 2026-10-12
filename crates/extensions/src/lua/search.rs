@@ -228,7 +228,7 @@ impl LuaExtension {
         args: Value,
         cancel: &dyn Cancel,
     ) -> Result<Option<Value>, Error> {
-        self.run_cancellable(Target::Search(name.to_owned()), args, cancel)
+        self.run_cancellable(Target::Search(name.to_owned()), args, cancel, None)
     }
 }
 

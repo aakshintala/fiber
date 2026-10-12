@@ -1462,3 +1462,174 @@ fiber.tool("find", {{
     assert_eq!(len(), before, "nothing writes after the call returned");
     watchdog.stand_down(WAIT);
 }
+
+/// `host.tool` through the public API (`docs/extensions.md`, "Running a
+/// tool"): a fake `Ask` hands its runner to the hub, and the script sees
+/// the inner call's outcome.
+
+/// An `Ask` whose inner calls run through `runner`, when it has one.
+struct FakeAsk {
+    runner: Option<Arc<dyn contract::tool::InnerCalls>>,
+}
+
+impl contract::tool::Ask for FakeAsk {
+    fn action(&self) -> contract::ActionId {
+        contract::ActionId("a_test".to_owned())
+    }
+
+    fn answerable(&self) -> bool {
+        false
+    }
+
+    fn ask(&self, _asking: contract::tool::Asking) -> contract::tool::Answered {
+        contract::tool::Answered::NoAnswer
+    }
+
+    fn inner_calls(&self) -> Option<Arc<dyn contract::tool::InnerCalls>> {
+        self.runner.clone()
+    }
+}
+
+/// A runner that records each call and completes it with `"file text"`.
+#[derive(Default)]
+struct ScriptRunner {
+    calls: std::sync::Mutex<Vec<(String, String, Value)>>,
+}
+
+impl contract::tool::InnerCalls for ScriptRunner {
+    fn run(
+        &self,
+        extension: &str,
+        name: &str,
+        arguments: Value,
+    ) -> Result<Box<contract::events::ToolCallCompleted>, String> {
+        self.inner()
+            .push((extension.to_owned(), name.to_owned(), arguments));
+        Ok(Box::new(contract::events::ToolCallCompleted {
+            status: contract::events::CallStatus::Completed,
+            reason: None,
+            error: None,
+            process: None,
+            content: vec![ContentPart::Text {
+                text: "file text".to_owned(),
+            }],
+            details: None,
+            artifact: None,
+            changes: None,
+            control: None,
+            changed_by: None,
+            provider_item: None,
+        }))
+    }
+}
+
+impl ScriptRunner {
+    fn inner(&self) -> std::sync::MutexGuard<'_, Vec<(String, String, Value)>> {
+        self.calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Runs `tool` through `run_asking` with `ask` on its own thread.
+fn run_asking(tool: &Arc<LuaTool>, ask: FakeAsk, arguments: Value) -> mpsc::Receiver<Output> {
+    let (tx, rx) = mpsc::channel();
+    let tool = Arc::clone(tool);
+    std::thread::spawn(move || {
+        let output = tool.run_asking(
+            &args(arguments),
+            &CancelToken::new(),
+            &Recorder::default(),
+            &ask,
+        );
+        match tx.send(output) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx
+}
+
+const FETCH: &str = r#"
+fiber.tool("fetch", {
+  description = "Fetches a file.",
+  input_schema = { type = "object" },
+  effects = { effects = { "reads" }, reversible = true },
+  timeout = 2000,
+  run = function() local o = host.tool("read", { path = "x" }) return o.content[1].text end,
+})
+"#;
+
+#[test]
+fn run_asking_runs_the_script_and_hands_the_runner_to_the_hub() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "fetch", FETCH, FakeClock::new());
+    let tools = by_name(&ext);
+    let runner = Arc::new(ScriptRunner::default());
+    let ask = FakeAsk {
+        runner: Some(Arc::clone(&runner) as Arc<dyn contract::tool::InnerCalls>),
+    };
+    let output = ran(
+        &run_asking(&tools["fetch"], ask, json!({})),
+        &Deadline::after(WAIT),
+    );
+    assert_eq!(text(&output), "file text");
+    // The runner saw the extension's name, the tool and the arguments.
+    assert_eq!(
+        runner.inner().clone(),
+        vec![(
+            "fiber.test/fetch".to_owned(),
+            "read".to_owned(),
+            json!({"path": "x"})
+        )]
+    );
+}
+
+#[test]
+fn run_without_a_runner_fails_naming_the_missing_anchor() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "fetch", FETCH, FakeClock::new());
+    let tools = by_name(&ext);
+    let (code, message) = failed(&ran(
+        &run(&tools["fetch"], json!({})),
+        &Deadline::after(WAIT),
+    ));
+    assert_eq!(code, ErrorCode::ToolError);
+    assert!(
+        message.contains("called outside a running tool call"),
+        "the error names the missing anchor: {message}"
+    );
+}
+
+#[test]
+fn run_asking_without_a_runner_fails_the_same_way() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "fetch", FETCH, FakeClock::new());
+    let tools = by_name(&ext);
+    let output = ran(
+        &run_asking(&tools["fetch"], FakeAsk { runner: None }, json!({})),
+        &Deadline::after(WAIT),
+    );
+    let (code, message) = failed(&output);
+    assert_eq!(code, ErrorCode::ToolError);
+    assert!(
+        message.contains("called outside a running tool call"),
+        "the error names the missing anchor: {message}"
+    );
+}
+
+#[test]
+fn run_asking_cancelled_returns_no_content_and_no_error() {
+    let dir = fakes::TempDir::new("fiber-lua-tools");
+    let ext = extension(dir.path(), "fetch", FETCH, FakeClock::new());
+    let tools = by_name(&ext);
+    let runner = Arc::new(ScriptRunner::default());
+    let ask = FakeAsk {
+        runner: Some(Arc::clone(&runner) as Arc<dyn contract::tool::InnerCalls>),
+    };
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let output = tools["fetch"].run_asking(&Map::new(), &cancel, &Recorder::default(), &ask);
+    assert!(output.content.is_empty(), "no content: {output:?}");
+    assert_eq!(output.error, None, "no error: {output:?}");
+    assert!(runner.inner().is_empty(), "the call never ran");
+}
