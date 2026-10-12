@@ -1670,6 +1670,92 @@ fn no_boundary_takes_the_first_replayed_exit_as_today() {
 }
 
 #[test]
+fn the_fold_starts_from_the_run_boundary() {
+    // The fold dedupes from the run's boundary: a replayed earlier run's
+    // `fiber_exited` at the boundary never stands in for this run's, even
+    // when the watch delivers it. The fake script filters at the boundary
+    // as the real watch does, so this test drives the runner with a watch
+    // that replays without filtering: the fold is the backstop. The child
+    // blocks until the watch ran, so the stale line is always first; the
+    // fresh line on stdout ends the run. Without the boundary the fold
+    // takes the stale line and the run reports it instead.
+    let rig = rig(vec![]);
+    let stale = fiber_exited_line(5, "Old.");
+    let fresh = json_line(9, "New.");
+    let (called_tx, called_rx) = mpsc::channel();
+    let seen: Arc<Mutex<Vec<Option<u64>>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_after = Arc::clone(&seen);
+    let watch: Watch = Arc::new(
+        move |_: &SessionId, after: Option<u64>, on_line: &mut dyn FnMut(&Envelope)| {
+            seen_after.lock().unwrap().push(after);
+            let _sent = called_tx.send(());
+            on_line(&stale);
+            Ok(Watched::Exited)
+        },
+    );
+    let gate = TempDir::new("fiber-delegate-fold-boundary");
+    let block = fifo(gate.path(), "block");
+    let shell = format!(
+        ": fiber-delegate-fold-boundary; read _ < '{}'; printf '%s\\n' '{fresh}'; exit 0",
+        block.display()
+    );
+    let events = rig.events.clone();
+    let launch: Launch = Arc::new(move |_: &Launched| {
+        let mut command = Command::new("sh");
+        command.args(["-c", shell.as_str()]);
+        command
+    });
+    let (runner, stop) = Runner::new(
+        rig.job.clone(),
+        SessionId("s_child".into()),
+        events.clone(),
+        Arc::clone(&rig.clock) as Arc<dyn contract::clock::Clock>,
+        BOUND,
+        1024,
+        watch,
+        Some(5),
+    );
+    let launched = Launched {
+        session_id: SessionId("s_child".into()),
+        job_id: rig.job.clone(),
+        parent: SessionId("s_parent".into()),
+        model: "fake/m".into(),
+        prompt: "hi".into(),
+        workspace: rig.events.parent().unwrap().to_path_buf(),
+        resume: false,
+    };
+    let (child, listing) = runner.spawn(&launch, &launched).unwrap();
+    let (_started, finish) = rig.registry.open_started(
+        rig.job.clone(),
+        "delegate_spawn".into(),
+        "scan".into(),
+        events.to_string_lossy().into_owned(),
+        stop,
+        crate::support::delegate_started(&rig.job.0),
+    );
+    let watchdog = Watchdog::matching("fiber-delegate-fold-boundary");
+    thread::spawn(move || {
+        runner.drive(child, Some(listing), finish);
+    });
+    Deadline::after(DEADLINE)
+        .recv(&called_rx)
+        .expect("the watch ran before the release");
+    release_fifo(&block, b"go\n");
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
+        Some("New.".into())
+    );
+    let afters = seen.lock().unwrap().clone();
+    assert!(
+        !afters.is_empty() && afters.iter().all(|after| *after == Some(5)),
+        "every watch call passes the boundary: {afters:?}"
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
 fn minted_command_ids_carry_their_prefix_and_differ() {
     let first = super::mint_command_id();
     let second = super::mint_command_id();
