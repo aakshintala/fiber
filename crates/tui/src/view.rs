@@ -15,7 +15,7 @@ use crate::completion_rows::Rows;
 use crate::markdown::{Role, style};
 use crate::mouse::{self, Target, TargetId};
 
-mod banner;
+pub(crate) mod banner;
 pub(crate) mod chrome;
 mod completions;
 mod drag;

@@ -1,7 +1,8 @@
 //! Home's frame: snapshots and the cursor.
 
 use super::super::{cursor, render, text};
-use crate::app::{App, QUIT_HINT};
+use super::{TypedRow, typed_body};
+use crate::app::{App, Effect, QUIT_HINT};
 use crate::home::{Launch, Spot};
 use crate::keys::Key;
 use crate::link::Line;
@@ -1920,4 +1921,406 @@ fn a_chip_past_the_box_has_no_target() {
         app.focused(),
         Some(crate::mouse::TargetId::Home(Spot::Model))
     );
+}
+
+/// Types `text` into the open picker, collecting every `(id, path)` its
+/// `directories` lines send.
+fn type_path(app: &mut App, text: &str) -> Vec<(String, String)> {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut out = Vec::new();
+    for ch in text.chars() {
+        if let Effect::Send(lines) = app.on_key(Key::Char(ch), now) {
+            for line in &lines {
+                let line: serde_json::Value = serde_json::from_str(line).unwrap();
+                if line["command"] == "directories" {
+                    out.push((
+                        line["id"].as_str().unwrap().to_owned(),
+                        line["args"]["path"].as_str().unwrap().to_owned(),
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Answers the `directories` request `id` with `names` at `path`.
+fn answer(app: &mut App, id: &str, names: &[&str], path: &str) {
+    app.on_line(accepted(
+        id,
+        serde_json::json!({"directories": names, "path": path}),
+    ));
+}
+
+/// An app with the picker typing `text`: on hello, one live row in
+/// `/repo0`, the picker open.
+fn typing(width: u16, height: u16, text: &str) -> (App, Vec<(String, String)>) {
+    let mut app = home(width, height);
+    app.on_line(hello());
+    app.on_line(status_in("s_0000000000000000", "fix the parser", "/repo0"));
+    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    let sent = type_path(&mut app, text);
+    (app, sent)
+}
+
+/// The typed picker at 80x24: `/repo/fi` with two completions over two
+/// recents.
+#[test]
+fn home_picker_typed() {
+    let (mut app, sent) = typing(80, 24, "/repo/fi");
+    answer(
+        &mut app,
+        &sent[1].0,
+        &["fiber", "fiber-worktrees"],
+        "/repo/",
+    );
+    let shown = screen(&app, 80, 24);
+    assert!(shown.contains("› /repo/fi"), "{shown}");
+    assert!(shown.contains("fiber-worktrees"), "{shown}");
+    assert!(shown.contains("── recents ──"), "{shown}");
+    insta::assert_snapshot!("home_picker_typed", shown);
+}
+
+/// The typed picker's cells: the typed row's prompt in `info` with a dim
+/// cursor, the first completion barred and bold, the header and the
+/// unfocused recents dim.
+#[test]
+fn the_typed_picker_row_styles() {
+    use ratatui::style::Modifier;
+
+    let (mut app, sent) = typing(80, 24, "/repo/fi");
+    answer(
+        &mut app,
+        &sent[1].0,
+        &["fiber", "fiber-worktrees"],
+        "/repo/",
+    );
+    let buf = buffer(&app, 80, 24);
+    let shown = screen(&app, 80, 24);
+    let row = |piece: &str| {
+        shown
+            .lines()
+            .position(|line| line.contains(piece))
+            .and_then(|row| u16::try_from(row).ok())
+            .unwrap_or_else(|| panic!("{piece} draws"))
+    };
+    let col = |y: u16, piece: &str| {
+        let text: String = (0..80).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+        let at = text.find(piece).unwrap_or_else(|| panic!("{piece} draws"));
+        u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX)
+    };
+    // The typed row's `› ` reads in `info`.
+    let typed = row("› /repo/fi");
+    assert_eq!(
+        buf[(col(typed, "›"), typed)].style().fg,
+        Some(crate::theme::Role::Info.color()),
+        "{shown}"
+    );
+    // Its cursor is dim.
+    let cursor = col(typed, "█");
+    assert!(
+        buf[(cursor, typed)]
+            .style()
+            .add_modifier
+            .contains(Modifier::DIM),
+        "{shown}"
+    );
+    // The first completion sits on the bar, bold.
+    let first = row("fiber");
+    assert_eq!(
+        buf[(col(first, "fiber"), first)].bg,
+        crate::theme::Role::Accent.color(),
+        "{shown}"
+    );
+    assert!(
+        buf[(col(first, "fiber"), first)]
+            .style()
+            .add_modifier
+            .contains(Modifier::BOLD),
+        "{shown}"
+    );
+    // The header and the unfocused recents stay dim.
+    let header = row("── recents ──");
+    assert!(
+        buf[(col(header, "──"), header)]
+            .style()
+            .add_modifier
+            .contains(Modifier::DIM),
+        "{shown}"
+    );
+    let recent = row("/repo0");
+    assert!(
+        buf[(col(recent, "/repo0"), recent)]
+            .style()
+            .add_modifier
+            .contains(Modifier::DIM),
+        "{shown}"
+    );
+}
+
+/// A focused recent while typing sits on the bar, and keeps no dim.
+#[test]
+fn a_focused_recent_while_typing_is_barred() {
+    use ratatui::style::Modifier;
+
+    let (mut app, sent) = typing(80, 24, "/repo/fi");
+    answer(
+        &mut app,
+        &sent[1].0,
+        &["fiber", "fiber-worktrees"],
+        "/repo/",
+    );
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    let buf = buffer(&app, 80, 24);
+    let shown = screen(&app, 80, 24);
+    let y = shown
+        .lines()
+        .position(|line| line.contains("/w"))
+        .and_then(|row| u16::try_from(row).ok())
+        .unwrap_or_else(|| panic!("/w draws: {shown}"));
+    let text: String = (0..80).map(|x| buf[(x, y)].symbol().to_owned()).collect();
+    let at = text.find("/w").unwrap_or_else(|| panic!("/w draws"));
+    let x = u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX);
+    assert_eq!(
+        buf[(x, y)].bg,
+        crate::theme::Role::Accent.color(),
+        "{shown}"
+    );
+    assert!(
+        !buf[(x, y)].style().add_modifier.contains(Modifier::DIM),
+        "{shown}"
+    );
+}
+
+/// "no such directory" draws dim with no completion rows, above the
+/// blank row, the header and the recents.
+#[test]
+fn the_missing_row_draws_dim_over_the_recents() {
+    use ratatui::style::Modifier;
+
+    let (mut app, sent) = typing(80, 24, "/repo/zz");
+    answer(&mut app, &sent[1].0, &["fiber"], "/repo/");
+    let now = fakes::clock::FakeClock::new().now();
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    let buf = buffer(&app, 80, 24);
+    let shown = screen(&app, 80, 24);
+    assert!(shown.contains("no such directory"), "{shown}");
+    assert!(!shown.contains("fiber"), "{shown}");
+    let missing = shown
+        .lines()
+        .position(|line| line.contains("no such directory"))
+        .and_then(|row| u16::try_from(row).ok())
+        .unwrap_or_else(|| panic!("the missing row draws"));
+    let text: String = (0..80)
+        .map(|x| buf[(x, missing)].symbol().to_owned())
+        .collect();
+    let at = text
+        .find("no such directory")
+        .unwrap_or_else(|| panic!("the missing row draws"));
+    let x = u16::try_from(text[..at].chars().count()).unwrap_or(u16::MAX);
+    assert!(
+        buf[(x, missing)]
+            .style()
+            .add_modifier
+            .contains(Modifier::DIM),
+        "{shown}"
+    );
+    // The blank row stands the header off the missing row, and the
+    // recents follow it.
+    let lines: Vec<&str> = shown.lines().collect();
+    let header = lines
+        .iter()
+        .position(|line| line.contains("── recents ──"))
+        .unwrap_or_else(|| panic!("the header draws: {shown}"));
+    assert!(lines[header - 1].trim().is_empty(), "{shown}");
+    assert!(lines[header + 1].contains("/w"), "{shown}");
+}
+
+/// The typed picker's body rows within `room` rows, with 30 completions
+/// and 3 recents: the typed row and the focused row always draw, and
+/// the separators yield first.
+#[test]
+fn the_typed_body_keeps_the_typed_row_and_the_focus() {
+    use TypedRow::{Blank, Completion as C, Header, Recent as R, Typed as T};
+    let body = |room: usize, focus: Option<usize>| typed_body(30, 3, focus, false, room);
+    // A focused completion draws with the typed row, windowed around it.
+    assert_eq!(body(2, Some(0)), vec![T, C(0)]);
+    assert_eq!(body(5, Some(0)), vec![T, C(0), C(1), C(2), C(3)]);
+    assert_eq!(body(2, Some(29)), vec![T, C(29)]);
+    assert_eq!(body(3, Some(29)), vec![T, C(28), C(29)]);
+    assert_eq!(body(4, Some(29)), vec![T, C(27), C(28), C(29)]);
+    assert_eq!(body(5, Some(29)), vec![T, C(26), C(27), C(28), C(29)]);
+    // A focused recent stands without the separators when neither fits.
+    assert_eq!(body(2, Some(30)), vec![T, R(0)]);
+    assert_eq!(body(2, Some(32)), vec![T, R(2)]);
+    // With room for one more row, the next recent joins it, else the
+    // nearest completion.
+    assert_eq!(body(3, Some(30)), vec![T, R(0), R(1)]);
+    assert_eq!(body(3, Some(32)), vec![T, C(29), R(2)]);
+    // From room 4 the separators draw with the focused recent.
+    assert_eq!(body(4, Some(30)), vec![T, Blank, Header, R(0)]);
+    assert_eq!(body(4, Some(32)), vec![T, Blank, Header, R(2)]);
+    assert_eq!(body(5, Some(30)), vec![T, Blank, Header, R(0), R(1)]);
+    assert_eq!(body(5, Some(32)), vec![T, Blank, Header, R(1), R(2)]);
+    // Nothing focused anchors the window at the first row.
+    assert_eq!(body(3, None), vec![T, C(0), C(1)]);
+    // Every body holds at most its room.
+    for room in 0..8usize {
+        for focus in [None, Some(0), Some(15), Some(29), Some(30), Some(32)] {
+            assert!(
+                body(room, focus).len() <= room.max(1),
+                "room {room} focus {focus:?}"
+            );
+        }
+    }
+}
+
+/// The typed body with no completions: the typed row, then the recents
+/// with their separators once those fit.
+#[test]
+fn the_typed_body_without_completions() {
+    use TypedRow::{Blank, Header, Missing, Recent as R, Typed as T};
+    assert_eq!(
+        typed_body(0, 3, None, false, 5),
+        vec![T, Blank, Header, R(0), R(1)]
+    );
+    assert_eq!(typed_body(0, 3, None, false, 3), vec![T]);
+    assert_eq!(
+        typed_body(0, 2, None, true, 6),
+        vec![T, Missing, Blank, Header, R(0), R(1)]
+    );
+    assert_eq!(
+        typed_body(0, 2, Some(1), true, 4),
+        vec![T, Blank, Header, R(1)]
+    );
+}
+
+/// A short screen keeps the focused completion barred: the last of 30
+/// draws with the typed row, and the first drops out.
+#[test]
+fn a_short_screen_keeps_the_focused_completion_drawn() {
+    let mut app = home(80, 12);
+    app.on_line(hello());
+    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    let sent = type_path(&mut app, "/");
+    let mut all = Vec::new();
+    for n in 0..30 {
+        all.push(format!("c{n:02}"));
+    }
+    let refs: Vec<&str> = all.iter().map(String::as_str).collect();
+    answer(&mut app, &sent[0].0, &refs, "/");
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..29 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    let buf = buffer(&app, 80, 12);
+    let shown = screen(&app, 80, 12);
+    // Room 4 holds the typed row and the window ending at the focus.
+    assert!(shown.contains("› /"), "{shown}");
+    assert!(shown.contains("c29"), "{shown}");
+    assert!(!shown.contains("c00"), "{shown}");
+    let accent = crate::theme::Role::Accent.color();
+    let bars: Vec<u16> = (0..12)
+        .filter(|y| (0..80).any(|x| buf[(x, *y)].bg == accent))
+        .collect();
+    assert_eq!(bars.len(), 1, "{shown}");
+    let row: String = (0..80)
+        .map(|x| buf[(x, bars[0])].symbol().to_owned())
+        .collect();
+    assert!(row.contains("c29"), "{shown}");
+}
+
+/// A short screen keeps the focused recent drawn with the typed row,
+/// dropping the completions and the separators first.
+#[test]
+fn a_short_screen_keeps_the_focused_recent_drawn() {
+    let mut app = home(80, 10);
+    app.on_line(hello());
+    app.on_click(crate::mouse::TargetId::Home(Spot::Workspace));
+    let sent = type_path(&mut app, "/a");
+    let mut all = Vec::new();
+    for n in 0..30 {
+        all.push(format!("a{n:02}"));
+    }
+    let refs: Vec<&str> = all.iter().map(String::as_str).collect();
+    answer(&mut app, &sent[0].0, &refs, "/");
+    // Past the 30 completions to the first recent.
+    let now = fakes::clock::FakeClock::new().now();
+    for _ in 0..31 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    let shown = screen(&app, 80, 10);
+    // Room 2 holds the typed row and the focused recent alone.
+    assert!(shown.contains("› /a"), "{shown}");
+    assert!(shown.contains("/w"), "{shown}");
+    assert!(!shown.contains("a00"), "{shown}");
+    assert!(!shown.contains("── recents ──"), "{shown}");
+}
+
+/// With the link down and the picker open, home's frame holds the
+/// reconnect banner; with the link up it does not.
+#[test]
+fn the_reconnect_banner_draws_over_home() {
+    let (app, _) = typing(80, 24, "/");
+    let up = screen(&app, 80, 24);
+    assert!(!up.contains("reconnecting"), "{up}");
+    let mut down = app;
+    down.connect_failed("Could not reach the hub: refused".to_owned());
+    down.next_retry();
+    let shown = screen(&down, 80, 24);
+    assert!(shown.contains("Connection lost · reconnecting"), "{shown}");
+    // The foot hint stays on the last row.
+    let last = shown.lines().last().unwrap_or_default();
+    assert!(last.contains("Ctrl+C"), "{shown}");
+}
+
+/// A recents-only picker still parks the cursor in the draft; with the
+/// typed row open the terminal cursor hides.
+#[test]
+fn the_cursor_hides_while_typing_a_path() {
+    let mut app = picking(80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let screen = app.home_screen().expect("home draws");
+    assert!(super::cursor(&app, &screen, area).is_some());
+    type_path(&mut app, "/");
+    let screen = app.home_screen().expect("home draws");
+    assert!(
+        screen
+            .picker
+            .as_ref()
+            .is_some_and(|picker| picker.typed.is_some())
+    );
+    assert_eq!(super::cursor(&app, &screen, area), None);
+}
+
+/// While typing, only the recent rows take clicks, by their index into
+/// the recents: completion, typed, blank and header rows give no target.
+#[test]
+fn clicking_a_recent_while_typing_chooses_it() {
+    let (mut app, sent) = typing(80, 24, "/repo/f");
+    answer(&mut app, &sent[1].0, &["fiber"], "/repo/");
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let targets = home_only(&app, area, &mut buf);
+    let mut picks: Vec<usize> = targets
+        .iter()
+        .filter_map(|target| {
+            if let crate::mouse::TargetId::Home(Spot::Pick(at)) = target.id {
+                Some(at)
+            } else {
+                None
+            }
+        })
+        .collect();
+    picks.sort();
+    // The two recents, and nothing else.
+    assert_eq!(picks, vec![0, 1]);
+    app.on_click(crate::mouse::TargetId::Home(Spot::Pick(1)));
+    assert!(
+        app.home_screen()
+            .is_some_and(|screen| screen.picker.is_none())
+    );
+    assert_eq!(app.workspace(), PathBuf::from("/repo0"));
 }
