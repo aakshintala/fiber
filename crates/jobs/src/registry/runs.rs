@@ -221,8 +221,10 @@ impl Registry {
             };
             // The gate held from the check, and only a resume commits a
             // new run while only an end settles a running one, so the
-            // entry this check saw ended is still this run, ended.
-            if job.run != run || !matches!(job.phase, super::Phase::Ended(_)) {
+            // entry this check saw ended is still this run, ended. Both
+            // checks fail closed: anything unexpected answers live and
+            // changes nothing.
+            if job.run != run {
                 let session = job
                     .delegate
                     .as_ref()
@@ -230,11 +232,18 @@ impl Registry {
                     .unwrap_or_else(|| SessionId("s_gone".into()));
                 return Err(Resume::Live(session, job.run));
             }
-            let super::Phase::Ended(completed) =
-                std::mem::replace(&mut job.phase, super::Phase::Running)
-            else {
-                unreachable!("checked ended above");
+            let completed = match &job.phase {
+                super::Phase::Ended(completed) => completed.clone(),
+                super::Phase::Running => {
+                    let session = job
+                        .delegate
+                        .as_ref()
+                        .map(|delegate| delegate.delegate_session_id.clone())
+                        .unwrap_or_else(|| SessionId("s_gone".into()));
+                    return Err(Resume::Live(session, job.run));
+                }
             };
+            job.phase = super::Phase::Running;
             job.ends.push(RunEnd {
                 run,
                 completed: (*completed).clone(),

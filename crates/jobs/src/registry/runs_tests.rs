@@ -678,6 +678,58 @@ fn two_resumes_race_through_the_gate_and_start_one_run() {
     assert!(registry.running(&id.0, 2));
 }
 
+#[test]
+fn a_resume_whose_run_moved_during_start_answers_live_and_changes_nothing() {
+    let (_dir, registry) = world();
+    let (id, finish) = open_delegate(&registry);
+    end_run(finish, &id, "Done.");
+    let moved = Arc::clone(&registry);
+    let moved_id = id.clone();
+    match registry.resume(&id.0, Some(action()), |_| {
+        // Another resume committed while `start` ran with the inner
+        // lock released: the entry moved on without this resume.
+        let mut inner = super::super::lock(&moved.inner);
+        inner
+            .jobs
+            .iter_mut()
+            .find(|job| job.started.job_id == moved_id)
+            .expect("the job is still there")
+            .run = 7;
+        Ok::<_, String>((Stop(Box::new(|| {})), ()))
+    }) {
+        Err(Resume::Live(_, 7)) => {}
+        _ => panic!("the stale resume answers live"),
+    }
+    assert_eq!(registry.run_of(&id.0), Some(7));
+    assert!(matches!(registry.target(&id.0), Target::Ended));
+}
+
+#[test]
+fn a_resume_whose_phase_left_ended_during_start_answers_live_and_changes_nothing() {
+    let (_dir, registry) = world();
+    let (id, finish) = open_delegate(&registry);
+    end_run(finish, &id, "Done.");
+    let moved = Arc::clone(&registry);
+    let moved_id = id.clone();
+    match registry.resume(&id.0, Some(action()), |_| {
+        // The entry started running again while `start` ran with the
+        // inner lock released: the recheck fails closed instead of
+        // overwriting the running phase.
+        let mut inner = super::super::lock(&moved.inner);
+        inner
+            .jobs
+            .iter_mut()
+            .find(|job| job.started.job_id == moved_id)
+            .expect("the job is still there")
+            .phase = super::super::Phase::Running;
+        Ok::<_, String>((Stop(Box::new(|| {})), ()))
+    }) {
+        Err(Resume::Live(_, 1)) => {}
+        _ => panic!("the racing resume answers live"),
+    }
+    assert!(registry.running(&id.0, 1));
+}
+
 /// Two runs in: run 1 ended, run 2 started by `a` and ended, run 3
 /// started by `c`. Both settles held, both ends reported.
 struct TwoRuns {
