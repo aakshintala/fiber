@@ -20,19 +20,19 @@ fn open_flags() -> i32 {
     libc::O_NOFOLLOW | libc::O_NONBLOCK
 }
 
-/// Whether `hub/devices/` holds a record whose hash is the SHA-256 of
-/// `token`. Anything that is not a regular file holding that hash is
+/// The file name of a record whose hash is the SHA-256 of `token` in
+/// `hub/devices/`. Anything that is not a regular file holding that hash is
 /// skipped, fail closed: a missing directory, an unreadable file, a
 /// directory or a symlink, non-JSON, a missing or non-string hash, or
 /// uppercase hex. Records open with `O_NOFOLLOW`, so a symlink is refused
 /// at open even when an entry is swapped between the directory read and
 /// the open. `O_NONBLOCK` prevents a FIFO from stalling authentication
 /// before its opened-file metadata can reject it.
-pub(crate) fn holds(home: &Path, token: &str) -> bool {
+pub(crate) fn holder(home: &Path, token: &str) -> Option<String> {
     let want = sha256_hex(token.as_bytes());
     let entries = match fs::read_dir(home.join("hub").join("devices")) {
         Ok(entries) => entries,
-        Err(_) => return false,
+        Err(_) => return None,
     };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -66,10 +66,10 @@ pub(crate) fn holds(home: &Path, token: &str) -> bool {
             Err(_) => continue,
         };
         if record.get("token_sha256").and_then(Value::as_str) == Some(want.as_str()) {
-            return true;
+            return Some(entry.file_name().to_string_lossy().into_owned());
         }
     }
-    false
+    None
 }
 
 /// The lowercase hexadecimal SHA-256 of `bytes`.

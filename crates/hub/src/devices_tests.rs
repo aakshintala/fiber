@@ -60,9 +60,9 @@ fn sha256_of_abc_is_the_standard_digest() {
 fn a_matching_record_holds_its_token() {
     let temp = Temp::new();
     write_record(&temp.dir, "phone", "t0k3n");
-    assert!(holds(&temp.dir, "t0k3n"));
+    assert_eq!(holder(&temp.dir, "t0k3n").as_deref(), Some("phone"));
     assert!(
-        !holds(&temp.dir, "t0k3m"),
+        holder(&temp.dir, "t0k3m").is_none(),
         "one character off holds nothing"
     );
 }
@@ -70,7 +70,7 @@ fn a_matching_record_holds_its_token() {
 #[test]
 fn no_devices_directory_holds_nothing() {
     let temp = Temp::new();
-    assert!(!holds(&temp.dir, "t0k3n"));
+    assert!(holder(&temp.dir, "t0k3n").is_none());
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn skipped_shapes_do_not_stop_a_match() {
     )
     .unwrap();
     write_record(&temp.dir, "zzz-phone", "t0k3n");
-    assert!(holds(&temp.dir, "t0k3n"));
+    assert_eq!(holder(&temp.dir, "t0k3n").as_deref(), Some("zzz-phone"));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn each_skipped_shape_alone_holds_nothing() {
         let temp = Temp::new();
         fs::create_dir_all(temp.devices()).unwrap();
         fs::write(temp.devices().join(name), contents).unwrap();
-        assert!(!holds(&temp.dir, "t0k3n"), "{name} holds nothing");
+        assert!(holder(&temp.dir, "t0k3n").is_none(), "{name} holds nothing");
     }
 }
 
@@ -134,12 +134,12 @@ fn a_fifo_does_not_hold_authentication_open() {
     let home = temp.dir.clone();
     let (done, returned) = mpsc::channel();
     thread::spawn(move || {
-        done.send(holds(&home, "t0k3n")).unwrap_or(());
+        done.send(holder(&home, "t0k3n")).unwrap_or(());
     });
     let held = Deadline::after(FIFO_DEADLINE)
         .recv(&returned)
         .expect("authentication lookup returns while a FIFO is present");
-    assert!(!held, "a FIFO does not hold a device token");
+    assert!(held.is_none(), "a FIFO does not hold a device token");
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn a_directory_and_a_symlink_named_like_devices_hold_nothing() {
     )
     .unwrap();
     std::os::unix::fs::symlink(elsewhere.join("real"), temp.devices().join("tablet")).unwrap();
-    assert!(!holds(&temp.dir, "t0k3n"));
+    assert!(holder(&temp.dir, "t0k3n").is_none());
 }
 
 #[test]
@@ -171,5 +171,12 @@ fn a_record_swapped_for_a_symlink_before_open_is_refused() {
         fs::rename(&record, &moved).unwrap();
         std::os::unix::fs::symlink(&moved, &record).unwrap();
     });
-    assert!(!holds(&temp.dir, "t0k3n"));
+    assert!(holder(&temp.dir, "t0k3n").is_none());
+}
+
+#[test]
+fn a_hash_only_record_outside_the_name_rule_is_returned_by_name() {
+    let temp = Temp::new();
+    write_record(&temp.dir, ".phone", "t0k3n");
+    assert_eq!(holder(&temp.dir, "t0k3n").as_deref(), Some(".phone"));
 }

@@ -264,7 +264,7 @@ fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>
             if line.session_id.is_none()
                 && line.command == "authenticate"
                 && token(&line.args)
-                    .is_some_and(|token| crate::devices::holds(&hub.home, token)) =>
+                    .is_some_and(|token| crate::devices::holder(&hub.home, token).is_some()) =>
         {
             line.id
         }
