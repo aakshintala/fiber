@@ -19,11 +19,11 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    Decision, DelegateFinished, JobCompleted, Outcome, Parent, ToolCallArgumentsDelta,
-    ToolCallRequested, TurnOutcome,
+    Decision, DelegateFinished, DelegateStarted, JobCompleted, JobStarted, Outcome, Parent,
+    ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, SessionMessage};
-use contract::jobs::{Jobs, OpenError};
+use contract::jobs::{Jobs, OpenError, Taken};
 use contract::provider::{
     Delta, Input, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition,
 };
@@ -32,7 +32,7 @@ use contract::shapes::{
     ContentPart, DeclaredEffects, Effect, Failure, Origin, Process, Sender as From, Tokens, Usage,
 };
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
-use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, SessionId};
+use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId, SessionId};
 use fakes::Deadline;
 use fakes::jobs::FakeJobs;
 use fakes::{Scripted, ScriptedProvider};
@@ -3003,4 +3003,215 @@ fn admit_idle_claims_a_notice_at_admission() {
         "a held claim starts one turn with the notice"
     );
     assert_eq!(held.count(), 1, "the claim is asked at admission");
+}
+
+/// A resumed run's start records, queued under `action`: the action of a
+/// call the loop never started, so the writer's turn applies.
+fn resumed_ahead(id: &str, action: &ActionId) -> Vec<Taken> {
+    vec![
+        Taken {
+            record: contract::jobs::JobRecord::Started(JobStarted {
+                job_id: JobId(id.into()),
+                tool: Some("delegate_message".into()),
+                extension: None,
+                description: "resumed".into(),
+                output_path: format!("artifacts/{id}.log"),
+            }),
+            action: Some(action.clone()),
+        },
+        Taken {
+            record: contract::jobs::JobRecord::DelegateStarted(DelegateStarted {
+                job_id: JobId(id.into()),
+                delegate_session_id: SessionId("s_d000000000000001".into()),
+                harness: "fiber".into(),
+                model: "fiber:fake/m".into(),
+                workspace: "/w".into(),
+                worktree: None,
+                forked_from: None,
+            }),
+            action: Some(action.clone()),
+        },
+    ]
+}
+
+/// `id`'s end as a delegate notice whose claim took `ahead` before the
+/// notice's own finish and completion.
+fn ahead_notice(id: &str, text: &str, ahead: Vec<Taken>, asked: &Asked) -> JobNotice {
+    let asked = Arc::clone(&asked.0);
+    JobNotice {
+        completed: failed(id),
+        claim: Claim(Box::new(move || {
+            asked.fetch_add(1, Ordering::SeqCst);
+            Some(ahead.clone())
+        })),
+        delegate: Some(delegate_finished(id, text.into())),
+    }
+}
+
+/// [`ahead_notice`] as a delivery.
+fn ahead_delegate(id: &str, text: &str, ahead: Vec<Taken>, asked: &Asked) -> Delivery {
+    Delivery::Job(ahead_notice(id, text, ahead, asked))
+}
+
+/// The four lines a notice whose claim took a resumed run's start writes:
+/// the two starts under `action`, then the finish and the completion with
+/// no action, all under the turn that wrote them.
+fn assert_ahead_lines(lines: &[Envelope], id: &str, action: &ActionId, at: usize) {
+    let four = &lines[at..at + 4];
+    assert_eq!(
+        [
+            four[0].kind.as_str(),
+            four[1].kind.as_str(),
+            four[2].kind.as_str(),
+            four[3].kind.as_str()
+        ],
+        [
+            "job_started",
+            "delegate_started",
+            "delegate_finished",
+            "job_completed"
+        ]
+    );
+    assert_eq!(four[0].action_id.as_ref(), Some(action));
+    assert_eq!(four[1].action_id.as_ref(), Some(action));
+    assert_eq!(four[2].action_id, None);
+    assert_eq!(four[3].action_id, None);
+    let turn = four[0].turn_id.clone().unwrap();
+    for line in &four[1..] {
+        assert_eq!(line.turn_id.as_ref(), Some(&turn));
+    }
+    assert_eq!(four[0].payload["job_id"], id);
+    assert_eq!(four[1].payload["job_id"], id);
+    assert_eq!(four[2].payload["job_id"], id);
+    assert_eq!(four[3].payload["job_id"], id);
+}
+
+#[test]
+fn a_notice_claims_write_what_it_took_ahead_at_the_next_boundary() {
+    let mut world = World::new(
+        vec![calls("gated"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Gated)],
+    );
+    let asked = Asked::default();
+    let action = ActionId("a_aaaaaaaaaaaaaaaa".into());
+    let ahead = resumed_ahead(DELEGATE, &action);
+    let answered = on_request(&world.log, {
+        let inbox = world.inbox.clone();
+        let counted = asked.clone();
+        move |id| {
+            inbox
+                .send(ahead_delegate(DELEGATE, "Done.", ahead.clone(), &counted))
+                .unwrap();
+            inbox.send(allow(id)).unwrap();
+        }
+    });
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    answered.join().unwrap();
+    assert_eq!(asked.count(), 1, "the claim is asked once, at the write");
+    let lines = world.turn_lines();
+    let called = [
+        "permission_requested",
+        "permission_resolved",
+        "tool_call_started",
+        "tool_call_completed",
+    ];
+    assert_eq!(
+        kinds(&lines),
+        two_steps_with(
+            &called,
+            &[
+                "job_started",
+                "delegate_started",
+                "delegate_finished",
+                "job_completed"
+            ]
+        )
+    );
+    let at = lines
+        .iter()
+        .position(|line| line.kind == "job_started")
+        .expect("a job_started line");
+    assert_ahead_lines(&lines, DELEGATE, &action, at);
+}
+
+#[test]
+fn a_notice_kept_for_the_next_turn_writes_what_its_claim_took_ahead() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    let asked = Asked::default();
+    let action = ActionId("a_aaaaaaaaaaaaaaaa".into());
+    // Taken while no turn runs: the next turn moves it into its input
+    // through `take_queued`, which claims it at the move.
+    world
+        .looped
+        .as_mut()
+        .unwrap()
+        .admit_job(ahead_notice(
+            DELEGATE,
+            "Done.",
+            resumed_ahead(DELEGATE, &action),
+            &asked,
+        ));
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(asked.count(), 1, "the claim is asked once, at the move");
+    let lines = world.turn_lines();
+    assert_eq!(
+        kinds(&lines),
+        one_step_with(&[
+            "job_started",
+            "delegate_started",
+            "delegate_finished",
+            "job_completed"
+        ])
+    );
+    // The turn's input still names the job once, with its message after.
+    let input = lines[0].payload["input"].as_array().unwrap();
+    assert_eq!(input.len(), 2);
+    assert_eq!(
+        input[0],
+        json!({"type": "jobs", "job_ids": [DELEGATE]})
+    );
+    assert_eq!(input[1]["type"], "message");
+    let at = lines
+        .iter()
+        .position(|line| line.kind == "job_started")
+        .expect("a job_started line");
+    assert_ahead_lines(&lines, DELEGATE, &action, at);
+}
+
+#[test]
+fn a_notice_while_idle_writes_what_its_claim_took_ahead_first() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    let asked = Asked::default();
+    let action = ActionId("a_aaaaaaaaaaaaaaaa".into());
+    world.send(ahead_delegate(
+        DELEGATE,
+        "Done.",
+        resumed_ahead(DELEGATE, &action),
+        &asked,
+    ));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(asked.count(), 1, "the claim is asked once, at admission");
+    let lines = world.turn_lines();
+    assert_eq!(
+        kinds(&lines),
+        one_step_with(&[
+            "job_started",
+            "delegate_started",
+            "delegate_finished",
+            "job_completed"
+        ])
+    );
+    // The turn's input names the job once, with no message item.
+    assert_eq!(
+        lines[0].payload["input"],
+        json!([{"type": "jobs", "job_ids": [DELEGATE]}])
+    );
+    let at = lines
+        .iter()
+        .position(|line| line.kind == "job_started")
+        .expect("a job_started line");
+    assert_ahead_lines(&lines, DELEGATE, &action, at);
 }
