@@ -889,13 +889,11 @@ fn a_real_sigterm_while_booting_exits_143() {
         // The signals thread exits the process; this wait only bounds a
         // child whose exit never came.
         let (_held, never) = mpsc::channel::<()>();
-        let _waited = Deadline::after(DEADLINE).recv(&never);
+        let _waited = Deadline::after(CHILD_WITHIN).recv(&never);
         std::process::exit(0);
     }
     let name = module_path!().split_once("::").unwrap().1;
-    let exe = std::env::current_exe().expect("the test binary's path");
-    let mut command = Command::new(exe);
-    command
+    let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             &format!("{name}::a_real_sigterm_while_booting_exits_143"),
@@ -904,60 +902,18 @@ fn a_real_sigterm_while_booting_exits_143() {
         ])
         .env(CHILD, "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    command.process_group(0);
-    let child = command.spawn().expect("the child started");
-    let group = child.id();
-    let (finished_tx, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let output = child.wait_with_output();
-        if let Ok(()) = finished_tx.send(output) {}
-    });
-    // The child is already spawned, so a watchdog that cannot start must
-    // still leave nothing running: kill the group and wait for the waiter
-    // before the panic continues.
-    let watchdog =
-        match std::panic::catch_unwind(AssertUnwindSafe(|| fakes::Watchdog::group(group))) {
-            Ok(watchdog) => watchdog,
-            Err(payload) => {
-                match fakes::kill_group(group, "KILL") {
-                    Ok(_) | Err(_) => {}
-                }
-                match Deadline::after(DEADLINE).recv(&finished) {
-                    Ok(_) | Err(_) => {}
-                }
-                std::panic::resume_unwind(payload);
-            }
-        };
-    match Deadline::after(DEADLINE).recv(&finished) {
-        Ok(Ok(output)) => {
-            let cleanup = Deadline::after(DEADLINE);
-            watchdog.stand_down(cleanup.left());
-            assert_eq!(output.status.code(), Some(143), "{}", output.status);
-        }
-        Ok(Err(err)) => {
-            let cleanup = Deadline::after(DEADLINE);
-            match fakes::kill_group(group, "KILL") {
-                Ok(_) | Err(_) => {}
-            }
-            match fakes::group_empties(group, cleanup.left()) {
-                true | false => {}
-            }
-            panic!("the child has no output: {err}");
-        }
-        Err(_) => {
-            let cleanup = Deadline::after(DEADLINE);
-            match fakes::kill_group(group, "KILL") {
-                Ok(_) | Err(_) => {}
-            }
-            let reaped = cleanup.recv(&finished).is_ok();
-            let emptied = fakes::group_empties(group, cleanup.left());
-            panic!(
-                "waited {DEADLINE:?} for the child to exit (reaped: {reaped}, group empty: {emptied})"
-            );
-        }
-    }
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || tx.send(child.wait().unwrap()));
+    let Ok(status) = Deadline::after(DEADLINE).recv(&rx) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {DEADLINE:?} for the child to exit on SIGTERM");
+    };
+    assert_eq!(status.code(), Some(143), "{status}");
 }
 
 #[test]
