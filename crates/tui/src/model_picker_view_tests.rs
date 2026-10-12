@@ -269,6 +269,25 @@ fn the_picker_hides_the_cursor() {
     }
 }
 
+/// The screen row holding `needle`, and its text.
+fn find_mark_row(text: &str, needle: &str) -> (u16, String) {
+    let (at, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains(needle))
+        .unwrap_or_else(|| panic!("no row holds {needle:?}: {text}"));
+    (u16::try_from(at).unwrap_or(u16::MAX), (*line).to_owned())
+}
+
+/// The cell column of `needle` in `line`: byte indexes and cell
+/// columns part on multibyte text.
+fn mark_x(line: &str, needle: &str) -> u16 {
+    let byte = line
+        .find(needle)
+        .unwrap_or_else(|| panic!("no {needle:?} in {line:?}"));
+    u16::try_from(crate::format::width(&line[..byte])).unwrap_or(u16::MAX)
+}
+
 #[test]
 fn model_picker_marking() {
     use ratatui::style::Modifier;
@@ -288,27 +307,32 @@ fn model_picker_marking() {
     // Each row draws its mark; there are no level chips here.
     assert!(text.contains("[x] m1"), "{text}");
     assert!(text.contains("[ ] m2"), "{text}");
+    assert!(text.contains("[x] z2"), "{text}");
     assert!(!text.contains("[low]"), "{text}");
+    assert!(!text.contains("ⓢ"), "{text}");
     assert!(
-        text.contains("Space mark · Enter save · Esc back"),
+        text.contains("↑↓ move · Enter toggle · Ctrl+S save · Esc close"),
         "{text}"
     );
-    // A marked row draws bold, as a chosen multi-select option does;
-    // an unmarked row draws plain.
-    for (y, line) in text.lines().enumerate() {
-        let row = u16::try_from(y).unwrap_or(u16::MAX);
-        if line.contains("[x]") {
-            assert!(
-                (0..area.width).any(|x| buf[(x, row)].modifier.contains(Modifier::BOLD)),
-                "no bold on {line:?}"
-            );
-        }
-        if line.contains("[ ]") {
-            assert!(
-                (0..area.width).all(|x| !buf[(x, row)].modifier.contains(Modifier::BOLD)),
-                "bold on {line:?}"
-            );
-        }
+    // The focused mark is bold and black on `accent`; an unfocused
+    // marked mark is neither bold nor dim, and an unmarked mark is dim.
+    // The bar bolds the whole focused row, so only other rows must
+    // carry no bold anywhere.
+    let (y, line) = find_mark_row(&text, "[x] m1");
+    let x = mark_x(&line, "[x]");
+    assert!(buf[(x, y)].modifier.contains(Modifier::BOLD));
+    assert!(!buf[(x, y)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(x, y)].fg, crate::look::BAR_TEXT);
+    assert_eq!(buf[(x, y)].bg, crate::theme::Role::Accent.color());
+    let (y, line) = find_mark_row(&text, "[x] z2");
+    let x = mark_x(&line, "[x]");
+    assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD));
+    assert!(!buf[(x, y)].modifier.contains(Modifier::DIM));
+    for needle in ["[ ] m2", "[ ] z1"] {
+        let (y, line) = find_mark_row(&text, needle);
+        let x = mark_x(&line, &needle[..3]);
+        assert!(buf[(x, y)].modifier.contains(Modifier::DIM));
+        assert!(!buf[(x, y)].modifier.contains(Modifier::BOLD));
     }
     insta::assert_snapshot!("model_picker_marking", text);
 }
