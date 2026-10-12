@@ -412,7 +412,7 @@ pub(crate) fn extension_case(
         case.until,
         Arc::clone(&process_clock),
     );
-    let signals = match doors::Signals::install(process_clock) {
+    let signals = match crate::shutdown::install(process_clock) {
         Ok(signals) => signals,
         Err(error) => return report(&name, &[format!("case signals: {error}")]),
     };

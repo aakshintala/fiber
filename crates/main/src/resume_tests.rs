@@ -163,7 +163,7 @@ fn enter_worktree_reports_a_lock_it_cannot_open() {
     let name = worktree.file_name().unwrap().to_string_lossy().into_owned();
     std::fs::create_dir(worktree.with_file_name(format!("{name}.lock"))).unwrap();
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let signals = doors::Signals::install(Arc::clone(&clock)).unwrap();
+    let signals = doors::Signals::install(Arc::clone(&clock), None).unwrap();
     let reads = Arc::new(crate::switch::Reads::default());
     match enter_worktree(
         Some(Worktree {

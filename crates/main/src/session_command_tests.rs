@@ -92,7 +92,7 @@ fn a_failure_with_no_signal_is_reported() {
 fn report_child(signalled: bool) {
     fakes::within("report_child", CHILD_DEADLINE, move || {
         let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-        let signals = doors::Signals::install(clock).unwrap();
+        let signals = doors::Signals::install(clock, None).unwrap();
         let (tx, rx) = mpsc::channel();
         signals.arm(Box::new(move || tx.send(()).unwrap()), Box::new(|| {}));
         if signalled {
