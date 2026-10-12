@@ -285,12 +285,7 @@ fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>
             (line.id, who, None)
         }
         Ok(line) if line.session_id.is_none() && line.command == "pair" => {
-            let args = if code(&line.args).is_some() {
-                line.args
-            } else {
-                Map::new()
-            };
-            match hub.pairing.redeem(&hub, n, &args) {
+            match hub.pairing.redeem(&hub, n, &line.args) {
                 Ok((token, who)) => {
                     let result = serde_json::json!({"device":who.by(), "token":token.0});
                     (line.id, who, Some(result))
@@ -424,14 +419,6 @@ fn token(args: &Map<String, Value>) -> Option<&str> {
         return None;
     }
     args.get("token")?.as_str()
-}
-
-/// The pairing code when arguments are exactly one string `code`.
-fn code(args: &Map<String, Value>) -> Option<&str> {
-    if args.len() != 1 {
-        return None;
-    }
-    args.get("code")?.as_str()
 }
 
 /// Answers a refused first command and closes: the answer, close 1008

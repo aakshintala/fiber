@@ -115,3 +115,66 @@ fn malformed_device_lists_are_refused_before_printing() {
         assert!(out.is_empty());
     }
 }
+/// Runs an exit-code wrapper against one hub answer, or an unreachable hub.
+fn exit_code(
+    answer: Option<Value>,
+    run: fn(&mut dyn FnMut() -> io::Result<doors::hub::Hub>) -> i32,
+) -> i32 {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut connect: Box<dyn FnMut() -> io::Result<doors::hub::Hub>> = match answer {
+            Some(answer) => {
+                let (client, server) = UnixStream::pair().unwrap();
+                client.set_read_timeout(Some(WAIT)).unwrap();
+                server.set_read_timeout(Some(WAIT)).unwrap();
+                thread::spawn(move || {
+                    let mut read = BufReader::new(server);
+                    let mut line = String::new();
+                    read.read_line(&mut line).unwrap();
+                    writeln!(read.get_mut(), "{answer}").unwrap();
+                });
+                let mut client = Some(client);
+                Box::new(move || {
+                    Ok((
+                        client.take().unwrap(),
+                        HubLine {
+                            kind: "hub_hello".to_owned(),
+                            ts: 1,
+                            schema_version: 1,
+                            payload: Map::new(),
+                        },
+                    ))
+                })
+            }
+            None => Box::new(|| Err(io::Error::other("no hub"))),
+        };
+        tx.send(run(&mut *connect)).unwrap_or(());
+    });
+    Deadline::after(WAIT).recv_or_fail(&rx, "the token wrapper returns its exit code")
+}
+#[test]
+fn token_list_exits_zero_once_the_list_is_printed() {
+    assert_eq!(
+        exit_code(Some(accepted(json!([]))), |connect| hub_token_list(connect)),
+        0
+    );
+}
+#[test]
+fn token_list_exits_nonzero_when_the_hub_is_unreachable() {
+    assert_ne!(exit_code(None, |connect| hub_token_list(connect)), 0);
+}
+#[test]
+fn token_revoke_exits_zero_once_the_device_is_revoked() {
+    let answer = json!({"kind":"command_accepted","ts":1,"schema_version":1,"payload":{"command_id":"c_revoke"}});
+    assert_eq!(
+        exit_code(Some(answer), |connect| hub_token_revoke("phone", connect)),
+        0
+    );
+}
+#[test]
+fn token_revoke_exits_nonzero_when_the_hub_is_unreachable() {
+    assert_ne!(
+        exit_code(None, |connect| hub_token_revoke("phone", connect)),
+        0
+    );
+}

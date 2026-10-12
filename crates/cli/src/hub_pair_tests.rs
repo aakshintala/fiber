@@ -123,6 +123,7 @@ fn address_accepts_only_ws_and_wss() {
         "ws://",
         "wss://:80",
         "ws://h:0",
+        "ws://h:+5",
         "ws://h:65536",
         "ws://h:abc",
         "ws://h:",
@@ -191,4 +192,47 @@ fn qr_rendering_is_pinned_with_and_without_an_address() {
         draw(&qr_text(Some(&address), CODE)).unwrap(),
         "█████████████████████████████████████\n█████████████████████████████████████\n████ ▄▄▄▄▄ █ ▀▀█▀███▄▄ ▄██ ▄▄▄▄▄ ████\n████ █   █ █▀▀▀█▀▄█ ▄▀██▀█ █   █ ████\n████ █▄▄▄█ ██▀ ▀▄▄ ▄ ▀▀ ██ █▄▄▄█ ████\n████▄▄▄▄▄▄▄█ █ ▀ ▀ █ ▀▄█▄█▄▄▄▄▄▄▄████\n████ ▀ ▄▀ ▄ █   ▄▄▄██▄   █ ▀▀▄▀▄ ████\n█████▀▀  ▀▄▀█ ▀ ▄▀ █▀▄ █ ▄▀  ▀█▀█████\n████▀▀▄▀▀█▄ ▀▀█▀ ▀█▀  ▀ ▀█▀▀█▀▄ ▀████\n████▄▀▀█▀█▄▀▀█ ▀▄▀▄▀██ ▄▀█▄███▄▄ ████\n██████ ██▀▄▄████▄▀█▀▄ ██▀▄█▀▄█▀▀█████\n████▄█ ▄  ▄██▀▀  ██▄▄ ▄█▄ ▄▄▀  ▀▀████\n█████▄▄▄▄█▄▄ █  ▄ ▀▄█▄█▄ ▄▄▄   ▄ ████\n████ ▄▄▄▄▄ █ ██ █▄██▄█ ▄ █▄█ ▄▄ ▀████\n████ █   █ █▀▄  ▄▀ ▀▀▄██▄ ▄  ▄▄█▀████\n████ █▄▄▄█ █▄ ▄█▄▀██▄▄██ █▀▄█▀█▀▄████\n████▄▄▄▄▄▄▄█▄▄█▄▄███▄██▄▄██▄███▄█████\n█████████████████████████████████████\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀"
     );
+}
+/// Runs the exit-code wrapper against one hub answer, or an unreachable hub.
+fn exit_code(answer: Option<Value>) -> i32 {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut connect: Box<dyn FnMut() -> io::Result<doors::hub::Hub>> = match answer {
+            Some(answer) => {
+                let (client, server) = UnixStream::pair().unwrap();
+                client.set_read_timeout(Some(WAIT)).unwrap();
+                server.set_read_timeout(Some(WAIT)).unwrap();
+                thread::spawn(move || {
+                    let mut read = BufReader::new(server);
+                    let mut text = String::new();
+                    read.read_line(&mut text).unwrap();
+                    writeln!(read.get_mut(), "{answer}").unwrap();
+                });
+                let mut client = Some(client);
+                Box::new(move || {
+                    Ok((
+                        client.take().unwrap(),
+                        HubLine {
+                            kind: "hub_hello".to_owned(),
+                            ts: 1,
+                            schema_version: 1,
+                            payload: Map::new(),
+                        },
+                    ))
+                })
+            }
+            None => Box::new(|| Err(io::Error::other("no hub"))),
+        };
+        tx.send(hub_pair("phone", None, &mut *connect))
+            .unwrap_or(());
+    });
+    Deadline::after(WAIT).recv_or_fail(&rx, "pair returns its exit code")
+}
+#[test]
+fn pair_exits_zero_once_the_code_is_printed() {
+    assert_eq!(exit_code(Some(accepted())), 0);
+}
+#[test]
+fn pair_exits_nonzero_when_the_hub_is_unreachable() {
+    assert_ne!(exit_code(None), 0);
 }

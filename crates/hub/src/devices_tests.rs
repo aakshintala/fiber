@@ -277,3 +277,37 @@ fn a_hash_only_record_outside_the_name_rule_is_returned_by_name() {
     write_record(&temp.dir, ".phone", "t0k3n");
     assert_eq!(holder(&temp.dir, "t0k3n").as_deref(), Some(".phone"));
 }
+
+#[test]
+fn a_temporary_that_cannot_be_removed_fails_the_write_with_that_error() {
+    let temp = Temp::new();
+    fs::create_dir_all(temp.dir.join("hub/.phone.tmp")).unwrap();
+    let record = Record {
+        name: "phone".to_owned(),
+        paired_at: 10,
+        last_connected_at: 10,
+        token_sha256: sha256_hex(b"token"),
+    };
+    let error = write(&temp.dir, &record).unwrap_err();
+    assert_ne!(
+        error.kind(),
+        io::ErrorKind::AlreadyExists,
+        "the removal's error is returned, not the later create's"
+    );
+}
+
+#[test]
+fn a_devices_path_that_is_not_a_directory_is_an_error_not_an_absence() {
+    let temp = Temp::new();
+    fs::create_dir_all(temp.dir.join("hub")).unwrap();
+    fs::write(temp.devices(), "not a directory").unwrap();
+    assert!(remove(&temp.dir, "phone").is_err());
+    assert!(exists(&temp.dir, "phone").is_err());
+    assert!(list(&temp.dir).is_err());
+}
+
+#[test]
+fn list_with_no_devices_directory_is_empty() {
+    let temp = Temp::new();
+    assert!(list(&temp.dir).unwrap().is_empty());
+}
