@@ -1156,17 +1156,3 @@ fn settle_pins_zero_true_and_held_false_at_once() {
     );
     watching.stand_down(DEADLINE);
 }
-
-/// The settle answers at once with nothing in flight, on the System
-/// clock production uses: under the `==`/`!=` mutant it waits the full
-/// bound and answers `false`, so the wall-clock bound below fails it in
-/// seconds instead of running out the suite's deadlines.
-#[test]
-fn settle_on_the_system_clock_returns_true_at_once_with_nothing_in_flight() {
-    let reads = Reads::default();
-    let clock = crate::clock::System;
-    let settled = fakes::within("the settle", Duration::from_secs(2), move || {
-        reads.settle(&clock, doors::SHUTDOWN_BOUND)
-    });
-    assert!(settled, "nothing in flight settles at once");
-}

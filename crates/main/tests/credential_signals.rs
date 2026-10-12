@@ -283,6 +283,31 @@ fn sigterm_to_refresh_model_lists_while_a_credential_command_runs_exits_143_and_
 }
 
 #[test]
+fn fiber_models_with_nothing_in_flight_exits_within_two_seconds() {
+    let setup = Setup::new();
+    // Declared after `setup`, so it drops first: a failing run kills this
+    // test's refresh child before its directory is removed.
+    let refresh_guard = Watchdog::matching(&setup.refresh_pattern());
+    // The command exits at once with a key, so nothing is in flight when
+    // `fiber models` settles its reads on exit: under the `==`/`!=` mutant
+    // that settle waits the full bound, so the 2 s deadline below fails
+    // the test at once.
+    install(&setup.home(), "printf key");
+    let (fiber_pid, child, watchdog) = setup.start(&["models"]);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let deadline = Deadline::after(Duration::from_secs(2));
+    let output = match deadline.recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(_) => support::expired(deadline, fiber_pid, &finished, "`fiber models` to exit"),
+    };
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    await_refresh_exit(setup.deadline, &setup.refresh_pattern());
+    watchdog.stand_down(setup.deadline.cleanup());
+    refresh_guard.stand_down(setup.deadline.cleanup());
+}
+
+#[test]
 fn fiber_models_returning_normally_kills_what_its_credential_command_left() {
     let setup = Setup::new();
     // Declared after `setup`, so it drops first: a failing run kills this
