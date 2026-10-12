@@ -58,12 +58,11 @@ impl Setup {
             .stderr(Stdio::piped());
         let (mut child, watchdog) = spawn_watched(&mut command);
         if let Some(text) = stdin_text {
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(text.as_bytes())
-                .unwrap();
+            let written = child.stdin.take().unwrap().write_all(text.as_bytes());
+            // A usage error exits before reading stdin, so the pipe may be closed.
+            if let Err(e) = written {
+                assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "{e}");
+            }
         }
         let group = child.id();
         let guard = KillGroup(group);
