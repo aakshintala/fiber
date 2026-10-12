@@ -271,6 +271,56 @@ impl World {
     }
 }
 
+struct DroppedCommand(Arc<std::sync::atomic::AtomicBool>);
+impl Drop for DroppedCommand {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn settling_drops_a_command_request_without_taking_answering_or_logging_it() {
+    let (jobs, _stops) = Listed::new(&[]);
+    let mut world = World::new(jobs);
+    let watchdog = fakes::Watchdog::matching(&world.held._home.path().display().to_string());
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let guard = DroppedCommand(dropped.clone());
+    let taken = Arc::new(AtomicUsize::new(0));
+    let take = taken.clone();
+    let answered = Arc::new(AtomicUsize::new(0));
+    let answer = answered.clone();
+    let request = contract::inbox::InnerCallRequest {
+        extension: "ext".into(),
+        command: CommandId("c_1".into()),
+        name: "read".into(),
+        arguments: serde_json::json!({}),
+        cancel: Arc::new(fakes::CancelToken::new()),
+        taken: Box::new(move || {
+            take.fetch_add(1, Ordering::SeqCst);
+        }),
+        answer: Box::new(move |_| {
+            answer.fetch_add(1, Ordering::SeqCst);
+            drop(guard);
+        }),
+    };
+    let world = fakes::within(
+        "settle command request",
+        Duration::from_secs(3),
+        move || {
+            world
+                .looped
+                .settle_one(Delivery::InnerCall(request))
+                .unwrap();
+            world
+        },
+    );
+    assert!(dropped.load(Ordering::SeqCst));
+    assert_eq!(taken.load(Ordering::SeqCst), 0);
+    assert_eq!(answered.load(Ordering::SeqCst), 0);
+    assert_eq!(world.held.kinds(), ["session_started"]);
+    watchdog.stand_down(Duration::from_secs(3));
+}
+
 impl Held {
     fn durable(&self) -> Vec<Envelope> {
         log::read(&self.dir)

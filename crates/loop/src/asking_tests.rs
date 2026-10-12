@@ -676,7 +676,14 @@ fn dropping_the_release_cancels_each_inner_call_it_holds() {
         let mut inner = Vec::new();
         let mut release = Release::default();
         looped
-            .take_inner(scope, &streams, &mut inner, &mut release, &wake, &turn_id)
+            .take_inner(
+                scope,
+                &streams,
+                &mut inner,
+                &mut release,
+                &wake,
+                Some(&turn_id),
+            )
             .unwrap();
         // The worker runs now; returning drops the release while it waits.
         deadline.recv(&started).expect("the inner worker runs");

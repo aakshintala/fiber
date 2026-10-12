@@ -33,7 +33,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{Loop, Model, TurnCancel};
 
-const TURN_DEADLINE: Duration = Duration::from_secs(10);
+const TURN_DEADLINE: Duration = Duration::from_secs(5);
 
 /// What a hook was shown, owned.
 #[derive(Debug, Clone, PartialEq)]
@@ -359,6 +359,7 @@ fn run_in(
     break_artifacts: bool,
     pinned: bool,
 ) -> Ran {
+    let watchdog = fakes::Watchdog::matching(&home.path().display().to_string());
     let workspace = home.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
@@ -454,6 +455,7 @@ fn run_in(
             streamed
         },
     );
+    watchdog.stand_down(TURN_DEADLINE);
     let session = home.path().join("s_test");
     Ran {
         turn,
@@ -2060,6 +2062,125 @@ fn a_shutdown_with_an_unsaved_spill_removes_its_left_file() {
             .is_none(),
         "the left file was removed"
     );
+}
+
+fn command_hook_failure() -> Arc<FakeHooks> {
+    FakeHooks::new(
+        AfterToolOutcome::Failed(contract::hook::HookFailure {
+            extension: "x".into(),
+            message: "m".into(),
+        }),
+        &[],
+        Vec::new(),
+    )
+}
+
+const COMMAND_HOOK_REFUSAL: &str =
+    "Output withheld: the `after_tool` hook of extension x could not run: m.";
+
+fn assert_command_hook_failed(ran: &Ran) {
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "hook_failed");
+    assert_eq!(completed.payload["error"]["message"], COMMAND_HOOK_REFUSAL);
+    assert_eq!(
+        completed.payload["content"],
+        json!([{"type": "text", "text": COMMAND_HOOK_REFUSAL}])
+    );
+    assert!(completed.payload.get("artifact").is_none());
+    assert!(!ran.on_disk().contains("raw secret"));
+    let action = completed.action_id.as_ref().unwrap();
+    assert_eq!(
+        ran.streamed
+            .iter()
+            .filter(|line| line.action_id.as_ref() == Some(action))
+            .map(|line| line.kind.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed"
+        ]
+    );
+}
+
+#[test]
+fn a_command_hook_failure_withholds_plain_output_and_fails_the_call() {
+    let ran = run(
+        fixed(text("raw secret")),
+        script("probe", json!({})),
+        Some(command_hook_failure()),
+        Arc::new(TurnCancel::default()),
+    );
+    assert_command_hook_failed(&ran);
+}
+
+fn image_output(mut tool: Fixed, images: Vec<ContentPart>) -> Fixed {
+    let make = tool.make.take().unwrap();
+    tool.make = Some(Arc::new(move || {
+        let mut output = make();
+        output.content.extend(images.clone());
+        output
+    }));
+    tool
+}
+
+fn one_image() -> Vec<ContentPart> {
+    vec![ContentPart::Image {
+        path: "artifacts/shot.png".into(),
+        mime_type: "image/png".into(),
+        width: 1,
+        height: 1,
+    }]
+}
+
+#[test]
+fn a_command_hook_failure_replaces_spilled_output_and_suppresses_images() {
+    for images in [Vec::new(), one_image()] {
+        let home = fakes::TempDir::new("fiber-command-hook-spill");
+        let tool = spilling(
+            &home,
+            b"raw secret".to_vec(),
+            "raw secret",
+            "",
+            0,
+            Bound::DEFAULT,
+        );
+        let ran = run_spilled(
+            home,
+            image_output(tool, images),
+            Some(command_hook_failure()),
+        );
+        assert_command_hook_failed(&ran);
+        assert_eq!(
+            std::fs::read_to_string(ran.session.join("artifacts").join(SPILL_NAME)).unwrap(),
+            format!("{COMMAND_HOOK_REFUSAL}\n")
+        );
+    }
+}
+
+#[test]
+fn a_command_hook_failure_withholds_unsaved_output_and_suppresses_images() {
+    for images in [Vec::new(), one_image()] {
+        let home = fakes::TempDir::new("fiber-command-hook-unsaved");
+        let left = home.path().join("left.txt");
+        std::fs::write(&left, "raw secret").unwrap();
+        let tool = unsaved(
+            "raw secret",
+            "",
+            0,
+            "not saved".into(),
+            Some(left.clone()),
+            Bound::DEFAULT,
+        );
+        let ran = run_spilled(
+            home,
+            image_output(tool, images),
+            Some(command_hook_failure()),
+        );
+        assert_command_hook_failed(&ran);
+        assert!(!left.exists());
+    }
 }
 
 #[test]

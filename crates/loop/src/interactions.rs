@@ -118,7 +118,7 @@ impl Loop {
     pub(crate) fn serve_interactions(
         &mut self,
         calls: &Calls<'_>,
-        turn: &TurnId,
+        turn: Option<&TurnId>,
     ) -> Result<(), Error> {
         let now = self.log.clock().now();
         let last = calls.last().map(|(id, _)| *id);
@@ -162,7 +162,7 @@ impl Loop {
                     resumes: asking.suspends,
                 };
                 if again.is_none() {
-                    self.append(&Event::InteractionRequested(requested), turn, None)?;
+                    self.write(&Event::InteractionRequested(requested), turn, None)?;
                 }
                 slot.pend(
                     request,
@@ -276,7 +276,7 @@ impl Loop {
     fn inbox_closed(&mut self, calls: &Calls<'_>, turn: &TurnId) -> Result<(), Error> {
         for (_, stream) in running(calls) {
             if let Some((request, _)) = stream.asking().pending() {
-                self.declined(request, turn)?;
+                self.declined(request, Some(turn))?;
                 stream.asking().resolve(Answered::NoAnswer);
             }
         }
@@ -348,13 +348,17 @@ impl Loop {
     }
 
     /// Writes Fiber's decline of `request`: `by` `fiber`, `declined: true`.
-    pub(crate) fn declined(&mut self, request: RequestId, turn: &TurnId) -> Result<(), Error> {
+    pub(crate) fn declined(
+        &mut self,
+        request: RequestId,
+        turn: Option<&TurnId>,
+    ) -> Result<(), Error> {
         let resolved = InteractionResolved {
             request_id: request,
             by: ResolvedBy::Fiber,
             answer: Answer::Declined { declined: True },
         };
-        self.append(&Event::InteractionResolved(resolved), turn, None)
+        self.write(&Event::InteractionResolved(resolved), turn, None)
     }
 }
 

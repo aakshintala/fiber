@@ -200,6 +200,7 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
         | Delivery::Interaction(_)
         | Delivery::Resolved(..)
         | Delivery::ExtensionExec(_)
+        | Delivery::InnerCall(_)
         | Delivery::ExtensionLog(_) => {
             panic!("no job runs here")
         }
@@ -1026,6 +1027,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::Message(_)
+                | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
@@ -1062,6 +1064,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::Message(_)
+                | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the model arrives as a model"),
             }
@@ -1150,6 +1153,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Resolved(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::Message(_)
+                | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the credential arrives as a credential"),
             }
@@ -1243,6 +1247,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::Message(_)
+                | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -1282,6 +1287,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Interaction(_)
                 | Delivery::Resolved(..)
                 | Delivery::Message(_)
+                | Delivery::InnerCall(_)
                 | Delivery::ExtensionLog(_)
                 | Delivery::Cancelled => panic!("the rewind arrives as a rewind"),
             }
@@ -3045,6 +3051,7 @@ impl FakeDoor {
 impl contract::extension::ExtensionDoor for FakeDoor {
     fn command(
         &self,
+        _id: &contract::CommandId,
         name: &str,
         text: &str,
     ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
@@ -3073,6 +3080,7 @@ struct HeldDoor {
 impl contract::extension::ExtensionDoor for HeldDoor {
     fn command(
         &self,
+        _id: &contract::CommandId,
         name: &str,
         _text: &str,
     ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
@@ -3233,6 +3241,7 @@ fn quiesce_seals_the_door() {
     impl contract::extension::ExtensionDoor for Sealed {
         fn command(
             &self,
+            _id: &contract::CommandId,
             _name: &str,
             _text: &str,
         ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {

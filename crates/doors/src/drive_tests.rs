@@ -272,7 +272,12 @@ fn drive_after_close_answers_closing_with_a_retained_handle() {
 struct AskDoor;
 
 impl contract::extension::ExtensionDoor for AskDoor {
-    fn command(&self, name: &str, _text: &str) -> Result<Box<dyn FnOnce() + Send>, Rejection> {
+    fn command(
+        &self,
+        _id: &contract::CommandId,
+        name: &str,
+        _text: &str,
+    ) -> Result<Box<dyn FnOnce() + Send>, Rejection> {
         Err(Rejection {
             code: ErrorCode::UnknownCommand,
             message: format!("`{name}` names no extension command."),

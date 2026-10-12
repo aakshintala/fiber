@@ -401,6 +401,10 @@ that is running when it makes one is the **outer call**.
   standing denies, and every `before_tool` and `after_tool` hook, in all three
   phases. A call one of them refuses returns `denied` with the reason, so a
   `sanitize` hook redacts an inner call's output before the script sees it.
+  A command's inner call, or an inner call made inside one, that reaches a
+  `before_tool`, `check` or `after_tool` hook of the command's own extension
+  fails with `hook_failed`, because that hook would wait behind the command
+  ("How an extension runs"); `host.tool` returns the failure to the command.
 - **When it may be made:** only while one of the extension's own tool calls
   is running, or while one of its commands runs ("Commands and screens"),
   where the command's invocation is the anchor. A person or a driver invoked
@@ -1085,7 +1089,9 @@ does not survive the exit.
 
 A command may run tools with `host.tool`. The person or driver who invoked it
 is the admission, and each inner call names the command's invocation
-("Running a tool").
+("Running a tool"). While a turn runs, a command's inner call starts at the
+next step boundary, in the order the calls arrived; a step waiting on an
+interaction leaves it queued. The command's timeout covers the wait.
 
 A command talks to the person through the closed interactions every client
 answers (`docs/architecture.md`, "Asking a human"): confirm, select,

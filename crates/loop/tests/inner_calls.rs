@@ -758,6 +758,643 @@ fn waiting_inner(
     }))
 }
 
+struct RequestDrop(Option<std::sync::mpsc::Sender<()>>);
+
+impl Drop for RequestDrop {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _sent = sender.send(());
+        }
+    }
+}
+
+struct CommandRequest {
+    request: contract::inbox::InnerCallRequest,
+    answer: std::sync::mpsc::Receiver<Box<ToolCallCompleted>>,
+    taken: std::sync::mpsc::Receiver<()>,
+    dropped: std::sync::mpsc::Receiver<()>,
+    cancel: Arc<fakes::CancelToken>,
+}
+
+fn command_request(name: &str, arguments: Value) -> CommandRequest {
+    let cancel = Arc::new(fakes::CancelToken::new());
+    let (answered, answer) = std::sync::mpsc::channel();
+    let (taking, taken) = std::sync::mpsc::channel();
+    let (dropping, dropped) = std::sync::mpsc::channel();
+    let mut guard = RequestDrop(Some(dropping));
+    CommandRequest {
+        request: contract::inbox::InnerCallRequest {
+            extension: "ext".into(),
+            command: contract::CommandId("c_1".into()),
+            name: name.into(),
+            arguments,
+            cancel: cancel.clone(),
+            taken: Box::new(move || {
+                let _sent = taking.send(());
+            }),
+            answer: Box::new(move |completed| {
+                drop(guard.0.take());
+                let _sent = answered.send(completed);
+            }),
+        },
+        answer,
+        taken,
+        dropped,
+        cancel,
+    }
+}
+
+fn command_lines(session: &mut Session) -> Vec<Envelope> {
+    session.events_until("command completion", |line| {
+        line.kind == "tool_call_completed"
+    })
+}
+
+fn close_idle(
+    session: &mut Session,
+    done: &std::sync::mpsc::Receiver<(r#loop::Loop, Option<TurnOutcome>)>,
+) {
+    session
+        .inbox
+        .send(contract::inbox::Delivery::Close(support::ignore()))
+        .unwrap();
+    let (looped, outcome) = fakes::Deadline::after(std::time::Duration::from_secs(3))
+        .recv_or_fail(done, "idle loop closed");
+    session.looped = Some(looped);
+    assert_eq!(outcome, None);
+}
+
+fn assert_command_anchor(lines: &[Envelope]) {
+    let id = inner_id(lines);
+    let requested = lines
+        .iter()
+        .find(|line| line.action_id.as_ref() == Some(&id))
+        .unwrap();
+    assert_eq!(
+        requested.payload["ran_by"],
+        json!({"extension":"ext", "command_id":"c_1"})
+    );
+    let chain: Vec<_> = lines
+        .iter()
+        .filter(|line| line.action_id.as_ref() == Some(&id))
+        .collect();
+    assert!(chain.iter().all(|line| line.turn_id.is_none()));
+    assert_eq!(
+        chain
+            .iter()
+            .filter(|line| line.payload.contains_key("ran_by"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn an_idle_command_runs_turnless_and_answers_with_the_logged_completion() {
+    let tool = Arc::new(FakeTool::new("read", |_, _, _, _| text("answer")));
+    let mut session = Session::with_tools(vec![], None, vec![tool]);
+    let mut request = command_request("read", json!({}));
+    let dir = session.dir.clone();
+    let taken = request.request.taken;
+    request.request.taken = Box::new(move || {
+        assert!(
+            !log::read(&dir)
+                .unwrap()
+                .iter()
+                .any(|line| line.kind == "tool_call_requested")
+        );
+        taken();
+    });
+    session
+        .inbox
+        .send(contract::inbox::Delivery::InnerCall(request.request))
+        .unwrap();
+    let (done, _) = start_turn(&mut session);
+    fakes::Deadline::after(std::time::Duration::from_secs(3))
+        .recv_or_fail(&request.taken, "request taken");
+    let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+        .recv_or_fail(&request.answer, "written completion");
+    let lines = command_lines(&mut session);
+    assert_eq!(
+        support::kinds(&lines),
+        [
+            "session_started",
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed"
+        ]
+    );
+    assert_command_anchor(&lines);
+    assert_eq!(
+        serde_json::to_value(&*completed).unwrap(),
+        Value::Object(lines.last().unwrap().payload.clone())
+    );
+    assert_eq!(completed.content, text("answer").content);
+    assert!(session.requests().is_empty());
+    close_idle(&mut session, &done);
+}
+
+#[test]
+fn an_ended_command_or_a_shutdown_drops_the_request_without_taking_or_logging_it() {
+    for shutdown in [false, true] {
+        let mut session = Session::with_tools(vec![], None, vec![]);
+        let request = command_request("read", json!({}));
+        if shutdown {
+            session.cancel.shutdown(143);
+        } else {
+            request.cancel.cancel();
+        }
+        session
+            .inbox
+            .send(contract::inbox::Delivery::InnerCall(request.request))
+            .unwrap();
+        let (done, _) = start_turn(&mut session);
+        // A shutdown stops before draining the inbox; dropping the returned
+        // loop drops its unanswered deliveries too.
+        if shutdown {
+            let (looped, outcome) = fakes::Deadline::after(std::time::Duration::from_secs(3))
+                .recv_or_fail(&done, "shutdown loop");
+            assert_eq!(outcome, None);
+            drop(looped);
+        } else {
+            fakes::Deadline::after(std::time::Duration::from_secs(3))
+                .recv_or_fail(&request.dropped, "ended request dropped");
+            close_idle(&mut session, &done);
+        }
+        assert!(request.answer.try_recv().is_err());
+        assert!(request.taken.try_recv().is_err());
+        let lines = log::read(&session.dir).unwrap();
+        assert_eq!(support::kinds(&lines), ["session_started",]);
+    }
+}
+
+#[test]
+fn a_command_end_cancels_its_running_inner_call_and_shutdown_runs_no_after_hook() {
+    for shutdown in [false, true] {
+        let (started, running) = std::sync::mpsc::channel();
+        let (stopped, _cancelled) = std::sync::mpsc::channel();
+        let tool = waiting_inner(started, stopped, None);
+        let mut session = Session::with_tools(vec![], None, vec![tool]);
+        let hooks = Arc::new(FakeHooks::default());
+        session.looped = Some(session.looped.take().unwrap().hooks(hooks.clone()));
+        let request = command_request("inner", json!({}));
+        session
+            .inbox
+            .send(contract::inbox::Delivery::InnerCall(request.request))
+            .unwrap();
+        let (done, _) = start_turn(&mut session);
+        fakes::Deadline::after(std::time::Duration::from_secs(3))
+            .recv_or_fail(&running, "inner tool running");
+        if shutdown {
+            session.cancel.shutdown(143);
+        } else {
+            request.cancel.cancel();
+        }
+        let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+            .recv_or_fail(&request.answer, "cancelled inner completion");
+        assert_eq!(completed.status, CallStatus::Cancelled);
+        let lines = command_lines(&mut session);
+        assert_command_anchor(&lines);
+        assert_eq!(
+            support::kinds(&lines),
+            [
+                "session_started",
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed"
+            ]
+        );
+        if shutdown {
+            assert!(completed.content.is_empty());
+            assert_eq!(*hooks.seen.lock().unwrap(), ["before inner", "check inner"]);
+            let (looped, outcome) = fakes::Deadline::after(std::time::Duration::from_secs(3))
+                .recv_or_fail(&done, "shutdown loop stopped");
+            session.looped = Some(looped);
+            assert_eq!(outcome, None);
+        } else {
+            assert_eq!(
+                *hooks.seen.lock().unwrap(),
+                ["before inner", "check inner", "after inner"]
+            );
+            close_idle(&mut session, &done);
+        }
+    }
+}
+
+#[test]
+fn a_command_chain_has_eight_inner_levels_and_turnless_outer_action_anchors() {
+    fn recursive(name: &'static str, other: &'static str) -> Arc<FakeTool> {
+        Arc::new(FakeTool::new(name, move |args, _, _, ask| {
+            let left = args["left"].as_u64().unwrap();
+            if left == 0 {
+                return text("end");
+            }
+            match ask
+                .inner_calls()
+                .unwrap()
+                .run("ext", other, json!({"left":left-1}))
+            {
+                Ok(done) => Output {
+                    content: done.content,
+                    ..Default::default()
+                },
+                Err(error) => text(error),
+            }
+        }))
+    }
+    for (left, count, result) in [
+        (6, 7, "end"),
+        (7, 8, "end"),
+        (8, 8, "host.tool: inner-call depth exceeds 8"),
+    ] {
+        let mut session =
+            Session::with_tools(vec![], None, vec![recursive("a", "b"), recursive("b", "a")]);
+        let request = command_request("a", json!({"left":left}));
+        session
+            .inbox
+            .send(contract::inbox::Delivery::InnerCall(request.request))
+            .unwrap();
+        let (done, _) = start_turn(&mut session);
+        let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+            .recv_or_fail(&request.answer, "command chain completion");
+        assert_eq!(completed.status, CallStatus::Completed);
+        assert_eq!(completed.content, text(result).content);
+        close_idle(&mut session, &done);
+        let lines = log::read(&session.dir).unwrap();
+        let requested: Vec<_> = lines
+            .iter()
+            .filter(|line| line.kind == "tool_call_requested")
+            .collect();
+        assert_eq!(requested.len(), count);
+        assert_command_anchor(&lines);
+        for pair in requested.windows(2) {
+            assert_eq!(
+                pair[1].payload["ran_by"],
+                json!({"extension":"ext","outer_action_id":pair[0].action_id})
+            );
+        }
+        let completions: Vec<_> = lines
+            .iter()
+            .filter(|line| line.kind == "tool_call_completed")
+            .map(|line| &line.action_id)
+            .collect();
+        assert_eq!(
+            completions,
+            requested
+                .iter()
+                .rev()
+                .map(|line| &line.action_id)
+                .collect::<Vec<_>>()
+        );
+        assert!(lines.iter().all(|line| line.turn_id.is_none()));
+        let mut expected = vec!["session_started"];
+        for _ in 0..count {
+            expected.extend(["tool_call_requested", "tool_call_started"]);
+        }
+        expected.extend(std::iter::repeat_n("tool_call_completed", count));
+        assert_eq!(support::kinds(&lines), expected);
+    }
+}
+
+#[test]
+fn an_ask_in_a_command_chain_is_declined_even_in_an_answerable_session() {
+    let tool = Arc::new(FakeTool::new("inner", |_, _, _, ask| {
+        assert!(!ask.answerable());
+        assert_eq!(
+            ask.ask(asking("inner?")),
+            contract::tool::Answered::NoAnswer
+        );
+        text("declined")
+    }));
+    let mut session = Session::with_tools(vec![], None, vec![tool])
+        .answerable(true)
+        .inbox_woken();
+    let request = command_request("inner", json!({}));
+    session
+        .inbox
+        .send(contract::inbox::Delivery::InnerCall(request.request))
+        .unwrap();
+    let (done, _) = start_turn(&mut session);
+    let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+        .recv_or_fail(&request.answer, "declined command ask");
+    assert_eq!(completed.content, text("declined").content);
+    let lines = command_lines(&mut session);
+    assert_eq!(
+        support::kinds(&lines),
+        [
+            "session_started",
+            "tool_call_requested",
+            "tool_call_started",
+            "interaction_resolved",
+            "tool_call_completed"
+        ]
+    );
+    assert_eq!(lines[3].payload["declined"], true);
+    assert!(lines.iter().all(|line| line.turn_id.is_none()));
+    close_idle(&mut session, &done);
+}
+
+#[derive(Clone, Copy)]
+enum StepHold {
+    Approval,
+    Tool,
+    Interaction,
+}
+
+fn command_at_step_boundary(hold: StepHold, cancel: bool) {
+    let (started, running) = std::sync::mpsc::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let held = Mutex::new(held);
+    let outer = Arc::new(FakeTool::new("outer", move |_, _, _, ask| {
+        match hold {
+            StepHold::Tool => {
+                started.send(()).unwrap();
+                let _released = held.lock().unwrap().recv();
+            }
+            StepHold::Interaction => {
+                assert_eq!(
+                    ask.ask(asking("model?")),
+                    contract::tool::Answered::Reply(contract::events::Answer::Confirmed {
+                        confirmed: true
+                    })
+                );
+            }
+            StepHold::Approval => {}
+        }
+        text("model result")
+    }));
+    let (inner_started, inner_running) = std::sync::mpsc::channel();
+    let (stopped, _cancelled) = std::sync::mpsc::channel();
+    let inner: Arc<dyn Tool> = if cancel {
+        waiting_inner(inner_started, stopped, None)
+    } else {
+        Arc::new(FakeTool::new("inner", |_, _, _, _| text("inner result")))
+    };
+    let mut session = session(vec![outer, inner]).answerable(true).inbox_woken();
+    if let StepHold::Approval = hold {
+        session.rules.set(contract::rules::StandingRules {
+            global: vec![],
+            project: vec![contract::rules::Rule {
+                decision: contract::rules::RuleDecision::Ask,
+                tool: "outer".into(),
+                prefix: "x".into(),
+                added: None,
+                session_id: None,
+            }],
+        });
+    }
+    let tap = support::Tap::new(&session.log);
+    let (done, _) = start_turn(&mut session);
+    let pending = match hold {
+        StepHold::Approval => Some(tap.wait_for("permission_requested")),
+        StepHold::Tool => {
+            fakes::Deadline::after(std::time::Duration::from_secs(3))
+                .recv_or_fail(&running, "step tool held");
+            None
+        }
+        StepHold::Interaction => Some(tap.wait_for("interaction_requested")),
+    };
+    let request = command_request("inner", json!({}));
+    session
+        .inbox
+        .send(contract::inbox::Delivery::InnerCall(request.request))
+        .unwrap();
+    match hold {
+        StepHold::Tool => release.send(()).unwrap(),
+        StepHold::Approval | StepHold::Interaction => {
+            let pending = pending.unwrap();
+            let answer = match hold {
+                StepHold::Approval => support::allow(),
+                StepHold::Interaction => {
+                    contract::commands::ReplyAnswer::Confirmed { confirmed: true }
+                }
+                StepHold::Tool => unreachable!(),
+            };
+            session
+                .inbox
+                .send(support::reply_delivery(
+                    contract::RequestId(pending.payload["request_id"].as_str().unwrap().into()),
+                    answer,
+                ))
+                .unwrap();
+        }
+    }
+    if cancel {
+        fakes::Deadline::after(std::time::Duration::from_secs(3))
+            .recv_or_fail(&inner_running, "command tool at step boundary");
+        assert!(session.cancel.cancel());
+    }
+    let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+        .recv_or_fail(&request.answer, "boundary command completion");
+    assert_eq!(
+        completed.status,
+        if cancel {
+            CallStatus::Cancelled
+        } else {
+            CallStatus::Completed
+        }
+    );
+    let (looped, outcome) =
+        fakes::Deadline::after(std::time::Duration::from_secs(3)).recv_or_fail(&done, "step ended");
+    session.looped = Some(looped);
+    assert_eq!(
+        outcome,
+        Some(if cancel {
+            TurnOutcome::Interrupted
+        } else {
+            TurnOutcome::Completed
+        })
+    );
+    let lines = session.lines();
+    assert_command_anchor(&lines);
+    let mut expected = vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "tool_call_arguments_delta",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+    ];
+    if let StepHold::Approval = hold {
+        expected.extend(["permission_requested", "permission_resolved"]);
+    }
+    expected.push("tool_call_started");
+    if let StepHold::Interaction = hold {
+        expected.extend(["interaction_requested", "interaction_resolved"]);
+    }
+    expected.extend([
+        "tool_call_completed",
+        "step_started",
+        "tool_call_requested",
+        "tool_call_started",
+        "tool_call_completed",
+    ]);
+    if !cancel {
+        expected.extend_from_slice(support::REPLY);
+    }
+    expected.push("turn_completed");
+    assert_eq!(support::kinds(&lines), expected);
+}
+
+#[test]
+fn a_command_queued_on_an_approval_wait_runs_at_the_next_step_boundary() {
+    command_at_step_boundary(StepHold::Approval, false);
+}
+
+#[test]
+fn a_command_queued_mid_step_follows_the_steps_last_tool_result() {
+    command_at_step_boundary(StepHold::Tool, false);
+}
+
+#[test]
+fn a_command_queued_during_an_interaction_waits_for_the_reply_and_step_boundary() {
+    command_at_step_boundary(StepHold::Interaction, false);
+}
+
+#[test]
+fn a_turn_cancel_stops_a_command_inner_call_started_by_the_boundary_drain() {
+    command_at_step_boundary(StepHold::Approval, true);
+}
+
+#[test]
+fn command_inner_calls_keep_credential_and_standing_denies_but_skip_standing_asks() {
+    use contract::rules::{Rule, RuleDecision, StandingRules};
+    for (credentials, decision, expected) in [
+        (true, RuleDecision::Ask, CallStatus::Denied),
+        (false, RuleDecision::Deny, CallStatus::Denied),
+        (false, RuleDecision::Ask, CallStatus::Completed),
+    ] {
+        let tool = Arc::new(FakeTool::new("inner", |_, _, _, _| text("allowed")));
+        let mut session = Session::with_tools(vec![], None, vec![tool.clone()]);
+        session.rules.set(StandingRules {
+            global: vec![],
+            project: vec![Rule {
+                decision,
+                tool: "inner".into(),
+                prefix: "x".into(),
+                added: None,
+                session_id: None,
+            }],
+        });
+        let path = if credentials {
+            session.credentials.join("secret")
+        } else {
+            session.workspace.join("public")
+        };
+        let request = command_request("inner", json!({"path":path}));
+        session
+            .inbox
+            .send(contract::inbox::Delivery::InnerCall(request.request))
+            .unwrap();
+        let (done, _) = start_turn(&mut session);
+        let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+            .recv_or_fail(&request.answer, "command permission outcome");
+        assert_eq!(completed.status, expected);
+        let lines = command_lines(&mut session);
+        assert_command_anchor(&lines);
+        let mut kinds = vec!["session_started", "tool_call_requested"];
+        if expected == CallStatus::Denied {
+            kinds.push("permission_resolved");
+            assert_eq!(
+                lines[2].payload["decided_by"],
+                if credentials {
+                    "credential_deny"
+                } else {
+                    "standing_rule"
+                }
+            );
+            assert!(tool.ran.lock().unwrap().is_empty());
+        } else {
+            kinds.push("tool_call_started");
+            assert_eq!(tool.ran.lock().unwrap().len(), 1);
+        }
+        kinds.push("tool_call_completed");
+        assert_eq!(support::kinds(&lines), kinds);
+        assert!(lines.iter().all(|line| line.turn_id.is_none()));
+        close_idle(&mut session, &done);
+    }
+}
+
+#[test]
+fn a_command_names_the_session_only_when_its_final_completion_succeeds() {
+    use contract::hook::{AfterToolOutcome, HookFailure};
+    for (after, status, names) in [
+        (
+            AfterToolOutcome::Failed(HookFailure {
+                extension: "x".into(),
+                message: "m".into(),
+            }),
+            CallStatus::Failed,
+            0,
+        ),
+        (AfterToolOutcome::Unchanged, CallStatus::Completed, 1),
+    ] {
+        let tool = Arc::new(FakeTool::new("inner", |_, _, _, _| Output {
+            control: Some(contract::events::Control {
+                name: Some("named".into()),
+                ..Default::default()
+            }),
+            ..text("raw secret")
+        }));
+        let mut session = Session::with_tools(vec![], None, vec![tool]);
+        let hooks = Arc::new(FakeHooks {
+            after,
+            ..Default::default()
+        });
+        session.looped = Some(session.looped.take().unwrap().hooks(hooks));
+        let request = command_request("inner", json!({}));
+        session
+            .inbox
+            .send(contract::inbox::Delivery::InnerCall(request.request))
+            .unwrap();
+        let (done, _) = start_turn(&mut session);
+        let completed = fakes::Deadline::after(std::time::Duration::from_secs(3))
+            .recv_or_fail(&request.answer, "command completion");
+        assert_eq!(completed.status, status);
+        let lines = session.events_until("command completion", |line| {
+            line.kind == "tool_call_completed"
+        });
+        let id = inner_id(&lines);
+        let named: Vec<_> = lines
+            .iter()
+            .filter(|line| line.kind == "session_named")
+            .collect();
+        assert_eq!(named.len(), names);
+        if let Some(named) = named.first() {
+            assert_eq!(named.payload["name"], "named");
+            assert_eq!(named.action_id.as_ref(), Some(&id));
+            assert!(named.turn_id.is_none());
+        }
+        if status == CallStatus::Failed {
+            assert_eq!(
+                completed.error.as_ref().unwrap().code,
+                contract::ErrorCode::HookFailed
+            );
+        }
+        let mut expected = vec![
+            "session_started",
+            "tool_call_requested",
+            "tool_call_started",
+        ];
+        expected.extend(std::iter::repeat_n("session_named", names));
+        expected.push("tool_call_completed");
+        assert_eq!(support::kinds(&lines), expected);
+        assert!(lines.iter().all(|line| line.turn_id.is_none()));
+        session
+            .inbox
+            .send(contract::inbox::Delivery::Close(support::ignore()))
+            .unwrap();
+        let (looped, outcome) = fakes::Deadline::after(std::time::Duration::from_secs(3))
+            .recv_or_fail(&done, "idle loop closed");
+        session.looped = Some(looped);
+        assert_eq!(outcome, None);
+    }
+}
+
 fn start_turn(
     session: &mut Session,
 ) -> (

@@ -167,7 +167,7 @@ fn a_cancel_landing_before_the_take_declines_the_ask() {
     });
     let turn = TurnId("t_1".into());
     let calls = [(&action, Some(stream.as_ref()))];
-    looped.serve_interactions(&calls, &turn).unwrap();
+    looped.serve_interactions(&calls, Some(&turn)).unwrap();
     let lines = durable(&home);
     assert_eq!(kinds(&lines), ["session_started", "interaction_resolved"]);
     let resolved = &lines[1];

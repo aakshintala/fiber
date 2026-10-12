@@ -40,7 +40,8 @@ fn received(rx: &std::sync::mpsc::Receiver<Delivery>) -> Option<String> {
     match rx.try_recv().ok()? {
         Delivery::ExtensionExec(exec) => Some(exec.program),
         Delivery::ExtensionLog(log) => Some(log.message),
-        Delivery::Prompt(..)
+        Delivery::InnerCall(_)
+        | Delivery::Prompt(..)
         | Delivery::Steer(..)
         | Delivery::SteerDrop(..)
         | Delivery::Name(..)

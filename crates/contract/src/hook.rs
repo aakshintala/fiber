@@ -50,6 +50,9 @@ pub enum AfterToolOutcome {
         /// What the artifact holds instead of the returned output.
         artifact: Option<String>,
     },
+    /// A hook of the command's own extension could not run: the call
+    /// fails with `hook_failed`, and its output is withheld.
+    Failed(HookFailure),
     /// A `blocking` hook of `extension` failed: the output is withheld.
     Withheld {
         /// The extension whose hook failed.

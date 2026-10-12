@@ -149,7 +149,9 @@ fn timed_out<T>(
 fn content(answer: &AfterToolAnswer) -> Option<&str> {
     match &answer.outcome {
         AfterToolOutcome::Changed { content, .. } => content.as_deref(),
-        AfterToolOutcome::Unchanged | AfterToolOutcome::Withheld { .. } => None,
+        AfterToolOutcome::Unchanged
+        | AfterToolOutcome::Withheld { .. }
+        | AfterToolOutcome::Failed(_) => None,
     }
 }
 

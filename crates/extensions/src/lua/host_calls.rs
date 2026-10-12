@@ -271,13 +271,12 @@ pub(super) fn admit<'a>(
             }
         }
         Request::Tool(request) => {
-            // Only a running tool call anchors an inner call: every other
+            // An admitted command or running tool call anchors an inner call: every other
             // target, and a tool call with no runner, answers the error at
             // once, starting no tool work and writing no line.
             let runner = match target {
-                Target::Tool(_) => shared.runners.get(&id).cloned(),
-                Target::Command(_)
-                | Target::Provider { .. }
+                Target::Tool(_) | Target::Command(_) => shared.runners.get(&id).cloned(),
+                Target::Provider { .. }
                 | Target::Hook { .. }
                 | Target::Timer { .. }
                 | Target::Search(_)

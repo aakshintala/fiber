@@ -104,7 +104,9 @@ fn content(session: &Arc<SessionExtensions>) -> Option<String> {
         .expect("waited for the hook");
     match answer.outcome {
         AfterToolOutcome::Changed { content, .. } => content,
-        AfterToolOutcome::Unchanged | AfterToolOutcome::Withheld { .. } => None,
+        AfterToolOutcome::Unchanged
+        | AfterToolOutcome::Withheld { .. }
+        | AfterToolOutcome::Failed(_) => None,
     }
 }
 

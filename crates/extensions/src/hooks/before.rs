@@ -23,6 +23,17 @@ mod tests;
 #[path = "keys_tests.rs"]
 mod keys_tests;
 
+/// Refuses only the own hook reached while the loop serves a command's chain.
+pub(super) fn own_command_failure(
+    extension: &crate::LuaExtension,
+    point: &str,
+) -> Option<HookFailure> {
+    extension.runs_own_command_call().then(|| HookFailure {
+        extension: extension.name().to_owned(),
+        message: format!("The `{point}` hook would wait behind its extension's command"),
+    })
+}
+
 /// Runs the `sanitize` and `transform` `before_tool` hooks on `call`, in
 /// order: a `check` hook judges what will actually run, so it runs later,
 /// in [`check_tool`].
@@ -37,6 +48,12 @@ pub(super) fn before_tool(
         let Some(extension) = session.lua.get(entry.extension) else {
             continue;
         };
+        if let Some(failure) = own_command_failure(extension, BEFORE_TOOL) {
+            return BeforeToolAnswer {
+                outcome: BeforeToolOutcome::Failed(failure),
+                notices,
+            };
+        }
         let name = extension.name();
         let arg = shown(call, &arguments);
         let returned = extension
@@ -89,6 +106,12 @@ pub(super) fn check_tool(session: &SessionExtensions, call: &BeforeToolCall<'_>)
         let Some(extension) = session.lua.get(entry.extension) else {
             continue;
         };
+        if let Some(failure) = own_command_failure(extension, BEFORE_TOOL) {
+            return CheckAnswer {
+                outcome: CheckOutcome::Failed(failure),
+                notices,
+            };
+        }
         let name = extension.name();
         let arg = shown(call, call.arguments);
         let returned = extension

@@ -436,7 +436,12 @@ impl LuaExtension {
     /// Queues the command `name` with `text` as a held call: it never starts
     /// until `Queued::release`. Returns the queued call; `wait` returns the
     /// run's end. Starts the extension.
-    pub(crate) fn queue_command(&self, name: &str, text: &str) -> Result<Queued, Error> {
+    pub(crate) fn queue_command(
+        &self,
+        command: contract::CommandId,
+        name: &str,
+        text: &str,
+    ) -> Result<Queued, Error> {
         let asked = self.hub.clock().now();
         let mut shared = self.hub.lock();
         self.start(&mut shared)?;
@@ -472,6 +477,18 @@ impl LuaExtension {
         }
         let target = Target::Command(name.to_owned());
         let id = shared.push_held(target.clone(), Value::String(text.into()), asked);
+        let ended = Arc::new(command_calls::Ended::default());
+        shared.runners.insert(
+            id,
+            Arc::new(command_calls::CommandCalls {
+                hub: Arc::downgrade(&self.hub),
+                command,
+                call: id,
+                ended: ended.clone(),
+                #[cfg(test)]
+                pause: std::sync::Mutex::default(),
+            }),
+        );
         drop(shared);
         self.hub.notify();
         Ok(Queued {
@@ -480,7 +497,13 @@ impl LuaExtension {
             id,
             target,
             asked,
+            ended,
         })
+    }
+
+    /// Whether the loop is serving this extension's command's inner-call chain.
+    pub(crate) fn runs_own_command_call(&self) -> bool {
+        self.hub.lock().serving.is_some()
     }
 
     /// Hands the ephemeral emitter to `host.status`, `host.widget` and `host.emit`.
@@ -711,6 +734,7 @@ pub(crate) struct Queued {
     id: u64,
     target: Target,
     asked: Instant,
+    ended: Arc<command_calls::Ended>,
 }
 
 impl Queued {
@@ -726,8 +750,10 @@ impl Queued {
             let now = self.hub.clock().now();
             match shared.judge(&self.name, self.id, &self.target, self.asked, now) {
                 (Next::Return(result), unsent) => {
+                    self.clear(&mut shared);
                     self.hub.notify();
                     drop(shared);
+                    self.ended.end();
                     drop(unsent);
                     return result;
                 }
@@ -737,6 +763,23 @@ impl Queued {
                 }
             }
         }
+    }
+    /// Removes only this command's runner and serving window under the hub lock.
+    fn clear(&self, shared: &mut Shared) {
+        shared.runners.remove(&self.id);
+        if shared.serving == Some(self.id) {
+            shared.serving = None;
+        }
+    }
+}
+
+impl Drop for Queued {
+    fn drop(&mut self) {
+        {
+            let mut shared = self.hub.lock();
+            self.clear(&mut shared);
+        }
+        self.ended.end();
     }
 }
 
@@ -818,6 +861,7 @@ fn timeout_ms(timeout: Duration) -> u64 {
 }
 
 pub(crate) mod asks;
+mod command_calls;
 mod declared;
 mod errors;
 mod host_calls;

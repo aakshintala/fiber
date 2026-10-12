@@ -7,10 +7,11 @@ use contract::ErrorCode;
 impl contract::extension::ExtensionDoor for SessionExtensions {
     fn command(
         &self,
+        id: &contract::CommandId,
         name: &str,
         text: &str,
     ) -> Result<Box<dyn FnOnce() + Send>, contract::inbox::Rejection> {
-        let admitted = self.commands.admit_with(name, text)?;
+        let admitted = self.commands.admit_with(id, name, text)?;
         let queued = std::sync::Arc::clone(admitted.queued());
         let lua = std::sync::Arc::clone(admitted.lua());
         let extension = admitted.extension().to_owned();
