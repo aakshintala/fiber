@@ -592,3 +592,571 @@ fn a_null_reaches_the_tool_as_absent_only_for_an_optional_property() {
     );
     assert_eq!(outputs_sent(&server)[0], "absent");
 }
+
+/// An extension tool calling `host.tool("read", ...)` through the same
+/// path a model's call takes (`docs/extensions.md`, "Running a tool"): the
+/// outcome as the model would see it, the inner call's own lines with
+/// `ran_by`, hooks on the inner call, and nothing sent to the provider but
+/// the outer call's result.
+#[test]
+fn an_extension_tool_calling_host_tool_sees_the_inner_outcome() {
+    let setup = Setup::new_with_fm_root();
+    fs::write(setup.workspace().join("note.txt"), "the file\n").unwrap();
+    let server = calling(&[function_call("call_fetch", "fetch_twice", &json!({}))]);
+    setup.provider(&server);
+    setup.lua(
+        "fetch",
+        &tool(
+            "fetch_twice",
+            "{ effects = { \"reads\" }, paths = { \"note.txt\" }, reversible = true }",
+            "function() local outcome = host.tool(\"read\", { path = \"note.txt\" })\
+               return tostring(#outcome.content) end",
+            "30000",
+        ),
+    );
+    setup.lua(
+        "watch",
+        "fiber.hook(\"before_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) host.fs.write(\"saw-\" .. call.tool, \"x\") end })\n",
+    );
+    let run = ask(&setup, "fetch it");
+    assert_eq!(
+        run.kinds(),
+        kinds(
+            &[],
+            1,
+            &[],
+            &[
+                "tool_call_started",
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed",
+                "tool_call_completed",
+            ]
+        )
+    );
+    // The outer tool's result is the part count, and the provider's
+    // follow-up holds that output only: the inner `read` was never sent.
+    assert_eq!(outputs_sent(&server), ["1"]);
+    // The inner call's request carries `ran_by`, and only that line does.
+    let requested = run.all("tool_call_requested");
+    assert_eq!(requested.len(), 2);
+    assert!(requested[0]["payload"].get("ran_by").is_none());
+    assert_eq!(
+        requested[1]["payload"]["ran_by"]["extension"],
+        "fiber.test/fetch"
+    );
+    assert_eq!(
+        requested[1]["payload"]["ran_by"]["outer_action_id"],
+        requested[0]["action_id"]
+    );
+    assert_eq!(
+        run.lines
+            .iter()
+            .filter(|line| line["payload"].get("ran_by").is_some())
+            .count(),
+        1,
+        "only the inner request carries ran_by"
+    );
+    // The inner start and completion match the inner request's action,
+    // differ from the outer's, and both precede the outer's completion.
+    let (outer_action, inner_action) = (
+        requested[0]["action_id"].clone(),
+        requested[1]["action_id"].clone(),
+    );
+    assert_ne!(inner_action, outer_action);
+    let started = run.all("tool_call_started");
+    let completed = run.all("tool_call_completed");
+    assert_eq!(started.len(), 2);
+    assert_eq!(completed.len(), 2);
+    assert_eq!(started[0]["action_id"], outer_action);
+    assert_eq!(started[1]["action_id"], inner_action);
+    assert_eq!(completed[0]["action_id"], inner_action);
+    assert_eq!(completed[0]["payload"]["status"], "completed");
+    assert_eq!(completed[1]["action_id"], outer_action);
+    // A second extension's `before_tool` hook ran on the inner call.
+    assert!(setup.workspace().join("saw-read").is_file());
+    assert!(setup.workspace().join("saw-fetch_twice").is_file());
+}
+
+/// A `sanitize` `after_tool` hook redacts an inner call's output before the
+/// script sees it (`docs/extensions.md`, "Running a tool").
+#[test]
+fn a_sanitize_hook_redacts_an_inner_call_before_the_script_sees_it() {
+    let setup = Setup::new_with_fm_root();
+    fs::write(
+        setup.workspace().join("note.txt"),
+        "redactable-secret-text\n",
+    )
+    .unwrap();
+    let server = calling(&[function_call("call_fetch", "fetch_twice", &json!({}))]);
+    setup.provider(&server);
+    setup.lua(
+        "fetch",
+        &tool(
+            "fetch_twice",
+            "{ effects = { \"reads\" }, paths = { \"note.txt\" }, reversible = true }",
+            "function() local outcome = host.tool(\"read\", { path = \"note.txt\" })\
+               return outcome.content[1].text end",
+            "30000",
+        ),
+    );
+    setup.lua(
+        "redact",
+        "fiber.hook(\"after_tool\", { phase = \"sanitize\", timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) if call.tool == \"read\" then return { content = \"[redacted]\" } end end })\n",
+    );
+    let run = ask(&setup, "fetch it");
+    assert_eq!(
+        run.kinds(),
+        kinds(
+            &[],
+            1,
+            &[],
+            &[
+                "tool_call_started",
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed",
+                "tool_call_completed",
+            ]
+        )
+    );
+    // The script saw the redaction, and so did the provider: neither holds
+    // the file's text.
+    assert_eq!(outputs_sent(&server), ["[redacted]"]);
+    let completed = run.all("tool_call_completed");
+    assert_eq!(
+        completed[0]["payload"]["content"],
+        json!([{"type": "text", "text": "[redacted]"}])
+    );
+    for line in &run.lines {
+        if line.to_string().contains("redactable-secret") {
+            panic!("leaked in kind {}: {line}", line["kind"]);
+        }
+    }
+    assert!(!run.stderr.contains("redactable-secret"));
+    assert!(!on_disk(&run.session_dir(&setup)).contains("redactable-secret"));
+}
+
+/// An inner call to a credential path is denied, like the model's own call.
+#[test]
+fn an_inner_call_to_a_credential_path_is_denied() {
+    let setup = Setup::new_with_fm_root();
+    let secret = setup.home().join("credentials").join("k");
+    fs::create_dir_all(secret.parent().unwrap()).unwrap();
+    fs::write(&secret, "sekret\n").unwrap();
+    let server = calling(&[function_call("call_leak", "leak", &json!({}))]);
+    setup.provider(&server);
+    setup.lua(
+        "sneak",
+        &tool(
+            "leak",
+            "{ effects = { \"reads\" }, reversible = true }",
+            &format!(
+                "function() local outcome = host.tool(\"read\", {{ path = {:?} }})\
+                   return outcome.status .. \"|\" .. (outcome.reason or \"none\") end",
+                secret.display().to_string()
+            ),
+            "30000",
+        ),
+    );
+    let run = ask(&setup, "leak it");
+    assert_eq!(
+        run.kinds(),
+        kinds(
+            &[],
+            1,
+            &[],
+            &[
+                "tool_call_started",
+                "tool_call_requested",
+                "permission_resolved",
+                "tool_call_completed",
+                "tool_call_completed",
+            ]
+        )
+    );
+    assert_eq!(outputs_sent(&server), ["denied|credentials"]);
+    let requested = run.all("tool_call_requested");
+    let inner_action = requested[1]["action_id"].clone();
+    // The inner call was refused by the credential deny, with no start
+    // under its action.
+    let resolved = run.payload("permission_resolved");
+    assert_eq!(resolved["decided_by"], "credential_deny");
+    assert_eq!(run.all("permission_resolved")[0]["action_id"], inner_action);
+    assert!(
+        run.all("tool_call_started")
+            .iter()
+            .all(|line| line["action_id"] != inner_action),
+        "the denied inner call never started"
+    );
+    let completed = run.all("tool_call_completed");
+    assert_eq!(completed[0]["action_id"], inner_action);
+    assert_eq!(completed[0]["payload"]["status"], "denied");
+    assert!(!run.stdout.contains("sekret"));
+    assert!(!run.stderr.contains("sekret"));
+    assert!(!on_disk(&run.session_dir(&setup)).contains("sekret"));
+    for request in server.requests() {
+        assert!(
+            !String::from_utf8_lossy(&request.body).contains("sekret"),
+            "the secret reached the provider"
+        );
+    }
+}
+
+/// A standing deny refuses an inner call without running it.
+#[test]
+fn a_standing_deny_refuses_an_inner_call() {
+    let setup = Setup::new_with_fm_root();
+    fs::write(setup.workspace().join("note.txt"), "the file\n").unwrap();
+    let server = calling(&[function_call("call_fetch", "fetch_twice", &json!({}))]);
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "deny", "tool": "read", "prefix": "/"})
+        ),
+    )
+    .unwrap();
+    setup.lua(
+        "fetch",
+        &tool(
+            "fetch_twice",
+            "{ effects = { \"reads\" }, paths = { \"note.txt\" }, reversible = true }",
+            "function() local outcome = host.tool(\"read\", { path = \"note.txt\" })\
+               return outcome.status .. \"|\" .. (outcome.reason or \"none\") end",
+            "30000",
+        ),
+    );
+    let run = ask(&setup, "fetch it");
+    assert_eq!(
+        run.kinds(),
+        kinds(
+            &[],
+            1,
+            &[],
+            &[
+                "tool_call_started",
+                "tool_call_requested",
+                "permission_resolved",
+                "tool_call_completed",
+                "tool_call_completed",
+            ]
+        )
+    );
+    // A standing rule refused it, and the file's text is not in the outcome.
+    assert_eq!(outputs_sent(&server), ["denied|standing_rule"]);
+    let resolved = run.payload("permission_resolved");
+    assert_eq!(resolved["decided_by"], "standing_rule");
+    assert_eq!(
+        run.all("permission_resolved")[0]["action_id"],
+        run.all("tool_call_requested")[1]["action_id"]
+    );
+}
+
+/// A standing ask does not raise a question on an inner call: with nobody
+/// to answer, it still runs.
+#[test]
+fn a_standing_ask_still_runs_an_inner_call() {
+    let setup = Setup::new_with_fm_root();
+    fs::write(setup.workspace().join("note.txt"), "the file\n").unwrap();
+    let server = calling(&[function_call("call_fetch", "fetch_twice", &json!({}))]);
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "read", "prefix": "/"})
+        ),
+    )
+    .unwrap();
+    setup.lua(
+        "fetch",
+        &tool(
+            "fetch_twice",
+            "{ effects = { \"reads\" }, paths = { \"note.txt\" }, reversible = true }",
+            "function() local outcome = host.tool(\"read\", { path = \"note.txt\" })\
+               return outcome.status .. \"|\" .. tostring(#outcome.content) end",
+            "30000",
+        ),
+    );
+    let run = ask(&setup, "fetch it");
+    assert_eq!(
+        run.kinds(),
+        kinds(
+            &[],
+            1,
+            &[],
+            &[
+                "tool_call_started",
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed",
+                "tool_call_completed",
+            ]
+        )
+    );
+    assert_eq!(outputs_sent(&server), ["completed|1"]);
+    assert!(
+        run.all("permission_requested").is_empty(),
+        "no question was raised"
+    );
+    assert!(run.all("permission_resolved").is_empty());
+}
+
+/// Cancelling the outer call cancels its inner calls: the outer call times
+/// out, so the loop stops its running inner call.
+#[test]
+fn cancelling_the_outer_call_cancels_its_inner_calls() {
+    let setup = Setup::new_with_fm_root();
+    let server = calling(&[function_call("call_outer", "outer", &json!({}))]);
+    setup.provider(&server);
+    setup.lua(
+        "o",
+        &tool(
+            "outer",
+            "{ effects = { \"reads\" }, reversible = true }",
+            "function() local outcome = host.tool(\"spin\", {}) return \"unreached\" end",
+            "500",
+        ),
+    );
+    setup.lua(
+        "s",
+        &tool(
+            "spin",
+            "{ effects = { \"reads\" }, reversible = true }",
+            "function() while true do end end",
+            "60000",
+        ),
+    );
+    // The 500 ms is a real-clock bound that fires in every run; no
+    // assertion depends on how long it took.
+    let run = ask(&setup, "spin it");
+    assert_eq!(
+        run.kinds(),
+        kinds(
+            &[],
+            1,
+            &[],
+            &[
+                "tool_call_started",
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed",
+                "tool_call_completed",
+            ]
+        )
+    );
+    let requested = run.all("tool_call_requested");
+    let completed = run.all("tool_call_completed");
+    // The inner call was cancelled, and its completion precedes the outer's,
+    // which failed with the timeout.
+    assert_eq!(completed[0]["action_id"], requested[1]["action_id"]);
+    assert_eq!(completed[0]["payload"]["status"], "cancelled");
+    assert_eq!(completed[1]["action_id"], requested[0]["action_id"]);
+    assert_eq!(completed[1]["payload"]["status"], "failed");
+    assert_eq!(completed[1]["payload"]["error"]["code"], "timeout");
+}
+
+/// A self-call and a chain deeper than 8 are errors in the calling code:
+/// they write no line, and the extension decides what to do next. The four
+/// outer calls run at once, so their inner lines interleave in no fixed
+/// order: this pins each action's own kind list and the sorted multiset of
+/// all kinds instead, with the counts and the tree shapes that are fixed.
+#[test]
+fn inner_call_depth_is_cut_at_eight_and_a_tool_cannot_run_itself() {
+    let setup = Setup::new_with_fm_root();
+    let server = calling(&[
+        function_call("call_7", "ping", &json!({"left": 7})),
+        function_call("call_8", "ping", &json!({"left": 8})),
+        function_call("call_9", "ping", &json!({"left": 9})),
+        function_call("call_self", "selfish", &json!({})),
+    ]);
+    setup.provider(&server);
+    let chain = |name: &str, next: &str| {
+        tool(
+            name,
+            "{ effects = { \"reads\" }, reversible = true }",
+            &format!(
+                "function(args) if args.left <= 0 then return \"end\" end\n\
+                   local ok, inner = pcall(host.tool, \"{next}\", {{ left = args.left - 1 }})\n\
+                   if not ok then return \"error:\" .. inner end\n\
+                   return inner.content[1].text end"
+            ),
+            "30000",
+        )
+    };
+    setup.lua(
+        "chain",
+        &format!(
+            "{}{}{}",
+            chain("ping", "pong"),
+            chain("pong", "ping"),
+            tool(
+                "selfish",
+                "{ effects = { \"reads\" }, reversible = true }",
+                "function() local ok, inner = pcall(host.tool, \"selfish\", {})\n\
+                   if not ok then return \"error:\" .. inner end\n\
+                   return \"unreached\" end",
+                "30000",
+            ),
+        ),
+    );
+    let run = ask(&setup, "ping them");
+    // 4 outer calls; 7 + 8 + 8 inner calls written (the refused 9th and the
+    // self-call write none), each requested, started and completed.
+    let requested = run.all("tool_call_requested");
+    let started = run.all("tool_call_started");
+    let completed = run.all("tool_call_completed");
+    assert_eq!(requested.len(), 27);
+    assert_eq!(started.len(), 27);
+    assert_eq!(completed.len(), 27);
+    // Every action's own list is requested, started then completed.
+    let mut by_action: std::collections::BTreeMap<String, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for line in run.lines.iter().filter(|line| {
+        line["kind"]
+            .as_str()
+            .is_some_and(|kind| kind.starts_with("tool_call_"))
+    }) {
+        by_action
+            .entry(line["action_id"].as_str().unwrap().to_owned())
+            .or_default()
+            .push(line["kind"].as_str().unwrap());
+    }
+    assert_eq!(by_action.len(), 27);
+    for (action, kinds) in &by_action {
+        assert_eq!(
+            kinds,
+            &[
+                "tool_call_requested",
+                "tool_call_started",
+                "tool_call_completed"
+            ],
+            "action {action}"
+        );
+    }
+    // The four outer calls carry no `ran_by`; the 23 inner ones name the
+    // extension and their outer call.
+    let mut inner_parents = Vec::new();
+    for line in &requested {
+        match line["payload"].get("ran_by") {
+            None => {}
+            Some(ran_by) => {
+                assert_eq!(ran_by["extension"], "fiber.test/chain");
+                assert_ne!(ran_by["outer_action_id"], line["action_id"]);
+                inner_parents.push((
+                    line["action_id"].as_str().unwrap().to_owned(),
+                    ran_by["outer_action_id"].as_str().unwrap().to_owned(),
+                ));
+            }
+        }
+    }
+    assert_eq!(inner_parents.len(), 23);
+    // Each outer call's tree holds its chain: 7, 8 and 8 inners, none for
+    // the self-call.
+    let mut children: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for (action, parent) in &inner_parents {
+        children
+            .entry(parent.clone())
+            .or_default()
+            .push(action.clone());
+    }
+    fn descendants(
+        children: &std::collections::BTreeMap<String, Vec<String>>,
+        action: &str,
+    ) -> usize {
+        children
+            .get(action)
+            .map(|direct| {
+                direct
+                    .iter()
+                    .map(|child| 1 + descendants(children, child))
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+    let mut trees = Vec::new();
+    for line in requested
+        .iter()
+        .filter(|line| line["payload"].get("ran_by").is_none())
+    {
+        let name = line["payload"]["name"].clone();
+        let count = descendants(&children, line["action_id"].as_str().unwrap());
+        if name == "selfish" {
+            assert_eq!(count, 0, "a self-call writes no inner line");
+        } else {
+            trees.push((line["payload"]["arguments"].clone(), count));
+        }
+    }
+    trees.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
+    assert_eq!(
+        trees,
+        [
+            (json!({"left": 7}), 7),
+            (json!({"left": 8}), 8),
+            (json!({"left": 9}), 8),
+        ]
+    );
+    // 7 and 8 caps return `end`; 9 and the self-call return the refusal,
+    // matched by each outer call's own action, since inner calls share the
+    // same names and arguments.
+    for line in requested
+        .iter()
+        .filter(|line| line["payload"].get("ran_by").is_none())
+    {
+        let done = completed
+            .iter()
+            .find(|done| done["action_id"] == line["action_id"])
+            .unwrap_or_else(|| panic!("no completion for {}", line["action_id"]));
+        let content = &done["payload"]["content"];
+        let end = json!([{"type": "text", "text": "end"}]);
+        match (
+            line["payload"]["name"].as_str().unwrap(),
+            line["payload"]["arguments"].clone(),
+        ) {
+            ("ping", args) if args == json!({"left": 7}) => assert_eq!(content, &end),
+            ("ping", args) if args == json!({"left": 8}) => assert_eq!(content, &end),
+            ("ping", args) if args == json!({"left": 9}) => assert_eq!(
+                content,
+                &json!([{"type": "text", "text": "error:host.tool: inner-call depth exceeds 8"}])
+            ),
+            ("selfish", args) if args == json!({}) => assert_eq!(
+                content,
+                &json!([{"type": "text", "text": "error:host.tool: the tool `selfish` cannot run itself"}])
+            ),
+            unexpected => panic!("an unexpected outer call: {unexpected:?}"),
+        }
+    }
+    // The sorted multiset of all kinds is fixed; only the interleave is not.
+    let mut kinds = run.kinds();
+    kinds.sort_unstable();
+    let mut expected = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "usage_recorded",
+        "assistant_message_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ];
+    expected.extend(std::iter::repeat_n("tool_call_requested", 27));
+    expected.extend(std::iter::repeat_n("tool_call_started", 27));
+    expected.extend(std::iter::repeat_n("tool_call_completed", 27));
+    expected.sort_unstable();
+    assert_eq!(kinds, expected);
+}
