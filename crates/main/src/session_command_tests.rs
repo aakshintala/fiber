@@ -25,6 +25,12 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(20);
 /// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
 const RERUN_WITHIN: Duration = Duration::from_secs(30);
 
+/// Re-run bounds keep their margins: the child's budget is below the
+/// parent's wait, and the wait stays inside half of nextest's per-test
+/// timeout.
+const _: () =
+    assert!(CHILD_DEADLINE.as_secs() < RERUN_WITHIN.as_secs() && RERUN_WITHIN.as_secs() <= 30);
+
 /// The child's marker: set, the test installs the signals and reports a
 /// failure, with a real SIGTERM sent to its own process or with none.
 const CHILD: &str = "FIBER_MAIN_REPORT_CHILD";

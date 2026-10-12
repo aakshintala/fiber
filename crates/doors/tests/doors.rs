@@ -56,6 +56,15 @@ const RERUN_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
 /// parent's wait (`docs/testing.md`, "Waits and timeouts").
 const RERUN_OUTER: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// Re-run bounds keep their margins: the child's budget is below the
+/// parent's wait, the wait stays inside half of nextest's per-test timeout,
+/// and the outer wrapper is at least twice the wait.
+const _: () = assert!(
+    CHILD_BUDGET.as_secs() < RERUN_WITHIN.as_secs()
+        && RERUN_WITHIN.as_secs() <= 30
+        && RERUN_OUTER.as_secs() >= 2 * RERUN_WITHIN.as_secs()
+);
+
 /// A reader whose `read` fails with an error that is not invalid UTF-8.
 struct BrokenRead;
 

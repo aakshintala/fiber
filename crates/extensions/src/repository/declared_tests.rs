@@ -25,6 +25,10 @@ const HOOKS_FILE: &str = ".fiber/config/hooks.json";
 /// timeout (`.config/nextest.toml`, `docs/testing.md`, "Waits and timeouts").
 const RERUN_WITHIN: Duration = Duration::from_secs(30);
 
+/// Re-run bounds keep their margins: the parent's wait stays inside half of
+/// nextest's per-test timeout (the child's own budget is checked beside it).
+const _: () = assert!(RERUN_WITHIN.as_secs() <= 30);
+
 /// A git repository in `<tmp>/repo`, with Fiber home beside it in
 /// `<tmp>/home`.
 pub(super) struct Repo {

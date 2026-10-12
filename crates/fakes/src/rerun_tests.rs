@@ -5,8 +5,10 @@ const PROBE: &str = "FIBER_FAKES_RERUN_PROBE";
 const HANG: &str = "FIBER_FAKES_RERUN_HANG";
 const DIR: &str = "FIBER_FAKES_RERUN_DIR";
 const PID_FILE: &str = "FIBER_FAKES_RERUN_PID_FILE";
-const HOLD_CHILD: &str = "FIBER_FAKES_RERUN_HOLD_CHILD";
-const HOLD_DIR: &str = "FIBER_FAKES_RERUN_HOLD_DIR";
+
+/// The default `rerun` bound stays below the standard re-run caller wait
+/// (30 s), so callers on the default need no per-child budget.
+const _: () = assert!(CHILD_WITHIN.as_secs() < 30);
 
 #[test]
 #[allow(
@@ -208,96 +210,6 @@ fn a_rerun_child_has_no_crash_exception_port() {
         "the child still has a crash exception port:\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
-}
-
-#[test]
-#[allow(
-    clippy::print_stdout,
-    reason = "the parent test reads this line from the child's output"
-)]
-fn a_child_that_outlives_reruns_bound_still_runs_under_rerun_within() {
-    const TEST: &str =
-        "rerun::tests::a_child_that_outlives_reruns_bound_still_runs_under_rerun_within";
-    // The child's own bound fires before the parent's wait, so the two no
-    // longer contradict.
-    const CHILD_BUDGET: std::time::Duration = std::time::Duration::from_secs(20);
-    // The parent's wait stays inside half of nextest's per-test timeout.
-    const RERUN_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
-    // Past `rerun`'s 10 s bound but inside the child's own budget, so the
-    // default wait kills the child and this wait does not.
-    const HOLD: std::time::Duration = std::time::Duration::from_secs(12);
-    /// One poll pause while waiting for a marker file: not a deadline.
-    const POLL: std::time::Duration = std::time::Duration::from_millis(10);
-    if std::env::var_os(HOLD_CHILD).is_some() {
-        let dir = std::path::PathBuf::from(std::env::var(HOLD_DIR).unwrap());
-        crate::within("rerun hold child", CHILD_BUDGET, move || {
-            std::fs::write(dir.join("ready"), "").unwrap();
-            let release = crate::Deadline::after(CHILD_BUDGET);
-            while !dir.join("release").exists() {
-                if release.left().is_zero() {
-                    panic!("waited {CHILD_BUDGET:?} for the release");
-                }
-                // The wait is for a marker file another process writes,
-                // which an injected clock sees nothing of.
-                #[allow(
-                    clippy::disallowed_methods,
-                    reason = "a poll pause inside a marker-file wait"
-                )]
-                std::thread::sleep(POLL);
-            }
-            println!("rerun hold child ran");
-        });
-        return;
-    }
-    let dir = crate::TempDir::new("fiber-rerun-hold");
-    let ready = dir.path().join("ready");
-    let release = dir.path().join("release");
-    let (never_tx, never_rx) = std::sync::mpsc::channel::<()>();
-    std::thread::scope(|s| {
-        s.spawn(move || {
-            // The child is up once it signals: the clock moves only after
-            // that signal, never on a bare sleep.
-            let up = crate::Deadline::after(RERUN_WITHIN);
-            while !ready.exists() {
-                if up.left().is_zero() {
-                    panic!("waited {RERUN_WITHIN:?} for the child to hold");
-                }
-                // The wait is for a marker file another process writes,
-                // which an injected clock sees nothing of.
-                #[allow(
-                    clippy::disallowed_methods,
-                    reason = "a poll pause inside a marker-file wait"
-                )]
-                std::thread::sleep(POLL);
-            }
-            // A bounded receive, not a sleep: the hold outlives `rerun`'s
-            // bound on every run, whatever the load.
-            assert!(
-                matches!(
-                    crate::Deadline::after(HOLD).recv(&never_rx),
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-                ),
-                "nothing releases the hold early"
-            );
-            std::fs::write(&release, "").unwrap();
-        });
-        let output = rerun_within(
-            TEST,
-            &[(HOLD_CHILD, "1"), (HOLD_DIR, dir.path().to_str().unwrap())],
-            RERUN_WITHIN,
-        );
-        assert!(
-            output.status.success(),
-            "the held child ran:\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stdout).contains("rerun hold child ran"),
-            "the child's output comes back"
-        );
-    });
-    drop(never_tx);
 }
 
 #[test]

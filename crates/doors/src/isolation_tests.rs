@@ -43,6 +43,15 @@ const RERUN_WITHIN: Duration = Duration::from_secs(30);
 /// parent's wait (`docs/testing.md`, "Waits and timeouts").
 const RERUN_OUTER: Duration = Duration::from_secs(60);
 
+/// Re-run bounds keep their margins: the child's budget is below the
+/// parent's wait, the wait stays inside half of nextest's per-test timeout,
+/// and the outer wrapper is at least twice the wait.
+const _: () = assert!(
+    CHILD_BUDGET.as_secs() < RERUN_WITHIN.as_secs()
+        && RERUN_WITHIN.as_secs() <= 30
+        && RERUN_OUTER.as_secs() >= 2 * RERUN_WITHIN.as_secs()
+);
+
 /// The plain `add` runner: `Command::output`, as the session passes a
 /// cancellable one.
 fn direct(command: &mut Command) -> io::Result<Output> {
