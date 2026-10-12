@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
 use contract::events::{JobCompleted, Outcome};
-use contract::jobs::{End, JobRecord, Opening, Stop};
+use contract::jobs::{End, JobRecord, Opening, Stop, Taken};
 use contract::shapes::{ContentPart, Effect, Failure, Process};
 use contract::tool::{Cancel, Output, Tool};
 use contract::{ErrorCode, JobId};
@@ -37,6 +37,16 @@ fn args(value: Value) -> Map<String, Value> {
 #[track_caller]
 fn take_output(rx: &mpsc::Receiver<Output>) -> Output {
     Deadline::after(DEADLINE).recv(rx).expect("a wait returned")
+}
+
+/// What the output's `Settle` takes: the run's news through its end
+/// mark, once, in queue order.
+fn settled(output: &Output) -> Vec<Taken> {
+    (output
+        .settle
+        .clone()
+        .expect("an ended answer settles")
+        .0)()
 }
 
 fn text_of(output: &Output) -> &str {
@@ -182,7 +192,7 @@ fn list_is_empty_then_shows_jobs_in_start_order() {
     let cancel = CancelToken::new();
     let empty = run(&tool, json!({"action": "list"}), &cancel);
     assert!(empty.error.is_none());
-    assert!(empty.jobs.is_empty());
+    assert!(empty.settle.is_none());
     assert_eq!(text_of(&empty), "No jobs.\n");
 
     let running = open(&registry, "npm test", idle_stop());
@@ -194,7 +204,7 @@ fn list_is_empty_then_shows_jobs_in_start_order() {
     (ended.end.0)(completed(&ended_id, Outcome::Completed));
     let listed = run(&tool, json!({"action": "list"}), &cancel);
     assert!(listed.error.is_none());
-    assert!(listed.jobs.is_empty(), "list does not deliver a completion");
+    assert!(listed.settle.is_none(), "list does not deliver a completion");
     assert_eq!(
         text_of(&listed),
         format!(
@@ -210,7 +220,7 @@ fn list_is_empty_then_shows_jobs_in_start_order() {
         &cancel,
     );
     assert!(waited.error.is_none());
-    assert!(matches!(waited.jobs.as_slice(), [JobRecord::Completed(_)]));
+    assert!(matches!(&settled(&waited)[..], [Taken { record: JobRecord::Completed(_), .. }]));
     drop(running.end);
 }
 
@@ -234,7 +244,7 @@ fn an_unknown_job_id_is_invalid_arguments_for_every_action() {
             "{}",
             text_of(&output)
         );
-        assert!(output.jobs.is_empty());
+        assert!(output.settle.is_none());
     }
 }
 
@@ -336,13 +346,13 @@ fn a_job_that_already_ended_is_returned_at_once_and_claimed_once() {
         path.display()
     );
     assert_eq!(text_of(&output), expected);
-    assert_eq!(output.jobs.len(), 1);
+    assert_eq!(settled(&output).len(), 1);
     let again = run(
         &tool,
         json!({"action": "wait", "job_id": id, "timeout_ms": 0}),
         &cancel,
     );
-    assert!(again.jobs.is_empty());
+    assert!(settled(&again).is_empty());
     assert_eq!(text_of(&again), expected);
     assert!(again.error.is_none());
 }
@@ -436,7 +446,7 @@ fn a_zero_timeout_on_a_running_job_returns_at_once() {
         .recv(&rx)
         .expect("a zero timeout returned");
     assert!(output.error.is_none());
-    assert!(output.jobs.is_empty());
+    assert!(output.settle.is_none());
     assert!(
         text_of(&output).contains("still running"),
         "{}",
@@ -519,7 +529,7 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
         .recv(&rx)
         .expect("the timeout returned");
     assert!(output.error.is_none());
-    assert!(output.jobs.is_empty());
+    assert!(output.settle.is_none());
     assert!(
         text_of(&output).contains("still running"),
         "{}",
@@ -548,7 +558,7 @@ fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
         .expect("the wait returned");
     assert!(output.error.is_none());
     assert!(
-        matches!(output.jobs.as_slice(), [JobRecord::Completed(done)] if done.status == Outcome::Completed)
+        matches!(&settled(&output)[..], [Taken { record: JobRecord::Completed(done), .. }] if done.status == Outcome::Completed)
     );
     assert!(
         text_of(&output).contains("completed"),
@@ -610,8 +620,8 @@ fn a_timeout_that_overflows_the_clock_waits_until_the_job_ends() {
         .expect("the wait returned");
     assert!(output.error.is_none());
     assert!(matches!(
-        output.jobs.as_slice(),
-        [JobRecord::Completed(done)] if done.status == Outcome::Completed
+        settled(&output).as_slice(),
+        [Taken { record: JobRecord::Completed(done), .. }] if done.status == Outcome::Completed
     ));
     assert!(
         !text_of(&output).contains("still running"),
@@ -648,7 +658,7 @@ fn cancelling_a_wait_leaves_the_job_running() {
         .recv(&rx)
         .expect("the cancelled wait returned");
     assert!(output.error.is_none());
-    assert!(output.jobs.is_empty());
+    assert!(output.settle.is_none());
     assert!(text_of(&output).contains("still running"));
     let listed = run(
         &JobsTool::new(registry),
@@ -698,7 +708,12 @@ fn two_waits_deliver_the_completion_once() {
     let outputs: Vec<Output> = handles.into_iter().map(|rx| take_output(&rx)).collect();
     let records = outputs
         .iter()
-        .filter(|output| !output.jobs.is_empty())
+        .filter(|output| {
+            output
+                .settle
+                .as_ref()
+                .is_some_and(|settle| !(settle.0)().is_empty())
+        })
         .count();
     assert_eq!(records, 1);
     for output in &outputs {
@@ -730,7 +745,7 @@ fn stop_on_an_ended_job_names_how_it_ended() {
             "{}",
             text_of(&output)
         );
-        assert!(output.jobs.is_empty());
+        assert!(output.settle.is_none());
     }
 }
 
@@ -776,8 +791,8 @@ fn stop_calls_stop_once_and_returns_the_end_it_reports() {
         "{}",
         text_of(&output)
     );
-    match output.jobs.as_slice() {
-        [JobRecord::Completed(done)] => {
+    match settled(&output).as_slice() {
+        [Taken { record: JobRecord::Completed(done), .. }] => {
             assert_eq!(done.status, Outcome::Cancelled);
             assert_eq!(done.job_id.0, output_id(&output));
         }
@@ -830,7 +845,7 @@ fn cancelling_stop_after_the_stop_was_sent_returns_at_once() {
         .expect("the cancelled stop returned");
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(output.error.is_none());
-    assert!(output.jobs.is_empty());
+    assert!(output.settle.is_none());
     let listed = run(
         &JobsTool::new(registry),
         json!({"action": "list"}),

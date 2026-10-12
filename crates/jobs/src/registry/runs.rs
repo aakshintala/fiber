@@ -20,6 +20,7 @@ use super::{Registry, final_text, lock};
 use crate::delegate::outcome::empty;
 
 /// What `id` names in this session's registry.
+#[derive(Debug)]
 pub(crate) enum Target {
     /// No job has this id.
     Unknown,
@@ -318,10 +319,16 @@ impl Registry {
             .iter()
             .position(|pending| pending.at > mark)
             .unwrap_or(job.queue.len());
-        if !matches!(
-            job.queue.get(split.wrapping_sub(1)).map(|pending| &pending.record),
-            Some(JobRecord::Completed(_))
-        ) {
+        // The claim holds only for its own run's `Completed`: an entry
+        // with an earlier mark is another run's news, already taken or
+        // never this run's.
+        let holds = match job.queue.get(split.wrapping_sub(1)) {
+            Some(pending) => {
+                pending.at == mark && matches!(pending.record, JobRecord::Completed(_))
+            }
+            None => false,
+        };
+        if !holds {
             return None;
         }
         let mut taken: Vec<Pending> = job.queue.drain(..split).collect();
